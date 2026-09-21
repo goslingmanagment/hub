@@ -429,6 +429,61 @@ export const notificationIncidentRecoveries = pgTable("notification_incident_rec
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Decision 381: what the paging sweep has done about a latch. The latch row
+// says whether the condition holds; this row says whether the owner has been
+// told, for which episode, and whether the recovery was announced yet.
+export const notificationIncidentPaging = pgTable(
+  "notification_incident_paging",
+  {
+    notificationIncidentId: bigint("notification_incident_id", { mode: "number" })
+      .primaryKey()
+      .references(() => notificationIncidents.id, { onDelete: "cascade" }),
+    observedOpenedAt: timestamp("observed_opened_at", { withTimezone: true }).notNull(),
+    observedStatus: text("observed_status").$type<"open" | "resolved">().notNull(),
+    pagedOpenedAt: timestamp("paged_opened_at", { withTimezone: true }),
+    pagedAt: timestamp("paged_at", { withTimezone: true }),
+    pagedMode: text("paged_mode").$type<"immediate" | "sustained" | "flapping">(),
+    pagedResolvedAt: timestamp("paged_resolved_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    statusCheck: check("notification_incident_paging_status_check", sql`
+      ${table.observedStatus} in ('open', 'resolved')
+    `),
+    modeCheck: check("notification_incident_paging_mode_check", sql`
+      ${table.pagedMode} is null or ${table.pagedMode} in ('immediate', 'sustained', 'flapping')
+    `),
+  }),
+);
+
+// Decision 381: one row per latch episode (open → resolved), including the
+// episodes that healed before they ever paged. The latch row keeps only its
+// newest episode; the daily digest and the flap detector need the history.
+export const notificationIncidentCycles = pgTable(
+  "notification_incident_cycles",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    notificationIncidentId: bigint("notification_incident_id", { mode: "number" })
+      .references(() => notificationIncidents.id, { onDelete: "cascade" })
+      .notNull(),
+    incidentKey: text("incident_key").notNull(),
+    kind: notificationIncidentKindEnum("kind").notNull(),
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "cascade" }),
+    openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    paged: boolean("paged").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    episodeUidx: uniqueIndex("notification_incident_cycles_episode_uidx").on(
+      table.notificationIncidentId,
+      table.openedAt,
+    ),
+    openedIdx: index("notification_incident_cycles_opened_idx").on(table.openedAt),
+  }),
+);
+
 export const telegramSettings = pgTable("telegram_settings", {
   id: integer("id").primaryKey().default(1),
   enabled: boolean("enabled").default(true).notNull(),

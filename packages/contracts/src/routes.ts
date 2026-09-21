@@ -2969,6 +2969,7 @@ const deliveryKindEnum = z.enum([
   "incident_opened",
   "incident_resolved",
   "incident_manually_resolved",
+  "alert_digest_scheduled",
 ]);
 
 export const notificationsSettingsResponseSchema = z.object({

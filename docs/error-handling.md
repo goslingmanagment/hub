@@ -285,8 +285,31 @@ such an orphan resolution is a deliberate open question, not current behavior.
 `aiCriticalAlertsEnabled` is a separate audited config flag, default `false`;
 the master Telegram notification flag must also be enabled. Paging-off does
 not prevent incident creation. It persists a visible `suppressed` outbox row,
-so enabling the flag later affects new transitions only. Existing sync
-incident delivery remains outside this AI critical-outbox policy.
+so enabling the flag later affects new transitions only. Every other kind
+reaches the same outbox under the `sync_failure` policy, enqueued by the
+paging sweep below rather than by the producer.
+
+### Paging policy (Decision 381)
+
+Producers only transition latches; none of them sends. The minutely
+`notifications.paging.sweep` (worker) evaluates every latch outside the AI
+critical pair against a per-kind policy in
+`apps/runtime/src/services/notification-paging-policy.ts` and enqueues the
+resulting page or recovery notice into the durable outbox under
+`sync_failure`. The policy is exhaustive over the kind union.
+
+| Rule | Meaning |
+|---|---|
+| Open hold | The condition must have stayed open this long before its page is enqueued. `0` pages on the first sweep that sees it open (the kinds that need a hand today). Sustained kinds: `proxy_failed` 15 min, `stream_failed_threshold` 10 min, `scheduler_silent` / `ops_sampler_silent` 10 min, `golden_signal_lag` / `ofapi_burn_rate` 30 min, `ofapi_webhook_silence` 10 min, `db_disk_usage:runway_warning` 6 h. |
+| Flap rule | A sustained kind whose latch opened ≥ 5 times inside 6 h pages once as "flapping" even if no episode outlasted the open hold. The page covers every episode in the window. |
+| Quiet hold | The recovery notice is enqueued only once the latch has stayed resolved for the hold (immediate kinds 5–60 min, proxy kinds 30 min, watchdog 10 min, runway warning 24 h). A reopen inside the hold is the same standing page: no message either way. |
+| Episodes | Every latch episode (a distinct `opened_at`) is recorded in `notification_incident_cycles` on the first sweep that sees it, including episodes that began and ended between two sweeps; `paged` marks the ones a page covered. |
+| Manual resolve | The dashboard's own "Manually resolved" line is the recovery notice; the sweep sees the `incident_manually_resolved` attempt and settles the standing page silently. |
+| Digest | Daily, at the report hour after the revenue report: open incidents by age and the quiet episodes of the last 24 h grouped per subject. Skipped when empty; idempotent per due date via an `alert_digest_scheduled` attempt row; gated by the master flag and `syncFailureAlertsEnabled`. |
+
+Idempotency: a held page's outbox key uses the episode's `opened_at`, a
+flapping page's the decision instant, a recovery notice's the latch's
+`resolved_at`; the paging row and the outbox row commit in one transaction.
 
 `notification_outbox_age` is the age in milliseconds of the oldest
 `created_at` among `pending` or `leased` rows, or `0` when none exist. The

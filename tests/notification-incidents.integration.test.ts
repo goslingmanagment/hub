@@ -4,6 +4,9 @@ const telegramMocks = vi.hoisted(() => ({
   sendTelegramMessage: vi.fn(),
 }));
 
+// Decision 381: producers only flip latches. The Telegram sender is mocked so
+// every case below can pin that NOTHING here sends directly — paging is the
+// sweep's (tests/notification-paging-sweep.integration.test.ts).
 vi.mock("../apps/runtime/src/services/telegram.ts", () => ({
   sendTelegramMessage: telegramMocks.sendTelegramMessage,
 }));
@@ -16,7 +19,6 @@ import {
   getNotificationIncidentByKey,
   getPageSyncState,
   insertSyncRequestAttempt,
-  listDeliveryAttempts,
   listNotificationIncidents,
   markPageSyncAuthBlocked,
   openNotificationIncident,
@@ -129,10 +131,7 @@ describe("notification incidents integration", () => {
 
     let incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("open");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
-      text: expect.stringContaining("🚨 Auth failed"),
-    });
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     await resolveSyncChunkRecoveryIncidents(app, {
       platformAccountId: page.id,
@@ -143,10 +142,7 @@ describe("notification incidents integration", () => {
 
     incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("resolved");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
-      text: expect.stringContaining("✅ Resolved"),
-    });
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     await notifyAuthFailedIncident(app, {
       platformAccountId: page.id,
@@ -158,49 +154,7 @@ describe("notification incidents integration", () => {
     incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
     expect(incident?.status).toBe("open");
     expect(incident?.resolvedAt).toBeNull();
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(3);
-  });
-
-  it("records skipped Telegram attempts when an opened incident has no destination", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    telegramMocks.sendTelegramMessage.mockResolvedValue({
-      status: "skipped",
-      reason: "unconfigured",
-    });
-
-    const model = await createModel(testDb.db, {
-      slug: "unconfigured-alert-model",
-      name: "Unconfigured Alert Model",
-    });
-    const page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "unconfigured-alert-page",
-    });
-    const app = createTestAppContext(testDb);
-
-    await notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorSummary: "session expired",
-    });
-
-    const incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
-    expect(incident?.status).toBe("open");
-
-    const attempts = await listDeliveryAttempts(testDb.db, {
-      kind: ["incident_opened"],
-    });
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({
-      status: "skipped",
-      error: "unconfigured",
-      notificationIncidentId: incident?.id,
-    });
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("classifies proxied transport failures separately and opens stream incidents exactly at the third failure", async (context) => {
@@ -273,7 +227,7 @@ describe("notification incidents integration", () => {
 
     let proxyIncident = await getNotificationIncidentByKey(testDb.db, `proxy_failed:${proxiedPage.id}`);
     expect(proxyIncident?.status).toBe("open");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     await resolveSyncChunkRecoveryIncidents(app, {
       platformAccountId: proxiedPage.id,
@@ -284,7 +238,7 @@ describe("notification incidents integration", () => {
 
     proxyIncident = await getNotificationIncidentByKey(testDb.db, `proxy_failed:${proxiedPage.id}`);
     expect(proxyIncident?.status).toBe("resolved");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     telegramMocks.sendTelegramMessage.mockClear();
 
@@ -337,10 +291,7 @@ describe("notification incidents integration", () => {
       `stream_failed_threshold:${thresholdPage.id}:subscribers`,
     );
     expect(thresholdIncident?.status).toBe("open");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
-      text: expect.stringContaining("Stream: subscribers"),
-    });
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     await resolveSyncChunkRecoveryIncidents(app, {
       platformAccountId: thresholdPage.id,
@@ -355,7 +306,7 @@ describe("notification incidents integration", () => {
     )).toEqual(expect.objectContaining({
       status: "resolved",
     }));
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("opens a forced stream blocker incident below the retry threshold", async (context) => {
@@ -395,10 +346,7 @@ describe("notification incidents integration", () => {
       testDb.db,
       `stream_failed_threshold:${page.id}:followers`,
     )).toEqual(expect.objectContaining({ status: "open" }));
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenLastCalledWith(expect.anything(), {
-      text: expect.not.stringContaining("3x"),
-    });
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("detects terminal proxy failures from the newest attempt window instead of the oldest rows", async (context) => {
@@ -496,7 +444,7 @@ describe("notification incidents integration", () => {
 
     const incident = await getNotificationIncidentByKey(testDb.db, `proxy_failed:${page.id}`);
     expect(incident?.status).toBe("open");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("opens one persisted incident under concurrent callers without throwing", async (context) => {
@@ -776,7 +724,7 @@ describe("notification incidents integration", () => {
         status: "resolved",
       }),
     ]));
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("does not clear newer page-level failures from stale verification recovery", async (context) => {
@@ -917,96 +865,11 @@ describe("notification incidents integration", () => {
       errorSummary: "new failure after recovery",
     });
     expect(incident?.lastSeenAt.toISOString()).toBe(laterFailureAt.toISOString());
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   // W3.3 (D3-N1): an "existing" transition used to return before the send —
   // one transient Telegram failure at open time lost the page permanently.
-  it("re-sends a lost open notification on later passes, stops once sent", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const model = (await createModel(testDb.db, {
-      slug: "lost-page-model",
-      name: "Lost Page Model",
-    }))!;
-    const page = (await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "lost-page",
-    }))!;
-    const app = createTestAppContext(testDb);
-
-    telegramMocks.sendTelegramMessage.mockResolvedValue({
-      status: "failed",
-      error: "telegram 502",
-    });
-
-    const notify = () => notifyAuthFailedIncident(app, {
-      platformAccountId: page.id,
-      pageLabel: page.label,
-      platform: "fansly",
-      errorSummary: "session expired",
-    });
-
-    await notify(); // opened; attempt #1 failed
-    await notify(); // existing + no sent row → re-send; attempt #2 failed
-
-    let attempts = await listDeliveryAttempts(testDb.db, { kind: ["incident_opened"] });
-    expect(attempts).toHaveLength(2);
-    expect(attempts.every((attempt) => attempt.status === "failed")).toBe(true);
-
-    telegramMocks.sendTelegramMessage.mockResolvedValue({
-      status: "sent",
-      chatId: "6065935464",
-      messageId: 2,
-    });
-    await notify(); // attempt #3 sent
-    await notify(); // sent row exists → no further sends
-
-    attempts = await listDeliveryAttempts(testDb.db, { kind: ["incident_opened"] });
-    expect(attempts).toHaveLength(3);
-    expect(attempts.filter((attempt) => attempt.status === "sent")).toHaveLength(1);
-  });
-
-  it("caps open-notification re-sends at five total attempts (D3-N1)", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const model = (await createModel(testDb.db, {
-      slug: "capped-page-model",
-      name: "Capped Page Model",
-    }))!;
-    const page = (await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "capped-page",
-    }))!;
-    const app = createTestAppContext(testDb);
-
-    telegramMocks.sendTelegramMessage.mockResolvedValue({
-      status: "failed",
-      error: "telegram destination gone",
-    });
-
-    for (let pass = 0; pass < 8; pass += 1) {
-      await notifyAuthFailedIncident(app, {
-        platformAccountId: page.id,
-        pageLabel: page.label,
-        platform: "fansly",
-        errorSummary: "session expired",
-      });
-    }
-
-    const attempts = await listDeliveryAttempts(testDb.db, { kind: ["incident_opened"] });
-    expect(attempts).toHaveLength(5);
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(5);
-  });
-
-  // W3.3 (A36): the old exact-equality gate meant a manual resolve
-  // mid-streak silenced the stream forever (the count never re-equals 3).
   it("re-alerts a stream-failure streak after a manual resolve", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1047,10 +910,10 @@ describe("notification incidents integration", () => {
     )).toBeNull();
 
     await notify(2); // 3rd failure: opens + notifies
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     await notify(4); // 5th failure: existing-with-retry — sent row → no re-send
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
 
     // Owner resolves manually mid-streak; the condition persists.
     await resolveNotificationIncident(testDb.db, {
@@ -1063,7 +926,7 @@ describe("notification incidents integration", () => {
       `stream_failed_threshold:${page.id}:light`,
     );
     expect(incident?.status).toBe("open");
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(2);
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   // W3.3 (D4-N1): if the auth-block clear fails, the incidents are still

@@ -11,7 +11,8 @@ export type TelegramDeliveryKind =
   | "daily_report_manual"
   | "incident_opened"
   | "incident_resolved"
-  | "incident_manually_resolved";
+  | "incident_manually_resolved"
+  | "alert_digest_scheduled";
 export type TelegramDeliveryStatus = "sent" | "failed" | "skipped";
 
 export async function getTelegramSettings(
@@ -178,13 +179,14 @@ export async function hasScheduledReportForDate(
 export async function getLatestScheduledReportDateOnOrBefore(
   db: Database,
   reportDate: string,
+  kind: "daily_report_scheduled" | "alert_digest_scheduled" = "daily_report_scheduled",
 ): Promise<string | null> {
   const row = await db.query.telegramDeliveryAttempts.findFirst({
     columns: {
       reportDate: true,
     },
     where: and(
-      eq(telegramDeliveryAttempts.kind, "daily_report_scheduled"),
+      eq(telegramDeliveryAttempts.kind, kind),
       eq(telegramDeliveryAttempts.status, "sent"),
       lte(telegramDeliveryAttempts.reportDate, reportDate),
     ),

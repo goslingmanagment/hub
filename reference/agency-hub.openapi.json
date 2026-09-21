@@ -5140,7 +5140,8 @@
                               "daily_report_manual",
                               "incident_opened",
                               "incident_resolved",
-                              "incident_manually_resolved"
+                              "incident_manually_resolved",
+                              "alert_digest_scheduled"
                             ]
                           },
                           "status": {

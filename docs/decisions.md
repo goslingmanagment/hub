@@ -377,6 +377,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 378 | Retired Workboard tables dropped | The eight orphaned Workboard v2 tables (`workboard_state`, `workboard_contact_log`, `workboard_snoozes`, `workboard_claim_leases`, `wb_closing_settings`, `wb_closing_cache`, `wb_llm_usage_daily`, `wb_classifier_runs`) are dropped by migration `0203_drop_workboard_tables.sql`, which is rollback-compatible against the Decision 376 image because that image neither reads nor writes them. The inert `workboard-closing` value in the Postgres `ai_usage_feature` enum stays. Both transitional pieces Decision 376 left behind — the page-erasure exclusions and the pg-boss queue/schedule retirement at scheduler boot — go with this change. |
 | 379 | One hi-greeting feature instead of a mode | `hi-greeting` has one template and orthogonal optional request parameters: `variantCount: 1 \| 3`, `clientContext.personalMessageCount`, `fanUsername`, `fanAvatarUrl`. The chat Hi button gains the avatar, username, saved name and automation-label guidance the New Followers queue already had. `gate_hi_greeting_limit` (limit 10) counts personal messages when the client reports them, every message otherwise. All count-dependent prompt text sits in the uncached task block (`{greetingTask}`), so the 1h static prefix is identical for both counts. `greetingMode: "new-follower"` stays as a deprecated alias with unchanged semantics for extension <= 2.4.3 and of-desktop. Supersedes the "separate template, legacy Hi unchanged" part of #333/#339. Deploy Core before the extension release that sends the new fields. |
 | 380 | Orphaned Workboard enum types dropped | The five `workboard_*` Postgres enum types (`workboard_tab`, `workboard_mass_substate`, `workboard_secondary_status`, `workboard_freeloader_status`, `workboard_contact_action`) are dropped by migration `0204_drop_workboard_enum_types.sql`. Decision 378 left them behind because a `DROP TABLE` does not cascade to the enum types its columns used, so they survived the table drop with no remaining user. Rollback-compatible against the Decision 378 image, which neither reads nor writes them, and listed as such in `scripts/deploy-production.sh`. The inert `workboard-closing` value inside the `ai_usage_feature` enum still stays: Postgres cannot drop an enum value without rebuilding the type. |
+| 381 | Alert paging policy: hold, flap, quiet hold, daily digest | Incident producers only flip latches; nothing but the minutely paging sweep (`notifications.paging.sweep`) pages, through the durable outbox under `sync_failure`. Per kind: an open hold before the first page (proxy_failed 15 min, stream_failed_threshold / watchdog kinds 10 min, golden_signal_lag / ofapi_burn_rate 30 min, disk runway warning 6 h; hand-needed kinds page at once), a quiet hold before the recovery notice (a reopen inside it is the same incident), and a flap rule (5 episodes in 6 h page once as "flapping"). Every episode is recorded (`notification_incident_cycles`, 0205) and a daily alert digest rides with the revenue report: open incidents by age plus the quiet episodes that healed before paging. The AI critical pair keeps its atomic outbox (Decision 186). Measured before: 320 alert messages in 7 days, 217 of them proxy_failed with a median open→resolve gap of 1.9 min. |
 | 381 | OFAPI custody | The four OFAPI accounts retired before migration 0150 (`acct_fbaf…`, `acct_b929…` → 2026-07-21; `acct_9070…`, `acct_b47a…` → 2026-09-03) get historical custody rows in `ofapi_account_bindings` by an owner-approved evidence import (`docs/runbooks/ofapi-historical-binding-import.md`), not by hiding their ~452k v3-stamped webhook rows from the `obs_backlog_webhook_ofapi_v5` gauge. Attribution is proven three ways from `observations` alone; the v3→v5 replay dedupes every fact (dedup keys unchanged) and appends only the never-consumed `chat_queue.*` material, pinned by an integration test. |
 | 382 | OFAPI custody | OFAPI custody follows the creator, not the connection: a five-minute reconciler (`ofapiBindingReconcileEnabled`, roster read is free) seeds the OnlyFans creator id onto each page from the roster, rebinds a page whose account died to the creator's single authenticated account through the same verified apply the owner route uses (roster capture as evidence, `ofapi.binding.replaced` audit, auth incident resolved), and attaches every other unowned account of that creator as historical custody so its journaled facts replay. It never seeds a creator another page carries, never rebinds on a mismatch or an ambiguous roster, and never moves custody between pages. CLI `ofapi:bindings:reconcile` reports (or `--execute`s) the same plan. The sweep result names the unmapped refs it skipped. |
 
@@ -16262,3 +16263,88 @@ that `OFAPI_EXPECTED_TEAM_SLUG` follows the key, otherwise the preflight is
 `mismatch` and the run is skipped. The handover steps are in
 `docs/runbooks/ofapi-binding-continuity.md`.
 
+## Decision 381: Alert paging policy — hold, flap, quiet hold, daily digest (2026-09-22)
+
+**Context.** The owner's alert channel had become unreadable. Measured on
+production for 2026-09-15..21: 320 incident messages in seven days, 217 of
+them `proxy_failed`. The open→resolve pairs for that kind had a median gap of
+1.9 minutes and three quarters closed inside five; `lilly-1` and `lilly-2`
+each produced 13 open/resolve pairs on 2026-09-21 alone for `dm_messages`
+transport blips that healed on the next chunk. Every one of the 16
+`scheduler_silent` pairs in the week lasted ~5.4 minutes and lined up with a
+deploy: the deploy quiesces the scheduler about four minutes before it
+replaces the api, so the old api's watchdog paged a dead cron that was only
+being restarted. `ofapi_burn_rate` and the disk-runway warning flipped around
+their thresholds hourly. Meanwhile `ofapi_chargebacks_reconcile_failed` had
+been open since 2026-09-08 with nobody looking, and the two-day proxy
+degradation on `lora-2` (47 opens across 12 streams) was indistinguishable
+from the blips. The root cause in code: `proxy_failed` opened on the FIRST
+transport failure of a run with no threshold, every open and every resolve
+went straight to Telegram from the producer, and no rule anywhere asked
+whether a condition had lasted long enough to be worth a message.
+
+**Decision.** Paging is separated from the latch. Producers keep opening and
+resolving latches exactly as before (event-time ordering, recovery tombstones,
+advisory locks, all of Decision 186 untouched) and send nothing. A minutely
+sweep on the worker, `notifications.paging.sweep`, reads every latch the
+policy owns and decides, per kind, whether the owner should hear about it:
+
+- **Open hold.** A condition pages only once it has stayed open this long:
+  `proxy_failed` 15 min, `stream_failed_threshold` 10 min, `scheduler_silent`
+  and `ops_sampler_silent` 10 min (above the deploy gap), `golden_signal_lag`
+  and `ofapi_burn_rate` 30 min, `ofapi_webhook_silence` 10 min, the disk
+  runway warning 6 h. Kinds that need a hand today — `auth_blocked`,
+  `proxy_missing`, `ofapi_auth`, `ofapi_low_credit`, `ofapi_binding_conflict`,
+  `wrong_transactions_writer`, the percent and runway-critical disk latches,
+  `observations_partitions`, `read_gateway_capture`, `capture_payload_parity`,
+  the two reconcile kinds — page on the first sweep that sees them open.
+- **Flap rule.** A sustained kind that opened five times inside six hours
+  pages once as "flapping" even when no single episode outlasts its hold,
+  because a proxy that fails for a minute every ten minutes is broken and
+  would otherwise never page.
+- **Quiet hold.** The recovery notice waits until the condition has stayed
+  resolved for its hold (30 min for the proxy kinds, 10 min for the
+  watchdog, 5 min for the immediate kinds, 24 h for the runway warning). A
+  reopen inside the hold is the SAME incident: no resolve, no new page, and
+  the eventual "Resolved" line says how long it was open or flapped.
+- **Digest.** Every episode (open→resolved) is recorded in
+  `notification_incident_cycles` whether or not it paged. Once a day, at the
+  report hour and after the revenue report, an alert digest lists the
+  incidents still open by age and the quiet episodes per page and kind that
+  healed before paging. It is skipped when there is nothing to say and is
+  idempotent per due date through an `alert_digest_scheduled` attempt row.
+
+The page text keeps the per-kind titles and gains one line: "Open for 16 min
+· 3 episodes in the last 6 h", "Flapping: 5 episodes in the last 6 h, each
+healing before the 15 min hold", "Quiet for 31 min · was open 20 min".
+
+**Delivery.** The sweep enqueues into the existing durable outbox under the
+`sync_failure` paging policy, so `syncFailureAlertsEnabled` still gates it,
+alerts-off persists a `suppressed` row and never floods when re-enabled, and
+the FIFO-per-incident, lease and attempt-cap rules of Decision 186 apply
+unchanged. The D3-N1 direct-send retry loop is gone with the direct path; the
+outbox's five attempts are the same cap. The AI critical pair
+(`ai_provider_billing`, `ai_provider_failed`) keeps its atomic
+transition-time outbox and is excluded from the sweep. The dashboard's manual
+resolve still sends its own line; the sweep sees the
+`incident_manually_resolved` attempt and settles the standing page silently.
+
+**State.** `notification_incident_paging` (one row per latch: the newest
+episode observed, the episode the standing page covers, when it was paged and
+under which rule, and when its recovery was announced) and
+`notification_incident_cycles` (one row per episode, unique on incident +
+opened_at, `paged` flag). Migration 0205 also seeds a standing page for every
+incident that is open at deploy time and was already paged by the old direct
+path, so the cutover neither pages those again nor forgets their recovery.
+Both tables are purely additive and rollback-compatible; the migration is
+listed as such in the deploy script.
+
+**What was deliberately not done.** No hysteresis inside the producers
+(burn-rate and runway thresholds are unchanged; the holds absorb the flip),
+no cross-incident grouping (the per-page proxy latch already collapses the
+streams, and the flap rule covers the storm), no per-incident reminders (the
+digest lists standing incidents daily), and no change to the deploy order
+that causes the scheduler gap — the hold hides it, the deploy script can fix
+it separately. The retired stale `golden_signal_lag` latches from August and
+the standing chargebacks reconcile latch will appear in the first digest;
+that is the point.
