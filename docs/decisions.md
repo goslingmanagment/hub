@@ -16322,7 +16322,10 @@ healing before the 15 min hold", "Quiet for 31 min · was open 20 min".
 `sync_failure` paging policy, so `syncFailureAlertsEnabled` still gates it,
 alerts-off persists a `suppressed` row and never floods when re-enabled, and
 the FIFO-per-incident, lease and attempt-cap rules of Decision 186 apply
-unchanged. The D3-N1 direct-send retry loop is gone with the direct path; the
+unchanged. A page whose row ended `suppressed` or `exhausted` never reached
+the owner, so its recovery is settled silently — the orphan "Resolved" that
+Decision 186 left as an open question for the AI outbox does not apply to
+this path. The D3-N1 direct-send retry loop is gone with the direct path; the
 outbox's five attempts are the same cap. The AI critical pair
 (`ai_provider_billing`, `ai_provider_failed`) keeps its atomic
 transition-time outbox and is excluded from the sweep. The dashboard's manual

@@ -301,6 +301,16 @@ describe("notification paging sweep (Decision 381)", () => {
     await runNotificationPagingSweep(app(), { now: at(2 * MINUTE) });
     ({ rows } = await outboxFor(key));
     expect(rows).toHaveLength(1);
+
+    // …and a page that never reached Telegram gets no orphan "Resolved".
+    await resolveLatch(key, at(3 * MINUTE));
+    expect(await runNotificationPagingSweep(app(), { now: at(9 * MINUTE) })).toMatchObject({
+      resolved: 0,
+      silentlyResolved: 1,
+    });
+    const { incident, rows: after } = await outboxFor(key);
+    expect(after.map((row) => row.transition)).toEqual(["opened"]);
+    expect((await getNotificationIncidentPaging(testDb!.db, incident.id))?.pagedResolvedAt).toEqual(at(9 * MINUTE));
   });
 
   it("a manual resolve from the dashboard settles the page without a second recovery notice", async () => {

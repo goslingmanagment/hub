@@ -1,5 +1,6 @@
 import {
   enqueueNotificationDeliveryOutbox,
+  getNotificationDeliveryOutboxByIncident,
   hasManualIncidentResolveSince,
   listNotificationPagingCandidates,
   markNotificationIncidentCyclesPaged,
@@ -276,7 +277,20 @@ async function evaluateCandidate(
     return;
   }
 
-  const messageText = decision.silent
+  // A recovery is only news if the page itself reached Telegram. A page whose
+  // outbox row ended suppressed (alerts were off) or exhausted must not be
+  // followed by an orphan "Resolved". Rows still pending are fine: the outbox
+  // delivers per incident in transition order, so the page goes first. No row
+  // at all means the page predates this sweep (the migration seed) and was
+  // sent by the retired direct path.
+  const pageRows = paging?.pagedAt
+    ? (await getNotificationDeliveryOutboxByIncident(app.db, candidate.incidentId))
+      .filter((row) => row.transition !== "resolved" && toMs(row.createdAt) >= toMs(paging.pagedAt!))
+    : [];
+  const pageNeverDelivered = pageRows.length > 0
+    && pageRows.every((row) => row.state === "suppressed" || row.state === "exhausted");
+  const silent = decision.silent || pageNeverDelivered;
+  const messageText = silent
     ? null
     : renderPagingResolvedMessage({
       candidate,
@@ -309,7 +323,7 @@ async function evaluateCandidate(
       now,
     });
   });
-  if (decision.silent) {
+  if (silent) {
     result.silentlyResolved += 1;
   } else {
     result.resolved += 1;
