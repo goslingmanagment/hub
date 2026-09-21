@@ -231,6 +231,7 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         // exact target remains debt and retries from the head, not behind it.
         walk: { generation: walk.generation }, complete: !targetUnconfirmed,
         outcome: targetUnconfirmed ? "target_unconfirmed" : "boundary_checked", now: now(), rawPageIds,
+        settlement: { conversationId: conversation.id, policy },
         ...(targetUnconfirmed ? { retryAt: new Date(Date.now() + 60_000) } : {}),
       });
     });

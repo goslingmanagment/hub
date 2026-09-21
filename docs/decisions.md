@@ -381,6 +381,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 382 | OFAPI custody | OFAPI custody follows the creator, not the connection: a five-minute reconciler (`ofapiBindingReconcileEnabled`, roster read is free) seeds the OnlyFans creator id onto each page from the roster, rebinds a page whose account died to the creator's single authenticated account through the same verified apply the owner route uses (roster capture as evidence, `ofapi.binding.replaced` audit, auth incident resolved), and attaches every other unowned account of that creator as historical custody so its journaled facts replay. It never seeds a creator another page carries, never rebinds on a mismatch or an ambiguous roster, and never moves custody between pages. CLI `ofapi:bindings:reconcile` reports (or `--execute`s) the same plan. The sweep result names the unmapped refs it skipped. |
 | 383 | Fansly A0 boundary after A1 | Resolve the last certified full completion across bounded cursors; preserve it in the initial diagnostics checkpoint, including when A1 is disabled. A1 stop still uses start minus overlap. |
 | 384 | Fansly B1 transport isolation | Defer an admitted hint request only on its observed transport/timeout failure, after telemetry succeeds; use durable subject backoff without clearing ordinary freshness or incidents. |
+| 385 | Fansly B1 target settlement | Exact retained delete evidence can settle a target after the contiguous REST walk. Durable settlement remains distinct from REST materialization and never stamps a deleted-only target hot. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16296,3 +16297,21 @@ hold and cannot clear ordinary failures, freshness or incidents.
 Validation: 36 B1 integration tests pass, including real observed-request
 transport emission, ordinary progress, durable retry growth, new-signal
 backoff preservation, hint-only incident preservation and negative cases.
+
+## Decision 385: Deleted B1 targets can settle without fictional archive materialization (2026-09-22)
+
+After a contiguous, fully normalized REST walk, an exact retained delete receipt
+can confirm a missing target: same page, group, message and credential generation,
+received no earlier than the create. Correlation and bulk markers do not invalidate
+an exact address. Unknown group, foreign generation and older evidence remain debt.
+The confirmation predicate is shared with receipt settlement. Migration 0205 adds
+nullable settlement time/kind/delete-observation evidence and appends view columns;
+hot_applied_at retains its meaning. The writer runs in the existing claim CAS and
+owned transaction, applies only enabled post-activation receipt types, preserves
+R+1 and leaves mutation receipts unapplied. Per-receipt settlement survives later
+subject generation/policy changes, unlike a derivation from applied_revision alone.
+No B2 business deletion or WS-to-archive materialization is enabled.
+
+Validation: 44 B1 integration tests pass, including the migrated DB, mixed live
+and deleted targets, partial contiguous walks, replay, invalid deletion evidence,
+late deletion and R+1. The original capture/erasure/rollback tests still pass.

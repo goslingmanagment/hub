@@ -30,7 +30,7 @@ beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
 
 function failRequest(context: FanslyRequestContext, error: Error, failureKind: HttpRequestFailureKind = "transport") {
   return executeObservedRequest<never, never>({
-    observer: context.requestObserver, requestId: randomUUID(), operation: "messages",
+    observer: context.requestObserver ?? null, requestId: randomUUID(), operation: "messages",
     endpointTemplate: "/message", method: "GET", retries: 0,
     execute: async () => { throw error; },
     onTransportError: () => ({ kind: "failed", failureKind, error }),
@@ -116,6 +116,74 @@ async function fixture(routeInitial = true) {
 }
 
 describe("B1 REST execution and rollback", () => {
+  async function deletion(f: Awaited<ReturnType<typeof fixture>>, changes: {
+    groupRef?: string | null; generation?: string; receivedAt?: Date; bulk?: boolean;
+  } = {}) {
+    await routeFanslyWsHintEvent(db.db, {
+      id: 900, pageId: f.page.id, observationId: 900,
+      generation: changes.generation ?? f.policy.generation, receivedAt: changes.receivedAt ?? new Date(),
+      node: { path: [], outcome: "mutation_debt", mutation: {
+        messageRef: "150", groupRef: changes.groupRef === undefined ? "100" : changes.groupRef,
+        correlationRef: "12345", bulk: changes.bulk ?? false,
+      } },
+    }, f.policy);
+  }
+  it.each([false, true])("settles an exact deleted target (bulk=%s) without claiming hot materialization", async bulk => {
+    const f = await fixture();
+    f.messages.shift();
+    await deletion(f, { bulk });
+    await deletion(f, { bulk }); // receipt replay is idempotent
+    await f.step();
+    expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
+    await f.due(); await f.step();
+    await f.due(); await f.step();
+    expect((await db.pool.query("select applied_revision,requested_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ applied_revision: 1n, requested_revision: 1n });
+    const receipt = (await db.pool.query("select * from fansly_ws_hint_status where event_id=1")).rows[0];
+    expect(receipt).toMatchObject({ settlement_kind: "source_deleted", settlement_observation_id: 900n, hot_applied_at: null });
+    expect(receipt.settled_at).toBeInstanceOf(Date);
+    expect((await db.pool.query("select settled_at,outcome from fansly_ws_hint_receipts where event_id=900")).rows[0])
+      .toEqual({ settled_at: null, outcome: "mutation_debt" });
+  });
+  it.each(["foreign_group", "null_group", "foreign_generation", "older"])("does not settle a target using %s deletion evidence", async kind => {
+    const f = await fixture(); f.messages.shift();
+    await deletion(f, { groupRef: kind === "foreign_group" ? "200" : kind === "null_group" ? null : "100",
+      generation: kind === "foreign_generation" ? "b".repeat(64) : f.policy.generation,
+      receivedAt: kind === "older" ? new Date("2026-01-02") : new Date() });
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    expect((await db.pool.query("select applied_revision,last_refresh_outcome from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ applied_revision: 0n, last_refresh_outcome: "target_unconfirmed" });
+    expect((await db.pool.query("select settled_at from fansly_ws_hint_receipts where event_id=1")).rows[0].settled_at).toBeNull();
+  });
+  it("records separate deletion and materialization evidence in a mixed revision", async () => {
+    const f = await fixture(); f.messages.shift();
+    await deletion(f);
+    await routeFanslyWsHintEvent(db.db, {
+      id: 2, pageId: f.page.id, observationId: 2, generation: f.policy.generation, receivedAt: new Date(),
+      node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef: "100", messageRef: "149" } },
+    }, f.policy);
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    const receipts = (await db.pool.query("select event_id,settlement_kind,hot_applied_at from fansly_ws_hint_receipts where outcome='routed' order by event_id")).rows;
+    expect(receipts[0]).toEqual({ event_id: 1n, settlement_kind: "source_deleted", hot_applied_at: null });
+    expect(receipts[1]).toMatchObject({ event_id: 2n, settlement_kind: "rest_materialized" });
+    expect(receipts[1].hot_applied_at).toBeInstanceOf(Date);
+  });
+  it("settles a previously stuck claim when an exact deletion arrives, preserving R+1", async () => {
+    const f = await fixture(); f.messages.shift();
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    await deletion(f);
+    const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+      await f.route(2);
+      return original(context, params);
+    });
+    await f.due(); await f.step();
+    const state = (await db.pool.query("select applied_revision,requested_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+    expect(state.applied_revision).toBe(1n);
+    expect(state.requested_revision).toBe(2n);
+    expect((await db.pool.query("select event_id,settlement_kind from fansly_ws_hint_receipts where outcome='routed' order by event_id")).rows)
+      .toEqual([{ event_id: 1n, settlement_kind: "source_deleted" }, { event_id: 2n, settlement_kind: null }]);
+  });
   it("routes real durable B0 material through canonicalization and the registered projector exactly once", async () => {
     const f = await fixture(false);
     const connectionId = randomUUID();
