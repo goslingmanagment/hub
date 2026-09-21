@@ -84,7 +84,7 @@
   "tests/helpers/db.ts": 2,
   "tests/identity-grants.integration.test.ts": 2,
   "tests/message-archive.integration.test.ts": 17,
-  "tests/notification-incidents.integration.test.ts": 107,
+  "tests/notification-incidents.integration.test.ts": 103,
   "tests/notifications-dashboard.integration.test.ts": 3,
   "tests/ofapi-account-health.integration.test.ts": 13,
   "tests/ofapi-audience-sync.integration.test.ts": 41,

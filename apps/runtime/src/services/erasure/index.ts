@@ -1431,6 +1431,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fan_profiles", "platform_account_id"],
     ["fan_summaries", "platform_account_id"],
     ["message_archive_shadow", "account_id"],
+    // Decision 381: the paging sweep's episode history. Its incident FK
+    // cascades from the row below, but the pages FK makes it page-owned in
+    // its own right, so it is erased explicitly rather than by implication.
+    ["notification_incident_cycles", "platform_account_id"],
     ["notification_incidents", "platform_account_id"],
     ["agent_hydration_requests", "page_id"],
     ["ai_usage_events", "page_id"],
