@@ -87,6 +87,7 @@ export type FanslyWsHintWalk = {
 
 export type FanslyWsHintClaim = {
   pageId: number; groupRef: string; token: string; revision: number;
+  consecutiveFailures: number;
   walk: FanslyWsHintWalk;
 };
 
@@ -108,7 +109,7 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
   if (!await tryAcquireDmArchiveWriterFenceLock(db, pageId)) throw new Error("fansly_ws_hint_erasure_busy");
   const token = randomUUID();
   const result = await db.execute<{
-    subject_ref: string; claimed_revision: string; backfill_cursor: FanslyWsHintWalk;
+    subject_ref: string; claimed_revision: string; backfill_cursor: FanslyWsHintWalk; consecutive_failures: number;
   }>(sql`
     with candidate as (
       select page_id, plane, subject_ref,
@@ -140,10 +141,11 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
       claim_expires_at = ${new Date(now.getTime() + 300_000)},
       refresh_visits = s.refresh_visits + 1, last_visited_at = ${now}, updated_at = now()
     from candidate c where s.page_id = c.page_id and s.plane = c.plane and s.subject_ref = c.subject_ref
-    returning s.subject_ref, s.claimed_revision, s.backfill_cursor
+    returning s.subject_ref, s.claimed_revision, s.backfill_cursor, s.consecutive_failures
   `);
   const row = result.rows[0];
-  return row ? { pageId, groupRef: row.subject_ref, token, revision: Number(row.claimed_revision), walk: row.backfill_cursor } : null;
+  return row ? { pageId, groupRef: row.subject_ref, token, revision: Number(row.claimed_revision),
+    walk: row.backfill_cursor, consecutiveFailures: row.consecutive_failures } : null;
 }
 
 export async function isFanslyWsHintClaimEnabled(db: Database, claim: FanslyWsHintClaim, policy: FanslyWsHintPolicy) {
@@ -156,6 +158,24 @@ export async function isFanslyWsHintClaimEnabled(db: Database, claim: FanslyWsHi
       and r.received_at >= ${new Date(policy.activationAt)} and r.generation = ${policy.generation}
       and r.hint_type in ${[...policy.enabledTypes]} limit 1`);
   return result.rows.length > 0;
+}
+
+// Both the completion gate and the receipt writer use these exact predicates.
+// A correlation/bulk marker does not negate an exact native message address.
+// Missing group or a different credential generation is not deletion evidence.
+function deletedTargetObservation() {
+  return sql`(select d.observation_id from fansly_ws_hint_receipts d
+    where d.page_id = r.page_id and d.group_ref = r.group_ref
+      and d.message_ref = r.message_ref and d.generation = r.generation
+      and d.outcome = 'mutation_debt' and d.received_at >= r.received_at
+    order by d.received_at, d.event_id limit 1)`;
+}
+
+function liveTarget(conversationId: number) {
+  return sql`exists (select 1 from page_dm_messages m join page_dm_threads t on t.id = m.conversation_id
+    where m.platform_account_id = r.page_id and t.platform_account_id = r.page_id
+      and t.platform_conversation_id = r.group_ref and m.conversation_id = ${conversationId}
+      and m.platform_message_id = r.message_ref and m.deleted_at is null)`;
 }
 
 /** A stale REST head reaching the old boundary does not prove that the
@@ -172,9 +192,7 @@ export async function hasUnconfirmedFanslyWsHintTargets(
       and r.generation = ${claim.walk.generation} and r.outcome = 'routed'
       and r.hint_type = 'message_created' and r.received_at >= ${new Date(policy.activationAt)}
       and r.routed_revision > s.applied_revision and r.routed_revision <= ${claim.revision}
-      and not exists (select 1 from page_dm_messages m
-        where m.platform_account_id = r.page_id and m.conversation_id = ${conversationId}
-          and m.platform_message_id = r.message_ref and m.deleted_at is null)
+      and not ${liveTarget(conversationId)} and ${deletedTargetObservation()} is null
     limit 1`);
   return result.rows.length > 0;
 }
@@ -184,7 +202,8 @@ export async function hasUnconfirmedFanslyWsHintTargets(
  * A newer R+1 immediately becomes due, with a fresh head walk. */
 export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim, input: {
   walk: FanslyWsHintWalk; complete: boolean; outcome: string; now: Date; retryAt?: Date;
-  rawPageIds?: number[];
+  rawPageIds?: number[]; failed?: boolean;
+  settlement?: { conversationId: number; policy: FanslyWsHintPolicy };
 }) {
   const nextCursor = input.complete ? { generation: claim.walk.generation }
     : { ...input.walk, generation: claim.walk.generation, revision: claim.revision };
@@ -199,6 +218,8 @@ export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim
       refresh_class = case when ${input.complete} and requested_revision <= ${claim.revision} then null else 'dirty' end,
       dirty_reason = case when ${input.complete} and requested_revision <= ${claim.revision} then null else 'ws_hint' end,
       last_refresh_outcome = ${input.outcome},
+      consecutive_failures = case when ${input.complete} then 0
+        when ${input.failed === true} then least(consecutive_failures, 30) + 1 else consecutive_failures end,
       last_checked_at = case when ${Boolean(input.rawPageIds?.length)} then ${input.now}::timestamptz else last_checked_at end,
       refresh_checks = refresh_checks + ${input.rawPageIds?.length ? 1 : 0}, updated_at = now()
     where page_id = ${claim.pageId} and plane = ${FANSLY_WS_DM_PLANE} and subject_ref = ${claim.groupRef}
@@ -207,14 +228,29 @@ export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim
     returning page_id
   `);
   if (!result.rows.length) throw new Error("fansly_ws_hint_claim_fenced");
-  if (input.complete) await db.execute(sql`update fansly_ws_hint_receipts set hot_applied_at = clock_timestamp(),
-    rest_raw_page_ids = ${JSON.stringify(input.rawPageIds ?? [])}::jsonb
-    where page_id = ${claim.pageId} and group_ref = ${claim.groupRef} and generation = ${claim.walk.generation}
-      and outcome = 'routed' and routed_revision <= ${claim.revision} and hot_applied_at is null
-      and (hint_type = 'group_created' or exists (select 1 from page_dm_messages m
-        join page_dm_threads t on t.id = m.conversation_id
-        where m.platform_account_id = ${claim.pageId} and t.platform_conversation_id = ${claim.groupRef}
-          and m.platform_message_id = fansly_ws_hint_receipts.message_ref and m.deleted_at is null))`);
+  if (input.complete && input.settlement) {
+    const { conversationId, policy } = input.settlement;
+    if (!policy.enabledTypes.size || policy.generation !== claim.walk.generation) throw new Error("fansly_ws_hint_settlement_policy_invalid");
+    await db.execute(sql`with evidence as (
+      select r.event_id, r.hint_type,
+        (r.hot_applied_at is not null or ${liveTarget(conversationId)}) as materialized,
+        ${deletedTargetObservation()} as delete_observation_id
+      from fansly_ws_hint_receipts r
+      where r.page_id = ${claim.pageId} and r.group_ref = ${claim.groupRef}
+        and r.generation = ${policy.generation} and r.outcome = 'routed'
+        and r.routed_revision <= ${claim.revision} and r.settled_at is null
+        and r.received_at >= ${new Date(policy.activationAt)} and r.hint_type in ${[...policy.enabledTypes]}
+    ) update fansly_ws_hint_receipts r set settled_at = clock_timestamp(),
+      settlement_kind = case when e.hint_type = 'group_created' then 'group_checked'
+        when e.materialized then 'rest_materialized' else 'source_deleted' end,
+      settlement_observation_id = case when not e.materialized and e.hint_type = 'message_created'
+        then e.delete_observation_id else null end,
+      hot_applied_at = case when e.materialized or e.hint_type = 'group_created'
+        then coalesce(r.hot_applied_at, clock_timestamp()) else r.hot_applied_at end,
+      rest_raw_page_ids = coalesce(r.rest_raw_page_ids, ${JSON.stringify(input.rawPageIds ?? [])}::jsonb)
+      from evidence e where r.event_id = e.event_id
+        and (e.materialized or e.hint_type = 'group_created' or e.delete_observation_id is not null)`);
+  }
 }
 
 /** Admission is serialized by the caller's owned page-sync transaction.

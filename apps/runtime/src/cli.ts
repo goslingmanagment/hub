@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
+import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
+import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -1744,6 +1746,38 @@ export function buildProgram() {
       } finally {
         await app.close();
       }
+    });
+
+  program
+    .command("fansly:ws-recovery-manifest")
+    .description("Read-only provenance and reader-state check for up to 20 exact retained WS messages; never prints message text")
+    .requiredOption("--input <file>", "JSON with pageLabel and exact observationId/groupRef/messageRef targets")
+    .action(async (options: { input: string }) => {
+      const request: unknown = JSON.parse(await readFile(options.input, "utf8"));
+      const app = await createAppContext();
+      try { console.log(JSON.stringify(await buildFanslyWsRecoveryManifest(app, request), null, 2)); }
+      finally { await app.close(); }
+    });
+
+  program
+    .command("fansly:ws-policy")
+    .description("Inspect B1 generation, preview an account-verified repair, or apply an exact reviewed preview")
+    .requiredOption("--page <label>", "exact Fansly page label")
+    .option("--preview", "read-only preview; one account/me request through the page proxy")
+    .option("--apply <file>", "apply a saved preview after repeating account binding and config CAS checks")
+    .action(async (options: { page: string; preview?: boolean; apply?: string }) => {
+      if (options.preview && options.apply) throw new Error("Choose preview or apply");
+      const app = await createAppContext();
+      try {
+        if (options.apply) {
+          const document = JSON.parse(await readFile(options.apply, "utf8")) as { proposal?: { pageLabel?: unknown } };
+          if (!document.proposal) throw new Error("Preview has no applicable repair proposal; inspect its state and blockers");
+          if (document.proposal?.pageLabel !== options.page) throw new Error("Preview page does not match --page");
+          console.log(JSON.stringify(await applyFanslyWsPolicyRepair(app, document.proposal)));
+        } else console.log(JSON.stringify(options.preview
+          ? await previewFanslyWsPolicyRepair(app, options.page)
+          : await diagnoseFanslyWsHints(app, options.page), null, 2));
+      } finally { await app.close(); }
     });
 
   program

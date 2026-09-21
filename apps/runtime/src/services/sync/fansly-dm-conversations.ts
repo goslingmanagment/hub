@@ -39,7 +39,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import {
-  advanceDmBoundedStop, dmFullSweepDue, parseDmBoundedSweepState,
+  advanceDmBoundedStop, dmFullSweepCompletedAt, dmFullSweepDue, parseDmBoundedSweepState,
   resolveDmBoundedPolicy, serializeDmBoundedSweepState, type DmBoundedSweepState,
 } from "./dm-bounded-state.ts";
 
@@ -287,6 +287,18 @@ export async function fanslyDmConversationsChunk(
   const currentSlot = schedulingKnown
     ? computeCurrentPageSyncSlot(new Date(), cadenceSeconds, slotOffsetSeconds) : -1;
   const previousSchedule = previousBounded?.polling ?? parsedState?.polling;
+  // A1 carries certified full completion in polling, not the completed-full
+  // cursor arm. A0 keeps its measured completion boundary; A1 still stops
+  // against the full START minus overlap. Invalid A1 proof cannot fall back
+  // to an unverified legacy timestamp.
+  const certifiedCompletion = dmFullSweepCompletedAt(checkpoint?.state, new Date());
+  const previousCompletion = certifiedCompletion === undefined
+    ? (parsedState?.kind === "completed" && parsedState.membershipCertified
+      ? parsedState.lastFullSweepCompletedAt : null)
+    : certifiedCompletion;
+  const previousBoundary = previousCompletion === null ? NaN : Date.parse(previousCompletion);
+  const boundaryMs = Number.isSafeInteger(previousBoundary) && previousBoundary <= Date.now()
+    ? previousBoundary : null;
   const fullDue = dmFullSweepDue({
     policy: boundedPolicy, schedule: previousSchedule, currentSlot, cadenceSeconds, slotOffsetSeconds,
   });
@@ -339,6 +351,11 @@ export async function fanslyDmConversationsChunk(
         lastCertifiedFull: previousSchedule?.lastCertifiedFull ?? null,
       } } : {}),
     };
+    // Preserve the boundary even if we crash before the first page and A1 is
+    // now disabled (the new business cursor then has no polling proof).
+    if (shadowEnabled) state.diagnostics = createDmShadowState({
+      startedAtMs: Date.parse(state.fullSweepStartedAt), boundaryMs, completeCoverage: true,
+    });
     const progressCheckpoint = await writeSweepCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
       outcome: "progress",
@@ -353,10 +370,7 @@ export async function fanslyDmConversationsChunk(
   let shadow = shadowEnabled && state.kind !== "bounded"
     ? state.diagnostics ?? createDmShadowState({
       startedAtMs: Date.parse(state.fullSweepStartedAt),
-      boundaryMs: parsedState?.kind === "completed" && parsedState.membershipCertified &&
-        parsedState.lastFullSweepCompletedAt !== null
-        ? Date.parse(parsedState.lastFullSweepCompletedAt)
-        : null,
+      boundaryMs,
       completeCoverage: state.pageCount === 0,
     })
     : undefined;

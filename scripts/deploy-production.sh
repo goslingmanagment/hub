@@ -443,6 +443,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # send path, so it runs unchanged after a rollback. Listing it keeps
   # automatic rollback armed for this deploy.
   "0205_notification_incident_paging.sql"
+  # Additive B1 receipt evidence; old writers leave the nullable fields empty.
+  "0206_fansly_ws_hint_settlement.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

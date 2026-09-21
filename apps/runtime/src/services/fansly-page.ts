@@ -4,6 +4,11 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
+/** Shared provider guard for authenticated routes and trusted operator tools. */
+export function assertFanslyPage(page: { platform: string }, message: string) {
+  if (page.platform !== "fansly") throw new BadRequestError(message);
+}
+
 export async function resolveAccessibleFanslyPage(
   app: AppContext,
   principal: AuthPrincipal,
@@ -17,9 +22,7 @@ export async function resolveAccessibleFanslyPage(
   if (!canAccessPage(principal, page.id)) {
     throw new ForbiddenError();
   }
-  if (page.platform !== "fansly") {
-    throw new BadRequestError(`${unsupportedFeatureLabel} is only supported for Fansly pages`);
-  }
+  assertFanslyPage(page, `${unsupportedFeatureLabel} is only supported for Fansly pages`);
 
   return page;
 }

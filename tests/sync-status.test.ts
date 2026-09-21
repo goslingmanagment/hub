@@ -304,7 +304,7 @@ describe("sync status service", () => {
           return monitorRows.filter((row) => requested.has(row.stream));
         },
       );
-      const app = { db: {} };
+      const app = { db: {}, config: {} };
       const full = await getSyncStatusSnapshot(app as never, { pageIds: [7], now });
       const scoped = await getSyncStatusSnapshot(app as never, { pageIds: [7], now, monitorStreams: dmStreams });
       const fullPage = full.pages[0]!;
@@ -359,7 +359,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -386,7 +386,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -422,7 +422,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -474,7 +474,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -559,7 +559,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [9],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -597,7 +597,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -666,7 +666,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -818,7 +818,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-07-02T00:00:00.000Z"),
     });
@@ -940,7 +940,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "dm_conversations", cadenceSeconds: 1800 }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -990,7 +990,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "top_spenders" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1042,7 +1042,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "top_spenders" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1206,7 +1206,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "top_spenders" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1249,7 +1249,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "dm_conversations" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1332,7 +1332,7 @@ describe("sync status service", () => {
       }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1388,7 +1388,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "top_spenders" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1434,7 +1434,7 @@ describe("sync status service", () => {
       buildMonitorRow({ stream: "top_spenders" }),
     ]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });
@@ -1450,7 +1450,7 @@ describe("sync status service", () => {
     dbMocks.listPageSyncStates.mockResolvedValue([]);
     dbMocks.listSyncMonitorStreamRows.mockResolvedValue([]);
 
-    const snapshot = await getSyncStatusSnapshot({ db: {} } as never, {
+    const snapshot = await getSyncStatusSnapshot({ db: {}, config: {} } as never, {
       pageIds: [7],
       now: new Date("2026-03-24T12:00:00.000Z"),
     });

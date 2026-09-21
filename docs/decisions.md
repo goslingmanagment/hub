@@ -380,6 +380,11 @@ appends a row here in the same change (family law: updated-in-change).
 | 381 | Alert paging policy: hold, flap, quiet hold, daily digest | Incident producers only flip latches; nothing but the minutely paging sweep (`notifications.paging.sweep`) pages, through the durable outbox under `sync_failure`. Per kind: an open hold before the first page (proxy_failed 15 min, stream_failed_threshold / watchdog kinds 10 min, golden_signal_lag / ofapi_burn_rate 30 min, disk runway warning 6 h; hand-needed kinds page at once), a quiet hold before the recovery notice (a reopen inside it is the same incident), and a flap rule (5 episodes in 6 h page once as "flapping"). Every episode is recorded (`notification_incident_cycles`, 0205) and a daily alert digest rides with the revenue report: open incidents by age plus the quiet episodes that healed before paging. The AI critical pair keeps its atomic outbox (Decision 186). Measured before: 320 alert messages in 7 days, 217 of them proxy_failed with a median open→resolve gap of 1.9 min. |
 | 381 | OFAPI custody | The four OFAPI accounts retired before migration 0150 (`acct_fbaf…`, `acct_b929…` → 2026-07-21; `acct_9070…`, `acct_b47a…` → 2026-09-03) get historical custody rows in `ofapi_account_bindings` by an owner-approved evidence import (`docs/runbooks/ofapi-historical-binding-import.md`), not by hiding their ~452k v3-stamped webhook rows from the `obs_backlog_webhook_ofapi_v5` gauge. Attribution is proven three ways from `observations` alone; the v3→v5 replay dedupes every fact (dedup keys unchanged) and appends only the never-consumed `chat_queue.*` material, pinned by an integration test. |
 | 382 | OFAPI custody | OFAPI custody follows the creator, not the connection: a five-minute reconciler (`ofapiBindingReconcileEnabled`, roster read is free) seeds the OnlyFans creator id onto each page from the roster, rebinds a page whose account died to the creator's single authenticated account through the same verified apply the owner route uses (roster capture as evidence, `ofapi.binding.replaced` audit, auth incident resolved), and attaches every other unowned account of that creator as historical custody so its journaled facts replay. It never seeds a creator another page carries, never rebinds on a mismatch or an ambiguous roster, and never moves custody between pages. CLI `ofapi:bindings:reconcile` reports (or `--execute`s) the same plan. The sweep result names the unmapped refs it skipped. |
+| 383 | Fansly A0 boundary after A1 | Resolve the last certified full completion across bounded cursors; preserve it in the initial diagnostics checkpoint, including when A1 is disabled. A1 stop still uses start minus overlap. |
+| 384 | Fansly B1 transport isolation | Defer an admitted hint request only on its observed transport/timeout failure, after telemetry succeeds; use durable subject backoff without clearing ordinary freshness or incidents. |
+| 385 | Fansly B1 target settlement | Exact retained delete evidence can settle a target after the contiguous REST walk. Durable settlement remains distinct from REST materialization and never stamps a deleted-only target hot. |
+| 386 | Checked Fansly generation repair | Explicit preview/apply verifies account/me via the page proxy, rechecks generation and config CAS, audits one policy generation change, and exposes informational mismatch metrics without failing deploy health. |
+| 387 | Retained Fansly recovery manifest | A bounded read-only command checks exact raw custody, reader state, later mutations and owner erasure without materializing messages or inventing REST membership. B2 stays separate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16351,3 +16356,93 @@ that causes the scheduler gap — the hold hides it, the deploy script can fix
 it separately. The retired stale `golden_signal_lag` latches from August and
 the standing chargebacks reconcile latch will appear in the first digest;
 that is the point.
+
+## Decision 383: Fansly A0 keeps the certified full boundary after A1 (2026-09-22)
+
+A full scan following a bounded scan used to lose the previous full completion
+because the legacy full parser does not parse bounded state. Resolve the
+validated certified completion using the existing A1 proof reader, with the
+certified legacy timestamp only for legacy documents. Future/invalid proof
+stays unknown. Persist new diagnostics with the first progress checkpoint so
+a crash before the first page also preserves the boundary when A1 is disabled.
+Existing diagnostics win on resume; missing partial diagnostics stay incomplete.
+A0 still compares with full completion; A1 still stops against full start minus
+60 seconds. No cadence, membership, raw request or certification rule changes.
+
+Validation: 30 A0/A1 integration tests pass, including full-to-bounded-to-full,
+flag-off, resumed full and a changed head below the simulated stop. Independent
+Fable plan review and decisions are in docs/plans/2026-09-22-fansly-reliability/.
+
+## Decision 384: B1 transport failure stays on its subject (2026-09-22)
+
+A positively attributed B1 transport/timeout failure releases the subject with
+exponential backoff (60 seconds through one hour using consecutive_failures),
+then returns the remaining chunk to ordinary DM polling. The observer records
+the admitted request id and records terminal evidence only after telemetry
+succeeds. Unobserved errors, policy/lease cancellation, auth, shared Retry-After,
+DB and capture failures retain existing executor behavior. Admitted attempts
+are never refunded. Actual admission refusal reasons replace the opaque bucket.
+New signals preserve retry_after_at. Hint-only runs retain the existing quality
+hold and cannot clear ordinary failures, freshness or incidents.
+
+Validation: 36 B1 integration tests pass, including real observed-request
+transport emission, ordinary progress, durable retry growth, new-signal
+backoff preservation, hint-only incident preservation and negative cases.
+
+## Decision 385: Deleted B1 targets can settle without fictional archive materialization (2026-09-22)
+
+After a contiguous, fully normalized REST walk, an exact retained delete receipt
+can confirm a missing target: same page, group, message and credential generation,
+received no earlier than the create. Correlation and bulk markers do not invalidate
+an exact address. Unknown group, foreign generation and older evidence remain debt.
+The confirmation predicate is shared with receipt settlement. Migration 0205 adds
+nullable settlement time/kind/delete-observation evidence and appends view columns;
+hot_applied_at retains its meaning. The writer runs in the existing claim CAS and
+owned transaction, applies only enabled post-activation receipt types, preserves
+R+1 and leaves mutation receipts unapplied. Per-receipt settlement survives later
+subject generation/policy changes, unlike a derivation from applied_revision alone.
+No B2 business deletion or WS-to-archive materialization is enabled.
+
+Validation: 44 B1 integration tests pass, including the migrated DB, mixed live
+and deleted targets, partial contiguous walks, replay, invalid deletion evidence,
+late deletion and R+1. The original capture/erasure/rollback tests still pass.
+
+## Decision 386: Repin Fansly B1 through a reviewed, independently verified operation (2026-09-22)
+
+Decision 366's generation pin remains fail-closed. fansly:ws-policy reports the
+current mismatch; --preview performs one account/me binding inspection through
+the exact page dispatcher and emits a 15-minute proposal. --apply <file> repeats
+that inspection, then locks generation-defining rows and existing config gates
+and rechecks identity, generation, non-auth-refused state, policy version and the
+full gate fingerprint in a serializable transaction. Only one page's generation
+changes through the existing audited config writer. Canary/expired/disabled
+policies refuse; sibling policy fields, activation and all attempt rows survive.
+The proposal UUID and audit fingerprint recognize a repeated apply without a
+second audit transition. No new recovery scheduler or automatic repin is added.
+
+B0 verified_at proves only an accepted session-shaped frame, not observed account
+identity. It remains diagnostic; it cannot substitute for independent account/me.
+Detailed messages_live.metrics.fanslyWsHints reports a mismatch. The extra state
+is informational and never changes /health/sync, which gates deployment. Old
+retained disabled receipts are not re-routed by repinning.
+
+Validation: 11 PostgreSQL integration tests cover exact audited apply/idempotence,
+stale version/gates/preview, canary, auth refusal, identity mismatch, rotation
+before and during apply, budget and sibling preservation, and unchanged health.
+
+## Decision 387: Inspect retained-only messages before designing their projection (2026-09-22)
+
+fansly:ws-recovery-manifest accepts at most 20 exact page/observation/group/message
+targets. It reads through the existing payload seam, uses canonical reader
+precedence and the owner-erasure fence, and prints text length and envelope hash rather than
+message text. Raw absence or unavailability, ambiguous addresses and uncertain
+custody remain explicit. The manifest does not claim account authentication from
+B0's stored expected identity and does not imply a source delete reached readers.
+It runs in a read-only transaction and cannot create membership, dispatch reads,
+reset B1 debt or apply an archive projection. The six audited Ari targets are
+recorded as exact input, with a reproducible runbook. A B2 projector remains a
+separate design and production action under Decisions 344 and 366.
+
+Validation: six integration tests cover nested raw provenance, no side effects,
+missing addresses, later delete evidence, canonical reader/tombstone precedence,
+owner erasure and bounded input. No production recovery has been performed.

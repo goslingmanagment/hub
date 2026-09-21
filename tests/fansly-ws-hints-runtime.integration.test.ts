@@ -6,7 +6,8 @@ import {
   upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
-import { resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND, type HttpRequestObserver } from "@agency_hub_core/shared";
+import { executeObservedRequest, resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND,
+  type HttpRequestObserver, type HttpRequestFailureKind } from "@agency_hub_core/shared";
 import { FanslyApiError, type FanslyMessage, type FanslyRequestContext } from "@agency_hub_core/fansly";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -26,6 +27,16 @@ let db: StartedTestDatabase;
 beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
 afterAll(async () => { await db?.stop(); });
 beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
+
+function failRequest(context: FanslyRequestContext, error: Error, failureKind: HttpRequestFailureKind = "transport") {
+  return executeObservedRequest<never, never>({
+    observer: context.requestObserver ?? null, requestId: randomUUID(), operation: "messages",
+    endpointTemplate: "/message", method: "GET", retries: 0,
+    execute: async () => { throw error; },
+    onTransportError: () => ({ kind: "failed", failureKind, error }),
+    onResponse: () => { throw new Error("unexpected response"); },
+  });
+}
 
 async function fixture(routeInitial = true) {
   const app = createTestAppContext(db, { syncSharedRateLimitEnabled: true });
@@ -105,6 +116,107 @@ async function fixture(routeInitial = true) {
 }
 
 describe("B1 REST execution and rollback", () => {
+  async function deletion(f: Awaited<ReturnType<typeof fixture>>, changes: {
+    groupRef?: string | null; generation?: string; receivedAt?: Date; bulk?: boolean;
+  } = {}) {
+    await routeFanslyWsHintEvent(db.db, {
+      id: 900, pageId: f.page.id, observationId: 900,
+      generation: changes.generation ?? f.policy.generation, receivedAt: changes.receivedAt ?? new Date(),
+      node: { path: [], outcome: "mutation_debt", mutation: {
+        messageRef: "150", groupRef: changes.groupRef === undefined ? "100" : changes.groupRef,
+        correlationRef: "12345", bulk: changes.bulk ?? false,
+      } },
+    }, f.policy);
+  }
+  it.each([false, true])("settles an exact deleted target (bulk=%s) without claiming hot materialization", async bulk => {
+    const f = await fixture();
+    f.messages.shift();
+    await deletion(f, { bulk });
+    await deletion(f, { bulk }); // receipt replay is idempotent
+    await f.step();
+    expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
+    await f.due(); await f.step();
+    await f.due(); await f.step();
+    expect((await db.pool.query("select applied_revision,requested_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ applied_revision: 1n, requested_revision: 1n });
+    const receipt = (await db.pool.query("select * from fansly_ws_hint_status where event_id=1")).rows[0];
+    expect(receipt).toMatchObject({ settlement_kind: "source_deleted", settlement_observation_id: 900n, hot_applied_at: null });
+    expect(receipt.settled_at).toBeInstanceOf(Date);
+    expect((await db.pool.query("select settled_at,outcome from fansly_ws_hint_receipts where event_id=900")).rows[0])
+      .toEqual({ settled_at: null, outcome: "mutation_debt" });
+  });
+  it.each(["foreign_group", "null_group", "foreign_generation", "older"])("does not settle a target using %s deletion evidence", async kind => {
+    const f = await fixture(); f.messages.shift();
+    await deletion(f, { groupRef: kind === "foreign_group" ? "200" : kind === "null_group" ? null : "100",
+      generation: kind === "foreign_generation" ? "b".repeat(64) : f.policy.generation,
+      receivedAt: kind === "older" ? new Date("2026-01-02") : new Date() });
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    expect((await db.pool.query("select applied_revision,last_refresh_outcome from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ applied_revision: 0n, last_refresh_outcome: "target_unconfirmed" });
+    expect((await db.pool.query("select settled_at from fansly_ws_hint_receipts where event_id=1")).rows[0].settled_at).toBeNull();
+  });
+  it("records separate deletion and materialization evidence in a mixed revision", async () => {
+    const f = await fixture(); f.messages.shift();
+    await deletion(f);
+    await routeFanslyWsHintEvent(db.db, {
+      id: 2, pageId: f.page.id, observationId: 2, generation: f.policy.generation, receivedAt: new Date(),
+      node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef: "100", messageRef: "149" } },
+    }, f.policy);
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    const receipts = (await db.pool.query("select event_id,settlement_kind,hot_applied_at from fansly_ws_hint_receipts where outcome='routed' order by event_id")).rows;
+    expect(receipts[0]).toEqual({ event_id: 1n, settlement_kind: "source_deleted", hot_applied_at: null });
+    expect(receipts[1]).toMatchObject({ event_id: 2n, settlement_kind: "rest_materialized" });
+    expect(receipts[1].hot_applied_at).toBeInstanceOf(Date);
+  });
+  it("keeps actual REST materialization authoritative when a delete receipt also exists", async () => {
+    const f = await fixture(); await deletion(f);
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    const receipt = (await db.pool.query("select settlement_kind,hot_applied_at from fansly_ws_hint_receipts where event_id=1")).rows[0];
+    expect(receipt.settlement_kind).toBe("rest_materialized");
+    expect(receipt.hot_applied_at).toBeInstanceOf(Date);
+  });
+  it("preserves pre-migration materialization evidence when revisiting old receipts", async () => {
+    const f = await fixture();
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    await db.pool.query("update fansly_ws_hint_receipts set settled_at=null,settlement_kind=null where event_id=1");
+    await db.pool.query("update page_dm_messages set deleted_at=now() where platform_message_id='150'");
+    f.messages.shift(); await deletion(f);
+    await routeFanslyWsHintEvent(db.db, {
+      id: 2, pageId: f.page.id, observationId: 2, generation: f.policy.generation, receivedAt: new Date(),
+      node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef: "100", messageRef: "149" } },
+    }, f.policy);
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    expect((await db.pool.query("select settlement_kind from fansly_ws_hint_receipts where event_id=1")).rows[0].settlement_kind)
+      .toBe("rest_materialized");
+  });
+  it("does not bypass the five-page contiguity limit when a deletion arrives mid-walk", async () => {
+    const f = await fixture();
+    const prototype = f.messages[0]!;
+    f.messages.splice(0, f.messages.length, ...Array.from({ length: 151 }, (_, n) => ({ ...prototype, id: String(250 - n) }))
+      .filter(message => message.id !== "150"));
+    await f.step(); await deletion(f);
+    for (let n = 0; n < 4; n++) { await f.due(); await f.step(); }
+    expect((await db.pool.query("select applied_revision,last_refresh_outcome from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ applied_revision: 0n, last_refresh_outcome: "walk_limit" });
+    expect((await db.pool.query("select settled_at from fansly_ws_hint_receipts where event_id=1")).rows[0].settled_at).toBeNull();
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(1);
+  });
+  it("settles a previously stuck claim when an exact deletion arrives, preserving R+1", async () => {
+    const f = await fixture(); f.messages.shift();
+    for (let n = 0; n < 3; n++) { await f.due(); await f.step(); }
+    await deletion(f);
+    const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+      await f.route(2);
+      return original(context, params);
+    });
+    await f.due(); await f.step();
+    const state = (await db.pool.query("select applied_revision,requested_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+    expect(state.applied_revision).toBe(1n);
+    expect(state.requested_revision).toBe(2n);
+    expect((await db.pool.query("select event_id,settlement_kind from fansly_ws_hint_receipts where outcome='routed' order by event_id")).rows)
+      .toEqual([{ event_id: 1n, settlement_kind: "source_deleted" }, { event_id: 2n, settlement_kind: null }]);
+  });
   it("routes real durable B0 material through canonicalization and the registered projector exactly once", async () => {
     const f = await fixture(false);
     const connectionId = randomUUID();
@@ -341,9 +453,10 @@ describe("B1 REST execution and rollback", () => {
     await f.owned(() => fanslyDmMessagesChunk(f.app, f.input("event", true) as never));
     expect(f.calls).toEqual([]);
   });
-  it.each(["disabled", "budget_exhausted"])("settles an event-only %s run without ordinary freshness or incident recovery", async (mode) => {
+  it.each(["disabled", "budget_exhausted", "transport"])("settles an event-only %s run without ordinary freshness or incident recovery", async (mode) => {
     const f = await fixture();
     if (mode === "disabled") f.app.config.fanslyWsHintsEnabled = false;
+    else if (mode === "transport") f.app.adapter.getMessagesPage = context => failRequest(context, new TypeError("fetch failed"));
     else await db.pool.query(`insert into fansly_ws_hint_attempts(page_id,request_id,attempt_number,generation)
       select $1, 'spent-'||n, 1, $2 from generate_series(1,50) n`, [f.page.id, f.policy.generation]);
     await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
@@ -370,6 +483,62 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select outcome,stats from sync_runs where id=$1", [result.runId])).rows[0])
       .toMatchObject({ outcome: "skipped", stats: { qualityHold: "fansly_ws_hint_only" } });
     expect(f.calls).toEqual([]);
+  });
+  it("isolates an observed transport failure and persists backoff while ordinary polling progresses", async () => {
+    const f = await fixture();
+    const ordinary = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(ordinary).mockImplementationOnce(context =>
+      failRequest(context, new TypeError("fetch failed")));
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+    expect(f.calls).toEqual(["messages", "messages", "messages"]);
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+    const subject = (await db.pool.query("select * from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+    expect(subject).toMatchObject({ last_refresh_outcome: "target_transport", consecutive_failures: 1, applied_revision: 0n });
+    expect(subject.retry_after_at.getTime() - Date.now()).toBeGreaterThan(50_000);
+    await f.route(2);
+    expect((await db.pool.query("select retry_after_at from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].retry_after_at)
+      .toEqual(subject.retry_after_at);
+    expect((await getPageSyncState(db.db, f.page.id, "dm_messages"))?.consecutiveFailures).toBe(0);
+    await f.due();
+    f.app.adapter.getMessagesPage = context => failRequest(context, new TypeError("fetch failed"));
+    await f.step();
+    expect((await db.pool.query("select consecutive_failures,extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ consecutive_failures: 2 });
+    const seconds = (await db.pool.query("select extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].seconds;
+    expect(Number(seconds)).toBeGreaterThan(110);
+    // The container clock can differ from the application clock by milliseconds.
+    expect(Number(seconds)).toBeLessThanOrEqual(121);
+  });
+  it.each(["unobserved", "policy", "auth", "rate_limit", "telemetry"])("propagates %s failures instead of disguising them as B1 debt", async kind => {
+    const f = await fixture();
+    const error = kind === "auth" ? new FanslyApiError("auth", 401)
+      : kind === "rate_limit" ? new FanslyApiError("rate", 429)
+      : new TypeError("injected failure");
+    f.app.adapter.getMessagesPage = context => kind === "unobserved" ? Promise.reject(error)
+      : failRequest(context, error, kind === "policy" ? "policy" : "transport");
+    const input = f.input();
+    if (kind === "telemetry") input.telemetry.getRequestObserver = () => ({ onRequestEvent: async event => {
+      if (event.state === "failed") throw error;
+    } });
+    await expect(f.owned(() => runFanslyWsHintStep(f.app, input as never))).rejects.toBe(error);
+    expect((await db.pool.query("select consecutive_failures from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].consecutive_failures).toBe(0);
+  });
+  it.each(["generation", "lease"])("handles %s revocation while deferring a transport failure", async reason => {
+    const f = await fixture(); const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(original).mockImplementationOnce(async context => {
+      try { return await failRequest(context, new TypeError("transport failed")); }
+      catch (error) {
+        if (reason === "generation") await saveProxy(f.app, f.page.id, { url: "http://rotated.example.test:8080" });
+        else await db.pool.query("update page_sync_states set lease_token=$1 where page_id=$2 and stream='dm_messages'", [randomUUID(), f.page.id]);
+        throw error;
+      }
+    });
+    const run = f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+    if (reason === "generation") {
+      await expect(run).resolves.toBeDefined();
+      expect(f.calls).toEqual(["messages", "messages", "messages"]);
+    } else await expect(run).rejects.toThrow();
+    expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
   });
   it("isolates a disappeared hinted group while ordinary history still progresses", async () => {
     const f = await fixture();
