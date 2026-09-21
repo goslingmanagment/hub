@@ -16250,3 +16250,15 @@ both refs replay through the sweep); waiting on no or ambiguous candidates
 while still attaching them as history; duplicate connection kept as history
 without switching; no custody move to a creator another page carries; the
 skip reasons.
+
+**Correction (2026-09-21, owner).** The rotation is not a creator being
+"added again" inside one OFAPI team: the owner registers a new OnlyFansAPI
+account (team) roughly monthly, connects the models there and hands the new
+key to an agent who applies it in the hub, so every `acct_…` changes with
+the team at once. The vendor's re-authenticate advice does not apply. The
+reconciler's rebind path is exactly this case (old accounts vanish from the
+roster, the new ones carry the same creator ids); its one prerequisite is
+that `OFAPI_EXPECTED_TEAM_SLUG` follows the key, otherwise the preflight is
+`mismatch` and the run is skipped. The handover steps are in
+`docs/runbooks/ofapi-binding-continuity.md`.
+
