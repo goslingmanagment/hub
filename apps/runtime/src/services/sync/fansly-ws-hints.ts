@@ -72,6 +72,8 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
   if (!selected) return;
   const { claim, context, conversation, walk } = selected;
   let admitted = 0;
+  let admittedRequestId: string | undefined;
+  let transportFailure: "transport" | "timeout" | undefined;
   const observer: HttpRequestObserver = {
     async onRequestEvent(event) {
       let expiresAt: string | undefined;
@@ -100,10 +102,18 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         // A late commit keeps its reservation but cannot authorize dispatch.
         if (hintPolicyExpired(expiresAt)) throw new HintDeferred("admission_expired");
         admitted++;
+        admittedRequestId = event.requestId;
         await input.budget.onRequestEvent(event);
       }
       const telemetry = input.telemetry.getRequestObserver();
       await telemetry.onRequestEvent(event);
+      // Set evidence AFTER telemetry: an observer/DB failure must propagate.
+      // The transport throws immediately after this terminal event, before
+      // raw capture or normalization. Policy cancellation is never isolated.
+      if (event.state === "failed" && event.requestId === admittedRequestId
+        && (event.failureKind === "transport" || event.failureKind === "timeout")) {
+        transportFailure = event.failureKind;
+      }
       if (event.state === "started" && hintPolicyExpired(expiresAt)) {
         // The started observer is outside the transport's try/catch. Close its
         // telemetry explicitly when the final await crosses the deadline.
@@ -121,7 +131,8 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
   };
   const now = () => new Date();
   const defer = (outcome: string) => owned((db) => advanceFanslyWsHint(db, claim, {
-    walk, complete: false, outcome, now: now(), retryAt: new Date(Date.now() + 60_000),
+    walk, complete: false, outcome, failed: true, now: now(),
+    retryAt: new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(claim.consecutiveFailures, 6))),
   }));
   try {
     if (!conversation) {
@@ -226,10 +237,14 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
   } catch (error) {
     // Only admission refusals are a quiet yield. Provider errors (especially
     // 429/Retry-After), capture failures and lost leases retain executor policy.
-    if (error instanceof HintDeferred) { await defer("admission_deferred"); return; }
+    if (error instanceof HintDeferred) { await defer(error.message); return; }
     if (error instanceof FanslyApiError && error.retryAfterAt === null
       && (error.status === 404 || (error.status !== undefined && error.status >= 500))) {
       await defer("target_failed");
+      return;
+    }
+    if (!(error instanceof FanslyApiError) && transportFailure) {
+      await defer(`target_${transportFailure}`);
       return;
     }
     throw error;

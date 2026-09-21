@@ -6,7 +6,8 @@ import {
   upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
-import { resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND, type HttpRequestObserver } from "@agency_hub_core/shared";
+import { executeObservedRequest, resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND,
+  type HttpRequestObserver, type HttpRequestFailureKind } from "@agency_hub_core/shared";
 import { FanslyApiError, type FanslyMessage, type FanslyRequestContext } from "@agency_hub_core/fansly";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -26,6 +27,16 @@ let db: StartedTestDatabase;
 beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
 afterAll(async () => { await db?.stop(); });
 beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
+
+function failRequest(context: FanslyRequestContext, error: Error, failureKind: HttpRequestFailureKind = "transport") {
+  return executeObservedRequest<never, never>({
+    observer: context.requestObserver, requestId: randomUUID(), operation: "messages",
+    endpointTemplate: "/message", method: "GET", retries: 0,
+    execute: async () => { throw error; },
+    onTransportError: () => ({ kind: "failed", failureKind, error }),
+    onResponse: () => { throw new Error("unexpected response"); },
+  });
+}
 
 async function fixture(routeInitial = true) {
   const app = createTestAppContext(db, { syncSharedRateLimitEnabled: true });
@@ -341,9 +352,10 @@ describe("B1 REST execution and rollback", () => {
     await f.owned(() => fanslyDmMessagesChunk(f.app, f.input("event", true) as never));
     expect(f.calls).toEqual([]);
   });
-  it.each(["disabled", "budget_exhausted"])("settles an event-only %s run without ordinary freshness or incident recovery", async (mode) => {
+  it.each(["disabled", "budget_exhausted", "transport"])("settles an event-only %s run without ordinary freshness or incident recovery", async (mode) => {
     const f = await fixture();
     if (mode === "disabled") f.app.config.fanslyWsHintsEnabled = false;
+    else if (mode === "transport") f.app.adapter.getMessagesPage = context => failRequest(context, new TypeError("fetch failed"));
     else await db.pool.query(`insert into fansly_ws_hint_attempts(page_id,request_id,attempt_number,generation)
       select $1, 'spent-'||n, 1, $2 from generate_series(1,50) n`, [f.page.id, f.policy.generation]);
     await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
@@ -370,6 +382,45 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select outcome,stats from sync_runs where id=$1", [result.runId])).rows[0])
       .toMatchObject({ outcome: "skipped", stats: { qualityHold: "fansly_ws_hint_only" } });
     expect(f.calls).toEqual([]);
+  });
+  it("isolates an observed transport failure and persists backoff while ordinary polling progresses", async () => {
+    const f = await fixture();
+    const ordinary = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(ordinary).mockImplementationOnce(context =>
+      failRequest(context, new TypeError("fetch failed")));
+    await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
+    expect(f.calls).toEqual(["messages", "messages", "messages"]);
+    expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
+    const subject = (await db.pool.query("select * from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
+    expect(subject).toMatchObject({ last_refresh_outcome: "target_transport", consecutive_failures: 1, applied_revision: 0n });
+    expect(subject.retry_after_at.getTime() - Date.now()).toBeGreaterThan(50_000);
+    await f.route(2);
+    expect((await db.pool.query("select retry_after_at from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].retry_after_at)
+      .toEqual(subject.retry_after_at);
+    expect((await getPageSyncState(db.db, f.page.id, "dm_messages"))?.consecutiveFailures).toBe(0);
+    await f.due();
+    f.app.adapter.getMessagesPage = context => failRequest(context, new TypeError("fetch failed"));
+    await f.step();
+    expect((await db.pool.query("select consecutive_failures,extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toMatchObject({ consecutive_failures: 2 });
+    const seconds = (await db.pool.query("select extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].seconds;
+    expect(Number(seconds)).toBeGreaterThan(110);
+    // The container clock can differ from the application clock by milliseconds.
+    expect(Number(seconds)).toBeLessThanOrEqual(121);
+  });
+  it.each(["unobserved", "policy", "auth", "rate_limit", "telemetry"])("propagates %s failures instead of disguising them as B1 debt", async kind => {
+    const f = await fixture();
+    const error = kind === "auth" ? new FanslyApiError("auth", 401)
+      : kind === "rate_limit" ? new FanslyApiError("rate", 429)
+      : new TypeError("injected failure");
+    f.app.adapter.getMessagesPage = context => kind === "unobserved" ? Promise.reject(error)
+      : failRequest(context, error, kind === "policy" ? "policy" : "transport");
+    const input = f.input();
+    if (kind === "telemetry") input.telemetry.getRequestObserver = () => ({ onRequestEvent: async event => {
+      if (event.state === "failed") throw error;
+    } });
+    await expect(f.owned(() => runFanslyWsHintStep(f.app, input as never))).rejects.toBe(error);
+    expect((await db.pool.query("select consecutive_failures from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].consecutive_failures).toBe(0);
   });
   it("isolates a disappeared hinted group while ordinary history still progresses", async () => {
     const f = await fixture();

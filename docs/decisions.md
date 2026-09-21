@@ -380,6 +380,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 381 | OFAPI custody | The four OFAPI accounts retired before migration 0150 (`acct_fbaf…`, `acct_b929…` → 2026-07-21; `acct_9070…`, `acct_b47a…` → 2026-09-03) get historical custody rows in `ofapi_account_bindings` by an owner-approved evidence import (`docs/runbooks/ofapi-historical-binding-import.md`), not by hiding their ~452k v3-stamped webhook rows from the `obs_backlog_webhook_ofapi_v5` gauge. Attribution is proven three ways from `observations` alone; the v3→v5 replay dedupes every fact (dedup keys unchanged) and appends only the never-consumed `chat_queue.*` material, pinned by an integration test. |
 | 382 | OFAPI custody | OFAPI custody follows the creator, not the connection: a five-minute reconciler (`ofapiBindingReconcileEnabled`, roster read is free) seeds the OnlyFans creator id onto each page from the roster, rebinds a page whose account died to the creator's single authenticated account through the same verified apply the owner route uses (roster capture as evidence, `ofapi.binding.replaced` audit, auth incident resolved), and attaches every other unowned account of that creator as historical custody so its journaled facts replay. It never seeds a creator another page carries, never rebinds on a mismatch or an ambiguous roster, and never moves custody between pages. CLI `ofapi:bindings:reconcile` reports (or `--execute`s) the same plan. The sweep result names the unmapped refs it skipped. |
 | 383 | Fansly A0 boundary after A1 | Resolve the last certified full completion across bounded cursors; preserve it in the initial diagnostics checkpoint, including when A1 is disabled. A1 stop still uses start minus overlap. |
+| 384 | Fansly B1 transport isolation | Defer an admitted hint request only on its observed transport/timeout failure, after telemetry succeeds; use durable subject backoff without clearing ordinary freshness or incidents. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16279,3 +16280,19 @@ A0 still compares with full completion; A1 still stops against full start minus
 Validation: 30 A0/A1 integration tests pass, including full-to-bounded-to-full,
 flag-off, resumed full and a changed head below the simulated stop. Independent
 Fable plan review and decisions are in docs/plans/2026-09-22-fansly-reliability/.
+
+## Decision 384: B1 transport failure stays on its subject (2026-09-22)
+
+A positively attributed B1 transport/timeout failure releases the subject with
+exponential backoff (60 seconds through one hour using consecutive_failures),
+then returns the remaining chunk to ordinary DM polling. The observer records
+the admitted request id and records terminal evidence only after telemetry
+succeeds. Unobserved errors, policy/lease cancellation, auth, shared Retry-After,
+DB and capture failures retain existing executor behavior. Admitted attempts
+are never refunded. Actual admission refusal reasons replace the opaque bucket.
+New signals preserve retry_after_at. Hint-only runs retain the existing quality
+hold and cannot clear ordinary failures, freshness or incidents.
+
+Validation: 36 B1 integration tests pass, including real observed-request
+transport emission, ordinary progress, durable retry growth, new-signal
+backoff preservation, hint-only incident preservation and negative cases.

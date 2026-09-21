@@ -87,6 +87,7 @@ export type FanslyWsHintWalk = {
 
 export type FanslyWsHintClaim = {
   pageId: number; groupRef: string; token: string; revision: number;
+  consecutiveFailures: number;
   walk: FanslyWsHintWalk;
 };
 
@@ -108,7 +109,7 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
   if (!await tryAcquireDmArchiveWriterFenceLock(db, pageId)) throw new Error("fansly_ws_hint_erasure_busy");
   const token = randomUUID();
   const result = await db.execute<{
-    subject_ref: string; claimed_revision: string; backfill_cursor: FanslyWsHintWalk;
+    subject_ref: string; claimed_revision: string; backfill_cursor: FanslyWsHintWalk; consecutive_failures: number;
   }>(sql`
     with candidate as (
       select page_id, plane, subject_ref,
@@ -140,10 +141,11 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
       claim_expires_at = ${new Date(now.getTime() + 300_000)},
       refresh_visits = s.refresh_visits + 1, last_visited_at = ${now}, updated_at = now()
     from candidate c where s.page_id = c.page_id and s.plane = c.plane and s.subject_ref = c.subject_ref
-    returning s.subject_ref, s.claimed_revision, s.backfill_cursor
+    returning s.subject_ref, s.claimed_revision, s.backfill_cursor, s.consecutive_failures
   `);
   const row = result.rows[0];
-  return row ? { pageId, groupRef: row.subject_ref, token, revision: Number(row.claimed_revision), walk: row.backfill_cursor } : null;
+  return row ? { pageId, groupRef: row.subject_ref, token, revision: Number(row.claimed_revision),
+    walk: row.backfill_cursor, consecutiveFailures: row.consecutive_failures } : null;
 }
 
 export async function isFanslyWsHintClaimEnabled(db: Database, claim: FanslyWsHintClaim, policy: FanslyWsHintPolicy) {
@@ -184,7 +186,7 @@ export async function hasUnconfirmedFanslyWsHintTargets(
  * A newer R+1 immediately becomes due, with a fresh head walk. */
 export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim, input: {
   walk: FanslyWsHintWalk; complete: boolean; outcome: string; now: Date; retryAt?: Date;
-  rawPageIds?: number[];
+  rawPageIds?: number[]; failed?: boolean;
 }) {
   const nextCursor = input.complete ? { generation: claim.walk.generation }
     : { ...input.walk, generation: claim.walk.generation, revision: claim.revision };
@@ -199,6 +201,8 @@ export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim
       refresh_class = case when ${input.complete} and requested_revision <= ${claim.revision} then null else 'dirty' end,
       dirty_reason = case when ${input.complete} and requested_revision <= ${claim.revision} then null else 'ws_hint' end,
       last_refresh_outcome = ${input.outcome},
+      consecutive_failures = case when ${input.complete} then 0
+        when ${input.failed === true} then least(consecutive_failures, 30) + 1 else consecutive_failures end,
       last_checked_at = case when ${Boolean(input.rawPageIds?.length)} then ${input.now}::timestamptz else last_checked_at end,
       refresh_checks = refresh_checks + ${input.rawPageIds?.length ? 1 : 0}, updated_at = now()
     where page_id = ${claim.pageId} and plane = ${FANSLY_WS_DM_PLANE} and subject_ref = ${claim.groupRef}
