@@ -3,16 +3,36 @@
 What happens when an OnlyFans page's OFAPI account changes, and what to do so
 it changes as rarely as possible.
 
-## The rule that avoids the problem
+## How the accounts actually rotate here
 
-An `acct_…` is one OFAPI connection. OFAPI keeps it alive through session
-expiry (automatic re-login, then "Re-authenticate Account" in the console or
-`POST /api/authenticate/{account_id}/reauthenticate`). A NEW `acct_…`
-appears only when the creator is **added again** ("Start Authentication" /
-"Add account"). The vendor FAQ names that as the mistake behind duplicate
-accounts. So, when the hub raises `ofapi_auth` (session expired, 2FA, face
-check, disconnected): **re-authenticate the bound account; do not add the
-creator again.** Then nothing below is needed.
+The owner registers a NEW OnlyFansAPI account (a new team) roughly monthly,
+connects the models there and hands the new API key to an agent, who applies
+it in the hub. Every `acct_…` changes at once with the team; the OnlyFans
+creator ids behind them do not. (The vendor's "re-authenticate instead of
+adding again" advice is about a different situation — one team, a session
+that expired — and does not apply to this flow.)
+
+## Key handover: what the agent does in the hub
+
+1. On the VPS, in `/opt/agency-hub/.env.production`: set `OFAPI_API_KEY` to
+   the new key and `OFAPI_EXPECTED_TEAM_SLUG` to the new team's slug (OFAPI
+   console, or `GET https://app.onlyfansapi.com/api/whoami` with the new
+   key → `team.slug`); keep `OFAPI_WEBHOOK_MANAGEMENT_SCOPE=team`. Both are
+   env-only settings (`editability: never`), so recreate the services:
+   `cd /opt/agency-hub && docker compose --env-file .env.production -f docker-compose.production.yml up -d`.
+   Without the new slug the credential preflight reports `mismatch`, every
+   stateful OFAPI call refuses, and the reconciler skips with
+   `credential_mismatch` in the worker log.
+2. Re-register the webhook under the new team: `POST /api/v1/admin/ofapi/webhook`
+   (owner session) with `endpointUrl` = `https://gosling-agency.ru/api/v1/ofapi/webhook`.
+3. Do NOT edit `pages.ofapi_account_id` by hand. Within five minutes the
+   reconciler sees the new roster, rebinds both pages to the new accounts of
+   the same creators and keeps the old accounts as history — or run it now:
+   `ofapi:bindings:reconcile` (report), then `--execute`.
+4. Check: `select id,label,ofapi_account_id,external_page_id from pages where platform='onlyfans'`
+   shows the new `acct_…`; `ofapi_account_bindings` still lists the previous
+   ones with `valid_to`; the worker log has `OFAPI binding reconcile complete`
+   with two `rebind` actions.
 
 ## When the id changes anyway
 
@@ -25,7 +45,7 @@ by the creator's OnlyFans id, which never changes:
 | Page has no creator id recorded | Seeds it from the roster entry of the page's current account (page + custody row). Refuses if another page carries that creator. |
 | Current account gone from the roster / not authenticated / auth action required, exactly one authenticated account of the same creator | Rebinds through the verified apply: new generation, old account retired with `valid_to`, `ofapi.binding.replaced` audit row, auth incident resolved. Journaled facts of both refs replay. |
 | Same, but zero or several candidates | Waits (`waiting[].reason`). Candidates still join custody as history. |
-| Bound account works and the creator is connected a second time | Keeps the binding, attaches the duplicate as history, logs the re-authenticate advice (`duplicates[]`). |
+| Bound account works and the creator is connected a second time | Keeps the binding, attaches the duplicate as history, reports it (`duplicates[]`). |
 | Recorded creator ≠ roster creator for the page's account | Touches nothing, reports `identityMismatches[]` (log level error). |
 | Roster account no page owns and no creator matched | Reports `unownedRosterAccounts[]`. |
 
