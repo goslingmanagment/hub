@@ -97,17 +97,14 @@ describe("Fansly fail-closed egress (W3.1)", () => {
       errorCode: "proxy_missing",
     }));
 
-    // The second refusal deduped into the existing incident, and the sent
-    // open notification is not re-sent (D3-N1 retry only fires on sent=0).
-    expect(telegramMocks.sendTelegramMessage).toHaveBeenCalledTimes(1);
+    // The second refusal deduped into the existing incident. Nothing here
+    // sends: paging is the sweep's (Decision 381), so no delivery attempt
+    // exists yet either.
+    expect(telegramMocks.sendTelegramMessage).not.toHaveBeenCalled();
     const attempts = await listDeliveryAttempts(testDb.db, {
       kind: ["incident_opened"],
     });
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({
-      status: "sent",
-      notificationIncidentId: incident?.id,
-    });
+    expect(attempts).toHaveLength(0);
   });
 
   it("resolves normally once a proxy is assigned and a successful chunk closes the incident", async (context) => {
