@@ -19,7 +19,7 @@ needed. Keep raw observations and attempt accounting intact.
 ## Checked generation repair
 
 Run against the intended environment. Status is read-only and makes no Fansly
-HTTP request. Preview and apply each inspect account/me once through the exact
+HTTP request. Preview for a mismatched generation and apply each inspect account/me once through the exact
 page proxy, without retries or redirects. They never send a fan message.
 
 ```sh
@@ -63,6 +63,7 @@ from subject_refresh_state where plane = 'fansly_ws_dm'
 order by page_id, subject_ref;
 ```
 
+A prior hot_applied_at remains materialization evidence even if the message is later deleted.
 source_deleted means an exact retained delete settled the operational target
 following a contiguous REST walk. It does not mean the message was stored in the
 business archive; hot_applied_at stays null for a deleted-only target. Its
@@ -71,7 +72,8 @@ stay mutation_debt; this is not a B2 tombstone projector.
 
 A terminal transport/timeout event for the admitted B1 request records
 `target_transport`/`target_timeout` and retries after 60 seconds, then 120, up to
-one hour. Auth, 429/Retry-After, policy cancellation and storage/telemetry errors
+one hour. A missing target without exact deletion evidence still uses the existing
+one-minute target_unconfirmed retry, bounded by the unchanged 24-hour cap. Auth, 429/Retry-After, policy cancellation and storage/telemetry errors
 retain shared executor behavior. New R+1 preserves retry_after_at. Hint-only
 runs never certify ordinary freshness or resolve its incidents. Attempt counts
 are not refunded or reset across policy generations.
@@ -94,7 +96,7 @@ pnpm --silent cli fansly:ws-recovery-manifest \
 
 The command uses a read-only transaction, at most 20 exact targets, the envelope
 payload reader, canonical reader precedence and the existing owner-erasure
-fence. Output contains text length/hash and provenance, never text. Missing
+fence. Output contains text length and envelope hash and provenance, never text. Missing
 receipts, unavailable bodies, uncertain binding and owner erasure are explicit.
 Custody is the stored expected identity, not fabricated account verification.
 Later source mutations remain distinct from materialization/tombstones in the

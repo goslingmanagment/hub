@@ -232,7 +232,8 @@ export async function advanceFanslyWsHint(db: Database, claim: FanslyWsHintClaim
     const { conversationId, policy } = input.settlement;
     if (!policy.enabledTypes.size || policy.generation !== claim.walk.generation) throw new Error("fansly_ws_hint_settlement_policy_invalid");
     await db.execute(sql`with evidence as (
-      select r.event_id, r.hint_type, ${liveTarget(conversationId)} as materialized,
+      select r.event_id, r.hint_type,
+        (r.hot_applied_at is not null or ${liveTarget(conversationId)}) as materialized,
         ${deletedTargetObservation()} as delete_observation_id
       from fansly_ws_hint_receipts r
       where r.page_id = ${claim.pageId} and r.group_ref = ${claim.groupRef}

@@ -101,6 +101,11 @@ describe("checked Fansly B1 generation repair", () => {
     f.inspect.mockResolvedValue({ ...matched, identityMatched: false, observedAccountId: "888", reason: "account_mismatch" });
     expect(await f.preview()).toMatchObject({ state: "blocked", proposal: null, blockers: ["binding:account_mismatch"] });
   });
+  it("does not spend a binding request when the policy already matches", async () => {
+    const f = await fixture(); await f.patch({ generation: f.generation });
+    expect(await f.preview()).toMatchObject({ state: "already_matching", proposal: null, binding: null });
+    expect(f.inspect).not.toHaveBeenCalled();
+  });
   it("shows a generation mismatch in detailed metrics without changing deploy health", async () => {
     const f = await fixture();
     const mismatchedHealth = await getPublicSyncHealth(f.app, { pageIds: [f.page.id] });

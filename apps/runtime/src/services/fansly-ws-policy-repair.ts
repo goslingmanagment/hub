@@ -73,14 +73,21 @@ export async function previewFanslyWsPolicyRepair(app: RepairApp, label: string)
   const connection = await app.db.execute(sql`select id, verified_at, last_guard_at, closed_at, stop_reason
     from fansly_ws_connections where page_id=${snapshot.pageId} and generation=${snapshot.generation}
     order by started_at desc limit 1`);
-  const binding = await inspectBinding(app, label);
   const blocked = await isFanslyWsGenerationBlocked(app.db, snapshot.pageId, snapshot.generation);
+  if (snapshot.policy.generation === snapshot.generation) return {
+    state: blocked ? "blocked" : "already_matching", pageLabel: label,
+    configuredGeneration: snapshot.policy.generation, currentGeneration: snapshot.generation,
+    binding: null, connection: connection.rows[0] ?? null,
+    blockers: blocked ? ["auth_refused"] : [], proposal: null,
+    effect: "No generation change is needed; no account/me request was made.",
+  };
+  const binding = await inspectBinding(app, label);
   const blockers = [
     ...(!binding.identityMatched || binding.observedAccountId !== snapshot.nativeAccountId ? [`binding:${binding.reason}`] : []),
     ...(binding.pageId !== snapshot.pageId || binding.generation !== snapshot.generation ? ["generation_changed"] : []),
     ...(blocked ? ["auth_refused"] : []),
   ];
-  const proposal: FanslyWsRepairProposal | null = blockers.length || snapshot.policy.generation === snapshot.generation ? null : {
+  const proposal: FanslyWsRepairProposal | null = blockers.length ? null : {
     id: randomUUID(), pageId: snapshot.pageId, pageLabel: label, nativeAccountId: snapshot.nativeAccountId,
     fromGeneration: snapshot.policy.generation, toGeneration: snapshot.generation,
     policyVersion: snapshot.policyVersion, fingerprint: snapshot.fingerprint,

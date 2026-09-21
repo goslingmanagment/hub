@@ -236,16 +236,22 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       });
     });
   } catch (error) {
-    // Only admission refusals are a quiet yield. Provider errors (especially
-    // 429/Retry-After), capture failures and lost leases retain executor policy.
-    if (error instanceof HintDeferred) { await defer(error.message); return; }
+    // A rotation can revoke the deferral itself after a failed request. It
+    // grants no write authority; the old claim expires or a new generation
+    // replaces it. Lost leases and storage failures still propagate.
+    const deferIfCurrent = async (outcome: string) => {
+      try { await defer(outcome); } catch (deferralError) {
+        if (!(deferralError instanceof HintDeferred)) throw deferralError;
+      }
+    };
+    if (error instanceof HintDeferred) { await deferIfCurrent(error.message); return; }
     if (error instanceof FanslyApiError && error.retryAfterAt === null
       && (error.status === 404 || (error.status !== undefined && error.status >= 500))) {
-      await defer("target_failed");
+      await deferIfCurrent("target_failed");
       return;
     }
     if (!(error instanceof FanslyApiError) && transportFailure) {
-      await defer(`target_${transportFailure}`);
+      await deferIfCurrent(`target_${transportFailure}`);
       return;
     }
     throw error;

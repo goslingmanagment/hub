@@ -56,7 +56,7 @@ export async function buildFanslyWsRecoveryManifest(app: Pick<AppContext, "db" |
       const membership = await db.execute(sql`select is_visible, fan_id is not null as identity_resolved,
         partner_platform_user_id as partner_ref, metadata->>'messageSyncExcludedReason' as excluded_reason
         from page_dm_threads where platform_account_id=${pageId} and platform_conversation_id=${target.groupRef}`);
-      const refs = [target.groupRef, String(membership.rows[0]?.partner_ref ?? "")];
+      const refs = [target.groupRef, String(membership.rows[0]?.partner_ref ?? "")].filter(Boolean);
       if (await isDmArchiveScopeFenced(db, { pageId, platform: "fansly", refs, materialAt: receivedAt })) {
         items.push({ ...target, reader, blockers: ["owner_erased"] }); continue;
       }
@@ -98,7 +98,7 @@ export async function buildFanslyWsRecoveryManifest(app: Pick<AppContext, "db" |
         nativeAccountRef: row.native_account_ref, custodyProof: "stored_expected_identity_only",
         reader, membership: membership.rows[0] ?? null, sourcePath: nodes[0]!.path,
         frameSha256: hash(frame), senderRef, createdAt: createdAtMs === null ? null : new Date(createdAtMs).toISOString(),
-        textLength: content?.length ?? null, textSha256: content === null ? null : hash(content),
+        textLength: content?.length ?? null,
         laterMutations: mutations.rows.slice(0, 20), mutationsTruncated: mutations.rows.length > 20,
         blockers: ["ws_archive_projector_not_enabled",
           ...(row.native_account_ref !== stored.page.platformAccountId ? ["native_binding_changed"] : []),

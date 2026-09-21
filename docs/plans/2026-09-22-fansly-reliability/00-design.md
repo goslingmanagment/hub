@@ -1,6 +1,6 @@
 # Fansly reliability fixes after the WS + REST audit
 
-Status: reviewed by Fable; review decisions incorporated before implementation. See reviews/.
+Status: implemented, reviewed by Fable and locally validated. Draft PR #254; see reviews/ and the reliability runbook.
 Base: ecc864da / origin/main. Branch: codex/fansly-reliability-root-causes.
 
 ## Problem and scope

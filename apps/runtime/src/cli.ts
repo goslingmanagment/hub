@@ -1771,6 +1771,7 @@ export function buildProgram() {
       try {
         if (options.apply) {
           const document = JSON.parse(await readFile(options.apply, "utf8")) as { proposal?: { pageLabel?: unknown } };
+          if (!document.proposal) throw new Error("Preview has no applicable repair proposal; inspect its state and blockers");
           if (document.proposal?.pageLabel !== options.page) throw new Error("Preview page does not match --page");
           console.log(JSON.stringify(await applyFanslyWsPolicyRepair(app, document.proposal)));
         } else console.log(JSON.stringify(options.preview

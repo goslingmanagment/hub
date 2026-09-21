@@ -153,6 +153,19 @@ describe("A1 bounded scans through the real handler", () => {
       boundaryMs: Date.parse(FULL_END), stopPage: 3, changedHeadsBelowStop: 1, resumes: 1,
     } });
   });
+  it("preserves the A0 boundary when A1 is off and the first full page fails", async () => {
+    const f = await fixture([...[0, 1, 2].map(n => pageAt(n)), ...[0, 1, 2, 3, 4].map(n => pageAt(n))]);
+    f.app.config.fanslyDmShadowPageAllowlist = "a1";
+    await f.chunk();
+    f.app.config.fanslyDmBoundedEnabled = false;
+    vi.mocked(f.app.adapter.getMessagingGroupsPage).mockRejectedValueOnce(new Error("first page failed"));
+    await expect(f.chunk()).rejects.toThrow("first page failed");
+    expect((await f.checkpoint())?.state).toMatchObject({ pageCount: 0,
+      diagnostics: { boundaryMs: Date.parse(FULL_END), completeCoverage: true } });
+    await f.chunk();
+    expect((await db.pool.query("select status,diagnostics from fansly_dm_shadow_sweeps where page_id=$1", [f.page.id])).rows[0])
+      .toMatchObject({ status: "complete", diagnostics: { boundaryMs: Date.parse(FULL_END), completeCoverage: true } });
+  });
 
   it("does not advance a bounded cursor or apply rows on raw capture failure", async () => {
     const f = await fixture();

@@ -16345,7 +16345,7 @@ before and during apply, budget and sibling preservation, and unchanged health.
 
 fansly:ws-recovery-manifest accepts at most 20 exact page/observation/group/message
 targets. It reads through the existing payload seam, uses canonical reader
-precedence and the owner-erasure fence, and prints text length/hash rather than
+precedence and the owner-erasure fence, and prints text length and envelope hash rather than
 message text. Raw absence or unavailability, ambiguous addresses and uncertain
 custody remain explicit. The manifest does not claim account authentication from
 B0's stored expected identity and does not imply a source delete reached readers.

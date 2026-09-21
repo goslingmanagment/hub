@@ -48,10 +48,11 @@ describe("bounded read-only WS recovery manifest", () => {
     const result = await f.manifest();
     expect(result).toMatchObject({ mode: "read_only", recoveryApplied: false, items: [{
       reader: { state: "missing" }, membership: null, sourcePath: [0],
-      textLength: privateText.length, textSha256: createHash("sha256").update(privateText).digest("hex"),
+      textLength: privateText.length,
       custodyProof: "stored_expected_identity_only", blockers: ["ws_archive_projector_not_enabled"],
     }] });
     expect(JSON.stringify(result)).not.toContain(privateText);
+    expect(result.items[0]).not.toHaveProperty("textSha256");
     expect(await f.counts()).toEqual(before);
   });
   it("reports wrong addresses and missing receipts as unknown instead of raw recovery", async () => {
