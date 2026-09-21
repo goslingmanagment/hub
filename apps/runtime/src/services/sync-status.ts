@@ -1607,7 +1607,7 @@ export async function getSyncStatusSnapshot(
     fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
-  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => page.platform === "fansly")
+  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => fanslyPageIds.includes(page.id))
     .map(async page => [page.id, await getFanslyWsHintDiagnostic(app, page.label, effectiveConfig ?? app.config)] as const)));
   const dmFullSweepSlaByPage = new Map(scopedPages
     .filter((page) => fanslyPageIds.includes(page.id))

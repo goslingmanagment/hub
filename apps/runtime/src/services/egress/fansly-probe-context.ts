@@ -7,6 +7,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { BadRequestError, NotFoundError, ProxyMissingError } from "../errors.ts";
 import { decodeStoredFanslySession, resolveStoredProxyConfig } from "../page-context.ts";
 import { resolveEgress } from "./resolver.ts";
+import { assertFanslyPage } from "../fansly-page.ts";
 
 /**
  * The caller must pass its READ ONLY, REPEATABLE READ transaction as app.db.
@@ -40,9 +41,7 @@ async function readStoredProbePage(db: Database, pageLabel: string) {
   const stored = await findPageByLabel(db, pageLabel);
   // Catalog lookup excludes deleted pages.
   if (!stored) throw new NotFoundError(`Page "${pageLabel}" not found`);
-  if (stored.page.platform !== "fansly") {
-    throw new BadRequestError(`Page "${pageLabel}" is not a Fansly page`);
-  }
+  assertFanslyPage(stored.page, `Page "${pageLabel}" is not a Fansly page`);
   if (!stored.credentials) {
     throw new BadRequestError(`Page "${pageLabel}" has no stored platform credentials`);
   }

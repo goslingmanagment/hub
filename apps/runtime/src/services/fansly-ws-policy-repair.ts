@@ -8,6 +8,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { applyEffectiveOverrides, loadEffectiveConfig } from "./effective-config.ts";
 import { inspectFanslyBinding } from "./egress/fansly-binding-preflight.ts";
 import { readFanslyPageGeneration, readProbeSnapshot } from "./egress/fansly-probe-context.ts";
+import { assertFanslyPage } from "./fansly-page.ts";
 
 const POLICY_KEY = "fanslyWsHintsPolicies";
 const GATE_KEYS = ["fanslyWsCaptureEnabled", "fanslyWsCapturePageAllowlist", "fanslyWsHintsEnabled",
@@ -42,8 +43,9 @@ async function readPolicySnapshot(db: Database, config: AppContext["config"], la
   if (!policy) throw new Error("fansly_ws_repair_policy_inactive");
   if (policy.expiresAt !== undefined) throw new Error("fansly_ws_repair_canary_refused");
   const stored = await findPageByLabel(db, label);
-  if (!stored || stored.page.platform !== "fansly" || !stored.page.platformAccountId
+  if (!stored || !stored.page.platformAccountId
     || !/^[1-9][0-9]{0,31}$/.test(stored.page.platformAccountId)) throw new Error("fansly_ws_repair_identity_missing");
+  assertFanslyPage(stored.page, "fansly_ws_repair_requires_fansly");
   const generation = await readFanslyPageGeneration(db, label);
   const policyVersion = overrides.get(POLICY_KEY)?.version ?? 0;
   const fingerprint = createHash("sha256").update(JSON.stringify({
