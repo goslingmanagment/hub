@@ -133,6 +133,27 @@ describe("A1 bounded scans through the real handler", () => {
     expect((await f.threads()).every((row) => Number(row.last_seen_generation) === 2)).toBe(true);
   });
 
+  it.each(["deadline", "off"])("keeps the A0 boundary and below-stop witness after A1 (%s), including resume", async reason => {
+    const f = await fixture([
+      ...[0, 1, 2].map(n => pageAt(n)),
+      ...[0, 1, 2, 3, 4].map(n => pageAt(n, n === 4 ? { lastMessageId: "changed-head" } : {})),
+    ]);
+    f.app.config.fanslyDmShadowPageAllowlist = "a1";
+    await f.chunk();
+    if (reason === "off") f.app.config.fanslyDmBoundedEnabled = false;
+    else vi.setSystemTime(new Date("2026-09-15T01:00:00Z"));
+    await f.chunk(2);
+    expect((await f.checkpoint())?.state).toMatchObject({ diagnostics: {
+      boundaryMs: Date.parse(FULL_END), pageCount: 2, completeCoverage: true,
+    } });
+    await f.chunk();
+    const reports = await db.pool.query("select status,diagnostics from fansly_dm_shadow_sweeps where page_id=$1", [f.page.id]);
+    expect(reports.rows).toHaveLength(1);
+    expect(reports.rows[0]).toMatchObject({ status: "complete", diagnostics: {
+      boundaryMs: Date.parse(FULL_END), stopPage: 3, changedHeadsBelowStop: 1, resumes: 1,
+    } });
+  });
+
   it("does not advance a bounded cursor or apply rows on raw capture failure", async () => {
     const f = await fixture();
     await db.pool.query(`create function reject_a1_raw() returns trigger language plpgsql as $$
