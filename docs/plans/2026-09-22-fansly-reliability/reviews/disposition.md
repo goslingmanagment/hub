@@ -39,3 +39,10 @@ low-priority compatibility/diagnostic findings were addressed before completion:
 Fable's focused follow-up explicitly confirms M1/M2/L1–L4 are addressed with no
 remaining blockers. Its type/lint follow-ups are covered by the final pnpm check.
 The additional live read used only read_only; no production mutation occurred.
+
+## Integration with main (2026-09-22)
+
+Main PR #253 independently used migration 0205 for notification paging. The
+unreleased Fansly settlement migration is now 0206; its SQL is unchanged.
+References to 0205 in the preserved Fable reviews describe the reviewed branch
+at that time. Both additive migrations remain in the deploy rollback allowlist.

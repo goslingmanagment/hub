@@ -55,7 +55,9 @@ function notificationDeliveryIdempotencyKey(input: {
 }
 
 /**
- * Called only from the incident transition transaction. The selected paging
+ * Called only inside a transaction that also commits the state the row
+ * answers for: the incident transition for the AI critical pair, the paging
+ * sweep's paging row for every other kind (Decision 381). The selected paging
  * setting is read in that same transaction: paging-off persists a suppressed
  * outbox row instead of silently omitting delivery state.
  */

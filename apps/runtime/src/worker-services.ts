@@ -118,6 +118,11 @@ import {
   ensureNotificationDeliveryOutboxQueue,
   startNotificationDeliveryOutboxWorker,
 } from "./services/notification-delivery-outbox.ts";
+import {
+  ensureNotificationPagingSweepQueue,
+  startNotificationPagingSweepWorker,
+} from "./services/notification-paging-sweep.ts";
+import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
 import { ensureTieringQueue, startTieringWorker } from "./services/tiering/index.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
@@ -225,6 +230,7 @@ export async function startWorkerServices(
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
+  await ensureNotificationPagingSweepQueue(boss, createdQueues);
   await ensureTargetedThreadBackfillQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
   // Hoisted out of the worker-startup section below (it used to sit next to
@@ -531,6 +537,7 @@ export async function startWorkerServices(
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
+  await startNotificationPagingSweepWorker(app, boss);
   await startTieringWorker(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
@@ -548,24 +555,35 @@ export async function startWorkerServices(
     const settings = await getTelegramSettings(app.db, {
       defaultReportHourUtc: app.config.telegramReportHourUtc,
     });
-    if (!settings.enabled || !settings.dailyReportEnabled) {
+    if (!settings.enabled) {
       return;
     }
-
     const dueReportDate = resolveDueTelegramReportDate(now, settings.reportHourUtc);
-    const latestSentReportDate = await getLatestScheduledReportDateOnOrBefore(
-      app.db,
-      dueReportDate,
-    );
 
-    for (const reportDate of listPendingTelegramReportDates(latestSentReportDate, dueReportDate)) {
-      const result = await sendDailyRevenueTelegramReport(
-        app,
-        buildTelegramReportRunTime(reportDate),
+    if (settings.dailyReportEnabled) {
+      const latestSentReportDate = await getLatestScheduledReportDateOnOrBefore(
+        app.db,
+        dueReportDate,
       );
-      if (result.delivery.status === "failed") {
-        throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);
+
+      for (const reportDate of listPendingTelegramReportDates(latestSentReportDate, dueReportDate)) {
+        const result = await sendDailyRevenueTelegramReport(
+          app,
+          buildTelegramReportRunTime(reportDate),
+        );
+        if (result.delivery.status === "failed") {
+          throw new Error(`Telegram daily report delivery failed: ${result.delivery.error}`);
+        }
       }
+    }
+
+    // Decision 381: the alert digest rides at the same hour, after the money.
+    // It is idempotent per due date and skips itself when there is nothing to
+    // say; its failure must never cost the revenue report a retry.
+    try {
+      await sendScheduledAlertDigest(app, { reportDate: dueReportDate, now });
+    } catch (error) {
+      app.logger.warn({ err: error }, "Alert digest failed; continuing");
     }
   });
 

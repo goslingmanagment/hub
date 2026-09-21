@@ -12,6 +12,7 @@ import { ensureCapturePayloadParityQueue } from "../apps/runtime/src/services/ca
 import { ensureDbDiskUsageQueue } from "../apps/runtime/src/services/db-disk-alert.ts";
 import { ensureOpsMetricsQueue } from "../apps/runtime/src/services/golden-signals.ts";
 import { ensureNotificationDeliveryOutboxQueue } from "../apps/runtime/src/services/notification-delivery-outbox.ts";
+import { ensureNotificationPagingSweepQueue } from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import { ensureObservationsPartitionQueue } from "../apps/runtime/src/services/observations-partitions.ts";
 import { ensureOfapiChargebacksQueue } from "../apps/runtime/src/services/ofapi-chargebacks-sync.ts";
 import { ensureOfapiCommandQueues } from "../apps/runtime/src/services/ofapi-command-executor.ts";
@@ -71,6 +72,7 @@ async function createAllQueues(boss: PgBoss) {
   await ensureVoiceNotesSweepQueue(boss);
   await ensureOpsMetricsQueue(boss);
   await ensureNotificationDeliveryOutboxQueue(boss);
+  await ensureNotificationPagingSweepQueue(boss);
   await ensureTieringQueue(boss);
   await ensureAgentHydrationQueue(boss);
   await ensureTargetedThreadBackfillQueue(boss);

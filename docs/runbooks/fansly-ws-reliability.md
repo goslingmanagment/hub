@@ -1,17 +1,17 @@
 # Fansly WS + REST reliability repair
 
-Decisions 383–386; plans and independent Fable review:
+Decisions 383–387; plans and independent Fable review:
 `docs/plans/2026-09-22-fansly-reliability/`.
 
 ## Deployment boundary
 
-This branch changes code and adds migration 0205. It does not deploy, enable
+This branch changes code and adds migration 0206. It does not deploy, enable
 flags, repin production policy, reset a watermark or recover historical rows.
 Production rollout follows the ordinary owner-approved deploy procedure. Test
 and observe one page before widening an operational intervention. Preserve the
 existing B0/B1 gates, full cadence and 24-hour attempt budget.
 
-0205 is additive and an older binary can keep writing the old columns. A code
+0206 is additive and an older binary can keep writing the old columns. A code
 rollback leaves new receipt evidence readable; old code can again repeat reads
 for deleted targets. Disable B1 through the existing switch if containment is
 needed. Keep raw observations and attempt accounting intact.

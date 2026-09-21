@@ -436,8 +436,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # pre-drop image runs unchanged after a rollback. Listing it keeps
   # automatic rollback armed for this deploy.
   "0204_drop_workboard_enum_types.sql"
+  # Decision 381: two PURELY ADDITIVE tables the paging sweep owns
+  # (`notification_incident_paging`, `notification_incident_cycles`) plus a
+  # one-off seed read from existing rows. The image this deploy replaces
+  # neither reads nor writes them and still pages through its own direct
+  # send path, so it runs unchanged after a rollback. Listing it keeps
+  # automatic rollback armed for this deploy.
+  "0205_notification_incident_paging.sql"
   # Additive B1 receipt evidence; old writers leave the nullable fields empty.
-  "0205_fansly_ws_hint_settlement.sql"
+  "0206_fansly_ws_hint_settlement.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

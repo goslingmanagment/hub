@@ -26,6 +26,10 @@ import {
   ensureNotificationDeliveryOutboxSchedule,
 } from "./notification-delivery-outbox.ts";
 import {
+  ensureNotificationPagingSweepQueue,
+  ensureNotificationPagingSweepSchedule,
+} from "./notification-paging-sweep.ts";
+import {
   RAW_PAYLOAD_CLEANUP_QUEUE,
   ensurePlannerSchedule,
   ensureSyncQueues,
@@ -65,6 +69,7 @@ export async function registerAllSchedules(
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
+  await ensureNotificationPagingSweepQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
@@ -94,6 +99,7 @@ export async function registerAllSchedules(
     ensureVoiceNotesSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),
+    ensureNotificationPagingSweepSchedule(boss),
     ensureTieringSchedule(boss),
     ensureAgentHydrationSchedule(boss),
   ]);

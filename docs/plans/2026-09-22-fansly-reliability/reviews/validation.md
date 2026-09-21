@@ -27,3 +27,13 @@ completeness certificate. No deployment, flag change, production policy repin,
 watermark reset or backfill was performed. The six Ari targets have a read-only
 manifest; no WS-to-archive B2 projector was introduced and no recovery is claimed.
 The main working checkout and its pre-existing edits were preserved.
+
+## Merge preparation (2026-09-22)
+
+Merged main 5d4cf1b120488951c03746a14fdd6ee734c3fb92. Conflict resolution
+preserved both decision entries and rollback allowlist entries; the unreleased
+Fansly migration moved from 0205 to 0206 without SQL changes. No runtime source
+conflicts occurred. The combined tree passed 138 tests across six files:
+Fansly B1 repository/runtime, schema guard, migration invariants, production
+migration history, and deploy behavior. Shell syntax and whitespace checks pass.
+Full CI is required before merging PR #254.

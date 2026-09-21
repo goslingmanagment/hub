@@ -1,19 +1,14 @@
 import {
   clearPageSyncAuthBlock,
-  getIncidentOpenedDeliveryState,
-  getTelegramSettings,
   hasRecentTerminalProxyFailure,
-  insertDeliveryAttempt,
   openNotificationIncidentWithRecoveryGuard,
   recoverAndResolveNotificationIncident,
-  type NotificationIncidentRow,
   type NotificationIncidentKind,
   type SyncStream,
 } from "@agency_hub_core/db";
 import { sanitizeError, type SanitizeErrorOptions } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
 const STREAM_FAILURE_THRESHOLD = 3;
 const INCIDENT_ERROR_OPTIONS = {
@@ -21,18 +16,17 @@ const INCIDENT_ERROR_OPTIONS = {
   truncation: "ellipsis",
   trim: true,
 } satisfies SanitizeErrorOptions;
-// W3.3 (D3-N1): total incident_opened attempts allowed per incident before
-// the re-send loop gives up. Pacing comes free from the monitor cadence.
+// Attempt cap per critical outbox row (Decision 186).
 const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
-type CriticalIncidentApp = Pick<AppContext, "db"> & {
+// Decision 381: producers only flip latches. Every kind outside the AI
+// critical pair is paged by the minutely paging sweep
+// (`notification-paging-sweep.ts`) through the durable outbox, so no producer
+// here needs Telegram credentials or runtime config any more. The exported
+// signatures keep accepting `config` so the many call sites stay unchanged.
+type IncidentApp = Pick<AppContext, "db"> & {
   logger: Pick<AppContext["logger"], "warn">;
 };
-type DirectIncidentApp = Pick<AppContext, "db" | "logger" | "config">;
-type IncidentApp = CriticalIncidentApp | DirectIncidentApp;
-
-function isDirectIncidentApp(app: IncidentApp): app is DirectIncidentApp {
-  return "config" in app;
-}
+type CriticalIncidentApp = IncidentApp;
 
 export function incidentKey(
   input: {
@@ -122,7 +116,36 @@ function openTitleForIncident(
   }
 }
 
-function openMessageForIncident(
+/** The open title without its siren, for the daily digest's lines. */
+export function incidentTitleForKind(
+  input: { kind: NotificationIncidentKind; subKey?: string | null },
+): string {
+  return openTitleForIncident(input).replace(/^🚨\s*/u, "");
+}
+
+/**
+ * Recovers the `subKey` from a stored incident key (the row does not keep it
+ * as a column). Shapes, from `incidentKey` above:
+ * `kind:global[:subKey]` and `kind:<pageId>[:<stream>][:subKey]`, where the
+ * stream segment is present exactly when it equals the row's stream column.
+ */
+export function parseIncidentSubKey(
+  input: { incidentKey: string; kind: NotificationIncidentKind; stream: string | null },
+): string | null {
+  const prefix = `${input.kind}:`;
+  if (!input.incidentKey.startsWith(prefix)) {
+    return null;
+  }
+  const segments = input.incidentKey.slice(prefix.length).split(":");
+  // segments[0] is "global" or the page id; drop it.
+  let rest = segments.slice(1);
+  if (segments[0] !== "global" && input.stream !== null && rest[0] === input.stream) {
+    rest = rest.slice(1);
+  }
+  return rest.length > 0 ? rest.join(":") : null;
+}
+
+export function openMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
     pageLabel: string | null;
@@ -239,18 +262,6 @@ export function resolveMessageForIncident(
   ].join("\n");
 }
 
-function deliveryAttemptFields(delivery: TelegramSendResult) {
-  return {
-    status: delivery.status,
-    messageId: delivery.status === "sent" ? delivery.messageId : null,
-    error: delivery.status === "failed"
-      ? delivery.error
-      : delivery.status === "skipped"
-        ? delivery.reason
-        : null,
-  };
-}
-
 async function openIncidentAndNotify(
   app: IncidentApp,
   input: {
@@ -263,13 +274,17 @@ async function openIncidentAndNotify(
     errorCode?: string | null;
     errorSummary?: string | null;
     occurredAt?: Date;
-    deliveryMode?: "direct" | "critical_outbox";
+    /** `policy` (default): the latch alone; the paging sweep decides whether
+     * and when it pages. `critical_outbox`: the AI critical pair, whose
+     * outbox row commits inside the latch transition (Decision 186). */
+    deliveryMode?: "policy" | "critical_outbox";
   },
 ): Promise<boolean> {
-  // Returns whether an incident row exists for this condition (opened now or
-  // already open). False = the open itself failed — callers with their own
-  // once-only latches (read-gateway capture) re-arm on false; this function
-  // never throws, so a rejected promise can't carry that signal.
+  // Returns whether the latch now reflects the condition (opened, reopened,
+  // refreshed, or suppressed by a newer recovery). False = the open itself
+  // failed — callers with their own once-only latches (read-gateway capture)
+  // re-arm on false; this function never throws, so a rejected promise can't
+  // carry that signal.
   try {
     const occurredAt = input.occurredAt ?? new Date();
     const outboxMessage = input.deliveryMode === "critical_outbox"
@@ -278,7 +293,7 @@ async function openIncidentAndNotify(
         errorSummary: input.errorSummary ?? null,
       })
       : null;
-    const result = await openNotificationIncidentWithRecoveryGuard(app.db, {
+    await openNotificationIncidentWithRecoveryGuard(app.db, {
       incidentKey: incidentKey(input),
       kind: input.kind,
       platformAccountId: input.platformAccountId,
@@ -306,53 +321,10 @@ async function openIncidentAndNotify(
         : {}),
     });
 
-    if (result.transition === "existing" || result.transition === "suppressed" || !result.incident) {
-      // W3.3 (D3-N1): "existing" used to return BEFORE the Telegram send, so
-      // one transient send failure at open time lost that incident's page
-      // permanently — every later monitor pass on the standing condition
-      // re-hit this branch. If the open notification never reached Telegram,
-      // re-send here (capped; delivery is at-least-once — a process death
-      // between the Telegram accept and the attempt insert can page twice,
-      // preferable to permanent pager loss).
-      if (
-        input.deliveryMode !== "critical_outbox"
-        && result.transition === "existing"
-        && result.incident
-        && result.incident.status === "open"
-      ) {
-        if (!isDirectIncidentApp(app)) {
-          throw new Error("Direct notification incident delivery requires runtime config");
-        }
-        await retryUndeliveredOpenNotification(app, input, result.incident);
-      }
-      return true;
-    }
-    if (input.deliveryMode === "critical_outbox") {
-      return true;
-    }
-    if (!isDirectIncidentApp(app)) {
-      throw new Error("Direct notification incident delivery requires runtime config");
-    }
-
-    const settings = await getTelegramSettings(app.db, {
-      defaultReportHourUtc: app.config.telegramReportHourUtc,
-    });
-    if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
-      return true;
-    }
-
-    const delivery = await sendTelegramMessage(app, {
-      text: openMessageForIncident({
-        ...input,
-        errorSummary: input.errorSummary ?? null,
-      }),
-    });
-
-    await insertDeliveryAttempt(app.db, {
-      kind: "incident_opened",
-      notificationIncidentId: result.incident.id,
-      ...deliveryAttemptFields(delivery),
-    });
+    // Whatever the transition, the latch now reflects the condition. Paging
+    // is not this function's job (Decision 381): the AI critical kinds
+    // enqueued their outbox row inside the transition above, and every other
+    // kind is evaluated by the paging sweep against its hold and flap rules.
     return true;
   } catch (error) {
     app.logger.warn({
@@ -362,54 +334,6 @@ async function openIncidentAndNotify(
     }, "Notification incident open failed; continuing");
     return false;
   }
-}
-
-/**
- * W3.3 (D3-N1): re-send an incident's open notification when no attempt has
- * ever reached Telegram. totalCount === 0 means alerts were disabled when the
- * incident opened (no attempt was recorded) — that stays silent on purpose;
- * a later re-enable must not page for every incident opened while off.
- */
-async function retryUndeliveredOpenNotification(
-  app: Pick<AppContext, "db" | "logger" | "config">,
-  input: {
-    kind: NotificationIncidentKind;
-    pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
-    stream?: SyncStream | null;
-    subKey?: string | null;
-    errorSummary?: string | null;
-  },
-  incident: NotificationIncidentRow,
-) {
-  const state = await getIncidentOpenedDeliveryState(app.db, incident.id);
-  if (
-    state.sentCount > 0
-    || state.totalCount === 0
-    || state.totalCount >= MAX_OPEN_DELIVERY_ATTEMPTS
-  ) {
-    return;
-  }
-
-  const settings = await getTelegramSettings(app.db, {
-    defaultReportHourUtc: app.config.telegramReportHourUtc,
-  });
-  if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
-    return;
-  }
-
-  const delivery = await sendTelegramMessage(app, {
-    text: openMessageForIncident({
-      ...input,
-      errorSummary: input.errorSummary ?? null,
-    }),
-  });
-
-  await insertDeliveryAttempt(app.db, {
-    kind: "incident_opened",
-    notificationIncidentId: incident.id,
-    ...deliveryAttemptFields(delivery),
-  });
 }
 
 /**
@@ -450,7 +374,7 @@ async function resolveIncidentAndNotify(
     recoveredAt?: Date;
     stream?: SyncStream | null;
     subKey?: string | null;
-    deliveryMode?: "direct" | "critical_outbox";
+    deliveryMode?: "policy" | "critical_outbox";
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
@@ -477,32 +401,9 @@ async function resolveIncidentAndNotify(
         : {}),
     });
 
-    if (!resolved) {
-      return;
-    }
-    if (input.deliveryMode === "critical_outbox") {
-      return;
-    }
-    if (!isDirectIncidentApp(app)) {
-      throw new Error("Direct notification incident delivery requires runtime config");
-    }
-
-    const settings = await getTelegramSettings(app.db, {
-      defaultReportHourUtc: app.config.telegramReportHourUtc,
-    });
-    if (!settings.enabled || !settings.syncFailureAlertsEnabled) {
-      return;
-    }
-
-    const delivery = await sendTelegramMessage(app, {
-      text: resolveMessageForIncident(input),
-    });
-
-    await insertDeliveryAttempt(app.db, {
-      kind: "incident_resolved",
-      notificationIncidentId: resolved.id,
-      ...deliveryAttemptFields(delivery),
-    });
+    // Decision 381: the recovery notice for every non-critical kind is the
+    // paging sweep's, once the condition has stayed quiet for its hold.
+    void resolved;
   } catch (error) {
     app.logger.warn({
       platformAccountId: input.platformAccountId,
