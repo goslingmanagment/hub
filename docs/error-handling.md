@@ -507,3 +507,16 @@ or 60 verified seconds. Socket teardown destroys the upgraded transport even if
 the peer ignores close. Only fixed reasons/page labels enter logs; provider
 errors, SQL errors, tokens and raw frames do not. See the
 [B0 runbook](runbooks/fansly-ws-capture.md) for precise limits and residuals.
+
+### Fansly B1 addressed reads (Decisions 384–385)
+
+An admitted hint request with an observed terminal transport/timeout failure is
+subject debt (`target_transport` / `target_timeout`), retried with durable bounded
+backoff. It does not abort unrelated ordinary DM polling. Auth, 429/Retry-After,
+policy cancellation, capture/DB/telemetry and lease errors retain executor policy.
+Hint-only work retains its quality hold and cannot certify ordinary freshness or
+resolve ordinary incidents. Admission refusals retain their concrete bounded reason.
+
+`source_deleted` in fansly_ws_hint_status settles an exact operational target after
+a contiguous REST check, not archive materialization; hot_applied_at remains null.
+See `docs/runbooks/fansly-ws-reliability.md` for verification and generation repair.

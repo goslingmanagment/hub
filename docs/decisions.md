@@ -383,6 +383,7 @@ appends a row here in the same change (family law: updated-in-change).
 | 384 | Fansly B1 transport isolation | Defer an admitted hint request only on its observed transport/timeout failure, after telemetry succeeds; use durable subject backoff without clearing ordinary freshness or incidents. |
 | 385 | Fansly B1 target settlement | Exact retained delete evidence can settle a target after the contiguous REST walk. Durable settlement remains distinct from REST materialization and never stamps a deleted-only target hot. |
 | 386 | Checked Fansly generation repair | Explicit preview/apply verifies account/me via the page proxy, rechecks generation and config CAS, audits one policy generation change, and exposes informational mismatch metrics without failing deploy health. |
+| 387 | Retained Fansly recovery manifest | A bounded read-only command checks exact raw custody, reader state, later mutations and owner erasure without materializing messages or inventing REST membership. B2 stays separate. |
 
 ## Consensus Decisions
 - **Language / runtime (12/12):** TypeScript on Node.js 22 LTS keeps API, dashboard, worker, and shared contracts in one well-supported stack.
@@ -16339,3 +16340,20 @@ retained disabled receipts are not re-routed by repinning.
 Validation: 11 PostgreSQL integration tests cover exact audited apply/idempotence,
 stale version/gates/preview, canary, auth refusal, identity mismatch, rotation
 before and during apply, budget and sibling preservation, and unchanged health.
+
+## Decision 387: Inspect retained-only messages before designing their projection (2026-09-22)
+
+fansly:ws-recovery-manifest accepts at most 20 exact page/observation/group/message
+targets. It reads through the existing payload seam, uses canonical reader
+precedence and the owner-erasure fence, and prints text length/hash rather than
+message text. Raw absence or unavailability, ambiguous addresses and uncertain
+custody remain explicit. The manifest does not claim account authentication from
+B0's stored expected identity and does not imply a source delete reached readers.
+It runs in a read-only transaction and cannot create membership, dispatch reads,
+reset B1 debt or apply an archive projection. The six audited Ari targets are
+recorded as exact input, with a reproducible runbook. A B2 projector remains a
+separate design and production action under Decisions 344 and 366.
+
+Validation: six integration tests cover nested raw provenance, no side effects,
+missing addresses, later delete evidence, canonical reader/tombstone precedence,
+owner erasure and bounded input. No production recovery has been performed.

@@ -436,6 +436,8 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # pre-drop image runs unchanged after a rollback. Listing it keeps
   # automatic rollback armed for this deploy.
   "0204_drop_workboard_enum_types.sql"
+  # Additive B1 receipt evidence; old writers leave the nullable fields empty.
+  "0205_fansly_ws_hint_settlement.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
+import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -1745,6 +1746,17 @@ export function buildProgram() {
       } finally {
         await app.close();
       }
+    });
+
+  program
+    .command("fansly:ws-recovery-manifest")
+    .description("Read-only provenance and reader-state check for up to 20 exact retained WS messages; never prints message text")
+    .requiredOption("--input <file>", "JSON with pageLabel and exact observationId/groupRef/messageRef targets")
+    .action(async (options: { input: string }) => {
+      const request: unknown = JSON.parse(await readFile(options.input, "utf8"));
+      const app = await createAppContext();
+      try { console.log(JSON.stringify(await buildFanslyWsRecoveryManifest(app, request), null, 2)); }
+      finally { await app.close(); }
     });
 
   program
