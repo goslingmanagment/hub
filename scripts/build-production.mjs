@@ -38,7 +38,6 @@ const runtimeExternal = [
   "socks",
   "undici",
   "zod",
-  "zod-to-json-schema",
 ];
 const bundledPackageOptions = { external: [] };
 const nodeBundledPackageOptions = {
@@ -94,13 +93,12 @@ async function buildPackage(packageDir, entryPoints, options = {}) {
 
 await Promise.all([
   cleanDist("apps/runtime/dist"),
-  cleanDist("packages/contracts/dist"),
   cleanDist("packages/db/dist"),
-  cleanDist("packages/fansly/dist"),
-  cleanDist("packages/platform-core/dist"),
   cleanDist("packages/shared/dist"),
 ]);
 
+// Dashboard consumes this source directly; bundling it here also rejects any
+// accidental dependency on Node built-ins in the browser entry point.
 await buildPackage("packages/shared/dist", {
   browser: "packages/shared/src/browser.ts",
 }, {
@@ -108,22 +106,6 @@ await buildPackage("packages/shared/dist", {
   platform: "browser",
   target: "es2022",
 });
-
-await buildPackage("packages/shared/dist", {
-  index: "packages/shared/src/index.ts",
-}, nodeBundledPackageOptions);
-
-await buildPackage("packages/contracts/dist", {
-  index: "packages/contracts/src/index.ts",
-}, nodeBundledPackageOptions);
-
-await buildPackage("packages/fansly/dist", {
-  index: "packages/fansly/src/index.ts",
-}, nodeBundledPackageOptions);
-
-await buildPackage("packages/platform-core/dist", {
-  index: "packages/platform-core/src/index.ts",
-}, nodeBundledPackageOptions);
 
 await buildPackage("packages/db/dist", {
   index: "packages/db/src/index.ts",

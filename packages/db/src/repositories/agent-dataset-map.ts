@@ -48,8 +48,6 @@ export interface AgentDatasetSqlMapping {
   readonly fields: Readonly<Record<string, string>>;
   /** The column the `[from, to)` window applies to; every dataset has one. */
   readonly windowColumn: string;
-  /** Tiebreak columns appended to every ORDER BY so the keyset is total. */
-  readonly stableKeyColumns: readonly string[];
   /**
    * The capture planes this dataset's SQL actually reads.
    *
@@ -1027,7 +1025,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       cross join lateral jsonb_array_elements(coalesce(i.value->'metrics','[]'::jsonb)) with ordinality m(value,ordinality)
       where s.category='balances'`,
     fields:{platform:"f_platform",source:"f_source",operation:"f_operation",metricPath:"f_metric_path",unit:"f_unit",rawValue:"f_raw_value",valueMills:"f_value_mills",windowFrom:"f_window_from",windowTo:"f_window_to",granularity:"f_granularity",observedAt:"f_observed_at",coverageState:"f_coverage_state",coverageReason:"f_coverage_reason",observationRef:"f_observation_ref"},
-    windowColumn:"k_occurred_at",stableKeyColumns:["k_key"],readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
+    windowColumn:"k_occurred_at",readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
   },
   fan_memberships: {
     source: FAN_MEMBERSHIPS,
@@ -1042,7 +1040,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lifetimeSpendMills: "f_lifetime_spend_mills",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_fans", "fans"],
   },
   dm_threads: {
@@ -1057,7 +1054,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       coverageStatus: "f_coverage_status",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_dm_threads", "fans"],
   },
   subscriptions: {
@@ -1073,7 +1069,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       currency: "f_currency",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_subscriptions", "fans"],
   },
   subscription_events: {
@@ -1085,7 +1080,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       subType: "f_sub_type",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["domain_events", "fans", "page_fans"],
     captureFloorPlane: "domain_events",
     provenanceColumns: {
@@ -1111,7 +1105,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       correlationRef: "f_correlation_ref",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["transactions", "fans"],
     captureFloorPlane: "transactions",
     eligibilityColumn: "k_eligible",
@@ -1135,7 +1128,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       tipMessageText: "f_tip_message_text",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["transactions", "transaction_tip_contexts", "fans"],
     captureFloorPlane: "transactions",
     eligibilityColumn: "k_eligible",
@@ -1162,7 +1154,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       currency: "f_currency",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["fan_spend_daily", "fans"],
   },
   follows: {
@@ -1175,7 +1166,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       unfollowedAt: "f_unfollowed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_follows", "fans"],
   },
   followers_daily: {
@@ -1186,7 +1176,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       followersCount: "f_followers_count",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["daily_followers"],
   },
   fan_aliases: {
@@ -1200,7 +1189,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastSeenAt: "f_last_seen_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_fan_aliases", "fan_username_aliases", "fans", "page_fans"],
   },
   fan_notes: {
@@ -1214,7 +1202,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       updatedAt: "f_updated_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["fan_notes", "fans"],
   },
   posts: {
@@ -1232,7 +1219,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       wallRefs: "f_wall_refs",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["creator_posts"],
     captureFloorPlane: "creator_posts",
     provenanceColumns: {
@@ -1251,7 +1237,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       updatedAtPlatform: "f_updated_at_platform", firstOrigin: "f_first_origin", sourceKind: "f_source_kind",
       firstObservedAt: "f_first_observed_at", lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
     },
-    windowColumn: "k_occurred_at", stableKeyColumns: ["k_key"],
+    windowColumn: "k_occurred_at",
     readPlanes: ["creator_raw_media"],
     provenanceColumns: { observationRef: "k_observation_ref", ingestPath: "k_ingest_path", convergence: "k_convergence" },
   },
@@ -1267,7 +1253,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       postObservationRef: "f_post_observation_ref", offerObservationRef: "f_offer_observation_ref",
       bundleObservationRef: "f_bundle_observation_ref", fileObservationRef: "f_file_observation_ref",
     },
-    windowColumn: "k_occurred_at", stableKeyColumns: ["k_key"],
+    windowColumn: "k_occurred_at",
     readPlanes: ["creator_posts", "creator_media", "creator_media_bundles", "creator_raw_media"],
     captureFloorPlane: "creator_posts",
     internalCaptureGap: { column: "k_link_complete", plane: "creator_raw_media" },
@@ -1291,7 +1277,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       tipGoalAmountsHidden: "f_tip_goal_amounts_hidden",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["creator_posts"],
     captureFloorPlane: "creator_posts",
     provenanceColumns: {
@@ -1314,7 +1299,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       postTipMessageText: "f_post_tip_message_text",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["creator_post_tips"],
     captureFloorPlane: "creator_post_tips",
     provenanceColumns: {
@@ -1336,7 +1320,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       linkedPostCount: "f_linked_post_count",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["creator_posts"],
     // This source is ranked and goal-only: min(k_occurred_at) would be the
     // oldest WINNING goal snapshot, not the physical creator_posts floor.
@@ -1376,7 +1359,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       previewInteractionTimeMs: "f_preview_interaction_time_ms",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["stats_traffic_buckets"],
     captureFloorPlane: "stats_traffic_buckets",
   },
@@ -1405,7 +1387,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       salesGrossMillsDerived: "f_sales_gross_mills_derived",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     // The catalogue head is a LEFT join and is an inventory store: a bucket can
     // arrive before the media row exists. The floor therefore belongs to the
     // temporal plane, and `creator_media` stays a read plane with no floor.
@@ -1430,7 +1411,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       observedAt: "f_observed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["stats_top_media"],
     captureFloorPlane: "stats_top_media",
   },
@@ -1452,7 +1432,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       observedAt: "f_observed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["stats_top_tags"],
     captureFloorPlane: "stats_top_tags",
   },
@@ -1470,7 +1449,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastObservedAt: "f_last_observed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["revenue_mix_daily"],
     captureFloorPlane: "revenue_mix_daily",
   },
@@ -1496,7 +1474,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastObservedAt: "f_last_observed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["message_media_offers"],
     captureFloorPlane: "message_media_offers",
   },
@@ -1521,7 +1498,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       missingSince: "f_missing_since",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["post_comments"],
     captureFloorPlane: "post_comments",
   },
@@ -1537,7 +1513,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       discoveredVia: "f_discovered_via",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     // The plane is declared even though the table is EMPTY on Fansly: that is
     // the difference between "we looked and there is nothing" and "nobody ever
     // built this", and the floor coming back `unknown` is the honest signal.
@@ -1571,7 +1546,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["creator_vault_album_members", "creator_vault_albums", "creator_raw_media", "creator_vault_album_scans"],
     captureFloorPlane: "creator_vault_album_members",
   },
@@ -1590,7 +1564,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       acknowledgedAt: "f_acknowledged_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["platform_notifications"],
     captureFloorPlane: "platform_notifications",
   },
@@ -1612,7 +1585,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastObservedAt: "f_last_observed_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_subscription_tiers", "page_subscription_tier_plans"],
     // The PLAN is where the price lives, and a tier with no plan row still
     // appears (LEFT join) — so the floor is the tier head's, which is the one
@@ -1636,7 +1608,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       updatedAtPlatform: "f_updated_at_platform",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["page_payout_requests", "page_payout_methods"],
     captureFloorPlane: "page_payout_requests",
   },
@@ -1658,7 +1629,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       updatedAt: "f_updated_at",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     readPlanes: ["capture_coverage"],
     // `min(updated_at)` is when THIS page's coverage bookkeeping begins — a real
     // floor for this plane, and not to be confused with `oldestCapturedAt`,
@@ -1676,7 +1646,6 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       consecutiveFailures: "f_consecutive_failures",
     },
     windowColumn: "k_occurred_at",
-    stableKeyColumns: ["k_key"],
     // Sync state is not a claim plane: no claim class answers for it, so this
     // dataset honestly reads NOTHING the registry knows about.
     readPlanes: [],
