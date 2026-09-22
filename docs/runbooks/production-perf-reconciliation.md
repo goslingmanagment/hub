@@ -1,8 +1,8 @@
 # Reconcile the deployed performance fixes with main
 
 Decision 321 restores deployed behavior on main `0a08365f`. The source manifest
-and read-only migration/runtime receipts are in
-`investigations/production-perf-parity-2026-09-14/`.
+and read-only migration/runtime receipts are retained in
+[Git history](https://github.com/goslingmanagment/core/tree/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/production-perf-parity-2026-09-14).
 
 Before a deployment from main, reconcile the remaining C1 membership changes in
 PR166 and the feature-controls dashboard branch. Passing this PR's tests does

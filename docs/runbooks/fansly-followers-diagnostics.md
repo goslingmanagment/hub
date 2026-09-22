@@ -41,7 +41,7 @@ and compatible rollback procedure in the C2a runbook.
 The owner-approved diagnostic source `d47dc9b09f87` began running on
 11 September at 01:05 UTC. Its protected sync-health deploy gate failed;
 the image remained running and the schema guard skipped automatic rollback.
-See the [current C1 record](../../investigations/fansly-c1-followers-2026-09-10/STATUS.md).
+See the [historical C1 record](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/fansly-c1-followers-2026-09-10/STATUS.md).
 Migrations 0182–0183 are applied: do not edit or renumber them when main moves.
 Use a new forward migration for any later SQL change.
 
@@ -134,7 +134,7 @@ Counts can explain protection in one generation. Equal counts across later
 generations do not identify the same row or establish redundant work. Presence
 observations also remain a benefit of full roster reads. A policy fix still
 requires a demonstrated cause and preservation of legitimate repairs/freshness.
-The [presence consumer inventory](../../investigations/fansly-c1-followers-2026-09-10/PRESENCE-CONSUMERS-20260912.md)
+The [presence consumer inventory](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/fansly-c1-followers-2026-09-10/PRESENCE-CONSUMERS-20260912.md)
 identifies the current online indicator, Followers and Agent
 Read Plane dependencies. Their different thresholds are not one shared SLA.
 

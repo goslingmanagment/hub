@@ -1,8 +1,0 @@
-{
-  "fixture": "projection",
-  "observations": 1000,
-  "projectionRows": 1000,
-  "elapsedMs": 129,
-  "transport": "local_pg_client",
-  "productionLatencyMeasured": false
-}

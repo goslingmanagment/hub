@@ -1,6 +1,0 @@
-{
-  "readAt": "2026-09-13T22:32:26.250570+00:00",
-  "exitCode": 0,
-  "stdout": "/agency-hub-api-1 sha256:c443947a356972cd2833c10a4e728fe1890e92e76a77fc2328f00ebca0af5c85 running healthy restarts=0\n/agency-hub-worker-1 sha256:c443947a356972cd2833c10a4e728fe1890e92e76a77fc2328f00ebca0af5c85 running healthy restarts=0\n/agency-hub-scheduler-1 sha256:c443947a356972cd2833c10a4e728fe1890e92e76a77fc2328f00ebca0af5c85 running healthy restarts=0\n",
-  "stderr": ""
-}

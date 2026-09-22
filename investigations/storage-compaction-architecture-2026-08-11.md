@@ -1,5 +1,10 @@
 # Архитектура хранения без потери фактов
 
+> Сохранена спецификация и обоснование архитектуры. Статусы, измерения и
+> указания «следующий этап» ниже относятся к датам документа, а не к текущему
+> состоянию. Текущую реализацию проверять по коду и профильному runbook; старые
+> решения и отчёты доступны через Git по инструкции в `AGENTS.md`.
+
 Статус: **proposal, production не менялся**.
 
 Дата: 2026-08-11
@@ -1295,7 +1300,7 @@ codec; exact manifest/segment ID для каждого source-drop approval.
 - [production Compose](../docker-compose.production.yml);
 - [deploy script](../scripts/deploy-production.sh);
 - [Agent read-plane tiering constraints](../docs/runbooks/agent-read-plane-enablement.md);
-- [append-only decisions](../docs/decisions.md).
+- [append-only decisions](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/docs/decisions.md).
 
 Primary upstream documentation:
 

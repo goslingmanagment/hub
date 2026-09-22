@@ -1,9 +1,0 @@
-{
-  "base": "1fe9dbe74daa8a4fbfd452ac352f7f290a60b1e4",
-  "branch": "fix/voice-service-settlement-fixture-20260914",
-  "decision": 330,
-  "files": {
-    "tests/voice-notes-service.integration.test.ts": "af4e463560a2156ca25ae367cf8a88b75e94583dc447dbabb012e73a65ad4101",
-    "docs/decisions.md": "28bbf2cc531df81bca4472b5e6cd6115356004a605a62d5257ad9e60fb43e204"
-  }
-}

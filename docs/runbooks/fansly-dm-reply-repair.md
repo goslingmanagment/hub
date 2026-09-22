@@ -1,6 +1,6 @@
 # Fansly reply repair before A0
 
-Scope: the P2 in the [8 September diagnostic](../../investigations/fansly-dm-diagnostic-2026-09-08/REPORT.md).
+Scope: the P2 in the [8 September diagnostic](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/fansly-dm-diagnostic-2026-09-08/REPORT.md).
 Implementation: decision 278; migration 0173; sync-pull v6. No new flag.
 
 ## Gate 1: deploy the reviewed prerequisite revisions

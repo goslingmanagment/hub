@@ -1,1 +1,0 @@
-{"status":"ok","timestamp":"2026-09-09T17:44:34.772Z","contractHash":"da876ec6191cf75b84db068747a43f17e878ad3789a224f49d8a9fcc2e24654b","capabilities":["desktop-lifecycle-v2"],"checks":{"api":{"status":"ok"},"database":{"status":"ok","latencyMs":6,"error":null}}}

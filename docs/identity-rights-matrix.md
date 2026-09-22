@@ -8,15 +8,9 @@ has an account" answers none of them. This document is the map, and
 `tests/rights-matrix.integration.test.ts` is its proof: every row below names
 the test case that holds it.
 
-Read with: `docs/decisions.md` #349 (the unified account), #352 (this matrix)
-and #370 (the legacy removal this document was updated for),
-`docs/generated/15-auth-config-and-access.md` (the generated policy table),
-`docs/runbooks/chatter-onboarding.md` and `docs/runbooks/chatter-offboarding.md`.
-
-Account-target operations use immutable `userId`. A login can belong to a new
-account after deletion; credentials, rights, cached cards and historical usage
-remain bound to the original ID. See
-[account deletion](runbooks/user-account-deletion.md).
+Read with the [generated policy table](generated/authorization-policy.md),
+[chatter onboarding](runbooks/chatter-onboarding.md) and
+[chatter offboarding](runbooks/chatter-offboarding.md).
 
 Account-target operations use immutable `userId`. A login can belong to a new
 account after deletion; credentials, rights, cached cards and historical usage

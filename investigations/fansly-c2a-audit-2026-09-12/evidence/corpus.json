@@ -1,8 +1,0 @@
-{
-  "fixture": "corpus",
-  "observations": 120000,
-  "fanWindows": 1000,
-  "elapsedMs": 13155,
-  "transport": "local_pg_client",
-  "productionLatencyMeasured": false
-}

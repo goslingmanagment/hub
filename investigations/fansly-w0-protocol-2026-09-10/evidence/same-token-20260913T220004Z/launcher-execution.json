@@ -1,7 +1,0 @@
-{
-  "command": [
-    "python3",
-    "tests/fansly-probe-launcher.py"
-  ],
-  "exitCode": 0
-}
