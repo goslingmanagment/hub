@@ -2079,12 +2079,25 @@ export async function acquirePageSyncLease(
   },
 ) {
   const now = input.now ?? new Date();
+  // One page job runs one bounded chunk. Reconciliation must yield turns to
+  // both DM lanes: dm_messages runs WS-addressed reads before its history walk.
+  // Background peers share their highest priority and rotate by durable DB
+  // start time; explicit operator dispatches keep their existing boost. Only
+  // eligible peers participate, so a blocked/retrying peer cannot stall work.
   const result = await db.execute<Record<string, unknown>>(sql`
-    with candidate as (
+    with runnable as (
       select st.page_id as "pageId",
              st.stream as "stream",
-             st.request_seq as "requestSeq"
+             st.request_seq as "requestSeq",
+             st.requested_at,
+             st.started_at,
+             ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} as priority,
+             case when p.platform = 'fansly'
+                         and st.stream in ('followers_reconcile', 'dm_conversations', 'dm_messages')
+                         and coalesce(st.dispatch_source, 'scheduled') in ('scheduled', 'event', 'recovery', 'anomaly')
+                  then 'fansly_dm_fairness' else st.stream::text end as fairness_group
       from ${pageSyncStates} st
+      inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       where st.page_id = ${input.pageId}
         and st.request_seq > st.applied_seq
         and st.status <> 'paused'
@@ -2098,13 +2111,19 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and exists (
-          select 1 from ${pages} p
-          where p.id = st.page_id and p.status = 'active'
-        )
-      order by ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} desc,
-               st.requested_at asc nulls last,
-               ${streamOrderSql("st.stream")} asc
+    ), ranked as (
+      select r.*,
+             count(*) over (partition by r.fairness_group) as peer_count,
+             max(r.priority) over (partition by r.fairness_group) as effective_priority
+      from runnable r
+    ), candidate as (
+      select r."pageId", r."stream", r."requestSeq"
+      from ranked r
+      order by r.effective_priority desc,
+               case when r.peer_count > 1 then r.started_at end asc nulls first,
+               r.priority desc,
+               r.requested_at asc nulls last,
+               ${streamOrderSql('r."stream"')} asc
       limit 1
     ),
     acquired as (
@@ -2115,7 +2134,7 @@ export async function acquirePageSyncLease(
           lease_token = ${input.leaseToken},
           lease_heartbeat_at = clock_timestamp(),
           lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
-          started_at = ${now},
+          started_at = clock_timestamp(),
           updated_at = ${now}
       from candidate
       where st.page_id = candidate."pageId"
