@@ -1,6 +1,7 @@
 # Project Kernel — Pass 2: Target Architecture
 
-**Deliverable 2 of 3** · Companions: [`pass2-review-current-architecture.md`](pass2-review-current-architecture.md) · [`decision-points.md`](decision-points.md)
+> Historical architecture proposal. Current behavior is defined by source;
+> current operating procedures and agent instructions are in runbooks and AGENTS.md.
 
 **Provenance.** Written 2026-07-04 as Pass 2 of Project Kernel. Grounded in the Pass 2 review
 (whose factual claims were re-verified against source for this document — the handful of
@@ -13,7 +14,7 @@ migration cost. Pass 3 owns the path.
 heart — it exists to close the review's one-way doors. §4–§9 specify the kernel's planes. §10
 specifies each userspace client. §11–§12 cover analytics and the repository standard. §13 records
 the alternatives that lost and why. §14 is the inventory Pass 3 needs. Ten forks in this design
-are product calls; each is marked `→ DP n` and argued in [`decision-points.md`](decision-points.md)
+are product calls; each is marked `→ DP n`
 — the target text below states my recommendation but does not pretend the fork is closed.
 
 ---
@@ -56,7 +57,6 @@ proven mechanism has a designated home in the new structure:
 | Workboard v2 pure engine | Extracted intact into the workboard service; event-driven recompute (§10.3) |
 | Testcontainers CI, OFAPI webhook fixtures | Kept; extended to the whole family (§12.4) |
 | Extension credential custody (memory-only) | Unchanged — explicitly preserved by DP 1's recommended option (§10.2) |
-| `docs/decisions.md` | Becomes the family-wide standard (§12.2) |
 
 ---
 
@@ -831,42 +831,10 @@ the family reads as one product built to one bar. Designed for the stated future
 engineering is done by AI coding agents**, so the standard optimizes for orientation speed,
 verifiable freshness, and machine-regenerable depth.
 
-### 12.1 Repo skeleton (every repo)
+### 12.1–12.3 Documentation and agent instructions
 
-```
-README.md              # thin: what this is, how to run, where docs live
-CLAUDE.md              # THE agent context file (see 12.3)
-AGENTS.md              # one line: "Read CLAUDE.md." (anti-drift pointer)
-docs/
-  decisions.md         # numbered, append-only decision log + quick-ref table (core's format)
-  specs/               # hand-curated, deliberately thin (PRD/SPEC class)
-  generated/           # machine-generated maps & references — regenerated, never hand-edited
-  prompts/             # the prompts that generate docs/generated/* (the Pass 1 pattern)
-apps/  packages/  scripts/  tests/
-```
-
-### 12.2 Documentation taxonomy — three classes, three rules
-
-| Class | Examples | Rule |
-|---|---|---|
-| **Hand-curated, thin** | README, CLAUDE.md, PRD/SPEC, decisions.md | Kept current *in the same change* that invalidates them (the desktop's discipline, now family law). Small enough that this is cheap. |
-| **Machine-generated** | System maps (Pass 1 style), API reference, route/policy tables, schema catalog | Carry a banner: generation date + the command/prompt that regenerates them. Never hand-edited; regenerated on a cadence and after structural changes. Stale-by-date is visible, so trust is calibrated. |
-| **Decision log** | `docs/decisions.md` per repo; cross-repo decisions live in core's and are referenced | Append-only, numbered, quick-reference table at top. Supersession is a new entry pointing back, never an edit. |
-
-**Anti-deletion rule** (the family has a knowledge-deletion habit — the review documents
-irrecoverably lost audit and design docs): removing or superseding any doc requires a tombstone
-entry in `decisions.md` saying what was removed and why; deprecated specs get a banner, not
-deletion. Generated docs are exempt (they regenerate).
-
-### 12.3 Agent context files
-
-Every repo carries a CLAUDE.md to the standard the desktop already set (it is the family's gold
-standard and spot-checks clean — keep its shape): what this repo is in one paragraph; a
-doc-routing table ("read X before doing Y"); hard rules **with rationale**; conventions; the
-check command. Core's current state — 632 files, the money, no CLAUDE.md, conventions living in
-one person's memory files — is the inversion to fix first. AGENTS.md is always a pointer, never
-content (drift prevention). Session-runbook docs (the desktop's SESSIONS.md) are recommended
-where multi-session work is the norm.
+The former documentation taxonomy and CLAUDE/session-log process are retired.
+Current agent instructions live in AGENTS.md.
 
 ### 12.4 CI & toolchain standard
 
@@ -1020,5 +988,4 @@ DP 10 (repo topology) gates where the SDK and workboard app land.
 
 ---
 
-*End of target architecture. The forks are numbered and argued in
-[`decision-points.md`](decision-points.md); nothing above should be read as closing them.*
+*End of the historical target architecture proposal.*

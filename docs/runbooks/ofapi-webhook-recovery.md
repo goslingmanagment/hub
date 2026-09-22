@@ -206,4 +206,4 @@ not a latency percentile. No synthetic callback, remote redelivery, subscription
 change or message send was used. Historical unmapped debt remains retained.
 
 Detailed evidence, exact repair command, validation and limitations:
-[`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md`](../../investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md).
+[`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md`](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md).

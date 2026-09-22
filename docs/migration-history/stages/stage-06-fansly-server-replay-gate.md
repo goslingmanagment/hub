@@ -1,5 +1,7 @@
 # Stage 6 — Fansly server-replay gate (per-route checks + live spike)
 
+> Historical migration specification; use current source and runbooks for operations.
+
 **Repo(s):** core (extension repo as reference only) · **Depends on:** — (any time after Stage 1;
 must precede Stages 16/17) · **Passport:** roadmap.md §4, stage 6
 
@@ -76,8 +78,8 @@ Stage 17 (message backscroll re-confirmation).
 
 **Deliverable:** (1) three read-only probe methods on the adapter behind a probe-only code path;
 (2) a probe CLI command that runs them against the owner-chosen pages under existing pacing and
-egress; (3) a recorded **verdict table** appended to `docs/decisions.md` and referenced from this
-file; (4) if any family is non-replayable, the narrow per-endpoint escalation to the owner (Q2
+egress; (3) a recorded **verdict table** in this file;
+(4) if any family is non-replayable, the narrow per-endpoint escalation to the owner (Q2
 part 2).
 
 ## 2. Changes
@@ -104,9 +106,7 @@ part 2).
   described (scope guard).
 
 **core — docs:**
-- `docs/decisions.md` — append the verdict table (per family: replayable / replayable-but-check-
-  rots-in-N-days / non-replayable) and the longevity re-probe results.
-- This stage file's §5 verdict block is filled in after execution.
+- This stage file's §5 verdict block records replayability and longevity re-probe results.
 
 **CONTINGENCY ONLY (do not build unless the probe fails a family):**
 - `packages/shared/src/types.ts` — extend `FanslySessionBundle` with an **optional** additive field
@@ -164,7 +164,7 @@ must not perturb the live sync FSM).
    - **Non-replayable** — auth/anti-bot rejection on the first well-formed call with a valid session.
 3. Longevity re-probe: repeat the single call per family once per day for ≥5 days; record the
    check-longevity per family.
-4. Record the verdict table in `docs/decisions.md` and mirror it into the block below.
+4. Record the verdict table in the block below.
 
 **Observation window:** ~5 days for the longevity measurement; the go/no-go for Stage 16 needs only
 the day-1 replayability result per family.
@@ -207,8 +207,7 @@ pnpm cli fansly:replay-probe --page lilly-1 --page lilly-2 --calls 1
 ```
 Each call emits one JSON line `{page,family,verdict,httpStatus,errorCode,itemCount,wallClockMs}`
 plus a summary table; `verdict:"auth-rejected"` on any family = non-replayable → escalate
-(Q2 part 2). Repeat once/day for ≥5 days for the longevity column. Paste the summary into
-`docs/decisions.md` and mirror the verdict table above.
+(Q2 part 2). Repeat once/day for ≥5 days for the longevity column. Update the verdict table above.
 
 **Escalation (Q2 part 2):** for any family classified non-replayable, raise the narrow
 per-endpoint question to the owner — choose (a) capture-through for those endpoints only, (b) an

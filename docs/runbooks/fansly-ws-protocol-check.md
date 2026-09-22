@@ -12,7 +12,7 @@ the previous owner-token prohibition for this selected existing session. It is
 the provider credential used by Hub, not an administrative Hub API access token.
 The first limited probe on `lilly-1` completed on 13 September; its sanitized
 receipt and still-unverified gates are recorded in the stage STATUS.
-See [the exact owner choice](../../investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md).
+See [the exact owner choice](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/fansly-w0-protocol-2026-09-10/OWNER-CHOICE-20260913.md).
 
 ## Offline diagnostic export
 

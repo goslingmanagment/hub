@@ -1,9 +1,0 @@
-[{"platform":"fansly","source":"pull","kind":"posts","parse_version":7,"observations":2531}, 
- {"platform":"fansly","source":"pull","kind":"uservault_albums","parse_version":2,"observations":72}, 
- {"platform":"fansly","source":"pull","kind":"vault_albums","parse_version":2,"observations":72}, 
- {"platform":"fansly","source":"pull","kind":"vault_media","parse_version":2,"observations":2449}, 
- {"platform":"onlyfans","source":"ofapi_capture","kind":"ofapi.posts_page.v1","parse_version":0,"observations":2}, 
- {"platform":"onlyfans","source":"ofapi_capture","kind":"ofapi.posts_page.v1","parse_version":1,"observations":42}, 
- {"platform":"onlyfans","source":"ofapi_capture","kind":"ofapi.posts_page.v1","parse_version":5,"observations":166}, 
- {"platform":"onlyfans","source":"ofapi_capture","kind":"ofapi.posts_page.v1","parse_version":6,"observations":10}, 
- {"platform":"onlyfans","source":"ofapi_capture","kind":"ofapi.posts_page.v1","parse_version":7,"observations":14}]

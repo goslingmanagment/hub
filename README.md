@@ -11,7 +11,7 @@ For v1.0 production:
 - detailed sync health at `/api/v1/health/sync` requires an owner or dashboard session, or a configured `HEALTH_SYNC_MONITORING_TOKEN` sent as `x-monitoring-token`
 - Swagger/OpenAPI docs at `/documentation` and `/api/v1/openapi.json` require an owner dashboard session
 
-Backups are intentionally deferred in this release hardening pass. Do not assume built-in backup or restore scripts exist yet.
+Recurring off-server backups and disaster-recovery restore drills are outside the owner-approved product scope. Do not assume built-in backup or restore scripts exist.
 
 ## Production Prerequisites
 
@@ -59,7 +59,7 @@ openssl rand -base64 32
 - the complete `SERVICE_EGRESS_PROXY_URL` / `SERVICE_EGRESS_PROXY_USERNAME` /
   `SERVICE_EGRESS_PROXY_PASSWORD` tuple before enabling Telegram delivery or
   ElevenLabs voice synthesis (see
-  [`docs/runbooks/service-egress-proxy.md`](docs/runbooks/service-egress-proxy.md))
+  [`.env.production.example`](.env.production.example))
 
 The default production compose file expects the bundled Postgres container and binds the app to `127.0.0.1:3000`. Put a TLS reverse proxy on the same host in front of that loopback port. Compose reads interpolation values from `.env.production`; the API, scheduler, and worker receive the application environment, while Postgres receives only `POSTGRES_*`.
 
@@ -274,7 +274,7 @@ Compose keeps `20m` × 5.
 
 ## Backups
 
-Built-in backup automation is not shipped in this release hardening pass. Use your existing VPS or Postgres backup tooling until Agency Hub backup/restore scripts are implemented.
+Recurring off-server backups, restore drills and backup-provider monitoring are intentionally outside the owner-approved product scope. Loss of the VPS can mean loss of the stored history; that risk was explicitly accepted. Reopening a backup program requires a new owner decision and is not an implicit implementation blocker.
 
 ## Monitoring
 

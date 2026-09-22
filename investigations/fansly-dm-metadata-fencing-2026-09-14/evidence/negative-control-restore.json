@@ -1,8 +1,0 @@
-{
-  "base": "b78752d0d1144a8457638ffb3ae0bda33455fde1",
-  "candidateSha256": "526f0fb06edeb2e0189b5b3998bdba8eb88cd0d7086672d327a76fa3866763c1",
-  "originalHandlerSha256": "f5cc826b7f8b63dc262ec58201fb580aa910eddc32980d18ff4fadb1520444f8",
-  "restoredSha256": "526f0fb06edeb2e0189b5b3998bdba8eb88cd0d7086672d327a76fa3866763c1",
-  "restoredExactly": true,
-  "controlExitCode": 1
-}

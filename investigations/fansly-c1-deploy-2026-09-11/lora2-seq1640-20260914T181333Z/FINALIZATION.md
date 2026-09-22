@@ -1,1 +1,0 @@
-Independent numerical review passed; see REVIEW.md. This supersedes the author-time pending-review statement. A separate targeted note was added to STATE; all cumulative observations, runtime, clocks and gates remain unchanged.
