@@ -77,15 +77,6 @@ export function useStatsCoverage(pageLabel: string, options: QueryOptions = {}) 
   });
 }
 
-export function useContentMedia(pageLabel: string, options: QueryOptions = {}) {
-  return useQuery({
-    meta: ANALYTICS_QUERY_META,
-    queryKey: ["contentMedia", pageLabel],
-    queryFn: () => kernel.contentMedia({ params: { pageLabel }, query: { limit: 100 } }),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-  });
-}
-
 export function useContentComments(
   pageLabel: string,
   window: { from: string; to: string },

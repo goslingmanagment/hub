@@ -236,22 +236,6 @@ export function usePageFanTransactions(
   });
 }
 
-export function useFanTransactions(
-  platform: string,
-  platformUserId: string,
-  params: { limit?: number; offset?: number } = {},
-) {
-  return useQuery({
-    queryKey: ["fanTransactions", platform, platformUserId, params],
-    queryFn: () =>
-      kernel.crossPageFanTransactions({
-        params: { platform, platformUserId } as Parameters<typeof kernel.crossPageFanTransactions>[0]["params"],
-        query: params,
-      }),
-    enabled: !!platformUserId,
-  });
-}
-
 export function usePageFanDetail(pageLabel: string, platformUserId: string) {
   return useQuery({
     queryKey: ["pageFanDetail", pageLabel, platformUserId],

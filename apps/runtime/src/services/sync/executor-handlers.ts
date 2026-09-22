@@ -2683,23 +2683,6 @@ export async function onlyfansDmConversationsChunk(
   } satisfies StreamChunkResult;
 }
 
-export async function onlyfansDmMessagesChunk(
-  _app: AppContext,
-  _input: ExecutorRequestContext & {
-    streamState: PageSyncLease;
-    syncRunId: number;
-  },
-): Promise<StreamChunkResult> {
-  // OF mirror S0: this handler is retained only as a rollback-compatible code
-  // symbol. The legacy per-chat crawler must never issue another vendor call;
-  // durable capture jobs use the separate intent-driven ofapi_capture stream.
-  return {
-    satisfied: true,
-    yieldReason: null,
-    stats: { skipped: "legacy_ofapi_dm_messages_retired" },
-  } satisfies StreamChunkResult;
-}
-
 export async function fanslyDmMessagesChunk(
   app: AppContext,
   input: ExecutorRequestContext & {

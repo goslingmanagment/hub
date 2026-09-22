@@ -5,7 +5,6 @@ import {
   isOfapiDmSyncEligiblePage,
   OFAPI_FLOOR_BALANCE_FRESHNESS_MS,
   parseOfapiChatSummary,
-  parseOfapiRestMessage,
 } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
 import { filterOnlyFansDmPollingStreams } from "../apps/runtime/src/services/sync/onlyfans-dm-polling.ts";
 
@@ -141,41 +140,5 @@ describe("parseOfapiChatSummary", () => {
     expect(summary!.lastMessage!.senderRole).toBe("model");
 
     expect(parseOfapiChatSummary({ fan: {} })).toBeNull();
-  });
-});
-
-describe("parseOfapiRestMessage", () => {
-  it("maps direction from isSentByMe and records tip amounts only for tips", () => {
-    const fanMessage = parseOfapiRestMessage({
-      id: 1000200,
-      text: "<p>hello</p>",
-      createdAt: "2026-06-11T09:00:00+00:00",
-      isSentByMe: false,
-      fromUser: { id: 1000005, _view: "s" },
-      isTip: true,
-      price: 5,
-    }, "1000005");
-    expect(fanMessage).not.toBeNull();
-    expect(fanMessage!.senderRole).toBe("fan");
-    expect(fanMessage!.content).toBe("hello");
-    expect(fanMessage!.tipAmountCents).toBe(500);
-
-    const ppvMessage = parseOfapiRestMessage({
-      id: 1000201,
-      text: "<p>ppv</p>",
-      createdAt: "2026-06-11T09:01:00+00:00",
-      isSentByMe: true,
-      fromUser: { id: 42, _view: "i" },
-      isTip: false,
-      price: 25,
-    }, "1000005");
-    expect(ppvMessage!.senderRole).toBe("model");
-    // price on a non-tip message is the PPV unlock price, not revenue.
-    expect(ppvMessage!.tipAmountCents).toBe(0);
-  });
-
-  it("returns null for unusable ids or timestamps", () => {
-    expect(parseOfapiRestMessage({ id: null, createdAt: "2026-06-11T09:00:00+00:00" }, "1")).toBeNull();
-    expect(parseOfapiRestMessage({ id: 5, createdAt: "nope" }, "1")).toBeNull();
   });
 });

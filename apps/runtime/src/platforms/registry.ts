@@ -6,7 +6,7 @@ import {
   type PlatformRegistry,
 } from "@agency_hub_core/platform-core";
 
-import type { PageSyncLease } from "@agency_hub_core/db";
+import { getSyncStreamsForPlatform, type PageSyncLease } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
@@ -40,16 +40,9 @@ import { fanslyPayoutsChunk } from "../services/sync/fansly-payouts.ts";
 import { fanslyPostRepliesChunk } from "../services/sync/fansly-post-replies.ts";
 import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
 
-// Kernel Stage 18: the two platform adapters, assembled in the app layer
-// (pull handlers need AppContext/executor types — platform-core stays
-// app-agnostic). Capabilities mirror today's hardcoded per-platform stream
-// lists BYTE-FOR-BYTE (parity is test-pinned against
-// getSyncStreamsForPlatform until Task 4 swaps the planner onto these).
-//
-// The pull handlers currently point at the SHARED per-stream chunk functions
-// (each still branches by platform internally) — the Tasks 2–3 handler moves
-// split those bodies into per-adapter modules behind these same slots,
-// keeping every commit green (move-don't-rewrite).
+// Adapters are assembled in the app layer because pull handlers require
+// AppContext. Capabilities share the planner's per-platform stream lists;
+// conformance checks below require a handler for every declared stream.
 
 /** The full executor dispatch input (executeStreamChunk's shape). Handlers
  * declaring narrower inputs are assignable (parameter contravariance). */
@@ -75,38 +68,6 @@ export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler> & {
   syncScopes: SyncScopePolicy;
 };
 export type AppPlatformRegistry = PlatformRegistry<AppPlatformAdapter>;
-
-/** Mirrors getSyncStreamsForPlatform("fansly"): every stream but fan_identities. */
-const FANSLY_STREAMS: CanonicalStream[] = [
-  "light",
-  "transactions",
-  "top_spenders",
-  "subscribers",
-  "followers",
-  "followers_reconcile",
-  "dm_conversations",
-  "dm_messages",
-  "fan_earnings",
-  "purchase_history",
-  "posts",
-  "stats_snapshot",
-  "notifications",
-  "catalog",
-  "post_replies",
-  "payouts",
-  "media_stats",
-];
-
-/** Mirrors getSyncStreamsForPlatform("onlyfans") (OFAPI-era streams). */
-const ONLYFANS_STREAMS: CanonicalStream[] = [
-  "light",
-  "transactions",
-  "fan_identities",
-  "top_spenders",
-  "subscribers",
-  "dm_conversations",
-  "posts",
-];
 
 // The per-platform pull maps route straight to the split handler halves —
 // no platform branch survives on the dispatched path (Stage 18 Tasks 2–3).
@@ -155,7 +116,7 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   key: "fansly",
   displayName: "Fansly",
   capabilities: {
-    streams: FANSLY_STREAMS,
+    streams: getSyncStreamsForPlatform("fansly"),
     webhooks: false,
     writes: [],
     presenceSource: "poll",
@@ -191,7 +152,7 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
   key: "onlyfans",
   displayName: "OnlyFans",
   capabilities: {
-    streams: ONLYFANS_STREAMS,
+    streams: getSyncStreamsForPlatform("onlyfans"),
     webhooks: true,
     writes: [
       "send_text_message_v1",

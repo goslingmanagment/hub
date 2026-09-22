@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { SYNC_STREAMS, getSyncStreamsForPlatform } from "@agency_hub_core/db";
+import { SYNC_STREAMS } from "@agency_hub_core/db";
 import { PLATFORM_STREAMS, checkAdapterConformance } from "@agency_hub_core/platform-core";
 
 import {
@@ -13,20 +13,9 @@ import {
 } from "../apps/runtime/src/platforms/registry.ts";
 import { resolveStreamsForScope } from "../apps/runtime/src/services/sync-control.ts";
 
-// Kernel Stage 18: the adapter seam's parity pins. Capabilities must emit the
-// SAME stream sets as the hardcoded per-platform lists they will replace
-// (Task 4 swaps the planner onto them) — any drift fails here first.
-
 describe("platform registry (Stage 18)", () => {
   it("the platform-core stream vocabulary mirrors the db SYNC_STREAMS exactly", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
-  });
-
-  it("capabilities.streams match getSyncStreamsForPlatform for both platforms (pinned)", () => {
-    expect(fanslyPlatformAdapter.capabilities.streams)
-      .toEqual(getSyncStreamsForPlatform("fansly"));
-    expect(onlyfansPlatformAdapter.capabilities.streams)
-      .toEqual(getSyncStreamsForPlatform("onlyfans"));
   });
 
   it("capabilities cover resolveStreamsForScope outputs for every scope", () => {

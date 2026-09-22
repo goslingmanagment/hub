@@ -8,9 +8,7 @@ import { DashboardShellProvider } from "../apps/dashboard/src/components/layout/
 const queryMocks = vi.hoisted(() => ({
   useAuthMe: vi.fn(),
   useOverview: vi.fn(),
-  useOverviewGrowth: vi.fn(),
   useOverviewRevenue: vi.fn(),
-  useOverviewRevenueDaily: vi.fn(),
   useRevenueChart: vi.fn(),
   useOverviewRevenueByModel: vi.fn(),
   usePageFollowersDaily: vi.fn(),
@@ -169,9 +167,7 @@ describe("dashboard sync product surfaces", () => {
   beforeEach(() => {
     queryMocks.useAuthMe.mockReset();
     queryMocks.useOverview.mockReset();
-    queryMocks.useOverviewGrowth.mockReset();
     queryMocks.useOverviewRevenue.mockReset();
-    queryMocks.useOverviewRevenueDaily.mockReset();
     queryMocks.useOverviewRevenueByModel.mockReset();
     queryMocks.usePageFollowersDaily.mockReset();
     queryMocks.usePageRevenue.mockReset();
@@ -190,16 +186,7 @@ describe("dashboard sync product surfaces", () => {
     queryMocks.useOverviewRevenue.mockReturnValue({ data: buildOverviewRevenue() });
     queryMocks.useRevenueChart.mockReset();
     queryMocks.useRevenueChart.mockReturnValue({ data: { series: [] } });
-    queryMocks.useOverviewRevenueDaily.mockReturnValue({ data: { series: [] } });
     queryMocks.useOverviewRevenueByModel.mockReturnValue({ data: { models: [] } });
-    queryMocks.useOverviewGrowth.mockReturnValue({
-      data: {
-        pages: [{ pageId: 1, newFollowers: 0, newSubscribers: 0 }],
-      },
-      isLoading: false,
-      isFetching: false,
-      isPlaceholderData: false,
-    });
     queryMocks.usePageRevenue.mockReturnValue({
       data: {
         netEarningsMills: 0,
@@ -306,7 +293,6 @@ describe("dashboard sync product surfaces", () => {
     expect(html.match(/Данные не удалось загрузить/g)).toHaveLength(2);
     expect(html).toContain("Повторить");
     expect(html).toContain('href="/pages/lana?period=7d"');
-    expect(queryMocks.useOverviewGrowth).not.toHaveBeenCalled();
   });
 
   it("keeps refunds and unclassified money visible in the expanded source comparison", () => {

@@ -14,17 +14,13 @@ const queryMocks = vi.hoisted(() => ({
   useAdminSyncBlockReset: vi.fn(),
   useAdminSyncBlockResume: vi.fn(),
   useAdminSyncBlockTrigger: vi.fn(),
-  useAdminSyncRuns: vi.fn(),
   useAdminSyncRunDetail: vi.fn(),
-  useAdminSyncTrigger: vi.fn(),
-  useAdminSyncTriggerAll: vi.fn(),
   useAdminVerifyPage: vi.fn(),
   useAuthMe: vi.fn(),
   useLogout: vi.fn(),
   useOverview: vi.fn(),
   usePageSyncBlocks: vi.fn(),
   useSyncOverview: vi.fn(),
-  useSyncMonitor: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
@@ -281,41 +277,6 @@ function buildConnection(overrides: Partial<{
   };
 }
 
-function buildMonitorResponse() {
-  return {
-    generatedAt: "2026-03-24T12:00:00.000Z",
-    window: { hours: 24, startedAt: "2026-03-23T12:00:00.000Z" },
-    overall: {
-      pages: 1,
-      streams: 7,
-      runningStreams: 0,
-      blockedStreams: 0,
-      stalledStreams: 0,
-      pendingStreams: 0,
-      retryingStreams: 0,
-      counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
-      recentRuns: { running: 0, success: 1, partial: 0, failed: 0, skipped: 0 },
-      recentErrors: { total429s: 0, total5xxs: 0, failedRuns: 0, failedAttempts: 0, retryAttempts: 0, last429At: null, last5xxAt: null },
-      providers: [],
-      syncUx: buildSyncUx(),
-    },
-    pages: [{
-      pageId: 1,
-      pageLabel: "lana",
-      platform: "fansly" as const,
-      modelSlug: "lana",
-      modelName: "Lana",
-      username: "lana",
-      displayName: "Lana",
-      counts: { fans: 0, followers: 34, subscribers: 12, transactions: 100, conversations: 10, messages: 200 },
-      summary: { runningStreams: 0, blockedStreams: 0, stalledStreams: 0, pendingStreams: 0, retryingStreams: 0, recentErrors: 0 },
-      streams: [],
-      syncUx: buildSyncUx(),
-    }],
-    recentEvents: [],
-  };
-}
-
 function renderWithRouter(element: ReturnType<typeof createElement>, initialEntries = ["/"]) {
   const pages = buildOverview().pages;
   const shellValue: DashboardShellValue = {
@@ -346,17 +307,13 @@ describe("dashboard sync layout", () => {
     queryMocks.useAdminSyncBlockReset.mockReset();
     queryMocks.useAdminSyncBlockResume.mockReset();
     queryMocks.useAdminSyncBlockTrigger.mockReset();
-    queryMocks.useAdminSyncRuns.mockReset();
     queryMocks.useAdminSyncRunDetail.mockReset();
-    queryMocks.useAdminSyncTrigger.mockReset();
-    queryMocks.useAdminSyncTriggerAll.mockReset();
     queryMocks.useAdminVerifyPage.mockReset();
     queryMocks.useAuthMe.mockReset();
     queryMocks.useLogout.mockReset();
     queryMocks.useOverview.mockReset();
     queryMocks.usePageSyncBlocks.mockReset();
     queryMocks.useSyncOverview.mockReset();
-    queryMocks.useSyncMonitor.mockReset();
 
     queryMocks.useOverview.mockReturnValue({ data: buildOverview() });
     queryMocks.useSyncOverview.mockReturnValue({
@@ -388,17 +345,9 @@ describe("dashboard sync layout", () => {
       data: [],
       isLoading: false,
     });
-    queryMocks.useAdminSyncRuns.mockReturnValue({
-      data: [],
-      isLoading: false,
-    });
     queryMocks.useAdminSyncRunDetail.mockReturnValue({
       data: null,
       isLoading: false,
-    });
-    queryMocks.useAdminSyncTrigger.mockReturnValue({
-      isPending: false,
-      mutateAsync: vi.fn(),
     });
     queryMocks.useAdminSyncBlockTrigger.mockReturnValue({
       isPending: false,
@@ -416,17 +365,9 @@ describe("dashboard sync layout", () => {
       isPending: false,
       mutateAsync: vi.fn(),
     });
-    queryMocks.useAdminSyncTriggerAll.mockReturnValue({
-      isPending: false,
-      mutateAsync: vi.fn(),
-    });
     queryMocks.useAdminVerifyPage.mockReturnValue({
       isPending: false,
       mutateAsync: vi.fn(),
-    });
-    queryMocks.useSyncMonitor.mockReturnValue({
-      data: buildMonitorResponse(),
-      isLoading: false,
     });
   });
 

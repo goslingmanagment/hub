@@ -138,7 +138,6 @@ export * from "./repositories/ofapi-message-coverage.ts";
 export * from "./repositories/ofapi-certified-history.ts";
 export * from "./repositories/ofapi-commands.ts";
 export * from "./repositories/ofapi-sync-snapshot.ts";
-export * from "./repositories/onlyfans-public-profiles.ts";
 export * from "./repositories/telegram-settings.ts";
 export * from "./repositories/reporting.ts";
 export * from "./repositories/runtime-instances.ts";
