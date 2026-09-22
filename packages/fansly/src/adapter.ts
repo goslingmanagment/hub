@@ -1298,7 +1298,12 @@ export class FanslyAdapter {
   }
 
   async verifySession(context: FanslyRequestContext) {
-    return this.getAccountMe(context);
+    const response = await this.getAccountMe(context);
+    if (!isRecord(response.parsed) || !isRecord(response.parsed.account) ||
+      typeof response.parsed.account.id !== "string" || response.parsed.account.id.length === 0) {
+      throw new FanslyApiError("Fansly session verification returned an invalid account");
+    }
+    return response;
   }
 
   // ── Stage 6 replay-probe methods (read-only, loosely typed) ──

@@ -13,7 +13,7 @@
 // was requested. Scenarios G3 already covers (two-page sweep, v2 resume,
 // withheld finalization, erasure, duplicate id restart) are not repeated.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -23,6 +23,7 @@ import {
   getCheckpoint,
   getPageDmSyncCoverage,
   startSyncRun,
+  upsertFans,
   upsertPageDmConversation,
 } from "@agency_hub_core/db";
 
@@ -202,6 +203,36 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
       [pageId, platformConversationId, MESSAGE_SYNC_AT],
     );
   }
+
+  it.each([
+    null, { id: "grp-1" }, { id: "grp-1", users: null },
+    { id: "grp-1", users: [{}] }, { id: "wrong-group", users: [] },
+  ])("captures rejected group detail without replacing identity or advancing the page: %j", async raw => {
+    if (!testDb) throw new Error("Test database required");
+    const response = groupsPage({ conversations: ["grp-1"], total: 1, offset: 0, done: true });
+    // A contradictory roster partner requires the detail lookup even though
+    // the stored thread already has a valid fan binding.
+    response.groups[0]!.users[1]!.userId = "contradictory-partner";
+    const { stored } = await seedPage("sweep-detail-contract", { pages: [response] });
+    const [fan] = await upsertFans(appContext.db, [{ platform: "fansly", platformUserId: "fan-grp-1" }]);
+    if (!fan) throw new Error("fan seed failed");
+    await upsertPageDmConversation(appContext.db, {
+      ...seedThreadInput(stored.page.id, "grp-1", 1), fanId: fan.id,
+    });
+    const before = (await testDb.pool.query("select * from page_dm_threads where platform_account_id=$1", [stored.page.id])).rows;
+    appContext.adapter.getGroupDetail = vi.fn(async () => ({ parsed: raw as never, raw: raw as never }));
+
+    await expect(runChunk(stored, fakeTelemetry(), 5)).rejects.toThrow("group detail response contract rejected");
+
+    expect(appContext.adapter.getGroupDetail).toHaveBeenCalledTimes(1);
+    expect((await testDb.pool.query("select * from page_dm_threads where platform_account_id=$1", [stored.page.id])).rows)
+      .toEqual(before);
+    expect((await testDb.pool.query("select payload from observations where account_id=$1 and kind='group_detail'", [stored.page.id])).rows)
+      .toEqual([{ payload: { contractAccepted: false, raw } }]);
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.state).toMatchObject({ offset: 0, observedCount: 0, pageCount: 0 });
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("finalizes a small inbox in one chunk: one request, certified, unseen threads hidden", async (context) => {
     if (!testDb) {

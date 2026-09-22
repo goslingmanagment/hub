@@ -413,6 +413,29 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(2);
     expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
   });
+  it.each([
+    null, { id: "99" }, { id: "99", users: null },
+    { id: "99", users: [{}] }, { id: "wrong-group", users: [] },
+  ])("journals rejected group detail without marking discovery captured: %j", async raw => {
+    const f = await fixture(false);
+    await f.route(2, "99");
+    f.app.adapter.getGroupDetail = vi.fn(async context => {
+      await f.physical(context, "group_detail");
+      return { parsed: raw as never, raw: raw as never };
+    });
+
+    await expect(f.step()).rejects.toThrow("group detail response contract rejected");
+
+    expect(f.calls).toEqual(["group_detail"]);
+    expect((await db.pool.query("select payload from observations where account_id=$1 and kind='group_detail'", [f.page.id])).rows)
+      .toEqual([{ payload: { contractAccepted: false, raw } }]);
+    const state = (await db.pool.query("select backfill_cursor, applied_revision from subject_refresh_state where page_id=$1 and subject_ref='99'", [f.page.id])).rows[0];
+    expect(state.backfill_cursor).not.toHaveProperty("groupDetailCaptured");
+    expect(state.applied_revision).toBe(0n);
+    expect((await db.pool.query("select count(*)::int n from page_dm_threads where platform_account_id=$1 and platform_conversation_id='99'", [f.page.id])).rows[0].n)
+      .toBe(0);
+  });
+
   it("reads an unknown group once without inventing visible membership", async () => {
     const f = await fixture();
     await db.pool.query("update subject_refresh_state set next_due_at=now()+interval '1 hour'");

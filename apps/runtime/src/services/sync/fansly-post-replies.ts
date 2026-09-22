@@ -740,14 +740,18 @@ export async function fanslyPostRepliesChunk(
     if (pending.length > 0) {
       await assertOwnedPageSyncLease(app.db);
       const response = await app.adapter.getAccountsByIdsPage(requestContext, pending);
+      const contractAccepted = Array.isArray(response.raw);
       await journal(
         OBSERVATION_KINDS.accountLookup,
         { idCount: pending.length, origin: STREAM },
-        response.raw,
+        contractAccepted ? response.raw : { contractAccepted: false, raw: response.raw },
         {
-        action: "inserting Fansly comment author lookup raw payload",
+          action: "inserting Fansly comment author lookup raw payload",
         },
       );
+      if (!contractAccepted) {
+        throw new Error("Fansly comment author lookup response contract rejected");
+      }
       hydratedAuthors = pending.length;
       state = {
         ...state,

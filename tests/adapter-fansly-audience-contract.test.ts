@@ -96,4 +96,53 @@ describe("Fansly audience response contracts", () => {
     expect(observed.events[1]).toMatchObject({ responseMetadata: { summaryUnavailable: true } });
     expect(JSON.stringify(observed.events)).not.toContain(raw.content);
   });
+
+  it.each([
+    null, {}, { account: null }, { account: [] }, { account: {} },
+    { account: { id: "" } }, { account: { id: 123 } },
+  ])("rejects malformed account identity during session verification: %j", async raw => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const observed = captureEvents();
+    await expect(adapter.verifySession({
+      session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+    })).rejects.toMatchObject({
+      name: "FanslyApiError", message: "Fansly session verification returned an invalid account",
+    });
+    await adapter.close();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(observed.events.map(event => event.state)).toEqual(["started", "success"]);
+    expect(observed.events[1]).toMatchObject({ httpStatus: 200 });
+  });
+
+  it("verifies an explicit account identity without requiring optional profile counters", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const raw = { account: { id: "account-1" } };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    expect(await adapter.verifySession({
+      session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0),
+    })).toMatchObject({ parsed: raw, raw });
+    await adapter.close();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps malformed account responses available for capture outside session verification", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const raw = { content: "private account body" };
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const observed = captureEvents();
+    expect(await adapter.getAccountMe({
+      session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+    })).toMatchObject({ raw });
+    await adapter.close();
+    expect(observed.events.map(event => event.state)).toEqual(["started", "success"]);
+    expect(observed.events[1]).toMatchObject({ responseMetadata: { summaryUnavailable: true } });
+    expect(JSON.stringify(observed.events)).not.toContain(raw.content);
+  });
 });
