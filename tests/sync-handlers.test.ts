@@ -135,7 +135,6 @@ import {
   fanslySubscribersChunk,
   fanslyTopSpendersChunk,
   fanslyTransactionsChunk,
-  onlyfansDmMessagesChunk,
   onlyfansTransactionsChunk,
 } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import {
@@ -437,28 +436,6 @@ describe("sync executor handlers", () => {
       budget: new SyncChunkBudget(),
     } as never)).rejects.toThrow(/Unsupported executor stream "dm_messages"/);
     expect(telemetry.addNote).not.toHaveBeenCalled();
-  });
-
-  it("keeps the retired OnlyFans history handler physically incapable of vendor I/O", async () => {
-    const listChatMessages = vi.fn(async () => {
-      throw new Error("must not run");
-    });
-    const result = await onlyfansDmMessagesChunk({
-      ofapi: { listChatMessages },
-    } as never, {
-      pageContext: {
-        platform: "onlyfans",
-        page: { id: 55, label: "onlyfans-page" },
-      },
-      streamState: { stream: "dm_messages" },
-    } as never);
-
-    expect(result).toEqual({
-      satisfied: true,
-      yieldReason: null,
-      stats: { skipped: "legacy_ofapi_dm_messages_retired" },
-    });
-    expect(listChatMessages).not.toHaveBeenCalled();
   });
 
   it("syncs Fansly top spenders in steady state using the trailing 7 day window", async () => {

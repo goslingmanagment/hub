@@ -10,12 +10,10 @@ import {
   listPageDmConversationsByPlatformConversationIds,
   listPageSyncStates,
   recordOfapiCreditUsage,
-  refreshPageDmConversationWindow,
   setPageOfapiAccountId,
   startSyncRun,
   upsertCheckpoint,
   upsertPageDmConversation,
-  upsertPageDmMessages,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -23,7 +21,6 @@ import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/of
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   executeOfapiDmConversationsChunk,
-  executeOfapiDmMessagesChunk,
 } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
 import { pauseDisabledOnlyFansDmPollingForPage } from "../apps/runtime/src/services/sync/onlyfans-dm-polling.ts";
 import { pauseSyncBlock, resumeSyncBlock, triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
@@ -44,7 +41,6 @@ let appContext: AppContext;
 
 type FakePages = {
   chats: Map<number, OfapiListPage>;
-  messages: Array<{ expectFirstId: string | null; page: OfapiListPage }>;
 };
 
 function listPage(items: Record<string, unknown>[], hasNextPage: boolean, balance = 20_000): OfapiListPage {
@@ -94,31 +90,7 @@ function chatItem(input: {
   };
 }
 
-function messageItem(input: {
-  id: string;
-  fanId: string;
-  text?: string;
-  createdAt: string;
-  sentByMe?: boolean;
-  isTip?: boolean;
-  price?: number;
-}): Record<string, unknown> {
-  const sentByMe = input.sentByMe ?? false;
-  return {
-    id: Number(input.id),
-    text: `<p>${input.text ?? `message ${input.id}`}</p>`,
-    createdAt: input.createdAt,
-    isSentByMe: sentByMe,
-    fromUser: { id: sentByMe ? MODEL_USER_ID : Number(input.fanId), _view: "s" },
-    isTip: input.isTip ?? false,
-    price: input.price ?? 0,
-    mediaCount: 0,
-    media: [],
-  };
-}
-
 function fakeOfapiClient(pages: FakePages) {
-  let messageCall = 0;
   const listChats = vi.fn(async (_context: unknown, _accountId: string, params: { offset?: number }) => {
     const page = pages.chats.get(params.offset ?? 0);
     if (!page) {
@@ -126,19 +98,8 @@ function fakeOfapiClient(pages: FakePages) {
     }
     return page;
   });
-  const listChatMessages = vi.fn(async (
-    _context: unknown,
-    _accountId: string,
-    _chatId: string,
-    params: { firstId?: string | null },
-  ) => {
-    const scripted = pages.messages[messageCall];
-    if (!scripted) {
-      throw new Error(`Unexpected listChatMessages call #${messageCall + 1}`);
-    }
-    messageCall += 1;
-    expect(params.firstId ?? null).toBe(scripted.expectFirstId);
-    return scripted.page;
+  const listChatMessages = vi.fn(async () => {
+    throw new Error("List Chats must not invoke the retired per-chat history crawler");
   });
 
   const client: OfapiClient = {
@@ -185,7 +146,7 @@ async function seedMappedPage(label = "lora-of") {
   return page;
 }
 
-async function buildChunkInput(page: { id: number }, stream: "dm_conversations" | "dm_messages", options?: {
+async function buildChunkInput(page: { id: number }, stream: "dm_conversations", options?: {
   maxRequests?: number;
 }) {
   const run = await startSyncRun(appContext.db, {
@@ -221,23 +182,6 @@ async function getConversation(pageId: number, fanId: string) {
     platformConversationIds: [fanId],
   });
   return conversation ?? null;
-}
-
-async function getStoredMessages(conversationId: number) {
-  const { rows } = await testDb!.pool.query<{
-    platform_message_id: string;
-    sender_role: string;
-    content: string;
-    total_tip_amount_cents: number;
-  }>(
-    `select platform_message_id, sender_role, content, total_tip_amount_cents
-     from page_dm_messages
-     where conversation_id = $1
-       and deleted_at is null
-     order by created_at desc, platform_message_id desc`,
-    [conversationId],
-  );
-  return rows;
 }
 
 beforeAll(async () => {
@@ -284,7 +228,6 @@ describe("OFAPI DM conversations sync", () => {
           chatItem({ fanId: "1000007", unread: 0, lastMessage: null }),
         ], false)],
       ]),
-      messages: [],
     });
     appContext = { ...appContext, ofapi: client };
 
@@ -359,7 +302,6 @@ describe("OFAPI DM conversations sync", () => {
           }),
         ], false)],
       ]),
-      messages: [],
     });
     appContext = { ...appContext, ofapi: client };
 
@@ -429,7 +371,7 @@ describe("OFAPI DM conversations sync", () => {
     }
 
     const page = await seedMappedPage();
-    const { client, listChats } = fakeOfapiClient({ chats: new Map(), messages: [] });
+    const { client, listChats } = fakeOfapiClient({ chats: new Map() });
 
     // Daily budget exhausted.
     appContext = {
@@ -485,7 +427,7 @@ describe("OFAPI DM conversations sync", () => {
       ], false)],
     ]);
 
-    const first = fakeOfapiClient({ chats, messages: [] });
+    const first = fakeOfapiClient({ chats });
     appContext = {
       ...createTestAppContext(testDb, {
         ofapiDmSyncEnabled: true,
@@ -504,7 +446,7 @@ describe("OFAPI DM conversations sync", () => {
     expect(await getConversation(page.id, FAN_B)).toBeNull();
 
     // Next chunk run continues from the persisted offset and completes.
-    const second = fakeOfapiClient({ chats, messages: [] });
+    const second = fakeOfapiClient({ chats });
     appContext = {
       ...createTestAppContext(testDb, {
         ofapiDmSyncEnabled: true,
@@ -521,297 +463,6 @@ describe("OFAPI DM conversations sync", () => {
     expect(second.listChats).toHaveBeenCalledTimes(1);
     expect(second.listChats.mock.calls[0]![2]).toMatchObject({ offset: 1 });
     expect(await getConversation(page.id, FAN_B)).not.toBeNull();
-  });
-});
-
-describe("OFAPI DM messages sync", () => {
-  async function seedConversationViaBootstrap(lastMessageId: string, lastMessageAt: string, unread = 1) {
-    const page = await seedMappedPage();
-    const bootstrap = fakeOfapiClient({
-      chats: new Map([
-        [0, listPage([
-          chatItem({
-            fanId: FAN_A,
-            unread,
-            lastMessage: { id: lastMessageId, createdAt: lastMessageAt },
-          }),
-        ], false)],
-      ]),
-      messages: [],
-    });
-    appContext = { ...appContext, ofapi: bootstrap.client };
-    const result = await executeOfapiDmConversationsChunk(
-      appContext,
-      await buildChunkInput(page, "dm_conversations"),
-    );
-    expect(result.satisfied).toBe(true);
-    return page;
-  }
-
-  it("backfills with the inclusive first_id cursor down to history exhaustion", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedConversationViaBootstrap("1000300", "2026-06-11T10:00:00+00:00");
-    const { client, listChatMessages } = fakeOfapiClient({
-      chats: new Map(),
-      messages: [
-        {
-          expectFirstId: null,
-          page: listPage([
-            messageItem({ id: "1000300", fanId: FAN_A, createdAt: "2026-06-11T10:00:00+00:00" }),
-            messageItem({ id: "1000299", fanId: FAN_A, createdAt: "2026-06-11T09:59:00+00:00", sentByMe: true }),
-            messageItem({ id: "1000298", fanId: FAN_A, createdAt: "2026-06-11T09:58:00+00:00" }),
-          ], true),
-        },
-        {
-          expectFirstId: "1000298",
-          page: listPage([
-            // Inclusive cursor echo — must be deduped, not double-stored.
-            messageItem({ id: "1000298", fanId: FAN_A, createdAt: "2026-06-11T09:58:00+00:00" }),
-            messageItem({
-              id: "1000297",
-              fanId: FAN_A,
-              createdAt: "2026-06-11T09:57:00+00:00",
-              isTip: true,
-              price: 5,
-            }),
-            messageItem({ id: "1000296", fanId: FAN_A, createdAt: "2026-06-11T09:56:00+00:00", sentByMe: true }),
-          ], false),
-        },
-      ],
-    });
-    appContext = { ...appContext, ofapi: client };
-
-    const result = await executeOfapiDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, "dm_messages"),
-    );
-    expect(result.satisfied).toBe(true);
-    expect(listChatMessages).toHaveBeenCalledTimes(2);
-
-    const conversation = await getConversation(page.id, FAN_A);
-    expect(conversation!.messageCoverageStatus).toBe("complete");
-    expect(conversation!.messageBackfillComplete).toBe(true);
-    expect(conversation!.storedMessageCount).toBe(5);
-    expect(conversation!.newestStoredMessageId).toBe("1000300");
-    expect(conversation!.oldestStoredMessageId).toBe("1000296");
-
-    const messages = await getStoredMessages(conversation!.id);
-    expect(messages.map((message) => message.platform_message_id)).toEqual([
-      "1000300",
-      "1000299",
-      "1000298",
-      "1000297",
-      "1000296",
-    ]);
-    expect(messages[1]!.sender_role).toBe("model");
-    expect(messages[3]!.total_tip_amount_cents).toBe(500);
-
-    // Stage 1 (V4): every DM-message fetch persists the raw page far-future.
-    const rawPayloads = await testDb.pool.query<{
-      endpoint: string;
-      retain_until: Date;
-    }>(
-      `select endpoint, retain_until
-       from sync_raw_payloads
-       where page_id = $1
-         and payload_kind = 'dm_messages'
-       order by id`,
-      [page.id],
-    );
-    expect(rawPayloads.rows).toHaveLength(2);
-    for (const row of rawPayloads.rows) {
-      expect(row.endpoint).toBe("dm_messages");
-      expect(row.retain_until.getTime()).toBeGreaterThan(
-        Date.now() + 36000 * 24 * 60 * 60 * 1000,
-      );
-    }
-
-    // Stage 7 producer 2: each fetched page is also an observation with the
-    // documented pull idempotency key (page:stream:run:requestSeq).
-    const observations = await testDb.pool.query<{
-      producer: string;
-      kind: string;
-      account_id: string;
-      idempotency_key: string;
-    }>(
-      `select producer, kind, account_id::text as account_id, idempotency_key
-       from observations where source = 'pull' and kind = 'dm_messages' order by id`,
-    );
-    expect(observations.rows).toHaveLength(2);
-    for (const row of observations.rows) {
-      expect(row.producer).toBe("sync:onlyfans:dm_messages");
-      expect(row.kind).toBe("dm_messages");
-      expect(row.account_id).toBe(String(page.id));
-      // page:stream:run:<requestSeq under the page executor; UUID fallback
-      // here because the test drives the chunk outside the executor context>.
-      expect(row.idempotency_key).toMatch(new RegExp(`^${page.id}:dm_messages:\\d+:[\\w-]+$`));
-    }
-    expect(observations.rows[0]!.idempotency_key).not.toBe(observations.rows[1]!.idempotency_key);
-
-    // Stage 7 3b tail: the bootstrap chats walk journals its list pages too.
-    const chatListObservations = await testDb.pool.query<{ producer: string }>(
-      `select producer from observations where source = 'pull' and kind = 'dm_conversations'`,
-    );
-    expect(chatListObservations.rows.length).toBeGreaterThan(0);
-    expect(chatListObservations.rows[0]!.producer).toBe("sync:onlyfans:dm_conversations");
-  });
-
-  it("tops up a diverged head incrementally and stops on overlap with stored messages", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedConversationViaBootstrap("1000300", "2026-06-11T10:00:00+00:00");
-
-    // First: complete a small backfill so the conversation holds 1000300.
-    const backfill = fakeOfapiClient({
-      chats: new Map(),
-      messages: [
-        {
-          expectFirstId: null,
-          page: listPage([
-            messageItem({ id: "1000300", fanId: FAN_A, createdAt: "2026-06-11T10:00:00+00:00" }),
-          ], false),
-        },
-      ],
-    });
-    appContext = { ...appContext, ofapi: backfill.client };
-    expect((await executeOfapiDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, "dm_messages"),
-    )).satisfied).toBe(true);
-
-    // Reconcile reports a newer head → head-stale candidate. The head's
-    // createdAt must postdate last_message_sync_at (stamped with the REAL
-    // clock during the backfill above), so it cannot be a fixed date — the
-    // original 2026-06-11T11:00Z went stale the moment the wall clock passed it.
-    const divergedHeadIso = new Date(Date.now() + 60_000).toISOString();
-    const reconcile = fakeOfapiClient({
-      chats: new Map([
-        [0, listPage([
-          chatItem({
-            fanId: FAN_A,
-            unread: 2,
-            lastMessage: { id: "1000310", createdAt: divergedHeadIso },
-          }),
-        ], false)],
-      ]),
-      messages: [],
-    });
-    const staleIso = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
-    const checkpoint = await getCheckpoint(appContext.db, page.id, "dm_conversations");
-    await upsertCheckpoint(appContext.db, {
-      platformAccountId: page.id,
-      stream: "dm_conversations",
-      state: {
-        ...(checkpoint?.state as Record<string, unknown>),
-        lastReconcileAt: staleIso,
-      },
-    });
-    appContext = { ...appContext, ofapi: reconcile.client };
-    expect((await executeOfapiDmConversationsChunk(
-      appContext,
-      await buildChunkInput(page, "dm_conversations"),
-    )).satisfied).toBe(true);
-
-    // Incremental top-up: newest page overlaps the stored 1000300 and stops.
-    const topUp = fakeOfapiClient({
-      chats: new Map(),
-      messages: [
-        {
-          expectFirstId: null,
-          page: listPage([
-            messageItem({ id: "1000310", fanId: FAN_A, createdAt: divergedHeadIso }),
-            messageItem({ id: "1000300", fanId: FAN_A, createdAt: "2026-06-11T10:00:00+00:00" }),
-            messageItem({ id: "1000290", fanId: FAN_A, createdAt: "2026-06-11T08:00:00+00:00" }),
-          ], true),
-        },
-      ],
-    });
-    appContext = { ...appContext, ofapi: topUp.client };
-    const result = await executeOfapiDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, "dm_messages"),
-    );
-    expect(result.satisfied).toBe(true);
-    expect(topUp.listChatMessages).toHaveBeenCalledTimes(1);
-
-    const conversation = await getConversation(page.id, FAN_A);
-    expect(conversation!.newestStoredMessageId).toBe("1000310");
-    // Overlap completes the incremental pass; coverage stays complete.
-    expect(conversation!.messageCoverageStatus).toBe("complete");
-    const messages = await getStoredMessages(conversation!.id);
-    expect(messages.map((message) => message.platform_message_id)).toEqual([
-      "1000310",
-      "1000300",
-      "1000290",
-    ]);
-  });
-
-  it("caps a backfill at the retention tier and marks it partial_window", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // Regular fan → 200-message retention. Stage stored count just below the
-    // cap so a single page crosses it.
-    const page = await seedConversationViaBootstrap("1201000", "2026-06-11T10:00:00+00:00");
-    const conversation = await getConversation(page.id, FAN_A);
-    const seeded: Parameters<typeof upsertPageDmMessages>[1] = [];
-    for (let index = 0; index < 198; index += 1) {
-      const id = 1201000 - index;
-      seeded.push({
-        conversationId: conversation!.id,
-        platformAccountId: page.id,
-        platformMessageId: String(id),
-        senderPlatformUserId: FAN_A,
-        senderRole: "fan",
-        createdAt: new Date(Date.parse("2026-06-11T10:00:00+00:00") - index * 60_000),
-        content: `seeded ${id}`,
-        totalTipAmountCents: 0,
-        inReplyToMessageId: null,
-        inReplyToRootMessageId: null,
-      });
-    }
-    await upsertPageDmMessages(appContext.db, seeded);
-    await refreshPageDmConversationWindow(appContext.db, { conversationId: conversation!.id });
-
-    const oldestSeeded = String(1201000 - 197);
-    const { client, listChatMessages } = fakeOfapiClient({
-      chats: new Map(),
-      messages: [
-        {
-          expectFirstId: oldestSeeded,
-          page: listPage([
-            messageItem({ id: oldestSeeded, fanId: FAN_A, createdAt: "2026-06-11T06:00:00+00:00" }),
-            messageItem({ id: "1200500", fanId: FAN_A, createdAt: "2026-06-11T05:00:00+00:00" }),
-            messageItem({ id: "1200499", fanId: FAN_A, createdAt: "2026-06-11T04:59:00+00:00" }),
-            messageItem({ id: "1200498", fanId: FAN_A, createdAt: "2026-06-11T04:58:00+00:00" }),
-          ], true),
-        },
-      ],
-    });
-    appContext = { ...appContext, ofapi: client };
-
-    const result = await executeOfapiDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, "dm_messages"),
-    );
-    expect(result.satisfied).toBe(true);
-    expect(listChatMessages).toHaveBeenCalledTimes(1);
-
-    const capped = await getConversation(page.id, FAN_A);
-    expect(capped!.messageCoverageStatus).toBe("partial_window");
-    // The fetch-side window cap still bounds the backfill (hence
-    // partial_window), but Stage 1 disables the finalize prune by default, so
-    // every stored row is kept — 198 seeded + 3 new past the 200 tier.
-    expect(capped!.storedMessageCount).toBe(201);
   });
 });
 

@@ -1641,20 +1641,8 @@ export async function getPageConversationPreview(
   } satisfies PageConversationPreview;
 }
 
-// ─── Per-conversation DM message-sync circuit breaker (0086) ───────────────
-// One poison chat (vendor-side scrape timeout, no HTTP status) must not wedge
-// a page's whole dm_messages stream. Failures accrue exponential backoff
-// (next_retry_at) and, from the 4th failure, a quarantine window; candidate
-// selection above skips excluded conversations, re-admission is implicit once
-// the windows lapse. Rows are operational sync state — cleared on a
-// successful sync of the conversation, cascaded away with their thread.
-
-export const PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD = 4;
-const PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES = 5;
-const PAGE_DM_SYNC_FAILURE_BACKOFF_CAP_HOURS = 6;
-const PAGE_DM_SYNC_QUARANTINE_HOURS = 6;
-const PAGE_DM_SYNC_LAST_ERROR_MAX_LENGTH = 500;
-
+// Historical per-conversation breaker state remains readable by sync and
+// health surfaces after the legacy OnlyFans message crawler was retired.
 export interface PageDmConversationSyncHealth {
   conversationId: number;
   platformAccountId: number;
@@ -1703,130 +1691,9 @@ export async function getConversationSyncHealth(
   };
 }
 
-/**
- * Upserts one failure observation: failure_count++, backoff
- * next_retry_at = now + min(5min * 2^(failure_count - 1), 6h), and from the
- * 4th failure a 6h quarantine window. One atomic statement — concurrent
- * writers cannot lose an increment.
- */
-export async function recordConversationSyncFailure(
-  db: Database,
-  input: {
-    conversationId: number;
-    platformAccountId: number;
-    errorClass: string;
-    errorMessage: string;
-    now?: Date;
-  },
-): Promise<{ failureCount: number; nextRetryAt: Date | null; quarantineUntil: Date | null }> {
-  const now = input.now ?? new Date();
-  const nowSql = sql`${now}::timestamptz`;
-  const lastError = input.errorMessage.slice(0, PAGE_DM_SYNC_LAST_ERROR_MAX_LENGTH);
-  // Module-level integer literals, inlined so make_interval needs no
-  // parameter-type inference.
-  const backoffBaseSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES));
-  const backoffCapSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_BACKOFF_CAP_HOURS));
-  const quarantineHoursSql = sql.raw(String(PAGE_DM_SYNC_QUARANTINE_HOURS));
-  const quarantineThresholdSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD));
-
-  const result = await db.execute<{
-    failureCount: NumericValue;
-    nextRetryAt: TimestampValue;
-    quarantineUntil: TimestampValue;
-  }>(sql`
-    insert into page_dm_message_sync_health (
-      conversation_id, platform_account_id, failure_count, error_class,
-      last_error, last_attempt_at, next_retry_at, quarantine_until, updated_at
-    )
-    values (
-      ${input.conversationId}, ${input.platformAccountId}, 1, ${input.errorClass},
-      ${lastError}, ${nowSql},
-      ${nowSql} + make_interval(mins => ${backoffBaseSql}),
-      null, ${nowSql}
-    )
-    on conflict (conversation_id) do update set
-      failure_count = page_dm_message_sync_health.failure_count + 1,
-      error_class = excluded.error_class,
-      last_error = excluded.last_error,
-      last_attempt_at = excluded.last_attempt_at,
-      next_retry_at = excluded.last_attempt_at + least(
-        make_interval(mins => ${backoffBaseSql})
-          * power(2, page_dm_message_sync_health.failure_count),
-        make_interval(hours => ${backoffCapSql})
-      ),
-      quarantine_until = case
-        when page_dm_message_sync_health.failure_count + 1 >= ${quarantineThresholdSql}
-          then excluded.last_attempt_at + make_interval(hours => ${quarantineHoursSql})
-        else page_dm_message_sync_health.quarantine_until
-      end,
-      updated_at = excluded.updated_at
-    returning
-      failure_count as "failureCount",
-      next_retry_at as "nextRetryAt",
-      quarantine_until as "quarantineUntil"
-  `);
-
-  const row = result.rows[0];
-  if (!row) {
-    throw new Error("recordConversationSyncFailure returned no row");
-  }
-  return {
-    failureCount: normalizeNumber(row.failureCount, "failureCount"),
-    nextRetryAt: parseTimestamp(row.nextRetryAt),
-    quarantineUntil: parseTimestamp(row.quarantineUntil),
-  };
-}
-
-/** Successful sync of the conversation resets its failure bookkeeping. The
- * learned preferred_page_limit survives (0087) — a giant chat's incremental
- * head fetches need the small limit too; the row is dropped only when there
- * is nothing sticky to keep. */
-export async function clearConversationSyncHealth(db: Database, conversationId: number) {
-  await db.execute(sql`
-    with kept as (
-      update page_dm_message_sync_health
-      set failure_count = 0,
-          error_class = null,
-          last_error = null,
-          next_retry_at = null,
-          quarantine_until = null,
-          updated_at = now()
-      where conversation_id = ${conversationId}
-        and preferred_page_limit is not null
-      returning conversation_id
-    )
-    delete from page_dm_message_sync_health
-    where conversation_id = ${conversationId}
-      and not exists (select 1 from kept)
-  `);
-}
-
-/** 0087: a successful adaptive probe records the working page limit so later
- * runs start there instead of re-paying the default-limit timeouts. Never
- * touches failure bookkeeping. */
-export async function recordConversationPreferredPageLimit(
-  db: Database,
-  input: { conversationId: number; platformAccountId: number; pageLimit: number },
-) {
-  await db.execute(sql`
-    insert into page_dm_message_sync_health (conversation_id, platform_account_id, preferred_page_limit)
-    values (${input.conversationId}, ${input.platformAccountId}, ${input.pageLimit})
-    on conflict (conversation_id)
-    do update set preferred_page_limit = excluded.preferred_page_limit, updated_at = now()
-  `);
-}
-
-/**
- * How many of the page's conversations are currently excluded by the breaker
- * (backoff or quarantine window still open). Keeps the dm_messages last_ok
- * stamp honest: exhaustion can complete while poison chats sit out, and this
- * count says so in the run stats.
- */
-/** Conversation-level coverage debt per account: breaker rows still carrying
- * failures. Unlike the page-level failure streak (reset to 0 by every
- * partial yield), these rows clear only when THEIR conversation actually
- * syncs — the honest health signal while poison chats sit out. Rows kept
- * only for preferred_page_limit (failure_count = 0) don't count. */
+/** Historical conversation-level failures per account, retained for health
+ * reporting. Rows kept only for preferred_page_limit (failure_count = 0)
+ * do not count. */
 export async function countConversationSyncFailuresByAccount(
   db: Database,
   input?: { platformAccountIds?: readonly number[] },
@@ -1844,19 +1711,4 @@ export async function countConversationSyncFailuresByAccount(
     platformAccountId: normalizeNumber(row.platformAccountId, "platformAccountId"),
     failingConversationCount: normalizeNumber(row.count, "count"),
   }));
-}
-
-export async function countExcludedConversationSyncHealth(
-  db: Database,
-  input: { platformAccountId: number; now?: Date },
-) {
-  const now = input.now ?? new Date();
-  const nowSql = sql`${now}::timestamptz`;
-  const result = await db.execute<{ count: NumericValue }>(sql`
-    select count(*)::bigint as "count"
-    from page_dm_message_sync_health h
-    where h.platform_account_id = ${input.platformAccountId}
-      and (h.next_retry_at > ${nowSql} or h.quarantine_until > ${nowSql})
-  `);
-  return normalizeNumber(result.rows[0]?.count ?? 0, "count");
 }
