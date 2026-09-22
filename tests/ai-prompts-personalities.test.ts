@@ -27,7 +27,7 @@ describe('createBundledPersonalities', () => {
     expect(lora.name).toBe('Lora');
     expect(lora.builtin).toBe(true);
     expect(lora.builtinVersion).toBe(BUNDLED_LORA_PERSONALITY_VERSION);
-    expect(lora.builtinVersion).toBe(2);
+    expect(lora.builtinVersion).toBe(3);
   });
 
   it('defaults updatedAt to 0 and honors the provided build timestamp', () => {
