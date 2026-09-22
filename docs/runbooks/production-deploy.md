@@ -5,8 +5,10 @@ for every mode (full, dist-only, auto and pull). Tracked changes and untracked
 release inputs are refused. Fetch the deployed commit's Git history first.
 
 While holding the remote deployment lock, the driver reads the actual images
-of API, worker and scheduler, including stopped containers. Ordinary deploys
-must contain every deployed commit. A missing/dirty/unknown revision, partial
+of API, worker and scheduler, including stopped containers, and excludes
+one-off `compose run` containers (for example, interrupted migrations).
+An ordinary deploy candidate must contain every deployed role's commit.
+A missing/dirty/unknown revision, partial
 stack or inspection failure stops deployment before image tagging, migrations
 and service stops. It repeats the check before quiesce and refuses an external
 image replacement during its build. An entirely empty role inventory is
@@ -29,6 +31,9 @@ after the build. The override is CLI-only and does not bypass clean-source,
 Git-history, migration compatibility, infrastructure or health checks. Use
 dist-only only when the target's dependency-checksum clean base is available.
 The production-pinned Hub CLI is rebuilt from the selected source checkout.
+If a deployed label has no recoverable Git history, even explicit replacement
+is refused. Recover that history before using this driver; fetching `main`
+alone cannot recover an unpublished commit that is no longer stored anywhere.
 
 This is a guard in the deployment driver. A historical copy of the script or
 direct root-level Docker commands can bypass it; do not use an old checkout's

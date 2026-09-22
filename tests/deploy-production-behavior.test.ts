@@ -309,6 +309,72 @@ describe("production deploy behavior without production access", () => {
     expect(guard(candidate, ["absent", "absent", "absent"], { REPLACE_DEPLOYED: candidate }).status).not.toBe(0);
     expect(guard(candidate, [candidate, candidate, candidate], { TEST_REVISION_INVENTORY: `api|${candidate}|${imageId}` }).status).not.toBe(0);
     expect(guard(candidate, [candidate, candidate, candidate], { TEST_REMOTE_FAILURE_PATTERN: "deploy-revision-inventory" }).status).not.toBe(0);
+    expect(guard(candidate, [candidate, candidate, candidate], { TEST_REVISION_INVENTORY: `${inventory([candidate, candidate, candidate])}|extra` }).status).not.toBe(0);
+  });
+
+  it("checks every real container when a service has multiple instances", () => {
+    const parent = initCheckout();
+    const child = commitRevision("child");
+    const deployed = `${inventory([parent, parent, parent])}\napi|${child}|${imageId}`;
+    expect(guard(parent, [parent, parent, parent], { TEST_REVISION_INVENTORY: deployed }).status).not.toBe(0);
+    expect(guard(child, [parent, parent, parent], { TEST_REVISION_INVENTORY: deployed }).status).toBe(0);
+  });
+
+  it("excludes compose-run orphans while still inspecting stopped application roles", () => {
+    const candidate = initCheckout();
+    const result = guard(candidate, [candidate, candidate, candidate], { REMOTE_APP_DIR_ESCAPED: '"$ROOT_DIR"' });
+    expect(result.status, result.stderr).toBe(0);
+    // Execute the actual generated remote shell against a local Docker stub.
+    // Asking for the orphan's revision is a failure, not a canned inventory.
+    const probe = spawnSync("bash", ["-c", String.raw`
+      docker() {
+        local last
+        for last in "$@"; do :; done
+        if [[ "$1" == compose ]]; then
+          [[ "$*" == *"ps -a -q"* ]] || return 90
+          printf '%s\n' "$last"
+          if [[ "$last" == api ]]; then printf 'orphan\n'; fi
+        elif [[ "$1" == inspect ]]; then
+          if [[ "$last" == orphan ]]; then printf 'orphan-image|True\n'; else printf '%s|False\n' "$TEST_ROLE_IMAGE"; fi
+        elif [[ "$1" == image && "$last" == "$TEST_ROLE_IMAGE" ]]; then
+          printf '%s\n' "$APP_SOURCE_REVISION"
+        else return 91; fi
+      }
+    ` + readFileSync(commandLog, "utf8")], {
+      encoding: "utf8", timeout: 5_000,
+      env: environment({ APP_SOURCE_REVISION: candidate, TEST_ROLE_IMAGE: imageId }),
+    });
+    expect(probe.status, probe.stderr).toBe(0);
+    expect(probe.stdout.trim()).toBe(inventory([candidate, candidate, candidate]));
+  });
+
+  it("parses exact replacement and an independent source checkout before any deployment", () => {
+    const driver = path.join(fixtureRoot, "driver");
+    const source = path.join(fixtureRoot, "source checkout");
+    mkdirSync(driver);
+    mkdirSync(source);
+    const script = readFileSync(deployPath, "utf8");
+    const prefix = path.join(driver, "deploy-prefix.sh");
+    writeFileSync(prefix, script.slice(0, script.indexOf('BUILD_PLATFORM="linux/amd64"'))
+      + '\nprintf "%s\\n%s\\n" "$ROOT_DIR" "$REPLACE_DEPLOYED"\n');
+    const parsed = spawnSync("bash", [prefix, "--source-dir", source, "--replace-deployed", revision, "root@fixture.invalid"], {
+      encoding: "utf8", timeout: 5_000, env: environment({ DEPLOY_SOURCE_DIR: driver }),
+    });
+    expect(parsed.status, parsed.stderr).toBe(0);
+    expect(parsed.stdout.trim()).toBe(`${source}\n${revision}`);
+    const envOnly = spawnSync("bash", [prefix, "root@fixture.invalid"], {
+      encoding: "utf8", timeout: 5_000,
+      env: environment({ DEPLOY_SOURCE_DIR: source, DEPLOY_REPLACE_DEPLOYED: revision }),
+    });
+    expect(envOnly.status, envOnly.stderr).toBe(0);
+    expect(envOnly.stdout).toBe(`${source}\n\n`);
+    for (const invalid of ["", "unknown", `${revision}-dirty`, "$(echo injected)"]) {
+      const rejected = spawnSync("bash", [prefix, "--replace-deployed", invalid, "root@fixture.invalid"], {
+        encoding: "utf8", timeout: 5_000, env: environment(),
+      });
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("exact deployed 12-hex revision");
+    }
   });
 
   it("refuses an external image replacement between the two guards", () => {

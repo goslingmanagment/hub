@@ -216,6 +216,14 @@ describe("compose config", () => {
     expect(firstRevisionGuard).toBeLessThan(main.indexOf("capture_remote_rollback_image"));
     expect(lastRevisionGuard).toBeGreaterThan(candidate);
     expect(lastRevisionGuard).toBeLessThan(quiesce);
+    const sourceChecks = [...main.matchAll(/validate_source_checkout/g)].map(match => match.index);
+    expect(sourceChecks).toHaveLength(3);
+    expect(sourceChecks[0]).toBeGreaterThan(main.indexOf("initialize_deploy_metadata_and_tags"));
+    expect(sourceChecks[0]).toBeLessThan(candidate);
+    expect(sourceChecks[1]).toBeGreaterThan(candidate);
+    expect(sourceChecks[1]).toBeLessThan(quiesce);
+    expect(sourceChecks[2]).toBeGreaterThan(main.indexOf("start_phase recreate"));
+    expect(sourceChecks[2]).toBeLessThan(main.indexOf('"Unable to promote candidate image tag'));
     expect(infrastructure).toBeGreaterThan(candidate);
     expect(quiesce).toBeGreaterThan(infrastructure);
     expect(main).toContain('RECREATE_SERVICES="api worker scheduler"');
@@ -267,6 +275,7 @@ describe("compose config", () => {
     const rebuild = getShellFunction(text, "rebuild_local_hub_cli");
 
     expect(rebuild).toContain('"${SCRIPT_DIR}/rebuild-hub-cli-prod.sh" "$APP_SOURCE_REVISION"');
+    expect(rebuild).toContain('HUB_CLI_SOURCE_DIR="$ROOT_DIR"');
     expect(rebuild).toContain("unknown|*-dirty)");
     expect(text).toContain("--skip-hub-cli-rebuild");
     expect(text).toContain("DEPLOY_SKIP_HUB_CLI_REBUILD");

@@ -66,7 +66,9 @@ media_stats failures and request-budget changes are outside this change.
 - For runnable background dispatches (scheduled/event/recovery/anomaly), give
   the competing streams the group's maximum existing priority, and select
   the least recently started one. Never-started work sorts first. On equal timestamps retain existing
-  priority, requested_at and stream-order tie breakers. Manual/onboarding/reset
+  priority, requested_at and stream-order tie breakers within the group. Unrelated
+  equal-priority work wins over previously started group members; a lone
+  member retains its own priority and original ordering. Manual/onboarding/reset
   dispatches retain their explicit priority until the existing yield demotion.
 - Compute this inside acquirePageSyncLease after the existing eligibility
   filters, using the durable page_sync_states.started_at value. No new queue,

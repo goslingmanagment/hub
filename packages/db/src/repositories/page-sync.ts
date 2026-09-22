@@ -2084,6 +2084,8 @@ export async function acquirePageSyncLease(
   // Background peers share their highest priority and rotate by durable DB
   // start time; explicit operator dispatches keep their existing boost. Only
   // eligible peers participate, so a blocked/retrying peer cannot stall work.
+  // Unrelated work wins an equal-priority tie; a lone peer keeps its original
+  // priority. Mixed-source peers may borrow recovery priority for one turn.
   const result = await db.execute<Record<string, unknown>>(sql`
     with runnable as (
       select st.page_id as "pageId",

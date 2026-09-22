@@ -80,11 +80,47 @@ describe("Fansly bounded DM and reconciliation fairness", () => {
 
   it("gives the event-sourced B1 lane a turn during anomaly reconciliation", async () => {
     await requestPageSync(db, { pageId, streams: ["followers_reconcile"], source: "anomaly" });
+    await testDb!.pool.query(`update page_sync_states set status='idle', applied_seq=request_seq
+      where page_id=$1 and stream='dm_messages'`, [pageId]);
     await requestPageSync(db, { pageId, streams: ["dm_messages"], source: "event" });
     expect(await runTurn()).toBe("followers_reconcile");
     expect(await runTurn()).toBe("dm_conversations");
-    expect(await runTurn()).toBe("dm_messages");
+    const eventLease = await acquire();
+    expect(eventLease).toMatchObject({
+      stream: "dm_messages", dispatchSource: "event", requestPayload: { fanslyWsHintOnly: true },
+    });
+    await yieldPageSync(db, {
+      pageId, stream: eventLease.stream, requestSeq: eventLease.leasedSeq!,
+      leaseToken: eventLease.leaseToken!, dispatchSource: "scheduled",
+    });
     expect(await runTurn()).toBe("followers_reconcile");
+  });
+
+  it("does not lend a manual boost to background peers", async () => {
+    await requestPageSync(db, { pageId, streams: ["dm_messages"], source: "manual" });
+    await requestPageSync(db, { pageId, streams: ["subscribers"], source: "scheduled" });
+    expect(await runTurn()).toBe("dm_messages");
+    expect(await runTurn()).toBe("subscribers");
+    // Leave the unrelated higher-priority work settled for the next turn.
+    await testDb!.pool.query(`update page_sync_states set applied_seq=request_seq, status='idle'
+      where page_id=$1 and stream='subscribers'`, [pageId]);
+    expect(await runTurn()).toBe("followers_reconcile");
+  });
+
+  it("lends a recovery priority to the waiting DM peer, below explicit operator work", async () => {
+    await requestPageSync(db, { pageId, streams: ["followers_reconcile"], source: "recovery" });
+    await requestPageSync(db, { pageId, streams: ["followers"], source: "scheduled" });
+    await testDb!.pool.query(`update page_sync_states set started_at=clock_timestamp()
+      where page_id=$1 and stream='followers_reconcile'`, [pageId]);
+    expect(await runTurn()).toBe("dm_conversations");
+  });
+
+  it("lets unrelated work win a mixed-source equal-priority tie", async () => {
+    await requestPageSync(db, { pageId, streams: ["dm_conversations"], source: "recovery" });
+    await testDb!.pool.query(`update page_sync_states set started_at=clock_timestamp()
+      where page_id=$1 and stream=any($2::sync_stream[])`, [pageId, peers]);
+    await requestPageSync(db, { pageId, streams: ["subscribers"], source: "scheduled" });
+    expect(await runTurn()).toBe("subscribers");
   });
 
   it("uses database service time when worker clocks disagree", async () => {

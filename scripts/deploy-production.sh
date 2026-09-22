@@ -10,6 +10,7 @@ usage() {
   cat <<'EOF'
 Usage:
   scripts/deploy-production.sh [options] <user@host>
+  Runbook: docs/runbooks/production-deploy.md (in the current driver checkout)
 
 Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
@@ -723,14 +724,18 @@ verify_remote_revision_lineage() {
 # deploy-revision-inventory
 for service in api worker scheduler; do
   ids=\$(${REMOTE_COMPOSE} ps -a -q \"\$service\")
-  if [[ -z \"\$ids\" ]]; then
-    printf '%s|absent|none\\n' \"\$service\"
-  else
-    for id in \$ids; do
-      image_id=\$(docker inspect -f '{{.Image}}' \"\$id\")
+  role_present=0
+  for id in \$ids; do
+      metadata=\$(docker inspect -f '{{.Image}}|{{index .Config.Labels \"com.docker.compose.oneoff\"}}' \"\$id\")
+      IFS='|' read -r image_id oneoff <<<\"\$metadata\"
+      # An abandoned compose-run migration is not a deployed application role.
+      if [[ \"\$oneoff\" == True || \"\$oneoff\" == true ]]; then continue; fi
       revision=\$(docker image inspect -f '{{index .Config.Labels \"agency-hub.source-revision\"}}' \"\$image_id\")
       printf '%s|%s|%s\\n' \"\$service\" \"\$revision\" \"\$image_id\"
-    done
+      role_present=1
+  done
+  if [[ \"\$role_present\" == 0 ]]; then
+    printf '%s|absent|none\\n' \"\$service\"
   fi
 done")" || { log "Cannot inspect deployed revision inventory"; return 1; }
   local seen_api=0 seen_worker=0 seen_scheduler=0
