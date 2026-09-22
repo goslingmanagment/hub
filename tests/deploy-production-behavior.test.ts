@@ -247,7 +247,10 @@ describe("production deploy behavior without production access", () => {
   );
 
   function commitRevision(label: string) {
-    const commit = spawnSync("git", ["commit", "--allow-empty", "-qm", label], { cwd: fixtureRoot, encoding: "utf8" });
+    const commit = spawnSync("git", [
+      "-c", "user.name=Deploy Test", "-c", "user.email=deploy-test@example.invalid",
+      "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", label,
+    ], { cwd: fixtureRoot, encoding: "utf8" });
     expect(commit.status, commit.stderr).toBe(0);
     return spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: fixtureRoot, encoding: "utf8" }).stdout.trim();
   }
