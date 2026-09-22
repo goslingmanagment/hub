@@ -506,7 +506,7 @@ describe('template variable substitution', () => {
     expect(result.user).toContain(
       'A Russian draft is not a reason to answer in Russian: only the fan\'s own lines decide.',
     );
-    expect(result.user).toContain('Think like a subtle psychologist');
+    expect(result.user).toContain("Keep the draft's energy");
     expect(result.user).toContain(
       "Output only the improved message text, in the fan's language (English by default).",
     );
