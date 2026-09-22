@@ -20,23 +20,6 @@ export function useOverviewRevenue(period: string) {
   });
 }
 
-export function useOverviewGrowth(period: string) {
-  return useQuery({
-    queryKey: ["overviewGrowth", period],
-    queryFn: () =>
-      kernel.overviewGrowth({ query: { period } as RevenueQuery }),
-    placeholderData: (previousData) => previousData,
-  });
-}
-
-export function useOverviewRevenueDaily(period = "30d") {
-  return useQuery({
-    queryKey: ["overviewRevenueDaily", period],
-    queryFn: () =>
-      kernel.overviewRevenueDaily({ query: { period } as RevenueDailyQuery }),
-  });
-}
-
 export function useOverviewRevenueByModel(period = "30d", windowAt?: string) {
   return useQuery({
     queryKey: ["overviewRevenueByModel", period, windowAt],
