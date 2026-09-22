@@ -37,6 +37,7 @@ Usage:
 Environment:
   HUB_CLI_PROD_SHARE  Parent of the pinned installs. Default: ~/.local/share
   HUB_CLI_BIN_LINK    The `hub` on PATH. Default: ~/.local/bin/hub
+  HUB_CLI_SOURCE_DIR  Git checkout containing the deployed revision.
 USAGE
 }
 
@@ -56,7 +57,7 @@ esac
 REQUESTED="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${HUB_CLI_SOURCE_DIR:-${SCRIPT_DIR}/..}" && pwd)"
 SHARE_DIR="${HUB_CLI_PROD_SHARE:-${HOME}/.local/share}"
 BIN_LINK="${HUB_CLI_BIN_LINK:-${HOME}/.local/bin/hub}"
 INSTALL_NAME="hub-agent-cli-prod"

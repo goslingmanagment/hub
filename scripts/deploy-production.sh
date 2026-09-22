@@ -16,6 +16,10 @@ Options:
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
   --mode <mode>          Build mode: full, dist-only, auto, or pull. Default: full
   --pull-image <digest> GHCR image@sha256 digest required by --mode pull.
+  --source-dir <path>    Clean source checkout to deploy with this driver.
+  --replace-deployed <revision>
+                        Explicitly replace this exact deployed 12-hex revision,
+                        including rollback or a divergent release. CLI only.
   --recreate-scope <scope>
                         apps (default) preserves unchanged Postgres; stack
                         explicitly includes PostgreSQL/infrastructure changes.
@@ -58,6 +62,7 @@ Environment variable equivalents:
   DEPLOY_IMAGE_TAG
   DEPLOY_BUILD_MODE
   DEPLOY_PULL_IMAGE
+  DEPLOY_SOURCE_DIR
   DEPLOY_RECREATE_SCOPE
   DEPLOY_NODE_BASE_IMAGE
   DEPLOY_NODE_BASE_CACHE_IMAGE (deprecated; accepted but ignored)
@@ -125,6 +130,8 @@ APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
 BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"
 PULL_IMAGE="${DEPLOY_PULL_IMAGE:-}"
+SOURCE_DIR="${DEPLOY_SOURCE_DIR:-}"
+REPLACE_DEPLOYED=""
 RECREATE_SCOPE="${DEPLOY_RECREATE_SCOPE:-apps}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
 DEPRECATED_NODE_BASE_CACHE_WARNING_EMITTED=0
@@ -184,6 +191,16 @@ DESKTOP_DIAGNOSTICS_RECEIPT="${DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source-dir)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      SOURCE_DIR="$2"
+      shift 2
+      ;;
+    --replace-deployed)
+      [[ $# -ge 2 && "$2" =~ ^[a-f0-9]{12}$ ]] || fail "--replace-deployed requires the exact deployed 12-hex revision"
+      REPLACE_DEPLOYED="$2"
+      shift 2
+      ;;
     --app-dir)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       APP_DIR="$2"
@@ -335,7 +352,7 @@ case "$ALLOW_UNLABELED_DIST_BASE" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SOURCE_DIR:-${SCRIPT_DIR}/..}" && pwd)" || fail "Cannot open source checkout"
 BUILD_PLATFORM="linux/amd64"
 # One checksum definition for local builds, dist overlays and CI publication.
 # shellcheck source=./scripts/deploy-metadata.sh
@@ -359,6 +376,7 @@ STACK_RECREATED=0
 LEGACY_SYNC_QUIESCED=0
 APP_DEPENDENCY_CHECKSUM=""
 APP_SOURCE_REVISION=""
+REMOTE_REVISION_BASELINE=""
 DEPLOY_RUN_ID=""
 ROLLBACK_IMAGE_TAG=""
 IMAGE_CANDIDATE_TAG=""
@@ -691,6 +709,70 @@ capture_remote_rollback_image() {
   else
     ROLLBACK_IMAGE_AVAILABLE=0
     log "No previous remote image found for rollback"
+  fi
+}
+
+# The remote lock serializes cooperating deployers; it does not make a stale
+# checkout safe. Inspect actual role images, including stopped containers, and
+# compare their commits before capturing/tagging images or changing the stack.
+verify_remote_revision_lineage() {
+  local candidate inventory service revision image_id extra deployed present=0 absent=0
+  candidate="$(git -C "$ROOT_DIR" rev-parse --verify --quiet "${APP_SOURCE_REVISION}^{commit}")" \
+    || { log "Cannot resolve candidate commit; fetch its Git history first"; return 1; }
+  inventory="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED};
+# deploy-revision-inventory
+for service in api worker scheduler; do
+  ids=\$(${REMOTE_COMPOSE} ps -a -q \"\$service\")
+  if [[ -z \"\$ids\" ]]; then
+    printf '%s|absent|none\\n' \"\$service\"
+  else
+    for id in \$ids; do
+      image_id=\$(docker inspect -f '{{.Image}}' \"\$id\")
+      revision=\$(docker image inspect -f '{{index .Config.Labels \"agency-hub.source-revision\"}}' \"\$image_id\")
+      printf '%s|%s|%s\\n' \"\$service\" \"\$revision\" \"\$image_id\"
+    done
+  fi
+done")" || { log "Cannot inspect deployed revision inventory"; return 1; }
+  local seen_api=0 seen_worker=0 seen_scheduler=0
+  while IFS='|' read -r service revision image_id extra; do
+    case "$service" in
+      api) seen_api=1 ;;
+      worker) seen_worker=1 ;;
+      scheduler) seen_scheduler=1 ;;
+      *) log "Malformed deployed role inventory"; return 1 ;;
+    esac
+    [[ -z "$extra" ]] || { log "Malformed deployed revision inventory"; return 1; }
+    if [[ "$revision" == "absent" && "$image_id" == "none" ]]; then
+      absent=$((absent + 1))
+      continue
+    fi
+    [[ "$revision" =~ ^[a-f0-9]{12}$ && "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]] \
+      || { log "Cannot prove ${service} source revision: missing, dirty or invalid image label"; return 1; }
+    deployed="$(git -C "$ROOT_DIR" rev-parse --verify --quiet "${revision}^{commit}")" \
+      || { log "Cannot resolve deployed ${service} commit ${revision}; fetch its Git history first"; return 1; }
+    if [[ -n "$REPLACE_DEPLOYED" ]]; then
+      [[ "$revision" == "$REPLACE_DEPLOYED" ]] \
+        || { log "Replacement expected ${REPLACE_DEPLOYED}, but ${service} runs ${revision}"; return 1; }
+    elif ! git -C "$ROOT_DIR" merge-base --is-ancestor "$deployed" "$candidate"; then
+      log "Refusing stale or divergent candidate ${APP_SOURCE_REVISION}: ${service} runs ${revision}. Use a newer commit, or explicitly --replace-deployed ${revision} after reviewing the replacement."
+      return 1
+    fi
+    present=$((present + 1))
+    log "Revision guard: ${service}=${revision}, candidate=${APP_SOURCE_REVISION}"
+  done <<<"$inventory"
+  [[ "$seen_api$seen_worker$seen_scheduler" == "111" ]] \
+    || { log "Incomplete deployed role inventory"; return 1; }
+  if (( absent > 0 )); then
+    [[ "$absent" == 3 && "$present" == 0 && -z "$REPLACE_DEPLOYED" ]] \
+      || { log "Partial deployed stack or replacement without an existing release; refusing deploy"; return 1; }
+  fi
+  if [[ -n "$REMOTE_REVISION_BASELINE" && "$inventory" != "$REMOTE_REVISION_BASELINE" ]]; then
+    log "Deployed images changed while the deploy lock was held; refusing deploy"
+    return 1
+  fi
+  REMOTE_REVISION_BASELINE="$inventory"
+  if [[ -n "$REPLACE_DEPLOYED" ]]; then
+    log "Explicit replacement authorized by CLI: ${REPLACE_DEPLOYED} -> ${APP_SOURCE_REVISION}"
   fi
 }
 
@@ -1227,20 +1309,19 @@ load_candidate_image() {
   docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 }
 
-validate_pull_checkout() {
-  [[ "$BUILD_MODE" == "pull" ]] || return 0
+validate_source_checkout() {
   local revision untracked
   revision="$(calculate_source_revision)" || { log "Unable to identify pull checkout"; return 1; }
   [[ "$revision" =~ ^[a-f0-9]{12}$ && "$revision" == "$APP_SOURCE_REVISION" ]] \
-    || { log "Pull deploy requires the unchanged, clean checkout of the image revision"; return 1; }
+    || { log "Deploy requires the unchanged, clean checkout of the image revision"; return 1; }
   [[ "$(calculate_dependency_checksum)" == "$APP_DEPENDENCY_CHECKSUM" ]] \
-    || { log "Dependency manifests changed during pull deploy"; return 1; }
+    || { log "Dependency manifests changed during deploy"; return 1; }
   # git status --untracked-files=no alone misses SQL that the release preflight
   # sees on disk but the CI image could not contain. Generated dist is ignored.
   untracked="$(git -C "$ROOT_DIR" ls-files --others --exclude-standard -- apps packages scripts \
     Dockerfile .dockerignore docker-compose.production.yml .env.production.example README.md)" \
     || { log "Unable to check untracked release inputs"; return 1; }
-  [[ -z "$untracked" ]] || { log "Pull checkout contains untracked release inputs; commit or move them first"; return 1; }
+  [[ -z "$untracked" ]] || { log "Source checkout contains untracked release inputs; commit or move them first"; return 1; }
 }
 
 pull_candidate_image() {
@@ -1433,7 +1514,7 @@ rebuild_local_hub_cli() {
       ;;
   esac
   log "Rebuilding the production-pinned hub CLI from ${APP_SOURCE_REVISION}"
-  "${SCRIPT_DIR}/rebuild-hub-cli-prod.sh" "$APP_SOURCE_REVISION"
+  HUB_CLI_SOURCE_DIR="$ROOT_DIR" "${SCRIPT_DIR}/rebuild-hub-cli-prod.sh" "$APP_SOURCE_REVISION"
 }
 
 gc_remote_deploy_images() {
@@ -1705,12 +1786,14 @@ ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"
 LIFECYCLE_EVIDENCE_FILE="${TEMP_DIR}/desktop-lifecycle-v2-evidence.json"
 LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 
+require_command git
 initialize_deploy_metadata_and_tags
-validate_pull_checkout || fail "Pull checkout validation failed"
+validate_source_checkout || fail "Source checkout validation failed"
 start_phase preflight
 acquire_local_deploy_lock
 preflight_migration_files
 acquire_remote_deploy_lock
+verify_remote_revision_lineage || fail "Production revision guard failed"
 
 log "Validating remote Docker access"
 run_remote "set -euo pipefail; docker version >/dev/null"
@@ -1724,7 +1807,7 @@ start_phase candidate
 build_candidate_image
 finish_phase candidate
 start_phase candidate-verification
-validate_pull_checkout || fail "Pull checkout changed during candidate preparation"
+validate_source_checkout || fail "Source checkout changed during candidate preparation"
 verify_candidate_lifecycle_capability
 prepare_remote_infrastructure_check
 verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
@@ -1734,6 +1817,7 @@ capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
   || fail "Unable to capture remote schema migration state before pre-recreate migration"
 SCHEMA_BASELINE_CAPTURED=1
 log "Captured remote schema migration state for rollback safety"
+verify_remote_revision_lineage || fail "Production revision guard changed during candidate preparation"
 quiesce_remote_legacy_sync_services \
   || fail "Unable to quiesce the legacy scheduler and worker"
 forbid_rollback_for_pending_pre_recreate_migrations
@@ -1772,7 +1856,7 @@ fi
 # must not be blocked by a rewrite it is arguably rescuing.
 verify_remote_no_capture_rewrite_in_flight \
   || fail_after_release_sync "A capture rewrite run started during the build on ${REMOTE}; recreating the containers now would kill it mid-walk"
-validate_pull_checkout || fail_after_release_sync "Pull checkout changed before promotion"
+validate_source_checkout || fail_after_release_sync "Source checkout changed before promotion"
 verify_remote_infrastructure_unchanged "$REMOTE_COMPOSE" || fail_after_release_sync "PostgreSQL/infrastructure changed during deploy; refusing app-only promotion"
 run_remote "set -euo pipefail; docker tag $(printf '%q' "$IMAGE_CANDIDATE_TAG") $(printf '%q' "$IMAGE_TAG")" \
   || fail_after_release_sync "Unable to promote candidate image tag after validation"

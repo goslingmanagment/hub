@@ -209,7 +209,13 @@ describe("compose config", () => {
     const candidate = main.indexOf("build_candidate_image\n");
     const infrastructure = main.indexOf("verify_remote_infrastructure_unchanged || fail");
     const quiesce = main.indexOf("quiesce_remote_legacy_sync_services");
-    expect(main.indexOf("validate_pull_checkout")).toBeGreaterThan(-1);
+    expect(main.indexOf("validate_source_checkout")).toBeGreaterThan(-1);
+    const firstRevisionGuard = main.indexOf("verify_remote_revision_lineage");
+    const lastRevisionGuard = main.lastIndexOf("verify_remote_revision_lineage");
+    expect(firstRevisionGuard).toBeGreaterThan(main.indexOf("acquire_remote_deploy_lock"));
+    expect(firstRevisionGuard).toBeLessThan(main.indexOf("capture_remote_rollback_image"));
+    expect(lastRevisionGuard).toBeGreaterThan(candidate);
+    expect(lastRevisionGuard).toBeLessThan(quiesce);
     expect(infrastructure).toBeGreaterThan(candidate);
     expect(quiesce).toBeGreaterThan(infrastructure);
     expect(main).toContain('RECREATE_SERVICES="api worker scheduler"');
@@ -217,6 +223,7 @@ describe("compose config", () => {
     const rollback = getShellFunction(text, "rollback_remote_stack");
     expect(rollback).toContain('${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build');
     expect(rollback).not.toContain("RECREATE_SERVICES");
+    expect(rollback).not.toContain("verify_remote_revision_lineage");
     expect(main.lastIndexOf("verify_remote_infrastructure_unchanged")).toBeLessThan(main.indexOf("STACK_RECREATED=1"));
     expect(main.indexOf("Production verified;")).toBeLessThan(main.indexOf("rebuild_local_hub_cli || log"));
   });

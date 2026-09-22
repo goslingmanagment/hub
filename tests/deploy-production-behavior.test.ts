@@ -68,6 +68,7 @@ run_remote() {
   printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"
   if [[ -n "$TEST_REMOTE_FAILURE_PATTERN" && "$1" == *"$TEST_REMOTE_FAILURE_PATTERN"* ]]; then return 23; fi
   case "$1" in
+    *"deploy-revision-inventory"*) printf '%s\n' "$TEST_REVISION_INVENTORY" ;;
     *"docker pull "*|*"start scheduler worker"*) return 0 ;;
     *"agency-hub.source-revision"*) printf '%s\n' "$TEST_IMAGE_METADATA" ;;
     *"docker tag "*) return 0 ;;
@@ -109,6 +110,7 @@ describe("production deploy behavior without production access", () => {
       BUILD_MODE: "pull", RECREATE_SCOPE: "apps", BUILD_PLATFORM: "linux/amd64",
       PULL_IMAGE: digest, IMAGE_CANDIDATE_TAG: candidateTag,
       APP_SOURCE_REVISION: revision, APP_DEPENDENCY_CHECKSUM: checksum,
+      REPLACE_DEPLOYED: "", REMOTE_REVISION_BASELINE: "", TEST_REVISION_INVENTORY: "",
       ROOT_DIR: fixtureRoot, SCRIPT_DIR: path.join(repoRoot, "scripts"),
       REMOTE: "root@fixture.invalid", REMOTE_APP_DIR_ESCAPED: "/opt/agency-hub",
       REMOTE_COMPOSE: "docker compose --current", REMOTE_CANDIDATE_COMPOSE: "docker compose --candidate",
@@ -196,10 +198,10 @@ describe("production deploy behavior without production access", () => {
   }
 
   function validateCheckout(expectedRevision: string, overrides: NodeJS.ProcessEnv = {}) {
-    return runFunctions(["validate_pull_checkout"], String.raw`
+    return runFunctions(["validate_source_checkout"], String.raw`
       source "$SCRIPT_DIR/deploy-metadata.sh"
       calculate_dependency_checksum() { printf '%s\n' "$TEST_CALCULATED_CHECKSUM"; }
-      validate_pull_checkout
+      validate_source_checkout
     `, { APP_SOURCE_REVISION: expectedRevision, ...overrides });
   }
 
@@ -243,6 +245,91 @@ describe("production deploy behavior without production access", () => {
       expect(result.stderr).toContain("untracked release inputs");
     },
   );
+
+  function commitRevision(label: string) {
+    const commit = spawnSync("git", ["commit", "--allow-empty", "-qm", label], { cwd: fixtureRoot, encoding: "utf8" });
+    expect(commit.status, commit.stderr).toBe(0);
+    return spawnSync("git", ["rev-parse", "--short=12", "HEAD"], { cwd: fixtureRoot, encoding: "utf8" }).stdout.trim();
+  }
+
+  function inventory(revisions: string[]) {
+    return ["api", "worker", "scheduler"].map((role, index) => {
+      const rev = revisions[index];
+      return `${role}|${rev}|${rev === "absent" ? "none" : imageId}`;
+    }).join("\n");
+  }
+
+  function guard(candidate: string, revisions: string[], overrides: NodeJS.ProcessEnv = {}, invocation = "verify_remote_revision_lineage") {
+    return runFunctions(["verify_remote_revision_lineage"], invocation, {
+      APP_SOURCE_REVISION: candidate, TEST_REVISION_INVENTORY: inventory(revisions), ...overrides,
+    });
+  }
+
+  it("accepts equal, forward and mixed ancestor revisions and inspects stopped roles", () => {
+    const parent = initCheckout();
+    const child = commitRevision("child");
+    for (const revisions of [[parent, parent, parent], [child, child, child], [parent, child, parent]]) {
+      const result = guard(child, revisions);
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(commands().filter(command => command.includes("ps -a -q"))).toHaveLength(3);
+  });
+
+  it("refuses an older candidate unless replacement names the exact current release", () => {
+    const parent = initCheckout();
+    const child = commitRevision("child");
+    expect(guard(parent, [child, child, child]).status).not.toBe(0);
+    expect(guard(parent, [child, child, child], { REPLACE_DEPLOYED: child }).status).toBe(0);
+    expect(guard(parent, [child, child, child], { REPLACE_DEPLOYED: parent }).status).not.toBe(0);
+    expect(guard(parent, [child, child, parent], { REPLACE_DEPLOYED: child }).status).not.toBe(0);
+  });
+
+  it("requires an exact replacement for divergent commits", () => {
+    const parent = initCheckout();
+    const deployed = commitRevision("deployed branch");
+    expect(spawnSync("git", ["checkout", "--detach", parent], { cwd: fixtureRoot }).status).toBe(0);
+    const candidate = commitRevision("different branch");
+    expect(guard(candidate, [deployed, deployed, deployed]).status).not.toBe(0);
+    const replacement = guard(candidate, [deployed, deployed, deployed], { REPLACE_DEPLOYED: deployed });
+    expect(replacement.status, replacement.stderr).toBe(0);
+    expect(replacement.stderr).toContain(`Explicit replacement authorized by CLI: ${deployed} -> ${candidate}`);
+  });
+
+  it.each(["", "unknown", "<no value>", "0123456789ab-dirty", "0123456789ab", "not-a-sha"])(
+    "fails closed on invalid or unresolved deployed revision %j", (deployed) => {
+      const candidate = initCheckout();
+      expect(guard(candidate, [deployed, deployed, deployed], { REPLACE_DEPLOYED: deployed }).status).not.toBe(0);
+    },
+  );
+
+  it("distinguishes empty, partial and failed inventories", () => {
+    const candidate = initCheckout();
+    expect(guard(candidate, ["absent", "absent", "absent"]).status).toBe(0);
+    expect(guard(candidate, [candidate, "absent", candidate]).status).not.toBe(0);
+    expect(guard(candidate, ["absent", "absent", "absent"], { REPLACE_DEPLOYED: candidate }).status).not.toBe(0);
+    expect(guard(candidate, [candidate, candidate, candidate], { TEST_REVISION_INVENTORY: `api|${candidate}|${imageId}` }).status).not.toBe(0);
+    expect(guard(candidate, [candidate, candidate, candidate], { TEST_REMOTE_FAILURE_PATTERN: "deploy-revision-inventory" }).status).not.toBe(0);
+  });
+
+  it("refuses an external image replacement between the two guards", () => {
+    const candidate = initCheckout();
+    const result = guard(candidate, [candidate, candidate, candidate], {
+      TEST_NEXT_REVISION_INVENTORY: inventory([candidate, candidate, candidate]).replaceAll(imageId, `sha256:${"f".repeat(64)}`),
+    }, String.raw`
+      verify_remote_revision_lineage
+      TEST_REVISION_INVENTORY="$TEST_NEXT_REVISION_INVENTORY"
+      verify_remote_revision_lineage
+    `);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Deployed images changed");
+  });
+
+  it.each(["full", "dist-only", "auto", "pull"])("requires clean source in %s mode", (mode) => {
+    const candidate = initCheckout();
+    expect(validateCheckout(candidate, { BUILD_MODE: mode }).status).toBe(0);
+    writeFileSync(path.join(fixtureRoot, "package.json"), '{"changed":true}\n');
+    expect(validateCheckout(candidate, { BUILD_MODE: mode }).status).not.toBe(0);
+  });
 
   it("stages candidate Compose using the actual project name and production project directory", () => {
     writeFileSync(path.join(fixtureRoot, "docker-compose.production.yml"), "fixture compose bytes\n");
