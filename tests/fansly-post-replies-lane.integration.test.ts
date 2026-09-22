@@ -128,6 +128,7 @@ interface AdapterCall {
 function adapterStub(options: {
   attemptsPerCall?: number;
   reply?: (params: Record<string, unknown>, index: number) => unknown;
+  accounts?: (ids: string[]) => unknown;
   fail?: (route: string, index: number) => Error | null;
 } = {}) {
   const attemptsPerCall = options.attemptsPerCall ?? 1;
@@ -178,7 +179,7 @@ function adapterStub(options: {
     }),
     getAccountsByIdsPage: vi.fn(async (context: never, ids: string[]) => {
       await observe(context, "account_lookup", { ids });
-      return wrap(ids.map((id) => ({ id, username: "fixture_fan" })));
+      return wrap(options.accounts ? options.accounts(ids) : ids.map((id) => ({ id, username: "fixture_fan" })));
     }),
   };
 }
@@ -973,6 +974,43 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     await fanslyPostRepliesChunk(appStub(adapter), input(page.id, telemetry));
     expect(adapter.calls.filter((call) => call.route === "account_lookup")).toHaveLength(1);
   });
+
+  it.each([null, { unexpected: "private provider contents" }])(
+    "journals rejected account lookup %j without remembering authors, then retries them", async raw => {
+      if (!testDb) throw new Error("Test database required");
+      const page = await seedPage();
+      await seedPost(page.id, ref(1), "2026-08-01T00:00:00.000Z");
+      await testDb.pool.query(
+        `insert into post_comments (
+          page_id, platform, comment_ref, parent_post_ref, author_ref, text_plain,
+          occurred_at, changed_at, discovered_via, first_observed_at, last_observed_at,
+          content_hash, source_event_id, source_observation_id, source_account_seq
+        ) values ($1, 'fansly', $2, $3, $4, 'hi', now(), now(), 'replies_walk', now(), now(),
+                  repeat('a', 64), 1, 1, 1)`,
+        [page.id, ref(7001), ref(1), ref(9001)],
+      );
+      let recovered = false;
+      const adapter = adapterStub({ accounts: ids => recovered
+        ? ids.map(id => ({ id, username: "fixture_fan" })) : raw });
+      const telemetry = telemetryStub();
+
+      await expect(fanslyPostRepliesChunk(appStub(adapter), input(page.id, telemetry)))
+        .rejects.toThrow("Fansly comment author lookup response contract rejected");
+      expect((await cursor(page.id))?.hydratedAuthorRefs).toEqual([]);
+      const captured = { contractAccepted: false, raw };
+      expect((await requestParams(page.id, "account_lookup"))[0]?.response_payload).toEqual(captured);
+      expect((await observations(page.id)).filter(row => row.kind === "account_lookup"))
+        .toEqual([{ kind: "account_lookup", payload: captured }]);
+      expect(adapter.calls.filter(call => call.route === "account_lookup")).toHaveLength(1);
+
+      recovered = true;
+      const result = await fanslyPostRepliesChunk(appStub(adapter), input(page.id, telemetry));
+      expect(result.stats?.hydratedAuthors).toBe(1);
+      expect((await cursor(page.id))?.hydratedAuthorRefs).toEqual([ref(9001)]);
+      expect(adapter.calls.filter(call => call.route === "account_lookup").map(call => call.params.ids))
+        .toEqual([[ref(9001)], [ref(9001)]]);
+    },
+  );
 
   it("reports the progress block and writes page-scoped coverage", async (context) => {
     if (!testDb) {

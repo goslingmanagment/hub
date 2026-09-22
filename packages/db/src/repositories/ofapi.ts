@@ -3025,7 +3025,7 @@ export interface InsertLinkStatSnapshotInput {
   revenueCalculatedAt: Date | null;
 }
 
-export async function insertLinkStatRun(
+async function insertLinkStatRun(
   db: Database,
   input: InsertLinkStatRunInput,
 ): Promise<{ id: number }> {
@@ -3052,7 +3052,7 @@ export async function insertLinkStatRun(
 // below that; callers wrap this in a transaction when atomicity matters.
 const LINK_STAT_SNAPSHOT_INSERT_CHUNK = 1000;
 
-export async function insertLinkStatSnapshots(
+async function insertLinkStatSnapshots(
   db: Database,
   runId: number,
   rows: InsertLinkStatSnapshotInput[],

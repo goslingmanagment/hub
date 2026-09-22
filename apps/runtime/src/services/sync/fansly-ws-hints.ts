@@ -7,7 +7,7 @@ import {
   saveFanslyWsHintWalk, tryAcquireDmArchiveWriterFenceLock, upsertPageDmMessages, isFanslyWsHintClaimEnabled,
   withOwnedPageSyncTransaction, type Database,
 } from "@agency_hub_core/db";
-import { FANSLY_MAPPER_VERSION, FanslyApiError, type FanslyMessage } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, FanslyApiError, isFanslyGroupDetailIdentity, type FanslyMessage } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded, resolveFanslyWsHintPolicy, type HttpRequestObserver } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -138,11 +138,15 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
     if (!conversation) {
       if (!walk.groupDetailCaptured) {
         const detail = await app.adapter.getGroupDetail(requestContext, claim.groupRef);
+        const contractAccepted = isFanslyGroupDetailIdentity(detail.parsed, claim.groupRef);
         await persistRawPayload(app.db, { platformAccountId: pageId, syncRunId: input.syncRunId,
-          endpoint: "group_detail", requestParams: { groupId: claim.groupRef }, responsePayload: detail.raw,
+          endpoint: "group_detail", requestParams: { groupId: claim.groupRef },
+          responsePayload: contractAccepted ? detail.raw : { contractAccepted: false, raw: detail.raw },
           mapperVersion: FANSLY_MAPPER_VERSION, payloadKind: "dm_metadata", retainUntil: dmRetentionDate(),
         }, { action: "inserting B1 group_detail raw payload", platform: "fansly" });
-        if (detail.parsed.id !== claim.groupRef) throw new Error("fansly_ws_hint_group_mismatch");
+        if (!contractAccepted) {
+          throw new Error("Fansly group detail response contract rejected; captured before refusal");
+        }
         walk.groupDetailCaptured = true;
       }
       // A group detail is not proof that the group belongs to the visible

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AiGatewayStreamFrame, AiGatewayUsage } from "@agency_hub_core/contracts";
 
-import { AiGatewayTerminalStreamConsumer } from "../apps/runtime/src/services/ai-gateway.ts";
+import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "../apps/runtime/src/services/ai-gateway.ts";
 
 // P1-5a: the shared terminal-stream consumer both the HTTP SSE pump and the CLI
 // smoke path drive, so the two lanes cannot drift on the coach ceiling or on
@@ -26,6 +26,48 @@ const usageFrame: AiGatewayStreamFrame = {
   cacheHit: false,
 };
 const done = (stopReason: string | null): AiGatewayStreamFrame => ({ type: "done", stopReason });
+
+describe("shared terminal accounting", () => {
+  const completedAt = new Date("2026-09-23T00:00:00Z");
+
+  it("retains the ceiling failure and estimates missing usage", () => {
+    const consumer = new AiGatewayTerminalStreamConsumer(4);
+    consumer.note(content("hello"));
+    const record = buildAiGatewayTerminalRecord(consumer, {
+      outcome: consumer.outcome, failure: null, durationMs: 123, completedAt,
+    });
+    expect(record).toMatchObject({
+      outcome: "failed", errorCode: "coach_output_too_long", failurePhase: "stream",
+      usage: null, estimateCostOnMissingUsage: true, completionText: "hello", durationMs: 123, completedAt,
+    });
+  });
+
+  it("prefers the transport failure while retaining observed usage", () => {
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(content("partial"));
+    consumer.note(usageFrame);
+    consumer.finish();
+    const record = buildAiGatewayTerminalRecord(consumer, {
+      outcome: "failed", failure: { code: "provider_stream_failed", failurePhase: "provider_response", providerHttpStatus: 503 },
+      durationMs: 123, completedAt,
+    });
+    expect(record).toMatchObject({
+      outcome: "failed", errorCode: "provider_stream_failed", failurePhase: "provider_response", providerHttpStatus: 503,
+      usage, providerResponseId: "msg_1", completionText: "partial", estimateCostOnMissingUsage: false,
+    });
+  });
+
+  it.each(["completed", "cancelled"] as const)("clears failure fields for the explicit %s outcome", (outcome) => {
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.finish();
+    const record = buildAiGatewayTerminalRecord(consumer, {
+      outcome, failure: { code: "provider_stream_failed", failurePhase: "stream", providerHttpStatus: 503 },
+      durationMs: 123, completedAt,
+    });
+    expect(record).toMatchObject({ outcome, errorCode: null, failurePhase: null, providerHttpStatus: null });
+    expect(consumer.outcome).toBe("failed");
+  });
+});
 
 describe("AiGatewayTerminalStreamConsumer", () => {
   it("threads a clean completion's outcome, usage, and stopReason and holds the done frame", () => {

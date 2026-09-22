@@ -101,7 +101,7 @@ export async function rebuildSpenderDailyFacts(
   `);
 }
 
-export async function rebuildSpenderLifetimePage(
+async function rebuildSpenderLifetimePage(
   db: Database,
   platformAccountId: number,
   from?: Date | null,
@@ -185,7 +185,7 @@ export async function rebuildSpenderLifetimePage(
   `);
 }
 
-export async function upsertSpenderProjectionWatermark(
+async function upsertSpenderProjectionWatermark(
   db: Database,
   platformAccountId: number,
   lastRebuiltAt = new Date(),
@@ -233,40 +233,6 @@ export async function rebuildSpenderProjections(
     }
     await upsertSpenderProjectionWatermark(dbTx, platformAccountId, rebuiltAt);
   });
-}
-
-export async function upsertSpenderLifetimePage(
-  db: Database,
-  input: {
-    platformAccountId: number;
-    fanId: number;
-    grossAmountMills: bigint;
-    creatorNetAmountMills: bigint;
-    lastTransactionAt?: Date | null;
-  },
-) {
-  const [row] = await db
-    .insert(spenderLifetimePage)
-    .values({
-      platformAccountId: input.platformAccountId,
-      fanId: input.fanId,
-      grossAmountMills: input.grossAmountMills,
-      creatorNetAmountMills: input.creatorNetAmountMills,
-      lastTransactionAt: input.lastTransactionAt ?? null,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [spenderLifetimePage.platformAccountId, spenderLifetimePage.fanId],
-      set: {
-        grossAmountMills: input.grossAmountMills,
-        creatorNetAmountMills: input.creatorNetAmountMills,
-        lastTransactionAt: input.lastTransactionAt ?? null,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
-
-  return row;
 }
 
 export async function getScopedLifetimeTotalsForFan(

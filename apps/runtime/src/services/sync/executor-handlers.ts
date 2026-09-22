@@ -76,7 +76,7 @@ import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveRawCapturePayloadRow } from "../payload-reader.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
@@ -128,7 +128,6 @@ import {
   isOfapiFanIdentitiesEligiblePage,
   syncOfapiFanIdentities,
 } from "./ofapi-fan-identities.ts";
-import { fanslyNewStreamAllowed } from "./fansly-stream-gate.ts";
 import {
   createFanslyLaneRuntime,
   createFanslyLaneJournal,
@@ -166,7 +165,7 @@ import {
   persistRawPayload,
   refreshPageMetadata,
   retentionDate,
-  trimFanslyFollowerPayload,
+  captureFanslyFollowerPayload,
 } from "./shared.ts";
 import {
   assertDmSharedRateLimitEnabled,
@@ -1468,18 +1467,14 @@ export async function fanslySubscribersChunk(
       requestContext,
       { limit: 100, offset: state.offset, status },
     );
-    state = {
-      ...state,
-      pageCount: state.pageCount + 1,
-      providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
-    };
-
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "subscribers",
       requestParams: { offset: state.offset, limit: 100, status },
-      responsePayload: page.raw,
+      responsePayload: page.contractAccepted === false
+        ? { contractAccepted: false, raw: page.raw }
+        : page.raw,
       mapperVersion: FANSLY_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
@@ -1487,6 +1482,15 @@ export async function fanslySubscribersChunk(
       action: "inserting subscribers raw payload",
       platform: "fansly",
     });
+
+    if (page.contractAccepted === false) {
+      throw new Error("Fansly subscribers response contract rejected; captured before refusal");
+    }
+    state = {
+      ...state,
+      pageCount: state.pageCount + 1,
+      providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+    };
 
     if (state.mode === "active" && state.offset === 0 && page.items.length === 0) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
@@ -1774,18 +1778,12 @@ export async function executeFollowersChunk(
         minDelayMs: app.config.followerPageDelayMs,
       },
     );
-    state = {
-      ...state,
-      pageCount: state.pageCount + 1,
-      newestFollowId: state.newestFollowId ?? page.items[0]?.id ?? null,
-    };
-
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
       endpoint: "followers",
       requestParams: { offset: state.offset, limit: 100, mode: "incremental" },
-      responsePayload: trimFanslyFollowerPayload(page.raw),
+      responsePayload: captureFanslyFollowerPayload(page.raw, page.contractAccepted),
       mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
@@ -1793,6 +1791,15 @@ export async function executeFollowersChunk(
       action: "inserting followers raw payload",
       platform: "fansly",
     });
+
+    if (page.contractAccepted === false) {
+      throw new Error("Fansly followers response contract rejected; captured before refusal");
+    }
+    state = {
+      ...state,
+      pageCount: state.pageCount + 1,
+      newestFollowId: state.newestFollowId ?? page.items[0]?.id ?? null,
+    };
 
     const newestFollowId = state.newestFollowId ?? state.knownFollowId;
     const nextState = page.done
@@ -2450,11 +2457,6 @@ export async function executeFollowersReconcileChunk(
         minDelayMs: app.config.followerPageDelayMs,
       },
     );
-    state = {
-      ...state,
-      pageCount: state.pageCount + 1,
-    };
-
     await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
@@ -2466,7 +2468,7 @@ export async function executeFollowersReconcileChunk(
         generation: state.generation,
         fullSweepStartedAt: state.fullSweepStartedAt,
       },
-      responsePayload: trimFanslyFollowerPayload(page.raw),
+      responsePayload: captureFanslyFollowerPayload(page.raw, page.contractAccepted),
       mapperVersion: FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
       payloadKind: "mapping_critical",
       retainUntil: retentionDate(),
@@ -2474,6 +2476,14 @@ export async function executeFollowersReconcileChunk(
       action: "inserting followers raw payload",
       platform: "fansly",
     });
+
+    if (page.contractAccepted === false) {
+      throw new Error("Fansly followers response contract rejected; captured before refusal");
+    }
+    state = {
+      ...state,
+      pageCount: state.pageCount + 1,
+    };
 
     if (state.offset === 0 && page.items.length === 0 && state.sourceFollowerCount > 0) {
       const existingActiveFollowers = asNumber(
@@ -3381,11 +3391,9 @@ export async function executePurchaseHistoryChunk(
   }
   await input.telemetry.recordPhaseStarted("purchase_history");
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyPurchaseHistorySyncEnabled !== true) {
-    return fanslyNewStreamSkip("flag_off");
-  }
-  if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
-    return fanslyNewStreamSkip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, "purchase_history", input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return fanslyNewStreamSkip(gate.state);
   }
 
   // Fansly requires a concrete accountMediaId/accountMediaBundleId. accountIds

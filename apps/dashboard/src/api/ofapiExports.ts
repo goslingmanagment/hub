@@ -1,5 +1,6 @@
 import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
 import { kernel } from "./sdk.js";
+import { ofapiCollectionQueryOptions } from "./ofapiCollection.js";
 export const ofapiExportActions = {
   control: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportControl>[0]["body"]) => kernel.ofapiTypedExportControl({ params: { jobId }, body }),
   refreshInventory: (body: Parameters<typeof kernel.ofapiExportInventoryRefresh>[0]["body"]) => kernel.ofapiExportInventoryRefresh({ body }),
@@ -8,7 +9,7 @@ export const ofapiExportActions = {
   approve: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportApprove>[0]["body"]) => kernel.ofapiTypedExportApprove({ params: { jobId }, body }),
   artifact: (jobId: string, body: Parameters<typeof kernel.ofapiTypedExportArtifact>[0]["body"]) => kernel.ofapiTypedExportArtifact({ params: { jobId }, body }),
 };
-export function useOfapiExportPages() { return useQuery({ queryKey: ["ofapi", "collection"], queryFn: () => kernel.ofapiCollectionGet({ query: {} }) }); }
+export function useOfapiExportPages() { return useQuery(ofapiCollectionQueryOptions()); }
 export function ofapiExportJobsQueryOptions(pageId: number) {
   return queryOptions({
     queryKey: ["ofapi", "exports", pageId],

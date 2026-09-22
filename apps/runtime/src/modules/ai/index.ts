@@ -24,6 +24,7 @@ import {
 
 import {
   AiGatewayTerminalStreamConsumer,
+  buildAiGatewayTerminalRecord,
   prepareAiGatewayStream,
   providerStreamFailureFrame,
   serializeAiGatewaySseFrame,
@@ -438,35 +439,12 @@ export async function pipeAiGatewaySse(
     } finally {
       raw.off("close", abortProvider);
       try {
-        const failed = terminalOutcome === "failed";
-        await stream.recordTerminal({
+        await stream.recordTerminal(buildAiGatewayTerminalRecord(consumer, {
           outcome: terminalOutcome,
-          errorCode: failed
-            ? terminalFailure?.code
-              ?? consumer.failureDetail?.errorCode
-              ?? "provider_stream_failed"
-            : null,
-          failurePhase: failed
-            ? terminalFailure?.failurePhase
-              ?? consumer.failureDetail?.failurePhase
-              ?? "stream"
-            : null,
-          providerHttpStatus: failed
-            ? terminalFailure?.providerHttpStatus
-              ?? consumer.failureDetail?.providerHttpStatus
-              ?? null
-            : null,
-          usage: consumer.usage,
-          providerResponseId: consumer.providerResponseId,
-          cacheHit: consumer.cacheHit,
+          failure: terminalFailure,
           durationMs: Date.now() - startedAt,
           completedAt: new Date(),
-          completionText: consumer.completionText,
-          stopReason: consumer.stopReason,
-          // Ceiling aborts spend real tokens with no usage frame — estimate the
-          // cost so the budget guards see it (P1-1/P2-6).
-          estimateCostOnMissingUsage: consumer.ceilingExceeded,
-        });
+        }));
       } catch (error) {
         request.log.error({
           requestId: stream.requestId,

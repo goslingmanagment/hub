@@ -84,7 +84,7 @@ const sharedMocks = vi.hoisted(() => ({
   persistRawPayload: vi.fn(),
   refreshPageMetadata: vi.fn(),
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
-  trimFanslyFollowerPayload: vi.fn((value: unknown) => value),
+  captureFanslyFollowerPayload: vi.fn((value: unknown) => value),
   trimFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
 }));
 

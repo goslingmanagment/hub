@@ -7,7 +7,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
-import { fanslyNewStreamAllowed, isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import { executeFanEarningsRecovery } from "./fan-earnings-recovery.ts";
@@ -28,11 +28,9 @@ export async function executeFanEarningsChunk(
   }
   await input.telemetry.recordPhaseStarted("fan_earnings");
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyFanEarningsSyncEnabled !== true) {
-    return fanslyNewStreamSkip("flag_off");
-  }
-  if (!fanslyNewStreamAllowed(effective.fanslyNewStreamPageAllowlist, input.pageContext.page.label)) {
-    return fanslyNewStreamSkip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, "fan_earnings", input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return fanslyNewStreamSkip(gate.state);
   }
 
   if (fanEarningsRecoveryEnabled(effective, input.pageContext.page.label)) {

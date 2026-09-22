@@ -105,7 +105,7 @@ import {
   rollFanslyUtcDay,
   spreadFanslyContinuation,
 } from "./fansly-lane.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
@@ -361,14 +361,9 @@ export async function fanslyPostRepliesChunk(
   await input.telemetry.recordPhaseStarted(STREAM);
 
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyPostRepliesSyncEnabled !== true) {
-    return skip("flag_off");
-  }
-  // FAIL-CLOSED (S4): empty = NO pages. Deliberately NOT `fanslyNewStreamAllowed`,
-  // whose empty CSV means every page — using it here would open the lane
-  // fleet-wide on the deploy that ships it.
-  if (!isPageAllowlisted(effective.fanslyPostRepliesPageAllowlist, input.pageContext.page.label)) {
-    return skip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, STREAM, input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return skip(gate.state);
   }
 
   const now = input.now ?? new Date();
@@ -745,14 +740,18 @@ export async function fanslyPostRepliesChunk(
     if (pending.length > 0) {
       await assertOwnedPageSyncLease(app.db);
       const response = await app.adapter.getAccountsByIdsPage(requestContext, pending);
+      const contractAccepted = Array.isArray(response.raw);
       await journal(
         OBSERVATION_KINDS.accountLookup,
         { idCount: pending.length, origin: STREAM },
-        response.raw,
+        contractAccepted ? response.raw : { contractAccepted: false, raw: response.raw },
         {
-        action: "inserting Fansly comment author lookup raw payload",
+          action: "inserting Fansly comment author lookup raw payload",
         },
       );
+      if (!contractAccepted) {
+        throw new Error("Fansly comment author lookup response contract rejected");
+      }
       hydratedAuthors = pending.length;
       state = {
         ...state,

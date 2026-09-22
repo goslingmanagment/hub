@@ -1,64 +1,92 @@
-// W8.1 (A12/A20, decision #133): ONE gate function feeds both the executor's
-// skip ladder and the pageTopSpenders `source.streamState` reporter — this
-// matrix is the shared semantic, incl. the empty-allowlist = all-pages rule.
-
 import { describe, expect, it } from "vitest";
 
+import { FANSLY_BULK_SYNC_STREAMS } from "@agency_hub_core/db";
 import {
+  evaluateFanslyStreamGate,
+  FANSLY_GATE_CONFIG_KEYS,
   fanslyNewStreamAllowed,
-  resolveFanslyNewStreamState,
+  GATED_FANSLY_STREAMS,
+  isPageAllowlisted,
 } from "../apps/runtime/src/services/sync/fansly-stream-gate.ts";
 
-describe("fanslyNewStreamAllowed (Stage 16 ramp allowlist)", () => {
-  it("treats an empty/blank/undefined CSV as ALL pages allowed", () => {
-    expect(fanslyNewStreamAllowed(undefined, "lilly-1")).toBe(true);
-    expect(fanslyNewStreamAllowed("", "lilly-1")).toBe(true);
-    expect(fanslyNewStreamAllowed("  ", "lilly-1")).toBe(true);
-    expect(fanslyNewStreamAllowed(" , ,", "lilly-1")).toBe(true);
+describe("Fansly allowlist primitives", () => {
+  it.each([undefined, "", "  ", " , ,"])("keeps opposite empty CSV semantics for %j", (csv) => {
+    expect(fanslyNewStreamAllowed(csv, "lilly-1")).toBe(true);
+    expect(isPageAllowlisted(csv, "lilly-1")).toBe(false);
   });
 
-  it("matches labels exactly, trimming CSV whitespace", () => {
-    expect(fanslyNewStreamAllowed("lilly-1", "lilly-1")).toBe(true);
-    expect(fanslyNewStreamAllowed(" lilly-1 , ari-2", "ari-2")).toBe(true);
-    expect(fanslyNewStreamAllowed("lilly-1,ari-2", "lora-3")).toBe(false);
-    expect(fanslyNewStreamAllowed("lilly", "lilly-1")).toBe(false);
+  it.each([fanslyNewStreamAllowed, isPageAllowlisted])("matches labels exactly after trimming CSV whitespace", (allows) => {
+    expect(allows("lilly-1", "lilly-1")).toBe(true);
+    expect(allows(" lilly-1 , ari-2", "ari-2")).toBe(true);
+    expect(allows("lilly-1,ari-2", "lora-3")).toBe(false);
+    expect(allows("lilly", "lilly-1")).toBe(false);
+    expect(allows("Lilly-1", "lilly-1")).toBe(false);
   });
 });
 
-describe("resolveFanslyNewStreamState (W8.1 reporter)", () => {
-  const base = {
-    platform: "fansly",
-    pageLabel: "lilly-1",
-    streamEnabled: true,
-    allowlistCsv: "",
-  };
+// Expected wiring is explicit so a swapped flag/allowlist cannot pass by
+// deriving both the fixture and the assertion from the production table.
+const cases = [
+  ["fan_earnings", "fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist", true],
+  ["purchase_history", "fanslyPurchaseHistorySyncEnabled", "fanslyNewStreamPageAllowlist", true],
+  ["stats_snapshot", "fanslyStatsSnapshotSyncEnabled", "fanslyStatsSnapshotPageAllowlist", false],
+  ["notifications", "fanslyNotificationsSyncEnabled", "fanslyNotificationsPageAllowlist", false],
+  ["catalog", "fanslyCatalogSyncEnabled", "fanslyCatalogPageAllowlist", false],
+  ["post_replies", "fanslyPostRepliesSyncEnabled", "fanslyPostRepliesPageAllowlist", false],
+  ["payouts", "fanslyPayoutsSyncEnabled", "fanslyPayoutsPageAllowlist", false],
+  ["media_stats", "fanslyMediaStatsSyncEnabled", "fanslyMediaStatsPageAllowlist", false],
+] as const;
 
-  it("reports ramped when the flag is on and the (empty) allowlist admits the page", () => {
-    expect(resolveFanslyNewStreamState(base)).toBe("ramped");
-    expect(resolveFanslyNewStreamState({ ...base, allowlistCsv: "lilly-1" })).toBe("ramped");
+describe("Fansly stream gates", () => {
+  it("covers every durable bulk stream exactly once and exposes only its gate config keys", () => {
+    expect(GATED_FANSLY_STREAMS.map((gate) => gate.stream)).toEqual([...FANSLY_BULK_SYNC_STREAMS]);
+    expect([...FANSLY_GATE_CONFIG_KEYS].sort()).toEqual(
+      [...new Set(cases.flatMap(([, flag, allowlist]) => [flag, allowlist]))].sort(),
+    );
   });
 
-  it("reports flag_off before allowlist state (executor ladder order)", () => {
-    expect(resolveFanslyNewStreamState({ ...base, streamEnabled: false })).toBe("flag_off");
-    expect(resolveFanslyNewStreamState({
-      ...base,
-      streamEnabled: false,
-      allowlistCsv: "someone-else",
-    })).toBe("flag_off");
-  });
+  describe.each(cases)("%s", (stream, enabledField, allowlistField, emptyAllows) => {
+    it.each([undefined, "", "  ", " , ,"])("keeps its own empty allowlist rule for %j", (csv) => {
+      expect(evaluateFanslyStreamGate({
+        [enabledField]: true,
+        [allowlistField]: csv,
+      }, stream, "lilly-1")).toEqual({
+        state: emptyAllows ? "ramped" : "not_allowlisted",
+        flagEnabled: true,
+        allowlisted: emptyAllows,
+      });
+    });
 
-  it("reports not_allowlisted for a page outside a non-empty allowlist", () => {
-    expect(resolveFanslyNewStreamState({ ...base, allowlistCsv: "someone-else" }))
-      .toBe("not_allowlisted");
-  });
+    it("uses its configured keys and reports independent flag/allowlist facts", () => {
+      expect(evaluateFanslyStreamGate({
+        [enabledField]: true,
+        [allowlistField]: " lilly-1 , ari-2 ",
+      }, stream, "lilly-1")).toEqual({ state: "ramped", flagEnabled: true, allowlisted: true });
+      expect(evaluateFanslyStreamGate({
+        [enabledField]: false,
+        [allowlistField]: "lilly-1",
+      }, stream, "lilly-1")).toEqual({ state: "flag_off", flagEnabled: false, allowlisted: true });
+      expect(evaluateFanslyStreamGate({
+        [enabledField]: true,
+        [allowlistField]: "other-page",
+      }, stream, "lilly-1")).toEqual({ state: "not_allowlisted", flagEnabled: true, allowlisted: false });
+      expect(evaluateFanslyStreamGate({
+        [enabledField]: false,
+        [allowlistField]: "other-page",
+      }, stream, "lilly-1")).toEqual({ state: "flag_off", flagEnabled: false, allowlisted: false });
+    });
 
-  it("reports unsupported_platform for non-fansly pages regardless of flags", () => {
-    expect(resolveFanslyNewStreamState({ ...base, platform: "onlyfans" }))
-      .toBe("unsupported_platform");
-    expect(resolveFanslyNewStreamState({
-      ...base,
-      platform: "onlyfans",
-      streamEnabled: false,
-    })).toBe("unsupported_platform");
+    it("does not borrow a different stream's flag or allowlist", () => {
+      const unrelated = Object.fromEntries(cases
+        .filter(([, flag]) => flag !== enabledField)
+        .flatMap(([, flag, allowlist]) => [[flag, true], [allowlist, "lilly-1"]]));
+      expect(evaluateFanslyStreamGate(unrelated, stream, "lilly-1").state).toBe("flag_off");
+      if (!emptyAllows) {
+        expect(evaluateFanslyStreamGate({
+          ...unrelated,
+          [enabledField]: true,
+        }, stream, "lilly-1").state).toBe("not_allowlisted");
+      }
+    });
   });
 });

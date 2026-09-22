@@ -125,6 +125,30 @@ export interface AiGatewayTerminalRecordInput {
   estimateCostOnMissingUsage?: boolean;
 }
 
+/** Keep HTTP and CLI terminal accounting consistent, including ceiling aborts. */
+export function buildAiGatewayTerminalRecord(
+  consumer: AiGatewayTerminalStreamConsumer,
+  input: Pick<AiGatewayTerminalRecordInput, "outcome" | "durationMs" | "completedAt"> & {
+    failure: Pick<AiProviderFailureClassification, "code" | "failurePhase" | "providerHttpStatus"> | null;
+  },
+): AiGatewayTerminalRecordInput {
+  const failed = input.outcome === "failed";
+  return {
+    outcome: input.outcome,
+    errorCode: failed ? input.failure?.code ?? consumer.failureDetail?.errorCode ?? "provider_stream_failed" : null,
+    failurePhase: failed ? input.failure?.failurePhase ?? consumer.failureDetail?.failurePhase ?? "stream" : null,
+    providerHttpStatus: failed ? input.failure?.providerHttpStatus ?? consumer.failureDetail?.providerHttpStatus ?? null : null,
+    usage: consumer.usage,
+    providerResponseId: consumer.providerResponseId,
+    cacheHit: consumer.cacheHit,
+    durationMs: input.durationMs,
+    completedAt: input.completedAt,
+    completionText: consumer.completionText,
+    stopReason: consumer.stopReason,
+    estimateCostOnMissingUsage: consumer.ceilingExceeded,
+  };
+}
+
 /** Stage 29: model prefix routes the provider — "openrouter:*" to the
  * second provider, everything else to Anthropic. */
 export function selectAiGatewayProvider(

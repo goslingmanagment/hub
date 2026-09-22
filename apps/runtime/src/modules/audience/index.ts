@@ -31,7 +31,7 @@ import {
 } from "../../services/reporting.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { resolveFanslyNewStreamState } from "../../services/sync/fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate, type FanslyStreamGateState } from "../../services/sync/fansly-stream-gate.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
@@ -142,13 +142,10 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     // W8.1 (A12/A20, decision #133): `builtAt:null / entries:[]` used to be
     // indistinguishable from "no spenders" — the source block says WHY the
     // projection is empty. streamState comes from the SAME gate helper the
-    // executor uses (resolveFanslyNewStreamState), so it cannot drift.
-    const streamState = resolveFanslyNewStreamState({
-      platform: page.platform,
-      pageLabel: page.label,
-      streamEnabled: effective.fanslyFanEarningsSyncEnabled === true,
-      allowlistCsv: effective.fanslyNewStreamPageAllowlist,
-    });
+    // executor uses (evaluateFanslyStreamGate), so it cannot drift.
+    const streamState: FanslyStreamGateState | "unsupported_platform" = page.platform === "fansly"
+      ? evaluateFanslyStreamGate(effective, "fan_earnings", page.label).state
+      : "unsupported_platform";
     return {
       window,
       builtAt: meta.builtAt === null ? null : meta.builtAt.toISOString(),

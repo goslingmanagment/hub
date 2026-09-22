@@ -36,9 +36,9 @@ export interface RoutePolicyTableRow {
 }
 
 /**
- * Schema-object-identity index: server.ts registers every route with
- * `schema: routeSchemas.X`, so `request.routeOptions.schema` is the exact object
- * stored here (the same identity join `contracts/generate.ts` relies on).
+ * Registration-time schema identity index. server.ts rejects unknown API
+ * schemas and binds the resolved entry to route.config for request handling.
+ * The same registration also supplies the contract generator's route table.
  */
 export function buildRoutePolicyIndex(): ReadonlyMap<unknown, RoutePolicyEntry> {
   const index = new Map<unknown, RoutePolicyEntry>();

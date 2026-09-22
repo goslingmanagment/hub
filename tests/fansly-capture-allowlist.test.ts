@@ -39,11 +39,27 @@ import {
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
   FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
+  captureFanslyFollowerPayload,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
   trimFanslyNotificationsPayload,
   trimFanslyPostRepliesPayload,
 } from "../apps/runtime/src/services/sync/shared.ts";
+
+describe("rejected follower capture", () => {
+  it("never presents a missing followers array as a valid empty page", () => {
+    const captured = captureFanslyFollowerPayload({}, false);
+    expect(captured).toMatchObject({ contractAccepted: false,
+      responseShape: { response: "object", followers: "undefined" } });
+    expect(captured).not.toHaveProperty("followers");
+  });
+
+  it("keeps accepted capture bytes unchanged, including an explicit empty page", () => {
+    for (const raw of [{ followers: [] }, { followers: [{ id: "1", followerId: "2" }] }]) {
+      expect(captureFanslyFollowerPayload(raw, true)).toEqual(trimFanslyFollowerPayload(raw));
+    }
+  });
+});
 
 const VERBATIM = JSON.parse(readFileSync(
   path.resolve("tests/fixtures/fansly/messaging_groups_verbatim.json"),
@@ -319,7 +335,7 @@ describe("the three journaling call sites", () => {
       "utf8",
     );
     const follower = [...source.matchAll(
-      /responsePayload: trimFanslyFollowerPayload\(page\.raw\),\s*\n\s*mapperVersion: (\w+),/g,
+      /responsePayload: captureFanslyFollowerPayload\(page\.raw, page\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
     // Two follower lanes: `followers` (incremental) and `followers_reconcile`.
     expect(follower).toHaveLength(2);

@@ -127,10 +127,23 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
     }
 
     const durationMs = Date.now() - startedAt.getTime();
-    const outcome = await input.onResponse(response, {
-      attemptNumber,
-      retriesRemaining: signal?.aborted ? 0 : retriesRemaining,
-    });
+    let outcome: ObservedRequestOutcome<TResult>;
+    try {
+      outcome = await input.onResponse(response, {
+        attemptNumber,
+        retriesRemaining: signal?.aborted ? 0 : retriesRemaining,
+      });
+    } catch (error) {
+      // The request already happened. A decoder/response-policy exception must
+      // close its attempt, never enter transport retry or expose response text
+      // embedded in the exception through diagnostic metadata.
+      outcome = {
+        kind: "failed",
+        failureKind: "provider",
+        errorMessage: "HTTP response processing failed",
+        error,
+      };
+    }
     const terminalEvent = buildTerminalEvent({
       ...input,
       outcome,

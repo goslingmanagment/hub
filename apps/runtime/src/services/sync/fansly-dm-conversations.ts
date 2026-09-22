@@ -28,7 +28,7 @@ import {
   type MessageCoverageStatus,
   type PageSyncLease,
 } from "@agency_hub_core/db";
-import { FANSLY_MAPPER_VERSION, type FanslyAccount } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, isFanslyGroupDetailIdentity, type FanslyAccount } from "@agency_hub_core/fansly";
 import {
   buildFanslyDmConversationMetadata,
   getFanslyDmMessageSyncExcludedReason,
@@ -698,12 +698,13 @@ export async function fanslyDmConversationsChunk(
         input.budget.hasRequestCapacity() &&
         input.budget.hasWallClockCapacity()) {
         detail = await app.adapter.getGroupDetail(requestContext, conversation.groupId);
+        const contractAccepted = isFanslyGroupDetailIdentity(detail.parsed, conversation.groupId);
         await persistRawPayload(app.db, {
           platformAccountId: input.pageContext.page.id,
           syncRunId: input.syncRunId,
           endpoint: "group_detail",
           requestParams: { groupId: conversation.groupId },
-          responsePayload: detail.raw,
+          responsePayload: contractAccepted ? detail.raw : { contractAccepted: false, raw: detail.raw },
           mapperVersion: FANSLY_MAPPER_VERSION,
           payloadKind: "dm_metadata",
           retainUntil: dmRetentionDate(),
@@ -711,6 +712,9 @@ export async function fanslyDmConversationsChunk(
           action: "inserting group_detail raw payload",
           platform: "fansly",
         });
+        if (!contractAccepted) {
+          throw new Error("Fansly group detail response contract rejected; captured before refusal");
+        }
         const detailPartnerIds = Array.from(new Set(
           (detail.parsed.users ?? [])
             .map((user) => user.userId)

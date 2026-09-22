@@ -36,7 +36,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
-import { AiGatewayTerminalStreamConsumer } from "./services/ai-gateway.ts";
+import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
@@ -1292,33 +1292,12 @@ export function buildProgram() {
           }
         }
         const totalMs = Date.now() - startedAt;
-        const failed = consumer.outcome === "failed";
-        await stream.recordTerminal({
+        await stream.recordTerminal(buildAiGatewayTerminalRecord(consumer, {
           outcome: consumer.outcome,
-          errorCode: failed
-            ? terminalFailure?.code
-              ?? consumer.failureDetail?.errorCode
-              ?? "provider_stream_failed"
-            : null,
-          failurePhase: failed
-            ? terminalFailure?.failurePhase
-              ?? consumer.failureDetail?.failurePhase
-              ?? "stream"
-            : null,
-          providerHttpStatus: failed
-            ? terminalFailure?.providerHttpStatus
-              ?? consumer.failureDetail?.providerHttpStatus
-              ?? null
-            : null,
-          usage: consumer.usage,
-          providerResponseId: consumer.providerResponseId,
-          cacheHit: consumer.cacheHit,
+          failure: terminalFailure,
           durationMs: totalMs,
           completedAt: new Date(),
-          completionText: consumer.completionText,
-          stopReason: consumer.stopReason,
-          estimateCostOnMissingUsage: consumer.ceilingExceeded,
-        });
+        }));
         if (rethrowProviderError) {
           throw providerError;
         }

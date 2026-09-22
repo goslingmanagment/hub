@@ -243,7 +243,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       },
     });
     let replayCeiling: number | null;
-    let unsubscribe: () => void;
+    let unsubscribe = () => {};
     try {
       const captured = await subscribeBeforeReplayBoundary({
         subscribe: () => syncEventHub!.subscribe({
@@ -303,6 +303,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     } catch (error) {
       request.log.warn({ err: error }, "SSE replay boundary capture failed; closing stream");
+      unsubscribe();
       activeSseStreams.delete(raw);
       raw.destroy();
       return;
@@ -732,7 +733,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     let replayBounds: Awaited<ReturnType<typeof listDomainEventAccountBounds>>;
     const replayThroughByAccount = new Map<number, number>();
     let closeAfterReplayPrefix = false;
-    let unsubscribe: () => void;
+    let unsubscribe = () => {};
     try {
       const captured = await subscribeBeforeReplayBoundary({
         subscribe: () => domainEventHub!.subscribe({
@@ -798,6 +799,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     } catch (error) {
       request.log.warn({ err: error }, "v2 SSE replay boundary capture failed; closing stream");
+      unsubscribe();
       activeSseStreams.delete(raw);
       raw.destroy();
       return;

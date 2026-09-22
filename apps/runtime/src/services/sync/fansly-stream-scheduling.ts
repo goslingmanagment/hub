@@ -1,34 +1,17 @@
 import {
   listFanslyPages,
   reconcileFanslyBulkStreamGate,
-  type FanslyBulkStreamGateState,
-  type FanslyBulkSyncStream,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isPageAllowlisted, resolveFanslyNewStreamState } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate, GATED_FANSLY_STREAMS } from "./fansly-stream-gate.ts";
 
 export type FanslyBulkStreamGateSummary = {
   paused: number;
   resumed: number;
   recoveryGenerations: number;
 };
-
-function resolveGateState(input: {
-  pageLabel: string;
-  streamEnabled: boolean;
-  allowlistCsv: string | undefined;
-}): FanslyBulkStreamGateState {
-  const state = resolveFanslyNewStreamState({
-    platform: "fansly",
-    ...input,
-  });
-  if (state === "unsupported_platform") {
-    throw new Error("Fansly bulk-stream gate received a non-Fansly page");
-  }
-  return state;
-}
 
 /**
  * Materializes the live Fansly rollout gate into durable stream state.
@@ -51,79 +34,11 @@ export async function reconcileFanslyBulkStreamScheduling(
   };
 
   for (const page of pages) {
-    const streams: Array<{
-      stream: FanslyBulkSyncStream;
-      enabled: boolean;
-      /** Set only by lanes with their own FAIL-CLOSED allowlist key. */
-      allowlisted?: boolean;
-    }> = [
-      {
-        stream: "fan_earnings",
-        enabled: effective.fanslyFanEarningsSyncEnabled === true,
-      },
-      {
-        stream: "purchase_history",
-        enabled: effective.fanslyPurchaseHistorySyncEnabled === true,
-      },
-      {
-        stream: "stats_snapshot",
-        enabled: effective.fanslyStatsSnapshotSyncEnabled === true,
-        // WP-F1 (S4): its OWN allowlist key, on the FAIL-CLOSED template
-        // (empty = NO pages). Passing it through `resolveGateState`'s
-        // `allowlistCsv` would silently apply the opposite rule — empty = ALL
-        // pages — and open the lane fleet-wide on the deploy that ships it.
-        allowlisted: isPageAllowlisted(effective.fanslyStatsSnapshotPageAllowlist, page.label),
-      },
-      {
-        stream: "notifications",
-        enabled: effective.fanslyNotificationsSyncEnabled === true,
-        // WP-F2 (S4): its OWN fail-closed allowlist key, for the same reason.
-        allowlisted: isPageAllowlisted(effective.fanslyNotificationsPageAllowlist, page.label),
-      },
-      {
-        stream: "catalog",
-        enabled: effective.fanslyCatalogSyncEnabled === true,
-        // WP-F3 (S4): its OWN fail-closed allowlist key, for the same reason.
-        allowlisted: isPageAllowlisted(effective.fanslyCatalogPageAllowlist, page.label),
-      },
-      {
-        stream: "post_replies",
-        enabled: effective.fanslyPostRepliesSyncEnabled === true,
-        // WP-F5 (S4): its OWN fail-closed allowlist key, for the same reason.
-        allowlisted: isPageAllowlisted(effective.fanslyPostRepliesPageAllowlist, page.label),
-      },
-      {
-        stream: "payouts",
-        enabled: effective.fanslyPayoutsSyncEnabled === true,
-        // WP-F7 (S4): its OWN fail-closed allowlist key, for the same reason.
-        allowlisted: isPageAllowlisted(effective.fanslyPayoutsPageAllowlist, page.label),
-      },
-      {
-        stream: "media_stats",
-        enabled: effective.fanslyMediaStatsSyncEnabled === true,
-        // WP-F4 (S4): its OWN fail-closed allowlist key, and the lane where the
-        // wrong semantic would cost the most — reading it through the
-        // fail-OPEN shared key would start a 300-call-a-day per-media walk on
-        // every Fansly page at once.
-        allowlisted: isPageAllowlisted(effective.fanslyMediaStatsPageAllowlist, page.label),
-      },
-    ];
-
-    for (const stream of streams) {
+    for (const { stream } of GATED_FANSLY_STREAMS) {
       const result = await reconcileFanslyBulkStreamGate(app.db, {
         pageId: page.id,
-        stream: stream.stream,
-        gateState: stream.allowlisted === undefined
-          ? resolveGateState({
-            pageLabel: page.label,
-            streamEnabled: stream.enabled,
-            allowlistCsv: effective.fanslyNewStreamPageAllowlist,
-          })
-          : !stream.enabled
-          ? "flag_off"
-          : stream.allowlisted
-          ? "ramped"
-          : "not_allowlisted",
+        stream,
+        gateState: evaluateFanslyStreamGate(effective, stream, page.label).state,
         now,
       });
       if (result.action === "paused") {

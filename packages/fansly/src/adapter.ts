@@ -293,6 +293,47 @@ function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | n
   };
 }
 
+function isNonNegativeCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseFanslySubscribersPage(value: unknown, status: string) {
+  if (!isRecord(value) || !isRecord(value.stats) || !Array.isArray(value.subscriptions) ||
+    !value.subscriptions.every((item) => isRecord(item) &&
+      typeof item.id === "string" && item.id.length > 0 &&
+      typeof item.subscriberId === "string" && item.subscriberId.length > 0 &&
+      typeof item.status === "number" && Number.isFinite(item.status))) {
+    return null;
+  }
+  const total = status === "5" ? value.stats.totalExpired
+    : status === "3,4" ? value.stats.totalActive : value.stats.total;
+  if (!isNonNegativeCount(total)) return null;
+  return {
+    total,
+    totalActive: isNonNegativeCount(value.stats.totalActive) ? value.stats.totalActive : null,
+    totalExpired: isNonNegativeCount(value.stats.totalExpired) ? value.stats.totalExpired : null,
+    subscriptions: value.subscriptions as FanslySubscribersPage["subscriptions"],
+  };
+}
+
+function parseFanslyFollowersPage(value: unknown): FanslyFollowersPage | null {
+  if (!isRecord(value) || !Array.isArray(value.followers) ||
+    !value.followers.every((item) => isRecord(item) &&
+      typeof item.id === "string" && item.id.length > 0 &&
+      typeof item.followerId === "string" && item.followerId.length > 0)) {
+    return null;
+  }
+  if (value.aggregationData !== undefined && value.aggregationData !== null &&
+    (!isRecord(value.aggregationData) ||
+      (value.aggregationData.accounts !== undefined && value.aggregationData.accounts !== null &&
+        (!Array.isArray(value.aggregationData.accounts) ||
+          !value.aggregationData.accounts.every((item) => isRecord(item) &&
+            typeof item.id === "string" && item.id.length > 0))))) {
+    return null;
+  }
+  return value as unknown as FanslyFollowersPage;
+}
+
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
   private readonly rateLimitChains = new Map<string, Promise<void>>();
@@ -1016,7 +1057,7 @@ export class FanslyAdapter {
     },
   ) {
     const status = params.status ?? "3,4";
-    const response = await this.request<FanslySubscribersPage>(context, "/subscribers", {
+    const response = await this.request<unknown>(context, "/subscribers", {
       operation: "subscribers",
       endpointTemplate: "/subscribers",
       query: {
@@ -1038,39 +1079,35 @@ export class FanslyAdapter {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
       },
-      summarizeResponse: (parsed) => ({
-        total: status === "5"
-          ? parsed.stats.totalExpired
-          : status === "3,4"
-            ? parsed.stats.totalActive
-            : parsed.stats.total,
-        totalActive: parsed.stats.totalActive,
-        totalExpired: parsed.stats.totalExpired,
-        returnedItems: parsed.subscriptions.length,
-        done: parsed.subscriptions.length < (params.limit ?? 100) ||
-          (params.offset ?? 0) + parsed.subscriptions.length >= (
-            status === "5"
-              ? parsed.stats.totalExpired
-              : status === "3,4"
-                ? parsed.stats.totalActive
-                : parsed.stats.total
-          ),
-      }),
+      summarizeResponse: (value) => {
+        const parsed = parseFanslySubscribersPage(value, status);
+        const total = parsed?.total ?? null;
+        return {
+          total,
+          totalActive: parsed?.totalActive ?? null,
+          totalExpired: parsed?.totalExpired ?? null,
+          returnedItems: parsed?.subscriptions.length ?? null,
+          done: parsed && total !== null
+            ? parsed.subscriptions.length < (params.limit ?? 100) ||
+              (params.offset ?? 0) + parsed.subscriptions.length >= total
+            : null,
+          contractAccepted: parsed !== null,
+        };
+      },
     });
 
     const limit = params.limit ?? 100;
     const offset = params.offset ?? 0;
-    const total = status === "5"
-      ? response.parsed.stats.totalExpired
-      : status === "3,4"
-        ? response.parsed.stats.totalActive
-        : response.parsed.stats.total;
+    const parsed = parseFanslySubscribersPage(response.parsed, status);
+    const total = parsed?.total ?? null;
     return {
       total,
-      items: response.parsed.subscriptions,
+      items: parsed?.subscriptions ?? [],
       offset,
-      done: response.parsed.subscriptions.length < limit ||
-        offset + response.parsed.subscriptions.length >= total,
+      done: parsed && total !== null
+        ? parsed.subscriptions.length < limit || offset + parsed.subscriptions.length >= total
+        : false,
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -1087,7 +1124,7 @@ export class FanslyAdapter {
       minDelayMs?: number;
     },
   ) {
-    const response = await this.request<FanslyFollowersPage>(
+    const response = await this.request<unknown>(
       context,
       `/account/${accountId}/followersnew`,
       {
@@ -1113,21 +1150,27 @@ export class FanslyAdapter {
           offset: params.offset ?? 0,
           limit: params.limit ?? 100,
         },
-        summarizeResponse: (parsed) => ({
-          returnedItems: parsed.followers.length,
-          accountCount: parsed.aggregationData?.accounts?.length ?? 0,
-          done: parsed.followers.length < (params.limit ?? 100),
-        }),
+        summarizeResponse: (value) => {
+          const parsed = parseFanslyFollowersPage(value);
+          return {
+            returnedItems: parsed?.followers.length ?? null,
+            accountCount: parsed ? parsed.aggregationData?.accounts?.length ?? 0 : null,
+            done: parsed ? parsed.followers.length < (params.limit ?? 100) : null,
+            contractAccepted: parsed !== null,
+          };
+        },
       },
     );
 
     const limit = params.limit ?? 100;
+    const parsed = parseFanslyFollowersPage(response.parsed);
     return {
-      items: response.parsed.followers,
-      total: response.parsed.followers.length,
+      items: parsed?.followers ?? [],
+      total: parsed?.followers.length ?? null,
       offset: params.offset ?? 0,
-      done: response.parsed.followers.length < limit,
-      accounts: response.parsed.aggregationData?.accounts ?? [],
+      done: parsed ? parsed.followers.length < limit : false,
+      accounts: parsed?.aggregationData?.accounts ?? [],
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -1255,7 +1298,12 @@ export class FanslyAdapter {
   }
 
   async verifySession(context: FanslyRequestContext) {
-    return this.getAccountMe(context);
+    const response = await this.getAccountMe(context);
+    if (!isRecord(response.parsed) || !isRecord(response.parsed.account) ||
+      typeof response.parsed.account.id !== "string" || response.parsed.account.id.length === 0) {
+      throw new FanslyApiError("Fansly session verification returned an invalid account");
+    }
+    return response;
   }
 
   // ── Stage 6 replay-probe methods (read-only, loosely typed) ──
@@ -2157,6 +2205,15 @@ export class FanslyAdapter {
           };
         }
 
+        let responseMetadata: Record<string, unknown>;
+        try {
+          responseMetadata = options.summarizeResponse?.(envelope.response) ?? {};
+        } catch {
+          // Summaries are diagnostics, not the contract validator. Preserve the
+          // response for ordered capture; never turn its contents (e.g. DM text)
+          // or a decoder's exception message into a diagnostic snippet.
+          responseMetadata = { summaryUnavailable: true };
+        }
         return {
           kind: "success",
           value: {
@@ -2164,7 +2221,7 @@ export class FanslyAdapter {
             raw: envelope.response,
           },
           httpStatus: response.status,
-          responseMetadata: options.summarizeResponse?.(envelope.response) ?? {},
+          responseMetadata,
         };
       },
     });
