@@ -58,7 +58,7 @@ import { canAccessPage, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
 import { getPageSummary } from "../../services/reporting.ts";
-import { isPageAllowlisted } from "../../services/voice-notes.ts";
+import { evaluateFanslyStreamGate, GATED_FANSLY_STREAMS } from "../../services/sync/fansly-stream-gate.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -105,57 +105,6 @@ const MONTH_TOTALS_LIMIT = 500;
 const COVERAGE_PLANE_ORDER = new Map<string, number>(
   Object.values(CAPTURE_COVERAGE_PLANES).map((plane, index) => [plane, index]),
 );
-
-/**
- * Every lane whose flag/allowlist state the coverage panel reports.
- *
- * The pairs are code constants read from the effective config, and the
- * allowlist semantic is the FAIL-CLOSED one every stream this initiative
- * shipped uses (empty = NO pages — the opposite of the older Fansly
- * new-stream allowlist). A lane absent from this table reports `null` for both,
- * which reads as "this lane has no ramp gate of its own", not as "enabled".
- */
-const LANE_GATES: Readonly<Record<string, {
-  enabledKey:
-    | "fanslyStatsSnapshotSyncEnabled"
-    | "fanslyNotificationsSyncEnabled"
-    | "fanslyCatalogSyncEnabled"
-    | "fanslyPostRepliesSyncEnabled"
-    | "fanslyPayoutsSyncEnabled"
-    | "fanslyMediaStatsSyncEnabled";
-  allowlistKey:
-    | "fanslyStatsSnapshotPageAllowlist"
-    | "fanslyNotificationsPageAllowlist"
-    | "fanslyCatalogPageAllowlist"
-    | "fanslyPostRepliesPageAllowlist"
-    | "fanslyPayoutsPageAllowlist"
-    | "fanslyMediaStatsPageAllowlist";
-}>> = {
-  stats_snapshot: {
-    enabledKey: "fanslyStatsSnapshotSyncEnabled",
-    allowlistKey: "fanslyStatsSnapshotPageAllowlist",
-  },
-  notifications: {
-    enabledKey: "fanslyNotificationsSyncEnabled",
-    allowlistKey: "fanslyNotificationsPageAllowlist",
-  },
-  catalog: {
-    enabledKey: "fanslyCatalogSyncEnabled",
-    allowlistKey: "fanslyCatalogPageAllowlist",
-  },
-  post_replies: {
-    enabledKey: "fanslyPostRepliesSyncEnabled",
-    allowlistKey: "fanslyPostRepliesPageAllowlist",
-  },
-  payouts: {
-    enabledKey: "fanslyPayoutsSyncEnabled",
-    allowlistKey: "fanslyPayoutsPageAllowlist",
-  },
-  media_stats: {
-    enabledKey: "fanslyMediaStatsSyncEnabled",
-    allowlistKey: "fanslyMediaStatsPageAllowlist",
-  },
-};
 
 // ── shared mappers ───────────────────────────────────────────────────────────
 
@@ -615,7 +564,13 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
         .map(coverageRowToWire),
       streams: states.map((state) => {
         const progress = (state.progress ?? {}) as Record<string, unknown>;
-        const gate = LANE_GATES[state.stream];
+        // The coverage contract reports only lanes with their own fail-closed
+        // gate. Legacy streams keep null/null even though the shared ramp exists.
+        const gate = GATED_FANSLY_STREAMS.find((entry) =>
+          entry.stream === state.stream && entry.failClosedAllowlistField !== null);
+        const verdict = gate === undefined
+          ? null
+          : evaluateFanslyStreamGate(effective, gate.stream, page.label);
         return {
           stream: state.stream,
           status: state.status,
@@ -625,15 +580,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
           consecutiveFailures: state.consecutiveFailures,
           blockerKind: state.blockerKind ?? null,
           blockerCode: state.blockerCode ?? null,
-          flagEnabled: gate === undefined
-            ? null
-            : effective[gate.enabledKey] === true,
-          // FAIL-CLOSED: an empty allowlist means NO pages on every lane this
-          // initiative shipped — the opposite of the older Fansly new-stream
-          // allowlist, and the difference is why this is not shared code.
-          allowlisted: gate === undefined
-            ? null
-            : isPageAllowlisted(effective[gate.allowlistKey], page.label),
+          flagEnabled: verdict?.flagEnabled ?? null,
+          allowlisted: verdict?.allowlisted ?? null,
           progress: {
             journaled: intOrNull(progress.journaled),
             callsToday: intOrNull(progress.callsToday),

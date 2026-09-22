@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { kernel } from "./sdk.js";
+import { OFAPI_COLLECTION_QUERY_KEY, ofapiCollectionQueryOptions } from "./ofapiCollection.js";
+
+export { OFAPI_COLLECTION_QUERY_KEY } from "./ofapiCollection.js";
 
 export type OfapiCollectionSnapshot = Awaited<ReturnType<typeof kernel.ofapiCollectionGet>>;
 export type OfapiCollectionPreview = Awaited<ReturnType<typeof kernel.ofapiCollectionPreview>>;
@@ -19,16 +22,12 @@ export type OfapiCollectionAuditRow = OfapiCollectionSnapshot["audit"][number];
 export type OfapiCollectionApplyResult = Awaited<ReturnType<typeof kernel.ofapiCollectionApply>>;
 export type OfapiCollectionJobCreateResult = Awaited<ReturnType<typeof kernel.ofapiCollectionJobCreate>>;
 
-export const OFAPI_COLLECTION_QUERY_KEY = ["admin", "ofapi-collection"] as const;
-
 /** Read-only: the GET reads retained local rows only, never the vendor. */
 export function useAdminOfapiCollection() {
   return useQuery({
-    queryKey: OFAPI_COLLECTION_QUERY_KEY,
-    queryFn: () => kernel.ofapiCollectionGet({ query: {} }),
+    ...ofapiCollectionQueryOptions(),
     refetchInterval: 15_000,
     placeholderData: (previous) => previous,
-    meta: { suppressGlobalError: true },
   });
 }
 

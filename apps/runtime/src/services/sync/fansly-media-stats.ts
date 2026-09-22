@@ -160,7 +160,7 @@ import {
   spreadFanslyContinuation,
   writeFanslyLaneCoverage,
 } from "./fansly-lane.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { retentionDate } from "./shared.ts";
@@ -609,15 +609,9 @@ export async function fanslyMediaStatsChunk(
   await input.telemetry.recordPhaseStarted(STREAM);
 
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyMediaStatsSyncEnabled !== true) {
-    return skip("flag_off");
-  }
-  // FAIL-CLOSED (S4): empty = NO pages. Deliberately NOT `fanslyNewStreamAllowed`,
-  // whose empty CSV means every page — using it here would start a
-  // 300-call-a-day per-media walk on every Fansly page on the deploy that
-  // shipped it.
-  if (!isPageAllowlisted(effective.fanslyMediaStatsPageAllowlist, input.pageContext.page.label)) {
-    return skip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, STREAM, input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return skip(gate.state);
   }
 
   const now = input.now ?? new Date();

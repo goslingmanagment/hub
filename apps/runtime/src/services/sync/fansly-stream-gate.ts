@@ -1,14 +1,58 @@
-// The Fansly page-allowlist primitives. Both live here on purpose: their
-// empty-CSV semantics are OPPOSITE, and one file makes that visible instead of
-// leaving it to be rediscovered per lane.
-//
-//   - isPageAllowlisted      — the canonical fail-closed gate (empty = NO page)
-//   - fanslyNewStreamAllowed — the frozen Stage 16 ramp legacy (empty = ALL)
-//
-// Stage 16 ramp gate, extracted (W8.1, decision #133): the executor gate and
-// the pageTopSpenders `source` reporter MUST share one allowlist semantic —
-// two hand-rolled copies would drift and the API would lie about why a
-// stream is not running. Flags gate platform EGRESS, never capture.
+import type { FanslyBulkSyncStream } from "@agency_hub_core/db";
+import type { AppConfig } from "@agency_hub_core/shared";
+
+// Stream gates control egress, never capture. Only the two legacy streams use
+// the shared empty-allowlist = ALL rule; each newer lane fails closed.
+export const GATED_FANSLY_STREAMS = [
+  { stream: "fan_earnings", enabledField: "fanslyFanEarningsSyncEnabled", failClosedAllowlistField: null },
+  { stream: "purchase_history", enabledField: "fanslyPurchaseHistorySyncEnabled", failClosedAllowlistField: null },
+  {
+    stream: "stats_snapshot",
+    enabledField: "fanslyStatsSnapshotSyncEnabled",
+    failClosedAllowlistField: "fanslyStatsSnapshotPageAllowlist",
+  },
+  {
+    stream: "notifications",
+    enabledField: "fanslyNotificationsSyncEnabled",
+    failClosedAllowlistField: "fanslyNotificationsPageAllowlist",
+  },
+  {
+    stream: "catalog",
+    enabledField: "fanslyCatalogSyncEnabled",
+    failClosedAllowlistField: "fanslyCatalogPageAllowlist",
+  },
+  {
+    stream: "post_replies",
+    enabledField: "fanslyPostRepliesSyncEnabled",
+    failClosedAllowlistField: "fanslyPostRepliesPageAllowlist",
+  },
+  {
+    stream: "payouts",
+    enabledField: "fanslyPayoutsSyncEnabled",
+    failClosedAllowlistField: "fanslyPayoutsPageAllowlist",
+  },
+  {
+    stream: "media_stats",
+    enabledField: "fanslyMediaStatsSyncEnabled",
+    failClosedAllowlistField: "fanslyMediaStatsPageAllowlist",
+  },
+] as const satisfies readonly {
+  stream: FanslyBulkSyncStream;
+  enabledField: keyof AppConfig;
+  failClosedAllowlistField: keyof AppConfig | null;
+}[];
+
+type FanslyStreamGate = (typeof GATED_FANSLY_STREAMS)[number];
+type GatedFanslyStream = FanslyStreamGate["stream"];
+type FanslyGateConfigKey = FanslyStreamGate["enabledField"]
+  | Exclude<FanslyStreamGate["failClosedAllowlistField"], null>
+  | "fanslyNewStreamPageAllowlist";
+type FanslyGateConfig = Partial<Pick<AppConfig, FanslyGateConfigKey>>;
+
+// A config edit can wake a stream only if it changes one of its gate fields.
+export const FANSLY_GATE_CONFIG_KEYS = new Set<string>(GATED_FANSLY_STREAMS.flatMap(
+  (gate) => [gate.enabledField, gate.failClosedAllowlistField ?? "fanslyNewStreamPageAllowlist"],
+));
 
 /**
  * The CANONICAL fail-closed allowlist: an empty, blank or unset CSV allows NO
@@ -45,29 +89,23 @@ export function fanslyNewStreamAllowed(
   return entries.length === 0 || entries.includes(pageLabel);
 }
 
-export type FanslyNewStreamState =
-  | "ramped"
-  | "flag_off"
-  | "not_allowlisted"
-  | "unsupported_platform";
+export type FanslyStreamGateState = "ramped" | "flag_off" | "not_allowlisted";
 
-/** The reporter side of the gate: same checks, same order, as the executor's
- *  skip ladder (platform → flag → allowlist) so the reported state can never
- *  disagree with what the executor would actually do. */
-export function resolveFanslyNewStreamState(input: {
-  platform: string;
-  pageLabel: string;
-  streamEnabled: boolean;
-  allowlistCsv: string | undefined;
-}): FanslyNewStreamState {
-  if (input.platform !== "fansly") {
-    return "unsupported_platform";
-  }
-  if (!input.streamEnabled) {
-    return "flag_off";
-  }
-  if (!fanslyNewStreamAllowed(input.allowlistCsv, input.pageLabel)) {
-    return "not_allowlisted";
-  }
-  return "ramped";
+/** The same flag/allowlist verdict feeds scheduling, wake-ups, reporting and
+ * the executor's live recheck before egress. Platform checks stay at callers. */
+export function evaluateFanslyStreamGate(
+  config: FanslyGateConfig,
+  stream: GatedFanslyStream,
+  pageLabel: string,
+): { state: FanslyStreamGateState; flagEnabled: boolean; allowlisted: boolean } {
+  const gate = GATED_FANSLY_STREAMS.find((entry) => entry.stream === stream)!;
+  const flagEnabled = config[gate.enabledField] === true;
+  const allowlisted = gate.failClosedAllowlistField === null
+    ? fanslyNewStreamAllowed(config.fanslyNewStreamPageAllowlist, pageLabel)
+    : isPageAllowlisted(config[gate.failClosedAllowlistField], pageLabel);
+  return {
+    state: !flagEnabled ? "flag_off" : allowlisted ? "ramped" : "not_allowlisted",
+    flagEnabled,
+    allowlisted,
+  };
 }

@@ -98,7 +98,7 @@ import {
   startEarningsWindow,
   type EarningsWindowWalk,
 } from "./fansly-earnings-window.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { retentionDate } from "./shared.ts";
@@ -793,14 +793,9 @@ export async function fanslyStatsSnapshotChunk(
   await input.telemetry.recordPhaseStarted(STREAM);
 
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyStatsSnapshotSyncEnabled !== true) {
-    return statsSkip("flag_off");
-  }
-  // FAIL-CLOSED (S4): empty = NO pages. Deliberately NOT `fanslyNewStreamAllowed`,
-  // whose empty CSV means every page — using it here would open the lane
-  // fleet-wide on the deploy that ships it.
-  if (!isPageAllowlisted(effective.fanslyStatsSnapshotPageAllowlist, input.pageContext.page.label)) {
-    return statsSkip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, STREAM, input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return statsSkip(gate.state);
   }
 
   const now = input.now ?? new Date();

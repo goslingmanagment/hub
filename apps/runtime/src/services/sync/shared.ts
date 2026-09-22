@@ -471,6 +471,29 @@ export function trimFanslyFollowerPayload(raw: unknown) {
   };
 }
 
+export function captureFanslyFollowerPayload(raw: unknown, contractAccepted: boolean | undefined) {
+  const captured = trimFanslyFollowerPayload(raw);
+  const payload = isRecord(raw) ? raw : {};
+  const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  if (contractAccepted === false || !isRecord(raw) || !Array.isArray(payload.followers)) {
+    const shape = (value: unknown) => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+    // Keep the established account/relation allowlist even on a rejected body.
+    // Nest it so replay cannot mistake the trimmed fallback arrays for a valid
+    // empty page; field types retain the malformed-shape evidence without text.
+    return {
+      contractAccepted: false,
+      responseShape: {
+        response: shape(raw),
+        followers: shape(payload.followers),
+        aggregationData: shape(payload.aggregationData),
+        accounts: shape(aggregationData.accounts),
+      },
+      captured,
+    };
+  }
+  return captured;
+}
+
 function redactFanslyMessageLike(raw: unknown) {
   if (!isRecord(raw)) {
     return null;

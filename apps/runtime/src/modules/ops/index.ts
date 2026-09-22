@@ -65,7 +65,6 @@ import {
   requireOwner,
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
-import { isPageAllowlisted } from "../../services/voice-notes.ts";
 import {
   BadRequestError,
   ConflictError,
@@ -120,8 +119,10 @@ import {
 } from "../../services/sync-blocks.ts";
 import { requestAllPagesSync, requestPageSync } from "../../services/sync-control.ts";
 import {
-  resolveFanslyNewStreamState,
-  type FanslyNewStreamState,
+  evaluateFanslyStreamGate,
+  FANSLY_GATE_CONFIG_KEYS,
+  GATED_FANSLY_STREAMS,
+  type FanslyStreamGateState,
 } from "../../services/sync/fansly-stream-gate.ts";
 import {
   getSyncMonitorRecentRequests,
@@ -192,87 +193,12 @@ type IncidentSummaryRow = {
   count: number | string;
 };
 
-/** The config keys that make up the Fansly ramp gates. Editing any of them can
- *  OPEN a gate for a page, which is what the wake-up below reacts to.
- *
- *  Registering a new gate's keys here is NOT optional: incident #192 was a
- *  gate-open that moved nothing for up to a day, and an unregistered key
- *  reproduces it exactly. */
-const GATE_CONFIG_KEYS = new Set([
-  "fanslyNewStreamPageAllowlist",
-  "fanslyFanEarningsSyncEnabled",
-  "fanslyPurchaseHistorySyncEnabled",
-  // WP-F1.
-  "fanslyStatsSnapshotSyncEnabled",
-  "fanslyStatsSnapshotPageAllowlist",
-  // WP-F2.
-  "fanslyNotificationsSyncEnabled",
-  "fanslyNotificationsPageAllowlist",
-  // WP-F3.
-  "fanslyCatalogSyncEnabled",
-  "fanslyCatalogPageAllowlist",
-  // WP-F5.
-  "fanslyPostRepliesSyncEnabled",
-  "fanslyPostRepliesPageAllowlist",
-  // WP-F7.
-  "fanslyPayoutsSyncEnabled",
-  "fanslyPayoutsPageAllowlist",
-  // WP-F4.
-  "fanslyMediaStatsSyncEnabled",
-  "fanslyMediaStatsPageAllowlist",
-]);
-
-/**
- * The streams the ramp gate governs, each with the flag that enables it and —
- * where the lane has one — its OWN allowlist key.
- *
- * `allowlistField` is what keeps the two allowlist SEMANTICS apart:
- * `fanslyNewStreamPageAllowlist` fails OPEN (empty = all pages) and
- * `fanslyStatsSnapshotPageAllowlist` fails CLOSED (empty = none). Reading the
- * stats lane through the shared key would report every page as "ramped" the
- * moment its flag went on, and the wake-up would queue the whole fleet.
- */
-const GATED_FANSLY_STREAMS = [
-  { stream: "fan_earnings", enabledField: "fanslyFanEarningsSyncEnabled", failClosedAllowlistField: null },
-  { stream: "purchase_history", enabledField: "fanslyPurchaseHistorySyncEnabled", failClosedAllowlistField: null },
-  {
-    stream: "stats_snapshot",
-    enabledField: "fanslyStatsSnapshotSyncEnabled",
-    failClosedAllowlistField: "fanslyStatsSnapshotPageAllowlist",
-  },
-  {
-    stream: "notifications",
-    enabledField: "fanslyNotificationsSyncEnabled",
-    failClosedAllowlistField: "fanslyNotificationsPageAllowlist",
-  },
-  {
-    stream: "catalog",
-    enabledField: "fanslyCatalogSyncEnabled",
-    failClosedAllowlistField: "fanslyCatalogPageAllowlist",
-  },
-  {
-    stream: "post_replies",
-    enabledField: "fanslyPostRepliesSyncEnabled",
-    failClosedAllowlistField: "fanslyPostRepliesPageAllowlist",
-  },
-  {
-    stream: "payouts",
-    enabledField: "fanslyPayoutsSyncEnabled",
-    failClosedAllowlistField: "fanslyPayoutsPageAllowlist",
-  },
-  {
-    stream: "media_stats",
-    enabledField: "fanslyMediaStatsSyncEnabled",
-    failClosedAllowlistField: "fanslyMediaStatsPageAllowlist",
-  },
-] as const;
-
 /** Gate verdict per (page, gated stream) at one instant, plus the pages it was
  *  computed over. Two of these — one from before the config write, one from after
  *  — are what makes the wake-up a TRANSITION detector rather than a "queue
  *  everything currently open" sweep. */
 interface FanslyGateSnapshot {
-  states: Map<string, FanslyNewStreamState>;
+  states: Map<string, FanslyStreamGateState>;
   pages: Array<{ id: number; label: string }>;
 }
 
@@ -285,32 +211,12 @@ async function captureFanslyGateStates(appContext: AppContext): Promise<FanslyGa
   // listFanslyPages is the repository's active-page listing (platform = 'fansly'
   // and status = 'active'); a tombstoned page must never be woken.
   const pages = await listFanslyPages(appContext.db);
-  const states = new Map<string, FanslyNewStreamState>();
+  const states = new Map<string, FanslyStreamGateState>();
   for (const page of pages) {
     for (const gated of GATED_FANSLY_STREAMS) {
-      // resolveFanslyNewStreamState is the REPORTER form of the gate: it applies the
-      // same checks in the same order as the executor's inline skip ladder and shares
-      // its allowlist primitive (fanslyNewStreamAllowed), but it is not literally the
-      // code the executor runs. Using it keeps this verdict aligned with what the
-      // `top-spenders` source block tells the extension.
-      const streamEnabled = effective[gated.enabledField] === true;
       states.set(
         gateStateKey(page.id, gated.stream),
-        gated.failClosedAllowlistField === null
-          ? resolveFanslyNewStreamState({
-            platform: page.platform,
-            pageLabel: page.label,
-            streamEnabled,
-            allowlistCsv: effective.fanslyNewStreamPageAllowlist,
-          })
-          : !streamEnabled
-          ? "flag_off"
-          : isPageAllowlisted(
-            effective[gated.failClosedAllowlistField] as string | undefined,
-            page.label,
-          )
-          ? "ramped"
-          : "not_allowlisted",
+        evaluateFanslyStreamGate(effective, gated.stream, page.label).state,
       );
     }
   }
@@ -367,7 +273,7 @@ async function captureGateStatesForConfigChange(
   appContext: AppContext,
   changedKeys: readonly string[],
 ): Promise<FanslyGateSnapshot | null> {
-  if (!changedKeys.some((key) => GATE_CONFIG_KEYS.has(key))) {
+  if (!changedKeys.some((key) => FANSLY_GATE_CONFIG_KEYS.has(key))) {
     return null;
   }
   try {

@@ -154,7 +154,7 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
   {
     name: "message_archive",
     eventTypes: [...MESSAGE_EVENT_TYPES],
-    tables: ["dm_message_archive"],
+    tables: ["message_archive"],
     stateClass: "fact_projection",
     // Decision #134: never in place. `projection:rebuild message_archive`
     // builds the shadow; `archive:rebuild-verify` then the owner-gated

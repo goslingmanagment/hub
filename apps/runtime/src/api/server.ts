@@ -52,6 +52,7 @@ import {
   classifyAuthPolicyDivergence,
   computeAuthPolicyVerdict,
   type AuthPolicyVerdict,
+  type RoutePolicyEntry,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
 import { formatRequestValidationMessage } from "./error-boundary.ts";
@@ -79,6 +80,9 @@ import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts"
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
 
 declare module "fastify" {
+  interface FastifyContextConfig {
+    hubAuthPolicy?: RoutePolicyEntry;
+  }
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
     authFailure?: AuthFailure | null;
@@ -322,11 +326,24 @@ export async function buildApiServer(appContext: AppContext) {
   // the same method/path introspection).
   const routePolicyTable: RoutePolicyTableRow[] = [];
   server.decorate("routePolicyTable", routePolicyTable);
+  const isApiRoute = (url: string | undefined) => url === "/api" || url?.startsWith("/api/") === true;
   server.addHook("onRoute", (route) => {
     const entry = routePolicyIndex.get(route.schema);
     if (!entry) {
+      if (isApiRoute(route.url)) {
+        throw new Error(`API route ${route.url} must use a registered contract schema`);
+      }
       return;
     }
+    if (!entry.auth) {
+      throw new Error(`API route ${route.url} has no authorization declaration`);
+    }
+    if (entry.auth.scope === "page" && !route.url.split("/").includes(":pageLabel")) {
+      throw new Error(`Page-scoped API route ${route.url} must declare :pageLabel`);
+    }
+    // Resolve schema identity once, while registering. Keep plugin settings
+    // (rate limits, etc.) and bind the same policy to Fastify's HEAD twin.
+    route.config = { ...route.config, hubAuthPolicy: entry };
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     for (const method of methods) {
       if (method === "HEAD") {
@@ -337,9 +354,15 @@ export async function buildApiServer(appContext: AppContext) {
   });
 
   server.addHook("onRequest", async (request) => {
-    const entry = routePolicyIndex.get(request.routeOptions.schema);
+    const entry = request.routeOptions.config.hubAuthPolicy;
     if (!entry) {
-      return; // outside the contract surface (documentation UI, 404s)
+      if (isApiRoute(request.routeOptions.url)) {
+        request.log.error({ path: request.routeOptions.url }, "auth-policy: API route has no authorization binding");
+        if (isAuthPolicyEnforced()) {
+          throw new ForbiddenError("Route has no authorization binding");
+        }
+      }
+      return; // documentation/static routes and unmatched requests retain their own handling
     }
     if (!entry.auth) {
       // The contracts CI gate makes this unreachable; fail closed if it drifts.

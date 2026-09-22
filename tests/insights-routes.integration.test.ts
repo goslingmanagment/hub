@@ -842,6 +842,10 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     expect(streams.get("media_stats")!.allowlisted).toBe(false);
     // A lane with no ramp gate of its own reports null rather than "enabled".
     expect(streams.get("light")!.flagEnabled).toBeNull();
+    // The shared Stage 16 gate does not become a new coverage-panel field.
+    for (const legacy of ["fan_earnings", "purchase_history"]) {
+      expect(streams.get(legacy)).toMatchObject({ flagEnabled: null, allowlisted: null });
+    }
     // The A16 item 3 field exists on the wire even before the lane has run: a
     // missing field and an unrun lane would look the same to the panel.
     expect(streams.get("media_stats")!).toHaveProperty("progress");

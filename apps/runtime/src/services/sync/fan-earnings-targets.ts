@@ -8,7 +8,7 @@ import type { AppConfig, HttpRequestObserver } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
-import { fanslyNewStreamAllowed, isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 
@@ -16,8 +16,7 @@ class TargetAdmissionDeferred extends Error {}
 
 export function fanEarningsTargetLimit(config: AppConfig, pageLabel: string) {
   const limit = config.fanslyFanEarningsTargetsDailyAttemptLimit;
-  return config.fanslyFanEarningsSyncEnabled === true
-    && fanslyNewStreamAllowed(config.fanslyNewStreamPageAllowlist, pageLabel)
+  return evaluateFanslyStreamGate(config, "fan_earnings", pageLabel).state === "ramped"
     && config.fanslyFanEarningsTargetsEnabled === true
     && isPageAllowlisted(config.fanslyFanEarningsTargetsPageAllowlist ?? "", pageLabel)
     && Number.isSafeInteger(limit) && limit! > 0 && limit! <= 1000 ? limit! : 0;

@@ -94,7 +94,7 @@ import {
   rollFanslyUtcDay,
   spreadFanslyContinuation,
 } from "./fansly-lane.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import {
@@ -560,14 +560,9 @@ export async function fanslyNotificationsChunk(
   await input.telemetry.recordPhaseStarted(STREAM);
 
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.fanslyNotificationsSyncEnabled !== true) {
-    return skip("flag_off");
-  }
-  // FAIL-CLOSED (S4): empty = NO pages. Deliberately NOT `fanslyNewStreamAllowed`,
-  // whose empty CSV means every page — using it here would open the lane
-  // fleet-wide on the deploy that ships it.
-  if (!isPageAllowlisted(effective.fanslyNotificationsPageAllowlist, input.pageContext.page.label)) {
-    return skip("not_allowlisted");
+  const gate = evaluateFanslyStreamGate(effective, STREAM, input.pageContext.page.label);
+  if (gate.state !== "ramped") {
+    return skip(gate.state);
   }
 
   const now = input.now ?? new Date();
