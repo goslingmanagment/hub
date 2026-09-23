@@ -25,8 +25,8 @@ const dynamicWsRestriction = {
 // - Base hygiene seeded from the desktop's config: js/ts recommended,
 //   no-unused-vars with the `_` escape hatch, consistent-type-imports,
 //   no-explicit-any (assertions across trust boundaries get reviewed).
-// - The architecture walls earlier stages introduced (these are the ones a
-//   reviewer must never see waived without a decisions.md entry). The
+// - The architecture walls earlier stages introduced: changes require an
+//   explicit rationale and updated regression coverage. The
 //   auth-declaration gate is a contracts unit test, not a lint rule, so it
 //   cannot be skipped by skipping lint. The `platform ===` and raw-fetch
 //   ratchets are counted scripts inside the test suite, not lint rules.
@@ -45,17 +45,13 @@ export default tseslint.config(
       "**/dist/**",
       "**/coverage/**",
       "**/node_modules/**",
+      ".claude/worktrees/**",
       "apps/dashboard/**",
       "artifacts/**",
       "docs/**",
       "packages/contracts/src/generated/**",
       ".playwright-cli/**",
     ],
-  },
-  // Retained browser-console research snippet; preserve its evidence bytes.
-  {
-    files: ["investigations/fansly-events-architecture-2026-09-07/evidence/ws-tap-snippet.js"],
-    languageOptions: { globals: { window: "readonly", copy: "readonly", console: "readonly" } },
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

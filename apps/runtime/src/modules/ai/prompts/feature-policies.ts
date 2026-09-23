@@ -4,7 +4,7 @@
 // Adapted in imports; the desktop's Settings-coupled message-count resolver
 // is replaced by the kernel window defaults below (recorded deviation —
 // per-feature windows become kernel config in Task 4's registry, seeded
-// with the desktop defaults). Later policy changes are recorded in decisions.md.
+// with the desktop defaults).
 
 import type {
   FeatureType,
