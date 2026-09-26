@@ -93,16 +93,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // Separate from raw.writableLength: these objects arrive while the durable
   // replay query is still running and have not reached the socket yet.
   const SSE_MAX_PRE_REPLAY_BUFFERED_BYTES = 1_000_000;
-  // TEMPORARY tourniquet, incident 2026-07-15 (decision #155): desktop ≤0.1.42
-  // deterministically rejects message.ppv_unlocked frames (the canonicalizer
-  // shipped the creator id as conversationRef) and wedges its cursor in a
-  // reconnect loop that burns paid OFAPI reads (~14k credits/night). Suppressing
-  // the frame at serve time — the account watermark still advances with the next
-  // delivered frame — unwedges the whole fleet with one deploy and loses nothing
-  // consumers use: the ledgered event is wrong-ref'd anyway and its projections
-  // are v1 no-ops. REMOVE once x-client-version on the read gateway shows the
-  // fleet on a desktop whose ppvUnlocked handler is non-rejecting (its D17).
-  const SUPPRESSED_V2_FRAME_TYPES: ReadonlySet<string> = new Set(["message.ppv_unlocked"]);
+  // Money frames log their ledger-to-wire latency, split by replay vs live
+  // tail. `createdAt` is the append transaction's now(); every replay and live
+  // row already carries it, so the measurement costs no extra query.
+  const LEDGER_LATENCY_LOGGED_V2_FRAME_TYPES: ReadonlySet<string> = new Set([
+    "message.ppv_unlocked",
+    "tip.received",
+    "transaction.posted",
+  ]);
 
   function sameNumberSet(left: ReadonlySet<number>, right: ReadonlySet<number>) {
     if (left.size !== right.size) {
@@ -650,14 +648,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     function writeV2Frame(
       event: DomainEventRow,
-      payload?: unknown,
-      allowSnapshotGap = false,
+      payload: unknown,
+      lane: { replay: boolean; allowSnapshotGap?: boolean },
     ) {
       if (raw.writableEnded || raw.destroyed) {
         return;
       }
       const hiddenCount = projectionCheckpointHiddenCount(event);
-      const verdict = allowSnapshotGap
+      const verdict = lane.allowSnapshotGap === true
         ? { ...guards.advanceAfterSnapshot(event.accountId, event.accountSeq), gap: false }
         : hiddenCount === null
           ? guards.advance(event.accountId, event.accountSeq)
@@ -676,9 +674,6 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
       if (!verdict.deliver) {
         return;
-      }
-      if (SUPPRESSED_V2_FRAME_TYPES.has(event.type)) {
-        return; // watermark advanced above; the next frame's id carries it
       }
       if (raw.writableLength > SSE_MAX_BUFFERED_BYTES) {
         request.log.warn("v2 SSE client not consuming; dropping connection");
@@ -702,6 +697,15 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         ...(payload !== undefined ? { payload } : {}),
       };
       raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
+      if (LEDGER_LATENCY_LOGGED_V2_FRAME_TYPES.has(event.type)) {
+        request.log.info({
+          type: event.type,
+          accountId: event.accountId,
+          accountSeq: event.accountSeq,
+          ledgerToWireMs: Date.now() - event.createdAt.getTime(),
+          replay: lane.replay,
+        }, "v2 money frame written");
+      }
     }
 
     /** Live-path frame write: enrich one event, then write. Enrichment
@@ -714,7 +718,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       } catch (error) {
         request.log.warn({ err: error, eventId: event.id }, "v2 frame enrichment failed; serving thin frame");
       }
-      writeV2Frame(event, enrichment);
+      writeV2Frame(event, enrichment, { replay: false });
     }
 
     // Subscribe before the replay so live frames buffer until replay flushes.
@@ -929,7 +933,10 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
               return new Map<number, unknown>();
             });
           for (const row of rows) {
-            writeV2Frame(row, enrichments.get(row.id), snapshotRecoveryReplay);
+            writeV2Frame(row, enrichments.get(row.id), {
+              replay: true,
+              allowSnapshotGap: snapshotRecoveryReplay,
+            });
           }
           if (snapshotRecoveryReplay) {
             const lastRetainedSeq = rows.at(-1)?.accountSeq;
@@ -1093,7 +1100,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
                 return new Map<number, unknown>();
               });
             for (const row of rows) {
-              writeV2Frame(row, enrichments.get(row.id));
+              writeV2Frame(row, enrichments.get(row.id), { replay: true });
             }
             afterSeq = continuity.nextSeq;
             if (continuity.done) break;
