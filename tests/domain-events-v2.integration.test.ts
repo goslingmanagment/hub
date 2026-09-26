@@ -19,6 +19,7 @@ import {
   setPageOfapiAccountId,
   settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
+import { createLogger } from "@agency_hub_core/shared";
 import {
   decodeDomainEventCursor,
   encodeDomainEventCursor,
@@ -1168,48 +1169,353 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
   });
 });
 
-describe("event stream v2 — incident 2026-07-15 tourniquet (#155)", () => {
-  it("suppresses message.ppv_unlocked frames while the watermark advances past them", async (context) => {
+// ── INC-001: message.ppv_unlocked is an ordinary cursor-bearing frame ───────
+
+describe("event stream v2 — message.ppv_unlocked delivery (INC-001)", () => {
+  // Desktop-shaped access: the chatter's device token, granted the page. (The
+  // owner-cookie tests above already spend the per-IP login budget.)
+  async function seedOfapiPage(label: string, ofapiAccountId: string) {
+    const seedContext = createTestAppContext(testDb!);
+    const model = await createModel(testDb!.db, { slug: `${label}-model`, name: label });
+    const page = await createOnlyFansPage(testDb!.db, { modelId: model!.id, label });
+    if (!page) {
+      throw new Error(`failed to create ${label} OFAPI page`);
+    }
+    await setPageOfapiAccountId(testDb!.db, { pageId: page.id, ofapiAccountId });
+    await assignPageToUser(seedContext, {
+      userId: await fixtureUserId(seedContext, "anton"),
+      pageLabel: label,
+    }, { source: "cli" });
+    return page.id;
+  }
+
+  /** Journals the OFAPI webhook envelope, then appends the canonical event the
+   * webhook canonicalizer derives from it (fan-keyed refs, never the creator). */
+  async function appendObservedWebhookEvent(input: {
+    pageId: number;
+    ofapiAccountId: string;
+    kind: "messages.received" | "messages.ppv.unlocked";
+    payload: Record<string, unknown>;
+    type: string;
+    fanRef: string;
+    messageRef: string;
+    data: unknown;
+    dedupKey: string;
+  }) {
+    const envelope = { event: input.kind, account_id: input.ofapiAccountId, payload: input.payload };
+    const observation = await insertObservation(testDb!.db, {
+      source: "webhook",
+      producer: "ofapi:webhook",
+      platform: "onlyfans",
+      accountId: input.pageId,
+      nativeAccountRef: input.ofapiAccountId,
+      kind: input.kind,
+      payload: envelope,
+      payloadHash: createHash("sha256").update(JSON.stringify(envelope)).digest(),
+      idempotencyKey: `inc001:${input.dedupKey}`,
+    });
+    return appendDomainEvents(testDb!.db, input.pageId, [{
+      type: input.type,
+      occurredAt: new Date("2026-09-26T12:00:00.000Z"),
+      fanIdentityRef: input.fanRef,
+      conversationRef: input.fanRef,
+      messageRef: input.messageRef,
+      data: input.data,
+      schemaVersion: 1,
+      observationId: observation.observationId,
+      dedupKey: input.dedupKey,
+    }]);
+  }
+
+  const appendMessage = (pageId: number, ofapiAccountId: string, fanRef: string, messageId: string) =>
+    appendObservedWebhookEvent({
+      pageId,
+      ofapiAccountId,
+      kind: "messages.received",
+      payload: { id: messageId, fromUser: { id: fanRef } },
+      type: "message.received",
+      fanRef,
+      messageRef: messageId,
+      data: { messageId },
+      dedupKey: `msg:received:${messageId}`,
+    });
+
+  const ppvMessageLink = (fanRef: string, messageId: string) =>
+    `https://onlyfans.com/my/chats/chat/${fanRef}/?firstId=${messageId}`;
+
+  const appendPpvUnlocked = (
+    pageId: number,
+    ofapiAccountId: string,
+    fanRef: string,
+    messageId: string,
+    notificationId: string,
+  ) => appendObservedWebhookEvent({
+    pageId,
+    ofapiAccountId,
+    kind: "messages.ppv.unlocked",
+    payload: {
+      id: notificationId,
+      user: { id: fanRef },
+      replacePairs: {
+        "{AMOUNT}": "$45.00",
+        "{MESSAGE_LINK}": ppvMessageLink(fanRef, messageId),
+      },
+    },
+    type: "message.ppv_unlocked",
+    fanRef,
+    messageRef: messageId,
+    data: { amountText: "$45.00", messageLink: ppvMessageLink(fanRef, messageId) },
+    dedupKey: `ppv:${notificationId}`,
+  });
+
+  it("delivers message.ppv_unlocked in order with its refs and a cursor past it", async (context) => {
     if (!requireSetup(context)) return;
+    const ofapiAccountId = "acct_inc001_delivery";
+    const pageId = await seedOfapiPage("inc001-delivery", ofapiAccountId);
+    const fanRef = "991779001";
+    await appendMessage(pageId, ofapiAccountId, fanRef, "991779101");
+    await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991779102", "991779900");
+    await appendMessage(pageId, ofapiAccountId, fanRef, "991779103");
 
-    // Anchor on the current head so earlier tests' events stay out of frame.
-    const snapshot = await fetch(`${baseUrl}/api/v1/events/v2/snapshot`, {
-      headers: { authorization: `Bearer ${chatterKey}` },
-    });
-    const { cursor } = await snapshot.json() as { cursor: string };
+    const collect = async (cursor: string) => {
+      const frames: Array<{ cursor: string; event: DomainEventFrame }> = [];
+      const handle = subscribeDomainEvents(bearerOptions(), {
+        cursor,
+        onFrame: (frame) => {
+          if (frame.event.accountId === pageId) {
+            frames.push(frame);
+          }
+        },
+      });
+      await sleep(600);
+      handle.close();
+      await handle.done;
+      return frames;
+    };
 
-    await appendDomainEvents(testDb!.db, lanaId, [
-      event("message.received", { text: "before ppv" }),
-      event("message.ppv_unlocked", { amountText: "$45.00" }),
-      event("message.received", { text: "after ppv" }),
+    const frames = await collect(encodeDomainEventCursor(new Map([[pageId, 0]])));
+    expect(frames.map((frame) => [frame.event.accountSeq, frame.event.type])).toEqual([
+      [1, "message.received"],
+      [2, "message.ppv_unlocked"],
+      [3, "message.received"],
     ]);
-
-    const frames: Array<{ cursor: string; event: DomainEventFrame }> = [];
-    const handle = subscribeDomainEvents(bearerOptions(), {
-      cursor,
-      onFrame: (frame) => frames.push(frame),
+    const ppv = frames[1]!.event;
+    expect(ppv).toMatchObject({
+      accountId: pageId,
+      accountRef: ofapiAccountId,
+      fanRef,
+      conversationRef: fanRef,
+      messageRef: "991779102",
+      data: { amountText: "$45.00", messageLink: ppvMessageLink(fanRef, "991779102") },
     });
-    await sleep(600);
-    handle.close();
-    await handle.done;
+    expect(ppv.payload).toBeUndefined();
+    // Each frame's id line carries that frame's own seq: the PPV is a cursor
+    // position like any other, not a watermark hidden in the next frame.
+    for (const frame of frames) {
+      const decoded = decodeDomainEventCursor(frame.cursor);
+      expect(decoded.ok).toBe(true);
+      if (!decoded.ok) {
+        throw new Error(decoded.reason);
+      }
+      expect(decoded.watermarks.get(pageId)).toBe(frame.event.accountSeq);
+    }
 
-    expect(frames.map((frame) => frame.event.type))
-      .toEqual(["message.received", "message.received"]);
-    const seqs = frames.map((frame) => frame.event.accountSeq);
-    expect(seqs[1]! - seqs[0]!).toBe(2); // the ppv seq sits between, undelivered
+    const afterPpv = await collect(frames[1]!.cursor);
+    expect(afterPpv.map((frame) => [frame.event.accountSeq, frame.event.type]))
+      .toEqual([[3, "message.received"]]);
+    expect(await collect(frames[2]!.cursor)).toEqual([]);
+  });
 
-    // The suppressed seq must ride the next frame's id line: resuming from the
-    // last delivered frame replays nothing — no client can wedge on the hidden
-    // event because no cursor ever points before it without also being before
-    // a delivered frame.
+  it("PPV as the last frame before an erased hole hands out its own cursor, so reconnect makes progress", async (context) => {
+    if (!requireSetup(context)) return;
+    const ofapiAccountId = "acct_inc001_hole";
+    const pageId = await seedOfapiPage("inc001-hole", ofapiAccountId);
+    await appendMessage(pageId, ofapiAccountId, "991780001", "991780101");
+    await appendPpvUnlocked(pageId, ofapiAccountId, "991780002", "991780102", "991780900");
+    const erasedFan = "991780003";
+    await appendMessage(pageId, ofapiAccountId, erasedFan, "991780103");
+
+    const { rows: owners } = await testDb!.pool.query<{ id: number }>(
+      "select id::int from users where username = 'dima'",
+    );
+    await executeErasure(
+      createTestAppContext(testDb!),
+      { scopeType: "fan", platform: "onlyfans", fanRef: erasedFan },
+      { initiatedBy: owners[0]!.id, auditSource: "test" },
+    );
+    const { rows: retained } = await testDb!.pool.query<{ account_seq: number }>(
+      "select account_seq::int from domain_events where account_id = $1 order by account_seq",
+      [pageId],
+    );
+    expect(retained.map((row) => row.account_seq)).toEqual([1, 2]);
+
+    // The retained prefix after seq=1 is the PPV alone; the tail hole at seq=3
+    // closes the stream with no ordinary frame after it. The PPV frame is the
+    // only carrier of the progress cursor.
+    const frames: Array<{ cursor: string; event: DomainEventFrame }> = [];
+    const snapshots: DomainEventsSnapshotRequired[] = [];
+    const prefix = subscribeDomainEvents(bearerOptions(), {
+      cursor: encodeDomainEventCursor(new Map([[pageId, 1]])),
+      onFrame: (frame) => {
+        if (frame.event.accountId === pageId) {
+          frames.push(frame);
+        }
+      },
+      onSnapshotRequired: (details) => { snapshots.push(details); },
+    });
+    await Promise.race([
+      prefix.done,
+      sleep(3_000).then(() => { throw new Error("prefix stream did not close at the hole"); }),
+    ]);
+    expect(snapshots).toEqual([]);
+    expect(frames.map((frame) => [frame.event.accountSeq, frame.event.type]))
+      .toEqual([[2, "message.ppv_unlocked"]]);
+    const ppvCursor = decodeDomainEventCursor(frames[0]!.cursor);
+    expect(ppvCursor.ok).toBe(true);
+    if (!ppvCursor.ok) {
+      throw new Error(ppvCursor.reason);
+    }
+    expect(ppvCursor.watermarks.get(pageId)).toBe(2);
+
+    // Reconnecting from the PPV's cursor reaches the hole itself (409 at
+    // seq=2) instead of replaying the same prefix from seq=1 forever.
     const resumed: DomainEventFrame[] = [];
     const resume = subscribeDomainEvents(bearerOptions(), {
-      cursor: frames.at(-1)!.cursor,
-      onFrame: (frame) => resumed.push(frame.event),
+      cursor: frames[0]!.cursor,
+      onFrame: (frame) => {
+        if (frame.event.accountId === pageId) {
+          resumed.push(frame.event);
+        }
+      },
+      onSnapshotRequired: (details) => { snapshots.push(details); },
     });
-    await sleep(500);
-    resume.close();
-    await resume.done;
+    await Promise.race([
+      resume.done,
+      sleep(3_000).then(() => { throw new Error("resume from the PPV cursor did not answer"); }),
+    ]);
     expect(resumed).toEqual([]);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.accounts).toContainEqual(expect.objectContaining({
+      accountId: pageId,
+      requestedSeq: 2,
+      currentSeq: 3,
+    }));
+
+    const recovery = await fetch(
+      `${baseUrl}/api/v1/events/v2/snapshot?accounts=${pageId}`
+        + `&sourceCursor=${encodeURIComponent(frames[0]!.cursor)}`,
+      { headers: { authorization: `Bearer ${chatterKey}` } },
+    );
+    expect(recovery.status).toBe(200);
+    const recovered = decodeDomainEventCursor(
+      (await recovery.json() as { cursor: string }).cursor,
+    );
+    expect(recovered.ok).toBe(true);
+    if (!recovered.ok) {
+      throw new Error(recovered.reason);
+    }
+    expect(recovered.watermarks.get(pageId)).toBe(3);
+  });
+
+  it("logs ledger-to-wire latency for money frames on replay and on the live tail", async (context) => {
+    if (!requireSetup(context)) return;
+    const ofapiAccountId = "acct_inc001_latency";
+    const pageId = await seedOfapiPage("inc001-latency", ofapiAccountId);
+    const fanRef = "991781001";
+    await appendMessage(pageId, ofapiAccountId, fanRef, "991781101");
+    await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991781102", "991781900");
+    // Weeks-old provider timestamps: the latency must come from the ledger
+    // row's created_at, not occurred_at.
+    await appendDomainEvents(testDb!.db, pageId, [{
+      type: "tip.received",
+      occurredAt: new Date("2026-07-01T00:00:00.000Z"),
+      fanIdentityRef: fanRef,
+      data: { amountText: "$5.00" },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: "inc001:tip:991781901",
+    }, {
+      type: "transaction.posted",
+      occurredAt: new Date("2026-07-01T00:00:00.000Z"),
+      fanIdentityRef: fanRef,
+      transactionRef: "991781902",
+      data: { amountMills: 5_000 },
+      schemaVersion: 1,
+      observationId: 0,
+      dedupKey: "inc001:tx:991781902",
+    }]);
+
+    const lines: string[] = [];
+    const loggedServer = await buildApiServer(createTestAppContext(testDb!, {
+      logger: createLogger("info", {
+        write(message: string) {
+          lines.push(message);
+        },
+      }),
+    }));
+    // A failed wait must still release the stream, or close() hangs on it.
+    const abort = new AbortController();
+    try {
+      await loggedServer.listen({ port: 0, host: "127.0.0.1" });
+      const address = loggedServer.server.address();
+      if (typeof address !== "object" || !address) {
+        throw new Error("logged server has no address");
+      }
+      const loggedOptions = {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        auth: { mode: "bearer" as const, token: () => chatterKey },
+      };
+
+      const seen: number[] = [];
+      let resolveReplayed: (() => void) | null = null;
+      const replayed = new Promise<void>((resolve) => { resolveReplayed = resolve; });
+      let resolveLive: (() => void) | null = null;
+      const live = new Promise<void>((resolve) => { resolveLive = resolve; });
+      const handle = subscribeDomainEvents(loggedOptions, {
+        cursor: encodeDomainEventCursor(new Map([[pageId, 0]])),
+        signal: abort.signal,
+        onFrame: (frame) => {
+          if (frame.event.accountId !== pageId) return;
+          seen.push(frame.event.accountSeq);
+          if (frame.event.accountSeq === 4) resolveReplayed?.();
+          if (frame.event.accountSeq === 5) resolveLive?.();
+        },
+      });
+      await Promise.race([
+        replayed,
+        sleep(3_000).then(() => { throw new Error("replay did not reach seq=4"); }),
+      ]);
+      await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991781103", "991781903");
+      await Promise.race([
+        live,
+        sleep(3_000).then(() => { throw new Error("live PPV frame did not arrive"); }),
+      ]);
+      handle.close();
+      await handle.done;
+      expect(seen).toEqual([1, 2, 3, 4, 5]);
+    } finally {
+      abort.abort();
+      await loggedServer.close();
+    }
+
+    const records = lines
+      .join("")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.msg === "v2 money frame written" && record.accountId === pageId);
+    expect(records.map((record) => [record.type, record.accountSeq, record.replay])).toEqual([
+      ["message.ppv_unlocked", 2, true],
+      ["tip.received", 3, true],
+      ["transaction.posted", 4, true],
+      ["message.ppv_unlocked", 5, false],
+    ]);
+    for (const record of records) {
+      expect(record.level).toBe(30);
+      expect(Number.isInteger(record.ledgerToWireMs)).toBe(true);
+      // Seconds, not the months since occurred_at: measured from created_at.
+      // Absolute bound tolerates host/container clock skew in either direction.
+      expect(Math.abs(record.ledgerToWireMs as number)).toBeLessThan(60_000);
+    }
   });
 });
