@@ -22,10 +22,14 @@ import { encryptJson } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { projectOfapiDmEvent } from "../apps/runtime/src/services/ofapi-dm-projection.ts";
+import { buildMessageArchiveShadow } from "../apps/runtime/src/services/projections/message-archive-rebuild.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
 import { getOfapiSyncSnapshot } from "../apps/runtime/src/services/ofapi-sync-snapshot.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
-import { runPpvPurchaseBackfill } from "../apps/runtime/src/services/ppv-purchase-backfill.ts";
+import {
+  reconcileRecentPpvPurchases,
+  runPpvPurchaseBackfill,
+} from "../apps/runtime/src/services/ppv-purchase-backfill.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   resetIntegrationDatabase,
@@ -125,14 +129,19 @@ async function sentPpv(messageId: string) {
   return { ...raw, account_id: ACCOUNT };
 }
 
-function ppvUnlock(notificationId: string, messageId: string, amount = "$25.00") {
+function ppvUnlock(
+  notificationId: string,
+  messageId: string,
+  amount = "$25.00",
+  createdAt = "2026-09-20T12:00:00+00:00",
+) {
   return {
     event: "messages.ppv.unlocked",
     account_id: ACCOUNT,
     payload: {
       id: notificationId,
       type: "paided_message",
-      createdAt: "2026-09-20T12:00:00+00:00",
+      createdAt,
       text: "Fan paid for your message",
       user_id: CREATOR,
       user: { id: Number(FAN) },
@@ -288,7 +297,11 @@ describe("PPV purchases in every hub projection (H2, INC-001)", () => {
       message_ref: MESSAGE,
       data: expect.objectContaining({ amountText: "$25.00", amountUsd: 25 }),
     }]);
-    expect(await runMessageArchiveProjection(appContext, { accountId: page.id })).toMatchObject({ opened: 1 });
+    expect(await runMessageArchiveProjection(appContext, { accountId: page.id })).toMatchObject({
+      opened: 1,
+      // Nothing was late: the recent-window reconcile finds every store done.
+      purchases: { hotPurchasedMarked: 0, messageArchiveOpened: 0, dmArchiveOpened: 0 },
+    });
     expect((await stateOf(page.id, MESSAGE)).maIsOpened).toBe(true);
 
     // Monotonic, archive 1: a later material head that still says "unopened"
@@ -318,6 +331,71 @@ describe("PPV purchases in every hub projection (H2, INC-001)", () => {
     const journalRow = await getOfapiWebhookEventById(appContext.db, unlockJournalId);
     expect(await projectOfapiDmEvent(appContext, journalRow!)).toMatchObject({ status: "skipped" });
     expect(await stateOf(page.id, MESSAGE)).toMatchObject({ dmIsOpened: true, maIsOpened: true });
+  });
+
+  it("an unlock that arrives BEFORE its message row reaches all three stores once the row exists", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const LATE = "2000010";
+    const zero = { hotPurchasedMarked: 0, messageArchiveOpened: 0, dmArchiveOpened: 0 };
+    const unlockedAt = new Date(Date.now() - 5 * 60_000);
+    // The fan buys while the PPV's messages.sent is still missing (lost in an
+    // outage). The unlock is ledgered, but there is nothing to annotate yet.
+    const unlockJournalId = await deliverAndProcess(ppvUnlock("3000010", LATE, "$25.00", unlockedAt.toISOString()));
+    expect((await getOfapiWebhookEventById(appContext.db, unlockJournalId))?.projectionStatus).toBe("skipped");
+    expect(await runMessageArchiveProjection(appContext, { accountId: page.id })).toMatchObject({
+      opened: 0, purchases: zero,
+    });
+
+    // Auto-redelivery brings messages.sent back later, with a higher seq:
+    // every store's insert path writes the row as "not bought".
+    await deliverAndProcess(await sentPpv(LATE));
+    expect(await stateOf(page.id, LATE)).toEqual({ hotPurchasedAt: null, dmIsOpened: false, maIsOpened: null });
+
+    // Outside the window the minutely pass leaves history alone (that is the
+    // one-off backfill's job) …
+    expect(await reconcileRecentPpvPurchases(appContext, {
+      accountId: page.id, now: new Date(Date.now() + 9 * 24 * 60 * 60_000),
+    })).toEqual(zero);
+    // … inside it, the very next sweep heals all three stores.
+    expect(await runMessageArchiveProjection(appContext, { accountId: page.id })).toMatchObject({
+      inserted: 1,
+      opened: 0,
+      purchases: { hotPurchasedMarked: 1, messageArchiveOpened: 1, dmArchiveOpened: 1 },
+    });
+    expect(await stateOf(page.id, LATE)).toEqual({
+      // Dated by the unlock itself, not by the heal.
+      hotPurchasedAt: unlockedAt,
+      dmIsOpened: true,
+      maIsOpened: true,
+    });
+    await expectFingerprintConsistent(LATE);
+    expect(await runMessageArchiveProjection(appContext, { accountId: page.id })).toMatchObject({ purchases: zero });
+
+    // The shadow rebuild reproduces it — and a purchase known only from the
+    // hot table — although its replay met the unlock before the row existed.
+    const HOT_ONLY = "2000011";
+    await deliverAndProcess(await sentPpv(HOT_ONLY));
+    await runMessageArchiveProjection(appContext, { accountId: page.id });
+    await testDb.pool.query(
+      "update page_dm_messages set purchased_at = now() where platform_message_id = $1",
+      [HOT_ONLY],
+    );
+    await runPpvPurchaseBackfill(appContext, { dryRun: false, accountId: page.id });
+    expect((await stateOf(page.id, HOT_ONLY)).maIsOpened).toBe(true);
+    const build = await buildMessageArchiveShadow(appContext, { accountId: page.id });
+    expect(build.results[0]).toMatchObject({ purchasesOpened: 2 });
+    const shadow = await testDb.pool.query(
+      "select message_ref, is_opened from message_archive_shadow where account_id = $1 order by message_ref",
+      [page.id],
+    );
+    expect(shadow.rows).toEqual([
+      { message_ref: LATE, is_opened: true },
+      { message_ref: HOT_ONLY, is_opened: true },
+    ]);
   });
 
   it("a material head already awaiting correction stays flagged for the reconciler", async (context) => {
@@ -375,14 +453,22 @@ describe("PPV purchases in every hub projection (H2, INC-001)", () => {
     await deliverAndProcess(await sentPpv(MESSAGE));
     await appendMaterialHead(page.id, MESSAGE, {
       isOpened: false,
-      media: [{ id: "m-video", type: "video", canView: false, isReady: true, duration: 12 }],
+      media: [
+        { id: "m-video", type: "video", canView: false, isReady: true, duration: 12 },
+        // isReady is boolean-or-null in a material head: missing is NOT false
+        // (a false makes an auto-read desktop poll paid media reads).
+        { id: "m-photo", type: "photo", canView: true, isReady: null, duration: 0 },
+      ],
     }, "media");
     await runMessageArchiveProjection(appContext, { accountId: page.id });
     // A hot-only row: the dm_message_archive overlay (which wins wherever it
     // exists) is absent, so the hot serializer answers alone.
     await testDb.pool.query("delete from dm_message_archive where platform_message_id = $1", [MESSAGE]);
 
-    const expectedMedia = [{ id: "m-video", type: "video", isReady: true, locked: true, durationSeconds: 12 }];
+    const expectedMedia = [
+      { id: "m-video", type: "video", isReady: true, locked: true, durationSeconds: 12 },
+      { id: "m-photo", type: "photo", isReady: true, locked: false, durationSeconds: 0 },
+    ];
     for (const read of [legacySnapshotMessage, boundedSnapshotMessage]) {
       const before = await read(page.id, MESSAGE);
       // Before H2: price 0, media [], isOpened null — a PPV that looked free.

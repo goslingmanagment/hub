@@ -2,7 +2,8 @@
 // replacement for the lossy delete+replay rebuild. Staged machinery:
 //   R0 preflight  — per-account census + detached-partition census
 //   R1 build      — legacy-seed LIFT + event replay from seq 0 + backfill
-//                   re-run, all into message_archive_shadow, behind a HARD
+//                   re-run + purchase re-apply (H2), all into
+//                   message_archive_shadow, behind a HARD
 //                   detached-partition gate
 //   R2 verify     — set-difference fidelity proof (shadow ⊇ old) + material
 //                   comparison; nonzero missing rows fails
@@ -30,6 +31,7 @@ import {
   listDomainEventPartitionCensus,
   listEventAccounts,
   listEventsSince,
+  openArchivePurchases,
   setProjectionWatermark,
   switchMessageArchiveShadowTables,
   type ArchiveRebuildAccountCensus,
@@ -103,6 +105,8 @@ export interface ShadowBuildAccountResult {
   tombstoned: number;
   archiveBatches: number;
   hotBatches: number;
+  /** H2 (INC-001): shadow rows the post-backfill purchase pass opened. */
+  purchasesOpened: number;
   /** The replay's high seq — becomes the live watermark at switch. */
   highSeq: number;
   /** True when the page no longer resolves a platform: legacy seeds are
@@ -229,6 +233,18 @@ async function buildShadowForAccount(
       }
     }
 
+    // H2 (INC-001): purchases LAST. The replay applies each unlock only to a
+    // row that existed at its seq, and the backfills above only insert new
+    // keys — so an unlock older than its row (a late message event, a
+    // backfill-only row) or a purchase known only from the hot table would
+    // come out unbought here while live says bought. Same facts, same
+    // monotonic writer as archive:backfill-ppv-purchases.
+    const purchasesOpened = await openArchivePurchases(
+      db,
+      { accountId, includeHot: true },
+      "message_archive_shadow",
+    );
+
     const gateAtEnd = await listDetachedPartitionsHoldingAccount(db, accountId);
     if (gateAtEnd.length > 0) {
       throw new DetachedPartitionGateError(accountId, gateAtEnd);
@@ -245,6 +261,7 @@ async function buildShadowForAccount(
       tombstoned,
       archiveBatches,
       hotBatches,
+      purchasesOpened,
       highSeq: watermark,
       replaySkipped: !replayed,
     };

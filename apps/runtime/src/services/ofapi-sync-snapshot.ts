@@ -55,7 +55,7 @@ function authenticatedFromStatus(status: string | null) {
  * here: dm_message_archive items ({locked, durationSeconds}) and — H2, for
  * hot-only rows — message_archive material-head items ({canView, duration},
  * ofapi-message-material.ts). `canView: false` IS `locked: true`; neither
- * shape's absent field is guessed.
+ * shape's absent field is guessed into a worse state.
  */
 function normalizeArchiveMedia(value: Array<Record<string, unknown>>): Array<{
   id: string;
@@ -83,7 +83,11 @@ function normalizeArchiveMedia(value: Array<Record<string, unknown>>): Array<{
     return [{
       id,
       type,
-      isReady: item.isReady === true,
+      // Only an explicit false is "not ready" (ofapi-payloads.ts, cold
+      // archive and desktop mappers agree): a material head stores isReady as
+      // boolean-or-null, and a spurious false makes an auto-read desktop poll
+      // paid media reads for an item that is already there.
+      isReady: item.isReady !== false,
       locked: item.locked === true || item.canView === false,
       ...(durationSeconds !== null ? { durationSeconds } : {}),
     }];

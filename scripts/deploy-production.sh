@@ -455,6 +455,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # until UTC midnight. 0208 only builds two indexes concurrently.
   "0207_ofapi_webhook_auto_redelivery.sql"
   "0208_ofapi_webhook_delivery_business_key_idx.sql"
+  # INC-001 H2: one new table (`observation_parse_quarantine`) plus its index,
+  # both IF NOT EXISTS, no FK and no change to any existing table. The previous
+  # image never names the table (it stamps a quarantined PPV exactly as before,
+  # just without writing the outcome row) and its schema guard only checks its
+  # own latest migration, so it runs unchanged after a rollback; a later
+  # re-deploy finds the migration already applied.
+  "0209_observation_parse_quarantine.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
