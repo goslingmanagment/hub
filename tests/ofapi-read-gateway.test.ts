@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveOfapiReadGatewayRequest } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
+import {
+  OFAPI_READ_GATEWAY_OPERATIONS,
+  ofapiReadGatewayTimeoutMs,
+  resolveOfapiReadGatewayRequest,
+} from "../apps/runtime/src/services/ofapi-read-gateway.ts";
 
 const ACCOUNT = "acct_01000000000000000000000000000000";
 
@@ -85,5 +89,36 @@ describe("OFAPI read gateway allowlist", () => {
       fallbackCredits: 0,
       fallbackEstimated: false,
     });
+  });
+});
+
+describe("OFAPI read gateway timeouts", () => {
+  const FAST_READS = ["ofapi_gateway_chats", "ofapi_gateway_transactions", "ofapi_gateway_chat_messages"];
+
+  it.each([
+    [`${ACCOUNT}/chats`, {}, "ofapi_gateway_chats"],
+    [`${ACCOUNT}/transactions`, {}, "ofapi_gateway_transactions"],
+    [`${ACCOUNT}/chats/123/messages`, {}, "ofapi_gateway_chat_messages"],
+  ])("gives %s 20 s", (path, query, operation) => {
+    const request = resolveOfapiReadGatewayRequest(path, query);
+    expect(request).toMatchObject({ kind: "proxy", operation });
+    expect(ofapiReadGatewayTimeoutMs(operation, false)).toBe(20_000);
+  });
+
+  it("keeps 60 s for an explicit deep-history page", () => {
+    expect(ofapiReadGatewayTimeoutMs("ofapi_gateway_chat_messages", true)).toBe(60_000);
+  });
+
+  it("leaves every other gateway and catalog read on the transport default", () => {
+    const others = [
+      ...OFAPI_READ_GATEWAY_OPERATIONS.filter((operation) => !FAST_READS.includes(operation)),
+      // Catalog routes carry their own operation (see the latest-fan roster above).
+      "ofapi_read_fans_latest",
+    ];
+    expect(others).toHaveLength(OFAPI_READ_GATEWAY_OPERATIONS.length - FAST_READS.length + 1);
+    for (const operation of others) {
+      expect(ofapiReadGatewayTimeoutMs(operation, false), operation).toBeUndefined();
+      expect(ofapiReadGatewayTimeoutMs(operation, true), operation).toBeUndefined();
+    }
   });
 });

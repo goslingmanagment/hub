@@ -35,7 +35,8 @@ const OFAPI_HISTORY_READ_TIMEOUT_MS = 60_000;
 // exceeded the 15 s abort (400 wasted attempts/24 h, zero successes ever on
 // lora-of/lora-vip-of). Slow-lane timeout for that operation only.
 const OFAPI_SLOW_READ_TIMEOUT_MS = 60_000;
-const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
+// Default for gateway and governed reads whose caller passes no timeoutMs.
+export const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
 const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
@@ -458,6 +459,8 @@ export interface OfapiClient {
       query: Record<string, string>;
       fallbackCredits: number;
       fallbackEstimated: boolean;
+      // Absent keeps OFAPI_PROXY_READ_TIMEOUT_MS.
+      timeoutMs?: number;
     },
   ): Promise<OfapiRawResponse>;
   // Capture-first transport. The caller durably reserves the attempt before
@@ -1203,6 +1206,7 @@ export function createOfapiClient(input: {
       query: Record<string, string>;
       fallbackCredits: number;
       fallbackEstimated: boolean;
+      timeoutMs?: number;
     },
   ): Promise<OfapiRawResponse> {
     const query = new URLSearchParams(options.query);
@@ -1222,7 +1226,7 @@ export function createOfapiClient(input: {
           authorization: `Bearer ${input.apiKey}`,
           accept: "application/json",
         },
-        signal: AbortSignal.timeout(OFAPI_PROXY_READ_TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
       };
       if (context.dispatcher) {
         init.dispatcher = context.dispatcher;

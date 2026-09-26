@@ -5,7 +5,7 @@ import {
 } from "node:http";
 import { connect as connectTcp } from "node:net";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyOfapiCollectionPolicy,
@@ -49,6 +49,8 @@ interface ScriptedResponse {
   rawBody?: string | Buffer;
   headers?: Record<string, string>;
   destroyAfterHeaders?: boolean;
+  /** Never answers: the client's own timeout is the only way out. */
+  hang?: boolean;
 }
 
 interface UpstreamRequest {
@@ -82,6 +84,9 @@ beforeAll(async () => {
       status: 500,
       body: { error: "unscripted request" },
     };
+    if (scripted.hang === true) {
+      return;
+    }
     response.writeHead(scripted.status, {
       "content-type": "application/json",
       ...scripted.headers,
@@ -240,6 +245,10 @@ beforeEach(async (context) => {
   });
   apiServer = await buildApiServer(appContext);
   await apiServer.ready();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function inject(path: string, readIntent?: string) {
@@ -1203,5 +1212,177 @@ describe("OFAPI read gateway integration", () => {
       "select 1 from observations where source = 'readthrough'",
     );
     expect(observations.rows).toHaveLength(0);
+  });
+});
+
+describe("OFAPI read gateway timeouts", () => {
+  const FAST_READS = [
+    { path: `${ACCOUNT_ONE}/chats?limit=10`, body: { data: [] } },
+    { path: `${ACCOUNT_ONE}/transactions?limit=10`, body: { data: { list: [] } } },
+    { path: `${ACCOUNT_ONE}/chats/123/messages?limit=10&order=desc`, body: { data: [] } },
+    // first_id alone is an old-client page, not an explicit deep-history read.
+    { path: `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`, body: { data: [] } },
+  ];
+  const DEEP_HISTORY = {
+    path: `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
+    readIntent: "deep-history-v1",
+    body: { data: [] },
+  };
+  // Any read outside the three classes keeps today's transport default.
+  const OTHER_READ = { path: `${ACCOUNT_ONE}/chats/123/messages/456`, body: { data: { id: 456 } } };
+
+  async function seedFreshBalance() {
+    await testDb!.pool.query(
+      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
+       values (1, current_date, 9000, now())
+       on conflict (id) do update
+         set last_balance = excluded.last_balance,
+             last_balance_at = excluded.last_balance_at`,
+    );
+  }
+
+  async function readArmingTimeout(read: { path: string; readIntent?: string; body: unknown }) {
+    scriptedResponses.push({ status: 200, body: read.body });
+    const armed = vi.spyOn(AbortSignal, "timeout");
+    const startedAt = Date.now();
+    const response = await inject(read.path, read.readIntent);
+    const finishedAt = Date.now();
+    const timeouts = armed.mock.calls.map(([ms]) => ms);
+    armed.mockRestore();
+    expect(response.statusCode, response.body).toBe(200);
+    return { timeouts, startedAt, finishedAt };
+  }
+
+  it("arms 20 s on the proxy path for chats, transactions and chat messages, 60 s for deep history and other reads", async () => {
+    const proxyRead = vi.spyOn(appContext.ofapi!, "proxyRead");
+
+    for (const read of FAST_READS) {
+      expect((await readArmingTimeout(read)).timeouts, read.path).toEqual([20_000]);
+    }
+    expect((await readArmingTimeout(DEEP_HISTORY)).timeouts).toEqual([60_000]);
+    expect((await readArmingTimeout(OTHER_READ)).timeouts).toEqual([60_000]);
+
+    expect(proxyRead.mock.calls.map(([, options]) => [options.operation, options.timeoutMs])).toEqual([
+      ["ofapi_gateway_chats", 20_000],
+      ["ofapi_gateway_transactions", 20_000],
+      ["ofapi_gateway_chat_messages", 20_000],
+      ["ofapi_gateway_chat_messages", 20_000],
+      ["ofapi_gateway_chat_messages", 60_000],
+      // No override at all: the transport default stays the only source.
+      ["ofapi_gateway_chat_message", undefined],
+    ]);
+    expect(proxyRead.mock.calls.at(-1)?.[1]).not.toHaveProperty("timeoutMs");
+  });
+
+  it("arms the same timeouts capture-first and reserves each attempt until timeout + 5 s", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await seedFreshBalance();
+    const governed = vi.spyOn(appContext.ofapi!, "dispatchGovernedRaw");
+
+    const windows: Array<{ timeoutMs: number; startedAt: number; finishedAt: number }> = [];
+    for (const [read, timeoutMs] of [
+      ...FAST_READS.map((read) => [read, 20_000] as const),
+      [DEEP_HISTORY, 60_000] as const,
+      [OTHER_READ, 60_000] as const,
+    ]) {
+      const { timeouts, startedAt, finishedAt } = await readArmingTimeout(read);
+      expect(timeouts, read.path).toEqual([timeoutMs]);
+      windows.push({ timeoutMs, startedAt, finishedAt });
+    }
+
+    const calls = governed.mock.calls.map(([, options]) => options);
+    expect(calls.map((options) => [options.operation, options.timeoutMs])).toEqual([
+      ["ofapi_gateway_chats", 20_000],
+      ["ofapi_gateway_transactions", 20_000],
+      ["ofapi_gateway_chat_messages", 20_000],
+      ["ofapi_gateway_chat_messages", 20_000],
+      ["ofapi_gateway_chat_messages", 60_000],
+      ["ofapi_gateway_chat_message", 60_000],
+    ]);
+    const attempts = await testDb!.pool.query<{ id: string; deadline_at: Date }>(
+      "select id::text, deadline_at from ofapi_request_attempts",
+    );
+    const durableDeadline = new Map(attempts.rows.map((row) => [row.id, row.deadline_at.getTime()]));
+    calls.forEach((options, index) => {
+      const { timeoutMs, startedAt, finishedAt } = windows[index]!;
+      const deadline = options.deadlineAt.getTime();
+      // Today's fixed 65 s is the 60 s default + 5 s; the fast classes get 25 s.
+      expect(deadline).toBeGreaterThanOrEqual(startedAt + timeoutMs + 5_000);
+      expect(deadline).toBeLessThanOrEqual(finishedAt + timeoutMs + 5_000);
+      expect(durableDeadline.get(options.attemptId)).toBe(deadline);
+    });
+  });
+
+  it("records a timed-out fast read like a timed-out default read, only with its own timeout", async () => {
+    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
+    await seedFreshBalance();
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    // A hung OFAPI read without the wait: the transport arms and reports its
+    // real timeout, but the abort itself fires after 50 ms.
+    const armed = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => realTimeout(
+      ms === 20_000 || ms === 60_000 ? 50 : ms,
+    ));
+    const warn = vi.spyOn(appContext.logger, "warn");
+    scriptedResponses.push({ status: 200, hang: true }, { status: 200, hang: true });
+
+    const fast = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
+    const other = await inject(OTHER_READ.path);
+
+    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
+    expect(upstreamRequests).toHaveLength(2);
+    expect(fast.statusCode, fast.body).toBe(503);
+    expect(fast.json()).toEqual(other.json());
+    expect(fast.json()).toMatchObject({ error: "service_unavailable", statusCode: 503 });
+
+    const attempts = await testDb!.pool.query<{ operation: string; state: string; dispatch_outcome: string; credit_state: string }>(
+      `select operation, state, dispatch_outcome, credit_state
+       from ofapi_request_attempts order by reserved_at, id`,
+    );
+    expect(attempts.rows).toEqual([
+      { operation: "ofapi_gateway_chats", state: "indeterminate", dispatch_outcome: "transport", credit_state: "indeterminate" },
+      { operation: "ofapi_gateway_chat_message", state: "indeterminate", dispatch_outcome: "transport", credit_state: "indeterminate" },
+    ]);
+    const receipts = await testDb!.pool.query<{ operation: string; credits: number; estimated: boolean; details: Record<string, unknown> }>(
+      `select operation, credits, estimated, details
+       from ofapi_credit_ledger where attempt_id is not null order by id`,
+    );
+    expect(receipts.rows.map((row) => row.operation)).toEqual(["ofapi_gateway_chats", "ofapi_gateway_chat_message"]);
+    const [fastReceipt, otherReceipt] = receipts.rows;
+    expect(fastReceipt).toMatchObject({
+      credits: 1,
+      estimated: true,
+      details: {
+        certainty: "indeterminate", outcome: "transport", reason: "transport", phase: "post_dispatch",
+        stage: "response_headers", transportClass: "timeout", status: null, bytesRead: 0, timeoutMs: 20_000,
+      },
+    });
+    expect(otherReceipt?.details.timeoutMs).toBe(60_000);
+    const shape = ({ details }: { details: Record<string, unknown> }) => {
+      const { elapsedMs: _elapsedMs, timeoutMs: _timeoutMs, ...rest } = details;
+      return rest;
+    };
+    expect(otherReceipt).toMatchObject({ credits: 1, estimated: true });
+    expect(shape(fastReceipt!)).toEqual(shape(otherReceipt!));
+
+    const transportWarnings = warn.mock.calls.filter(([, message]) => message === "OFAPI interactive capture transport failed");
+    expect(transportWarnings.map(([fields]) => (fields as { timeoutMs: number }).timeoutMs)).toEqual([20_000, 60_000]);
+  });
+
+  it("answers a timed-out fast proxy read like a timed-out default one", async () => {
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const armed = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => realTimeout(
+      ms === 20_000 || ms === 60_000 ? 50 : ms,
+    ));
+    scriptedResponses.push({ status: 200, hang: true }, { status: 200, hang: true });
+
+    const fast = await inject(`${ACCOUNT_ONE}/transactions?limit=10`);
+    const other = await inject(OTHER_READ.path);
+
+    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
+    expect(upstreamRequests).toHaveLength(2);
+    expect(fast.statusCode, fast.body).toBe(503);
+    expect(fast.json()).toEqual(other.json());
+    expect(fast.json()).toMatchObject({ error: "service_unavailable", statusCode: 503 });
+    expect((await testDb!.pool.query("select 1 from ofapi_credit_ledger")).rows).toHaveLength(0);
   });
 });
