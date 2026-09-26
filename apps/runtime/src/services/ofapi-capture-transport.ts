@@ -27,6 +27,7 @@ import {
   TooManyRequestsError,
 } from "./errors.ts";
 import {
+  OFAPI_PROXY_READ_TIMEOUT_MS,
   OfapiGovernedRequestError,
   type OfapiGovernedRawResponse,
   type OfapiRawResponse,
@@ -44,6 +45,9 @@ import {
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FLOOR_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
+// The attempt's durable deadline outlives its transport timeout by this much:
+// the 60 s default keeps its 65 s reservation, a shorter read a shorter one.
+const OFAPI_INTERACTIVE_DEADLINE_GRACE_MS = 5_000;
 
 function httpOutcome(status: number): OfapiHttpOutcome {
   if (status >= 200 && status < 300) return "success";
@@ -98,6 +102,8 @@ export async function executeCaptureFirstInteractiveRead(
     pathname: string;
     query: Record<string, string>;
     fallbackCredits: number;
+    /** Absent keeps OFAPI_PROXY_READ_TIMEOUT_MS. */
+    timeoutMs?: number | undefined;
     servingMode?: "vendor_only" | "shadow" | "db_fallback";
     fallbackReason?:
       | "surface_not_cutover"
@@ -113,7 +119,8 @@ export async function executeCaptureFirstInteractiveRead(
     throw new ServiceUnavailableError("OFAPI capture-first transport is unavailable");
   }
 
-  const deadlineAt = new Date(Date.now() + 65_000);
+  const timeoutMs = input.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS;
+  const deadlineAt = new Date(Date.now() + timeoutMs + OFAPI_INTERACTIVE_DEADLINE_GRACE_MS);
   const owner = await createOfapiInteractiveRequest(app.db, {
     pageId: input.pageId,
     ofapiAccountId: input.ofapiAccountId,
@@ -190,6 +197,7 @@ export async function executeCaptureFirstInteractiveRead(
       query: input.query,
       priorityClass: "interactive",
       deadlineAt,
+      timeoutMs,
       beforeDispatch: () => markOfapiAttemptDispatching(app.db, {
         attemptId: reservation.attemptId,
         fenceToken: reservation.fenceToken,

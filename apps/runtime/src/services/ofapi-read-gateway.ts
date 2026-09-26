@@ -197,6 +197,26 @@ export const OFAPI_READ_GATEWAY_OPERATIONS = [
 ] as const;
 export type OfapiReadGatewayOperation = typeof OFAPI_READ_GATEWAY_OPERATIONS[number];
 
+/**
+ * The desktop's first chat-list poll after launch waits on these reads, and
+ * OFAPI sometimes holds one for the full 60 s transport default. They fail
+ * fast at 20 s instead; an explicit deep-history page keeps 60 s because
+ * OFAPI scrapes older history server-side. Any other read passes no timeout
+ * and keeps the transport default.
+ */
+const OFAPI_GATEWAY_FAST_READ_OPERATIONS: ReadonlySet<string> = new Set<OfapiReadGatewayOperation>([
+  "ofapi_gateway_chats",
+  "ofapi_gateway_chat_messages",
+  "ofapi_gateway_transactions",
+]);
+const OFAPI_GATEWAY_FAST_READ_TIMEOUT_MS = 20_000;
+const OFAPI_GATEWAY_DEEP_HISTORY_TIMEOUT_MS = 60_000;
+
+export function ofapiReadGatewayTimeoutMs(operation: string, explicitDeepHistory: boolean): number | undefined {
+  if (!OFAPI_GATEWAY_FAST_READ_OPERATIONS.has(operation)) return undefined;
+  return explicitDeepHistory ? OFAPI_GATEWAY_DEEP_HISTORY_TIMEOUT_MS : OFAPI_GATEWAY_FAST_READ_TIMEOUT_MS;
+}
+
 function proxy(
   accountId: string,
   segments: string[],
@@ -541,6 +561,7 @@ export async function executeOfapiReadGatewayRequest(
       pathname: request.pathname,
       query: request.query,
     }, readIntent);
+  const timeoutMs = ofapiReadGatewayTimeoutMs(request.operation, explicitHistory);
   if (historyMode !== "vendor") {
     if (!explicitHistory) {
       fallbackReason = "surface_not_cutover";
@@ -598,6 +619,7 @@ export async function executeOfapiReadGatewayRequest(
         pathname: request.pathname,
         query: request.query,
         fallbackCredits: request.fallbackCredits,
+        timeoutMs,
         collectionContext: request.collectionContext,
         servingMode: historyMode === "vendor" ? "vendor_only" : historyMode,
         fallbackReason,
@@ -614,6 +636,7 @@ export async function executeOfapiReadGatewayRequest(
         query: request.query,
         fallbackCredits: request.fallbackCredits,
         fallbackEstimated: request.fallbackEstimated,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
     if (request.collectionContext && response.status >= 200 && response.status < 300) {
       if (!("capture" in response)) throw new ServiceUnavailableError("Collection requires durable response capture");

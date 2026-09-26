@@ -5,7 +5,7 @@ import {
 } from "node:http";
 import { connect as connectTcp } from "node:net";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
@@ -21,6 +21,8 @@ let server: Server | null = null;
 const extraServers: Server[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  server?.closeAllConnections();
   server?.close();
   server = null;
   while (extraServers.length > 0) {
@@ -237,6 +239,49 @@ describe("OFAPI proxy read client", () => {
     } finally {
       await dispatcher.close();
     }
+  });
+
+  it("arms the caller's timeout and keeps 60 s when none is passed", async () => {
+    server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [] }));
+    });
+    const baseUrl = await listenOnLocalhost(server);
+    const client = createOfapiClient({ baseUrl, apiKey: "test-key", restDelayMs: 0 });
+    const armed = vi.spyOn(AbortSignal, "timeout");
+    const read = {
+      operation: "ofapi_gateway_chats",
+      pathname: `/${ACCOUNT}/chats`,
+      query: { limit: "10" },
+      fallbackCredits: 1,
+      fallbackEstimated: true,
+    };
+
+    await client.proxyRead!({ pageId: 1 }, { ...read, timeoutMs: 20_000 });
+    await client.proxyRead!({ pageId: 1 }, read);
+
+    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
+  });
+
+  it("aborts a hung read at the caller's timeout as an upstream failure", async () => {
+    let requests = 0;
+    server = createServer(() => { requests += 1; });
+    const baseUrl = await listenOnLocalhost(server);
+    const client = createOfapiClient({ baseUrl, apiKey: "test-key", restDelayMs: 0 });
+
+    const startedAt = Date.now();
+    const promise = client.proxyRead!({ pageId: 1 }, {
+      operation: "ofapi_gateway_chats",
+      pathname: `/${ACCOUNT}/chats`,
+      query: { limit: "10" },
+      fallbackCredits: 1,
+      fallbackEstimated: true,
+      timeoutMs: 100,
+    });
+
+    await expect(promise).rejects.toMatchObject({ name: "OfapiApiError", status: null });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(requests).toBe(1);
   });
 
   it("maps response body stream failures to a controlled upstream error", async () => {
