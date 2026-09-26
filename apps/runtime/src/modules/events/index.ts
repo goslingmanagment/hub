@@ -781,7 +781,38 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       });
     }
 
-    const platformOf = (accountId: number) => pagePlatforms.get(accountId);
+    // Page → platform as this connection knows it: the connect-time read,
+    // extended when a page unknown to it appears live (a page never changes
+    // platform, so entries never go stale).
+    const knownPagePlatforms = new Map(pagePlatforms);
+    const platformOf = (accountId: number) => knownPagePlatforms.get(accountId);
+    // An owner (no grant list) filtered by platform subscribes to EVERY
+    // account, like the unfiltered owner, so a page whose first ledger event
+    // arrives mid-connection is delivered live and enters the cursor instead
+    // of 409ing the next resume. Frames are then filtered here by platform.
+    const filtersLiveByPlatform = requestedPlatform !== null && granted === undefined;
+    /** Synchronous platform check for the live lane: "unknown" only for a
+     * page this connection has not seen, resolved by liveAccountOnPlatform. */
+    function livePlatformVerdict(accountId: number): "on" | "off" | "unknown" {
+      if (!filtersLiveByPlatform) {
+        return "on";
+      }
+      const pagePlatform = knownPagePlatforms.get(accountId);
+      return pagePlatform === undefined
+        ? "unknown"
+        : pagePlatform === requestedPlatform ? "on" : "off";
+    }
+    async function liveAccountOnPlatform(accountId: number): Promise<boolean> {
+      const verdict = livePlatformVerdict(accountId);
+      if (verdict !== "unknown") {
+        return verdict === "on";
+      }
+      for (const [pageId, pagePlatform] of await listPagePlatforms(appContext.db)) {
+        knownPagePlatforms.set(pageId, pagePlatform);
+      }
+      // Still unknown after a fresh read: not a page on this platform.
+      return livePlatformVerdict(accountId) === "on";
+    }
 
     /** Batched serve-time enrichment for a replay page: payloads and frame
      * contexts, a fixed number of statements per batch (never per frame). */
@@ -853,6 +884,27 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
      * failure degrades to an unenriched frame (the desktop falls back to its
      * reconciliation path), never a dropped connection. */
     async function writeV2FrameEnriched(event: DomainEventRow) {
+      if (raw.writableEnded || raw.destroyed) {
+        return; // a closed stream buys no lookups or enrichment
+      }
+      if (filtersLiveByPlatform) {
+        let onRequestedPlatform: boolean;
+        try {
+          onRequestedPlatform = await liveAccountOnPlatform(event.accountId);
+        } catch (error) {
+          // Fail closed without skipping: the frame is not written and its
+          // cursor never passes it; the reconnect re-reads page platforms.
+          request.log.warn(
+            { err: error, accountId: event.accountId },
+            "v2 SSE page platform lookup failed; closing stream",
+          );
+          raw.end();
+          return;
+        }
+        if (!onRequestedPlatform) {
+          return;
+        }
+      }
       const [payload, context] = await Promise.allSettled([
         buildMessagePayloadEnrichments(appContext, [event]).then((map) => map.get(event.id)),
         buildDomainFrameContexts(appContext, [event], { platformOf }).then((map) => map.get(event.id)),
@@ -891,11 +943,17 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     try {
       const captured = await subscribeBeforeReplayBoundary({
         subscribe: () => domainEventHub!.subscribe({
-          // Unfiltered owners keep the dynamic "every account" lane; a
-          // platform-filtered connection is pinned to its narrowed universe
-          // (a page created mid-connection joins on the next reconnect).
-          accountIds: requestedPlatform === null ? granted : universe,
+          // Owners (filtered or not) keep the dynamic "every account" lane —
+          // a filtered owner drops other platforms' frames at delivery. A
+          // grant-listed connection is pinned to its grants (∩ platform);
+          // a grant change closes it through revalidation.
+          accountIds: granted === undefined
+            ? undefined
+            : requestedPlatform === null ? granted : universe,
           continuityLost(accountId, _afterSeq, throughSeq) {
+            if (livePlatformVerdict(accountId) === "off") {
+              return; // another platform's ledger: not this connection's
+            }
             const watermark = guards.watermarks().get(accountId) ?? 0;
             if (watermark >= throughSeq) {
               return;
@@ -907,6 +965,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             raw.end();
           },
           deliver(event) {
+            // Known other-platform frames never reach the bounded pre-replay
+            // buffer; unknown pages are resolved on the ordered write chain.
+            if (livePlatformVerdict(event.accountId) === "off") {
+              return;
+            }
             if (!replayDone) {
               bufferedLive.push(event);
               return;

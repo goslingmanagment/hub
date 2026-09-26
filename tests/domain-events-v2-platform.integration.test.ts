@@ -621,6 +621,50 @@ describe("v2 stream platform filter (H3)", () => {
     }
   });
 
+  it("delivers a new page's first event live to a filtered owner, like an unfiltered one, and never another platform's", async (context) => {
+    if (!requireSetup(context)) return;
+
+    // Pages onboarded with no ledger rows yet (no domain_event_seq row).
+    const model = await createModel(testDb!.db, { slug: "h3-new-pages", name: "H3 New Pages" });
+    const ofNew = (await createOnlyFansPage(testDb!.db, { modelId: model!.id, label: "h3-of-new" }))!.id;
+    const fsNew = (await createFanslyPage(testDb!.db, { modelId: model!.id, label: "h3-fs-new" }))!.id;
+    await setPageOfapiAccountId(testDb!.db, { pageId: ofNew, ofapiAccountId: `acct_h3_${ofNew}` });
+
+    const cookie = await ownerCookie();
+    const filtered = await openStream("?platform=onlyfans", { cookie });
+    const unfiltered = await openStream("", { cookie });
+    await filtered.waitFor(() => filtered.caughtUp());
+    await unfiltered.waitFor(() => unfiltered.caughtUp());
+
+    await appendDomainEvents(testDb!.db, fsNew, [plainEvent("message.received", { first: "fansly" })]);
+    await appendDomainEvents(testDb!.db, ofNew, [plainEvent("message.received", { first: "onlyfans" })]);
+    const accountsOf = (stream: typeof filtered) => stream.domain().map(({ frame }) => frame.accountId);
+    await unfiltered.waitFor(() => accountsOf(unfiltered).includes(ofNew) && accountsOf(unfiltered).includes(fsNew));
+    await filtered.waitFor(() => accountsOf(filtered).includes(ofNew));
+    await sleep(200);
+    await filtered.close();
+    await unfiltered.close();
+
+    expect(accountsOf(filtered)).toEqual([ofNew]);
+    const lastFiltered = filtered.frames.filter((frame) => frame.id !== null).at(-1)!.id!;
+    const lastUnfiltered = unfiltered.frames.filter((frame) => frame.id !== null).at(-1)!.id!;
+    const filteredCursor = decoded(lastFiltered);
+    expect(filteredCursor.platform).toBe("onlyfans");
+    expect(filteredCursor.watermarks.get(ofNew)).toBe(1);
+    expect(filteredCursor.watermarks.has(fsNew)).toBe(false);
+    expect([...filteredCursor.watermarks.keys()].every((id) => id !== fsA && id !== fsB)).toBe(true);
+
+    // Both resume without a 409, exactly like each other.
+    const resumedUnfiltered = await openStream("", { cookie, "last-event-id": lastUnfiltered });
+    const resumedFiltered = await openStream("?platform=onlyfans", { cookie, "last-event-id": lastFiltered });
+    expect(resumedUnfiltered.status).toBe(200);
+    expect(resumedFiltered.status).toBe(200);
+    await resumedFiltered.waitFor(() => resumedFiltered.caughtUp());
+    await resumedFiltered.close();
+    await resumedUnfiltered.close();
+    expect(resumedFiltered.domain()).toEqual([]);
+  });
+
   it("forwards typing only for the platform's pages", async (context) => {
     if (!requireSetup(context)) return;
 

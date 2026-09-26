@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 
-import { domainEventFrameSchema, encodeDomainEventCursor } from "@agency_hub_core/contracts";
+import {
+  decodeDomainEventCursor,
+  domainEventFrameSchema,
+  encodeDomainEventCursor,
+} from "@agency_hub_core/contracts";
 import type * as DbModule from "@agency_hub_core/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -161,6 +165,8 @@ async function runV2Stream(input: {
   platformOfAccount7?: "onlyfans" | "fansly";
   /** H3 `platform=` query parameter. */
   platformFilter?: "onlyfans" | "fansly";
+  /** listPagePlatforms after the connect-time read (unseen-page lookups). */
+  laterPagePlatforms?: () => Promise<Map<number, "onlyfans" | "fansly">>;
 }) {
   const writes: string[] = [];
   const raw = {
@@ -207,7 +213,7 @@ async function runV2Stream(input: {
     new Map([[7, input.rows.length]]),
   );
   dbMocks.listEventsSince.mockImplementation(
-    async (_db: unknown, query: { afterSeq: number; throughSeq: number; limit: number }) => {
+    async (_db: unknown, query: { accountId: number; afterSeq: number; throughSeq: number; limit: number }) => {
       // The FIRST query is the connection's replay read (the hub live lane
       // only queries after a NOTIFY, which the tests emit later).
       const isReplayQuery = !replayQuerySeen;
@@ -231,10 +237,19 @@ async function runV2Stream(input: {
       return input.rows
         .filter((seq) => seq > query.afterSeq && seq <= query.throughSeq)
         .slice(0, query.limit)
-        .map((seq) => (input.eventForSeq ?? event)(seq, input.currentAccountRefForSeq?.(seq) ?? null));
+        .map((seq) => ({
+          ...(input.eventForSeq ?? event)(seq, input.currentAccountRefForSeq?.(seq) ?? null),
+          // The live hub reads whichever account a NOTIFY named.
+          accountId: query.accountId,
+        }));
     },
   );
   dbMocks.listPagePlatforms.mockResolvedValue(new Map([[7, input.platformOfAccount7 ?? "onlyfans"]]));
+  if (input.laterPagePlatforms !== undefined) {
+    dbMocks.listPagePlatforms
+      .mockResolvedValueOnce(new Map([[7, input.platformOfAccount7 ?? "onlyfans"]]))
+      .mockImplementation(input.laterPagePlatforms);
+  }
   dbMocks.listRedeliveredWebhookObservationIds.mockImplementation(
     async (_db: unknown, ids: number[]) => input.redeliveryProbeFails
       ? Promise.reject(new Error("probe down"))
@@ -674,3 +689,56 @@ describe("H3 grant revalidation through the platform filter", () => {
     expect(v2GrantScopeChanged(undefined, undefined, "onlyfans", platforms)).toBe(false);
   });
 });
+
+describe("H3 platform-filtered owner, live lane", () => {
+  // The harness principal is the owner (no grant list). A NOTIFY for account
+  // 9 — a page this connection has never seen — arrives during the replay of
+  // account 7 and is flushed after the replay boundary.
+  async function ownerStreamWithNewPage(laterPagePlatforms: () => Promise<Map<number, "onlyfans" | "fansly">>) {
+    return runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1, 2],
+      head: 2,
+      liveHead: 2,
+      platformFilter: "onlyfans",
+      laterPagePlatforms,
+      duringReplay: async ({ notifyDomainEvents }) => {
+        notifyDomainEvents("9:1");
+        for (let tick = 0; tick < 5; tick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      },
+    });
+  }
+
+  it("delivers an unseen page's first events once its platform resolves to the requested one", async () => {
+    const frames = await ownerStreamWithNewPage(async () => new Map([[7, "onlyfans"], [9, "onlyfans"]]));
+    const domain = frames.filter((frame) => frame.lane === "domain");
+    expect(domain.map((frame) => [frame.event["accountId"], frame.event["accountSeq"]]))
+      .toEqual([[7, 1], [7, 2], [9, 1], [9, 2]]);
+    expect(domain.at(-1)?.id).toBe(encodeDomainEventCursor(new Map([[7, 2], [9, 2]]), { platform: "onlyfans" }));
+  });
+
+  it("drops an unseen page on another platform without widening the cursor", async () => {
+    const frames = await ownerStreamWithNewPage(async () => new Map([[7, "onlyfans"], [9, "fansly"]]));
+    expect(frames.filter((frame) => frame.lane === "domain").map((frame) => frame.event["accountId"])).toEqual([7, 7]);
+    expect(frames.every((frame) => !decodeDomainEventCursorOrThrow(frame.id).watermarks.has(9))).toBe(true);
+    expect(frames.at(-1)?.id).toBe(encodeDomainEventCursor(new Map([[7, 2]]), { platform: "onlyfans" }));
+  });
+
+  it("fails closed when the page lookup fails: no frame, stream ended, cursor never passes it", async () => {
+    const frames = await ownerStreamWithNewPage(async () => {
+      throw new Error("pages unavailable");
+    });
+    expect(frames.filter((frame) => frame.lane === "domain").map((frame) => frame.event["accountId"])).toEqual([7, 7]);
+    expect(frames.every((frame) => !decodeDomainEventCursorOrThrow(frame.id).watermarks.has(9))).toBe(true);
+  });
+});
+
+function decodeDomainEventCursorOrThrow(cursor: string) {
+  const decoded = decodeDomainEventCursor(cursor);
+  if (!decoded.ok) {
+    throw new Error(decoded.reason);
+  }
+  return decoded;
+}
