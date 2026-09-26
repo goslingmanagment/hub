@@ -200,7 +200,7 @@ export function OfapiWebhookRecovery() {
         <tbody>{history.attempts.map(attempt => <tr key={attempt.attemptId} className="border-t border-border-light">
           <td className="p-2 text-text-primary">{attempt.eventType}<span className="block text-text-secondary">{attempt.createdAt.slice(0, 19).replace("T", " ")} · #{attempt.attemptNumber}</span></td>
           <td className="p-2 text-text-primary">{attempt.succeeded ? "Доставлено" : attempt.deliveryRecovered ? "Восстановлено следующей попыткой" : `Ошибка ${attempt.statusCode ?? "сети"}`}
-            {attempt.redeliveryState && <span className="block text-text-secondary">Ручной повтор: {attempt.redeliveryState} · {attempt.redeliverySucceeded === null ? "результат ожидается" : attempt.redeliverySucceeded ? "доставлено" : "пока без успеха"}</span>}</td>
+            {attempt.redeliveryState && <span className="block text-text-secondary">Повтор доставки: {attempt.redeliveryState} · {attempt.redeliverySucceeded === null ? "результат ожидается" : attempt.redeliverySucceeded ? "доставлено" : "пока без успеха"}</span>}</td>
           <td className="p-2 text-text-primary">{attempt.localEventId ? `${attempt.captureState} · проекция: ${attempt.projectionStatus} · разбор: ${attempt.canonicalVersion ?? "ожидает"}` : "Совпадающий receipt не найден"}</td>
           <td className="p-2">{attempt.localEventId ? <button type="button" className={button} disabled={unavailable} onClick={() => void run(async () => {
             await ofapiWebhookRecoveryActions.replay({ body: { eventId: attempt.localEventId!, dryRun: false } });

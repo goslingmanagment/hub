@@ -9,17 +9,18 @@ import type { AppContext } from "../bootstrap.ts";
 export const OFAPI_DELIVERY_HISTORY_AGE_METRIC = "ofapi_delivery_history_age";
 export const OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS = 45 * 60_000;
 
-/** Gauge samples for the golden-signal sampler: none while collection is off
- * or no webhook is registered, `null` when the probe itself failed (a blind
- * spot the sampler latches like a breach). */
+/** Gauge samples for the golden-signal sampler, `null` when the probe itself
+ * failed (a blind spot the sampler latches like a breach). While collection is
+ * off or no webhook is registered there is no coverage to age: the gauge reads
+ * a neutral 0, so a latch opened before switching collection off resolves
+ * instead of staying open with no series behind it. */
 export async function sampleOfapiDeliveryHistoryAge(
   app: Pick<AppContext, "db">,
   now = Date.now(),
 ): Promise<OpsMetricSampleInput[] | null> {
   try {
     const coverage = await getWebhookDeliveryHistoryCoverage(app.db);
-    if (!coverage) return [];
-    const valueMs = Math.max(0, now - coverage.since.getTime());
+    const valueMs = coverage ? Math.max(0, now - coverage.since.getTime()) : 0;
     return [
       { metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p50", valueMs },
       { metric: OFAPI_DELIVERY_HISTORY_AGE_METRIC, quantile: "p95", valueMs },

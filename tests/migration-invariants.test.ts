@@ -307,4 +307,27 @@ describe("database migration invariants", () => {
     // Every executable query is delimited for the no-transaction runner.
     expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
   });
+
+  it("builds the H2 delivery-attempt indexes concurrently, outside 0207's transaction", async () => {
+    const intents = await readFile("packages/db/migrations/0207_ofapi_webhook_auto_redelivery.sql", "utf8");
+    const index = await readFile("packages/db/migrations/0208_ofapi_webhook_delivery_business_key_idx.sql", "utf8");
+    const recovery = await readFile("apps/runtime/src/services/ofapi-webhook-recovery.ts", "utf8");
+
+    // 0207 is transactional and touches only the small intents table and a
+    // new one; nothing in it may lock the live delivery-attempt table.
+    const intentStatements = intents.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    expect(intentStatements).not.toMatch(/on ofapi_webhook_delivery_attempts/i);
+
+    // 0208 follows the 0143/0169 shape.
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain("create index concurrently if not exists ofapi_webhook_delivery_failed_business_idx");
+    expect(index).toContain("create index concurrently if not exists ofapi_webhook_delivery_business_key_idx");
+    expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
+
+    // The partial predicate is a contract with the candidate scan: the query
+    // spells the same clauses as constants, so it implies the predicate.
+    expect(index).toContain("where not succeeded and idempotency_key is not null;");
+    expect(recovery).toContain("not a.succeeded and a.idempotency_key is not null");
+  });
 });

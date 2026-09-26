@@ -6135,7 +6135,9 @@ export const ofapiWebhookDeliveryAttempts = pgTable("ofapi_webhook_delivery_atte
   pk: primaryKey({ columns: [table.webhookId, table.attemptId] }),
   groupIdx: index("ofapi_webhook_delivery_group_idx").on(table.webhookId, table.deliveryUuid),
   timeIdx: index("ofapi_webhook_delivery_time_idx").on(table.webhookId, table.sourceCreatedAt.desc(), table.attemptId.desc()),
+  // Migration 0208 (built concurrently).
   businessKeyIdx: index("ofapi_webhook_delivery_business_key_idx").on(table.webhookId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
+  failedBusinessIdx: index("ofapi_webhook_delivery_failed_business_idx").on(table.webhookId, table.sourceCreatedAt).where(sql`not ${table.succeeded} and ${table.idempotencyKey} is not null`),
 }));
 
 export const ofapiWebhookDeliveryScans = pgTable("ofapi_webhook_delivery_scans", {
@@ -6158,14 +6160,17 @@ export const ofapiWebhookRedeliveryIntents = pgTable("ofapi_webhook_redelivery_i
 }, table => ({
   attemptFk: foreignKey({ columns: [table.webhookId, table.attemptId], foreignColumns: [ofapiWebhookDeliveryAttempts.webhookId, ofapiWebhookDeliveryAttempts.attemptId] }).onDelete("restrict"),
   activeAttemptUniq: uniqueIndex("ofapi_webhook_redelivery_active_attempt_uniq").on(table.webhookId, table.attemptId).where(sql`${table.state} in ('dispatching','accepted','indeterminate')`),
-  autoBusinessKeyUniq: uniqueIndex("ofapi_webhook_redelivery_auto_business_key_uniq").on(table.webhookId, table.businessKey).where(sql`${table.origin} = 'auto'`),
+  autoBusinessKeyUniq: uniqueIndex("ofapi_webhook_redelivery_auto_business_key_uniq").on(table.webhookId, table.businessKey).where(sql`${table.origin} = 'auto' and ${table.state} <> 'not_sent'`),
+  businessKeyIdx: index("ofapi_webhook_redelivery_business_key_idx").on(table.webhookId, table.businessKey),
   originDayIdx: index("ofapi_webhook_redelivery_origin_day_idx").on(table.origin, table.createdAt),
 }));
 
-// enabledAt is non-null exactly while automatic redelivery is enabled (migration 0207).
+// enabledAt is non-null exactly while automatic redelivery is enabled; pausedUntil
+// holds requests after a non-accepted outcome (migration 0207).
 export const ofapiWebhookAutoRedeliveryState = pgTable("ofapi_webhook_auto_redelivery_state", {
   id: boolean("id").primaryKey().default(true), enabledAt: timestamp("enabled_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  pausedUntil: timestamp("paused_until", { withTimezone: true }), pauseCount: integer("pause_count").default(0).notNull(),
+  pauseReason: text("pause_reason"), updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export const ofapiWebhookCollectionPolicy = pgTable("ofapi_webhook_collection_policy", {

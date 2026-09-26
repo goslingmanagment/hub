@@ -411,7 +411,11 @@ export async function getOfapiCreditsSummary(
     incidents: openIncidents
       .filter((incident) => incident.kind.startsWith("ofapi_"))
       .map((incident) => ({
-        kind: incident.kind,
+        // H2: the webhook auto-redelivery cap shares the ofapi_burn_rate kind
+        // (a new kind is a contract change) but is a different condition; its
+        // display kind carries the sub-key so the page names it on its own.
+        kind: incident.kind === "ofapi_burn_rate" && incident.incidentKey === "ofapi_burn_rate:global:auto_redelivery_cap"
+          ? "ofapi_burn_rate:auto_redelivery_cap" : incident.kind,
         openedAt: new Date(incident.openedAt).toISOString(),
         errorSummary: incident.errorSummary,
       })),

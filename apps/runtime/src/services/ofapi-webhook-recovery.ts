@@ -1,5 +1,5 @@
 import type { OfapiWebhookDeliveryHistoryResponse } from "@agency_hub_core/contracts";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
   captureWebhookDeliveryPage, claimWebhookCollectionApply, claimWebhookDeliveryScan,
@@ -18,6 +18,8 @@ import { OfapiApiError, OfapiHistoryRequestError, ofapiSafeErrorDiagnostics, typ
 import { buildOfapiWebhookEventSet, registerOfapiWebhook, resolveOfapiClient } from "./ofapi-webhooks.ts";
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { processOfapiWebhookEvent } from "./ofapi-events.ts";
+import { localDispatchRefusalFrom } from "./ofapi-command-executor.ts";
+import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
 
 const PAGE_SIZE = 100;
 const DAY_MS = 86_400_000;
@@ -161,7 +163,8 @@ export async function listOfapiWebhookDeliveryHistory(app: AppContext, input: { 
     left join observation_keys k on k.source='webhook' and k.idempotency_key=a.idempotency_key
     left join observations o on o.id=k.observation_id and o.received_at=k.received_at
     left join lateral(select state,redelivery_uuid from ofapi_webhook_redelivery_intents i
-      where i.webhook_id=a.webhook_id and i.attempt_id=a.attempt_id order by created_at desc limit 1) i on true
+      where i.webhook_id=a.webhook_id and (i.attempt_id=a.attempt_id or i.business_key=a.idempotency_key)
+      order by created_at desc limit 1) i on true
     where a.webhook_id=${webhookId} ${input.failedOnly ? sql`and a.succeeded=false` : sql``}
     order by a.source_created_at desc,a.attempt_id desc limit ${input.limit} offset ${input.offset}
   `);
@@ -186,6 +189,11 @@ const AUTO_REDELIVERY_DEFAULT_DAILY_CAP = 1000;
 // minutes after the newest captured attempt leaves that chain alone.
 const AUTO_REDELIVERY_QUIET_MS = 10 * 60_000;
 const AUTO_REDELIVERY_MAX_PER_TICK = 25;
+// After a request that did not end accepted, automatic requests pause; the
+// pause doubles on consecutive failures, so a paused webhook or a degraded
+// provider costs one business key per pause, a handful per day at most.
+const AUTO_REDELIVERY_PAUSE_MS = 15 * 60_000;
+const AUTO_REDELIVERY_MAX_PAUSE_MS = 6 * 60 * 60_000;
 // One global reservation serializes manual and automatic intent creation.
 const REDELIVERY_LOCK = 9003018;
 export const OFAPI_AUTO_REDELIVERY_CAP_INCIDENT = { kind: "ofapi_burn_rate", subKey: "auto_redelivery_cap" } as const;
@@ -196,13 +204,17 @@ async function settleInterruptedRedeliveries(db: Database) {
   await db.execute(sql`update ofapi_webhook_redelivery_intents set state='indeterminate',error_code='dispatch_interrupted'
     where state='dispatching' and created_at<now()-interval '2 minutes'`);
 }
+// A local refusal sent nothing and is not a request against either limit.
 async function redeliveriesToday(db: Database, origin: RedeliveryOrigin) {
   return (await db.execute<{ n: number }>(sql`select count(*)::int n from ofapi_webhook_redelivery_intents
-    where origin=${origin} and created_at>=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'`)).rows[0]?.n ?? 0;
+    where origin=${origin} and state<>'not_sent'
+      and created_at>=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'`)).rows[0]?.n ?? 0;
 }
 // Exactly one POST per committed intent. Only a verified acknowledgement is
-// accepted and only a definite 4xx is rejected; anything else stays
-// indeterminate and is never sent again for that intent.
+// accepted and only a definite 4xx is rejected. A typed refusal the client
+// raises before any egress (credential, credit accounting, key scope) is
+// 'not_sent'; anything else, including a failure after the response arrived,
+// stays indeterminate and is never sent again for that intent.
 async function dispatchRedeliveryIntent(app: AppContext, client: OfapiClient, input: { id: string; webhookId: string; attemptId: number }) {
   let state = "indeterminate"; let uuid: string | null = null; let code: string | null = null;
   try {
@@ -212,8 +224,12 @@ async function dispatchRedeliveryIntent(app: AppContext, client: OfapiClient, in
         typeof data.redelivery_id !== "string" || !data.redelivery_id) throw new Error("OFAPI redelivery acknowledgement could not be verified");
     uuid = data.redelivery_id; state = "accepted";
   } catch (error) {
-    code = errorCode(error);
-    if (error instanceof OfapiApiError && error.status !== null && error.status >= 400 && error.status < 500 && error.status !== 408) state = "rejected";
+    const local = localDispatchRefusalFrom(error);
+    if (local) { state = "not_sent"; code = `local_${local.reason}`; }
+    else {
+      code = errorCode(error);
+      if (error instanceof OfapiApiError && error.status !== null && error.status >= 400 && error.status < 500 && error.status !== 408) state = "rejected";
+    }
   }
   await app.db.execute(sql`update ofapi_webhook_redelivery_intents set state=${state},redelivery_uuid=${uuid},error_code=${code},settled_at=now()
     where id=${input.id} and state='dispatching'`);
@@ -241,19 +257,27 @@ export async function redeliverOfapiWebhook(app: AppContext, input: { id: string
     if (local.rows.length) throw new ConflictError("The receipt is retained locally; use local projection replay");
   }
   if (!attempt.idempotency_key) throw new ConflictError("This delivery has no durable identity for business replay");
+  const businessKey = attempt.idempotency_key;
   if (input.dryRun) return { id: input.id, state: "preview", redeliveryUuid: null, errorCode: null, projected: false };
   const client = resolveOfapiClient(app);
   const proof = await client.getCredentialPreflight?.();
   if (proof?.status !== "verified" || !client.redeliverWebhookDelivery) throw new ServiceUnavailableError("Verified OFAPI redelivery access is unavailable");
   const claimed = await app.db.transaction(async tx => {
     await tx.execute(sql`select pg_advisory_xact_lock(${REDELIVERY_LOCK})`);
-    const prior = await tx.execute(sql`select id from ofapi_webhook_redelivery_intents
-      where webhook_id=${webhookId} and attempt_id=${input.attemptId} and state in ('dispatching','accepted','indeterminate')`);
-    if (prior.rows.length) throw new ConflictError("An earlier redelivery for this attempt already owns the outcome; inspect its delivery chain");
+    // Key-level: an in-flight, accepted or indeterminate request of either
+    // origin for any attempt of this business key owns its outcome. A newer
+    // failed attempt reported after that request is the one exception: the
+    // owner may redeliver it once the earlier request has visibly failed.
+    const prior = await tx.execute(sql`select i.id from ofapi_webhook_redelivery_intents i
+      left join ofapi_webhook_delivery_attempts ia on ia.webhook_id=i.webhook_id and ia.attempt_id=i.attempt_id
+      where i.webhook_id=${webhookId} and i.state in ('dispatching','accepted','indeterminate')
+        and (i.attempt_id=${input.attemptId} or i.business_key=${businessKey} or ia.idempotency_key=${businessKey})
+        and (i.attempt_id=${input.attemptId} or i.state='dispatching' or i.created_at>=${new Date(attempt.source_created_at)})`);
+    if (prior.rows.length) throw new ConflictError("An earlier redelivery for this business key already owns the outcome; inspect its delivery chain");
     // The manual limit has its own counter; automatic requests never consume it.
     if (await redeliveriesToday(tx, "manual") >= MANUAL_REDELIVERY_DAILY_LIMIT) throw new ConflictError(`Daily manual redelivery limit reached (${MANUAL_REDELIVERY_DAILY_LIMIT})`);
     const row = await tx.execute(sql`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,origin,business_key,state)
-      values(${input.id},${webhookId},${input.attemptId},${input.actorUserId},'manual',${attempt.idempotency_key},'dispatching') on conflict(id) do nothing returning id`);
+      values(${input.id},${webhookId},${input.attemptId},${input.actorUserId},'manual',${businessKey},'dispatching') on conflict(id) do nothing returning id`);
     if (row.rows.length) await insertAuditEvent(tx, { actorUserId: input.actorUserId, source: "api", eventType: "admin.ofapi_webhook_redelivery_requested",
       metadata: { id: input.id, webhookId, attemptId: input.attemptId, webhookEventCreditsEstimated: 0.01 } });
     return row.rows.length > 0;
@@ -266,32 +290,45 @@ export async function redeliverOfapiWebhook(app: AppContext, input: { id: string
 interface AutoRedeliveryCandidate { businessKey: string; attemptId: number; eventType: string; lastAttemptAt: Date }
 
 /** Business keys eligible for one automatic redelivery, nearest to provider
- * expiry first. The redelivered attempt is the key's newest captured attempt.
- * Every attempt of the key failed and happened at or after `enabledAt`; the
- * newest is quiet for ten minutes and inside the seven-day retention; there is
- * no local receipt, no active intent of either origin and no automatic intent
- * of any outcome for the key. */
-export async function selectOfapiAutoRedeliveryCandidates(db: Database, input: { webhookId: string; enabledAt: Date; limit: number }) {
+ * expiry first; `businessKey` narrows the check to one key. The redelivered
+ * attempt is the key's newest captured attempt. Every attempt of the key failed
+ * and happened at or after `enabledAt`; the newest is inside the seven-day
+ * retention and quiet for ten minutes both by the clock and by completed
+ * history coverage (a lagging collector cannot fire mid provider retry chain).
+ * The receiver was alive after it: a later successful delivery on this webhook
+ * or a later local receipt. There is no local receipt for the key, no active
+ * intent of either origin and no automatic request of any provider outcome. */
+export async function selectOfapiAutoRedeliveryCandidates(db: Database, input: {
+  webhookId: string; enabledAt: Date; limit: number; businessKey?: string;
+}) {
   const types = sql.join(OFAPI_AUTO_REDELIVERY_EVENT_TYPES.map(type => sql`${type}`), sql`,`);
+  const quiet = sql`make_interval(secs => ${AUTO_REDELIVERY_QUIET_MS / 1000})`;
   const rows = (await db.execute<{ business_key: string; attempt_id: string; event_type: string; source_created_at: Date }>(sql`
+    with bounds as (select
+      (select max(s.window_end) from ofapi_webhook_delivery_scans s where s.webhook_id=${input.webhookId} and s.state='complete') as frontier,
+      greatest(
+        (select max(o.source_created_at) from ofapi_webhook_delivery_attempts o where o.webhook_id=${input.webhookId} and o.succeeded),
+        (select max(r.received_at) from ofapi_webhook_events r)) as alive_at)
     select k.idempotency_key as business_key,l.attempt_id,l.event_type,l.source_created_at
-    from (select distinct a.idempotency_key from ofapi_webhook_delivery_attempts a
-      where a.webhook_id=${input.webhookId} and a.idempotency_key is not null and not a.succeeded
-        and a.event_type in (${types}) and a.source_created_at>=${input.enabledAt}
-        and a.source_created_at>=now()-interval '7 days') k
+    from bounds b,
+      (select distinct a.idempotency_key from ofapi_webhook_delivery_attempts a
+        where a.webhook_id=${input.webhookId} and not a.succeeded and a.idempotency_key is not null
+          and a.event_type in (${types}) and a.source_created_at>=${input.enabledAt}
+          and a.source_created_at>=now()-interval '7 days'
+          ${input.businessKey === undefined ? sql`` : sql`and a.idempotency_key=${input.businessKey}`}) k
     cross join lateral (select l.attempt_id,l.event_type,l.source_created_at from ofapi_webhook_delivery_attempts l
       where l.webhook_id=${input.webhookId} and l.idempotency_key=k.idempotency_key
       order by l.source_created_at desc,l.attempt_id desc limit 1) l
-    where l.source_created_at<now()-make_interval(secs => ${AUTO_REDELIVERY_QUIET_MS / 1000})
+    where l.source_created_at<now()-${quiet} and l.source_created_at+${quiet}<=b.frontier
+      and l.source_created_at<b.alive_at
       and l.source_created_at>=now()-interval '7 days' and l.event_type in (${types})
       and not exists(select 1 from ofapi_webhook_delivery_attempts e where e.webhook_id=${input.webhookId}
         and e.idempotency_key=k.idempotency_key and (e.succeeded or e.source_created_at<${input.enabledAt}))
       and not exists(select 1 from ofapi_webhook_events w where w.idempotency_key=k.idempotency_key)
-      and not exists(select 1 from ofapi_webhook_redelivery_intents i join ofapi_webhook_delivery_attempts ia
-        on ia.webhook_id=i.webhook_id and ia.attempt_id=i.attempt_id
-        where i.webhook_id=${input.webhookId} and ia.idempotency_key=k.idempotency_key and i.state in ('dispatching','accepted','indeterminate'))
       and not exists(select 1 from ofapi_webhook_redelivery_intents i
-        where i.webhook_id=${input.webhookId} and i.origin='auto' and i.business_key=k.idempotency_key)
+        left join ofapi_webhook_delivery_attempts ia on ia.webhook_id=i.webhook_id and ia.attempt_id=i.attempt_id
+        where i.webhook_id=${input.webhookId} and (i.business_key=k.idempotency_key or ia.idempotency_key=k.idempotency_key)
+          and (i.state in ('dispatching','accepted','indeterminate') or (i.origin='auto' and i.state<>'not_sent')))
     order by l.source_created_at asc,l.attempt_id asc limit ${input.limit}`)).rows;
   return rows.map((row): AutoRedeliveryCandidate => ({ businessKey: row.business_key, attemptId: Number(row.attempt_id),
     eventType: row.event_type, lastAttemptAt: new Date(row.source_created_at) }));
@@ -299,10 +336,11 @@ export async function selectOfapiAutoRedeliveryCandidates(db: Database, input: {
 
 // The switch is live config; the moment the worker first sees it on is kept
 // durably so failures from before it are never redelivered automatically.
-// Switching off forgets that moment: a later switch-on starts a new one.
-async function autoRedeliveryEnabledAt(app: AppContext, enabled: boolean) {
+// Switching off forgets that moment and any pause: a later switch-on starts anew.
+async function autoRedeliveryState(app: AppContext, enabled: boolean) {
   if (!enabled) {
-    const cleared = await app.db.execute(sql`update ofapi_webhook_auto_redelivery_state set enabled_at=null,updated_at=now()
+    const cleared = await app.db.execute(sql`update ofapi_webhook_auto_redelivery_state
+      set enabled_at=null,paused_until=null,pause_count=0,pause_reason=null,updated_at=now()
       where enabled_at is not null returning id`);
     if (cleared.rows.length) {
       await insertAuditEvent(app.db, { source: "worker", eventType: "system.ofapi_webhook_auto_redelivery_disabled", metadata: {} });
@@ -318,56 +356,76 @@ async function autoRedeliveryEnabledAt(app: AppContext, enabled: boolean) {
     const enabledAt = new Date(started.rows[0].enabled_at);
     await insertAuditEvent(app.db, { source: "worker", eventType: "system.ofapi_webhook_auto_redelivery_enabled", metadata: { enabledAt: enabledAt.toISOString() } });
     app.logger.info({ operation: "ofapi_webhook_auto_redelivery", enabledAt: enabledAt.toISOString() }, "OFAPI webhook auto-redelivery switched on");
-    return enabledAt;
   }
-  const row = (await app.db.execute<{ enabled_at: Date | null }>(sql`select enabled_at from ofapi_webhook_auto_redelivery_state`)).rows[0];
-  return row?.enabled_at ? new Date(row.enabled_at) : null;
+  const row = (await app.db.execute<{ enabled_at: Date | null; paused_until: Date | null }>(sql`
+    select enabled_at,paused_until from ofapi_webhook_auto_redelivery_state`)).rows[0];
+  return row?.enabled_at ? { enabledAt: new Date(row.enabled_at), pausedUntil: row.paused_until ? new Date(row.paused_until) : null } : null;
+}
+
+async function pauseAutoRedelivery(app: AppContext, reason: string) {
+  const row = (await app.db.execute<{ paused_until: Date; pause_count: number }>(sql`update ofapi_webhook_auto_redelivery_state
+    set pause_count=pause_count+1,pause_reason=${reason},updated_at=now(),
+      paused_until=now()+make_interval(secs => least(${AUTO_REDELIVERY_MAX_PAUSE_MS / 1000}::float8,
+        ${AUTO_REDELIVERY_PAUSE_MS / 1000}::float8*power(2,least(pause_count,20))))
+    returning paused_until,pause_count`)).rows[0];
+  return row ? { pausedUntil: new Date(row.paused_until), pauseCount: Number(row.pause_count) } : null;
 }
 
 /** Runs after each delivery-history sweep. Commits a durable automatic intent
  * before its single POST, at most once per business key, within the UTC-day
- * cap. Reaching the cap latches the existing burn-rate incident under its own
+ * cap. The first request that does not end accepted stops the tick and pauses
+ * automatic requests; a local refusal before egress does not use the key's
+ * shot. Reaching the cap latches the existing burn-rate incident under its own
  * subKey until the day's automatic count is below the cap again. Never throws. */
 export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
-  const result = { dispatched: 0, capReached: false };
+  const result = { dispatched: 0, capReached: false, pausedUntil: null as Date | null };
   try {
     const effective = await loadEffectiveConfig(app.db, app.config);
-    const enabledAt = await autoRedeliveryEnabledAt(app, effective.ofapiWebhookAutoRedeliveryEnabled === true);
-    if (!enabledAt) return result;
+    const state = await autoRedeliveryState(app, effective.ofapiWebhookAutoRedeliveryEnabled === true);
+    if (!state) return result;
+    if (state.pausedUntil && state.pausedUntil.getTime() > Date.now()) {
+      result.pausedUntil = state.pausedUntil;
+      return result;
+    }
     const cap = effective.ofapiWebhookAutoRedeliveryDailyCap ?? AUTO_REDELIVERY_DEFAULT_DAILY_CAP;
     const config = await getOfapiWebhookConfig(app.db);
     if (!config?.externalWebhookId) return result;
     const webhookId = config.externalWebhookId;
     await settleInterruptedRedeliveries(app.db);
-    // Resolve verified access only when there is work: the cached preflight
-    // must never run inside the reservation transaction.
+    // One candidate scan per tick, outside the reservation lock.
+    const candidates = await selectOfapiAutoRedeliveryCandidates(app.db, { webhookId, enabledAt: state.enabledAt, limit: AUTO_REDELIVERY_MAX_PER_TICK });
     let client: OfapiClient | null = null;
-    if ((await selectOfapiAutoRedeliveryCandidates(app.db, { webhookId, enabledAt, limit: 1 })).length) {
+    if (candidates.length) {
+      // Readiness is proven before any claim, so an unready process never
+      // commits an intent. The client repeats these gates before egress.
       const resolved = resolveOfapiClient(app);
       const proof = await resolved.getCredentialPreflight?.();
-      if (proof?.status === "verified" && resolved.redeliverWebhookDelivery) client = resolved;
-      else app.logger.warn({ operation: "ofapi_webhook_auto_redelivery" }, "OFAPI webhook auto-redelivery waits for verified redelivery access");
+      try {
+        await assertOfapiConfiguredAccess(app.db, createHash("sha256").update(app.config.ofapiApiKey ?? "").digest("hex"),
+          { operation: "ofapi_webhook_redelivery", method: "POST", accountId: null });
+        if (proof?.status === "verified" && resolved.redeliverWebhookDelivery) client = resolved;
+      } catch (error) {
+        if (!localDispatchRefusalFrom(error)) throw error;
+      }
+      if (!client) app.logger.warn({ operation: "ofapi_webhook_auto_redelivery" }, "OFAPI webhook auto-redelivery waits for verified redelivery access");
     }
-    while (client && result.dispatched < AUTO_REDELIVERY_MAX_PER_TICK) {
+    for (const next of client ? candidates : []) {
       const claim = await app.db.transaction(async tx => {
         await tx.execute(sql`select pg_advisory_xact_lock(${REDELIVERY_LOCK})`);
-        const [candidate] = await selectOfapiAutoRedeliveryCandidates(tx, { webhookId, enabledAt, limit: 1 });
-        if (!candidate) return { kind: "none" as const };
+        // Under the lock only this key is re-checked.
+        const [candidate] = await selectOfapiAutoRedeliveryCandidates(tx, { webhookId, enabledAt: state.enabledAt, limit: 1, businessKey: next.businessKey });
+        if (!candidate) return { kind: "stale" as const };
         const today = await redeliveriesToday(tx, "auto");
         if (today >= cap) return { kind: "cap" as const, today, candidate };
         const id = randomUUID();
         const row = await tx.execute(sql`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,origin,business_key,state)
           values(${id},${webhookId},${candidate.attemptId},null,'auto',${candidate.businessKey},'dispatching') on conflict do nothing returning id`);
-        if (!row.rows.length) return { kind: "conflict" as const, candidate };
+        if (!row.rows.length) return { kind: "stale" as const };
         await insertAuditEvent(tx, { source: "worker", eventType: "system.ofapi_webhook_auto_redelivery_requested",
           metadata: { id, webhookId, attemptId: candidate.attemptId, eventType: candidate.eventType, webhookEventCreditsEstimated: 0.01 } });
         return { kind: "claimed" as const, id, candidate };
       });
-      if (claim.kind === "none") break;
-      if (claim.kind === "conflict") {
-        app.logger.warn({ operation: "ofapi_webhook_auto_redelivery", attemptId: claim.candidate.attemptId }, "OFAPI webhook auto-redelivery intent collided; left for the next sweep");
-        break;
-      }
+      if (claim.kind === "stale") continue;
       if (claim.kind === "cap") {
         result.capReached = true;
         app.logger.warn({ operation: "ofapi_webhook_auto_redelivery", cap, dispatchedToday: claim.today,
@@ -377,10 +435,22 @@ export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
             + "remaining failed business webhooks wait for the next UTC day or a manual redelivery" });
         break;
       }
-      const outcome = await dispatchRedeliveryIntent(app, client, { id: claim.id, webhookId, attemptId: claim.candidate.attemptId });
-      result.dispatched += 1;
-      app.logger.info({ operation: "ofapi_webhook_auto_redelivery", intentId: claim.id, attemptId: claim.candidate.attemptId,
-        eventType: claim.candidate.eventType, state: outcome.state, errorCode: outcome.errorCode }, "OFAPI webhook auto-redelivery requested");
+      const outcome = await dispatchRedeliveryIntent(app, client!, { id: claim.id, webhookId, attemptId: claim.candidate.attemptId });
+      if (outcome.state !== "not_sent") result.dispatched += 1;
+      const logged = { operation: "ofapi_webhook_auto_redelivery", intentId: claim.id, attemptId: claim.candidate.attemptId,
+        eventType: claim.candidate.eventType, state: outcome.state, errorCode: outcome.errorCode };
+      if (outcome.state === "accepted") {
+        app.logger.info(logged, "OFAPI webhook auto-redelivery requested");
+        await app.db.execute(sql`update ofapi_webhook_auto_redelivery_state set pause_count=0,pause_reason=null,updated_at=now() where pause_count>0`);
+        continue;
+      }
+      // A paused webhook, a rate limit, a provider or transport failure, or a
+      // local refusal is systemic until proven otherwise: stop and back off.
+      const pause = await pauseAutoRedelivery(app, `${outcome.state}:${outcome.errorCode ?? "unknown"}`);
+      result.pausedUntil = pause?.pausedUntil ?? null;
+      app.logger.warn({ ...logged, pausedUntil: pause?.pausedUntil.toISOString() ?? null, pauseCount: pause?.pauseCount ?? null },
+        "OFAPI webhook auto-redelivery paused after a request that was not accepted");
+      break;
     }
     if (!result.capReached && await redeliveriesToday(app.db, "auto") < cap) {
       await resolveOfapiGlobalIncident(app, OFAPI_AUTO_REDELIVERY_CAP_INCIDENT);
