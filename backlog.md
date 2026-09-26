@@ -21,7 +21,7 @@
   continuation молча пропускает исчезнувший thread и возвращает terminal cursor;
   объединённое клиентское состояние всё ещё содержит стёртый текст.
 - **Код:** `apps/runtime/src/services/ofapi-sync-snapshot-cursor.ts:23-37`,
-  `apps/runtime/src/services/ofapi-sync-snapshot.ts:414-442,525-536`,
+  `apps/runtime/src/services/ofapi-sync-snapshot.ts:418-446,529-540`,
   `tests/ofapi-sync-snapshot.integration.test.ts:989-1089`.
 - **Закрыть:** связать `stateCursor` с erasure/topology generation, отвечать
   `409 restart-required` при изменении и тестировать объединённый результат.
@@ -57,8 +57,11 @@
   применяет `message.ppv_unlocked` (`is_opened` только в true), DM-проекция
   ставит `dm_message_archive.is_opened` без superseding-события на покупку
   (`dm-message-candidate.ts:523-574`), hot rows snapshot берут цену и медиа из
-  архива (`ofapi-sync-snapshot.ts:107-128`); новые PPV-события несут числовой
-  `amountUsd`. Готовы и НЕ запускались: backfill
+  архива (`ofapi-sync-snapshot.ts:111-132`); разблокировка, пришедшая раньше
+  своей message-строки, долечивается минутным reconcile за 8 дней в sweep
+  `message_archive` (`ppv-purchase-backfill.ts`), shadow rebuild повторно
+  применяет покупки; новые PPV-события несут числовой `amountUsd`. Готовы и
+  НЕ запускались: backfill
   `archive:backfill-ppv-purchases` (read-only прод-счёт 2026-09-26: hot 7,
   `message_archive` 570, `dm_message_archive` 607) и repair
   `events:repair-ofapi-ppv-refs` (70 кандидатов; supersession key
