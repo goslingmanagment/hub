@@ -14,8 +14,10 @@ import { describe, expect, it } from "vitest";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { FANSLY_REPLAY_FAMILY } from "../apps/runtime/src/services/canonicalize/fansly-replay.ts";
 import {
+  HEALTH_FLOOR_QUARANTINE_GAUGES,
   HEALTH_FLOOR_REGISTRY,
   healthFloorName,
+  healthFloorQuarantineName,
 } from "../apps/runtime/src/services/health-floors.ts";
 import { GOLDEN_SIGNAL_THRESHOLDS_MS } from "../apps/runtime/src/services/golden-signals.ts";
 
@@ -82,5 +84,19 @@ describe("health-floor gauge names", () => {
     const floorKeys = Object.keys(GOLDEN_SIGNAL_THRESHOLDS_MS)
       .filter((key) => key.startsWith("obs_backlog_"));
     expect(floorKeys.length).toBe(HEALTH_FLOOR_REGISTRY.length);
+  });
+
+  it("H2: quarantine counters are their own threshold-free series, never a backlog gauge", () => {
+    const webhook = CANONICALIZER_FAMILIES.find((family) => family.source === "webhook");
+    expect(webhook?.quarantine).toBeDefined();
+    const names = HEALTH_FLOOR_QUARANTINE_GAUGES.map((gauge) => gauge.name);
+    expect(names).toContain(healthFloorQuarantineName("webhook", "ofapi", webhook!.version));
+    expect(new Set(names).size).toBe(names.length);
+    const backlogNames = new Set(HEALTH_FLOOR_REGISTRY.map((floor) => floor.name));
+    for (const name of names) {
+      // Excluded from the 10-minute backlog latch by construction.
+      expect(backlogNames.has(name)).toBe(false);
+      expect(GOLDEN_SIGNAL_THRESHOLDS_MS[name]).toBeUndefined();
+    }
   });
 });

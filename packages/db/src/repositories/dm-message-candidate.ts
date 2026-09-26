@@ -271,7 +271,7 @@ function earliest(...dates: Array<Date | null | undefined>): Date {
 function provenanceUpdate(
   current: Record<string, string>,
   fields: readonly string[],
-  source: DmCandidateSource,
+  source: DmCandidateSource | "ppv_unlocked",
 ): Record<string, string> {
   if (fields.length === 0) {
     return current;
@@ -486,6 +486,90 @@ export async function reduceDmMessageCandidate(
       .returning();
 
     return { status: "written" as const, row: updated!, materialChanged: true };
+  });
+}
+
+export type DmPurchaseFactStatus =
+  /** is_opened moved to TRUE. */
+  | "written"
+  /** Already TRUE — nothing to do (monotonic, idempotent). */
+  | "noop"
+  /** No material row for this message (yet) — never inserted from here. */
+  | "missing";
+
+/**
+ * H2 (INC-001): records a PPV PURCHASE on the OF material head —
+ * `is_opened` moves to TRUE and never back (advance_opened, amendment 3).
+ *
+ * A dedicated single-field writer, not a reducer candidate: a purchase is an
+ * annotation on a message that already exists, so it NEVER inserts (a stub
+ * built from a notification would be a message with no material), and it
+ * touches no source_* provenance (the webhook candidate path would overwrite
+ * the message's own journal lineage with the notification's). UPDATE-only,
+ * so there is nothing for the erasure fence to guard against resurrecting.
+ *
+ * Fingerprints: material_fingerprint is recomputed from the reduced head, as
+ * every material write must. emitted_fingerprint advances WITH it only when
+ * the row was in sync before (emitted = old material): the purchase's ledger
+ * lane is message.ppv_unlocked, and letting the corrections reconciler mint a
+ * superseding message.* event for it would put every purchase on the stream
+ * twice — and a backfill would replay hundreds of old messages to every
+ * connected client as live frames. A row that was already out of sync stays
+ * flagged; the reconciler's next superseding head then simply carries
+ * isOpened = true. A row the fingerprint backfill has not reached yet (or a
+ * null-ref stub) keeps NULL fingerprints — the backfill computes them from the
+ * row, purchase included.
+ */
+export async function applyDmMessagePurchaseFact(
+  db: Database,
+  input: {
+    platform: "onlyfans";
+    ofapiAccountId: string;
+    platformMessageId: string;
+  },
+): Promise<{ status: DmPurchaseFactStatus; row?: ArchiveRow }> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    const [existing] = await database
+      .select()
+      .from(dmMessageArchive)
+      .where(and(
+        eq(dmMessageArchive.platform, input.platform),
+        eq(dmMessageArchive.ofapiAccountId, input.ofapiAccountId),
+        eq(dmMessageArchive.platformMessageId, input.platformMessageId),
+      ))
+      .for("update");
+    if (!existing) {
+      return { status: "missing" as const };
+    }
+    const isOpened = advanceOpened(existing.isOpened, true);
+    if (isOpened === existing.isOpened) {
+      return { status: "noop" as const, row: existing };
+    }
+
+    const oldMaterial = existing.materialFingerprint;
+    const nextMaterial = oldMaterial === null
+      ? null
+      : computeDmMaterialFingerprint({ ...tupleOfRow(existing), isOpened });
+    const inSync = oldMaterial !== null
+      && existing.emittedFingerprint !== null
+      && existing.emittedFingerprint.equals(oldMaterial);
+    const [updated] = await database
+      .update(dmMessageArchive)
+      .set({
+        isOpened,
+        materialFingerprint: nextMaterial,
+        ...(inSync ? { emittedFingerprint: nextMaterial } : {}),
+        materialFieldProvenance: provenanceUpdate(
+          existing.materialFieldProvenance,
+          ["isOpened"],
+          "ppv_unlocked",
+        ),
+        updatedAt: new Date(),
+      })
+      .where(eq(dmMessageArchive.id, existing.id))
+      .returning();
+    return { status: "written" as const, row: updated! };
   });
 }
 

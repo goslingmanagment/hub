@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalizeOfapiWebhookObservation,
+  classifyOfapiWebhookQuarantine,
   OFAPI_WEBHOOK_CANONICALIZED_KINDS,
+  parseOfapiPpvAmountUsd,
 } from "../apps/runtime/src/services/canonicalize/ofapi-webhook.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
 
@@ -112,6 +114,64 @@ describe("ofapi-webhook canonicalizer (Stage 8)", () => {
       observation("messages_ppv_unlocked", { payload: envelope }),
     );
     expect(events).toEqual([]);
+  });
+
+  it("H2: carries a strictly parsed numeric amountUsd beside the verbatim amountText", () => {
+    const envelope = fixture("messages_ppv_unlocked");
+    const events = canonicalizeOfapiWebhookObservation(
+      observation("messages_ppv_unlocked", { payload: envelope }),
+    );
+    expect(events[0]!.data).toMatchObject({ amountText: "$12.00", amountUsd: 12 });
+
+    const payload = envelope.payload as Record<string, unknown>;
+    payload.replacePairs = { ...(payload.replacePairs as Record<string, unknown>), "{AMOUNT}": "12 USD" };
+    const unparsable = canonicalizeOfapiWebhookObservation(
+      observation("messages_ppv_unlocked", { payload: envelope }),
+    );
+    // Unparsable → null, never a guess; the event itself is still emitted.
+    expect(unparsable).toHaveLength(1);
+    expect(unparsable[0]!.data).toMatchObject({ amountText: "12 USD", amountUsd: null });
+  });
+
+  it("H2: parses {AMOUNT} strictly — dollar sign, whole dollars, optional two-digit cents", () => {
+    expect(parseOfapiPpvAmountUsd("$45.00")).toBe(45);
+    expect(parseOfapiPpvAmountUsd("$13.99")).toBe(13.99);
+    expect(parseOfapiPpvAmountUsd("$150.00")).toBe(150);
+    expect(parseOfapiPpvAmountUsd("$3")).toBe(3);
+    expect(parseOfapiPpvAmountUsd("$0.50")).toBe(0.5);
+    for (const value of [
+      "45.00", "$45.5", "$45.000", "$1,234.00", "€45.00", "$ 45.00", " $45.00", "$45.00 ",
+      "$045.00", "$-5.00", "$", "", "$1234567.00", "<b>$45.00</b>", null, undefined, 45, {},
+    ]) {
+      expect(parseOfapiPpvAmountUsd(value), String(value)).toBeNull();
+    }
+  });
+
+  it("H2: names every zero-event PPV notification a terminal quarantine with a fixed code", () => {
+    // A well-formed notification is not quarantined.
+    expect(classifyOfapiWebhookQuarantine(observation("messages_ppv_unlocked"))).toBeNull();
+
+    const noChat = fixture("messages_ppv_unlocked");
+    delete (noChat.payload as Record<string, unknown>).user;
+    expect(classifyOfapiWebhookQuarantine(observation("messages_ppv_unlocked", { payload: noChat })))
+      .toEqual({ code: "ppv_unlocked_no_chat_ref" });
+
+    const noId = fixture("messages_ppv_unlocked");
+    delete (noId.payload as Record<string, unknown>).id;
+    expect(classifyOfapiWebhookQuarantine(observation("messages_ppv_unlocked", { payload: noId })))
+      .toEqual({ code: "ppv_unlocked_no_notification_id" });
+
+    expect(classifyOfapiWebhookQuarantine(observation("messages_ppv_unlocked", { payload: { event: "x" } })))
+      .toEqual({ code: "ppv_unlocked_no_payload" });
+
+    // Every quarantine is exactly a zero-event outcome — the two never disagree.
+    for (const payload of [noChat, noId, { event: "x" }]) {
+      expect(canonicalizeOfapiWebhookObservation(observation("messages_ppv_unlocked", { payload })))
+        .toEqual([]);
+    }
+    // Other kinds keep their plain stamp-and-move-on behaviour.
+    expect(classifyOfapiWebhookQuarantine({ ...observation("messages_received"), payload: null }))
+      .toBeNull();
   });
 
   it("canonicalizes transactions.new into transaction.posted", () => {

@@ -50,6 +50,13 @@ function authenticatedFromStatus(status: string | null) {
   return null;
 }
 
+/**
+ * Media metadata to the sync-message media shape. Two stored shapes reach
+ * here: dm_message_archive items ({locked, durationSeconds}) and — H2, for
+ * hot-only rows — message_archive material-head items ({canView, duration},
+ * ofapi-message-material.ts). `canView: false` IS `locked: true`; neither
+ * shape's absent field is guessed into a worse state.
+ */
 function normalizeArchiveMedia(value: Array<Record<string, unknown>>): Array<{
   id: string;
   type: "photo" | "video" | "audio" | "gif" | "other";
@@ -68,14 +75,21 @@ function normalizeArchiveMedia(value: Array<Record<string, unknown>>): Array<{
     if (!id) {
       return [];
     }
+    const durationSeconds = typeof item.durationSeconds === "number"
+      ? item.durationSeconds
+      : typeof item.duration === "number"
+        ? item.duration
+        : null;
     return [{
       id,
       type,
-      isReady: item.isReady === true,
-      locked: item.locked === true,
-      ...(typeof item.durationSeconds === "number"
-        ? { durationSeconds: item.durationSeconds }
-        : {}),
+      // Only an explicit false is "not ready" (ofapi-payloads.ts, cold
+      // archive and desktop mappers agree): a material head stores isReady as
+      // boolean-or-null, and a spurious false makes an auto-read desktop poll
+      // paid media reads for an item that is already there.
+      isReady: item.isReady !== false,
+      locked: item.locked === true || item.canView === false,
+      ...(durationSeconds !== null ? { durationSeconds } : {}),
     }];
   });
 }
@@ -85,6 +99,15 @@ type SnapshotPage = NonNullable<Awaited<ReturnType<typeof findOfapiSyncSnapshotP
 type SnapshotHotMessage = Awaited<ReturnType<typeof listOfapiSyncSnapshotHotMessagePage>>[number];
 type SnapshotArchiveMessage = Awaited<ReturnType<typeof listOfapiSyncSnapshotArchiveMessagePage>>[number];
 
+/**
+ * A hot-only message (no dm_message_archive twin — that overlay wins
+ * wherever it exists). The hot table holds no price or media, so both come
+ * from the message_archive projection of the same message (H2, INC-001;
+ * previously a hard-coded `price: 0` made every hot PPV look free).
+ * isOpened is monotonic across the two stores: a hot purchase or an archive
+ * TRUE wins; otherwise the archive's own value (false = an unbought PPV),
+ * and null when neither store knows.
+ */
 function serializeHotMessage(hot: SnapshotHotMessage) {
   return {
     chatId: hot.platformConversationId,
@@ -94,11 +117,13 @@ function serializeHotMessage(hot: SnapshotHotMessage) {
       text: hot.content,
       createdAt: serializeTimestamp(hot.createdAt),
       isSentByMe: hot.senderRole === "model",
-      price: 0,
-      isOpened: hot.purchasedAt === null ? null : true,
+      price: millsToDollarsNumber(hot.archivePriceMills ?? 0n),
+      isOpened: hot.purchasedAt !== null || hot.archiveIsOpened === true
+        ? true
+        : hot.archiveIsOpened,
       isTip: hot.totalTipAmountCents > 0,
       tipAmountUsd: hot.totalTipAmountCents / 100,
-      media: [],
+      media: normalizeArchiveMedia(hot.archiveMediaMetadata ?? []),
     },
     deletedAt: null,
     sourceUpdatedAt: serializeTimestamp(hot.syncedAt),
@@ -600,24 +625,7 @@ export async function getOfapiSyncSnapshot(
   };
 
   for (const hot of hotMessages) {
-    byChat(hot.platformConversationId).set(hot.platformMessageId, {
-      chatId: hot.platformConversationId,
-      messageId: hot.platformMessageId,
-      message: {
-        id: hot.platformMessageId,
-        text: hot.content,
-        createdAt: serializeTimestamp(hot.createdAt),
-        isSentByMe: hot.senderRole === "model",
-        price: 0,
-        isOpened: hot.purchasedAt === null ? null : true,
-        isTip: hot.totalTipAmountCents > 0,
-        tipAmountUsd: hot.totalTipAmountCents / 100,
-        media: [],
-      },
-      deletedAt: null,
-      sourceUpdatedAt: serializeTimestamp(hot.syncedAt),
-      sourceFanoutSeq: null,
-    });
+    byChat(hot.platformConversationId).set(hot.platformMessageId, serializeHotMessage(hot));
   }
 
   for (const archived of archiveMessages) {

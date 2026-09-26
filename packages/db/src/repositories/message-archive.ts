@@ -202,8 +202,14 @@ async function applyReplyMaterial(
  * Applies one account's message.* events (ordered by account_seq) onto the
  * archive. received/sent insert (first writer wins — cross-producer dedup
  * already collapsed same-fact events upstream); deleted tombstones;
- * ppv_unlocked is a NO-OP in v1 (notification-shaped, unreliable message ref
- * — recorded deviation). Wave 2: a SUPERSEDING event (schema v2,
+ * ppv_unlocked (H2, INC-001 — a NO-OP through v1) marks the named message
+ * opened: is_opened only ever moves to TRUE (monotonic — a purchase is never
+ * undone, and no later writer's false/null may regress it), on an existing
+ * row only (no stub: a purchase is not message material). In account_seq
+ * order the message's own event precedes its unlock; a row that first
+ * appears LATER (a REST material head, a backfill copy) carries the purchase
+ * state its own source knows, and archive:backfill-ppv-purchases heals the
+ * rest from the ledger. Wave 2: a SUPERSEDING event (schema v2,
  * data.supersedesEventId + data.head) REPLACES the row's material — the
  * same-message superseding merge; account_seq ordering keeps replays
  * monotone, and deleted_at stays sticky. Returns rows written/tombstoned.
@@ -222,12 +228,31 @@ export async function applyMessageEventsToArchive(
     events: readonly MessageArchiveEventRow[];
     targetTable?: ArchiveTargetTable;
   },
-): Promise<{ inserted: number; tombstoned: number }> {
+): Promise<{ inserted: number; tombstoned: number; opened: number }> {
   const target = archiveTable(input.targetTable);
   let inserted = 0;
   let tombstoned = 0;
+  let opened = 0;
 
   for (const event of input.events) {
+    if (event.type === "message.ppv_unlocked") {
+      // Fansly unlocks carry no message ref (order identity only) and OFAPI
+      // notifications without a link carry none either: nothing to annotate.
+      // The ref is the only field read, so a PPV event whose CONVERSATION
+      // ref was wrong (the 2026-07 creator-id rows, superseded by the repair)
+      // still names the right message and applies harmlessly.
+      if (!event.messageRef) continue;
+      const result = await db.execute(sql`
+        update ${target} set is_opened = true, updated_at = now()
+        where account_id = ${input.accountId}
+          and platform = ${input.platform}
+          and message_ref = ${event.messageRef}
+          and is_opened is distinct from true
+        returning id
+      `);
+      opened += result.rows.length;
+      continue;
+    }
     if (event.type === "message.material_observed") {
       if (!event.messageRef) continue;
       const head = recordField(event.data, "head");
@@ -486,7 +511,7 @@ export async function applyMessageEventsToArchive(
     }
   }
 
-  return { inserted, tombstoned };
+  return { inserted, tombstoned, opened };
 }
 
 export async function getProjectionWatermark(
@@ -593,7 +618,7 @@ export async function liftLegacySeedRowsToShadow(
     insert into message_archive_shadow (
       account_id, platform, native_account_ref, conversation_ref, message_ref,
       fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
-      price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      price_mills, is_opened, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
       reply_metadata, material_observed_at, reply_parent_observed_at, reply_root_observed_at,
       content_pending, deleted_at, source_event_id, backfill_source,
       archived_at, updated_at
@@ -601,7 +626,7 @@ export async function liftLegacySeedRowsToShadow(
     select
       account_id, platform, native_account_ref, conversation_ref, message_ref,
       fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
-      price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+      price_mills, is_opened, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
       reply_metadata, material_observed_at, reply_parent_observed_at, reply_root_observed_at,
       content_pending, deleted_at, source_event_id, backfill_source,
       archived_at, updated_at
@@ -1307,13 +1332,13 @@ export async function backfillArchiveFromDmMessageArchive(
       insert into ${target} (
         account_id, platform, native_account_ref, conversation_ref, message_ref,
         fan_native_id, sender_role, is_sent_by_me, occurred_at, text_plain,
-        price_mills, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
+        price_mills, is_opened, is_tip, tip_amount_mills, in_reply_to_ref, media_metadata,
         deleted_at, backfill_source
       )
       select platform_account_id, platform::text, ofapi_account_id,
              platform_conversation_id, platform_message_id, fan_platform_user_id,
              sender_role::text, is_sent_by_me, message_created_at, text_plain,
-             price_mills, is_tip, tip_amount_mills, in_reply_to_message_id,
+             price_mills, is_opened, is_tip, tip_amount_mills, in_reply_to_message_id,
              media_metadata, deleted_at, 'dm_message_archive'
       from batch
       on conflict (account_id, platform, message_ref) do update set
@@ -1377,13 +1402,17 @@ export async function backfillArchiveFromHotTable(
       insert into ${target} (
         account_id, platform, conversation_ref, message_ref, fan_native_id,
         sender_role, is_sent_by_me, occurred_at, text_plain, tip_amount_mills,
-        is_tip, in_reply_to_ref, deleted_at, backfill_source
+        is_tip, is_opened, in_reply_to_ref, deleted_at, backfill_source
       )
       select platform_account_id, page_platform::text, platform_conversation_id,
              platform_message_id, partner_platform_user_id, sender_role::text,
              (sender_role = 'model'), created_at, content,
              (total_tip_amount_cents::bigint * 10),
-             (total_tip_amount_cents > 0), in_reply_to_message_id, deleted_at,
+             (total_tip_amount_cents > 0),
+             -- H2: the hot table records a purchase as purchased_at; it knows
+             -- nothing about an unbought PPV, so absence stays NULL.
+             case when purchased_at is not null then true end,
+             in_reply_to_message_id, deleted_at,
              'hot_table'
       from batch
       on conflict (account_id, platform, message_ref) do update set

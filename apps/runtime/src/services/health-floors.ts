@@ -12,7 +12,11 @@
 
 import { sql } from "drizzle-orm";
 
-import type { Database } from "@agency_hub_core/db";
+import {
+  countObservationQuarantine,
+  type Database,
+  type OpsMetricSampleInput,
+} from "@agency_hub_core/db";
 
 import { CANONICALIZER_FAMILIES } from "./canonicalize/index.ts";
 
@@ -156,4 +160,73 @@ export async function computeHealthFloorBacklogMs(
     ) pending
   `);
   return Number(result.rows[0]?.backlog_ms ?? 0);
+}
+
+/**
+ * H2 (INC-001): the QUARANTINE COUNTER beside a family's backlog-age gauge.
+ * A family that can name a zero-event observation a terminal quarantine (a PPV
+ * notification with no chat ref) STAMPS it — an unstamped row would keep the
+ * backlog gauge above HEALTH_FLOOR_THRESHOLD_MS forever and page
+ * golden_signal_lag for a row no code change will ever parse — and records the
+ * outcome in observation_parse_quarantine. This counter makes that visible
+ * without re-entering the backlog: it is a separate series with NO threshold,
+ * so it never feeds the 10-minute breach latch. Versioned like the backlog
+ * name: a family version bump starts a new series.
+ */
+export function healthFloorQuarantineName(source: string, lane: string, version: number): string {
+  return `obs_quarantined_${source}_${lane}_v${version}`;
+}
+
+export interface HealthFloorQuarantineGauge {
+  name: string;
+  source: string;
+  lane: string;
+  version: number;
+}
+
+/** One counter per family that declares a quarantine classifier. */
+export const HEALTH_FLOOR_QUARANTINE_GAUGES: readonly HealthFloorQuarantineGauge[] =
+  CANONICALIZER_FAMILIES
+    .filter((family) => family.quarantine !== undefined)
+    .map((family) => ({
+      name: healthFloorQuarantineName(family.source, family.lane, family.version),
+      source: family.source,
+      lane: family.lane,
+      version: family.version,
+    }));
+
+/** Observations quarantined at the family's CURRENT version (a count, not an
+ * age — deliberately incomparable with the backlog threshold). */
+export async function computeHealthFloorQuarantineCount(
+  db: Database,
+  gauge: HealthFloorQuarantineGauge,
+): Promise<number> {
+  return countObservationQuarantine(db, {
+    source: gauge.source,
+    lane: gauge.lane,
+    parseVersion: gauge.version,
+  });
+}
+
+/**
+ * The golden-signal sampler's whole quarantine contribution: one p50/p95 pair
+ * per counter (a count riding the sample table like acceptance_events_1h).
+ * NO threshold is registered for these names, so they never open the
+ * golden_signal_lag latch. A failed count is skipped, not latched: a stale
+ * series is visible on the endpoint, and a visibility counter must not page.
+ */
+export async function computeQuarantineGaugeSamples(db: Database): Promise<OpsMetricSampleInput[]> {
+  const samples: OpsMetricSampleInput[] = [];
+  for (const gauge of HEALTH_FLOOR_QUARANTINE_GAUGES) {
+    try {
+      const count = await computeHealthFloorQuarantineCount(db, gauge);
+      samples.push(
+        { metric: gauge.name, quantile: "p50", valueMs: count },
+        { metric: gauge.name, quantile: "p95", valueMs: count },
+      );
+    } catch {
+      // absent this run; see above
+    }
+  }
+  return samples;
 }

@@ -1,7 +1,11 @@
 // Canonicalizer seam (kernel Stage 8). Every canonicalizer is a PURE function
 // observation → CanonicalEventDraft[] — total over its declared kinds: an
-// unknown or unparseable payload yields zero events and the observation stays
-// at its current parse_version (capture now, parse later, replay).
+// unknown or unparseable payload yields zero events. Whether the driver then
+// stamps parse_version is the FAMILY's call, not the function's: a shape gate
+// (`canParse`/`parse` rejection) leaves the row unstamped for a future parser;
+// anything else is stamped — and a family may name a zero-event row a terminal
+// quarantine (`quarantine`), which records why before the stamp. The body stays
+// journaled either way (capture now, parse later, replay on a version bump).
 
 export interface CanonicalizableObservation {
   id: number;
@@ -49,6 +53,19 @@ export type Canonicalizer = (
   observation: CanonicalizableObservation,
   context?: CanonicalizeRunContext,
 ) => CanonicalEventDraft[];
+
+/**
+ * A TERMINAL zero-event outcome (H2, INC-001): the payload is readable, and it
+ * can never yield a safe event — e.g. a PPV notification with no chat ref,
+ * whose only fan-looking id is the creator's. Distinct from a rejection, which
+ * leaves the row unstamped for a future parser: a quarantined row IS stamped
+ * (an unstamped one would hold the backlog-age gauge up forever) and gets an
+ * explicit `observation_parse_quarantine` row plus a counter instead of
+ * silently vanishing into "stamped with zero events". Fixed codes only.
+ */
+export interface CanonicalQuarantine {
+  code: string;
+}
 
 /** Fixed-code refusal details; never provider payload content. */
 export interface CanonicalParseRejection {

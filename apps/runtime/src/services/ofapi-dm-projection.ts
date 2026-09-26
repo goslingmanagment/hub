@@ -8,6 +8,7 @@
 // short-circuit, and conversation heads only advance forward.
 
 import {
+  applyDmMessagePurchaseFact,
   findActiveOfapiPageForLiveConsumer,
   deletePageDmMessageByPlatformMessageId,
   getExistingPageDmMessageIds,
@@ -384,9 +385,17 @@ async function projectDmMessageDeleted(
   });
 }
 
+/**
+ * A purchase lands in BOTH hub stores keyed by the OnlyFans message id: the
+ * hot table (purchased_at) and — H2, INC-001 — the OF material head
+ * (dm_message_archive.is_opened, monotonic, never inserted from here). The
+ * event-fed message_archive learns it from message.ppv_unlocked itself.
+ * Idempotent: a replay finds purchased_at set and is_opened already TRUE.
+ */
 async function projectDmPpvUnlocked(
   app: AppContext,
   page: { id: number },
+  ofapiAccountId: string,
   payload: Record<string, unknown>,
 ): Promise<OfapiDmProjectionOutcome> {
   const messageId = extractMessageIdFromNotification(payload);
@@ -399,7 +408,12 @@ async function projectDmPpvUnlocked(
     platformMessageId: messageId,
     purchasedAt: parseMessageTimestamp(payload.createdAt) ?? undefined,
   });
-  return marked
+  const archived = await applyDmMessagePurchaseFact(app.db, {
+    platform: "onlyfans",
+    ofapiAccountId,
+    platformMessageId: messageId,
+  });
+  return marked || archived.status === "written"
     ? { status: "projected" }
     : { status: "skipped", reason: "Unlocked message is not stored locally (or already marked)" };
 }
@@ -476,7 +490,8 @@ export async function projectOfapiDmEvent(
     case "messages.deleted":
       return projectDmMessageDeleted(app, page, payload);
     case "messages.ppv.unlocked":
-      return projectDmPpvUnlocked(app, page, payload);
+      // `page` was resolved from this very ref, so it is non-null here.
+      return projectDmPpvUnlocked(app, page, row.ofapiAccountId!, payload);
     case "tips.received":
       return projectDmTipReceived(app, page, payload);
   }

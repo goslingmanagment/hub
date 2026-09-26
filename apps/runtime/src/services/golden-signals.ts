@@ -12,6 +12,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import {
   computeHealthFloorBacklogMs,
+  computeQuarantineGaugeSamples,
   HEALTH_FLOOR_REGISTRY,
   HEALTH_FLOOR_THRESHOLD_MS,
 } from "./health-floors.ts";
@@ -283,6 +284,8 @@ export async function computeGoldenSignals(
       ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
       ...floorSamples,
       ...(deliveryHistorySamples ?? []),
+      // H2 (INC-001): threshold-free quarantine counters (health-floors.ts).
+      ...await computeQuarantineGaugeSamples(app.db),
     ],
     failedProbes,
   };
