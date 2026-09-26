@@ -374,9 +374,10 @@ collection is switched off.
 
 ## Frame provenance and money facts — 2026-09-26 (H3)
 
-Redelivery restores a fact; it is not fresh news. The v2 event stream and
-`GET /api/v1/events/v2/facts` therefore say how each durable frame reached the
-ledger, without changing its business identity (refs, dedup keys, sequence):
+A redelivery restores a fact; it is not news. The v2 event stream and
+`GET /api/v1/events/v2/facts` therefore say what Core knows about how each
+durable frame reached the ledger, without changing its business identity
+(refs, dedup keys, sequence):
 
 - `provenance: "redelivery"` — the event's source observation came from an
   OFAPI webhook receipt whose `capture_headers.redeliveryOf` is set (the
@@ -386,16 +387,26 @@ ledger, without changing its business identity (refs, dedup keys, sequence):
 - `provenance: "repair"` — a superseding event (schema 2,
   `data.supersedesEventId`): the PPV ref repair, the Fansly 1970 repair and the
   DM corrections reconciler.
-- `provenance: "live"` — everything else. Fansly accounts are never
-  redelivered and skip the receipt lookup. When the lookup fails the field is
-  omitted; clients treat a missing provenance as not live.
+- `provenance: "live"` — neither a known redelivery nor a repair. It is NOT a
+  freshness signal. Old facts are `live` on every replay before
+  `replay_completed`, after re-canonicalization of old observations by a new
+  parser version (for example formerly quarantined PPVs), on Fansly history
+  pulls (no webhook lane, so the lookup is skipped), on OFAPI's own automatic
+  retries (they carry no redelivery header) and on receipts past retention.
+- No `provenance` field — unknown (the lookup failed): treat it as not live.
 
-Clients show attention (toasts, sounds) only for `live` frames after the
-replay boundary. The facts route pages `message.ppv_unlocked`, `tip.received`
-and `transaction.posted` of one granted account by `account_seq`, excluding
-events superseded under a `supersedes:<id>` key and serving their repair
-instead. It reads existing rows only: no new sequence, cursor or business
-identity (#265), and no OFAPI request.
+Clients decide on attention (toasts, sounds) only by combining all three:
+provenance `live`, a frame after the stream's `replay_completed` boundary, and
+an age check on `occurredAt`. Even that is not proof: when the upstream payload
+has no timestamp of its own, the canonicalizer falls back to the receipt time
+for `occurredAt`. Never toast from `/api/v1/events/v2/facts` — it is a catch-up
+of history, not news.
+
+The facts route pages `message.ppv_unlocked`, `tip.received` and
+`transaction.posted` of one granted account by `account_seq`, excluding events
+superseded under a `supersedes:<id>` key and serving their repair instead. It
+reads existing rows only: no new sequence, cursor or business identity (#265),
+and no OFAPI request.
 
 Validation: `tests/domain-events-v2-platform.integration.test.ts` (live,
 redelivered and repaired frames on replay and live lanes, facts paging and

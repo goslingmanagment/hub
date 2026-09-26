@@ -3382,11 +3382,22 @@ export const syncSnapshotRestartRequiredResponseSchema = z.object({
 
 // --- Event stream v2 (kernel Stage 21): domain_events, per-account ordering ---
 
-/** H3: how a durable frame's fact reached the ledger. `live` — first
- * delivery; `redelivery` — its source OFAPI webhook receipt was a provider
- * redelivery (`x-ofapi-redelivery-of`); `repair` — a superseding correction
- * (`data.supersedesEventId`). Business identity (refs, dedup) is the same in
- * all three; this only says whether the frame is fresh news. */
+/** H3: what Core knows about how a durable frame's fact reached the ledger.
+ * `redelivery` — its source OFAPI webhook receipt carries the provider's
+ * redelivery header (`x-ofapi-redelivery-of`); `repair` — a superseding
+ * correction (`data.supersedesEventId`); `live` — neither is KNOWN. `live` is
+ * NOT "fresh": old facts are labelled `live` on every replay before
+ * `replay_completed`, after re-canonicalization of old observations by a new
+ * parser version (e.g. formerly quarantined PPVs), on Fansly history pulls
+ * (no webhook lane, never looked up), on OFAPI's own automatic retries (no
+ * redelivery header) and on receipts past retention. A missing
+ * `provenance` means unknown (the lookup failed): treat it as not live.
+ * Business identity (refs, dedup) is the same in all three.
+ * Clients deciding on attention (toasts, sounds) must combine `live` with
+ * the stream's `replay_completed` boundary AND an age check on `occurredAt`
+ * — and even that is not proof: when the upstream payload has no timestamp
+ * of its own, `occurredAt` falls back to the receipt time. Never toast from
+ * `GET /api/v1/events/v2/facts` (catch-up of history, not news). */
 export const domainEventProvenanceEnum = z.enum(["live", "redelivery", "repair"]);
 
 /** H3: the money facts `GET /api/v1/events/v2/facts` serves. */
@@ -3424,8 +3435,9 @@ export const domainEventFrameSchema = z.object({
   // the ledger's transaction ref (transaction.posted), so money consumers
   // apply one change per transaction...
   transactionRef: z.string().nullable().optional(),
-  // ...how the fact reached the ledger (see domainEventProvenanceEnum).
-  // Absent when Core could not determine it — treat that as not live...
+  // ...what Core knows about how the fact reached the ledger — NOT a
+  // freshness signal (see domainEventProvenanceEnum). Absent = unknown,
+  // treat it as not live...
   provenance: domainEventProvenanceEnum.optional(),
   // ...and, on money-fact frames (domainEventFactTypes) whose conversationRef
   // names a known DM thread, its fan labels for display without a chat read.
