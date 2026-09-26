@@ -18,6 +18,7 @@ import type { Database } from "../client.ts";
 import {
   dmMessageArchive,
   domainEvents,
+  messageArchive,
   pageDmMessages,
   pageDmThreads,
   pages,
@@ -351,6 +352,12 @@ export interface OfapiSyncSnapshotHotMessage {
   inReplyToMessageId: string | null;
   purchasedAt: Date | null;
   syncedAt: Date;
+  /** H2 (INC-001): the hot table stores neither price nor media, so a hot-only
+   * row (no dm_message_archive twin) takes them from the event-fed
+   * message_archive projection of the same message; null when that has no row. */
+  archivePriceMills: bigint | null;
+  archiveMediaMetadata: Array<Record<string, unknown>> | null;
+  archiveIsOpened: boolean | null;
 }
 
 export interface OfapiSyncSnapshotArchiveMessage {
@@ -453,6 +460,14 @@ export async function listOfapiSyncSnapshotThreads(
     .limit(input.limit);
 }
 
+/** The message_archive row for a hot message: same page, same OnlyFans
+ * message id (the archive's unique key, so the join is one index probe). */
+const hotMessageArchiveTwin = and(
+  eq(messageArchive.accountId, pageDmMessages.platformAccountId),
+  eq(messageArchive.platform, "onlyfans"),
+  eq(messageArchive.messageRef, pageDmMessages.platformMessageId),
+);
+
 export async function listOfapiSyncSnapshotHotMessages(
   db: Database,
   input: {
@@ -476,9 +491,13 @@ export async function listOfapiSyncSnapshotHotMessages(
       inReplyToMessageId: pageDmMessages.inReplyToMessageId,
       purchasedAt: pageDmMessages.purchasedAt,
       syncedAt: pageDmMessages.syncedAt,
+      archivePriceMills: messageArchive.priceMills,
+      archiveMediaMetadata: messageArchive.mediaMetadata,
+      archiveIsOpened: messageArchive.isOpened,
     })
     .from(pageDmMessages)
     .innerJoin(pageDmThreads, eq(pageDmThreads.id, pageDmMessages.conversationId))
+    .leftJoin(messageArchive, hotMessageArchiveTwin)
     .where(and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       inArray(pageDmMessages.conversationId, input.conversationIds),
@@ -724,9 +743,13 @@ export async function listOfapiSyncSnapshotHotMessagePage(
       inReplyToMessageId: pageDmMessages.inReplyToMessageId,
       purchasedAt: pageDmMessages.purchasedAt,
       syncedAt: pageDmMessages.syncedAt,
+      archivePriceMills: messageArchive.priceMills,
+      archiveMediaMetadata: messageArchive.mediaMetadata,
+      archiveIsOpened: messageArchive.isOpened,
     })
     .from(pageDmMessages)
     .innerJoin(pageDmThreads, eq(pageDmThreads.id, pageDmMessages.conversationId))
+    .leftJoin(messageArchive, hotMessageArchiveTwin)
     .where(and(
       eq(pageDmMessages.platformAccountId, input.platformAccountId),
       eq(pageDmMessages.conversationId, input.conversationId),

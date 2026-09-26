@@ -133,6 +133,109 @@ function subscriptionEvent(
   }];
 }
 
+/**
+ * `{AMOUNT}` on messages.ppv.unlocked is display text ("$45.00"), not a
+ * number. Strict on purpose: a dollar sign, whole dollars, optional two-digit
+ * cents, nothing else. Anything else (another currency, a thousands
+ * separator, a bare number, drifted markup) is `null` — an honest unknown
+ * beats a plausible-looking guess on a money field. `amountText` stays beside
+ * it verbatim. Integer cents first, so "$13.99" is 13.99 and not a float sum.
+ */
+export function parseOfapiPpvAmountUsd(value: unknown): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = /^\$(0|[1-9][0-9]{0,5})(?:\.([0-9]{2}))?$/.exec(value);
+  if (!match) {
+    return null;
+  }
+  const cents = Number(match[1]) * 100 + Number(match[2] ?? "0");
+  return cents / 100;
+}
+
+/** Fixed reason codes for a PPV notification that can never become a safe
+ * event. Codes only — never payload content. */
+export type OfapiPpvQuarantineCode =
+  | "ppv_unlocked_no_payload"
+  | "ppv_unlocked_no_notification_id"
+  | "ppv_unlocked_no_chat_ref";
+
+/**
+ * The one decision for messages.ppv.unlocked: either the event draft or the
+ * fixed reason it is quarantined. The canonicalizer and the family's
+ * quarantine classifier both read it, so they cannot disagree about which
+ * notifications produce nothing.
+ */
+function ppvUnlockedOutcome(
+  observation: CanonicalizableObservation,
+): { draft: CanonicalEventDraft } | { quarantine: OfapiPpvQuarantineCode } {
+  const payload = envelopePayload(observation);
+  if (!payload) {
+    return { quarantine: "ppv_unlocked_no_payload" };
+  }
+  const notificationId = asString(payload.id);
+  if (!notificationId) {
+    return { quarantine: "ppv_unlocked_no_notification_id" };
+  }
+  // Incident 2026-07-15 (decision #155): top-level user_id is the recipient
+  // CREATOR on this kind (live-verified — same trap tips.received documents
+  // in ofapi-payloads.ts), so it must never be published as the
+  // conversation. The fan (= chat) id is payload.user.id / the
+  // {MESSAGE_LINK} chat path. With neither present the notification is
+  // QUARANTINED rather than shipped with refs that poison every
+  // conversation-resolving consumer: zero events, a terminal
+  // observation_parse_quarantine row with a fixed reason code, and the driver
+  // still stamps parse_version. Leaving it unstamped would hold the family's
+  // backlog-age gauge up forever and page golden_signal_lag. The body stays
+  // journaled, so a later parser version replays it like any other row.
+  const chatId = notificationChatId(payload);
+  if (!chatId) {
+    return { quarantine: "ppv_unlocked_no_chat_ref" };
+  }
+  const replacePairs = isRecord(payload.replacePairs) ? payload.replacePairs : {};
+  const messageLink = asString(replacePairs["{MESSAGE_LINK}"]);
+  const messageRef = extractMessageIdFromNotification(payload) ?? null;
+  const amountText = asString(replacePairs["{AMOUNT}"]);
+  return {
+    draft: {
+      type: "message.ppv_unlocked",
+      occurredAt: asDate(payload.createdAt, observation.receivedAt),
+      fanIdentityRef: chatId,
+      conversationRef: chatId,
+      messageRef,
+      data: {
+        amountText,
+        // H2 (forward-only, like A46's amountUnit): the price as a number of
+        // DOLLARS — the unit every OFAPI event amount already uses — or null
+        // when the text is not strictly "$<dollars>[.<cents>]". Events
+        // written before this field existed stay as they are.
+        amountUsd: parseOfapiPpvAmountUsd(amountText),
+        messageLink,
+      },
+      schemaVersion: 1,
+      // The notification id is the stable unique ref on this kind; the
+      // message id inside the link is best-effort display data.
+      dedupKey: `ppv:${notificationId}`,
+    },
+  };
+}
+
+/**
+ * The webhook family's terminal-quarantine classifier (the driver asks it
+ * only about observations that canonicalized to zero events). Today only
+ * messages.ppv.unlocked has a zero-event outcome worth recording; every other
+ * kind answers null and keeps its old stamp-and-move-on behaviour.
+ */
+export function classifyOfapiWebhookQuarantine(
+  observation: CanonicalizableObservation,
+): { code: OfapiPpvQuarantineCode } | null {
+  if (observation.kind !== "messages.ppv.unlocked") {
+    return null;
+  }
+  const outcome = ppvUnlockedOutcome(observation);
+  return "quarantine" in outcome ? { code: outcome.quarantine } : null;
+}
+
 export function canonicalizeOfapiWebhookObservation(
   observation: CanonicalizableObservation,
 ): CanonicalEventDraft[] {
@@ -174,43 +277,8 @@ export function canonicalizeOfapiWebhookObservation(
     }
 
     case "messages.ppv.unlocked": {
-      const payload = envelopePayload(observation);
-      if (!payload) {
-        return [];
-      }
-      const notificationId = asString(payload.id);
-      if (!notificationId) {
-        return [];
-      }
-      // Incident 2026-07-15 (decision #155): top-level user_id is the recipient
-      // CREATOR on this kind (live-verified — same trap tips.received documents
-      // in ofapi-payloads.ts), so it must never be published as the
-      // conversation. The fan (= chat) id is payload.user.id / the
-      // {MESSAGE_LINK} chat path; with neither present the observation stays
-      // journaled unparsed rather than shipping refs that poison every
-      // conversation-resolving consumer.
-      const chatId = notificationChatId(payload);
-      if (!chatId) {
-        return [];
-      }
-      const replacePairs = isRecord(payload.replacePairs) ? payload.replacePairs : {};
-      const messageLink = asString(replacePairs["{MESSAGE_LINK}"]);
-      const messageRef = extractMessageIdFromNotification(payload) ?? null;
-      return [{
-        type: "message.ppv_unlocked",
-        occurredAt: asDate(payload.createdAt, observation.receivedAt),
-        fanIdentityRef: chatId,
-        conversationRef: chatId,
-        messageRef,
-        data: {
-          amountText: asString(replacePairs["{AMOUNT}"]),
-          messageLink,
-        },
-        schemaVersion: 1,
-        // The notification id is the stable unique ref on this kind; the
-        // message id inside the link is best-effort display data.
-        dedupKey: `ppv:${notificationId}`,
-      }];
+      const outcome = ppvUnlockedOutcome(observation);
+      return "draft" in outcome ? [outcome.draft] : [];
     }
 
     case "tips.received": {

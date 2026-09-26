@@ -21,12 +21,15 @@ import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 export const MESSAGE_ARCHIVE_SWEEP_QUEUE = "projections.message-archive.sweep";
 
 const EVENT_PAGE_SIZE = 500;
-/** Exported for the W10 shadow rebuild — one filter, two replay paths. */
+/** Exported for the W10 shadow rebuild — one filter, two replay paths.
+ * H2 (INC-001): message.ppv_unlocked joins, so a purchase reaches the archive
+ * (is_opened, monotonic) on the live sweep AND on every rebuild replay. */
 export const MESSAGE_EVENT_TYPES = new Set([
   "message.received",
   "message.sent",
   "message.deleted",
   "message.material_observed",
+  "message.ppv_unlocked",
 ]);
 
 export async function ensureMessageArchiveQueues(
@@ -62,6 +65,8 @@ export interface MessageArchiveProjectionResult {
   eventsSeen: number;
   inserted: number;
   tombstoned: number;
+  /** Rows a message.ppv_unlocked moved to is_opened = true. */
+  opened: number;
 }
 
 export async function runMessageArchiveProjection(
@@ -73,6 +78,7 @@ export async function runMessageArchiveProjection(
     eventsSeen: 0,
     inserted: 0,
     tombstoned: 0,
+    opened: 0,
   };
   const platformCache = new Map<number, string | null>();
   const accounts = input?.accountId != null
@@ -118,6 +124,7 @@ export async function runMessageArchiveProjection(
       });
       totals.inserted += applied.inserted;
       totals.tombstoned += applied.tombstoned;
+      totals.opened += applied.opened;
       watermark = events[events.length - 1]!.accountSeq;
       await setProjectionWatermark(app.db, MESSAGE_ARCHIVE_PROJECTION, accountId, watermark);
       if (events.length < EVENT_PAGE_SIZE) {

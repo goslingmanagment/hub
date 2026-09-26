@@ -116,6 +116,8 @@ export * from "./repositories/observations.ts";
 export * from "./repositories/ops-metrics.ts";
 export * from "./repositories/access-grants.ts";
 export * from "./repositories/domain-events.ts";
+export * from "./repositories/domain-event-supersession.ts";
+export * from "./repositories/observation-quarantine.ts";
 export * from "./repositories/canonicalize-sweep.ts";
 export * from "./repositories/creator-posts.ts";
 export * from "./repositories/message-archive.ts";

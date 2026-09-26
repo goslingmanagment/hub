@@ -26,6 +26,7 @@ import {
   listPageNativeAccountRefs,
   loadDomainEventPartitionCoverage,
   markObservationParsed,
+  recordObservationQuarantine,
   type ReplayObservationRow,
   tryAcquireDmArchiveWriterFenceLock,
 } from "@agency_hub_core/db";
@@ -176,6 +177,23 @@ export interface CanonicalizationRunResult {
    * parser".
    */
   skippedUnavailable: number;
+  /**
+   * H2 (INC-001): accepted rows that produced zero events AND that their family
+   * named a TERMINAL quarantine (e.g. a PPV notification with no chat ref).
+   * They are stamped like any consumed row — an unstamped one would hold the
+   * backlog-age gauge up forever — but each also gets an
+   * `observation_parse_quarantine` row with its fixed reason code, in the same
+   * transaction as the stamp. Included in `stamped`; counted here so a run
+   * that quarantines is never read as an ordinary empty parse.
+   */
+  quarantined: number;
+  /** Bounded, content-free detail for `quarantined` (codes, never payload). */
+  quarantineSamples: Array<{
+    observationId: number;
+    family: string;
+    kind: string;
+    reasonCode: string;
+  }>;
   /** Highest observation id examined this run — the exact continuation cursor
    * for a bounded run (feed it back as `afterId`). Null when nothing matched. */
   lastObservationId: number | null;
@@ -642,9 +660,15 @@ async function runFamily(
         const exportAccounts = exportLifecycle?.accountIds.map(ref =>
           runContext.accountIdByNativeRef.get(`onlyfans:${ref}`) ?? null);
         const accountIds = exportAccounts ?? [accountId];
+        // H2 (INC-001): only an accepted row that produced NOTHING can be a
+        // terminal quarantine, and only its family can say so.
+        const quarantine = drafts.length === 0 ? family.quarantine?.(observation) ?? null : null;
 
         if (options.dryRun) {
           totals.appended += drafts.length * Math.max(1, accountIds.length);
+          if (quarantine !== null) {
+            noteQuarantine(totals, family, row, quarantine.code, runContext.diagnostics);
+          }
           continue;
         }
 
@@ -719,11 +743,33 @@ async function runFamily(
             totals.deduped += result.deduped;
           }
         }
-        await markObservationParsed(app.db, {
-          observationId: row.id,
-          receivedAt: row.receivedAt,
-          parseVersion: belowParseVersion,
-        });
+        if (quarantine !== null) {
+          // The outcome and the stamp commit together: a crash between them
+          // must not leave a stamped row whose quarantine was never recorded.
+          await app.db.transaction(async (tx) => {
+            await recordObservationQuarantine(tx, {
+              observationId: row.id,
+              parseVersion: belowParseVersion,
+              source: family.source,
+              lane: family.lane,
+              kind: row.kind,
+              reasonCode: quarantine.code,
+              receivedAt: row.receivedAt,
+            });
+            await markObservationParsed(tx, {
+              observationId: row.id,
+              receivedAt: row.receivedAt,
+              parseVersion: belowParseVersion,
+            });
+          });
+          noteQuarantine(totals, family, row, quarantine.code, runContext.diagnostics);
+        } else {
+          await markObservationParsed(app.db, {
+            observationId: row.id,
+            receivedAt: row.receivedAt,
+            parseVersion: belowParseVersion,
+          });
+        }
         totals.stamped += 1;
       } catch (error) {
         // §3.2c(ii): a refusal is not a failure. The observation keeps its
@@ -765,6 +811,27 @@ async function runFamily(
   return { budgetExhausted, pagesUsed, reachedEnd };
 }
 
+function noteQuarantine(
+  totals: CanonicalizationRunResult,
+  family: CanonicalizerFamily,
+  row: ReplayObservationRow,
+  reasonCode: string,
+  diagnostics: { record: (code: string) => void } | undefined,
+) {
+  totals.quarantined += 1;
+  // Same bound as unparseableSamples: a replay over a quarantine-heavy corpus
+  // must not turn the run result into its own log-volume incident.
+  if (totals.quarantineSamples.length < 20) {
+    totals.quarantineSamples.push({
+      observationId: row.id,
+      family: familyLabel(family),
+      kind: row.kind,
+      reasonCode,
+    });
+  }
+  diagnostics?.record(`canonicalize_quarantined:${family.lane}:${reasonCode}`);
+}
+
 /** One global latch; CLI/test stubs without config only log. Never called in dry-run. */
 async function reportOfapiBindingConflicts(
   app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>, refs: string[],
@@ -797,6 +864,8 @@ export async function runCanonicalization(
     skippedUnparseable: 0,
     unparseableSamples: [],
     skippedUnavailable: 0,
+    quarantined: 0,
+    quarantineSamples: [],
     lastObservationId: null,
     errored: 0,
     partitionBlocked: 0,

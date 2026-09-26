@@ -63,6 +63,8 @@ import { runDmCorrectionsFingerprintBackfill } from "./services/dm-corrections-b
 import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
 import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage-intake.ts";
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
+import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
+import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -1974,6 +1976,7 @@ export function buildProgram() {
           `${options.dryRun ? "[dry-run] would append" : "appended"} ${result.appended}, ` +
             `deduped ${result.deduped}, stamped ${result.stamped}, ` +
             `scanned ${result.scanned}, skipped-unmapped ${result.skippedUnmapped}, ` +
+            `quarantined ${result.quarantined}, ` +
             `errored ${result.errored}, partition-blocked ${result.partitionBlocked}, binding-conflicts ${result.bindingConflicts.length}`,
         );
         if (result.partitionBlocked > 0) {
@@ -2103,6 +2106,73 @@ export function buildProgram() {
             + `(already ${result.alreadyRepaired}, missing-obs ${result.missingObservation}, `
             + `missing-item ${result.missingItem}, out-of-range ${result.outOfRange}, `
             + `errored ${result.errored}) of ${result.scanned} scanned`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // H2 (INC-001). Both commands are owner-run one-offs: dry-run is the
+  // default (inside a READ ONLY transaction — it cannot write), `--execute`
+  // opts in, a re-run reports zeros. Neither calls OFAPI.
+  program
+    .command("events:repair-ofapi-ppv-refs")
+    .description(
+      "INC-001: append superseding message.ppv_unlocked events (refs re-derived from the source "
+        + "observation, original occurred_at, dedup supersedes:<id>) for the pre-2026-07-15 "
+        + "events that carry the creator id as fan/conversation ref. Dry-run default; idempotent",
+    )
+    .option("--execute", "actually append (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .option("--limit <n>", "max candidate events to examine this run", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runOfapiPpvRefRepair(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+          ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${result.dryRun ? "[dry-run] would repair" : "repaired"} ${result.repaired} `
+            + `(already ${result.alreadyRepaired}, already-correct ${result.alreadyCorrect}, `
+            + `missing-obs ${result.missingObservation}, lineage-mismatch ${result.lineageMismatch}, `
+            + `body-unavailable ${result.unavailableBody}, no-chat-ref ${result.missingChatRef}, `
+            + `partition-blocked ${result.partitionBlocked}, errored ${result.errored}) `
+            + `of ${result.scanned} scanned`,
+        );
+        if (result.errored > 0 || result.partitionBlocked > 0) {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("archive:backfill-ppv-purchases")
+    .description(
+      "INC-001: carry historical PPV purchases (unlock events + hot purchased_at) into "
+        + "page_dm_messages.purchased_at, message_archive.is_opened and "
+        + "dm_message_archive.is_opened. Monotonic, never inserts. Dry-run default; idempotent",
+    )
+    .option("--execute", "actually write (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runPpvPurchaseBackfill(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+        console.log(
+          `${result.dryRun ? "[dry-run] would mark" : "marked"}: `
+            + `hot purchased_at ${result.hotPurchasedMarked}, `
+            + `message_archive is_opened ${result.messageArchiveOpened}, `
+            + `dm_message_archive is_opened ${result.dmArchiveOpened} `
+            + `(${result.facts} purchase facts in scope)`,
         );
       } finally {
         await app.close();

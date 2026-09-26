@@ -3337,6 +3337,30 @@ export const domainEventSeq = pgTable(
   },
 );
 
+// H2 (INC-001, migration 0209): the terminal-quarantine outcome log. A
+// canonicalizer family names an accepted zero-event observation quarantined
+// (e.g. a PPV notification with no chat ref); the driver records the fixed
+// reason here and stamps parse_version in the same transaction. Content-free,
+// no FK to the partitioned/tiered observations table.
+export const observationParseQuarantine = pgTable(
+  "observation_parse_quarantine",
+  {
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    parseVersion: integer("parse_version").notNull(),
+    source: text("source").notNull(),
+    lane: text("lane").notNull(),
+    kind: text("kind").notNull(),
+    reasonCode: text("reason_code").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    quarantinedAt: timestamp("quarantined_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.observationId, table.parseVersion] }),
+    laneIdx: index("observation_parse_quarantine_lane_idx")
+      .on(table.source, table.lane, table.parseVersion),
+  }),
+);
+
 // Stage 10: platform-neutral message archive — a rebuildable projection fed
 // by message.* domain events (facts live upstream in observations/events).
 export const messageArchive = pgTable(

@@ -14,6 +14,7 @@ import type {
   Canonicalizer,
   CanonicalParser,
   CanonicalParseRejection,
+  CanonicalQuarantine,
 } from "./types.ts";
 import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation } from "./onlyfans-post-media.ts";
 import {
@@ -23,6 +24,7 @@ import {
 } from "./client-capture.ts";
 import {
   canonicalizeOfapiWebhookObservation,
+  classifyOfapiWebhookQuarantine,
   OFAPI_WEBHOOK_CANONICALIZED_KINDS,
   OFAPI_WEBHOOK_CANONICALIZER_VERSION,
 } from "./ofapi-webhook.ts";
@@ -101,6 +103,15 @@ interface CanonicalizerFamilyBase {
   prioritizeUnparsed?: boolean;
   canonicalize: Canonicalizer;
   /**
+   * H2 (INC-001): asked ONLY about an accepted observation that produced zero
+   * events. Non-null names it a TERMINAL quarantine: the driver records an
+   * `observation_parse_quarantine` row with the code, counts it, and still
+   * stamps parse_version in the same transaction — so the row leaves the
+   * backlog-age gauge instead of paging golden_signal_lag forever, without
+   * pretending it was an ordinary empty parse. Pure; fixed codes only.
+   */
+  quarantine?: (observation: CanonicalizableObservation) => CanonicalQuarantine | null;
+  /**
    * The family's events are projection material, not client-deliverable news
    * (every type it emits must be in PROJECTION_ONLY_DOMAIN_EVENT_TYPES). The
    * driver then appends through the projection-only protocol, which adds the
@@ -169,6 +180,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: [...OFAPI_WEBHOOK_CANONICALIZED_KINDS],
     version: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
     canonicalize: canonicalizeOfapiWebhookObservation,
+    quarantine: classifyOfapiWebhookQuarantine,
     canParse: observation => !(OFAPI_CONTENT_KINDS as readonly string[]).includes(observation.kind) || canonicalizeOfapiContentObservation(observation).length > 0,
     mixed: true,
   },

@@ -21,7 +21,7 @@
   continuation молча пропускает исчезнувший thread и возвращает terminal cursor;
   объединённое клиентское состояние всё ещё содержит стёртый текст.
 - **Код:** `apps/runtime/src/services/ofapi-sync-snapshot-cursor.ts:23-37`,
-  `apps/runtime/src/services/ofapi-sync-snapshot.ts:393-421,504-515`,
+  `apps/runtime/src/services/ofapi-sync-snapshot.ts:414-442,525-536`,
   `tests/ofapi-sync-snapshot.integration.test.ts:989-1089`.
 - **Закрыть:** связать `stateCursor` с erasure/topology generation, отвечать
   `409 restart-required` при изменении и тестировать объединённый результат.
@@ -41,18 +41,32 @@
 
 - **Исправлено:** новые `message.ppv_unlocked` получают правильные refs и
   fail-closed mapping (`ofapi-payloads.ts:115-121`,
-  `canonicalize/ofapi-webhook.ts:176-214`).
+  `canonicalize/ofapi-webhook.ts:169-222`).
 - **Сделано (#261):** `SUPPRESSED_V2_FRAME_TYPES` снят — PPV идёт в v2 обычным
   frame со своим cursor, поэтому PPV перед erased hole больше не зацикливает
   reconnect. Тесты доставки и этой регрессии —
   `tests/domain-events-v2.integration.test.ts:1174-1521`. Frames PPV, tip и
   transaction логируют `ledgerToWireMs`
   (`apps/runtime/src/modules/events/index.ts:96-103,700-708`).
+- **Сделано (H2c):** явная quarantine — PPV без chat ref даёт 0 событий, driver
+  по-прежнему штампует `parse_version` и в той же транзакции пишет terminal
+  outcome в `observation_parse_quarantine` (миграция 0209) + счётчик
+  `obs_quarantined_webhook_ofapi_v5` без порога, так что backlog-age gauge и
+  `golden_signal_lag` не залипают (`canonicalize-driver.ts:746-773`,
+  `health-floors.ts:165-232`). PPV во всех проекциях: `message_archive`
+  применяет `message.ppv_unlocked` (`is_opened` только в true), DM-проекция
+  ставит `dm_message_archive.is_opened` без superseding-события на покупку
+  (`dm-message-candidate.ts:523-574`), hot rows snapshot берут цену и медиа из
+  архива (`ofapi-sync-snapshot.ts:107-128`); новые PPV-события несут числовой
+  `amountUsd`. Готовы и НЕ запускались: backfill
+  `archive:backfill-ppv-purchases` (read-only прод-счёт 2026-09-26: hot 7,
+  `message_archive` 570, `dm_message_archive` 607) и repair
+  `events:repair-ofapi-ppv-refs` (70 кандидатов; supersession key
+  `supersedes:<id>`, `domainEventNotSupersededSql`) — repair только после D2.
 - **Остаток** — этапы H2/H3/Repair плана 2026-09-26
   (`_docs/2026-09-26-of-desktop-purchases-and-startup-plan.md`, вне репо):
-  repair 70 исторических rows с неверным `conversation_ref`; явная quarantine
-  semantics; PPV в проекциях и snapshot; read stop-loss; приёмка на флоте.
-  Decision #155 — каноническая история инцидента.
+  запуск backfill и repair 70 исторических rows; read stop-loss; приёмка на
+  флоте. Decision #155 — каноническая история инцидента.
 
 ## P1 перед отдельным one-way gate
 
