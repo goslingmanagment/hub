@@ -302,12 +302,16 @@ describe("OFAPI delivery recovery", () => {
   });
 
   it("never retries a transport-indeterminate POST and names a paused webhook rejection", async () => {
+    rows.push({ ...attempt(4), idempotency_key: "evt_other_business_key" });
     await scan(); send.mockRejectedValueOnce(new OfapiApiError("transport lost", null, null));
     const id = randomUUID();
     expect((await redeliverOfapiWebhook(app, { id, attemptId: 1, actorUserId: ownerId, dryRun: false })).state).toBe("indeterminate");
     await redeliverOfapiWebhook(app, { id, attemptId: 1, actorUserId: ownerId, dryRun: false }); expect(send).toHaveBeenCalledTimes(1);
+    // H2: the guard is key-level — attempt 2 carries the same business key.
+    await expect(redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: 2, actorUserId: ownerId, dryRun: false })).rejects.toThrow("earlier redelivery");
     send.mockRejectedValueOnce(new OfapiApiError("paused", 409, "{}"));
-    expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: 2, actorUserId: ownerId, dryRun: false })).toMatchObject({ state: "rejected", errorCode: "webhook_paused_or_disabled" });
+    expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: 4, actorUserId: ownerId, dryRun: false })).toMatchObject({ state: "rejected", errorCode: "webhook_paused_or_disabled" });
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("uses exact local replay without paid redelivery or replaying a neighboring fact", async () => {

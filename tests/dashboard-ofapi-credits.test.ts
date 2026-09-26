@@ -278,6 +278,24 @@ describe("OfapiCreditsPage", () => {
     expect(markup).toContain("Синк сообщений на паузе");
   });
 
+  it("names the webhook auto-redelivery cap apart from the burn-rate alarm", () => {
+    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
+      data: summaryFixture({
+        incidents: [{
+          kind: "ofapi_burn_rate:auto_redelivery_cap",
+          openedAt: "2026-06-12T11:00:00.000Z",
+          errorSummary: "OFAPI webhook auto-redelivery reached its daily cap (1000/1000 this UTC day)",
+        }],
+      }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const markup = renderPage();
+    expect(markup).toContain("Исчерпан суточный лимит автоповтора вебхуков");
+    expect(markup).not.toContain("Кредиты сгорают необычно быстро");
+  });
+
   it("raises a floor-blocked alarm and reddens a short runway", () => {
     queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
       data: summaryFixture({

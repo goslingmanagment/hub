@@ -222,6 +222,10 @@ const envSchema = z.object({
   OFAPI_BINDING_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
+  // H2 (amends #265): billed automatic redelivery of undelivered business
+  // webhooks. Off by default; the cap bounds automatic requests per UTC day.
+  OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED: booleanSchema.default(false),
+  OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP: z.coerce.number().int().min(1).max(1000).default(1000),
   OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
@@ -553,6 +557,8 @@ export interface AppConfig {
   ofapiBindingReconcileEnabled?: boolean;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
+  ofapiWebhookAutoRedeliveryEnabled?: boolean;
+  ofapiWebhookAutoRedeliveryDailyCap?: number;
   ofapiCreditLedgerEnabled?: boolean;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiCreditMicroUsdPrice?: number;
@@ -874,6 +880,8 @@ export function loadConfig(
     ofapiBindingReconcileEnabled: parsed.OFAPI_BINDING_RECONCILE_ENABLED,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
+    ofapiWebhookAutoRedeliveryEnabled: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED,
+    ofapiWebhookAutoRedeliveryDailyCap: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP,
     ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,

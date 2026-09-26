@@ -445,6 +445,16 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0205_notification_incident_paging.sql"
   # Additive B1 receipt evidence; old writers leave the nullable fields empty.
   "0206_fansly_ws_hint_settlement.sql"
+  # H2 (amends #265): webhook auto-redelivery. 0207 is additive for the image
+  # it replaces: the old manual insert omits origin (default 'manual') and
+  # supplies an actor, so it satisfies the new checks; the widened state check,
+  # new indexes and the new state table are never read by the old image, and
+  # the old history view keeps its attempt-level lookup. Known caveat: the old
+  # image counts every intent of the UTC day toward its manual limit of 20, so
+  # automatic intents written before a rollback can block manual redelivery
+  # until UTC midnight. 0208 only builds two indexes concurrently.
+  "0207_ofapi_webhook_auto_redelivery.sql"
+  "0208_ofapi_webhook_delivery_business_key_idx.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

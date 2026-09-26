@@ -98,6 +98,10 @@ describe("config registry", () => {
     "ofapiCreditAlertThreshold",
     "ofapiWebhookSilenceThresholdMinutes",
     "ofapiBurnAlertCreditsPerHour",
+    // H2 (amends #265): billed auto-redelivery switch and its UTC-day cap, read
+    // per sweep so the coordinator enables it after deploy without a restart.
+    "ofapiWebhookAutoRedeliveryEnabled",
+    "ofapiWebhookAutoRedeliveryDailyCap",
     "healthSyncLightMaxAgeMinutes",
     "healthSyncFollowerMaxAgeMinutes",
     "transactionLookbackDays",

@@ -125,6 +125,7 @@ function streamConfigKey(stream: string) {
 
 const INCIDENT_LABELS: Record<string, string> = {
   ofapi_burn_rate: "Кредиты сгорают необычно быстро",
+  "ofapi_burn_rate:auto_redelivery_cap": "Исчерпан суточный лимит автоповтора вебхуков",
   ofapi_low_credit: "Баланс кредитов низкий",
   ofapi_credit_floor: "Баланс упал ниже порога автостопа",
   ofapi_daily_credit_budget: "Дневной бюджет синка исчерпан",

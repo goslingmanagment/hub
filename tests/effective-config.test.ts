@@ -179,6 +179,10 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
     // Decision 368 wired the earnings roster max age as a live key.
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRosterMaxAgeHours")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(81);
+    // H2 (amends #265): the webhook auto-redelivery switch and its UTC-day
+    // cap, read per sweep so enabling after deploy needs no restart.
+    expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryEnabled")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryDailyCap")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(83);
   });
 });

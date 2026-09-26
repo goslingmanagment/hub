@@ -19,6 +19,11 @@ import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
+import {
+  OFAPI_DELIVERY_HISTORY_AGE_METRIC,
+  OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS,
+  sampleOfapiDeliveryHistoryAge,
+} from "./ofapi-delivery-history-signal.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 // Kernel Stage 25: the five golden signals — the acceptance instrument for
@@ -61,6 +66,8 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   // Stage 29 (DP 6 owner note): restricted-class volume guard — a gauge in
   // BYTES riding the p95 slot so the existing breach latch covers it.
   ai_content_bytes: 5_000_000_000,
+  // H2: OFAPI delivery-history coverage age (ofapi-delivery-history-signal.ts).
+  [OFAPI_DELIVERY_HISTORY_AGE_METRIC]: OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS,
   // Fast-reply freshness PR3: per-family observation-backlog gauges (health
   // floors) ride the p95 slot so the existing breach latch covers them.
   ...Object.fromEntries(
@@ -254,6 +261,10 @@ export async function computeGoldenSignals(
     }
   }
 
+  // H2: delivery-history coverage age; a failed probe latches like a breach.
+  const deliveryHistorySamples = await sampleOfapiDeliveryHistoryAge(app);
+  if (deliveryHistorySamples === null) failedProbes.push(OFAPI_DELIVERY_HISTORY_AGE_METRIC);
+
   return {
     samples: [
       ...toSamples("capture", capture),
@@ -271,6 +282,7 @@ export async function computeGoldenSignals(
       ...toSamples("ai_content_rows", { p50: aiRows, p95: aiRows }),
       ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
       ...floorSamples,
+      ...(deliveryHistorySamples ?? []),
     ],
     failedProbes,
   };

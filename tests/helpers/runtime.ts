@@ -40,6 +40,8 @@ export function createTestAppContext(
     ofapiBindingReconcileEnabled?: boolean;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
+    ofapiWebhookAutoRedeliveryEnabled?: boolean;
+    ofapiWebhookAutoRedeliveryDailyCap?: number;
     ofapiCreditLedgerEnabled?: boolean;
     ofapiBurnAlertCreditsPerHour?: number;
     ofapiCreditMicroUsdPrice?: number;
@@ -164,6 +166,8 @@ export function createTestAppContext(
       ofapiBindingReconcileEnabled: overrides?.ofapiBindingReconcileEnabled ?? false,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
+      ofapiWebhookAutoRedeliveryEnabled: overrides?.ofapiWebhookAutoRedeliveryEnabled ?? false,
+      ofapiWebhookAutoRedeliveryDailyCap: overrides?.ofapiWebhookAutoRedeliveryDailyCap ?? 1000,
       ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
       ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,
