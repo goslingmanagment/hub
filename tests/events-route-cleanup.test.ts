@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
       listDomainEventAccountBounds: vi.fn(),
       listDomainEventContiguousReplayEnds: vi.fn(),
       listPageOfapiAccountRefs: vi.fn(),
+      listPagePlatforms: vi.fn(),
     },
   };
 });
@@ -68,6 +69,7 @@ beforeEach(() => {
   }]]));
   mocks.db.listDomainEventContiguousReplayEnds.mockResolvedValue(new Map([[7, 1]]));
   mocks.db.listPageOfapiAccountRefs.mockResolvedValue(new Map([[7, "account-7"]]));
+  mocks.db.listPagePlatforms.mockResolvedValue(new Map([[7, "onlyfans"]]));
 });
 
 afterEach(() => {

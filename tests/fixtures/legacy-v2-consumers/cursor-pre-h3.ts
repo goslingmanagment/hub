@@ -1,12 +1,16 @@
+// FROZEN — do not edit to match newer code. A verbatim copy of the v2 cursor
+// codec every production consumer runs today: Core 4c237123 (pre-H3) and the
+// @kernel/sdk vendored into ChatGoose Desktop 0.1.56 (core 579b0e34) and
+// fansly-ext 2.4.6 (core 82571f3c) — byte-identical at all three commits.
+// Only the two exported names are prefixed. H3 tests prove that every
+// platform-bound cursor (v5/v6) FAILS on this decoder, so a rollback of Core
+// or an old client never silently widens one.
+
 // Kernel Stage 21: the event-stream v2 resume cursor. Opaque on the wire —
 // base64url JSON `{v: 2, w: {<accountId>: <highSeq>, …}}` for legacy/subset
 // cursors, `{v: 3, w: {…}, s: "granted"}` for an exact-grant binding, or
 // v4 with `r: "snapshot"` while a completed state snapshot is authorizing one
-// bounded replay across erased ledger gaps. H3 adds the platform binding
-// `p: "onlyfans" | "fansly"` (the stream/snapshot `platform=` filter): v5 is
-// v2/v3 plus `p`, v6 is v4 plus `p`. The binding gets its own versions so a
-// Core that predates it rejects the cursor instead of ignoring `p` and
-// widening the account set to every platform. These cursors are encoded
+// bounded replay across erased ledger gaps. These v2/v3/v4 cursors are encoded
 // Base64URL JSON, not MAC-signed; their topology and server-side epoch are
 // validated before use. The recovery marker is removed before the connection
 // enters the live lane. Do not confuse them with the bounded OFAPI stateCursor,
@@ -17,13 +21,6 @@
 export type DomainEventWatermarks = ReadonlyMap<number, number>;
 
 export type DomainEventCursorScope = "granted";
-/** H3: the platform a cursor's account set is narrowed to (v5/v6 only). */
-export type DomainEventCursorPlatform = "onlyfans" | "fansly";
-
-function isDomainEventCursorPlatform(value: unknown): value is DomainEventCursorPlatform {
-  return value === "onlyfans" || value === "fansly";
-}
-
 export interface DomainEventCursorRecovery {
   kind: "snapshot";
   /** Highest non-dry-run erasure_log id observed when the cursor was minted. */
@@ -42,7 +39,6 @@ export type DecodedDomainEventCursor =
     watermarks: Map<number, number>;
     scope: DomainEventCursorScope | null;
     recovery: DomainEventCursorRecovery | null;
-    platform: DomainEventCursorPlatform | null;
   }
   | { ok: false; reason: string };
 
@@ -86,31 +82,24 @@ function sortedRecord(values: DomainEventWatermarks): Record<string, number> {
   return record;
 }
 
-export function encodeDomainEventCursor(
+export function encodePreH3DomainEventCursor(
   watermarks: DomainEventWatermarks,
   options: {
     scope?: DomainEventCursorScope;
     recovery?: DomainEventCursorRecovery;
-    platform?: DomainEventCursorPlatform;
   } = {},
 ): string {
   // Sorted keys → deterministic encoding (cursor equality is comparable in tests).
   const w = sortedRecord(watermarks);
-  const recovering = options.recovery?.kind === "snapshot";
-  const platformBinding = options.platform;
-  const version = platformBinding !== undefined
-    ? recovering ? 6 : 5
-    : recovering
-      ? 4
-      : options.scope === undefined ? 2 : 3;
+  const version = options.recovery?.kind === "snapshot"
+    ? 4
+    : options.scope === undefined ? 2 : 3;
   return toBase64Url(JSON.stringify({
     // A distinct version makes rollback fail closed: old Core rejects a bound
-    // cursor instead of ignoring `s`/`p` and widening it (at a new account's
-    // head, or across platforms).
+    // cursor instead of ignoring `s` and widening it at a new account's head.
     v: version,
     w,
     ...(options.scope === undefined ? {} : { s: options.scope }),
-    ...(platformBinding === undefined ? {} : { p: platformBinding }),
     ...(options.recovery === undefined
       ? {}
       : {
@@ -123,7 +112,7 @@ export function encodeDomainEventCursor(
   }));
 }
 
-export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor {
+export function decodePreH3DomainEventCursor(text: string): DecodedDomainEventCursor {
   const json = fromBase64Url(text);
   if (json === null) {
     return { ok: false, reason: "not_base64url" };
@@ -146,12 +135,8 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
     b?: unknown;
     t?: unknown;
     c?: unknown;
-    p?: unknown;
   };
-  if (
-    candidate.v !== 2 && candidate.v !== 3 && candidate.v !== 4
-    && candidate.v !== 5 && candidate.v !== 6
-  ) {
+  if (candidate.v !== 2 && candidate.v !== 3 && candidate.v !== 4) {
     return { ok: false, reason: "unknown_version" };
   }
   if (typeof candidate.w !== "object" || candidate.w === null || Array.isArray(candidate.w)) {
@@ -160,22 +145,12 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
   if (
     (candidate.v === 2 && candidate.s !== undefined)
     || (candidate.v === 3 && candidate.s !== "granted")
-    || ((candidate.v === 4 || candidate.v === 5 || candidate.v === 6)
-      && candidate.s !== undefined && candidate.s !== "granted")
+    || (candidate.v === 4 && candidate.s !== undefined && candidate.s !== "granted")
   ) {
     return { ok: false, reason: "invalid_scope" };
   }
-  // v5/v6 carry exactly one known platform; v2-v4 never carry one (a `p` on
-  // an old version would be a cursor an old Core silently widens).
   if (
-    ((candidate.v === 5 || candidate.v === 6) && !isDomainEventCursorPlatform(candidate.p))
-    || (candidate.v !== 5 && candidate.v !== 6 && candidate.p !== undefined)
-  ) {
-    return { ok: false, reason: "invalid_platform" };
-  }
-  const recoveryVersion = candidate.v === 4 || candidate.v === 6;
-  if (
-    ((candidate.v === 2 || candidate.v === 3 || candidate.v === 5)
+    ((candidate.v === 2 || candidate.v === 3)
       && (
         candidate.r !== undefined
         || candidate.e !== undefined
@@ -183,7 +158,7 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
         || candidate.t !== undefined
         || candidate.c !== undefined
       ))
-    || (recoveryVersion && (
+    || (candidate.v === 4 && (
       candidate.r !== "snapshot"
       || typeof candidate.e !== "number"
       || !Number.isInteger(candidate.e)
@@ -223,7 +198,7 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
     return result;
   };
   let recovery: DomainEventCursorRecovery | null = null;
-  if (recoveryVersion) {
+  if (candidate.v === 4) {
     const base = parseRecoveryMap(candidate.b);
     const targets = parseRecoveryMap(candidate.t);
     const retainedCounts = parseRecoveryMap(candidate.c);
@@ -259,6 +234,5 @@ export function decodeDomainEventCursor(text: string): DecodedDomainEventCursor 
     watermarks,
     scope: candidate.s === "granted" ? "granted" : null,
     recovery,
-    platform: isDomainEventCursorPlatform(candidate.p) ? candidate.p : null,
   };
 }

@@ -1,11 +1,20 @@
 import {
+  domainEventFactTypes,
+  type DomainEventProvenance,
+} from "@agency_hub_core/contracts";
+import {
+  dmThreadLabelKey,
   findObservationEnvelopesByIds,
+  listDmThreadLabels,
+  listRedeliveredWebhookObservationIds,
+  type DmThreadLabel,
   type DomainEventRow,
 } from "@agency_hub_core/db";
 
-import { millsToDollarsNumber } from "@agency_hub_core/shared";
+import { millsToDollarsNumber, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { appPlatformRegistry } from "../platforms/registry.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { normalizeOfapiSyncMessage } from "./ofapi-payloads.ts";
 
@@ -142,4 +151,100 @@ export async function buildMessagePayloadEnrichments(
     }
   }
   return enrichments;
+}
+
+// --- H3: provenance and thread labels -------------------------------------
+
+const THREAD_LABELLED_TYPES: ReadonlySet<string> = new Set(domainEventFactTypes);
+
+export interface DomainFrameContext {
+  /** Absent when the redelivery lookup failed — consumers treat it as not live. */
+  provenance?: DomainEventProvenance;
+  thread?: DmThreadLabel;
+}
+
+/** A superseding correction: schema >= 2 carrying data.supersedesEventId —
+ * the H2 PPV ref repair, the Fansly 1970 repair and the DM corrections
+ * reconciler all mint this shape (domain-event-supersession.ts). */
+export function isSupersedingDomainEvent(row: Pick<DomainEventRow, "schemaVersion" | "data">): boolean {
+  if (row.schemaVersion < 2 || typeof row.data !== "object" || row.data === null) {
+    return false;
+  }
+  const supersedes = (row.data as Record<string, unknown>).supersedesEventId;
+  return typeof supersedes === "number" && Number.isSafeInteger(supersedes) && supersedes > 0;
+}
+
+/** Only a platform with a webhook lane (registry capability) can have a
+ * provider redelivery; a page unknown to the caller is looked up, not assumed. */
+function mayCarryWebhookRedelivery(pagePlatform: Platform | undefined): boolean {
+  return pagePlatform === undefined
+    || appPlatformRegistry.maybeGet(pagePlatform)?.capabilities.webhooks !== false;
+}
+
+/**
+ * Batch-build provenance + thread labels for a page of v2 frames: at most two
+ * statements for the whole batch (redelivered receipts, thread labels), never
+ * one per frame. Provenance: `repair` for superseding events (no lookup);
+ * `redelivery` when the source observation's OFAPI webhook receipt carries
+ * the provider's redelivery header; otherwise `live`. Accounts on a platform
+ * without webhooks (Fansly) skip the lookup. Thread labels ride money-fact
+ * frames only (the frames a client may surface without a local chat row). A
+ * failed lookup degrades that field, never the frame.
+ */
+export async function buildDomainFrameContexts(
+  app: Pick<AppContext, "db" | "logger">,
+  rows: readonly DomainEventRow[],
+  options: { platformOf: (accountId: number) => Platform | undefined },
+): Promise<Map<number, DomainFrameContext>> {
+  const contexts = new Map<number, DomainFrameContext>();
+  if (rows.length === 0) {
+    return contexts;
+  }
+  const needsRedeliveryLookup = (row: DomainEventRow) => (
+    !isSupersedingDomainEvent(row)
+    && row.observationId > 0
+    && mayCarryWebhookRedelivery(options.platformOf(row.accountId))
+  );
+  const lookupRows = rows.filter(needsRedeliveryLookup);
+  const threadKeys = rows.flatMap((row) => (
+    THREAD_LABELLED_TYPES.has(row.type) && row.conversationRef !== null
+      ? [{ accountId: row.accountId, conversationRef: row.conversationRef }]
+      : []
+  ));
+  const [redelivered, threads] = await Promise.allSettled([
+    lookupRows.length === 0
+      ? Promise.resolve(new Set<number>())
+      : listRedeliveredWebhookObservationIds(app.db, lookupRows.map((row) => row.observationId)),
+    threadKeys.length === 0
+      ? Promise.resolve(new Map<string, DmThreadLabel>())
+      : listDmThreadLabels(app.db, threadKeys),
+  ]);
+  if (redelivered.status === "rejected") {
+    app.logger.warn({ err: redelivered.reason }, "v2 frame provenance lookup failed; omitting provenance");
+  }
+  if (threads.status === "rejected") {
+    app.logger.warn({ err: threads.reason }, "v2 frame thread lookup failed; omitting thread labels");
+  }
+  for (const row of rows) {
+    const context: DomainFrameContext = {};
+    if (isSupersedingDomainEvent(row)) {
+      context.provenance = "repair";
+    } else if (!needsRedeliveryLookup(row)) {
+      context.provenance = "live";
+    } else if (redelivered.status === "fulfilled") {
+      context.provenance = redelivered.value.has(row.observationId) ? "redelivery" : "live";
+    }
+    if (
+      threads.status === "fulfilled"
+      && THREAD_LABELLED_TYPES.has(row.type)
+      && row.conversationRef !== null
+    ) {
+      const thread = threads.value.get(dmThreadLabelKey(row.accountId, row.conversationRef));
+      if (thread !== undefined) {
+        context.thread = thread;
+      }
+    }
+    contexts.set(row.id, context);
+  }
+  return contexts;
 }

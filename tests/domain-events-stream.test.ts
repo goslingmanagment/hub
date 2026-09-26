@@ -15,6 +15,9 @@ const dbMocks = vi.hoisted(() => ({
   listDomainEventRecoveryRetainedCounts: vi.fn(),
   listEventsSince: vi.fn(),
   listPageOfapiAccountRefs: vi.fn(),
+  listPagePlatforms: vi.fn(),
+  listRedeliveredWebhookObservationIds: vi.fn(),
+  listDmThreadLabels: vi.fn(),
 }));
 
 vi.mock("@agency_hub_core/db", async (importOriginal) => ({
@@ -24,7 +27,10 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => ({
 }));
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { registerEventsRoutes } from "../apps/runtime/src/modules/events/index.ts";
+import {
+  registerEventsRoutes,
+  v2GrantScopeChanged,
+} from "../apps/runtime/src/modules/events/index.ts";
 import {
   createAccountSeqGuards,
   createDomainEventHub,
@@ -143,6 +149,18 @@ async function runV2Stream(input: {
   }) => Promise<void>;
   /** End the response from inside the replay query (closed-stream race). */
   endDuringReplay?: boolean;
+  /** Ledger row override for one account_seq (H3 frame-context cases). */
+  eventForSeq?: (accountSeq: number, currentAccountRef: string | null) => DbModule.DomainEventRow;
+  /** Observation ids whose OFAPI receipt is a provider redelivery. */
+  redeliveredObservationIds?: number[];
+  /** The receipt probe rejects (database trouble). */
+  redeliveryProbeFails?: boolean;
+  /** Thread labels keyed `${accountId}:${conversationRef}`. */
+  threadLabels?: Map<string, { fanName: string | null; username: string | null }>;
+  /** Platform of the harness page (account 7); OnlyFans by default. */
+  platformOfAccount7?: "onlyfans" | "fansly";
+  /** H3 `platform=` query parameter. */
+  platformFilter?: "onlyfans" | "fansly";
 }) {
   const writes: string[] = [];
   const raw = {
@@ -213,9 +231,18 @@ async function runV2Stream(input: {
       return input.rows
         .filter((seq) => seq > query.afterSeq && seq <= query.throughSeq)
         .slice(0, query.limit)
-        .map((seq) => event(seq, input.currentAccountRefForSeq?.(seq) ?? null));
+        .map((seq) => (input.eventForSeq ?? event)(seq, input.currentAccountRefForSeq?.(seq) ?? null));
     },
   );
+  dbMocks.listPagePlatforms.mockResolvedValue(new Map([[7, input.platformOfAccount7 ?? "onlyfans"]]));
+  dbMocks.listRedeliveredWebhookObservationIds.mockImplementation(
+    async (_db: unknown, ids: number[]) => input.redeliveryProbeFails
+      ? Promise.reject(new Error("probe down"))
+      : new Set(
+      ids.filter((id) => input.redeliveredObservationIds?.includes(id) ?? false),
+    ),
+  );
+  dbMocks.listDmThreadLabels.mockResolvedValue(input.threadLabels ?? new Map());
   const initialAccountRefs = input.snapshottedAccountRef == null
     ? new Map<number, string>()
     : new Map([[7, input.snapshottedAccountRef]]);
@@ -286,7 +313,10 @@ async function runV2Stream(input: {
     await handler({
       headers: {},
       cookies: {},
-      query: input.cursor === null ? {} : { cursor: input.cursor },
+      query: {
+        ...(input.cursor === null ? {} : { cursor: input.cursor }),
+        ...(input.platformFilter === undefined ? {} : { platform: input.platformFilter }),
+      },
       log: logger,
       raw: requestRaw,
     }, {
@@ -533,5 +563,114 @@ describe("domain event v2 replay completion", () => {
     // The handler must bail after the one replay read — a dead connection
     // never pays for further batches.
     expect(dbMocks.listEventsSince).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("H3 v2 frame context", () => {
+  it("serves transactionRef, provenance and money-fact thread labels with one lookup per replay batch", async () => {
+    const frames = await runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1, 2, 3, 4],
+      head: 4,
+      eventForSeq: (seq, accountRef) => {
+        const base = event(seq, accountRef);
+        if (seq === 1) {
+          return { ...base, type: "message.received", conversationRef: "fan-1" };
+        }
+        if (seq === 2) {
+          return { ...base, type: "message.ppv_unlocked", conversationRef: "fan-1" };
+        }
+        if (seq === 3) {
+          return {
+            ...base,
+            type: "message.ppv_unlocked",
+            conversationRef: "fan-2",
+            schemaVersion: 2,
+            data: { supersedesEventId: 99, repair: "ofapi_ppv_ref" },
+          };
+        }
+        return { ...base, type: "transaction.posted", transactionRef: "tx-4" };
+      },
+      redeliveredObservationIds: [2],
+      threadLabels: new Map([["7:fan-1", { fanName: "Alex", username: "u1" }]]),
+    });
+
+    const domain = frames.filter((frame) => frame.lane === "domain").map((frame) => ({
+      accountSeq: frame.event["accountSeq"],
+      provenance: frame.event["provenance"],
+      thread: frame.event["thread"],
+      transactionRef: frame.event["transactionRef"],
+    }));
+    expect(domain).toEqual([
+      // A message frame: provenance yes, thread labels are for money facts only.
+      { accountSeq: 1, provenance: "live", thread: undefined, transactionRef: null },
+      { accountSeq: 2, provenance: "redelivery", thread: { fanName: "Alex", username: "u1" }, transactionRef: null },
+      // Repair is read from the row itself; its thread has no stored labels.
+      { accountSeq: 3, provenance: "repair", thread: undefined, transactionRef: null },
+      { accountSeq: 4, provenance: "live", thread: undefined, transactionRef: "tx-4" },
+    ]);
+    // Batched: one receipt probe and one thread probe for the whole replay
+    // page, never one per frame; the repair row needs no receipt probe.
+    expect(dbMocks.listRedeliveredWebhookObservationIds).toHaveBeenCalledTimes(1);
+    expect(dbMocks.listRedeliveredWebhookObservationIds).toHaveBeenCalledWith({}, [1, 2, 4]);
+    expect(dbMocks.listDmThreadLabels).toHaveBeenCalledTimes(1);
+    expect(dbMocks.listDmThreadLabels).toHaveBeenCalledWith({}, [
+      { accountId: 7, conversationRef: "fan-1" },
+      { accountId: 7, conversationRef: "fan-2" },
+    ]);
+  });
+
+  it("marks Fansly frames live without a webhook receipt probe", async () => {
+    const frames = await runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1, 2],
+      head: 2,
+      platformOfAccount7: "fansly",
+    });
+    expect(frames.filter((frame) => frame.lane === "domain").map((frame) => frame.event["provenance"]))
+      .toEqual(["live", "live"]);
+    expect(dbMocks.listRedeliveredWebhookObservationIds).not.toHaveBeenCalled();
+  });
+
+  it("omits provenance (never guesses live) when the receipt probe fails", async () => {
+    const frames = await runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1],
+      head: 1,
+      redeliveryProbeFails: true,
+      eventForSeq: (seq, accountRef) => ({ ...event(seq, accountRef), transactionRef: "tx-1" }),
+    });
+    const [frame] = frames.filter((entry) => entry.lane === "domain");
+    expect(frame?.event["provenance"]).toBeUndefined();
+    expect(frame?.event["transactionRef"]).toBe("tx-1");
+  });
+
+  it("binds every cursor of a platform=onlyfans connection to the platform", async () => {
+    const frames = await runV2Stream({
+      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
+      rows: [1, 2],
+      head: 2,
+      platformFilter: "onlyfans",
+    });
+    const ids = frames.map((frame) => frame.id);
+    expect(ids.length).toBe(3);
+    expect(ids.at(-1)).toBe(encodeDomainEventCursor(new Map([[7, 2]]), { platform: "onlyfans" }));
+  });
+});
+
+describe("H3 grant revalidation through the platform filter", () => {
+  const platforms = new Map<number, "onlyfans" | "fansly">([[1, "onlyfans"], [2, "fansly"], [3, "fansly"]]);
+
+  it("keeps a platform-filtered stream open across grant changes on other platforms", () => {
+    expect(v2GrantScopeChanged(new Set([1, 2]), new Set([1, 2, 3]), "onlyfans", platforms)).toBe(false);
+    expect(v2GrantScopeChanged(new Set([1, 2]), new Set([1]), "onlyfans", platforms)).toBe(false);
+  });
+
+  it("closes on a change within the platform, an owner flip, or any change when unfiltered", () => {
+    expect(v2GrantScopeChanged(new Set([1, 2]), new Set([2]), "onlyfans", platforms)).toBe(true);
+    expect(v2GrantScopeChanged(new Set([2]), new Set([2, 3]), "fansly", platforms)).toBe(true);
+    expect(v2GrantScopeChanged(new Set([1]), undefined, "onlyfans", platforms)).toBe(true);
+    expect(v2GrantScopeChanged(new Set([1, 2]), new Set([1, 2, 3]), null, platforms)).toBe(true);
+    expect(v2GrantScopeChanged(undefined, undefined, "onlyfans", platforms)).toBe(false);
   });
 });

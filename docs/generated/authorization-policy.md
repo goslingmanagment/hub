@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (254)
+## Routes (255)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -208,6 +208,7 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — |
 | GET | `/api/v1/events/snapshot` | `eventsSnapshot` | `apiKey` | — | — |
 | GET | `/api/v1/events/stream` | `eventsStream` | `apiKey` | — | — |
+| GET | `/api/v1/events/v2/facts` | `eventsV2Facts` | `any` | — | — |
 | GET | `/api/v1/events/v2/snapshot` | `eventsV2Snapshot` | `any` | — | — |
 | GET | `/api/v1/events/v2/stream` | `eventsV2Stream` | `any` | — | — |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — |
