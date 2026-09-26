@@ -168,6 +168,15 @@ export async function listPageOfapiAccountRefs(db: Database): Promise<Map<number
   return new Map(result.rows.map((row) => [row.id, row.ofapi_account_id]));
 }
 
+/** H3: every page's platform (tombstoned pages included — their ledger
+ * facts remain readable), for the v2 stream's `platform=` narrowing. */
+export async function listPagePlatforms(db: Database): Promise<Map<number, Platform>> {
+  const rows = await db
+    .select({ id: pages.id, platform: pages.platform })
+    .from(pages);
+  return new Map(rows.map((row) => [row.id, row.platform]));
+}
+
 export async function createPlatformPage(
   db: Database,
   input: {

@@ -12,6 +12,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
+import { domainEventNotSupersededSql } from "./domain-event-supersession.ts";
 
 export interface DomainEventInput {
   type: string;
@@ -982,6 +983,46 @@ export async function listEventsSince(
         : sql``}
     order by de.account_seq asc
     limit ${limit}
+  `);
+  return result.rows.map(mapEventRow);
+}
+
+/**
+ * H3 facts read: one account's events of `types` in (afterSeq, throughSeq],
+ * account_seq order, minus events a repair superseded (the superseding event
+ * itself is kept). A read of existing rows — no sequence is minted (#265).
+ * The caller reads throughSeq (the committed head) BEFORE this statement:
+ * every row at or below a committed head is already committed.
+ */
+export async function listDomainEventFacts(
+  db: Database,
+  input: {
+    accountId: number;
+    afterSeq: number;
+    throughSeq: number;
+    types: readonly string[];
+    limit: number;
+  },
+): Promise<DomainEventRow[]> {
+  if (input.types.length === 0 || input.throughSeq <= input.afterSeq) {
+    return [];
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select de.id::text as id, de.account_id, page.ofapi_account_id as current_account_ref,
+           de.account_seq::text as account_seq, de.type,
+           de.occurred_at, de.fan_identity_ref, de.conversation_ref, de.message_ref,
+           de.transaction_ref, de.post_ref, de.data, de.schema_version,
+           de.observation_id::text as observation_id,
+           de.dedup_key, de.created_at
+    from domain_events de
+    left join pages page on page.id = de.account_id
+    where de.account_id = ${input.accountId}
+      and de.type in (${sql.join(input.types.map((type) => sql`${type}`), sql`, `)})
+      and de.account_seq > ${input.afterSeq}
+      and de.account_seq <= ${input.throughSeq}
+      and ${domainEventNotSupersededSql("de")}
+    order by de.account_seq asc
+    limit ${input.limit}
   `);
   return result.rows.map(mapEventRow);
 }

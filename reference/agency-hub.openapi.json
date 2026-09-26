@@ -103163,13 +103163,355 @@
         }
       }
     },
+    "/api/v1/events/v2/facts": {
+      "get": {
+        "summary": "Money facts (PPV unlocks, tips, posted transactions) of one granted account",
+        "tags": [
+          "events"
+        ],
+        "description": "Pages one account's `message.ppv_unlocked`, `tip.received` and `transaction.posted` ledger events by account_seq (`afterSeq` exclusive), as DomainEventFrame rows without message payloads. Superseded events are excluded; their superseding repair is served with provenance `repair`. A read of existing ledger rows: no new sequence, cursor or OFAPI request. Same grants as the v2 stream (403 outside them). `afterSeq` above the account's head is 409.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "accountId",
+            "required": true
+          },
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "afterSeq",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 500,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountId": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "throughSeq": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "facts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "accountId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "accountSeq": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "type": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "occurredAt": {
+                            "type": "string"
+                          },
+                          "data": {},
+                          "fanRef": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "conversationRef": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "messageRef": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "accountRef": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "payload": {},
+                          "transactionRef": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "provenance": {
+                            "type": "string",
+                            "enum": [
+                              "live",
+                              "redelivery",
+                              "repair"
+                            ]
+                          },
+                          "thread": {
+                            "type": "object",
+                            "properties": {
+                              "fanName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "username": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "fanName",
+                              "username"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "accountId",
+                          "accountSeq",
+                          "type",
+                          "occurredAt",
+                          "data"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextAfterSeq": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "accountId",
+                    "throughSeq",
+                    "facts",
+                    "nextAfterSeq",
+                    "hasMore"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/events/v2/snapshot": {
       "get": {
         "summary": "Fresh v2 cursor (and per-account heads) for cold start or gap recovery",
         "tags": [
           "events"
         ],
-        "description": "Returns the current per-account high-water cursor for the requested accounts (comma-separated ids; omitted = every granted account), including the platform-native accountRef needed for each durable OFAPI state walk. An omitted-accounts cursor is bound to that exact grant keyset: reconnect returns 409 rather than widening a stale cursor at a newly granted account's head. Gap-recovery callers pass the rejected opaque sourceCursor so already-applied history is not replayed again; Core also advances past erased sequence holes. State payloads ride the consumer stages (24/33) additively — v2's snapshot role here is the cursor-reset handshake.",
+        "description": "Returns the current per-account high-water cursor for the requested accounts (comma-separated ids; omitted = every granted account), including the platform-native accountRef needed for each durable OFAPI state walk. An omitted-accounts cursor is bound to that exact grant keyset: reconnect returns 409 rather than widening a stale cursor at a newly granted account's head. Gap-recovery callers pass the rejected opaque sourceCursor so already-applied history is not replayed again; Core also advances past erased sequence holes. State payloads ride the consumer stages (24/33) additively — v2's snapshot role here is the cursor-reset handshake. Optional `platform` limits the accounts to that platform (an explicit account on another platform is 400) and binds the cursor to it; a sourceCursor bound to a different platform is 400.",
         "parameters": [
           {
             "schema": {
@@ -103187,6 +103529,18 @@
             },
             "in": "query",
             "name": "sourceCursor",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fansly",
+                "onlyfans"
+              ]
+            },
+            "in": "query",
+            "name": "platform",
             "required": false
           }
         ],
@@ -103359,7 +103713,7 @@
         "tags": [
           "events"
         ],
-        "description": "`text/event-stream` of DomainEventFrame rows (`event: domain`, `data` = JSON frame, `id` = the OPAQUE resume cursor — pass it back verbatim via `Last-Event-ID` or `cursor`). Per-account gapless ordering; all platforms. A cursor below an account's retained floor (or ahead of its head) answers 409 sync_snapshot_required with the per-account detail. The stream may interleave `event: ephemeral` frames (serve-time-only, no id) and `event: control` frames (connection signals — `{\"type\":\"replay_completed\"}` marks the end of replay; frames after it are live delivery). Skip control types you don't recognize.",
+        "description": "`text/event-stream` of DomainEventFrame rows (`event: domain`, `data` = JSON frame, `id` = the OPAQUE resume cursor — pass it back verbatim via `Last-Event-ID` or `cursor`). Per-account gapless ordering; all platforms. A cursor below an account's retained floor (or ahead of its head) answers 409 sync_snapshot_required with the per-account detail. The stream may interleave `event: ephemeral` frames (serve-time-only, no id) and `event: control` frames (connection signals — `{\"type\":\"replay_completed\"}` marks the end of replay; frames after it are live delivery). Skip control types you don't recognize. Optional `platform` narrows the account universe to granted accounts on that platform (typing and grant revalidation too); cursors it emits are bound to it and must be resumed with the same `platform` (400 otherwise). A cursor minted without `platform` is narrowed once, never widened.",
         "parameters": [
           {
             "schema": {
@@ -103367,6 +103721,18 @@
             },
             "in": "query",
             "name": "cursor",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fansly",
+                "onlyfans"
+              ]
+            },
+            "in": "query",
+            "name": "platform",
             "required": false
           }
         ],

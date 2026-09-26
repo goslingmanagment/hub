@@ -66,7 +66,14 @@
   `message_archive` 570, `dm_message_archive` 607) и repair
   `events:repair-ofapi-ppv-refs` (70 кандидатов; supersession key
   `supersedes:<id>`, `domainEventNotSupersededSql`) — repair только после D2.
-- **Остаток** — этапы H2/H3/Repair плана 2026-09-26
+- **Сделано (H3):** v2 stream/snapshot принимают `platform=onlyfans|fansly`
+  (гранты ∩ платформа; cursor v5/v6 с `p`, старый Core их отвергает; курсор
+  без `p` сужается один раз и никогда не расширяется); frames несут
+  `transactionRef`, `provenance` (`live|redelivery|repair`) и `thread` на
+  денежных фактах; `GET /api/v1/events/v2/facts` отдаёт PPV/tip/transaction
+  по `account_seq` без superseded (`apps/runtime/src/modules/events/index.ts`,
+  `tests/domain-events-v2-platform.integration.test.ts`).
+- **Остаток** — этапы H2/Repair плана 2026-09-26
   (`_docs/2026-09-26-of-desktop-purchases-and-startup-plan.md`, вне репо):
   запуск backfill и repair 70 исторических rows; read stop-loss; приёмка на
   флоте. Decision #155 — каноническая история инцидента.

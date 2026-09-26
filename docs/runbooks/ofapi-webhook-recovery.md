@@ -371,3 +371,44 @@ separate manual counter, schema checks, the cap alert with cap 1 and its
 resolution, unavailable access, bounded catch-up, the five-minute cadence, the
 pause after a failed page, the coverage-age latch and its resolution when
 collection is switched off.
+
+## Frame provenance and money facts — 2026-09-26 (H3)
+
+A redelivery restores a fact; it is not news. The v2 event stream and
+`GET /api/v1/events/v2/facts` therefore say what Core knows about how each
+durable frame reached the ledger, without changing its business identity
+(refs, dedup keys, sequence):
+
+- `provenance: "redelivery"` — the event's source observation came from an
+  OFAPI webhook receipt whose `capture_headers.redeliveryOf` is set (the
+  provider's `x-ofapi-redelivery-of`, present on manual and automatic
+  redeliveries alike). A redelivery reuses the original idempotency key, so the
+  lookup is observation → same-key receipt, batched per replay page.
+- `provenance: "repair"` — a superseding event (schema 2,
+  `data.supersedesEventId`): the PPV ref repair, the Fansly 1970 repair and the
+  DM corrections reconciler.
+- `provenance: "live"` — neither a known redelivery nor a repair. It is NOT a
+  freshness signal. Old facts are `live` on every replay before
+  `replay_completed`, after re-canonicalization of old observations by a new
+  parser version (for example formerly quarantined PPVs), on Fansly history
+  pulls (no webhook lane, so the lookup is skipped), on OFAPI's own automatic
+  retries (they carry no redelivery header) and on receipts past retention.
+- No `provenance` field — unknown (the lookup failed): treat it as not live.
+
+Clients decide on attention (toasts, sounds) only by combining all three:
+provenance `live`, a frame after the stream's `replay_completed` boundary, and
+an age check on `occurredAt`. Even that is not proof: when the upstream payload
+has no timestamp of its own, the canonicalizer falls back to the receipt time
+for `occurredAt`. Never toast from `/api/v1/events/v2/facts` — it is a catch-up
+of history, not news.
+
+The facts route pages `message.ppv_unlocked`, `tip.received` and
+`transaction.posted` of one granted account by `account_seq`, excluding events
+superseded under a `supersedes:<id>` key and serving their repair instead. It
+reads existing rows only: no new sequence, cursor or business identity (#265),
+and no OFAPI request.
+
+Validation: `tests/domain-events-v2-platform.integration.test.ts` (live,
+redelivered and repaired frames on replay and live lanes, facts paging and
+supersession) and `tests/domain-events-stream.test.ts` (one lookup per batch,
+Fansly skip, failed lookup omits provenance).

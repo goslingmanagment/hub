@@ -1,11 +1,14 @@
 import {
   decodeDomainEventCursor,
+  domainEventFactTypes,
   encodeDomainEventCursor,
   routeSchemas,
   type DomainEventCursorRecovery,
+  type DomainEventFrame,
   type DomainEventsSnapshotRequired,
 } from "@agency_hub_core/contracts";
 import {
+  getAccountHighWater,
   getOfapiFanoutReplayWindow,
   getMaxOfapiFanoutSeq,
   getOfapiSyncReplayFloor,
@@ -13,14 +16,17 @@ import {
   listOfapiStateSafeDomainEventWatermarks,
   listDomainEventAccountBounds,
   listDomainEventContiguousReplayEnds,
+  listDomainEventFacts,
   listDomainEventHighWaters,
   listDomainEventRecoveryRetainedCounts,
   listDomainEventSnapshotRecoveryFloors,
   listEventsSince,
   listOfapiSyncEventsForReplay,
   listPageOfapiAccountRefs,
+  listPagePlatforms,
   type DomainEventRow,
 } from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
 import type { FastifyReply } from "fastify";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
@@ -32,7 +38,11 @@ import {
   requireApiKeyUser,
   type AuthPrincipal,
 } from "../../services/auth.ts";
-import { buildMessagePayloadEnrichments } from "../../services/domain-events-enrich.ts";
+import {
+  buildDomainFrameContexts,
+  buildMessagePayloadEnrichments,
+  type DomainFrameContext,
+} from "../../services/domain-events-enrich.ts";
 import {
   createAccountSeqGuards,
   createDomainEventHub,
@@ -40,6 +50,7 @@ import {
 } from "../../services/domain-events-stream.ts";
 import {
   BadRequestError,
+  ConflictError,
   ForbiddenError,
   ServiceUnavailableError,
 } from "../../services/errors.ts";
@@ -63,6 +74,88 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 // and the hub/stream lifecycle state relocated verbatim from server.ts
 // (Stage 19 Task 3) — including the onClose teardown that keeps hijacked SSE
 // responses from holding server.close() open.
+
+/** The wire shape of one durable v2 frame (domainEventFrameSchema), shared by
+ * the stream and the facts route. Serve-time fields only; the ledger row is
+ * never rewritten. */
+function domainEventFrame(
+  event: DomainEventRow,
+  payload: unknown,
+  context: DomainFrameContext | undefined,
+): DomainEventFrame {
+  return {
+    accountId: event.accountId,
+    accountSeq: event.accountSeq,
+    type: event.type,
+    occurredAt: event.occurredAt.toISOString(),
+    data: event.data,
+    // Stage 24 serve-time fields (see domainEventFrameSchema).
+    fanRef: event.fanIdentityRef,
+    conversationRef: event.conversationRef,
+    messageRef: event.messageRef,
+    // The repository reads this current page mapping in the same statement
+    // as the event. A remap may therefore change accountRef within one
+    // connection, which lets OFAPI-keyed clients rebaseline before apply.
+    accountRef: event.currentAccountRef,
+    // H3 serve-time fields: optional on the wire; consumers built before
+    // them strip unknown keys (non-strict object schemas).
+    transactionRef: event.transactionRef,
+    ...(context?.provenance !== undefined ? { provenance: context.provenance } : {}),
+    ...(context?.thread !== undefined ? { thread: context.thread } : {}),
+    ...(payload !== undefined ? { payload } : {}),
+  };
+}
+
+/** H3 `platform=` narrowing: the ids of `accountIds` on `requestedPlatform`
+ * (everything when no platform was requested). Never adds an id. */
+function onPlatform(
+  accountIds: Iterable<number>,
+  requestedPlatform: Platform | null,
+  pagePlatforms: ReadonlyMap<number, Platform>,
+): Set<number> {
+  const narrowed = new Set<number>();
+  for (const accountId of accountIds) {
+    if (requestedPlatform === null || pagePlatforms.get(accountId) === requestedPlatform) {
+      narrowed.add(accountId);
+    }
+  }
+  return narrowed;
+}
+
+/**
+ * Whether a re-authenticated grant set differs from the connection's, as seen
+ * through the connection's `platform=` filter: a filtered connection ignores
+ * grant changes on other platforms. Unfiltered (`requestedPlatform` null) it is the
+ * plain set comparison; `pagePlatforms` is consulted only when filtered.
+ */
+export function v2GrantScopeChanged(
+  granted: ReadonlySet<number> | undefined,
+  refreshed: ReadonlySet<number> | undefined,
+  requestedPlatform: Platform | null,
+  pagePlatforms: ReadonlyMap<number, Platform>,
+): boolean {
+  if (granted === undefined || refreshed === undefined) {
+    return (granted === undefined) !== (refreshed === undefined);
+  }
+  const left = onPlatform(granted, requestedPlatform, pagePlatforms);
+  const right = onPlatform(refreshed, requestedPlatform, pagePlatforms);
+  if (left.size !== right.size) {
+    return true;
+  }
+  for (const accountId of left) {
+    if (!right.has(accountId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function narrowRecoveryMap(
+  values: ReadonlyMap<number, number>,
+  keep: ReadonlySet<number>,
+): Map<number, number> {
+  return new Map([...values].filter(([accountId]) => keep.has(accountId)));
+}
 
 export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -457,6 +550,10 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     const granted = grantedAccounts(principal);
+    // H3: optional platform filter. Every set this connection uses — replay,
+    // live fan-out, typing, grant revalidation, emitted cursors — is the
+    // unfiltered one intersected with this platform; nothing is ever added.
+    const requestedPlatform: Platform | null = request.query.platform ?? null;
 
     const authorization = request.headers.authorization;
     const bearerMatch = typeof authorization === "string"
@@ -473,9 +570,15 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // Resolve the starting watermarks: explicit cursor, or "now" (per-account
     // current high-waters over the granted universe).
     const heads = await listDomainEventHighWaters(appContext.db);
-    const universe = granted === undefined
-      ? new Set(heads.keys())
-      : granted;
+    // Page platforms: the `platform=` narrowing, and which accounts can carry
+    // an OFAPI webhook redelivery (frame provenance). Pages never change
+    // platform, so one read per connection is exact for existing pages.
+    const pagePlatforms = await listPagePlatforms(appContext.db);
+    const universe: ReadonlySet<number> = onPlatform(
+      granted === undefined ? heads.keys() : granted,
+      requestedPlatform,
+      pagePlatforms,
+    );
 
     let watermarks: Map<number, number>;
     let grantScopeBound = false;
@@ -486,10 +589,41 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       if (!decoded.ok) {
         throw new BadRequestError(`Invalid v2 cursor (${decoded.reason})`);
       }
+      // A platform-bound cursor resumes only on its own platform. Serving it
+      // without `platform=` would widen it to every platform.
+      const boundPlatform = decoded.platform;
+      if (boundPlatform !== null && boundPlatform !== requestedPlatform) {
+        throw new BadRequestError(requestedPlatform === null
+          ? `v2 cursor is bound to platform ${boundPlatform}; resume with platform=${boundPlatform}`
+          : `v2 cursor is bound to platform ${boundPlatform}, not ${requestedPlatform}`);
+      }
       watermarks = decoded.watermarks;
       grantScopeBound = decoded.scope === "granted";
       snapshotRecovery = decoded.recovery;
       snapshotRecoveryReplay = snapshotRecovery?.kind === "snapshot";
+      if (requestedPlatform !== null) {
+        const onRequestedPlatform = onPlatform(watermarks.keys(), requestedPlatform, pagePlatforms);
+        if (boundPlatform !== null && onRequestedPlatform.size !== watermarks.size) {
+          throw new BadRequestError("v2 cursor names an account outside its platform");
+        }
+        // A cursor minted before `platform=` is narrowed ONCE: accounts on
+        // other platforms leave its keyset (and its recovery topology); every
+        // cursor this connection emits is then bound to the platform, so the
+        // dropped accounts can never come back through it.
+        for (const accountId of [...watermarks.keys()]) {
+          if (!onRequestedPlatform.has(accountId)) {
+            watermarks.delete(accountId);
+          }
+        }
+        if (snapshotRecovery !== null) {
+          snapshotRecovery = {
+            ...snapshotRecovery,
+            base: narrowRecoveryMap(snapshotRecovery.base, onRequestedPlatform),
+            targets: narrowRecoveryMap(snapshotRecovery.targets, onRequestedPlatform),
+            retainedCounts: narrowRecoveryMap(snapshotRecovery.retainedCounts, onRequestedPlatform),
+          };
+        }
+      }
       for (const accountId of watermarks.keys()) {
         if (granted !== undefined && !granted.has(accountId)) {
           throw new ForbiddenError("Cursor names an account outside the granted scope");
@@ -643,12 +777,65 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             recovery: snapshotRecovery!,
           }
           : {}),
+        ...(requestedPlatform === null ? {} : { platform: requestedPlatform }),
       });
+    }
+
+    // Page → platform as this connection knows it: the connect-time read,
+    // extended when a page unknown to it appears live (a page never changes
+    // platform, so entries never go stale).
+    const knownPagePlatforms = new Map(pagePlatforms);
+    const platformOf = (accountId: number) => knownPagePlatforms.get(accountId);
+    // An owner (no grant list) filtered by platform subscribes to EVERY
+    // account, like the unfiltered owner, so a page whose first ledger event
+    // arrives mid-connection is delivered live and enters the cursor instead
+    // of 409ing the next resume. Frames are then filtered here by platform.
+    const filtersLiveByPlatform = requestedPlatform !== null && granted === undefined;
+    /** Synchronous platform check for the live lane: "unknown" only for a
+     * page this connection has not seen, resolved by liveAccountOnPlatform. */
+    function livePlatformVerdict(accountId: number): "on" | "off" | "unknown" {
+      if (!filtersLiveByPlatform) {
+        return "on";
+      }
+      const pagePlatform = knownPagePlatforms.get(accountId);
+      return pagePlatform === undefined
+        ? "unknown"
+        : pagePlatform === requestedPlatform ? "on" : "off";
+    }
+    async function liveAccountOnPlatform(accountId: number): Promise<boolean> {
+      const verdict = livePlatformVerdict(accountId);
+      if (verdict !== "unknown") {
+        return verdict === "on";
+      }
+      for (const [pageId, pagePlatform] of await listPagePlatforms(appContext.db)) {
+        knownPagePlatforms.set(pageId, pagePlatform);
+      }
+      // Still unknown after a fresh read: not a page on this platform.
+      return livePlatformVerdict(accountId) === "on";
+    }
+
+    /** Batched serve-time enrichment for a replay page: payloads and frame
+     * contexts, a fixed number of statements per batch (never per frame). */
+    async function enrichReplayBatch(rows: readonly DomainEventRow[], logMessage: string) {
+      const [payloads, contexts] = await Promise.all([
+        buildMessagePayloadEnrichments(appContext, rows)
+          .catch((error) => {
+            request.log.warn({ err: error }, logMessage);
+            return new Map<number, unknown>();
+          }),
+        buildDomainFrameContexts(appContext, rows, { platformOf })
+          .catch((error) => {
+            request.log.warn({ err: error }, "v2 replay frame context failed; serving without it");
+            return new Map<number, DomainFrameContext>();
+          }),
+      ]);
+      return { payloads, contexts };
     }
 
     function writeV2Frame(
       event: DomainEventRow,
       payload: unknown,
+      context: DomainFrameContext | undefined,
       lane: { replay: boolean; allowSnapshotGap?: boolean },
     ) {
       if (raw.writableEnded || raw.destroyed) {
@@ -680,22 +867,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         raw.destroy();
         return;
       }
-      const frame = {
-        accountId: event.accountId,
-        accountSeq: event.accountSeq,
-        type: event.type,
-        occurredAt: event.occurredAt.toISOString(),
-        data: event.data,
-        // Stage 24 serve-time fields (see domainEventFrameSchema).
-        fanRef: event.fanIdentityRef,
-        conversationRef: event.conversationRef,
-        messageRef: event.messageRef,
-        // The repository reads this current page mapping in the same statement
-        // as the event. A remap may therefore change accountRef within one
-        // connection, which lets OFAPI-keyed clients rebaseline before apply.
-        accountRef: event.currentAccountRef,
-        ...(payload !== undefined ? { payload } : {}),
-      };
+      const frame = domainEventFrame(event, payload, context);
       raw.write(`id: ${encodedConnectionCursor()}\nevent: domain\ndata: ${JSON.stringify(frame)}\n\n`);
       if (LEDGER_LATENCY_LOGGED_V2_FRAME_TYPES.has(event.type)) {
         request.log.info({
@@ -712,13 +884,43 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
      * failure degrades to an unenriched frame (the desktop falls back to its
      * reconciliation path), never a dropped connection. */
     async function writeV2FrameEnriched(event: DomainEventRow) {
-      let enrichment: unknown;
-      try {
-        enrichment = (await buildMessagePayloadEnrichments(appContext, [event])).get(event.id);
-      } catch (error) {
-        request.log.warn({ err: error, eventId: event.id }, "v2 frame enrichment failed; serving thin frame");
+      if (raw.writableEnded || raw.destroyed) {
+        return; // a closed stream buys no lookups or enrichment
       }
-      writeV2Frame(event, enrichment, { replay: false });
+      if (filtersLiveByPlatform) {
+        let onRequestedPlatform: boolean;
+        try {
+          onRequestedPlatform = await liveAccountOnPlatform(event.accountId);
+        } catch (error) {
+          // Fail closed without skipping: the frame is not written and its
+          // cursor never passes it; the reconnect re-reads page platforms.
+          request.log.warn(
+            { err: error, accountId: event.accountId },
+            "v2 SSE page platform lookup failed; closing stream",
+          );
+          raw.end();
+          return;
+        }
+        if (!onRequestedPlatform) {
+          return;
+        }
+      }
+      const [payload, context] = await Promise.allSettled([
+        buildMessagePayloadEnrichments(appContext, [event]).then((map) => map.get(event.id)),
+        buildDomainFrameContexts(appContext, [event], { platformOf }).then((map) => map.get(event.id)),
+      ]);
+      if (payload.status === "rejected") {
+        request.log.warn({ err: payload.reason, eventId: event.id }, "v2 frame enrichment failed; serving thin frame");
+      }
+      if (context.status === "rejected") {
+        request.log.warn({ err: context.reason, eventId: event.id }, "v2 frame context failed; serving without it");
+      }
+      writeV2Frame(
+        event,
+        payload.status === "fulfilled" ? payload.value : undefined,
+        context.status === "fulfilled" ? context.value : undefined,
+        { replay: false },
+      );
     }
 
     // Subscribe before the replay so live frames buffer until replay flushes.
@@ -741,8 +943,17 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     try {
       const captured = await subscribeBeforeReplayBoundary({
         subscribe: () => domainEventHub!.subscribe({
-          accountIds: granted,
+          // Owners (filtered or not) keep the dynamic "every account" lane —
+          // a filtered owner drops other platforms' frames at delivery. A
+          // grant-listed connection is pinned to its grants (∩ platform);
+          // a grant change closes it through revalidation.
+          accountIds: granted === undefined
+            ? undefined
+            : requestedPlatform === null ? granted : universe,
           continuityLost(accountId, _afterSeq, throughSeq) {
+            if (livePlatformVerdict(accountId) === "off") {
+              return; // another platform's ledger: not this connection's
+            }
             const watermark = guards.watermarks().get(accountId) ?? 0;
             if (watermark >= throughSeq) {
               return;
@@ -754,6 +965,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
             raw.end();
           },
           deliver(event) {
+            // Known other-platform frames never reach the bounded pre-replay
+            // buffer; unknown pages are resolved on the ordered write chain.
+            if (livePlatformVerdict(event.accountId) === "off") {
+              return;
+            }
             if (!replayDone) {
               bufferedLive.push(event);
               return;
@@ -815,7 +1031,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // `event: ephemeral` frames — no id line, never advancing the cursor.
     // Live-only by design: a missed typing hint has no replay value.
     syncEventHub ??= createSyncEventHub(appContext);
-    const ephemeralPages: ReadonlySet<number> = granted ?? new Set(initialOfapiAccountRefs.keys());
+    const ephemeralPages: ReadonlySet<number> = onPlatform(
+      granted ?? initialOfapiAccountRefs.keys(),
+      requestedPlatform,
+      pagePlatforms,
+    );
     const unsubscribeEphemeral = syncEventHub.subscribe({
       pageIds: ephemeralPages,
       deliver(frame) {
@@ -850,9 +1070,18 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           return;
         }
         const refreshedGranted = grantedAccounts(refreshed);
-        const changed = (granted === undefined) !== (refreshedGranted === undefined)
-          || (granted !== undefined && refreshedGranted !== undefined
-            && !sameNumberSet(granted, refreshedGranted));
+        let changed = v2GrantScopeChanged(granted, refreshedGranted, null, pagePlatforms);
+        if (changed && requestedPlatform !== null) {
+          // A platform-filtered connection only watches its own platform's
+          // grants. Fresh page platforms: a newly created page is unknown to
+          // the connection-time map.
+          changed = v2GrantScopeChanged(
+            granted,
+            refreshedGranted,
+            requestedPlatform,
+            await listPagePlatforms(appContext.db),
+          );
+        }
         if (changed) {
           request.log.warn("v2 SSE grant set changed; closing stream for re-auth");
           raw.end();
@@ -927,13 +1156,12 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           if (raw.writableEnded || raw.destroyed) {
             return;
           }
-          const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
-            .catch((error) => {
-              request.log.warn({ err: error }, "v2 replay enrichment failed; serving thin frames");
-              return new Map<number, unknown>();
-            });
+          const enrichments = await enrichReplayBatch(
+            rows,
+            "v2 replay enrichment failed; serving thin frames",
+          );
           for (const row of rows) {
-            writeV2Frame(row, enrichments.get(row.id), {
+            writeV2Frame(row, enrichments.payloads.get(row.id), enrichments.contexts.get(row.id), {
               replay: true,
               allowSnapshotGap: snapshotRecoveryReplay,
             });
@@ -1091,16 +1319,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
               cleanup();
               return;
             }
-            const enrichments = await buildMessagePayloadEnrichments(appContext, rows)
-              .catch((error) => {
-                request.log.warn(
-                  { err: error },
-                  "v2 post-snapshot replay enrichment failed; serving thin frames",
-                );
-                return new Map<number, unknown>();
-              });
+            const enrichments = await enrichReplayBatch(
+              rows,
+              "v2 post-snapshot replay enrichment failed; serving thin frames",
+            );
             for (const row of rows) {
-              writeV2Frame(row, enrichments.get(row.id), { replay: true });
+              writeV2Frame(row, enrichments.payloads.get(row.id), enrichments.contexts.get(row.id), {
+                replay: true,
+              });
             }
             afterSeq = continuity.nextSeq;
             if (continuity.done) break;
@@ -1145,7 +1371,11 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     const granted = grantedAccounts(principal);
+    const requestedPlatform: Platform | null = request.query.platform ?? null;
     const heads = await listDomainEventHighWaters(appContext.db);
+    const pagePlatforms = requestedPlatform === null
+      ? new Map<number, Platform>()
+      : await listPagePlatforms(appContext.db);
 
     let accountIds: number[];
     if (request.query.accounts !== undefined) {
@@ -1155,8 +1385,16 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
           throw new ForbiddenError("Requested account is outside the granted scope");
         }
       }
+      if (onPlatform(accountIds, requestedPlatform, pagePlatforms).size !== new Set(accountIds).size) {
+        throw new BadRequestError(`Requested account is not on platform ${requestedPlatform}`);
+      }
     } else {
-      accountIds = granted === undefined ? [...heads.keys()] : [...granted];
+      // H3: `platform=` narrows the granted universe; it never adds to it.
+      accountIds = [...onPlatform(
+        granted === undefined ? heads.keys() : granted,
+        requestedPlatform,
+        pagePlatforms,
+      )];
     }
 
     let sourceCursor: Extract<ReturnType<typeof decodeDomainEventCursor>, { ok: true }> | null = null;
@@ -1164,6 +1402,14 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       const decoded = decodeDomainEventCursor(request.query.sourceCursor);
       if (!decoded.ok) {
         throw new BadRequestError(`Invalid v2 source cursor (${decoded.reason})`);
+      }
+      // Same binding rule as the stream. An unbound source cursor needs no
+      // explicit narrowing: only the requested accounts' watermarks are read.
+      const boundPlatform = decoded.platform;
+      if (boundPlatform !== null && boundPlatform !== requestedPlatform) {
+        throw new BadRequestError(requestedPlatform === null
+          ? `v2 source cursor is bound to platform ${boundPlatform}; pass platform=${boundPlatform}`
+          : `v2 source cursor is bound to platform ${boundPlatform}, not ${requestedPlatform}`);
       }
       sourceCursor = decoded;
     }
@@ -1238,6 +1484,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         watermarks,
         {
           ...(request.query.accounts === undefined ? { scope: "granted" as const } : {}),
+          ...(requestedPlatform === null ? {} : { platform: requestedPlatform }),
           ...(legacyRecoveryErasureState === null
             ? {}
             : {
@@ -1252,6 +1499,51 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
         },
       ),
       accounts,
+    };
+  });
+
+  // H3: the money facts of one account, paged by account_seq. A filtered read
+  // of existing ledger rows (#265: no new sequence, no new business identity).
+  server.get("/api/v1/events/v2/facts", {
+    schema: routeSchemas.eventsV2Facts,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const granted = grantedAccounts(principal);
+    const { accountId, afterSeq, limit } = request.query;
+    if (granted !== undefined && !granted.has(accountId)) {
+      throw new ForbiddenError("Requested account is outside the granted scope");
+    }
+    // The committed head first: every row at or below it is committed, so the
+    // page below is complete through it (append bumps the head in the same
+    // transaction as the rows).
+    const throughSeq = await getAccountHighWater(appContext.db, accountId);
+    if (afterSeq > throughSeq) {
+      throw new ConflictError(
+        `afterSeq ${afterSeq} is ahead of account ${accountId} head ${throughSeq}; restart from 0`,
+      );
+    }
+    const rows = await listDomainEventFacts(appContext.db, {
+      accountId,
+      afterSeq,
+      throughSeq,
+      types: domainEventFactTypes,
+      limit: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const pagePlatforms = await listPagePlatforms(appContext.db);
+    const contexts = await buildDomainFrameContexts(appContext, page, {
+      platformOf: (id) => pagePlatforms.get(id),
+    }).catch((error) => {
+      request.log.warn({ err: error }, "v2 facts frame context failed; serving without it");
+      return new Map<number, DomainFrameContext>();
+    });
+    return {
+      accountId,
+      throughSeq,
+      facts: page.map((row) => domainEventFrame(row, undefined, contexts.get(row.id))),
+      nextAfterSeq: hasMore ? page.at(-1)!.accountSeq : throughSeq,
+      hasMore,
     };
   });
 }
