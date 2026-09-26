@@ -98,6 +98,23 @@ export async function finishWebhookDeliveryScanTick(db: Database, scan: WebhookD
     where id=${scan.id} and lease_token=${scan.lease_token} and state='running'`);
 }
 
+/** Coverage of the saved delivery history for the registered webhook (H2).
+ * `frontier` is the newest end of a completed window; before any window
+ * completes, the first scan's creation (or the policy's last save) bounds how
+ * long collection has lacked coverage. Null when collection is off, the policy
+ * row is absent, or no webhook is registered. */
+export async function getWebhookDeliveryHistoryCoverage(db: Database) {
+  const row = (await db.execute<{ webhook_id: string | null; frontier: Date | null; first_scan_at: Date | null; policy_updated_at: Date }>(sql`
+    select c.external_webhook_id as webhook_id,p.updated_at as policy_updated_at,
+      (select max(s.window_end) from ofapi_webhook_delivery_scans s where s.webhook_id=c.external_webhook_id and s.state='complete') as frontier,
+      (select min(s.created_at) from ofapi_webhook_delivery_scans s where s.webhook_id=c.external_webhook_id) as first_scan_at
+    from ofapi_webhook_collection_policy p join ofapi_webhook_config c on c.id=1
+    where p.id and p.history_enabled and c.external_webhook_id is not null`)).rows[0];
+  if (!row?.webhook_id) return null;
+  const date = (value: Date | null) => value ? new Date(value) : null;
+  return { webhookId: row.webhook_id, frontier: date(row.frontier), since: date(row.frontier) ?? date(row.first_scan_at) ?? new Date(row.policy_updated_at) };
+}
+
 export interface WebhookCollectionPolicy extends Record<string, unknown> {
   version: number; desired_groups: string[]; applied_groups: string[]; history_enabled: boolean;
   apply_state: string; applied_at: Date | null; error_code: string | null;

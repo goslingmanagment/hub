@@ -70,6 +70,12 @@ function openTitleForIncident(
   if (input.kind === "capture_payload_parity" && input.subKey === "dangling_reference") {
     return "🚨 Capture payload reference points at nothing";
   }
+  // H2: the automatic webhook redelivery cap is a spend bound, not an hourly
+  // burn rate; it shares the kind (a new kind is a contract change) but not
+  // the title or the latch.
+  if (input.kind === "ofapi_burn_rate" && input.subKey === "auto_redelivery_cap") {
+    return "🚨 OFAPI webhook auto-redelivery daily cap reached";
+  }
   switch (input.kind) {
     case "auth_blocked":
       return "🚨 Auth failed";
@@ -186,6 +192,9 @@ function resolveDetailForIncident(
     case "ofapi_low_credit":
       return "OFAPI credit balance recovered";
     case "ofapi_burn_rate":
+      if (input.subKey === "auto_redelivery_cap") {
+        return "OFAPI webhook auto-redelivery below its daily cap again; the burn-rate latch is unaffected";
+      }
       return "OFAPI credit burn rate back to normal";
     case "db_disk_usage":
       // The runway latches share the kind but not the condition: resolving a

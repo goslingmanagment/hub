@@ -17,7 +17,9 @@ History capture records exact responses before parsing. Fixed closed windows,
 100-row pages, durable leases/cursors and overlapping scans prevent a crash
 from silently skipping a page. A malformed page preserves raw evidence and
 the old offset. Manual scans have at most 20 pages; automatic scans use one
-bulk-priority page every five minutes with a one-hour overlap. Credential changes
+bulk-priority page every five minutes with a one-hour overlap, and catch up
+faster once coverage is more than 30 minutes old (see "Automatic redelivery and
+collector catch-up" below). Credential changes
 start a new scope. Scope is always labeled credential-visible: key access is
 not proof of complete team coverage. Captured facts have no scheduled deletion.
 
@@ -34,7 +36,8 @@ send. Dispatch makes one POST; accepted and indeterminate attempts block another
 intent for that provider attempt. A process/transport uncertainty remains
 indeterminate and is never retried automatically. A new successful provider
 attempt is matched to the acknowledgement UUID. HTTP 409 is presented as a
-paused/disabled webhook. The hard manual limit is 20 requests per UTC day.
+paused/disabled webhook. The hard manual limit is 20 manual requests per UTC
+day; automatic requests (below) have their own counter and never consume it.
 
 Exclusive page-scoped attempts, their intents and exclusive raw history or
 single-account export receipts participate in governed page erasure. Mixed
@@ -207,3 +210,118 @@ change or message send was used. Historical unmapped debt remains retained.
 
 Detailed evidence, exact repair command, validation and limitations:
 [`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md`](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md).
+
+
+## Automatic redelivery and collector catch-up — 2026-09-26 (H2, amends #265)
+
+Decision #265 made remote redelivery a distinct owner action: durable intent
+before a single POST, a hard 20/day limit, accepted/rejected/indeterminate
+outcomes, and no claim of receipt from an acknowledgement. On 2026-09-23 a
+~50-minute hub outage lost 14 business webhooks (55 provider attempts) that
+nobody redelivered until the manual Stage 0 on 2026-09-26, and the history
+collector was measured 27–63 minutes behind. This amendment keeps every #265
+guarantee and adds a system actor next to the owner.
+
+### Automatic redelivery
+
+After each delivery-history sweep (the minutely OFAPI sweep job,
+`runOfapiWebhookAutoRedelivery` right after `sweepOfapiWebhookDeliveryHistory`),
+the worker requests one provider redelivery per eligible business key:
+
+- event type is a business fact: `messages.received`, `messages.sent`,
+  `messages.deleted`, `messages.ppv.unlocked`, `tips.received`,
+  `transactions.new`, `subscriptions.new`, `subscriptions.renewed`,
+  `subscriptions.expired`. Presence, typing, account and async-job hooks are
+  never redelivered automatically;
+- the business key is the provider idempotency key; the redelivered attempt is
+  the key's newest captured attempt. That attempt is older than 10 minutes (the
+  provider's own retry chain is left alone) and inside the 7-day retention;
+  nearest to expiry goes first;
+- every captured attempt of the key failed and happened at or after the enable
+  moment. The worker stores that moment in `ofapi_webhook_auto_redelivery_state`
+  the first time it sees the switch on; switching off clears it, and a later
+  switch-on starts a new moment. Failures from before the moment, or from a
+  switched-off period, stay for the manual action;
+- no local receipt (`ofapi_webhook_events` row with that idempotency key), no
+  active intent of either origin for any attempt of the key, and no automatic
+  intent of any outcome for the key.
+
+Each request commits a `dispatching` intent with `origin='auto'`,
+`actor_user_id` null and `business_key` plus a `system.ofapi_webhook_auto_redelivery_requested`
+audit event (source `worker`) under the same advisory lock as the manual path,
+then makes exactly one POST. The outcome rules are shared with the manual path.
+A unique index on `(webhook_id, business_key) WHERE origin='auto'` makes the
+one-intent-per-business-key rule durable: a rejected or indeterminate automatic
+request is never repeated automatically, and an interrupted dispatch settles as
+`indeterminate` after two minutes like a manual one. The owner can still decide
+on a manual redelivery of a different attempt; the same attempt stays blocked
+while an intent owns its outcome. At most 25 requests go out per sweep tick.
+
+Migration 0207 adds `origin` (`manual` default, so existing rows and an older
+binary stay valid), `business_key` (backfilled from the attempt) and check
+constraints: a manual intent has an actor, an automatic one has none and has a
+business key. The admin API and dashboard are unchanged; an automatic intent
+appears in the delivery history as the attempt's redelivery state.
+
+Caps, per UTC day, on separate counters: 20 manual requests (previously this
+limit counted every intent of the day) and `OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP`
+automatic requests (default and maximum 1000, about 10 credits). When the cap
+blocks an eligible key, the worker logs `OFAPI webhook auto-redelivery daily cap
+reached` and opens the existing `ofapi_burn_rate` incident under its own latch
+`ofapi_burn_rate:global:auto_redelivery_cap` ("OFAPI webhook auto-redelivery
+daily cap reached"; a new incident kind is a contract change and waits for H3).
+The latch stays open until the day's automatic count is below the cap (the next
+UTC day or a raised cap) or the feature is switched off; the burn-rate paging
+policy pages after 30 minutes open. The hourly burn-rate latch is unaffected.
+
+Config (live overlay, no restart), both `editable` in the dashboard
+configuration:
+
+| Key | Env | Default |
+|---|---|---|
+| `ofapiWebhookAutoRedeliveryEnabled` | `OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED` | `false` |
+| `ofapiWebhookAutoRedeliveryDailyCap` | `OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP` | `1000` (1–1000) |
+
+### Collector catch-up and coverage age
+
+Coverage is the end of the newest completed history window. While it is at
+most 30 minutes old the collector keeps the #265 cadence: one page every five
+minutes. Once it is older, a healthy collector continues every minute with up
+to five pages per tick; each page is captured and persisted before the next
+request, and the frozen window, one-hour overlap and 7-day bound are unchanged.
+A failed page keeps the five-minute pause. History GET remains free.
+
+The golden-signal sampler emits `ofapi_delivery_history_age` (p50 = p95): now
+minus the coverage end, or, before any window completes, minus the first scan's
+creation (or the policy's last save). It is emitted only while collection is on
+with a registered webhook; a failing probe is a breach. Above 45 minutes it
+opens `golden_signal_lag:global:ofapi_delivery_history_age` (existing kind and
+paging policy); the value is on `GET /api/v1/ops/metrics`.
+
+### Rollout
+
+1. Deploy with migration 0207. The switch stays off: no automatic POST, no
+   enable moment. Catch-up and the coverage signal act at once on the existing
+   collector (collection is enabled in production).
+2. Enable: set `ofapiWebhookAutoRedeliveryEnabled` to on in the dashboard
+   configuration (or the env var plus a worker restart). Within a minute the
+   worker logs `OFAPI webhook auto-redelivery switched on`, and
+   `select enabled_at from ofapi_webhook_auto_redelivery_state` returns the
+   moment (null while switched off).
+3. Verify read-only: `select origin,state,count(*) from
+   ofapi_webhook_redelivery_intents where created_at>=current_date group by 1,2`;
+   each automatic intent has a business-type attempt, no receipt at request
+   time, and later a receipt/canonical event when accepted. Collector coverage:
+   `select now()-max(window_end) from ofapi_webhook_delivery_scans where
+   state='complete'` stays under ~30 minutes; `ops_metric_samples` has
+   `ofapi_delivery_history_age`.
+4. Disable by switching it off; intents and their outcomes remain.
+
+Validation: `tests/ofapi-webhook-auto-redelivery.integration.test.ts` covers
+default off and the persisted/forgotten enable moment, the live overlay,
+selection (types, quiet period, retention, enable moment, recovered keys,
+receipts, active manual intents, keyless attempts), expiry ordering, business-key
+dedup, indeterminate/rejected/interrupted outcomes never retried, the separate
+manual counter, schema checks, the cap alert with cap 1 and its resolution,
+unavailable access, bounded catch-up, the five-minute cadence, the pause after a
+failed page and the coverage-age latch.

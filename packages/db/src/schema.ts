@@ -6135,6 +6135,7 @@ export const ofapiWebhookDeliveryAttempts = pgTable("ofapi_webhook_delivery_atte
   pk: primaryKey({ columns: [table.webhookId, table.attemptId] }),
   groupIdx: index("ofapi_webhook_delivery_group_idx").on(table.webhookId, table.deliveryUuid),
   timeIdx: index("ofapi_webhook_delivery_time_idx").on(table.webhookId, table.sourceCreatedAt.desc(), table.attemptId.desc()),
+  businessKeyIdx: index("ofapi_webhook_delivery_business_key_idx").on(table.webhookId, table.idempotencyKey).where(sql`${table.idempotencyKey} is not null`),
 }));
 
 export const ofapiWebhookDeliveryScans = pgTable("ofapi_webhook_delivery_scans", {
@@ -6149,13 +6150,23 @@ export const ofapiWebhookDeliveryScans = pgTable("ofapi_webhook_delivery_scans",
 
 export const ofapiWebhookRedeliveryIntents = pgTable("ofapi_webhook_redelivery_intents", {
   id: uuid("id").primaryKey(), webhookId: text("webhook_id").notNull(), attemptId: bigint("attempt_id", { mode: "number" }).notNull(),
-  actorUserId: bigint("actor_user_id", { mode: "number" }).notNull().references(() => users.id, { onDelete: "restrict" }),
+  // Migration 0207: null exactly for origin 'auto' (system actor).
+  actorUserId: bigint("actor_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  origin: text("origin").default("manual").notNull(), businessKey: text("business_key"),
   state: text("state").notNull(), redeliveryUuid: text("redelivery_uuid"), errorCode: text("error_code"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(), settledAt: timestamp("settled_at", { withTimezone: true }),
 }, table => ({
   attemptFk: foreignKey({ columns: [table.webhookId, table.attemptId], foreignColumns: [ofapiWebhookDeliveryAttempts.webhookId, ofapiWebhookDeliveryAttempts.attemptId] }).onDelete("restrict"),
   activeAttemptUniq: uniqueIndex("ofapi_webhook_redelivery_active_attempt_uniq").on(table.webhookId, table.attemptId).where(sql`${table.state} in ('dispatching','accepted','indeterminate')`),
+  autoBusinessKeyUniq: uniqueIndex("ofapi_webhook_redelivery_auto_business_key_uniq").on(table.webhookId, table.businessKey).where(sql`${table.origin} = 'auto'`),
+  originDayIdx: index("ofapi_webhook_redelivery_origin_day_idx").on(table.origin, table.createdAt),
 }));
+
+// enabledAt is non-null exactly while automatic redelivery is enabled (migration 0207).
+export const ofapiWebhookAutoRedeliveryState = pgTable("ofapi_webhook_auto_redelivery_state", {
+  id: boolean("id").primaryKey().default(true), enabledAt: timestamp("enabled_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const ofapiWebhookCollectionPolicy = pgTable("ofapi_webhook_collection_policy", {
   id: boolean("id").primaryKey().default(true), version: bigint("version", { mode: "number" }).default(0).notNull(),
