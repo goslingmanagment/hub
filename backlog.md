@@ -48,7 +48,7 @@
   `tests/domain-events-v2.integration.test.ts:1174-1521`. Frames PPV, tip и
   transaction логируют `ledgerToWireMs`
   (`apps/runtime/src/modules/events/index.ts:96-103,700-708`).
-- **Сделано (H2c):** явная quarantine — PPV без chat ref даёт 0 событий, driver
+- **Сделано (#264):** явная quarantine — PPV без chat ref даёт 0 событий, driver
   по-прежнему штампует `parse_version` и в той же транзакции пишет terminal
   outcome в `observation_parse_quarantine` (миграция 0209) + счётчик
   `obs_quarantined_webhook_ofapi_v5` без порога, так что backlog-age gauge и
