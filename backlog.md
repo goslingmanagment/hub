@@ -40,18 +40,19 @@
 ### INC-001 / UV-010 — Завершить remediation PPV poison-loop
 
 - **Исправлено:** новые `message.ppv_unlocked` получают правильные refs и
-  fail-closed mapping (`ofapi-payloads.ts:77-82`,
-  `canonicalize/ofapi-webhook.ts:143-180`).
-- **Открытый сбой:** suppressed PPV продвигает только in-memory watermark; если
-  следующим идёт erased hole и обычного frame нет, Core закрывает stream без
-  нового cursor, а клиент бесконечно возвращается со старого cursor.
-- **Код:** `apps/runtime/src/modules/events/index.ts:95-104,655-677,914-954`;
-  happy-path тест с последующим frame —
-  `tests/domain-events-v2.integration.test.ts:1169-1201`.
-- **Остаток:** cursor-bearing ignored checkpoint перед close; append-only repair
-  70 исторических rows; явная quarantine/parse semantics; PPV snapshot coverage;
-  автоматический read stop-loss; production/fleet acceptance; только затем снять
-  `SUPPRESSED_V2_FRAME_TYPES`. Decision #155 — каноническая история инцидента.
+  fail-closed mapping (`ofapi-payloads.ts:115-121`,
+  `canonicalize/ofapi-webhook.ts:176-214`).
+- **Сделано (#261):** `SUPPRESSED_V2_FRAME_TYPES` снят — PPV идёт в v2 обычным
+  frame со своим cursor, поэтому PPV перед erased hole больше не зацикливает
+  reconnect. Тесты доставки и этой регрессии —
+  `tests/domain-events-v2.integration.test.ts:1174-1521`. Frames PPV, tip и
+  transaction логируют `ledgerToWireMs`
+  (`apps/runtime/src/modules/events/index.ts:96-103,700-708`).
+- **Остаток** — этапы H2/H3/Repair плана 2026-09-26
+  (`_docs/2026-09-26-of-desktop-purchases-and-startup-plan.md`, вне репо):
+  repair 70 исторических rows с неверным `conversation_ref`; явная quarantine
+  semantics; PPV в проекциях и snapshot; read stop-loss; приёмка на флоте.
+  Decision #155 — каноническая история инцидента.
 
 ## P1 перед отдельным one-way gate
 
