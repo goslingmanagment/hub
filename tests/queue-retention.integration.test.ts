@@ -36,6 +36,7 @@ import {
 } from "../apps/runtime/src/services/sync-queue.ts";
 import { ensureTieringQueue } from "../apps/runtime/src/services/tiering/index.ts";
 import { ensureVoiceNotesSweepQueue } from "../apps/runtime/src/services/voice-notes-sweep.ts";
+import { ensureAiMediaDescribeSweepQueue } from "../apps/runtime/src/services/ai-media-describe/sweep.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -70,6 +71,7 @@ async function createAllQueues(boss: PgBoss) {
   await ensureMessageArchiveQueues(boss);
   await ensureProjectionDebtQueue(boss);
   await ensureVoiceNotesSweepQueue(boss);
+  await ensureAiMediaDescribeSweepQueue(boss);
   await ensureOpsMetricsQueue(boss);
   await ensureNotificationDeliveryOutboxQueue(boss);
   await ensureNotificationPagingSweepQueue(boss);
