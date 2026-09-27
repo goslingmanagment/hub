@@ -245,6 +245,12 @@ the way to the provider; they are never written to disk, a table or a log. The
 previews rule — bytes only on chatters' machines — is unchanged. Prompts carry
 only the stored text description.
 
+Feature requests: the Fansly `clientContext.media` (optional, strict) lists
+the window's numbered media by id — never a URL or bytes. The hub fills ready
+descriptions into those labels or, with the describer off for the page or the
+feature (`fan-summary`), restores the legacy labels byte-for-byte. The client
+never learns whether a description exists; the prompt debug echo shows it.
+
 ## Rollback
 
 Desktop local provider keys stay supported until all of these are true:

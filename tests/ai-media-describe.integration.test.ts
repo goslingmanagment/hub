@@ -270,6 +270,22 @@ describe("AI media describer sweep", () => {
     expect(Number(day.rows[0].micro_usd_reserved)).toBeGreaterThan(0);
   });
 
+  it("never resends after the request may have left, even when the settle fails", async () => {
+    const id = await candidate({ mediaRef: "w1" });
+    const { calls, deps } = harness();
+    // Break the restricted-record write that follows a successful send.
+    await testDb!.pool.query("alter table ai_generation_content add constraint vision_break check (generation_ref not like 'media-describe:%') not valid");
+    try {
+      await runAiMediaDescribeSweep(app, deps);
+    } finally {
+      await testDb!.pool.query("alter table ai_generation_content drop constraint vision_break");
+    }
+    expect(calls.provider).toBe(1);
+    expect(await row(id)).toMatchObject({ status: "outcome_unknown", error_code: "in_flight" });
+    await runAiMediaDescribeSweep(app, deps);
+    expect(calls.provider).toBe(1);
+  });
+
   it("checks the daily caps before any network", async () => {
     app.config.aiMediaDescribeDailyImageLimit = 1;
     const first = await candidate({ mediaRef: "m5" });

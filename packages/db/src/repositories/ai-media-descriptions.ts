@@ -149,6 +149,8 @@ export async function upsertAiMediaDescriptionCandidate(
         ${now}, ${now}, ${now}
       )
       on conflict (page_id, platform, media_ref, variant) do update set
+        -- A generation may not know the sender; the capture later does.
+        fan_platform_user_id = coalesce(ai_media_descriptions.fan_platform_user_id, excluded.fan_platform_user_id),
         source_observation_id = case
           when excluded.source_observation_id is not null
             and (ai_media_descriptions.source_observation_id is null

@@ -281,6 +281,7 @@ export async function runAiMediaDescribeSweep(
     }
     const page = pagesById.get(row.pageId)!;
     let outcome: RowOutcome;
+    const progress = { sent: false };
     try {
       outcome = await processRow(app, deps, {
         row,
@@ -289,20 +290,26 @@ export async function runAiMediaDescribeSweep(
         model,
         limits,
         modelMedia: effective.aiMediaDescribeModelMedia ?? "teasers",
+        progress,
       });
     } catch (error) {
       app.logger.warn({
         descriptionId: row.id,
+        sent: progress.sent,
         err: error instanceof Error ? { name: error.name, message: error.message.slice(0, 200) } : String(error),
       }, "ai media describe row failed");
-      await finishAiMediaDescription(app.db, {
-        id: row.id,
-        status: row.attempts >= MAX_TRANSIENT_ATTEMPTS ? "failed" : "pending",
-        now,
-        errorCode: "internal_error",
-        nextAttemptAt: new Date(now.getTime() + TRANSIENT_RETRY_MS),
-      });
-      outcome = { status: "internal_error", sent: false };
+      // Once the request may have left, the row is already written ahead as
+      // outcome_unknown (or carries its real result): never make it due again.
+      if (!progress.sent) {
+        await finishAiMediaDescription(app.db, {
+          id: row.id,
+          status: row.attempts >= MAX_TRANSIENT_ATTEMPTS ? "failed" : "pending",
+          now,
+          errorCode: "internal_error",
+          nextAttemptAt: new Date(now.getTime() + TRANSIENT_RETRY_MS),
+        });
+      }
+      outcome = { status: "internal_error", sent: progress.sent };
     }
     result.outcomes[outcome.status] = (result.outcomes[outcome.status] ?? 0) + 1;
     if (outcome.sent) {
@@ -331,6 +338,8 @@ async function processRow(
     model: string;
     limits: { images: number; microUsd: number };
     modelMedia: "teasers" | "teasers+free";
+    /** Set before the provider send: a later failure must not make it due. */
+    progress: { sent: boolean };
   },
 ): Promise<RowOutcome> {
   const { row, page, now } = input;
@@ -491,6 +500,12 @@ async function processRow(
     },
   });
 
+  // Write-ahead: from here the request may reach the provider. A crash, a
+  // deploy or a failed settle leaves the row outcome_unknown — terminal, never
+  // sent again — instead of a pending row a later sweep would resend.
+  await finish("outcome_unknown", { errorCode: "in_flight", contentSha256, source: resolution.source, model: input.model });
+  input.progress.sent = true;
+
   const startedAt = Date.now();
   // The base64 copy lives only inside this call's scope.
   const outcome: MediaDescribeOutcome = await describeMedia({
@@ -601,7 +616,13 @@ async function processRow(
         source: resolution.source,
         errorCode: outcome.reason,
       });
-      await evaluateBreakerAfterRefusal(app, completedAt);
+      try {
+        await evaluateBreakerAfterRefusal(app, completedAt);
+      } catch (error) {
+        // The refusal is recorded; a breaker/incident hiccup must not undo it.
+        app.logger.warn({ descriptionId: row.id, err: error instanceof Error ? error.name : "error" },
+          "ai media describer breaker evaluation failed");
+      }
       return { status: "refused", sent: true };
     }
     case "outcome_unknown": {
@@ -657,15 +678,8 @@ async function processRow(
         });
         return { status: "account_stop", sent: true, stop: true };
       }
-      if (outcome.kind === "retryable" && row.attempts < MAX_TRANSIENT_ATTEMPTS) {
-        await finish("pending", {
-          errorCode: outcome.errorCode,
-          usageEventId,
-          contentSha256,
-          nextAttemptAt: new Date(completedAt.getTime() + TRANSIENT_RETRY_MS),
-        });
-        return { status: "provider_retry", sent: true };
-      }
+      // Plan §6: at most 2 retries, all inside describeMedia; an exhausted
+      // transient failure is final (nothing was processed or billed).
       await finish("failed", { errorCode: outcome.errorCode, usageEventId, contentSha256, source: resolution.source });
       return { status: "failed", sent: true };
     }

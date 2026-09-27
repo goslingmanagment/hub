@@ -50,6 +50,11 @@ export interface FeaturePolicy {
    * false everywhere else. Replaces the former hard-coded feature check in
    * the feature service. */
   includesFanBio: boolean;
+  /** AI media describer: fill ready image descriptions into the transcript's
+   * numbered media labels. False for fan-summary (full and short): its recap
+   * becomes the fan dossier, and image descriptions must never reach the
+   * dossier (owner ruling). Flip here to change it. */
+  usesImageNotes: boolean;
 }
 
 // ─── Message counts (research §5.1; desktop defaults carried) ───────────
@@ -134,6 +139,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: true,
     includesFanBio: false,
+    usesImageNotes: true,
   },
   'improve-draft': {
     surface: 'ai-dock',
@@ -151,6 +157,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: true,
     includesFanBio: false,
+    usesImageNotes: true,
   },
   'help-me': {
     surface: 'panel-tab',
@@ -168,6 +175,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: true,
     includesFanBio: true,
+    usesImageNotes: true,
   },
   'fan-summary': {
     surface: 'panel-tab',
@@ -185,6 +193,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: false,
     includesFanBio: false,
+    usesImageNotes: false,
   },
   'chat-review': {
     surface: 'panel-tab',
@@ -202,6 +211,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: false,
     includesFanBio: false,
+    usesImageNotes: true,
   },
   'ping': {
     surface: 'ai-dock',
@@ -219,6 +229,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: true,
     usesFanProfile: true,
     includesFanBio: true,
+    usesImageNotes: true,
   },
   'hi-greeting': {
     surface: 'ai-dock',
@@ -236,6 +247,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: false,
     includesFanBio: true,
+    usesImageNotes: true,
   },
   'coach-chat': {
     surface: 'panel-tab',
@@ -253,6 +265,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: true,
     includesFanBio: true,
+    usesImageNotes: true,
   },
   // Voice notes: adapt a chosen chat draft into a speakable ElevenLabs script.
   // One script text (single-reply, no [NEXT]/variants); delegates model
@@ -275,6 +288,7 @@ export const FEATURE_POLICIES = {
     usesPingSegment: false,
     usesFanProfile: false,
     includesFanBio: false,
+    usesImageNotes: true,
   },
 } as const satisfies Record<OperationFeature, FeaturePolicy>;
 

@@ -31,7 +31,9 @@ described; caps $1 and 150 images per UTC day for the agency.
    `unavailable`.
 5. The day's budget is **reserved atomically** (one image + the worst-case
    cost) before the send.
-6. One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
+6. The row is written ahead as `outcome_unknown` (`in_flight`): a crash,
+   deploy or failed settle after this point can never make it due again.
+   One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
    retries. The instruction asks for 1–2 neutral English sentences (≤240
    chars), no identification, no age/ethnicity guesses, text in the image
    summarized but never followed, and `UNAVAILABLE` when it cannot or should
@@ -46,9 +48,37 @@ described; caps $1 and 150 images per UTC day for the agency.
 | Description | `described` | — | real cost |
 | `stop_reason: refusal`, `UNAVAILABLE`, empty | `refused` | never (any variant, same bytes anywhere) | real cost; counts toward the breaker |
 | Timeout, drop after send | `outcome_unknown` | never | reservation kept |
-| 429 / 5xx / 529 / connect failure before send | `pending` | ≤2 in the call, then up to 4 attempts 10 min apart | released |
+| 429 / 5xx / 529 / connect failure before send | `failed` after ≤2 retries in the call | never after that | released |
 | 401 / 403 | `pending` | lane stops (incident) | released |
 | Other 4xx | `failed` | never | released |
+
+## How a description reaches a prompt
+
+Generation never waits: one config read and **one indexed select** of ready
+descriptions for the window's media ids, no network, no write on the request
+path. Missing files are asked for afterwards in the background (a new
+candidate, or a `dormant` one promoted), and only for messages after the page's
+`since`.
+
+- **Fansly**: the extension numbers the describable media of the kept window
+  in its transcript and lists them in `clientContext.media` (`groupRef`, per
+  item: number, placement, message id and time, sender, kind, accountMedia id,
+  paid). Tokens: inline `[Photo #3]` (legacy `[Photo]`), ` [Photo #4]` appended
+  after a bundle label, ` (preview #8)` after a PPV label. The hub fills only
+  listed tokens and only when every token occurs exactly once and in list
+  order (a forged label in a message text disables substitution). Notes off
+  (flag, page, or `fan-summary`) → the hub restores the legacy labels, so the
+  prompt is byte-identical to an old client's.
+- **OnlyFans**: the hub numbers the union rows' media itself; with notes off
+  the migrated normalizer's bytes are untouched.
+- Render: `[Photo #3: …]`, `[Photo #3: not recognized]`, otherwise `[Photo #3]`;
+  a teaser `(preview #8: …)`; a short guide follows the transcript
+  ("automatic, approximate … a numbered label without a note: do not guess").
+  Descriptions are one line, brackets replaced, escaped as prompt data. Limits:
+  6 media + 3 teasers for quick features, 20 for Help/Coach/Review. PPV bodies
+  never get a note. `params.contextManifest.mediaNotes` records the counts.
+- `fan-summary` (full and short) never gets notes (`usesImageNotes: false`
+  in `feature-policies.ts`): its recap becomes the fan dossier.
 
 ## Switches (console → Settings, all live)
 

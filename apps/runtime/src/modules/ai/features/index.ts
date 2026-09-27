@@ -33,6 +33,18 @@ import { isPageAllowlisted } from "../../../services/voice-notes.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import {
+  applyOnlyFansMediaNotes,
+  listOnlyFansMediaNoteItems,
+  loadMediaNoteDescriptions,
+  mediaNoteLimitsFor,
+  MEDIA_NOTES_GUIDE,
+  renderFanslyMediaNotes,
+  requestMediaDescriptionsInBackground,
+  resolveMediaNotesGate,
+  type MediaNoteDescription,
+  type MediaNoteItem,
+  type MediaNotesGate,
+  type MediaNotesManifest,
   isFanProfileFeatureEnabled,
   loadFanBio,
   loadFanDisplayName,
@@ -52,6 +64,7 @@ import {
   BUNDLED_LORA_PERSONALITY_ID,
   analyzePingSegment,
   buildPrompt,
+  formatTranscript,
   isOperationFeature,
   type GreetingVariantCount,
   type OperationFeature,
@@ -126,6 +139,11 @@ export interface AiFeatureRequestBody {
     /** Whole days since the fan's last text message (same clock as pingSegment). */
     fanSilenceDays?: number;
     transcriptCoverage?: "full-history" | "window";
+    /** AI media describer: the window's numbered describable media. */
+    media?: {
+      groupRef: string;
+      items: MediaNoteItem[];
+    };
   };
 }
 
@@ -427,6 +445,16 @@ export async function prepareAiFeatureStream(
   // PR3: the per-generation transcript context manifest (kernel-context path
   // only); rides an INTERNAL argument into the gateway, never the body.
   let contextManifest: Record<string, unknown> | undefined;
+  // AI media describer: image notes rendered into the transcript (one config
+  // read + one indexed select, no network), and the files to ask for after.
+  let mediaNotes: {
+    gate: MediaNotesGate;
+    items: MediaNoteItem[];
+    descriptions: MediaNoteDescription[];
+    conversationRef: string;
+    fanRef: string | null;
+    manifest: MediaNotesManifest;
+  } | undefined;
   // The transcript window this generation resolves to. Short fan-summary clamps
   // DOWN to the compact template's "300 recent messages max" promise; every
   // other request keeps the per-bucket default (fan-summary deep = 1500) or a
@@ -480,6 +508,35 @@ export async function prepareAiFeatureStream(
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
+    const mediaItems = clientContext.media?.items ?? [];
+    if (clientContext.media && mediaItems.length > 0) {
+      // Numbered labels always come back: filled when notes are active, the
+      // legacy bytes when not (flag off, page not allowed, fan-summary).
+      const gate = await resolveMediaNotesGate(app, {
+        pageLabel: stored.page.label,
+        usesImageNotes: policy.usesImageNotes,
+      });
+      const descriptions = gate.active
+        ? await loadMediaNoteDescriptions(app, { pageId, platform: "fansly", items: mediaItems })
+        : [];
+      const rendered = renderFanslyMediaNotes({
+        transcript: contextValues.transcript,
+        items: mediaItems,
+        active: gate.active,
+        descriptions,
+        limits: mediaNoteLimitsFor(feature),
+      });
+      contextValues.transcript = rendered.transcript;
+      mediaNotes = {
+        gate,
+        items: rendered.manifest.mismatch ? [] : mediaItems,
+        descriptions,
+        conversationRef: clientContext.media.groupRef,
+        fanRef: body.fanRef
+          ?? (body.conversationRef !== clientContext.media.groupRef ? body.conversationRef : null),
+        manifest: rendered.manifest,
+      };
+    }
   } else {
     // PR3 (C6): read the union mode ONCE per generation, here, just before
     // the transcript load, via the live overlay (flips need no restart).
@@ -538,6 +595,38 @@ export async function prepareAiFeatureStream(
           )
         : undefined,
     };
+    // Image notes on OnlyFans: the hub builds the labels itself, so the
+    // inactive path leaves the migrated normalizer's bytes untouched.
+    const ofItems = listOnlyFansMediaNoteItems(transcript.messages, transcript.mediaByMessage);
+    if (ofItems.length > 0) {
+      const gate = await resolveMediaNotesGate(app, {
+        pageLabel: stored.page.label,
+        usesImageNotes: policy.usesImageNotes,
+      });
+      if (gate.active) {
+        const descriptions = await loadMediaNoteDescriptions(app, { pageId, platform: "onlyfans", items: ofItems });
+        const applied = applyOnlyFansMediaNotes({
+          messages: transcript.messages,
+          items: ofItems,
+          descriptions,
+          limits: mediaNoteLimitsFor(feature),
+        });
+        if (!applied.manifest.mismatch) {
+          contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+        }
+        mediaNotes = {
+          gate,
+          items: applied.manifest.mismatch ? [] : ofItems,
+          descriptions,
+          conversationRef: body.conversationRef,
+          fanRef,
+          manifest: applied.manifest,
+        };
+      }
+    }
+  }
+  if (mediaNotes) {
+    contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
   }
 
   // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
@@ -869,6 +958,19 @@ export async function prepareAiFeatureStream(
       // The echo is a declassification, so it fails closed: a config-lookup
       // failure yields no frame and never affects the generation itself.
     }
+  }
+  if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
+    requestMediaDescriptionsInBackground(app, {
+      pageId,
+      platform: stored.page.platform,
+      policy: mediaNotes.gate.policy,
+      conversationRef: mediaNotes.conversationRef,
+      fanRef: mediaNotes.fanRef,
+      verifyThread: isFanslyRequest,
+      items: mediaNotes.items,
+      descriptions: mediaNotes.descriptions,
+      now: new Date(),
+    });
   }
   return prepareAiGatewayStream(
     app,
