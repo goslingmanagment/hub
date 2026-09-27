@@ -6266,16 +6266,31 @@ export const ofapiMediaLocators = pgTable("ofapi_media_locators", {
   pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }),
   url: text("url"), pathSha256: text("path_sha256"), sigKind: text("sig_kind").$type<"expires" | "policy" | "fansapi" | "unknown">(),
   expiresAt: timestamp("expires_at", { withTimezone: true }), mediaType: text("media_type"), fileExt: text("file_ext"),
-  chatId: text("chat_id"), messageId: text("message_id"), vaultMedia: boolean("vault_media").default(false).notNull(),
-  canView: boolean("can_view"), isReady: boolean("is_ready"), deleted: boolean("deleted").default(false).notNull(),
+  // On OnlyFans the chat id is the fan's user id: fan erasure reaches it by name.
+  fanPlatformUserId: text("fan_platform_user_id"), messageId: text("message_id"), vaultMedia: boolean("vault_media").default(false).notNull(),
+  canView: boolean("can_view"), isReady: boolean("is_ready"),
   hadFreeUrl: boolean("had_free_url").default(false).notNull(),
   observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, table => ({
   pk: primaryKey({ columns: [table.ofapiAccountId, table.mediaId, table.variant, table.source] }),
-  messageIdx: index("ofapi_media_locators_message_idx").on(table.ofapiAccountId, table.messageId).where(sql`${table.messageId} is not null`),
   expiryIdx: index("ofapi_media_locators_expiry_idx").on(table.expiresAt).where(sql`${table.url} is not null`),
   pageIdx: index("ofapi_media_locators_page_idx").on(table.pageId),
+}));
+
+// Where each media appears ('vault' or 'message:<id>'); shared media stay live
+// until their last link is deleted.
+export const ofapiMediaLinks = pgTable("ofapi_media_links", {
+  ofapiAccountId: text("ofapi_account_id").notNull(), mediaId: text("media_id").notNull(), linkKey: text("link_key").notNull(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }),
+  fanPlatformUserId: text("fan_platform_user_id"), messageId: text("message_id"),
+  deleted: boolean("deleted").default(false).notNull(),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => ({
+  pk: primaryKey({ columns: [table.ofapiAccountId, table.mediaId, table.linkKey] }),
+  messageIdx: index("ofapi_media_links_message_idx").on(table.ofapiAccountId, table.messageId).where(sql`${table.messageId} is not null`),
+  pageIdx: index("ofapi_media_links_page_idx").on(table.pageId),
 }));
 
 // One row per resolve; never a URL, signature or file content.
@@ -6291,6 +6306,7 @@ export const ofapiMediaFetchLog = pgTable("ofapi_media_fetch_log", {
   creditsEstimated: integer("credits_estimated").default(0).notNull(), overCap: boolean("over_cap").default(false).notNull(),
   hadFreeUrlExpired: boolean("had_free_url_expired").default(false).notNull(), afterReread: boolean("after_reread").default(false).notNull(),
   certainty: text("certainty").notNull(), ledgerEntryId: bigint("ledger_entry_id", { mode: "number" }),
+  collectionRequestId: text("collection_request_id"),
   clientResult: text("client_result"), bytesReceived: bigint("bytes_received", { mode: "number" }), httpStatus: integer("http_status"),
   reportedAt: timestamp("reported_at", { withTimezone: true }),
 }, table => ({

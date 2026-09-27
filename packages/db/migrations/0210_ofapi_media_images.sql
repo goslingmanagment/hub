@@ -1,8 +1,9 @@
 -- ChatGoose Desktop media images (docs/runbooks/ofapi-media.md).
 --
--- Four purely additive tables; no existing table, index or constraint changes.
--- The hub keeps only locators (known file URLs), a per-resolve decision log and
--- the agency's paid-download budget. Bytes never pass through or rest on the hub.
+-- Five purely additive tables; no existing table, index or constraint changes.
+-- The hub keeps only locators (known file URLs), where each media appears
+-- (links), a per-resolve decision log and the agency's paid-download budget.
+-- Bytes never pass through or rest on the hub.
 
 -- Known file URLs per OFAPI account, media id, variant and source. A row keeps
 -- the durable linkage (provenance, access flags, whether a free Expires-signed
@@ -21,12 +22,13 @@ create table if not exists ofapi_media_locators (
   expires_at timestamptz,
   media_type text,
   file_ext text,
-  chat_id text,
+  -- On OnlyFans a chat id IS the fan's user id (and file URLs carry it), so
+  -- fan erasure reaches this column by name (FAN_REF_ERASURE_COLUMNS).
+  fan_platform_user_id text,
   message_id text,
   vault_media boolean not null default false,
   can_view boolean,
   is_ready boolean,
-  deleted boolean not null default false,
   had_free_url boolean not null default false,
   observed_at timestamptz not null,
   updated_at timestamptz not null default now(),
@@ -37,16 +39,40 @@ create table if not exists ofapi_media_locators (
     check (sig_kind is null or sig_kind in ('expires', 'policy', 'fansapi', 'unknown'))
 );
 
-create index if not exists ofapi_media_locators_message_idx
-  on ofapi_media_locators (ofapi_account_id, message_id)
-  where message_id is not null;
-
 create index if not exists ofapi_media_locators_expiry_idx
   on ofapi_media_locators (expires_at)
   where url is not null;
 
 create index if not exists ofapi_media_locators_page_idx
   on ofapi_media_locators (page_id);
+
+-- Where each media appears: one row per message that carried it, plus one
+-- 'vault' row when the vault lists it. Shared vault and mass-PPV media sit in
+-- many messages, so messages.deleted marks only its own link; the media stops
+-- being served once no live link is left.
+create table if not exists ofapi_media_links (
+  ofapi_account_id text not null,
+  media_id text not null,
+  -- 'vault' or 'message:<message id>'
+  link_key text not null,
+  page_id bigint references pages(id) on delete restrict,
+  fan_platform_user_id text,
+  message_id text,
+  deleted boolean not null default false,
+  observed_at timestamptz not null,
+  updated_at timestamptz not null default now(),
+  primary key (ofapi_account_id, media_id, link_key),
+  constraint ofapi_media_links_key_check check (
+    (link_key = 'vault' and message_id is null)
+    or (message_id is not null and link_key = 'message:' || message_id))
+);
+
+create index if not exists ofapi_media_links_message_idx
+  on ofapi_media_links (ofapi_account_id, message_id)
+  where message_id is not null;
+
+create index if not exists ofapi_media_links_page_idx
+  on ofapi_media_links (page_id);
 
 -- One row per resolve (never per local cache hit). No URL, signature or file
 -- content is ever written here: identifiers, the decision and its price only.
@@ -74,6 +100,9 @@ create table if not exists ofapi_media_fetch_log (
   after_reread boolean not null default false,
   certainty text not null,
   ledger_entry_id bigint,
+  -- The paid download's collection reservation, settled again when a click of
+  -- unknown size reports its bytes.
+  collection_request_id text,
   client_result text,
   bytes_received bigint,
   http_status integer,

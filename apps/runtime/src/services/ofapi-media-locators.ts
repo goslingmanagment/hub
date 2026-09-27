@@ -255,13 +255,26 @@ export function ofapiMediaLocatorsFromGatewayBody(input: {
   return items.flatMap((message) => messageMedia(message, { ...base, chatId, vaultMedia: false }));
 }
 
+/**
+ * What may be logged about a failed locator write: the error's class and SQL
+ * state only. A driver error's message quotes the statement's parameters —
+ * signed file URLs — so neither the error nor its message is ever logged.
+ */
+export function ofapiMediaLocatorErrorFields(error: unknown) {
+  const record = error instanceof Error ? error as Error & { code?: unknown; cause?: unknown } : null;
+  const cause = record?.cause instanceof Error ? record.cause as Error & { code?: unknown } : null;
+  const code = typeof record?.code === "string" ? record.code : typeof cause?.code === "string" ? cause.code : null;
+  return { errorName: record?.name ?? typeof error, ...(cause ? { causeName: cause.name } : {}), ...(code ? { errorCode: code } : {}) };
+}
+
 /** Fail-open: a locator write never fails the webhook settle or the read. */
 async function recordLocators(app: Pick<AppContext, "db" | "logger">, rows: OfapiMediaLocatorInput[], context: Record<string, unknown>) {
   if (rows.length === 0) return 0;
   try {
     return await upsertOfapiMediaLocators(app.db, rows);
   } catch (error) {
-    app.logger.warn({ err: error, ...context, rows: rows.length }, "OFAPI media locator upsert failed; continuing");
+    app.logger.warn({ ...ofapiMediaLocatorErrorFields(error), ...context, rows: rows.length },
+      "OFAPI media locator upsert failed; continuing");
     return 0;
   }
 }
@@ -276,7 +289,8 @@ export async function recordOfapiWebhookMediaLocators(app: Pick<AppContext, "db"
     try {
       return await markOfapiMediaMessageDeleted(app.db, { ofapiAccountId: input.envelope.account_id, messageId });
     } catch (error) {
-      app.logger.warn({ err: error, eventId: input.eventId }, "OFAPI media locator deletion mark failed; continuing");
+      app.logger.warn({ ...ofapiMediaLocatorErrorFields(error), eventId: input.eventId },
+        "OFAPI media link deletion mark failed; continuing");
       return 0;
     }
   }
@@ -375,13 +389,17 @@ export async function recoverOfapiMediaLocators(app: AppContext, input: { hours:
   return result;
 }
 
-/** Daily: expired signatures older than 7 days lose their URL (the linkage stays); stale flights go. */
+/**
+ * Daily: a URL loses its signature 7 days after it expired — or, when its
+ * expiry could not be read, 7 days after it was observed (the linkage stays);
+ * stale flights go.
+ */
 export async function cleanupOfapiMediaLocators(app: Pick<AppContext, "db" | "logger">, now = new Date()) {
   try {
     const cleared = await clearExpiredOfapiMediaLocatorUrls(app.db, { expiredBefore: new Date(now.getTime() - 7 * 86_400_000) });
     const flights = await purgeExpiredOfapiMediaFlights(app.db, { before: new Date(now.getTime() - 3_600_000) });
     if (cleared > 0 || flights > 0) app.logger.info({ cleared, flights }, "OFAPI media locator cleanup complete");
   } catch (error) {
-    app.logger.warn({ err: error }, "OFAPI media locator cleanup failed; continuing");
+    app.logger.warn(ofapiMediaLocatorErrorFields(error), "OFAPI media locator cleanup failed; continuing");
   }
 }

@@ -150,6 +150,8 @@ export interface OfapiRawResponse {
   status: number;
   body: unknown;
   headers: Record<string, string>;
+  /** Media transport with `settlement: "caller"`: the collection reservation the caller settles or releases. */
+  collectionRequestId?: string;
 }
 
 export interface OfapiGovernedRawResponse {
@@ -478,9 +480,13 @@ export interface OfapiClient {
       // of /{account}/media/download/{cdnUrl} that never follows a redirect
       // and never reads a file body. `pathname` carries the CDN URL verbatim
       // (query included, unencoded, as OFAPI documents) and `query` is empty.
-      // The caller accounts credits itself; only the collection reservation
-      // is settled here. Returns `location` and `content-length` headers.
-      media?: { method: "GET" | "HEAD" };
+      // It never takes the client's request slot (the service paces media
+      // with its own bounded limiter, so chat reads never queue behind it).
+      // The caller accounts credits itself. The collection reservation is
+      // settled here unless `settlement` is "caller": then the response
+      // carries `collectionRequestId` and the caller settles or releases it.
+      // Returns `location` and `content-length` headers.
+      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse>;
   // Capture-first transport. The caller durably reserves the attempt before
@@ -1229,7 +1235,7 @@ export function createOfapiClient(input: {
       fallbackCredits: number;
       fallbackEstimated: boolean;
       timeoutMs?: number;
-      media?: { method: "GET" | "HEAD" };
+      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse> {
     const media = options.media ?? null;
@@ -1242,7 +1248,14 @@ export function createOfapiClient(input: {
     // The media path embeds a signed CDN URL: errors name only its shape.
     const pathLabel = media ? `/${accountId}/media/download/{cdnUrl}` : options.pathname;
     const requestId = `${options.operation}:${randomUUID()}`;
-    await waitForRequestSlot("interactive", !OFAPI_FREE_READ_OPERATIONS.has(options.operation));
+    if (media) {
+      // Desktop media transport is paced by the resolve service's own bounded
+      // limiter: it never takes (or waits for) the chat-read slot. A charging
+      // download still needs working credit accounting.
+      if (!OFAPI_FREE_READ_OPERATIONS.has(options.operation)) await assertCreditAccountingReady();
+    } else {
+      await waitForRequestSlot("interactive", !OFAPI_FREE_READ_OPERATIONS.has(options.operation));
+    }
 
     const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
     await authorizeOperation(options.operation, method, media ? pathLabel : options.pathname);
@@ -1306,8 +1319,11 @@ export function createOfapiClient(input: {
     if (media) {
       // The media resolve service writes its own ledger row (it knows the
       // price and links the row to its decision log); settle only the
-      // collection reservation here, with any provider-reported charge.
-      await input.onCollectionResponse?.(`${requestId}:1`, parseResponseMeta(body, response.headers)?.creditsUsed ?? null);
+      // collection reservation here, with any provider-reported charge —
+      // or leave it to the caller, who learns where the redirect went.
+      if (media.settlement !== "caller") {
+        await input.onCollectionResponse?.(`${requestId}:1`, parseResponseMeta(body, response.headers)?.creditsUsed ?? null);
+      }
     } else {
       const creditAccounted = await reportCreditSpend({
         operation: options.operation,
@@ -1350,6 +1366,7 @@ export function createOfapiClient(input: {
       status: response.status,
       body,
       headers,
+      ...(media?.settlement === "caller" ? { collectionRequestId: `${requestId}:1` } : {}),
     };
   }
 

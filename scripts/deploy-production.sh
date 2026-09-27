@@ -462,8 +462,9 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # own latest migration, so it runs unchanged after a rollback; a later
   # re-deploy finds the migration already applied.
   "0209_observation_parse_quarantine.sql"
-  # Desktop media images: four new tables (ofapi_media_locators,
-  # ofapi_media_fetch_log, ofapi_media_daily_budget, ofapi_media_flights), all
+  # Desktop media images: five new tables (ofapi_media_locators,
+  # ofapi_media_links, ofapi_media_fetch_log, ofapi_media_daily_budget,
+  # ofapi_media_flights), all
   # IF NOT EXISTS, no change to any existing table. The previous image never
   # names them and has no media routes (a new desktop then shows images as
   # unavailable), so it runs unchanged after a rollback; a later re-deploy

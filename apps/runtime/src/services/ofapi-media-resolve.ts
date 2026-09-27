@@ -3,17 +3,24 @@ import { randomUUID } from "node:crypto";
 import {
   admitOfapiMediaBudget,
   applyOfapiMediaFetchReports,
+  assertOfapiCollectionHeadroom,
   claimOfapiMediaFlight,
   findOfapiMediaFetchByRequest,
+  getOfapiMediaBudgetUsed,
   holdOfapiMediaFlight,
   listOfapiMappedPages,
+  listOfapiMediaLinks,
   listOfapiMediaLocators,
   OfapiCollectionPolicyError,
+  ofapiMediaTransferCredits,
   recordOfapiMediaFetch,
   refundOfapiMediaBudget,
+  releaseOfapiCollectionRequest,
   releaseOfapiMediaFlight,
+  settleOfapiCollectionRequest,
   type OfapiMediaFetchLogRow,
   type OfapiMediaFetchReport,
+  type OfapiMediaLinkRow,
   type OfapiMediaLocatorRow,
   type OfapiMediaOutcome,
   type OfapiMediaVariant,
@@ -24,7 +31,7 @@ import { createRequestDispatcher } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { fetchWithEgress } from "./egress/fetch.ts";
-import { NotFoundError, ServiceUnavailableError } from "./errors.ts";
+import { ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { resolveOfapiEgressContext, type OfapiEgressContext } from "./ofapi-egress.ts";
 import {
   OFAPI_CACHE_CDN_HOST,
@@ -40,14 +47,21 @@ import { OfapiKeyPermissionDeniedError } from "./ofapi-vendor-usage.ts";
 // the desktop downloads from the URL handed out here and reports the result.
 //
 // Decision order for one (account, media id, variant):
-//   access    deleted / locked / processing / non-photo full → refused
+//   access    every link deleted / locked / never seen ready (with a re-read
+//             hint for an explicit click) / non-photo full → refused
+//   click     an automatic request for `full` → cap_blocked (click_only)
 //   free_url  an Expires-signed OnlyFans URL (webhooks) with >120 s left
 //   cache     a cdn.fansapi.com URL already known with >120 s left
-//   OFAPI     the freshest live OnlyFans URL through /media/download:
+//   budget    an automatic request once the day's budget is spent, or the
+//             category off / at its ceiling → nothing reaches OFAPI
+//   OFAPI     the freshest live OnlyFans URL through /media/download, on the
+//             service's own bounded transport limiter:
 //             HEAD (manual redirect) → Location host decides:
 //               cdn.fansapi.com → GET (manual) for a GET-presigned URL, free
-//               dl.fansapi.com  → HEAD there for Content-Length → price →
-//                 agency budget → GET (manual) → hand out what it returns
+//               dl.fansapi.com  → budget and category checks → HEAD there
+//                 for Content-Length → price (unknown size: a click only, at
+//                 the guard price) → agency budget → GET (manual) → hand out
+//                 what it returns (cdn → free, the reservation released)
 //   none      source_expired (the desktop may re-read on an explicit click)
 
 export const OFAPI_MEDIA_OUTCOMES = [
@@ -95,17 +109,27 @@ const FREE_URL_MIN_REMAINING_MS = 120_000;
 const OFAPI_SOURCE_MIN_REMAINING_MS = 30_000;
 /** Single flight: held while resolving and after a paid hand-out until its report. */
 export const OFAPI_MEDIA_FLIGHT_HOLD_MS = 120_000;
-/** A click on a file of unknown size is capped here (memory guard, not a price). */
+/** A click on a file of unknown size is capped here (a memory guard for the desktop). */
 export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES = 5_000_000;
-const HOP_TIMEOUT_MS = 15_000;
-const CDN_HEAD_TIMEOUT_MS = 10_000;
+/** …and reserved at what that guard can cost, then settled on its report. */
+export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS = ofapiMediaTransferCredits(OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES);
+/** One resolve's network part (transport queueing included) never takes longer; the desktop waits 45 s. */
+export const OFAPI_MEDIA_RESOLVE_DEADLINE_MS = 35_000;
+const HOP_TIMEOUT_MS = 12_000;
+const CDN_HEAD_TIMEOUT_MS = 8_000;
+/** Media transport limiter: its own slots, never the OFAPI client's chat-read slot. */
+const TRANSPORT_CONCURRENCY = 4;
+/** At most ten transport starts a second (OFAPI's lowest plan allows 1,000 requests a minute). */
+const TRANSPORT_START_SPACING_MS = 100;
+const TRANSPORT_MAX_QUEUE_WAIT_MS = 8_000;
+const BUSY_RETRY_AFTER_MS = 2_000;
 /** Replays within this window get the same URL back (process memory only). */
 const HANDOUT_REPLAY_TTL_MS = 10 * 60_000;
 const HANDOUT_REPLAY_MAX = 5_000;
 
 /** OFAPI tariff: 3 credits per decimal MB, minimum 1 per non-empty transfer. */
 export function ofapiMediaDownloadPrice(contentLength: number) {
-  return Math.max(1, Math.ceil((3 * contentLength) / 1_000_000));
+  return ofapiMediaTransferCredits(contentLength);
 }
 
 function utcDay(at: Date) {
@@ -116,20 +140,97 @@ function nextUtcMidnight(at: Date) {
   return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate() + 1));
 }
 
+function dailyCap(app: AppContext) {
+  return Math.max(0, app.config.ofapiMediaDailyCapCredits ?? 100);
+}
+
+// ---- Transport limiter -----------------------------------------------------
+
+type Release = () => void;
+
+/**
+ * A small FIFO limiter for the media transport: at most `concurrency` hops at
+ * once, starts spaced by `spacingMs`, and a bounded wait — a caller that gets
+ * no slot in time answers `pending` (busy) instead of queueing further.
+ */
+export function createOfapiMediaTransportLimiter(options: { concurrency: number; spacingMs: number }) {
+  let active = 0;
+  let nextStartAt = 0;
+  let pump: ReturnType<typeof setTimeout> | null = null;
+  let queue: Array<{ grant: () => void; settled: boolean }> = [];
+
+  function drain() {
+    if (pump !== null) return;
+    queue = queue.filter((waiter) => !waiter.settled);
+    if (queue.length === 0 || active >= options.concurrency) return;
+    const wait = nextStartAt - Date.now();
+    if (wait > 0) {
+      pump = setTimeout(() => {
+        pump = null;
+        drain();
+      }, wait);
+      return;
+    }
+    const waiter = queue.shift()!;
+    waiter.settled = true;
+    active += 1;
+    nextStartAt = Date.now() + options.spacingMs;
+    waiter.grant();
+    drain();
+  }
+
+  function acquire(waitMs: number): Promise<Release | null> {
+    return new Promise((resolve) => {
+      let released = false;
+      const release: Release = () => {
+        if (released) return;
+        released = true;
+        active -= 1;
+        drain();
+      };
+      const waiter = { settled: false, grant: () => resolve(release) };
+      const timer = setTimeout(() => {
+        if (waiter.settled) return;
+        waiter.settled = true;
+        resolve(null);
+      }, Math.max(0, waitMs));
+      const grant = waiter.grant;
+      waiter.grant = () => {
+        clearTimeout(timer);
+        grant();
+      };
+      queue.push(waiter);
+      drain();
+    });
+  }
+
+  return { acquire, active: () => active };
+}
+
+let transport = createOfapiMediaTransportLimiter({ concurrency: TRANSPORT_CONCURRENCY, spacingMs: TRANSPORT_START_SPACING_MS });
+
+/** Tests shape the transport limiter (a fresh one each call); production keeps the defaults. */
+export function configureOfapiMediaTransportForTests(options: { concurrency?: number; spacingMs?: number } | null) {
+  transport = createOfapiMediaTransportLimiter({
+    concurrency: options?.concurrency ?? TRANSPORT_CONCURRENCY,
+    spacingMs: options?.spacingMs ?? TRANSPORT_START_SPACING_MS,
+  });
+}
+
 // ---- CDN hop ---------------------------------------------------------------
 
-export type OfapiMediaCdnHead = (url: URL) => Promise<{ status: number; contentLength: number | null }>;
+export type OfapiMediaCdnHead = (url: URL, timeoutMs: number) => Promise<{ status: number; contentLength: number | null }>;
 
 /** HEAD on the dl.fansapi.com Location for its size. No Authorization ever
  * travels to a CDN host; the vendor-direct route (egress resolver policy for
  * OFAPI) through the mandatory-dispatcher seam. */
-const defaultCdnHead: OfapiMediaCdnHead = async (url) => {
+const defaultCdnHead: OfapiMediaCdnHead = async (url, timeoutMs) => {
   const dispatcher = createRequestDispatcher();
   try {
     const response = await fetchWithEgress(fetch, dispatcher, url, {
       method: "HEAD",
       redirect: "manual",
-      signal: AbortSignal.timeout(CDN_HEAD_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     await response.body?.cancel().catch(() => undefined);
     const raw = response.headers.get("content-length");
@@ -183,7 +284,9 @@ interface Decision {
   retryAfterMs?: number | null;
   retryAt?: Date | null;
   certainty?: "estimated" | "confirmed" | "unknown";
-  accrualDay?: string;
+  /** A paid hand-out's issuance: its budget day, its log day and its ledger time. */
+  issuedAt?: Date;
+  collectionRequestId?: string | null;
   ledger?: Omit<RecordOfapiCreditSpendInput, "occurredAt">;
   budget?: { day: string; price: number };
 }
@@ -195,13 +298,35 @@ interface ResolveContext {
   input: OfapiMediaResolveRequest;
   resolveId: string;
   now: Date;
+  deadline: number;
   locators: OfapiMediaLocatorRow[];
+  links: OfapiMediaLinkRow[];
   cdnHead: OfapiMediaCdnHead;
 }
 
-type HopResult =
+type HopResult = (
   | { kind: "redirect"; status: number; target: "cdn" | "dl"; location: string; expiresAt: Date | null }
-  | { kind: "decided"; decision: Decision };
+  | { kind: "decided"; decision: Decision }
+) & { collectionRequestId?: string | null };
+
+const busy = (): Decision => ({ outcome: "pending", reason: "busy", retryAfterMs: BUSY_RETRY_AFTER_MS });
+const late = (): Decision => ({ outcome: "error", reason: "timeout" });
+
+/** Runs one media transport step on the limiter, inside the resolve's deadline. */
+async function onTransport<T>(ctx: ResolveContext, maxTimeoutMs: number, work: (timeoutMs: number) => Promise<T>):
+  Promise<{ kind: "done"; value: T } | { kind: "busy" } | { kind: "late" }> {
+  const left = ctx.deadline - Date.now();
+  if (left <= 0) return { kind: "late" };
+  const release = await transport.acquire(Math.min(TRANSPORT_MAX_QUEUE_WAIT_MS, left));
+  if (!release) return ctx.deadline - Date.now() <= 0 ? { kind: "late" } : { kind: "busy" };
+  try {
+    const timeoutMs = Math.min(maxTimeoutMs, ctx.deadline - Date.now());
+    if (timeoutMs <= 0) return { kind: "late" };
+    return { kind: "done", value: await work(timeoutMs) };
+  } finally {
+    release();
+  }
+}
 
 function classifyLocation(raw: string | undefined) {
   if (!raw) return null;
@@ -244,11 +369,19 @@ function classifyHop(response: OfapiRawResponse): HopResult {
   return decided("error", "upstream_error");
 }
 
+function policyRefusal(error: OfapiCollectionPolicyError): Decision {
+  // The owner's category policy (off, page ceiling, …): shown as unavailable, a click does not bypass it.
+  return {
+    outcome: "refused", reason: error.reason,
+    retryAfterMs: error.retryAt ? Math.max(0, error.retryAt.getTime() - Date.now()) : null,
+  };
+}
+
 async function hop(ctx: ResolveContext, egress: OfapiEgressContext, cdnUrl: string, method: "HEAD" | "GET",
   operation: "ofapi_media_probe" | "ofapi_media_download", reservedCredits: number): Promise<HopResult> {
   const { app, input } = ctx;
   try {
-    const response = await app.ofapi!.proxyRead!({
+    const step = await onTransport(ctx, HOP_TIMEOUT_MS, (timeoutMs) => app.ofapi!.proxyRead!({
       pageId: ctx.pageId,
       dispatcher: egress.dispatcher,
       egressKey: egress.egressKey,
@@ -261,16 +394,15 @@ async function hop(ctx: ResolveContext, egress: OfapiEgressContext, cdnUrl: stri
       query: {},
       fallbackCredits: reservedCredits,
       fallbackEstimated: true,
-      timeoutMs: HOP_TIMEOUT_MS,
-      media: { method },
-    });
-    return classifyHop(response);
+      timeoutMs,
+      // The download's reservation is settled here, once the Location is known.
+      media: { method, settlement: operation === "ofapi_media_download" ? "caller" : "response" },
+    }));
+    if (step.kind === "busy") return { kind: "decided", decision: busy() };
+    if (step.kind === "late") return { kind: "decided", decision: late() };
+    return { ...classifyHop(step.value), collectionRequestId: step.value.collectionRequestId ?? null };
   } catch (error) {
-    if (error instanceof OfapiCollectionPolicyError) {
-      // The owner's category policy (off, page ceiling, …): shown as unavailable, a click does not bypass it.
-      return { kind: "decided", decision: { outcome: "refused", reason: error.reason,
-        retryAfterMs: error.retryAt ? Math.max(0, error.retryAt.getTime() - Date.now()) : null } };
-    }
+    if (error instanceof OfapiCollectionPolicyError) return { kind: "decided", decision: policyRefusal(error) };
     if (error instanceof OfapiKeyPermissionDeniedError) return { kind: "decided", decision: { outcome: "unavailable", reason: "key_scope" } };
     if (error instanceof OfapiCreditAccountingUnavailableError) return { kind: "decided", decision: { outcome: "error", reason: "accounting_unavailable" } };
     if (error instanceof OfapiApiError && error.status === 409) return { kind: "decided", decision: { outcome: "unavailable", reason: "binding_unavailable" } };
@@ -281,15 +413,48 @@ async function hop(ctx: ResolveContext, egress: OfapiEgressContext, cdnUrl: stri
   }
 }
 
-function newestRow(rows: OfapiMediaLocatorRow[]) {
-  return rows.reduce<OfapiMediaLocatorRow | null>((newest, row) =>
-    newest === null || row.observedAt.getTime() > newest.observedAt.getTime() ? row : newest, null);
+/** Settles or releases a paid download's collection reservation; never fails the resolve. */
+async function closeReservation(ctx: ResolveContext, requestId: string | null | undefined, how: "release" | { credits: number | null }) {
+  if (!requestId) return;
+  try {
+    if (how === "release") await releaseOfapiCollectionRequest(ctx.app.db, requestId);
+    else await settleOfapiCollectionRequest(ctx.app.db, requestId, how.credits);
+  } catch (error) {
+    ctx.app.logger.warn({ resolveId: ctx.resolveId, errorName: error instanceof Error ? error.name : typeof error },
+      "OFAPI media collection settlement failed");
+  }
 }
 
-function rereadHint(rows: OfapiMediaLocatorRow[], mediaId: string): OfapiMediaReread | null {
-  const inMessage = rows.find((row) => row.chatId && row.messageId);
-  if (inMessage) return { kind: "message", chatId: inMessage.chatId!, messageId: inMessage.messageId! };
-  return rows.some((row) => row.vaultMedia) ? { kind: "vault", mediaId } : null;
+/**
+ * The checks that must pass before a network call that can lead to a charge:
+ * an automatic request once the day's budget cannot take even 1 credit, and
+ * the category off or without room for `credits`.
+ */
+async function preflight(ctx: ResolveContext, credits: number): Promise<Decision | null> {
+  const { app, input } = ctx;
+  if (input.trigger === "auto") {
+    const now = new Date();
+    const used = await getOfapiMediaBudgetUsed(app.db, utcDay(now));
+    if (used + 1 > dailyCap(app)) return { outcome: "cap_blocked", reason: "daily_cap", retryAt: nextUtcMidnight(now) };
+  }
+  try {
+    await assertOfapiCollectionHeadroom(app.db, { pageId: ctx.pageId, category: "media_previews", credits });
+  } catch (error) {
+    if (error instanceof OfapiCollectionPolicyError) return policyRefusal(error);
+    throw error;
+  }
+  return null;
+}
+
+function rereadHint(ctx: ResolveContext): OfapiMediaReread | null {
+  const live = ctx.links.filter((link) => !link.deleted);
+  const message = live.find((link) => link.messageId && link.chatId);
+  if (message) return { kind: "message", chatId: message.chatId!, messageId: message.messageId! };
+  if (live.some((link) => link.linkKey === "vault")) return { kind: "vault", mediaId: ctx.input.mediaId };
+  // Locators recorded before links existed.
+  const row = ctx.locators.find((locator) => locator.chatId && locator.messageId);
+  if (row) return { kind: "message", chatId: row.chatId!, messageId: row.messageId! };
+  return ctx.locators.some((locator) => locator.vaultMedia) ? { kind: "vault", mediaId: ctx.input.mediaId } : null;
 }
 
 function remainingMs(row: OfapiMediaLocatorRow, now: Date) {
@@ -302,50 +467,65 @@ function freshest(rows: OfapiMediaLocatorRow[], predicate: (row: OfapiMediaLocat
 
 async function paidPath(ctx: ResolveContext, egress: OfapiEgressContext, sourceUrl: string, priceLocation: string): Promise<Decision> {
   const { app, input } = ctx;
-  let head: { status: number; contentLength: number | null };
-  try {
-    head = await ctx.cdnHead(new URL(priceLocation));
-  } catch {
-    head = { status: 0, contentLength: null };
-  }
-  const contentLength = head.contentLength;
+  // Before the CDN hop: nothing more once the automatic budget or the
+  // category cannot take a download at all.
+  const blocked = await preflight(ctx, 1);
+  if (blocked) return blocked;
+  const size = await onTransport(ctx, CDN_HEAD_TIMEOUT_MS, (timeoutMs) => ctx.cdnHead(new URL(priceLocation), timeoutMs)
+    .catch(() => ({ status: 0, contentLength: null })));
+  if (size.kind === "busy") return busy();
+  if (size.kind === "late") return late();
+  const contentLength = size.value.contentLength;
   if (contentLength === null && input.trigger === "auto") {
     // Unknown size: never an automatic payment, only an explicit click.
     return { outcome: "cap_blocked", reason: "size_unknown" };
   }
-  const price = contentLength === null ? 1 : ofapiMediaDownloadPrice(contentLength);
-  const day = utcDay(new Date());
-  const cap = Math.max(0, app.config.ofapiMediaDailyCapCredits ?? 100);
-  const admission = await admitOfapiMediaBudget(app.db, { day, price, cap, trigger: input.trigger });
+  // A click of unknown size is reserved at what the guard lets through and
+  // settled to its reported bytes: the budget and the category never
+  // under-count what can be spent.
+  const price = contentLength === null ? OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS : ofapiMediaDownloadPrice(contentLength);
+  const issuedAt = new Date();
+  const day = utcDay(issuedAt);
+  const admission = await admitOfapiMediaBudget(app.db, { day, price, cap: dailyCap(app), trigger: input.trigger });
   if (!admission.admitted) {
-    return { outcome: "cap_blocked", reason: "daily_cap", contentLength, retryAt: nextUtcMidnight(new Date()) };
+    return { outcome: "cap_blocked", reason: "daily_cap", contentLength, retryAt: nextUtcMidnight(issuedAt) };
   }
   let handedOut = false;
   try {
     const get = await hop(ctx, egress, sourceUrl, "GET", "ofapi_media_download", price);
-    if (get.kind === "decided") return { ...get.decision, contentLength };
+    if (get.kind === "decided") {
+      await closeReservation(ctx, get.collectionRequestId, { credits: null });
+      return { ...get.decision, contentLength };
+    }
     if (get.target === "cdn") {
-      // Cached meanwhile: free, the admission is returned below.
+      // Cached meanwhile: free. The admission is returned below, the category reservation here.
+      await closeReservation(ctx, get.collectionRequestId, "release");
       return { outcome: "ofapi_cache", reason: null, url: get.location, urlExpiresAt: get.expiresAt, contentLength };
     }
     handedOut = true;
+    await closeReservation(ctx, get.collectionRequestId, { credits: price });
+    const maxBytes = contentLength ?? OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES;
     return {
-      outcome: "paid", reason: null, url: get.location, urlExpiresAt: null, contentLength,
-      maxBytes: contentLength ?? OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES, credits: price, overCap: admission.overCap,
-      certainty: "estimated", accrualDay: day, budget: { day, price },
+      outcome: "paid", reason: null, url: get.location, urlExpiresAt: null, contentLength, maxBytes,
+      credits: price, overCap: admission.overCap, certainty: "estimated", issuedAt,
+      collectionRequestId: get.collectionRequestId ?? null, budget: { day, price },
       ledger: {
         operation: "ofapi_media_download", pageId: ctx.pageId, httpStatus: get.status, credits: price,
         estimated: true, requestId: `ofapi_media_download:${ctx.resolveId}`, actorUserId: ctx.principal.user.id,
-        details: { resolveId: ctx.resolveId, surface: input.surface, trigger: input.trigger, variant: input.variant,
-          contentLength, overCap: admission.overCap },
+        details: {
+          resolveId: ctx.resolveId, surface: input.surface, trigger: input.trigger, variant: input.variant,
+          contentLength, overCap: admission.overCap,
+          ...(contentLength === null ? { sizeUnknown: true, guardBytes: maxBytes, settledOnReport: true } : {}),
+        },
       },
     };
   } finally {
     if (!handedOut) {
       // Nothing was handed out: the admission is returned. A hand-out keeps
-      // its charge until reconciliation, whatever the desktop reports.
-      await refundOfapiMediaBudget(app.db, { day, price }).catch((error) => {
-        app.logger.warn({ err: error, resolveId: ctx.resolveId }, "OFAPI media budget refund failed");
+      // its charge until its report (an unknown-size click is settled then).
+      await refundOfapiMediaBudget(app.db, { day, price }).catch((error: unknown) => {
+        app.logger.warn({ resolveId: ctx.resolveId, errorName: error instanceof Error ? error.name : typeof error },
+          "OFAPI media budget refund failed");
       });
     }
   }
@@ -372,22 +552,33 @@ async function viaOfapi(ctx: ResolveContext, sourceUrl: string): Promise<Decisio
   }
 }
 
-async function decide(ctx: ResolveContext): Promise<Decision & { hadFreeUrlExpired: boolean; reread: OfapiMediaReread | null }> {
-  const { app, input, locators, now } = ctx;
-  const newest = newestRow(locators);
+type DecisionResult = Decision & { hadFreeUrlExpired: boolean; reread: OfapiMediaReread | null };
+
+async function decide(ctx: ResolveContext): Promise<DecisionResult> {
+  const { app, input, locators, links, now } = ctx;
   const rows = locators.filter((row) => row.variant === input.variant);
-  const reread = rereadHint(locators, input.mediaId);
   const hadFreeUrlExpired = rows.some((row) => row.hadFreeUrl);
-  const done = (decision: Decision) => ({ ...decision, hadFreeUrlExpired: false, reread: null });
-  if (!newest) return { outcome: "source_expired", reason: "unknown_media", hadFreeUrlExpired: false, reread: null };
-  if (newest.deleted) return done({ outcome: "refused", reason: "deleted" });
-  if (newest.canView === false) return done({ outcome: "refused", reason: "locked" });
-  if (newest.isReady === false) return done({ outcome: "refused", reason: "not_ready" });
+  const done = (decision: Decision, reread: OfapiMediaReread | null = null) => ({ ...decision, hadFreeUrlExpired: false, reread });
+  if (locators.length === 0) return { outcome: "source_expired", reason: "unknown_media", hadFreeUrlExpired: false, reread: null };
+  // A media is deleted once every place it appeared is deleted (shared media
+  // keep their other messages and the vault).
+  if (links.length > 0 && links.every((link) => link.deleted)) return done({ outcome: "refused", reason: "deleted" });
+  const access = locators.find((row) => row.canView !== null);
+  if (access?.canView === false) return done({ outcome: "refused", reason: "locked" });
+  // Readiness is monotonic: any ready observation wins over a late or old
+  // "processing" one. Not ready yet: an explicit click may re-read the named
+  // message or vault item (media-context) and ask again; never automatically.
+  if (!locators.some((row) => row.isReady === true) && locators.some((row) => row.isReady === false)) {
+    return done({ outcome: "refused", reason: "not_ready" }, rereadHint(ctx));
+  }
+  const mediaType = locators.find((row) => row.mediaType)?.mediaType ?? null;
   if (input.variant === "full") {
     const ext = rows.find((row) => row.fileExt)?.fileExt ?? null;
-    if (newest.mediaType !== "photo" || (ext !== null && !OFAPI_MEDIA_FULL_EXTENSIONS.has(ext))) {
+    if (mediaType !== "photo" || (ext !== null && !OFAPI_MEDIA_FULL_EXTENSIONS.has(ext))) {
       return done({ outcome: "refused", reason: "variant_not_allowed" });
     }
+    // The full file is loaded on an explicit click only (server-side rule).
+    if (input.trigger !== "click") return done({ outcome: "cap_blocked", reason: "click_only" });
   }
   const live = rows.filter((row) => row.url !== null);
   const free = freshest(live, (row) => row.sigKind === "expires" && remainingMs(row, now) > FREE_URL_MIN_REMAINING_MS
@@ -398,11 +589,15 @@ async function decide(ctx: ResolveContext): Promise<Decision & { hadFreeUrlExpir
   const source = freshest(live, (row) => (row.sigKind === "expires" || row.sigKind === "policy")
     && remainingMs(row, now) > OFAPI_SOURCE_MIN_REMAINING_MS && parseOfapiMediaUrl(row.url)?.host === "onlyfans");
   if (!source) {
-    return { outcome: "source_expired", reason: rows.length > 0 ? "expired" : "no_variant_url", hadFreeUrlExpired, reread };
+    return { outcome: "source_expired", reason: rows.length > 0 ? "expired" : "no_variant_url", hadFreeUrlExpired, reread: rereadHint(ctx) };
   }
   if (!app.ofapi?.proxyRead || app.config.ofapiCreditLedgerEnabled !== true) {
     return { outcome: "unavailable", reason: "ofapi_unavailable", hadFreeUrlExpired, reread: null };
   }
+  // Before any network call: an automatic request once the budget is spent,
+  // and the category off, never reach OFAPI.
+  const blocked = await preflight(ctx, 0);
+  if (blocked) return { ...blocked, hadFreeUrlExpired, reread: null };
   const flightKey = `${input.accountId}|${input.mediaId}|${input.variant}`;
   const claim = await claimOfapiMediaFlight(app.db, { flightKey, resolveId: ctx.resolveId, holdMs: OFAPI_MEDIA_FLIGHT_HOLD_MS });
   if (!claim.claimed) {
@@ -413,7 +608,7 @@ async function decide(ctx: ResolveContext): Promise<Decision & { hadFreeUrlExpir
   try {
     const decision = await viaOfapi(ctx, source.url!);
     keep = decision.outcome === "paid";
-    return { ...decision, hadFreeUrlExpired, reread: decision.outcome === "source_expired" ? reread : null };
+    return { ...decision, hadFreeUrlExpired, reread: decision.outcome === "source_expired" ? rereadHint(ctx) : null };
   } finally {
     if (keep) {
       await holdOfapiMediaFlight(app.db, { resolveId: ctx.resolveId, holdMs: OFAPI_MEDIA_FLIGHT_HOLD_MS }).catch(() => undefined);
@@ -443,9 +638,22 @@ function replayResponse(row: OfapiMediaFetchLogRow): OfapiMediaResolveResponse {
   };
 }
 
+/** A requestId names one file: a repeat for another file is refused, never answered. */
+function assertSameFile(recorded: { accountId: string; mediaId: string; variant: OfapiMediaVariant }, input: OfapiMediaResolveRequest) {
+  if (recorded.accountId !== input.accountId || recorded.mediaId !== input.mediaId || recorded.variant !== input.variant) {
+    throw new ConflictError("This requestId was already used for another file", { reason: "request_id_reused" });
+  }
+}
+
+// Concurrent requests with the same requestId (the desktop retrying a lost
+// response) join the one in flight instead of racing it.
+type InFlight = { file: { accountId: string; mediaId: string; variant: OfapiMediaVariant }; answer: Promise<OfapiMediaResolveResponse> };
+let inFlight = new Map<string, InFlight>();
+
 /**
  * Resolves one media file for the calling chatter. Idempotent by the client's
- * requestId: a repeat returns the recorded answer without a second charge. A
+ * requestId: a repeat (or a concurrent twin) returns the recorded answer
+ * without a second charge; a requestId reused for another file is a 409. A
  * `pending` answer is final for its requestId; retry with a new one.
  */
 export async function resolveOfapiMedia(
@@ -462,17 +670,42 @@ export async function resolveOfapiMedia(
     && candidate.ofapiAccountId === input.accountId);
   if (!page) throw new NotFoundError("OFAPI account is not assigned to this chatter");
 
+  const key = `${principal.user.id}|${input.requestId}`;
+  const join = async (twin: InFlight) => {
+    assertSameFile(twin.file, input);
+    return { ...(await twin.answer), replayed: true };
+  };
+  const running = inFlight.get(key);
+  if (running) return join(running);
   const recorded = await findOfapiMediaFetchByRequest(app.db, { actorUserId: principal.user.id, clientRequestId: input.requestId });
-  if (recorded) return replayResponse(recorded);
+  if (recorded) {
+    assertSameFile({ accountId: recorded.ofapiAccountId, mediaId: recorded.mediaId, variant: recorded.variant }, input);
+    return replayResponse(recorded);
+  }
+  const twin = inFlight.get(key);
+  if (twin) return join(twin);
+  const answer = resolveFresh(app, principal, page.id, input);
+  inFlight.set(key, { file: { accountId: input.accountId, mediaId: input.mediaId, variant: input.variant }, answer });
+  try {
+    return await answer;
+  } finally {
+    inFlight = new Map([...inFlight].filter(([entry]) => entry !== key));
+  }
+}
 
+async function resolveFresh(app: AppContext, principal: HumanAuthPrincipal, pageId: number, input: OfapiMediaResolveRequest) {
+  const now = new Date();
   const ctx: ResolveContext = {
-    app, principal, pageId: page.id, input, resolveId: randomUUID(), now: new Date(),
+    app, principal, pageId, input, resolveId: randomUUID(), now, deadline: now.getTime() + OFAPI_MEDIA_RESOLVE_DEADLINE_MS,
     locators: await listOfapiMediaLocators(app.db, { ofapiAccountId: input.accountId, mediaId: input.mediaId }),
+    links: await listOfapiMediaLinks(app.db, { ofapiAccountId: input.accountId, mediaId: input.mediaId }),
     cdnHead: cdnHeadOverride ?? defaultCdnHead,
   };
   const decision = await decide(ctx);
-  const occurredAt = new Date();
+  // One timestamp per hand-out: a paid one is logged, ledgered and budgeted on its issuance day.
+  const occurredAt = decision.outcome === "paid" && decision.issuedAt ? decision.issuedAt : new Date();
   const variantRows = ctx.locators.filter((row) => row.variant === input.variant);
+  const mediaType = ctx.locators.find((row) => row.mediaType)?.mediaType ?? null;
   const credits = decision.outcome === "paid" ? decision.credits ?? 0 : 0;
   const giveBack = async () => {
     if (decision.budget) await refundOfapiMediaBudget(app.db, decision.budget).catch(() => undefined);
@@ -483,14 +716,15 @@ export async function resolveOfapiMedia(
     written = await recordOfapiMediaFetch(app.db, {
       log: {
         resolveId: ctx.resolveId, clientRequestId: input.requestId, occurredAt,
-        accrualDay: decision.accrualDay ?? utcDay(occurredAt), pageId: page.id, ofapiAccountId: input.accountId,
+        accrualDay: utcDay(occurredAt), pageId, ofapiAccountId: input.accountId,
         actorUserId: principal.user.id, surface: input.surface, trigger: input.trigger, mediaId: input.mediaId,
-        mediaType: newestRow(ctx.locators)?.mediaType ?? null, variant: input.variant,
+        mediaType, variant: input.variant,
         pathSha256: variantRows.find((row) => row.pathSha256)?.pathSha256 ?? null,
         outcome: decision.outcome, reason: decision.reason, contentLength: decision.contentLength ?? null,
         creditsEstimated: credits, overCap: decision.overCap ?? false,
         hadFreeUrlExpired: decision.hadFreeUrlExpired, afterReread: input.afterReread === true,
         certainty: decision.certainty ?? "confirmed",
+        collectionRequestId: decision.outcome === "paid" ? decision.collectionRequestId ?? null : null,
       },
       ledger: decision.outcome === "paid" ? decision.ledger ?? null : null,
     });
@@ -500,10 +734,13 @@ export async function resolveOfapiMedia(
     throw error;
   }
   if (written === null) {
-    // A concurrent resolve with the same requestId answered first.
+    // Another process answered this requestId first.
     await giveBack();
     const winner = await findOfapiMediaFetchByRequest(app.db, { actorUserId: principal.user.id, clientRequestId: input.requestId });
-    if (winner) return replayResponse(winner);
+    if (winner) {
+      assertSameFile({ accountId: winner.ofapiAccountId, mediaId: winner.mediaId, variant: winner.variant }, input);
+      return replayResponse(winner);
+    }
     throw new ServiceUnavailableError("OFAPI media resolve could not be recorded");
   }
   const urlExpiresAt = decision.urlExpiresAt ? decision.urlExpiresAt.toISOString() : null;
@@ -520,10 +757,10 @@ export async function resolveOfapiMedia(
     reason: decision.reason,
     retryAfterMs: decision.retryAfterMs ?? null,
     retryAt: decision.retryAt ? decision.retryAt.toISOString() : null,
-    mediaType: newestRow(ctx.locators)?.mediaType ?? null,
+    mediaType,
     reread: decision.reread,
     replayed: false,
-  };
+  } satisfies OfapiMediaResolveResponse;
 }
 
 /** Batched desktop transfer reports; idempotent by resolveId. */

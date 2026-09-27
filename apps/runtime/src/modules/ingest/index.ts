@@ -16,6 +16,7 @@ import {
   requireApiKeyUser,
   requireHarvestDeviceToken,
   requireOwner,
+  type HumanAuthPrincipal,
 } from "../../services/auth.ts";
 import {
   ingestClientObservations,
@@ -33,7 +34,6 @@ import {
 } from "../../services/ofapi-command-executor.ts";
 import { executeOfapiReadGatewayRequest } from "../../services/ofapi-read-gateway.ts";
 import { reportOfapiMediaFetches, resolveOfapiMedia } from "../../services/ofapi-media-resolve.ts";
-import { createHash } from "node:crypto";
 import {
   getOfapiWebhookStatus,
   receiveOfapiWebhook,
@@ -237,31 +237,36 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     return reply.code(response.status as 200).send(response.body);
   });
 
-  // Desktop media images (docs/runbooks/ofapi-media.md). Per-device limits:
-  // a 40-cell gallery scrolled needs far more than the gateway's 120/min, and
-  // the key is the bearer credential (one device token), not the address.
-  const perDevice = (request: { headers: Record<string, string | string[] | undefined>; ip: string }) => {
-    const authorization = request.headers.authorization;
-    return typeof authorization === "string" && authorization.length > 0
-      ? `media:${createHash("sha256").update(authorization).digest("hex").slice(0, 32)}`
-      : `media-ip:${request.ip}`;
+  // Desktop media images (docs/runbooks/ofapi-media.md). Authentication runs
+  // as a preHandler and the per-device limit after it, keyed by the
+  // authenticated device token (or user): a 40-cell gallery scrolled needs
+  // far more than the gateway's 120/min, and many chatters share one office
+  // address. Unauthenticated requests are refused before any limit applies.
+  const mediaPrincipals = new WeakMap<object, HumanAuthPrincipal>();
+  const authenticateMediaDevice = async (request: Parameters<typeof requirePrincipal>[0]) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    mediaPrincipals.set(request, principal);
+  };
+  const mediaPrincipal = (request: object) => {
+    const principal = mediaPrincipals.get(request);
+    if (!principal) throw new ServiceUnavailableError("Media request was not authenticated");
+    return principal;
+  };
+  const perDevice = (request: object) => {
+    const principal = mediaPrincipal(request);
+    return `media:${principal.user.id}:${principal.deviceTokenId ?? "user"}`;
   };
   server.post("/api/v1/ofapi/media/resolve", {
     schema: routeSchemas.ofapiMediaResolve,
-    config: { rateLimit: { max: 300, timeWindow: "1 minute", keyGenerator: perDevice } },
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    return resolveOfapiMedia(appContext, principal, request.body);
-  });
+    preHandler: authenticateMediaDevice,
+    config: { rateLimit: { max: 300, timeWindow: "1 minute", hook: "preHandler", keyGenerator: perDevice } },
+  }, async (request) => resolveOfapiMedia(appContext, mediaPrincipal(request), request.body));
   server.post("/api/v1/ofapi/media/reports", {
     schema: routeSchemas.ofapiMediaReports,
-    config: { rateLimit: { max: 120, timeWindow: "1 minute", keyGenerator: perDevice } },
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    return reportOfapiMediaFetches(appContext, principal, request.body.reports);
-  });
+    preHandler: authenticateMediaDevice,
+    config: { rateLimit: { max: 120, timeWindow: "1 minute", hook: "preHandler", keyGenerator: perDevice } },
+  }, async (request) => reportOfapiMediaFetches(appContext, mediaPrincipal(request), request.body.reports));
 
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
     const principal=await requirePrincipal(request); requireOwner(principal);

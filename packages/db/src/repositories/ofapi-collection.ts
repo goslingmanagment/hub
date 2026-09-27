@@ -313,6 +313,38 @@ export async function settleOfapiCollectionRequest(db: Database, requestId: stri
     if (row.job_id && delta !== 0) await database.execute(sql`update ofapi_collection_jobs set used_credits=used_credits+${delta},updated_at=now() where id=${row.job_id}::uuid`);
   });
 }
+/**
+ * Re-settles one interactive request to an exact figure: a desktop media click
+ * of unknown size is reserved at its guard price and settled to what its
+ * transfer report shows. Lowers the reservation to the figure and records it
+ * as actual, so the day's usage (greatest of the two) counts exactly it.
+ */
+export async function resettleOfapiCollectionRequest(db: Database, requestId: string, credits: number) {
+  if (!Number.isSafeInteger(credits) || credits < 0) throw new OfapiCollectionPolicyError("invalid_credits");
+  await db.execute(sql`update ofapi_collection_requests set reserved_credits=least(reserved_credits,${credits}),
+    actual_credits=${credits},state='captured',captured_at=coalesce(captured_at,now())
+    where request_id=${requestId} and state<>'released' and job_id is null`);
+}
+/**
+ * The admission check of one interactive request, without reserving: throws
+ * the refusal `reserveOfapiCollectionRequest` would give (category off, daily
+ * credit limit), so a caller can stop before any network call.
+ */
+export async function assertOfapiCollectionHeadroom(db: Database, input: {
+  pageId: number; category: OfapiCollectionCategory; credits: number; now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const policy = await effective(db, input.category, input.pageId, await state(db));
+  if (policy.mode === "off") throw new OfapiCollectionPolicyError("collection_off");
+  if (policy.source === "legacy_baseline") return;
+  const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
+  const usage = await db.execute<{ credits: string }>(sql`select coalesce(sum(greatest(reserved_credits,coalesce(actual_credits,0))),0)::text credits
+    from ofapi_collection_requests where state<>'released' and page_id=${input.pageId} and category=${input.category} and purpose='interactive' and created_at>=${dayStart}`);
+  if (Number(usage.rows[0]?.credits ?? 0) + Math.max(0, Math.trunc(input.credits)) > policy.dailyCreditLimit) {
+    const nextDay = new Date(dayStart); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    throw new OfapiCollectionPolicyError("daily_limit", { retryAt: nextDay });
+  }
+}
 export async function releaseOfapiCollectionRequest(db: Database, requestId: string) {
   await db.transaction(async tx => {
     const database = tx as unknown as Database;
