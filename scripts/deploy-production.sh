@@ -480,6 +480,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # anyone enables it). A later re-deploy finds both migrations applied.
   "0211_ai_usage_feature_media_describe.sql"
   "0212_ai_media_descriptions.sql"
+  # AI media describer, Fansly accelerator: one new table
+  # (ai_media_accelerator_reads), IF NOT EXISTS, no change to any existing
+  # table; the previous image never names it.
+  "0213_ai_media_accelerator_reads.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

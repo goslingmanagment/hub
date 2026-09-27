@@ -8,6 +8,10 @@ export type FanslyWsHint = {
   type: FanslyWsHintType;
   groupRef: string;
   messageRef: string | null;
+  /** AI media describer accelerator: present only on a message_created
+   * frame that carries attachments (ids only, never a URL). */
+  hasAttachments?: true;
+  senderRef?: string | null;
 };
 export type FanslyWsMutationDebt = {
   groupRef: string | null;
@@ -75,7 +79,10 @@ export function extractFanslyWsHints(frame: string, enabled: ReadonlySet<FanslyW
       const groupRef = nativeRef(message?.groupId);
       const messageRef = nativeRef(message?.id);
       if (!groupRef || !messageRef) { nodes.push({ path, outcome: "invalid" }); return; }
-      hint = { type: "message_created", groupRef, messageRef };
+      const attachmentCount = Array.isArray(message?.attachments) ? message.attachments.length : 0;
+      hint = attachmentCount > 0
+        ? { type: "message_created", groupRef, messageRef, hasAttachments: true, senderRef: nativeRef(message?.senderId) }
+        : { type: "message_created", groupRef, messageRef };
     } else if (service.serviceId === 4 && event.type === 8) {
       const groupRef = nativeRef(event.id);
       if (!groupRef) { nodes.push({ path, outcome: "invalid" }); return; }

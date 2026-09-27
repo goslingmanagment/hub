@@ -3938,6 +3938,37 @@ export const aiMediaDescribeDays = pgTable("ai_media_describe_days", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// AI media describer, Fansly freshness accelerator (0213): one row per
+// requested head read; admitted_at is the agency-wide rolling 24 h budget.
+export const aiMediaAcceleratorReads = pgTable(
+  "ai_media_accelerator_reads",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, {
+      onDelete: "restrict",
+    }),
+    groupRef: text("group_ref").notNull(),
+    messageRef: text("message_ref").notNull(),
+    requestedAt: timestamp("requested_at", { withTimezone: true }).defaultNow().notNull(),
+    status: text("status").$type<"pending" | "admitted" | "done" | "skipped" | "failed">()
+      .default("pending").notNull(),
+    outcome: text("outcome"),
+    requestId: text("request_id"),
+    admittedAt: timestamp("admitted_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => ({
+    messageUniq: unique("ai_media_accelerator_reads_message_uniq").on(table.pageId, table.messageRef),
+    pendingIdx: index("ai_media_accelerator_reads_pending_idx")
+      .on(table.pageId, table.requestedAt)
+      .where(sql`${table.status} = 'pending'`),
+    admittedIdx: index("ai_media_accelerator_reads_admitted_idx")
+      .on(table.admittedAt)
+      .where(sql`${table.admittedAt} is not null`),
+    groupIdx: index("ai_media_accelerator_reads_group_idx").on(table.pageId, table.groupRef, table.admittedAt),
+  }),
+);
+
 export const aiAcceptanceEvents = pgTable(
   "ai_acceptance_events",
   {
