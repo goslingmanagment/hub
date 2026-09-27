@@ -54,6 +54,11 @@ import {
   runVoiceNotesNightlyRetention,
   runVoiceNotesSweep,
 } from "./services/voice-notes-sweep.ts";
+import {
+  AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
+  ensureAiMediaDescribeSweepQueue,
+  runAiMediaDescribeSweepJob,
+} from "./services/ai-media-describe/sweep.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
@@ -228,6 +233,7 @@ export async function startWorkerServices(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
+  await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
@@ -528,6 +534,15 @@ export async function startWorkerServices(
     const result = await runVoiceNotesSweep(app);
     if (result.abandonedQueued > 0 || result.leaseExpired > 0 || result.budgetsReleased > 0) {
       app.logger.info(result, "Voice notes sweep complete");
+    }
+  });
+
+  await boss.work(AI_MEDIA_DESCRIBE_SWEEP_QUEUE, { batchSize: 1 }, async () => {
+    // Minutely AI media describer (docs/runbooks/ai-media-describe.md). Ids,
+    // statuses and counts only — never a URL or a description in the log.
+    const result = await runAiMediaDescribeSweepJob(app);
+    if (result.claimed > 0) {
+      app.logger.info(result, "AI media describe sweep complete");
     }
   });
 

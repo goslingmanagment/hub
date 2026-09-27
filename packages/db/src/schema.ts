@@ -23,7 +23,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import {
-  aiUsageFeatures,
+  aiUsageLedgerFeatures,
   fanFlagTypes,
   userRoles,
 } from "@agency_hub_core/shared";
@@ -221,7 +221,8 @@ export const transactionStateEnum = pgEnum("transaction_state", [
 ]);
 export const userRoleEnum = pgEnum("user_role", userRoles);
 export const fanFlagEnum = pgEnum("fan_flag", fanFlagTypes);
-export const aiUsageFeatureEnum = pgEnum("ai_usage_feature", aiUsageFeatures);
+// The DB enum carries the ledger-only system features too (0211).
+export const aiUsageFeatureEnum = pgEnum("ai_usage_feature", aiUsageLedgerFeatures);
 export const dmSenderRoleEnum = pgEnum("dm_sender_role", ["fan", "model", "system", "unknown"]);
 export const dmMessageCoverageStatusEnum = pgEnum("dm_message_coverage_status", [
   "pending_backfill",
@@ -3827,6 +3828,115 @@ export const aiGenerationContent = pgTable(
       .where(sql`${table.fanRef} is not null`),
   }),
 );
+
+// AI media describer (0212, docs/runbooks/ai-media-describe.md): restricted
+// class like ai_generation_content — owner-only reads, lake-excluded, inside
+// fan and page erasure. Text only; image bytes never rest on the hub.
+export type AiMediaDescriptionStatus =
+  | "pending"
+  | "awaiting_source"
+  | "dormant"
+  | "described"
+  | "refused"
+  | "unavailable"
+  | "failed"
+  | "budget_deferred"
+  | "outcome_unknown"
+  | "skipped_policy";
+
+export const aiMediaDescriptions = pgTable(
+  "ai_media_descriptions",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, {
+      onDelete: "restrict",
+    }),
+    platform: text("platform").$type<"fansly" | "onlyfans">().notNull(),
+    mediaRef: text("media_ref").notNull(),
+    variant: text("variant").$type<"full" | "poster" | "preview">().notNull(),
+    mediaKind: text("media_kind").$type<"photo" | "video" | "gif" | "bundle">().notNull(),
+    senderRole: text("sender_role").$type<"fan" | "model">().notNull(),
+    fanPlatformUserId: text("fan_platform_user_id"),
+    status: text("status").$type<AiMediaDescriptionStatus>().notNull(),
+    description: text("description"),
+    model: text("model"),
+    descriptionVersion: integer("description_version"),
+    source: text("source"),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }),
+    contentSha256: text("content_sha256"),
+    usageEventId: bigint("usage_event_id", { mode: "number" }).references(() => aiUsageEvents.id, {
+      onDelete: "set null",
+    }),
+    errorCode: text("error_code"),
+    attempts: integer("attempts").default(0).notNull(),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    firstMessageAt: timestamp("first_message_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    describedAt: timestamp("described_at", { withTimezone: true }),
+  },
+  (table) => ({
+    keyUniq: unique("ai_media_descriptions_key_uniq").on(
+      table.pageId,
+      table.platform,
+      table.mediaRef,
+      table.variant,
+    ),
+    dueIdx: index("ai_media_descriptions_due_idx")
+      .on(table.nextAttemptAt)
+      .where(sql`${table.status} in ('pending', 'awaiting_source', 'budget_deferred')`),
+    refusedShaIdx: index("ai_media_descriptions_refused_sha_idx")
+      .on(table.contentSha256)
+      .where(sql`${table.status} = 'refused' and ${table.contentSha256} is not null`),
+    terminalIdx: index("ai_media_descriptions_terminal_idx")
+      .on(table.describedAt)
+      .where(sql`${table.describedAt} is not null`),
+    fanIdx: index("ai_media_descriptions_fan_idx")
+      .on(table.pageId, table.fanPlatformUserId)
+      .where(sql`${table.fanPlatformUserId} is not null`),
+  }),
+);
+
+export const aiMediaDescriptionLinks = pgTable(
+  "ai_media_description_links",
+  {
+    descriptionId: bigint("description_id", { mode: "number" })
+      .notNull()
+      .references(() => aiMediaDescriptions.id, { onDelete: "cascade" }),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, {
+      onDelete: "restrict",
+    }),
+    platform: text("platform").$type<"fansly" | "onlyfans">().notNull(),
+    messageRef: text("message_ref").notNull(),
+    conversationRef: text("conversation_ref"),
+    fanPlatformUserId: text("fan_platform_user_id"),
+    senderRole: text("sender_role").$type<"fan" | "model">().notNull(),
+    messageAt: timestamp("message_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.descriptionId, table.messageRef] }),
+    conversationIdx: index("ai_media_description_links_conversation_idx").on(
+      table.pageId,
+      table.conversationRef,
+      table.messageAt,
+    ),
+    fanIdx: index("ai_media_description_links_fan_idx")
+      .on(table.pageId, table.fanPlatformUserId)
+      .where(sql`${table.fanPlatformUserId} is not null`),
+  }),
+);
+
+export const aiMediaDescribeDays = pgTable("ai_media_describe_days", {
+  day: date("day", { mode: "string" }).primaryKey(),
+  imagesReserved: integer("images_reserved").default(0).notNull(),
+  microUsdReserved: bigint("micro_usd_reserved", { mode: "number" }).default(0).notNull(),
+  refusals: integer("refusals").default(0).notNull(),
+  breakerTrippedAt: timestamp("breaker_tripped_at", { withTimezone: true }),
+  breakerReason: text("breaker_reason"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const aiAcceptanceEvents = pgTable(
   "ai_acceptance_events",

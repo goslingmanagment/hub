@@ -7,6 +7,7 @@ import {
   classifyTransportFailure,
   createProxyRequestDispatcher,
   createStickyConnectFailureFetch,
+  type ProxyConfig,
 } from "@agency_hub_core/shared";
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
@@ -192,6 +193,51 @@ function normalizeAnthropicProviderFailure(
     sdkFailureKind: sdkKind,
     cause: error,
   });
+}
+
+/** Sanctioned second use of the vendor SDK (the import ban keeps it in this
+ * file): the AI media describer's single-shot, non-streaming call. It has its
+ * own ledger rows (feature `media-describe`), budget reservation and restricted
+ * storage in services/ai-media-describe; SDK auto-retries are OFF because the
+ * describer owns a stricter retry policy (never after a possible send). */
+export interface AnthropicSingleShotClient {
+  create(body: unknown): Promise<unknown>;
+  release(): Promise<void>;
+}
+
+export function createPageProxyAnthropicSingleShotClient(
+  apiKey: string,
+  proxy: ProxyConfig,
+  options: { timeoutMs: number },
+): AnthropicSingleShotClient {
+  const dispatcher = createProxyRequestDispatcher(proxy);
+  const client = new Anthropic({
+    apiKey,
+    fetch: createAnthropicGatewayProxyFetch(dispatcher),
+    maxRetries: 0,
+    timeout: options.timeoutMs,
+  });
+  return {
+    async create(body) {
+      return await client.messages.create(body as Anthropic.MessageCreateParamsNonStreaming);
+    },
+    async release() {
+      await dispatcher.close().catch(() => undefined);
+    },
+  };
+}
+
+/** SDK error shape for callers outside this file (they may not import the SDK). */
+export function classifyAnthropicSdkFailure(error: unknown): {
+  kind: ReturnType<typeof anthropicSdkFailureKind>;
+  httpStatus: number | null;
+} {
+  return {
+    kind: anthropicSdkFailureKind(error),
+    httpStatus: error instanceof Anthropic.APIError && typeof error.status === "number"
+      ? error.status
+      : null,
+  };
 }
 
 export function createPageProxyAnthropicClientResolver(

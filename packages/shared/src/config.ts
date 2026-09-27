@@ -345,6 +345,19 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
   ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
+  // AI media describer (docs/runbooks/ai-media-describe.md): ships inert. Every
+  // knob is live-wired (read per sweep / per generation). The page policies
+  // FAIL CLOSED: "{}" grants no page; a page describes only messages newer than
+  // its policy `since` and only until its optional `until`.
+  ANTHROPIC_MEDIA_API_KEY: optionalTrimmedStringSchema,
+  AI_MEDIA_DESCRIBE_ENABLED: booleanSchema.default(false),
+  AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
+  AI_MEDIA_DESCRIBE_MODEL: z.enum(["anthropic:claude-sonnet-5", "anthropic:claude-haiku-4-5"])
+    .default("anthropic:claude-sonnet-5"),
+  AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT: z.coerce.number().int().min(0).default(150),
+  AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(1_000_000),
+  AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY: booleanSchema.default(true),
+  AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
   // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
   // one flip per verification window, never a bundle and never a restart.
@@ -632,6 +645,23 @@ export interface AppConfig {
   voiceNotesMaxConcurrentSyntheses?: number;
   onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
+  // AI media describer — ships inert; every knob live-wired.
+  /** Optional separate Anthropic key/workspace for the describer (spend
+   * accounting and a provider-side limit). Unset = the main key. */
+  anthropicMediaApiKey?: string | null;
+  aiMediaDescribeEnabled?: boolean;
+  /** JSON keyed by exact page label: {"since": ISO, "until"?: ISO}. "{}" = none. */
+  aiMediaDescribePagePolicies?: string;
+  aiMediaDescribeModel?: "anthropic:claude-sonnet-5" | "anthropic:claude-haiku-4-5";
+  /** Agency-wide images per UTC day (0 blocks all sends). */
+  aiMediaDescribeDailyImageLimit?: number;
+  /** Agency-wide micro-USD per UTC day (0 blocks all sends). */
+  aiMediaDescribeDailyMicroUsdLimit?: number;
+  /** Describe fan media on arrival only in chats with an AI generation in the
+   * last 7 days; other chats get it at their first generation. */
+  aiMediaDescribeLiveChatOnly?: boolean;
+  /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
+  aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
@@ -940,6 +970,14 @@ export function loadConfig(
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
+    anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,
+    aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
+    aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
+    aiMediaDescribeModel: parsed.AI_MEDIA_DESCRIBE_MODEL,
+    aiMediaDescribeDailyImageLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT,
+    aiMediaDescribeDailyMicroUsdLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT,
+    aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
+    aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,

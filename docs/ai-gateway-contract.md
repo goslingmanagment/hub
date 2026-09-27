@@ -232,6 +232,19 @@ model, provider, provider response id, bounded error code/class, token counts, a
 Provider response ids are audit metadata; they are not a substitute for storing prompt or response
 content.
 
+### AI media describer (system lane)
+
+The hub's background image describer (`docs/runbooks/ai-media-describe.md`) is
+a second, system-only use of the Anthropic key. It is not a gateway route: no
+client can call it. Its ledger rows use the ledger-only feature
+`media-describe` with `user_id` NULL (never accepted on the wire), its spend is
+bounded by its own agency-wide daily caps, and its restricted records omit the
+image. **Custody exception (owner ruling 2026-09-27):** for this path only,
+chat image bytes transit hub worker memory (downscaled, metadata stripped) on
+the way to the provider; they are never written to disk, a table or a log. The
+previews rule — bytes only on chatters' machines — is unchanged. Prompts carry
+only the stored text description.
+
 ## Rollback
 
 Desktop local provider keys stay supported until all of these are true:

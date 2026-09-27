@@ -172,6 +172,14 @@ describe("config registry", () => {
     "voiceNotesGlobalDailyCharBudget",
     "voiceNotesScriptMaxChars",
     "voiceNotesMaxConcurrentSyntheses",
+    // AI media describer: master switch, page policies, model, caps and source policy, read per sweep/generation.
+    "aiMediaDescribeEnabled",
+    "aiMediaDescribePagePolicies",
+    "aiMediaDescribeModel",
+    "aiMediaDescribeDailyImageLimit",
+    "aiMediaDescribeDailyMicroUsdLimit",
+    "aiMediaDescribeLiveChatOnly",
+    "aiMediaDescribeModelMedia",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's
     // ramp needs no restart. Every one of them rests at off/false.
     "agentReadPlaneMode",

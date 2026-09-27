@@ -159,6 +159,13 @@ jobs:
       - name: Chromium Headless Shell runtime smoke
         run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
 
+      - name: Native image library smoke
+        # The AI media describer loads sharp lazily; prove the prebuilt libvips
+        # binding for the target platform resolves from the runtime package.
+        run: |
+          docker run --rm -w /app/apps/runtime --entrypoint node agency_hub_core/runtime:ci \
+            --input-type=module -e "const { default: sharp } = await import('sharp'); const out = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#808080' } }).jpeg().toBuffer(); if (out.length < 100) throw new Error('sharp produced no JPEG'); console.log('sharp', sharp.versions.sharp, 'vips', sharp.versions.vips);"
+
       - name: Startup capability manifest smoke
         run: |
           capabilities="$(docker run --rm --entrypoint node agency_hub_core/runtime:ci apps/runtime/dist/startup.js print-public-capabilities)"

@@ -183,6 +183,20 @@ describe("LIVE_CONFIG_KEYS", () => {
     // cap, read per sweep so enabling after deploy needs no restart.
     expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryDailyCap")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(83);
+    // AI media describer: seven live knobs (switch, page policies, model, two
+    // daily caps, live-chat filter, creator-media mode), read per sweep and
+    // per generation so the owner stops or narrows it without a restart.
+    for (const key of [
+      "aiMediaDescribeEnabled",
+      "aiMediaDescribePagePolicies",
+      "aiMediaDescribeModel",
+      "aiMediaDescribeDailyImageLimit",
+      "aiMediaDescribeDailyMicroUsdLimit",
+      "aiMediaDescribeLiveChatOnly",
+      "aiMediaDescribeModelMedia",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
+    }
+    expect(LIVE_CONFIG_KEYS.size).toBe(90);
   });
 });

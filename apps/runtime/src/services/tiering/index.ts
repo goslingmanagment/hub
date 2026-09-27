@@ -32,7 +32,13 @@ export const RESTRICTED_OBSERVATION_KINDS = new Set(["desktop.guard_audit", "ofa
 // Stage 29: the restricted AI class NEVER exports to the lake — excluded by
 // construction (only TIERED_TABLES tier) and pinned by test so a future
 // "tier everything" sweep cannot pick these up silently.
-export const LAKE_EXCLUDED_TABLES = ["ai_generation_content", "ai_acceptance_events"] as const;
+export const LAKE_EXCLUDED_TABLES = [
+  "ai_generation_content",
+  "ai_acceptance_events",
+  // AI media describer (0212): the same restricted class.
+  "ai_media_descriptions",
+  "ai_media_description_links",
+] as const;
 
 interface TieredTableSpec {
   table: "observations" | "domain_events";

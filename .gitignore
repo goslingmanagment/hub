@@ -38,6 +38,8 @@ docs/runbooks/*
 !docs/runbooks/ofapi-posts-transport-recovery.md
 # Credit receipt, signed correction, and forecast evidence semantics.
 !docs/runbooks/ofapi-credit-reconciliation.md
+# AI media describer: switches, stops, custody exception and read-only checks.
+!docs/runbooks/ai-media-describe.md
 *.sql.gz
 
 # Local mockup/reference artifacts

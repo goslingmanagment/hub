@@ -889,6 +889,18 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
     target: "ofapi_media_links",
     reach: "predicate",
   },
+  // AI media describer (0212). A link names the fan of the conversation it was
+  // seen in; a description names the fan who sent the file.
+  {
+    column: "ai_media_description_links.fan_platform_user_id",
+    target: "ai_media_description_links",
+    reach: "predicate",
+  },
+  {
+    column: "ai_media_descriptions.fan_platform_user_id",
+    target: "ai_media_descriptions",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -1232,6 +1244,36 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_generation_content where ${generationPred}`),
   });
 
+  // AI media describer (0212): the fan's links (their conversation, or a
+  // creator file sent to them) first, then the descriptions of media the fan
+  // SENT. A teaser's description (creator content, nothing about the fan)
+  // stays with its other links. Independent predicates, so each count equals
+  // its delete.
+  const mediaLinkConvPred = fanGroupIds.length > 0
+    ? sql`(conversation_ref = ${ref} or conversation_ref in ${fanGroupIds})`
+    : sql`conversation_ref = ${ref}`;
+  const mediaLinkPred = sql`page_id in ${scope.pageIds}
+    and (${mediaLinkConvPred} or fan_platform_user_id = ${ref})`;
+  targets.push({
+    plane: "hot",
+    target: "ai_media_description_links",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_media_description_links where ${mediaLinkPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_media_description_links where ${mediaLinkPred}`),
+  });
+  const mediaDescriptionPred = sql`page_id in ${scope.pageIds} and fan_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "ai_media_descriptions",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_media_descriptions where ${mediaDescriptionPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_media_descriptions where ${mediaDescriptionPred}`),
+  });
+
   // Voice-notes lane (0109): a fan's rendered audio + conversation_ref + a
   // source_generation_ref into an ai_generation_content row this same erasure
   // deletes. voice_notes has NO FK to `fans`, so the unmapped-FK guard cannot
@@ -1489,6 +1531,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
     ["sync_runs", "page_id"],
+    // AI media describer (0212): links before the descriptions they reference.
+    ["ai_media_description_links", "page_id"],
+    ["ai_media_descriptions", "page_id"],
     ["ai_generation_content", "page_id"],
     // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block
