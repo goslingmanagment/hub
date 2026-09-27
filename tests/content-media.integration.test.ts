@@ -206,7 +206,14 @@ describe("[sync-critical] content media raw to agent API", () => {
   it("audits retained bodies through a read-only role without disclosing their content", async () => {
     await capture("vault_media", fixture);
     // This is the disposable Testcontainers database, never a production grant.
-    await db.pool.query("create role read_only login password 'content-media-test'");
+    // Roles are cluster-wide: another suite may already have created read_only.
+    await db.pool.query(`do $$ begin
+      if exists (select 1 from pg_roles where rolname = 'read_only') then
+        alter role read_only login password 'content-media-test';
+      else
+        create role read_only login password 'content-media-test';
+      end if;
+    end $$`);
     await db.pool.query("grant usage on schema public to read_only; grant select on all tables in schema public to read_only");
     const connection = new URL(db.connectionString);
     connection.username = "read_only"; connection.password = "content-media-test";
