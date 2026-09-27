@@ -35,6 +35,7 @@ export * from "./ofapi-smart-links.ts";
 export * from "./routes-ofapi-exports.ts";
 
 export * from "./routes-ofapi-media.ts";
+export * from "./routes-ofapi-media-images.ts";
 export * from "./ofapi-actions.ts";
 export * from "./ofapi-actions-collections.ts";
 

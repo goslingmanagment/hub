@@ -32,6 +32,8 @@ import {
   sendOfapiCommandExecuteJob,
 } from "../../services/ofapi-command-executor.ts";
 import { executeOfapiReadGatewayRequest } from "../../services/ofapi-read-gateway.ts";
+import { reportOfapiMediaFetches, resolveOfapiMedia } from "../../services/ofapi-media-resolve.ts";
+import { createHash } from "node:crypto";
 import {
   getOfapiWebhookStatus,
   receiveOfapiWebhook,
@@ -233,6 +235,32 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
       reply.header(name, value);
     }
     return reply.code(response.status as 200).send(response.body);
+  });
+
+  // Desktop media images (docs/runbooks/ofapi-media.md). Per-device limits:
+  // a 40-cell gallery scrolled needs far more than the gateway's 120/min, and
+  // the key is the bearer credential (one device token), not the address.
+  const perDevice = (request: { headers: Record<string, string | string[] | undefined>; ip: string }) => {
+    const authorization = request.headers.authorization;
+    return typeof authorization === "string" && authorization.length > 0
+      ? `media:${createHash("sha256").update(authorization).digest("hex").slice(0, 32)}`
+      : `media-ip:${request.ip}`;
+  };
+  server.post("/api/v1/ofapi/media/resolve", {
+    schema: routeSchemas.ofapiMediaResolve,
+    config: { rateLimit: { max: 300, timeWindow: "1 minute", keyGenerator: perDevice } },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return resolveOfapiMedia(appContext, principal, request.body);
+  });
+  server.post("/api/v1/ofapi/media/reports", {
+    schema: routeSchemas.ofapiMediaReports,
+    config: { rateLimit: { max: 120, timeWindow: "1 minute", keyGenerator: perDevice } },
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireApiKeyUser(principal);
+    return reportOfapiMediaFetches(appContext, principal, request.body.reports);
   });
 
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {

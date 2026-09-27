@@ -81,7 +81,7 @@ export async function assertOfapiConfiguredAccess(db: Database, fingerprint: str
     : /export/.test(input.operation) ? "exports"
       : /upload/.test(input.operation) ? "uploads"
         : /smart_link|pixel|postback/.test(input.operation) ? "links"
-          : input.method === "GET" ? "reads" : "commands";
+          : input.method === "GET" || input.method === "HEAD" ? "reads" : "commands";
   if (policy.capabilities && !policy.capabilities.includes(capability)) throw new OfapiKeyPermissionDeniedError(`OFAPI key declaration does not allow ${capability}`);
   if (input.accountId && policy.account_ids && !policy.account_ids.includes(input.accountId)) {
     throw new OfapiKeyPermissionDeniedError("OFAPI key declaration does not allow this account");
