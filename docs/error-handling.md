@@ -519,6 +519,24 @@ retry of a legacy scan uses its original query bounds and offset; normalization
 must never change the provider query halfway through pagination.
 
 
+### Desktop media resolve (media images)
+
+`POST /api/v1/ofapi/media/resolve` answers HTTP 200 with a closed `outcome`
+(`free_url`, `ofapi_cache`, `paid`, `cap_blocked`, `source_expired`,
+`unavailable`, `refused`, `pending`, `error`) and a bounded machine `reason`;
+these are decisions, not `AppError` codes. HTTP errors stay in the registry:
+404 `not_found` for an account not granted to the chatter (the read gateway's
+rule), 503 `service_unavailable` while the desktop read gateway is disabled,
+400 for an invalid request (a client URL is never accepted), 429 for the
+per-device rate limit. Retry law: a paid transfer is never retried
+automatically; `pending` is final for its `requestId` and advises
+`retryAfterMs` for a new one; `cap_blocked` by the daily budget carries the next
+UTC midnight in `retryAt` and yields only to an explicit click; `refused` and
+`unavailable` are not bypassed by a click. A repeated `requestId` replays the
+recorded answer without a second charge. Only fixed reasons and identifiers
+reach logs and the decision log — never a URL, signature, provider body or file
+content. See [the media runbook](runbooks/ofapi-media.md).
+
 ### Fansly B0 capture (Decision #343)
 
 Ownership/generation loss, unavailable capture, overflow and transport failure
