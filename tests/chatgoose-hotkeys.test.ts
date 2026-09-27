@@ -27,16 +27,16 @@ const META = ev("MetaLeft", "Meta", { metaKey: true });
 const CTRL = ev("ControlLeft", "Control", { ctrlKey: true });
 
 /** Press the primary modifier, then the combo (a fresh press). */
-function press(platform: HotkeyPlatform, client: HotkeyClient, event: HotkeyKeyEvent) {
-  const engine = createHotkeyEngine({ platform, client });
-  engine.keydown(platform === "mac" ? META : CTRL);
+function press(os: HotkeyPlatform, client: HotkeyClient, event: HotkeyKeyEvent) {
+  const engine = createHotkeyEngine({ platform: os, client });
+  engine.keydown(os === "mac" ? META : CTRL);
   if (event.shiftKey) engine.keydown(ev("ShiftLeft", "Shift", { metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: true }));
-  if (event.altKey && platform === "win") engine.keydown(ev("AltLeft", "Alt", { ctrlKey: true, altKey: true }));
+  if (event.altKey && os === "win") engine.keydown(ev("AltLeft", "Alt", { ctrlKey: true, altKey: true }));
   return engine.keydown(event);
 }
 
-function comboFor(platform: HotkeyPlatform, level: "text" | "panel"): Mods {
-  if (platform === "mac") return level === "text" ? { metaKey: true } : { metaKey: true, shiftKey: true };
+function comboFor(os: HotkeyPlatform, level: "text" | "panel"): Mods {
+  if (os === "mac") return level === "text" ? { metaKey: true } : { metaKey: true, shiftKey: true };
   return level === "text" ? { ctrlKey: true } : { ctrlKey: true, altKey: true };
 }
 

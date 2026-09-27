@@ -1,4 +1,4 @@
-import { HOTKEYS, MAC_SHIFT_ALIASES, MAC_SHIFT_SWALLOWED, type HotkeyAction, type HotkeyClient, type HotkeyDef, type HotkeyPlatform } from "./scheme.ts";
+import { HOTKEYS, MAC_SHIFT_ALIASES, MAC_SHIFT_SWALLOWED, isMacKeys, type HotkeyAction, type HotkeyClient, type HotkeyDef, type HotkeyPlatform } from "./scheme.ts";
 
 /** The fields of a DOM KeyboardEvent the engine reads. */
 export interface HotkeyKeyEvent {
@@ -62,7 +62,7 @@ type Chord = "text" | "shifted" | "panel" | null;
 /** Which modifier chord the event carries, strictly (extra modifiers → null). */
 function chordOf(event: HotkeyKeyEvent, platform: HotkeyPlatform): Chord {
   const { metaKey: meta, ctrlKey: ctrl, altKey: alt, shiftKey: shift } = event;
-  if (platform === "mac") {
+  if (isMacKeys(platform)) {
     if (!meta || ctrl || alt) return null;
     return shift ? "shifted" : "text";
   }
@@ -88,11 +88,11 @@ class FreshPressGuard {
   constructor(private readonly platform: HotkeyPlatform) {}
 
   private isPrimary(event: HotkeyKeyEvent): boolean {
-    return this.platform === "mac" ? isMeta(event) : isControl(event);
+    return isMacKeys(this.platform) ? isMeta(event) : isControl(event);
   }
 
   private primaryFlag(event: HotkeyKeyEvent): boolean {
-    return this.platform === "mac" ? event.metaKey : event.ctrlKey;
+    return isMacKeys(this.platform) ? event.metaKey : event.ctrlKey;
   }
 
   /** Update state for a keydown; returns whether a non-modifier key on this
