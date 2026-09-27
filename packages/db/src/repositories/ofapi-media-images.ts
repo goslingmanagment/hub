@@ -5,7 +5,6 @@ import { resettleOfapiCollectionRequest } from "./ofapi-collection.ts";
 import {
   insertOfapiCreditLedgerEntry,
   recordOfapiCreditSpend,
-  recordOfapiPhysicalCreditUsage,
   type RecordOfapiCreditSpendInput,
 } from "./ofapi.ts";
 
@@ -236,7 +235,7 @@ export async function listOfapiMediaLinks(db: Database, input: { ofapiAccountId:
 export async function markOfapiMediaMessageDeleted(db: Database, input: { ofapiAccountId: string; messageId: string }) {
   const result = await db.execute(sql`
     update ofapi_media_links set deleted = true, updated_at = now()
-    where ofapi_account_id = ${input.ofapiAccountId} and link_key = ${`message:${input.messageId}`} and not deleted
+    where ofapi_account_id = ${input.ofapiAccountId} and message_id = ${input.messageId} and not deleted
   `);
   return result.rowCount ?? 0;
 }
@@ -497,6 +496,11 @@ export function ofapiMediaTransferCredits(bytes: number) {
   return Math.max(1, Math.ceil((3 * Math.max(0, bytes)) / 1_000_000));
 }
 
+/** A click on a file of unknown size may take this much (the desktop's memory guard)… */
+export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES = 5_000_000;
+/** …and is reserved at what that can cost, then settled down on its report. */
+export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS = ofapiMediaTransferCredits(OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES);
+
 interface ReportedRow extends Record<string, unknown> {
   resolve_id: string; outcome: OfapiMediaOutcome; content_length: string | number | null; credits_estimated: number;
   accrual_day: string; occurred_at: Date | string; collection_request_id: string | null; page_id: string | number | null;
@@ -504,39 +508,42 @@ interface ReportedRow extends Record<string, unknown> {
 
 /**
  * A paid click of unknown size was admitted, reserved and ledgered at the
- * guard price; its report settles all three to what the reported bytes cost
- * (never below 1 credit). The ledger keeps its convention: the original `rest`
- * row stays and a signed `adjustment` row carries the difference, on the
- * issuance day. A report without a byte count leaves the guard charge.
+ * guard price; its report settles all three DOWN to what the reported bytes
+ * cost (never below 1 credit, never above the reservation — a client report
+ * can lower or keep a debit, never raise it). The ledger keeps its
+ * convention: the original `rest` row stays and a signed `adjustment` row
+ * (≤ 0) carries the difference, on the issuance day. The shared daily spend
+ * counter keeps its conservative figure. A report without a byte count leaves
+ * the guard charge.
  */
 async function settleUnknownSizeClick(db: Database, row: ReportedRow, report: OfapiMediaFetchReport, actorUserId: number) {
   if (row.outcome !== "paid" || row.content_length !== null || report.bytesReceived === null) return;
   const reserved = Number(row.credits_estimated);
-  const settled = ofapiMediaTransferCredits(report.bytesReceived);
+  const settled = Math.min(reserved,
+    ofapiMediaTransferCredits(Math.min(report.bytesReceived, OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES)));
   const delta = settled - reserved;
-  if (delta === 0) return;
+  if (delta >= 0) return;
   await db.execute(sql`update ofapi_media_fetch_log set credits_estimated = ${settled} where resolve_id = ${row.resolve_id}::uuid`);
   await adjustOfapiMediaBudget(db, { day: row.accrual_day, delta });
   if (row.collection_request_id) await resettleOfapiCollectionRequest(db, row.collection_request_id, settled);
-  const occurredAt = new Date(row.occurred_at);
   await insertOfapiCreditLedgerEntry(db, {
-    occurredAt, source: "adjustment", operation: "ofapi_media_download",
+    occurredAt: new Date(row.occurred_at), source: "adjustment", operation: "ofapi_media_download",
     pageId: row.page_id === null ? null : Number(row.page_id), credits: delta, estimated: true,
     requestId: `ofapi_media_download:${row.resolve_id}:settle`, actorUserId,
     details: { certainty: "client_report", resolveId: row.resolve_id, reservedCredits: reserved, settledCredits: settled,
       bytesReceived: report.bytesReceived },
   });
-  // The shared daily spend counter only grows: an over-guard transfer adds, a
-  // smaller one leaves the conservative figure.
-  if (delta > 0) await recordOfapiPhysicalCreditUsage(db, { creditsUsed: delta, now: occurredAt });
 }
 
 /**
  * Applies desktop transfer reports, idempotent by resolveId: a report is
  * accepted once, a repeat is a duplicate, anything else (unknown id, another
- * actor's resolve) is ignored. A paid transfer becomes `confirmed` only on a
- * reported success; any other result leaves its charge `unknown`, never zero.
- * An unknown-size click is settled to its reported bytes (above).
+ * actor's resolve) is ignored. A paid report of more bytes than its hand-out
+ * allowed (the priced size, or the guard of an unknown-size click) is
+ * rejected: nothing is applied and the charge stays as issued. A paid
+ * transfer becomes `confirmed` only on a reported success; any other result
+ * leaves its charge `unknown`, never zero. An unknown-size click is settled
+ * down to its reported bytes (above).
  */
 export async function applyOfapiMediaFetchReports(db: Database, input: {
   actorUserId: number; reports: readonly OfapiMediaFetchReport[];
@@ -544,6 +551,7 @@ export async function applyOfapiMediaFetchReports(db: Database, input: {
   let accepted = 0;
   let duplicate = 0;
   let unknown = 0;
+  let rejected = 0;
   const settled: string[] = [];
   for (const report of input.reports) {
     const updated = await db.transaction(async (tx) => {
@@ -560,6 +568,8 @@ export async function applyOfapiMediaFetchReports(db: Database, input: {
             else certainty end
         where resolve_id = ${report.resolveId}::uuid and actor_user_id = ${input.actorUserId}
           and reported_at is null
+          and (outcome <> 'paid' or ${report.bytesReceived}::bigint is null
+            or ${report.bytesReceived}::bigint <= coalesce(content_length, ${OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES}))
         returning resolve_id::text, outcome, content_length, credits_estimated,
           to_char(accrual_day, 'YYYY-MM-DD') as accrual_day, occurred_at, collection_request_id, page_id
       `);
@@ -575,13 +585,16 @@ export async function applyOfapiMediaFetchReports(db: Database, input: {
     const existing = await db.execute<{ reported: boolean }>(sql`
       select reported_at is not null as reported from ofapi_media_fetch_log
       where resolve_id = ${report.resolveId}::uuid and actor_user_id = ${input.actorUserId}`);
-    if (existing.rows[0]?.reported) {
+    const row = existing.rows[0];
+    if (row?.reported) {
       duplicate += 1;
       settled.push(report.resolveId);
+    } else if (row) {
+      rejected += 1;
     } else {
       unknown += 1;
     }
   }
   await releaseOfapiMediaFlight(db, settled);
-  return { accepted, duplicate, unknown };
+  return { accepted, duplicate, unknown, rejected };
 }

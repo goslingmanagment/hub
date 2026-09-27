@@ -11,6 +11,8 @@ import {
   listOfapiMappedPages,
   listOfapiMediaLinks,
   listOfapiMediaLocators,
+  OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES,
+  OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS,
   OfapiCollectionPolicyError,
   ofapiMediaTransferCredits,
   recordOfapiMediaFetch,
@@ -26,6 +28,7 @@ import {
   type OfapiMediaVariant,
   type RecordOfapiCreditSpendInput,
 } from "@agency_hub_core/db";
+import { OFAPI_MEDIA_MAX_TRANSFER_BYTES } from "@agency_hub_core/contracts";
 import { createRequestDispatcher } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -109,10 +112,10 @@ const FREE_URL_MIN_REMAINING_MS = 120_000;
 const OFAPI_SOURCE_MIN_REMAINING_MS = 30_000;
 /** Single flight: held while resolving and after a paid hand-out until its report. */
 export const OFAPI_MEDIA_FLIGHT_HOLD_MS = 120_000;
-/** A click on a file of unknown size is capped here (a memory guard for the desktop). */
-export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES = 5_000_000;
-/** …and reserved at what that guard can cost, then settled on its report. */
-export const OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS = ofapiMediaTransferCredits(OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES);
+// A click on a file of unknown size is capped at OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES
+// (the desktop's memory guard) and reserved at what that can cost
+// (OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS), then settled down on its report.
+export { OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_BYTES, OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS };
 /** One resolve's network part (transport queueing included) never takes longer; the desktop waits 45 s. */
 export const OFAPI_MEDIA_RESOLVE_DEADLINE_MS = 35_000;
 const HOP_TIMEOUT_MS = 12_000;
@@ -480,6 +483,10 @@ async function paidPath(ctx: ResolveContext, egress: OfapiEgressContext, sourceU
     // Unknown size: never an automatic payment, only an explicit click.
     return { outcome: "cap_blocked", reason: "size_unknown" };
   }
+  if (contentLength !== null && contentLength > OFAPI_MEDIA_MAX_TRANSFER_BYTES) {
+    // Larger than any file the desktop takes: never bought, click or not.
+    return { outcome: "refused", reason: "too_large", contentLength };
+  }
   // A click of unknown size is reserved at what the guard lets through and
   // settled to its reported bytes: the budget and the category never
   // under-count what can be spent.
@@ -494,7 +501,10 @@ async function paidPath(ctx: ResolveContext, egress: OfapiEgressContext, sourceU
   try {
     const get = await hop(ctx, egress, sourceUrl, "GET", "ofapi_media_download", price);
     if (get.kind === "decided") {
-      await closeReservation(ctx, get.collectionRequestId, { credits: null });
+      // A failed download handed nothing out: like the admission (returned
+      // below), its category reservation is released, so a later real
+      // download is not refused by a false daily_limit.
+      await closeReservation(ctx, get.collectionRequestId, "release");
       return { ...get.decision, contentLength };
     }
     if (get.target === "cdn") {

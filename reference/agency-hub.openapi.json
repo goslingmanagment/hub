@@ -109755,7 +109755,7 @@
         "tags": [
           "ofapi"
         ],
-        "description": "At most 100 reports per call. A lost report leaves a paid charge unknown, never zero.",
+        "description": "At most 100 reports per call. A lost report leaves a paid charge unknown, never zero; a report of more bytes than its hand-out allowed is rejected and changes nothing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -109790,7 +109790,7 @@
                             {
                               "type": "integer",
                               "minimum": 0,
-                              "maximum": 1000000000000
+                              "maximum": 30000000
                             },
                             {
                               "type": "null"
@@ -109855,12 +109855,18 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "rejected": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
                     }
                   },
                   "required": [
                     "accepted",
                     "duplicate",
-                    "unknown"
+                    "unknown",
+                    "rejected"
                   ],
                   "additionalProperties": false
                 }
