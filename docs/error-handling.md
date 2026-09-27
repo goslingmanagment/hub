@@ -527,7 +527,8 @@ must never change the provider query halfway through pagination.
 these are decisions, not `AppError` codes. HTTP errors stay in the registry:
 404 `not_found` for an account not granted to the chatter (the read gateway's
 rule), 503 `service_unavailable` while the desktop read gateway is disabled,
-400 for an invalid request (a client URL is never accepted), 409 `conflict`
+400 for an invalid request (a client URL is never accepted; a transfer
+report above 30,000,000 bytes), 409 `conflict`
 (reason `request_id_reused`) for a `requestId` already used for another file,
 429 for the per-device rate limit (keyed by the authenticated device token,
 `retry-after` in seconds). Retry law: a paid transfer is never retried
@@ -538,7 +539,9 @@ advises `retryAfterMs` for a new one; `cap_blocked` by the daily budget carries
 the next UTC midnight in `retryAt` and, like `size_unknown` and `click_only`
 (an automatic request for `full`), yields only to an explicit click;
 `refused` and `unavailable` are not bypassed by a click, except `refused`
-`not_ready`, which a click may refresh once through its `reread` hint. Only
+`not_ready`, which a click may refresh once through its `reread` hint. A
+paid transfer report of more bytes than its hand-out allowed is rejected and
+changes nothing; a report can only lower an unknown-size click's debit. Only
 fixed reasons, identifiers and error classes/SQL states reach logs and the
 decision log — never a URL, signature, provider body, driver error message or
 file content. See [the media runbook](runbooks/ofapi-media.md).

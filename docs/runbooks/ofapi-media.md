@@ -198,11 +198,20 @@ unexpected host); a hand-out keeps its charge until its report.
 
 **A click of unknown size** is reserved — in the budget, the category and an
 estimated ledger row — at what its 5 MB guard can cost (15 credits), and its
-report settles all three to max(1, ceil(3 × bytesReceived / 1e6)): the budget
-and the category are lowered (or raised), the log's `credits_estimated` is
-updated, and a signed `adjustment` ledger row (same issuance time, `details.
-certainty = 'client_report'`) carries the difference next to the original
-`rest` row. Without a report the guard charge stays.
+report settles all three DOWN to max(1, ceil(3 × bytesReceived / 1e6)),
+never above the reservation: the budget and the category are lowered, the
+log's `credits_estimated` is updated, and a signed `adjustment` ledger row
+(≤ 0, same issuance time, `details.certainty = 'client_report'`) carries the
+difference next to the original `rest` row. A client report can lower or keep
+a debit, never raise it; the shared daily spend counter keeps its
+conservative figure. Without a report the guard charge stays.
+
+**Transfer reports are bounded.** `bytesReceived` may not exceed 30,000,000
+(the largest file the desktop takes; the route answers 400 above it), and a
+paid report of more bytes than its hand-out allowed — the priced size, or
+5,000,000 for a click of unknown size — is rejected (counted in `rejected`,
+nothing applied, the charge stays as issued). A paid file larger than
+30,000,000 bytes is never bought (`refused` `too_large`).
 
 **Media transport** (the HEAD/GET to OFAPI and the CDN HEAD) runs on the
 resolve service's own limiter — at most 4 at once, starts at least 100 ms
@@ -230,7 +239,12 @@ first and the rate limit is keyed by the authenticated device token (resolve
    per UTC day for all paid media downloads together
    (`ofapi_media_daily_budget`). `auto` passes only while used + price ≤ cap
    (atomic conditional update); a `click` always passes and is logged
-   `over_cap`. Env-only: a change needs a redeploy.
+   `over_cap`. Env-only: a change needs a redeploy. Deliberately, once the
+   day's budget cannot take even 1 credit, an automatic request does not even
+   ask OFAPI whether a free cached copy exists: it answers `cap_blocked`
+   (`daily_cap`) and the desktop shows «Загрузить» until the UTC day turns or
+   someone clicks. Free webhook URLs and cached URLs already known to the hub
+   are still served automatically.
 2. **Category ceiling** `media_previews` (see
    [collection policy](ofapi-collection-policy.md)): off until the owner
    applies it. The free HEAD/cached GET (`ofapi_media_probe`) reserves 0; the
@@ -252,6 +266,10 @@ path the ledger row has `details.context = 'media'`.
 
 1. Deploy the hub (migration 0210 is additive and listed as rollback
    compatible). Until then a new desktop shows images as unavailable.
+   Migration 0210 changed during review before it was ever deployed: a
+   development database that already applied an earlier version of it must
+   be recreated (or have its five `ofapi_media_*` tables and the 0210 row in
+   `schema_migrations` dropped) before running this version.
 2. Optionally run the recovery command above so today's webhook URLs are
    usable at once.
 3. **Settings → Collection**: for each OnlyFans page select `media_previews`,
