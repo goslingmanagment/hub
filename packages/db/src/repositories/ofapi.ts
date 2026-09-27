@@ -1733,10 +1733,10 @@ export async function hasOfapiCreditSpendRequestAttempt(
 export async function recordOfapiCreditSpend(
   db: Database,
   input: RecordOfapiCreditSpendInput,
-) {
+): Promise<number | null> {
   const occurredAt = input.occurredAt ?? new Date();
-  await db.transaction(async (tx) => {
-    await insertOfapiCreditLedgerEntry(tx, {
+  return db.transaction(async (tx) => {
+    const entry = await insertOfapiCreditLedgerEntry(tx, {
       occurredAt,
       source: "rest",
       operation: input.operation,
@@ -1755,6 +1755,8 @@ export async function recordOfapiCreditSpend(
       budgetScope: input.budgetScope ?? null,
       now: occurredAt,
     });
+    // The id lets a caller link its own record (the media fetch log) to the row.
+    return entry?.id ?? null;
   });
 }
 

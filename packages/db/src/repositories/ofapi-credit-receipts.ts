@@ -17,6 +17,8 @@ export interface OfapiCreditReceipt {
   actorUserId: number | null;
   budgetScope?: "audience" | "backfill" | "link_stats" | null;
   receivedAt?: string;
+  /** A desktop re-read made only to refresh media URLs (read intent media-context-v1). */
+  ledgerContext?: "media";
 }
 
 export async function captureOfapiCreditReceipt(db: Database, receipt: OfapiCreditReceipt) {
@@ -52,7 +54,8 @@ export async function settleOfapiCreditReceipt(
       await recordOfapiCreditSpend(tx, {
         ...receipt, occurredAt: new Date(row.received_at),
         details: { attemptNumber: receipt.attemptNumber,
-          ...(receipt.isCached === null ? {} : { isCached: receipt.isCached }) },
+          ...(receipt.isCached === null ? {} : { isCached: receipt.isCached }),
+          ...(receipt.ledgerContext ? { context: receipt.ledgerContext } : {}) },
       });
       path = "ledger";
     } catch {
