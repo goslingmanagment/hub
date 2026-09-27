@@ -59,6 +59,7 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import { OFAPI_EPHEMERAL_EVENT_TYPES, finalizeOfapiWebhookRaw } from "./ofapi-webhook-capture.ts";
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { OFAPI_WEBHOOK_CANONICALIZED_KINDS } from "./canonicalize/ofapi-webhook.ts";
+import { cleanupOfapiMediaLocators, recordOfapiWebhookMediaLocators } from "./ofapi-media-locators.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
@@ -342,6 +343,14 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     return;
   }
 
+  // Media images: the message's file URLs (free, Expires-signed) are recorded
+  // before the frame fans out, so a desktop can resolve them as it arrives;
+  // messages.deleted stops serving media known only through that message.
+  // Fail-open: never blocks the settle.
+  await recordOfapiWebhookMediaLocators(app, {
+    envelope: envelope.data, pageId: page.id, observedAt: row.receivedAt, eventId: row.id,
+  });
+
   // A local replay repairs durable facts, never today's typing/presence.
   const staleEphemeral = OFAPI_EPHEMERAL_EVENT_TYPES.has(row.eventType) &&
     processedAt.getTime() - row.receivedAt.getTime() > 5 * 60_000;
@@ -551,6 +560,8 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
 
     await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
       await cleanupExpiredOfapiEvents(app);
+      // Expired media URLs older than 7 days lose the URL only; linkage stays.
+      await cleanupOfapiMediaLocators(app);
       const purged = await cleanupExpiredDmMessageArchive(app);
       if (purged > 0) {
         app.logger.info({ purged }, "OFAPI DM cold archive retention purge complete");

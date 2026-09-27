@@ -2617,6 +2617,28 @@ export function buildProgram() {
     });
 
   program
+    .command("ofapi:media-locators:recover")
+    .description(
+      "Desktop media images: rebuild media locators from journaled webhook payloads and "
+        + "captured gateway responses of the last N hours. Local only: no OFAPI request, no credits",
+    )
+    .option("--hours <n>", "look-back window in hours (max 720)", parsePositiveInt, 48)
+    .option("--limit <n>", "max rows per source", parsePositiveInt, 20000)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { recoverOfapiMediaLocators } = await import("./services/ofapi-media-locators.ts");
+        const result = await recoverOfapiMediaLocators(app, {
+          hours: Math.min(options.hours, 720),
+          limit: options.limit,
+        });
+        console.log(JSON.stringify(result));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ofapi-transactions-backfill")
     .description("Dry-run or apply OFAPI REST transaction backfill for OFAPI-only OnlyFans pages")
     .option("--page <label>", "page label; may be repeated", collectStringOption, [])

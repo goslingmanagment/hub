@@ -1367,6 +1367,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["follower_outreach_attempts", "platform_account_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
+    // Desktop media images (0210): signed file locators and the decision log.
+    ["ofapi_media_locators", "page_id"],
+    ["ofapi_media_fetch_log", "page_id"],
     ["ofapi_marketing_projection_receipts", "page_id"],
     ["ofapi_marketing_intents", "page_id"],
     ["ofapi_action_intents", "page_id"],

@@ -18,6 +18,7 @@ import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
 import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
+import { OFAPI_MEDIA_LOCATOR_OPERATIONS, recordOfapiGatewayMediaLocators } from "./ofapi-media-locators.ts";
 import { OfapiApiError, OfapiGovernedRequestError } from "./ofapi.ts";
 import {
   BadRequestError,
@@ -58,6 +59,14 @@ export interface OfapiReadGatewayResponse {
   body: unknown;
   headers: Record<string, string>;
 }
+
+/**
+ * Desktop re-read made only to refresh media file URLs after an explicit
+ * click (docs/runbooks/ofapi-media.md). Allowed on media-bearing reads; the
+ * credit ledger row is distinguishable (capture path: the attempt's surface
+ * carries `:media_context`; proxy path: ledger details.context = "media").
+ */
+export const OFAPI_MEDIA_CONTEXT_READ_INTENT = "media-context-v1";
 
 function invalid(message: string): never {
   throw new BadRequestError(`Invalid OFAPI read gateway request: ${message}`);
@@ -497,10 +506,13 @@ export async function executeOfapiReadGatewayRequest(
     );
   }
   const historyMode = historyDbFallback ? "db_fallback" : historyShadow ? "shadow" : "vendor";
-  const readIntent = input.readIntent?.trim() || null;
-  if (readIntent !== null && readIntent !== OFAPI_DEEP_HISTORY_READ_INTENT) {
+  const rawReadIntent = input.readIntent?.trim() || null;
+  if (rawReadIntent !== null && rawReadIntent !== OFAPI_DEEP_HISTORY_READ_INTENT
+    && rawReadIntent !== OFAPI_MEDIA_CONTEXT_READ_INTENT) {
     throw new BadRequestError("Unsupported OFAPI read intent");
   }
+  const mediaContext = rawReadIntent === OFAPI_MEDIA_CONTEXT_READ_INTENT;
+  const readIntent = mediaContext ? null : rawReadIntent;
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
   const captureFirst = Boolean(request.kind === "proxy" && (request.collectionContext || request.captureFirst)) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
@@ -541,6 +553,9 @@ export async function executeOfapiReadGatewayRequest(
   const page = assigned.find((candidate) => candidate.ofapiAccountId === request.accountId);
   if (!page) {
     throw new NotFoundError("OFAPI account is not assigned to this chatter");
+  }
+  if (mediaContext && !OFAPI_MEDIA_LOCATOR_OPERATIONS.has(request.operation)) {
+    throw new BadRequestError("Media-context intent is valid only for media-bearing reads");
   }
 
   if (readIntent !== null && request.chatId === undefined) {
@@ -615,7 +630,7 @@ export async function executeOfapiReadGatewayRequest(
         dispatcher: egress.dispatcher,
         egressKey: egress.egressKey,
         operation: request.operation,
-        surface: request.operation,
+        surface: mediaContext ? `${request.operation}:media_context` : request.operation,
         pathname: request.pathname,
         query: request.query,
         fallbackCredits: request.fallbackCredits,
@@ -630,6 +645,7 @@ export async function executeOfapiReadGatewayRequest(
         egressKey: egress.egressKey,
         // Stage 9: the acting chatter attributes this read's credit spend.
         actorUserId: principal.user.id,
+        ...(mediaContext ? { ledgerContext: "media" as const } : {}),
       }, {
         operation: request.operation,
         pathname: request.pathname,
@@ -643,6 +659,18 @@ export async function executeOfapiReadGatewayRequest(
       const capture = response.capture as { observationId: number; receivedAt: Date };
       await materializeOfapiReadSnapshot(app, { pageId: page.id, step: request, body: response.body, observationId: capture.observationId, observationReceivedAt: capture.receivedAt });
       response.body = safeOfapiReadBody(request.operation, response.body);
+    }
+    // Media images: known file URLs are recorded synchronously on BOTH paths,
+    // before the desktop can ask for a file (the tee below does not run on
+    // the capture-first path production uses). Fail-open.
+    if (response.status >= 200 && response.status < 300) {
+      await recordOfapiGatewayMediaLocators(app, {
+        operation: request.operation,
+        ofapiAccountId: request.accountId,
+        pageId: page.id,
+        pathname: request.pathname,
+        body: response.body,
+      });
     }
     // Stage 9 producer 4: tee every successful proxied body into the journal
     // — O(1) enqueue off the latency path, fail-open with a visible counter.
