@@ -302,6 +302,14 @@ describe("event → candidate → description → prompt", () => {
       .resolves.toMatchObject({ kind: "skip", reason: "creator_media_off" });
     await expect(fanslyAiMediaSource.resolve(app, row, { now: new Date(), modelMedia: "teasers+free" }))
       .resolves.toMatchObject({ kind: "skip", reason: "ppv_body" });
+    // A free-looking file inside a priced bundle is a PPV body too, whoever
+    // the row says sent it.
+    const bundled = await seedObservation({
+      accountMedia: [photoMedia("9101", Math.floor(Date.now() / 1000) + 3600)],
+      accountMediaBundles: [{ id: "PB1", accountMediaIds: ["9101"], permissions: { permissionFlags: [{ price: 25_000 }] } }],
+    });
+    await expect(fanslyAiMediaSource.resolve(app, { ...row, mediaRef: "9101", senderRole: "fan", sourceObservationId: bundled }, { now: new Date(), modelMedia: "teasers" }))
+      .resolves.toMatchObject({ kind: "skip", reason: "ppv_body" });
   });
 
   it("treats an expired capture as unavailable and expands a bundle into its files", async () => {

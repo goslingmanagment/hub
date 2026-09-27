@@ -55,12 +55,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function mediaKindFromMime(mime: string | null): "photo" | "video" | "gif" | null {
+// Same classes as the extension's labels: any image (a GIF included) is a
+// photo, so candidate and prompt keys agree.
+function mediaKindFromMime(mime: string | null): "photo" | "video" | null {
   if (mime === null) {
     return null;
-  }
-  if (mime === "image/gif") {
-    return "gif";
   }
   if (mime.startsWith("image/")) {
     return "photo";

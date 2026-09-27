@@ -118,9 +118,10 @@ function hasPrice(row: Record<string, unknown>): boolean {
   return (num(row.price) ?? 0) > 0;
 }
 
-function kindOf(mime: string | null): "photo" | "video" | "gif" | null {
+// Same classes as the extension's labels: any image (a GIF included) is a
+// photo, so the variant keys agree ('full'); its first frame is described.
+function kindOf(mime: string | null): "photo" | "video" | null {
   if (!mime) return null;
-  if (mime === "image/gif") return "gif";
   if (mime.startsWith("image/")) return "photo";
   if (mime.startsWith("video/")) return "video";
   return null;
@@ -181,8 +182,13 @@ export const fanslyAiMediaSource: AiMediaSource = {
     if (!offer) {
       return { kind: "unavailable", reason: "media_not_in_capture" };
     }
-    // Never the body of a paid PPV, whatever the row says.
-    if (row.variant !== "preview" && row.senderRole === "model" && hasPrice(offer)) {
+    // Never the body of a paid PPV, whatever the row says (a fan cannot
+    // price media, so no sender check): a priced file, or a file inside a
+    // priced bundle of this capture.
+    if (row.variant !== "preview" && (hasPrice(offer) || bundles.some((bundle) => hasPrice(bundle) && (
+      (Array.isArray(bundle.accountMediaIds) && bundle.accountMediaIds.map(text).includes(row.mediaRef))
+      || records(bundle.bundleContent).some((entry) => text(entry.accountMediaId) === row.mediaRef)
+    )))) {
       return { kind: "skip", reason: "ppv_body" };
     }
     const node = row.variant === "preview" ? asRecord(offer.preview) : asRecord(offer.media);
