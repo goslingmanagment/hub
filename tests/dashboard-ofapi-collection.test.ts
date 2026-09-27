@@ -105,7 +105,7 @@ import { OfapiCreditsPage } from "../apps/dashboard/src/pages/OfapiCreditsPage.t
 const CATEGORY_IDS: OfapiCollectionCategory[] = [
   "core_messages", "core_payments", "core_audience", "posts_comments", "visitors",
   "tracking_links", "smart_links", "vault_catalog", "vault_files", "balances",
-  "profile_notifications", "content_history",
+  "profile_notifications", "content_history", "media_previews",
 ];
 
 const SERVER_LABELS: Record<OfapiCollectionCategory, string> = {
@@ -121,17 +121,18 @@ const SERVER_LABELS: Record<OfapiCollectionCategory, string> = {
   balances: "Balances and payouts",
   profile_notifications: "Profile and notifications",
   content_history: "Stories, highlights and queue history",
+  media_previews: "Desktop media previews",
 };
 
 function catalog(): OfapiCollectionCatalogEntry[] {
   return CATEGORY_IDS.map((id) => ({
     id,
     label: SERVER_LABELS[id],
-    modes: id === "vault_files" ? ["off"] : ["off", "on_demand", "scheduled"],
+    modes: id === "vault_files" ? ["off"] : id === "media_previews" ? ["off", "on_demand"] : ["off", "on_demand", "scheduled"],
     baseline: ["core_messages", "core_payments", "core_audience"].includes(id),
-    consumers: id === "core_messages" ? ["chatters", "Agent Read"] : ["dashboard", "Agent Read"],
-    supportsOneOff: !["core_messages", "core_payments", "core_audience"].includes(id),
-    priceUnit: id === "vault_files" ? "calls_and_bytes" : "physical_calls",
+    consumers: id === "core_messages" ? ["chatters", "Agent Read"] : id === "media_previews" ? ["chatters"] : ["dashboard", "Agent Read"],
+    supportsOneOff: !["core_messages", "core_payments", "core_audience", "media_previews"].includes(id),
+    priceUnit: id === "vault_files" || id === "media_previews" ? "calls_and_bytes" : "physical_calls",
     prerequisites: id === "vault_files" ? ["owned source and explicit upload approval"] : ["active OFAPI page binding"],
     scope: "page",
     legacyOperations: [],
@@ -632,6 +633,7 @@ describe("collection model helpers", () => {
     expect(groups.running.map((view) => view.entry.id)).toEqual(["core_messages", "core_audience", "core_payments"]);
     expect(groups.available.map((view) => view.entry.id)).toEqual([
       "posts_comments", "visitors", "tracking_links", "smart_links", "vault_catalog", "balances", "profile_notifications", "content_history",
+      "media_previews",
     ]);
     expect(groups.one_off.map((view) => view.entry.id)).toEqual(["vault_files"]);
     expect(groups.unavailable).toEqual([]);

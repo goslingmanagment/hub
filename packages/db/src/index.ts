@@ -164,6 +164,7 @@ export * from "./repositories/ofapi-bindings.ts";
 
 export * from "./repositories/ofapi-vendor-usage.ts";
 export * from "./repositories/ofapi-collection.ts";
+export * from "./repositories/ofapi-media-images.ts";
 export * from "./repositories/ofapi-webhook-recovery.ts";
 
 export * from "./repositories/ofapi-provider-operations.ts";

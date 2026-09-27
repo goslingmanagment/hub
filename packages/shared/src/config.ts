@@ -226,6 +226,10 @@ const envSchema = z.object({
   // webhooks. Off by default; the cap bounds automatic requests per UTC day.
   OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED: booleanSchema.default(false),
   OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP: z.coerce.number().int().min(1).max(1000).default(1000),
+  // Desktop media images: agency-wide paid-download budget per UTC day. Auto
+  // previews pass only while used + price <= cap; an explicit click always
+  // passes and is flagged over_cap. Env-only by owner decision (redeploy).
+  OFAPI_MEDIA_DAILY_CAP_CREDITS: z.coerce.number().int().min(0).max(100000).default(100),
   OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
@@ -559,6 +563,7 @@ export interface AppConfig {
   ofapiWebhookSilenceThresholdMinutes?: number;
   ofapiWebhookAutoRedeliveryEnabled?: boolean;
   ofapiWebhookAutoRedeliveryDailyCap?: number;
+  ofapiMediaDailyCapCredits?: number;
   ofapiCreditLedgerEnabled?: boolean;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiCreditMicroUsdPrice?: number;
@@ -882,6 +887,7 @@ export function loadConfig(
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
     ofapiWebhookAutoRedeliveryEnabled: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED,
     ofapiWebhookAutoRedeliveryDailyCap: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP,
+    ofapiMediaDailyCapCredits: parsed.OFAPI_MEDIA_DAILY_CAP_CREDITS,
     ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,

@@ -30,6 +30,7 @@ import {
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
 import type { OfapiCreditSpendSink } from "./ofapi.ts";
+import { refreshOfapiVendorUsage } from "./ofapi-vendor-usage.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_CREDIT_ACCRUAL_QUEUE = "ofapi.credits.accrual";
@@ -397,6 +398,29 @@ export async function runOfapiBalancePing(app: AppContext) {
   }
 }
 
+/**
+ * Nightly reconciliation basis: the free vendor usage report for the previous
+ * UTC day, grouped by endpoint, into ofapi_vendor_usage_snapshots. Its
+ * `api/{account}/media/download/{cdnUrl}` row is the vendor truth for the
+ * media download spend the hub estimates (docs/runbooks/ofapi-media.md). The
+ * aggregate is never apportioned back to files. Never throws into accrual.
+ */
+export async function runOfapiVendorUsageNightly(app: AppContext, now = new Date()) {
+  if (!isOfapiCreditLedgerEnabled(app.config) || !app.ofapi?.getCreditUsage || !app.config.ofapiApiKey) {
+    return null;
+  }
+  const day = isoDay(addUtcDays(utcDayStart(now), -1));
+  try {
+    const result = await refreshOfapiVendorUsage(app, {
+      from: day, to: day, groupBy: "endpoint", accountId: null, includeToday: false,
+    });
+    return result.snapshotId;
+  } catch (error) {
+    app.logger.warn({ err: error, day }, "OFAPI nightly vendor usage refresh failed; continuing");
+    return null;
+  }
+}
+
 export async function ensureOfapiCreditQueues(
   boss: QueueCreationClient,
   createdQueues?: Set<string>,
@@ -426,6 +450,8 @@ type OfapiCreditWorkerBoss = Pick<PgBoss, "work">;
 export async function startOfapiCreditWorker(app: AppContext, boss: OfapiCreditWorkerBoss) {
   await boss.work(OFAPI_CREDIT_ACCRUAL_QUEUE, { batchSize: 1 }, async () => {
     await runOfapiWebhookAccrual(app);
+    // 00:40 UTC: the previous day's free vendor usage (media reconciliation).
+    await runOfapiVendorUsageNightly(app);
   });
   await boss.work(OFAPI_CREDIT_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
     await runOfapiCreditReconciliation(app);

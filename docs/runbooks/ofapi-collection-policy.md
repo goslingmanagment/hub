@@ -56,3 +56,26 @@ activation: deploy the reviewed code, read the baseline, select one page/categor
 preview a limited on-demand pilot, apply its revision, explicitly request the
 bounded job, then observe captured data, errors and actual credit attribution.
 Increase cadence only in a separate reviewed policy edit after that window.
+
+## `media_previews` (ChatGoose Desktop images)
+
+The category admits only the OFAPI media transport of the desktop media
+resolve service ([media runbook](ofapi-media.md#desktop-media-images-chatgoose-desktop)):
+modes `off` and `on_demand`, purpose `interactive`, price unit
+`calls_and_bytes`, no background executor and no one-off jobs. It is off until
+the owner applies it; while off, every OFAPI-backed image resolves as
+`refused` (`collection_off`) and only free webhook URLs and known OFAPI-cache
+URLs are served. The redirect probe `ofapi_media_probe` (HEAD, or the GET of a
+file OFAPI already caches) reserves 0 credits and so never consumes the
+ceiling; the paid `ofapi_media_download` GET reserves its byte price
+(3 credits per decimal MB, minimum 1). An explicit click on a file of unknown
+size reserves 15 (its 5 MB guard) and is settled to its reported bytes; a
+paid GET that lands on OFAPI's cache is released, not captured. The service
+checks the category has room for 1 credit before the CDN size lookup, so a
+page at its ceiling spends nothing further. The page's `dailyCreditLimit` is
+therefore an emergency ceiling on all paid media downloads of that page,
+explicit clicks included, on top of the agency-wide
+`OFAPI_MEDIA_DAILY_CAP_CREDITS` budget (default 100 per UTC day).
+
+Recommended owner setting, per OnlyFans page: mode **On demand**, daily
+credit limit **300**. Nothing is applied by deployment.

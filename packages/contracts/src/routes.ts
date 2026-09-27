@@ -1,4 +1,5 @@
 import { ofapiMediaRouteSchemas } from "./routes-ofapi-media.ts";
+import { ofapiMediaImageRouteSchemas } from "./routes-ofapi-media-images.ts";
 import { ofapiMarketingRouteSchemas } from "./routes-ofapi-marketing.ts";
 import { ofapiActionRouteSchemas } from "./routes-ofapi-actions.ts";
 import { ofapiBannedWordRouteSchemas } from "./routes-ofapi-banned-words.ts";
@@ -5509,6 +5510,7 @@ const baseRouteSchemas = {
   ...ofapiReadCollectionsRouteSchemas,
   ...ofapiExportRouteSchemas,
   ...ofapiMediaRouteSchemas,
+  ...ofapiMediaImageRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,

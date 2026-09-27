@@ -145,6 +145,13 @@ const SANCTIONED_DELETER_FILES = [
   // its only delete was the compensating release of a failed key claim, and
   // a claim that never commits without its journal row needs no compensation.
   "packages/db/src/repositories/ofapi-commands.ts",
+  // Desktop media images: `ofapi_media_flights` holds single-flight markers
+  // (one per file while one resolve talks to OFAPI, or until a paid
+  // hand-out's report). They are coordination rows, never captured data: a
+  // report releases its marker and the daily OFAPI events cleanup purges
+  // markers expired for an hour. Locators and the decision log are never
+  // deleted by schedule (expired locator URLs are only nulled).
+  "packages/db/src/repositories/ofapi-media-images.ts",
   "packages/db/src/repositories/ofapi-message-coverage.ts",
   "packages/db/src/repositories/ofapi.ts",
   "packages/db/src/repositories/ops-metrics.ts",

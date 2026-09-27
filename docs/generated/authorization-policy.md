@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (255)
+## Routes (257)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -226,6 +226,8 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/ofapi/commands/:commandId` | `getOfapiCommand` | `apiKey` | — | — |
 | POST | `/api/v1/ofapi/commands/:commandId/cancel` | `cancelOfapiCommand` | `apiKey` | — | — |
 | GET | `/api/v1/ofapi/credits/summary` | `ofapiCreditsChatterSummary` | `apiKey` | — | — |
+| POST | `/api/v1/ofapi/media/reports` | `ofapiMediaReports` | `apiKey` | — | — |
+| POST | `/api/v1/ofapi/media/resolve` | `ofapiMediaResolve` | `apiKey` | — | — |
 | GET | `/api/v1/ofapi/read/*` | `ofapiReadGateway` | `apiKey` | — | — |
 | POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — |
 | GET | `/api/v1/openapi.json` | `openApiJson` | `owner-session` | — | — |

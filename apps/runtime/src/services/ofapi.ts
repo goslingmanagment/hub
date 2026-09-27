@@ -42,6 +42,15 @@ const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
 
+/** GETs/HEADs documented as free: they skip the accounting-readiness gate
+ * (a pending receipt must not block a request that cannot charge). The media
+ * probe is the redirect lookup of the desktop media resolve service. */
+const OFAPI_FREE_READ_OPERATIONS: ReadonlySet<string> = new Set([
+  "ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog",
+  "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory",
+  "ofapi_media_probe",
+]);
+
 // The only place the OFAPI host may appear in runtime code (D1 of
 // docs/ofapi-parity-plan.md, enforced by a gate test): every OFAPI HTTP call
 // goes through this client, which is also the single _meta/credit-spend tap.
@@ -112,6 +121,9 @@ export interface OfapiRequestContext {
   // Attributes physical retry spend to a dedicated legacy lane as well as
   // the shared global ceiling. Governed mirror calls use their own plane.
   creditBudgetScope?: "audience" | "backfill" | "link_stats" | null;
+  // A desktop re-read made only to refresh media URLs (read intent
+  // media-context-v1): the ledger row carries it so media spend is separable.
+  ledgerContext?: "media" | null;
 }
 
 // Every OFAPI REST response carries _meta with the remaining credit balance —
@@ -138,6 +150,8 @@ export interface OfapiRawResponse {
   status: number;
   body: unknown;
   headers: Record<string, string>;
+  /** Media transport with `settlement: "caller"`: the collection reservation the caller settles or releases. */
+  collectionRequestId?: string;
 }
 
 export interface OfapiGovernedRawResponse {
@@ -281,6 +295,7 @@ export interface OfapiCreditSpendObservation {
   actorUserId: number | null;
   budgetScope?: "audience" | "backfill" | "link_stats" | null;
   receivedAt?: string;
+  ledgerContext?: "media";
 }
 
 export type OfapiCreditSpendSink = ((
@@ -461,6 +476,17 @@ export interface OfapiClient {
       fallbackEstimated: boolean;
       // Absent keeps OFAPI_PROXY_READ_TIMEOUT_MS.
       timeoutMs?: number;
+      // Media transport of the desktop media resolve service: one HEAD or GET
+      // of /{account}/media/download/{cdnUrl} that never follows a redirect
+      // and never reads a file body. `pathname` carries the CDN URL verbatim
+      // (query included, unencoded, as OFAPI documents) and `query` is empty.
+      // It never takes the client's request slot (the service paces media
+      // with its own bounded limiter, so chat reads never queue behind it).
+      // The caller accounts credits itself. The collection reservation is
+      // settled here unless `settlement` is "caller": then the response
+      // carries `collectionRequestId` and the caller settles or releases it.
+      // Returns `location` and `content-length` headers.
+      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse>;
   // Capture-first transport. The caller durably reserves the attempt before
@@ -897,6 +923,7 @@ export function createOfapiClient(input: {
     suppressZeroCredits?: boolean;
     actorUserId?: number | null;
     budgetScope?: "audience" | "backfill" | "link_stats" | null;
+    ledgerContext?: "media" | null;
   }) {
     const meta = parseResponseMeta(report.body, report.headers);
     await input.onCollectionResponse?.(`${report.requestId}:${report.attemptNumber}`, meta?.creditsUsed ?? null);
@@ -934,6 +961,7 @@ export function createOfapiClient(input: {
         actorUserId: report.actorUserId ?? null,
         receivedAt: new Date().toISOString(),
         ...(report.budgetScope ? { budgetScope: report.budgetScope } : {}),
+        ...(report.ledgerContext ? { ledgerContext: report.ledgerContext } : {}),
     };
     const key = `${observation.requestId}:${observation.attemptNumber}`;
     pendingCreditReceipts.set(key, observation);
@@ -1207,26 +1235,43 @@ export function createOfapiClient(input: {
       fallbackCredits: number;
       fallbackEstimated: boolean;
       timeoutMs?: number;
+      media?: { method: "GET" | "HEAD"; settlement?: "response" | "caller" };
     },
   ): Promise<OfapiRawResponse> {
+    const media = options.media ?? null;
+    const method = media?.method ?? "GET";
     const query = new URLSearchParams(options.query);
-    const url = `${baseUrl}${options.pathname}${query.size > 0 ? `?${query.toString()}` : ""}`;
-    const requestId = `${options.operation}:${randomUUID()}`;
-    await waitForRequestSlot("interactive");
-
+    // A media path already carries the CDN URL with its own query, verbatim:
+    // re-serializing it would re-encode the signature.
+    const url = `${baseUrl}${options.pathname}${!media && query.size > 0 ? `?${query.toString()}` : ""}`;
     const accountId = options.pathname.split("/")[1]!;
+    // The media path embeds a signed CDN URL: errors name only its shape.
+    const pathLabel = media ? `/${accountId}/media/download/{cdnUrl}` : options.pathname;
+    const requestId = `${options.operation}:${randomUUID()}`;
+    if (media) {
+      // Desktop media transport is paced by the resolve service's own bounded
+      // limiter: it never takes (or waits for) the chat-read slot. A charging
+      // download still needs working credit accounting.
+      if (!OFAPI_FREE_READ_OPERATIONS.has(options.operation)) await assertCreditAccountingReady();
+    } else {
+      await waitForRequestSlot("interactive", !OFAPI_FREE_READ_OPERATIONS.has(options.operation));
+    }
+
     const generation = await input.beforeAccountRequest?.(context.pageId, accountId);
-    await authorizeOperation(options.operation, "GET", options.pathname);
-    await input.beforeCollectionRequest?.({ operation: options.operation, method: "GET", accountId, pageId: context.pageId, requestId: `${requestId}:1`, context: context.collectionContext, interactive: true, reservedCredits: options.fallbackCredits });
+    await authorizeOperation(options.operation, method, media ? pathLabel : options.pathname);
+    await input.beforeCollectionRequest?.({ operation: options.operation, method, accountId, pageId: context.pageId, requestId: `${requestId}:1`, context: context.collectionContext, interactive: true, reservedCredits: options.fallbackCredits });
     let response: Response;
     try {
       const init: RequestInit & { dispatcher?: Dispatcher } = {
-        method: "GET",
+        method,
         headers: {
           authorization: `Bearer ${input.apiKey}`,
-          accept: "application/json",
+          accept: media ? "*/*" : "application/json",
         },
         signal: AbortSignal.timeout(options.timeoutMs ?? OFAPI_PROXY_READ_TIMEOUT_MS),
+        // Media: the Location decides free vs paid, and Authorization must
+        // never follow a redirect to a CDN host.
+        ...(media ? { redirect: "manual" as const } : {}),
       };
       if (context.dispatcher) {
         init.dispatcher = context.dispatcher;
@@ -1234,8 +1279,8 @@ export function createOfapiClient(input: {
       response = await fetch(url, init);
     } catch (error) {
       throw new OfapiApiError(
-        `OFAPI request failed: GET ${options.pathname}: ${
-          error instanceof Error ? error.message : String(error)
+        `OFAPI request failed: ${method} ${pathLabel}: ${
+          media ? "transport" : error instanceof Error ? error.message : String(error)
         }`,
         null,
         null,
@@ -1244,11 +1289,18 @@ export function createOfapiClient(input: {
 
     let text: string;
     try {
-      text = await response.text();
+      if (media && response.status < 400) {
+        // Bytes never pass through the hub: a redirect body is noise and a
+        // 2xx body would be the file itself.
+        await response.body?.cancel().catch(() => undefined);
+        text = "";
+      } else {
+        text = await response.text();
+      }
     } catch (error) {
       throw new OfapiApiError(
-        `OFAPI response body read failed: GET ${options.pathname}: ${
-          error instanceof Error ? error.message : String(error)
+        `OFAPI response body read failed: ${method} ${pathLabel}: ${
+          media ? "transport" : error instanceof Error ? error.message : String(error)
         }`,
         null,
         null,
@@ -1264,20 +1316,31 @@ export function createOfapiClient(input: {
       }
     }
 
-    const creditAccounted = await reportCreditSpend({
-      operation: options.operation,
-      httpStatus: response.status,
-      headers: response.headers,
-      body,
-      requestId,
-      pageId: context.pageId ?? null,
-      attemptNumber: 1,
-      fallbackCredits: options.fallbackCredits,
-      fallbackEstimated: options.fallbackEstimated,
-      actorUserId: context.actorUserId ?? null,
-    });
+    if (media) {
+      // The media resolve service writes its own ledger row (it knows the
+      // price and links the row to its decision log); settle only the
+      // collection reservation here, with any provider-reported charge —
+      // or leave it to the caller, who learns where the redirect went.
+      if (media.settlement !== "caller") {
+        await input.onCollectionResponse?.(`${requestId}:1`, parseResponseMeta(body, response.headers)?.creditsUsed ?? null);
+      }
+    } else {
+      const creditAccounted = await reportCreditSpend({
+        operation: options.operation,
+        httpStatus: response.status,
+        headers: response.headers,
+        body,
+        requestId,
+        pageId: context.pageId ?? null,
+        attemptNumber: 1,
+        fallbackCredits: options.fallbackCredits,
+        fallbackEstimated: options.fallbackEstimated,
+        actorUserId: context.actorUserId ?? null,
+        ledgerContext: context.ledgerContext ?? null,
+      });
 
-    if (creditAccounted === false) throw new OfapiApiError("OFAPI read credit accounting unavailable", null, null);
+      if (creditAccounted === false) throw new OfapiApiError("OFAPI read credit accounting unavailable", null, null);
+    }
 
     const headers: Record<string, string> = {};
     for (const name of [
@@ -1289,6 +1352,9 @@ export function createOfapiClient(input: {
       "idempotent-replayed",
       "x-rate-limit-remaining-minute",
       "x-rate-limit-limit-minute",
+      // Media only: never forwarded to a gateway client, whose body is
+      // re-serialized (a stale content-length would corrupt it).
+      ...(media ? ["location", "content-length"] : []),
     ]) {
       const value = response.headers.get(name);
       if (value !== null) {
@@ -1300,6 +1366,7 @@ export function createOfapiClient(input: {
       status: response.status,
       body,
       headers,
+      ...(media?.settlement === "caller" ? { collectionRequestId: `${requestId}:1` } : {}),
     };
   }
 
@@ -1904,7 +1971,7 @@ export function createOfapiClient(input: {
     let status: number | null = null;
     try {
       if (method !== "GET") await assertCredentialReady();
-      const freeRead = method === "GET" && ["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory"].includes(operation);
+      const freeRead = method === "GET" && OFAPI_FREE_READ_OPERATIONS.has(operation);
       await waitForRequestSlot(priorityClass, !freeRead);
       stage = "authorization";
       await authorizeOperation(operation, method, path);

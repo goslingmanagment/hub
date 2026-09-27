@@ -877,6 +877,18 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
     target: "post_comments",
     reach: "predicate",
   },
+  // Desktop media images (0210). On OnlyFans the chat id IS the fan's user id,
+  // and a locator's signed URL was observed in (and names) that fan's chat.
+  {
+    column: "ofapi_media_locators.fan_platform_user_id",
+    target: "ofapi_media_locators",
+    reach: "predicate",
+  },
+  {
+    column: "ofapi_media_links.fan_platform_user_id",
+    target: "ofapi_media_links",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -1086,6 +1098,30 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`
       select count(*)::text as n from media_orders where ${mediaOrderPred}`),
     run: (tx) => execCount(tx, sql`delete from media_orders where ${mediaOrderPred}`),
+  });
+
+  // Desktop media images (0210): a locator is a signed file URL observed in
+  // the fan's chat (its query names the fan), a link says a media appeared in
+  // one of the fan's messages. Both are derived caches the next observation
+  // rebuilds, so erasure deletes them outright.
+  const mediaPagePred = sql`(page_id in ${scope.pageIds}
+    or (page_id is null and ofapi_account_id in (select ofapi_account_id from pages where id in ${scope.pageIds})))`;
+  const mediaLocatorPred = sql`${mediaPagePred} and fan_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "ofapi_media_locators",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ofapi_media_locators where ${mediaLocatorPred}`),
+    run: (tx) => execCount(tx, sql`delete from ofapi_media_locators where ${mediaLocatorPred}`),
+  });
+  targets.push({
+    plane: "hot",
+    target: "ofapi_media_links",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ofapi_media_links where ${mediaLocatorPred}`),
+    run: (tx) => execCount(tx, sql`delete from ofapi_media_links where ${mediaLocatorPred}`),
   });
 
   // message_media_offers says what was OFFERED in the fan's conversation. Reach
@@ -1367,6 +1403,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["follower_outreach_attempts", "platform_account_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
+    // Desktop media images (0210): signed file locators, where media appear and the decision log.
+    ["ofapi_media_locators", "page_id"],
+    ["ofapi_media_links", "page_id"],
+    ["ofapi_media_fetch_log", "page_id"],
     ["ofapi_marketing_projection_receipts", "page_id"],
     ["ofapi_marketing_intents", "page_id"],
     ["ofapi_action_intents", "page_id"],
