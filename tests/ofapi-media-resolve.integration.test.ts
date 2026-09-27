@@ -333,8 +333,8 @@ describe("media resolve decision table", () => {
 
     // 1.2 MB arrived: settled to ceil(3.6) = 4 credits everywhere, once.
     const report = { resolveId: click.resolveId, result: "ok" as const, bytesReceived: 1_200_000, httpStatus: 200 };
-    expect(await reportOfapiMediaFetches(app, principal, [report])).toEqual({ accepted: 1, duplicate: 0, unknown: 0 });
-    expect(await reportOfapiMediaFetches(app, principal, [report])).toEqual({ accepted: 0, duplicate: 1, unknown: 0 });
+    expect(await reportOfapiMediaFetches(app, principal, [report])).toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
+    expect(await reportOfapiMediaFetches(app, principal, [report])).toEqual({ accepted: 0, duplicate: 1, unknown: 0, rejected: 0 });
     expect(await budgetUsed()).toBe(4);
     const settled = await testDb!.pool.query<{ reserved: number; actual: number }>(
       `select reserved_credits::int as reserved, actual_credits::int as actual from ofapi_collection_requests
@@ -418,10 +418,10 @@ describe("media resolve decision table", () => {
       { resolveId: ok.resolveId, result: "ok" as const, bytesReceived: 21_821, httpStatus: 200 },
       { resolveId: failed.resolveId, result: "timeout" as const, bytesReceived: 4_096, httpStatus: null },
     ];
-    expect(await reportOfapiMediaFetches(app, principal, reports)).toEqual({ accepted: 2, duplicate: 0, unknown: 0 });
-    expect(await reportOfapiMediaFetches(app, principal, reports)).toEqual({ accepted: 0, duplicate: 2, unknown: 0 });
+    expect(await reportOfapiMediaFetches(app, principal, reports)).toEqual({ accepted: 2, duplicate: 0, unknown: 0, rejected: 0 });
+    expect(await reportOfapiMediaFetches(app, principal, reports)).toEqual({ accepted: 0, duplicate: 2, unknown: 0, rejected: 0 });
     expect(await reportOfapiMediaFetches(app, principal, [{ resolveId: randomUUID(), result: "ok", bytesReceived: 1, httpStatus: 200 }]))
-      .toEqual({ accepted: 0, duplicate: 0, unknown: 1 });
+      .toEqual({ accepted: 0, duplicate: 0, unknown: 1, rejected: 0 });
     const rows = await testDb!.pool.query<{ resolve_id: string; certainty: string; client_result: string; credits_estimated: number }>(
       "select resolve_id::text, certainty, client_result, credits_estimated from ofapi_media_fetch_log order by id");
     expect(rows.rows).toEqual([
@@ -604,7 +604,7 @@ describe("media locators from the read gateway and the journal", () => {
         payload: { reports: [{ resolveId: resolved.json().resolveId, result: "failed", bytesReceived: null, httpStatus: null }] },
       });
       expect(reports.statusCode, reports.body).toBe(200);
-      expect(reports.json()).toEqual({ accepted: 1, duplicate: 0, unknown: 0 });
+      expect(reports.json()).toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
     } finally {
       await server.close();
     }
@@ -803,6 +803,137 @@ describe("media resolve — review round 1", () => {
     const left = await testDb!.pool.query<{ media_id: string }>(
       "select distinct media_id from ofapi_media_locators union select distinct media_id from ofapi_media_links order by 1");
     expect(left.rows).toEqual([{ media_id: "3000101" }]);
+  });
+});
+
+describe("media resolve — review round 2", () => {
+  async function spentToday() {
+    const result = await testDb!.pool.query<{ spent: number | null }>("select spent_credits as spent from ofapi_credit_state where id = 1");
+    return Number(result.rows[0]?.spent ?? 0);
+  }
+
+  async function unknownSizeClick(id: number) {
+    await enableMediaPolicy();
+    await seedGatewayLocators([id]);
+    mediaBehaviour = paidEverywhere;
+    cdnLength = null;
+    const click = await resolveOfapiMedia(app, principal, request(String(id), { trigger: "click" }));
+    expect(click).toMatchObject({ outcome: "paid", credits: 15, contentLength: null, maxBytes: 5_000_000 });
+    return click;
+  }
+
+  async function ledgerRows() {
+    const rows = await testDb!.pool.query<{ source: string; credits: number }>(
+      "select source, credits from ofapi_credit_ledger where operation = 'ofapi_media_download' order by id");
+    return rows.rows;
+  }
+
+  async function downloadReservation() {
+    const rows = await testDb!.pool.query<{ reserved: number; actual: number | null }>(
+      `select reserved_credits::int as reserved, actual_credits::int as actual from ofapi_collection_requests
+       where operation = 'ofapi_media_download'`);
+    return rows.rows;
+  }
+
+  it("rejects a report of more bytes than the hand-out allowed and changes nothing upward", async () => {
+    const click = await unknownSizeClick(3000200);
+    const spentBefore = await spentToday();
+    const oversized = { resolveId: click.resolveId, result: "ok" as const, bytesReceived: 1_000_000_000_000, httpStatus: 200 };
+    expect(await reportOfapiMediaFetches(app, principal, [oversized])).toEqual({ accepted: 0, duplicate: 0, unknown: 0, rejected: 1 });
+    expect(await budgetUsed()).toBe(15);
+    expect(await downloadReservation()).toEqual([{ reserved: 15, actual: 15 }]);
+    expect(await ledgerRows()).toEqual([{ source: "rest", credits: 15 }]);
+    expect(await spentToday()).toBe(spentBefore);
+    const log = await testDb!.pool.query<{ reported: boolean; credits: number }>(
+      "select reported_at is not null as reported, credits_estimated as credits from ofapi_media_fetch_log where resolve_id = $1",
+      [click.resolveId]);
+    expect(log.rows[0]).toEqual({ reported: false, credits: 15 });
+
+    // The route refuses such a value outright.
+    const server = await buildApiServer(app);
+    try {
+      const response = await server.inject({
+        method: "POST", url: "/api/v1/ofapi/media/reports", headers: { authorization: `Bearer ${chatterKey}` },
+        payload: { reports: [oversized] },
+      });
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await server.close();
+    }
+    expect(await budgetUsed()).toBe(15);
+  });
+
+  it("lets a report only lower or keep the debit of an unknown-size click", async () => {
+    const click = await unknownSizeClick(3000201);
+    // Exactly the guard: the reservation stands, no adjustment row.
+    const atGuard = { resolveId: click.resolveId, result: "aborted_size" as const, bytesReceived: 5_000_000, httpStatus: 200 };
+    expect(await reportOfapiMediaFetches(app, principal, [atGuard])).toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
+    expect(await budgetUsed()).toBe(15);
+    expect(await downloadReservation()).toEqual([{ reserved: 15, actual: 15 }]);
+    expect(await ledgerRows()).toEqual([{ source: "rest", credits: 15 }]);
+    const adjustments = await testDb!.pool.query("select 1 from ofapi_credit_ledger where source = 'adjustment' and credits > 0");
+    expect(adjustments.rows).toHaveLength(0);
+  });
+
+  it("rejects a known-size report above its priced size", async () => {
+    await enableMediaPolicy();
+    await seedGatewayLocators([3000202]);
+    mediaBehaviour = paidEverywhere;
+    const paid = await resolveOfapiMedia(app, principal, request("3000202"));
+    expect(paid).toMatchObject({ outcome: "paid", credits: 1, maxBytes: 21_821 });
+    await expect(reportOfapiMediaFetches(app, principal, [
+      { resolveId: paid.resolveId, result: "ok", bytesReceived: 21_822, httpStatus: 200 },
+    ])).resolves.toEqual({ accepted: 0, duplicate: 0, unknown: 0, rejected: 1 });
+    await expect(reportOfapiMediaFetches(app, principal, [
+      { resolveId: paid.resolveId, result: "ok", bytesReceived: 21_821, httpStatus: 200 },
+    ])).resolves.toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
+  });
+
+  it("never buys a file larger than the desktop may take", async () => {
+    await enableMediaPolicy();
+    await seedGatewayLocators([3000203]);
+    mediaBehaviour = paidEverywhere;
+    cdnLength = 30_000_001;
+    await expect(resolveOfapiMedia(app, principal, request("3000203", { trigger: "click" }))).resolves.toMatchObject({
+      outcome: "refused", reason: "too_large", url: null, credits: 0,
+    });
+    expect(upstreamRequests.map((entry) => entry.method)).toEqual(["HEAD"]);
+    expect(await budgetUsed()).toBe(0);
+  });
+
+  it("releases the category reservation of a failed paid GET, so the next download is not refused", async () => {
+    await enableMediaPolicy(1);
+    await seedGatewayLocators([3000204, 3000205]);
+    mediaBehaviour = (method) => method === "HEAD" ? { status: 302, location: DL_LOCATION("head") } : { status: 500 };
+    await expect(resolveOfapiMedia(app, principal, request("3000204"))).resolves.toMatchObject({ outcome: "error", reason: "upstream_error" });
+    const states = await testDb!.pool.query<{ state: string }>(
+      "select state from ofapi_collection_requests where operation = 'ofapi_media_download'");
+    expect(states.rows).toEqual([{ state: "released" }]);
+    expect(await budgetUsed()).toBe(0);
+    mediaBehaviour = paidEverywhere;
+    await expect(resolveOfapiMedia(app, principal, request("3000205"))).resolves.toMatchObject({ outcome: "paid", credits: 1 });
+  });
+
+  it("marks a deleted message's link through the message index", async () => {
+    const created = await insertOfapiWebhookEvent(app.db, {
+      idempotencyKey: `evt_${"r3".padEnd(40, "0")}`, eventType: "messages.received", ofapiAccountId: MEDIA_ACCOUNT,
+      payload: syntheticMessagesReceived({ messageId: 2000301, media: [photoMedia(3000206, expiresSignedUrl, new Date(Date.now() + 3_600_000))] }) as unknown as Record<string, unknown>,
+    });
+    await processOfapiWebhookEvent(app, created!.id);
+    const client = await testDb!.pool.connect();
+    try {
+      await client.query("begin");
+      // A tiny table would be scanned anyway: prove the statement CAN use the index.
+      await client.query("set local enable_seqscan = off");
+      const plan = await client.query(
+        `explain update ofapi_media_links set deleted = true, updated_at = now()
+         where ofapi_account_id = $1 and message_id = $2 and not deleted`, [MEDIA_ACCOUNT, "2000301"]);
+      expect(plan.rows.map((row: Record<string, unknown>) => String(Object.values(row)[0])).join("\n"))
+        .toContain("ofapi_media_links_message_idx");
+      await client.query("rollback");
+    } finally {
+      client.release();
+    }
   });
 });
 
