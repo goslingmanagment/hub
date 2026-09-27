@@ -1263,6 +1263,18 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`
       delete from ai_media_description_links where ${mediaLinkPred}`),
   });
+  // Accelerator reads (0213) name the fan's conversation and message ids.
+  const acceleratorGroups = [...new Set([...fanGroupIds, ref])];
+  const acceleratorPred = sql`page_id in ${scope.pageIds} and group_ref in ${acceleratorGroups}`;
+  targets.push({
+    plane: "hot",
+    target: "ai_media_accelerator_reads",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from ai_media_accelerator_reads where ${acceleratorPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from ai_media_accelerator_reads where ${acceleratorPred}`),
+  });
   const mediaDescriptionPred = sql`page_id in ${scope.pageIds} and fan_platform_user_id = ${ref}`;
   targets.push({
     plane: "hot",
@@ -1534,6 +1546,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // AI media describer (0212): links before the descriptions they reference.
     ["ai_media_description_links", "page_id"],
     ["ai_media_descriptions", "page_id"],
+    ["ai_media_accelerator_reads", "page_id"],
     ["ai_generation_content", "page_id"],
     // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block

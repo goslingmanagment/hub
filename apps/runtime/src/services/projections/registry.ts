@@ -43,6 +43,10 @@ import { listDetachedPartitionsHoldingAccount, listEventAccounts } from "@agency
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
+  AI_MEDIA_CANDIDATES_PROJECTION,
+  runAiMediaCandidatesProjection,
+} from "./ai-media-candidates.ts";
+import {
   CREATOR_POSTS_PROJECTION,
   rebuildCreatorPostsProjection,
   runCreatorPostsProjection,
@@ -141,6 +145,16 @@ function count(result: Record<string, unknown>, key: string): number {
 }
 
 export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
+  {
+    // AI media describer candidates: reads the media plane's and the WS
+    // hints' event types but writes only its own operational tables.
+    name: AI_MEDIA_CANDIDATES_PROJECTION,
+    eventTypes: ["message.attachments_observed", "fansly.ws_signal_observed"],
+    tables: ["ai_media_descriptions", "ai_media_description_links", "ai_media_accelerator_reads"],
+    stateClass: "operational_state", rebuildKind: "none", rebuild: null,
+    label: "AI media describer candidates projected", run: runAiMediaCandidatesProjection,
+    didWork: result => count(result, "candidates") > 0 || count(result, "accelerations") > 0,
+  },
   {
     name: FANSLY_WS_HINT_PROJECTION, eventTypes: ["fansly.ws_signal_observed"],
     tables: ["fansly_ws_hint_receipts", "subject_refresh_state"], stateClass: "operational_state",
@@ -387,6 +401,21 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   writer: string;
   justification: string;
 }[] = [
+  {
+    table: "ai_media_descriptions", stateClass: "operational_state",
+    writer: "services/projections/ai-media-candidates.ts, services/ai-media-describe/worker.ts",
+    justification: "AI media describer work items and PAID results (descriptions, refusal memory). Truncation would resend every image to the provider and forget refusals the owner ruled must never be retried.",
+  },
+  {
+    table: "ai_media_description_links", stateClass: "operational_state",
+    writer: "services/projections/ai-media-candidates.ts, modules/ai/context/media-notes-context.ts",
+    justification: "Where each described file appeared (fan, conversation, message); generation-requested links carry no event, so a replay cannot rebuild them.",
+  },
+  {
+    table: "ai_media_accelerator_reads", stateClass: "operational_state",
+    writer: "services/projections/ai-media-candidates.ts, services/sync/ai-media-accelerator.ts",
+    justification: "Fansly accelerator physical-attempt admissions enforce the agency-wide rolling cap; resetting them would grant additional Fansly requests again within the same window.",
+  },
   {
     table: "fansly_ws_hint_receipts", stateClass: "operational_state",
     writer: "services/projections/fansly-ws-hints.ts",

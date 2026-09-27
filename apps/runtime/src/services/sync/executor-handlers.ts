@@ -190,6 +190,7 @@ import {
 // handler module can be a leaf.
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { runFanslyWsHintStep } from "./fansly-ws-hints.ts";
+import { runAiMediaAcceleratorStep } from "./ai-media-accelerator.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
@@ -2707,6 +2708,9 @@ export async function fanslyDmMessagesChunk(
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_messages");
   await runFanslyWsHintStep(app, input);
+  // AI media describer accelerator (default off): at most one addressed head
+  // read per chunk under the same lease; journal-only.
+  await runAiMediaAcceleratorStep(app, { ...input, pageContext: input.pageContext });
   if (input.streamState.dispatchSource === "event" && input.streamState.requestPayload.fanslyWsHintOnly === true) {
     // Addressed hint custody cannot certify the ordinary DM stream's
     // freshness or recovery, even when this step applied its target.

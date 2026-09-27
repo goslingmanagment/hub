@@ -358,6 +358,10 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(1_000_000),
   AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY: booleanSchema.default(true),
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
+  // Fansly freshness accelerator: one head read of a conversation when a WS
+  // frame says a fan sent media. OFF until the owner enables it after stage 1.
+  AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
+  AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
   // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
   // one flip per verification window, never a bundle and never a restart.
@@ -662,6 +666,10 @@ export interface AppConfig {
   aiMediaDescribeLiveChatOnly?: boolean;
   /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
+  /** Fansly: one head read per fan media WS signal (own budget, default off). */
+  aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
+  /** Agency-wide accelerator reads per rolling 24 h. */
+  aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
@@ -978,6 +986,8 @@ export function loadConfig(
     aiMediaDescribeDailyMicroUsdLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT,
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
+    aiMediaDescribeFanslyAcceleratorEnabled: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED,
+    aiMediaDescribeFanslyAcceleratorDailyLimit: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
