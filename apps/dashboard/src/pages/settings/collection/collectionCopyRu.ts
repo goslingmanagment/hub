@@ -59,6 +59,10 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
     label: "Сторис, хайлайты и очередь",
     why: "История сторис, хайлайтов и запланированных публикаций",
   },
+  media_previews: {
+    label: "Картинки в десктопе",
+    why: "Превью и фото в треде, галерее и волте ChatGoose Desktop; бесплатные ссылки работают и без включения",
+  },
 };
 
 export const CONSUMER_LABELS_RU: Record<string, string> = {

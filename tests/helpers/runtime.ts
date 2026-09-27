@@ -42,6 +42,7 @@ export function createTestAppContext(
     ofapiWebhookSilenceThresholdMinutes?: number;
     ofapiWebhookAutoRedeliveryEnabled?: boolean;
     ofapiWebhookAutoRedeliveryDailyCap?: number;
+    ofapiMediaDailyCapCredits?: number;
     ofapiCreditLedgerEnabled?: boolean;
     ofapiBurnAlertCreditsPerHour?: number;
     ofapiCreditMicroUsdPrice?: number;
@@ -168,6 +169,7 @@ export function createTestAppContext(
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
       ofapiWebhookAutoRedeliveryEnabled: overrides?.ofapiWebhookAutoRedeliveryEnabled ?? false,
       ofapiWebhookAutoRedeliveryDailyCap: overrides?.ofapiWebhookAutoRedeliveryDailyCap ?? 1000,
+      ofapiMediaDailyCapCredits: overrides?.ofapiMediaDailyCapCredits ?? 100,
       ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
       ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,

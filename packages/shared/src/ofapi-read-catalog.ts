@@ -445,8 +445,24 @@ read("taggable_users", "release-forms/taggable-users", "vault_catalog", "items",
 /** A closed GET catalog. No arbitrary vendor path or persistent following sort is accepted. */
 export const OFAPI_READ_CATALOG: readonly OfapiReadDefinition[] =
   definitions.map((row) => ({ ...row, operation: `ofapi_read_${row.id}` }));
+/**
+ * Transport reads of the desktop media resolve service (docs/runbooks/ofapi-media.md),
+ * registered for admission and pricing but deliberately OUTSIDE the closed GET
+ * catalog: no gateway path, collector plan or one-off job can reach them. The
+ * probe (HEAD, or the GET of a file OFAPI already caches) is a free read and
+ * reserves nothing; the download reserves its byte price at admission.
+ */
+export const OFAPI_MEDIA_TRANSPORT_READS: readonly OfapiReadDefinition[] = [
+  { id: "media_probe", operation: "ofapi_media_probe", path: "media/download/:cdnUrl", category: "media_previews",
+    shape: "object", pagination: "none", query: {}, detail: false, defaultCollect: false, granularity: "entity",
+    reservedCredits: 0, collectionOnly: true },
+  { id: "media_download", operation: "ofapi_media_download", path: "media/download/:cdnUrl", category: "media_previews",
+    shape: "object", pagination: "none", query: {}, detail: false, defaultCollect: false, granularity: "entity",
+    collectionOnly: true },
+];
 export function findOfapiReadDefinition(operation: string) {
-  return OFAPI_READ_CATALOG.find((row) => row.operation === operation);
+  return OFAPI_READ_CATALOG.find((row) => row.operation === operation)
+    ?? OFAPI_MEDIA_TRANSPORT_READS.find((row) => row.operation === operation);
 }
 export function validateOfapiReadQuery(
   def: OfapiReadDefinition,
