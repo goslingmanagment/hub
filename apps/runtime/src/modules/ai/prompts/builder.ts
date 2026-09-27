@@ -182,7 +182,7 @@ const ANALYSIS_POLICY: PromptFeaturePolicy = {
 
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
-  'improve-draft': { ...REPLY_POLICY, requiresDraft: true },
+  'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
   'help-me': ANALYSIS_POLICY,
   'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none' },
   'chat-review': ANALYSIS_POLICY,
@@ -254,6 +254,25 @@ const SPLIT_REPLY_INSTRUCTIONS = `- Split mode is on for this reply.
 - ALWAYS return at least 2 parts: split even a brief reply into a main send plus a natural follow-up.
 - Use 3 parts only when the content genuinely needs the extra send - never more than 3.
 - Keep each part brief and casual, like real back-to-back texts.`;
+
+// improve-draft fills two slots: {improveOutputRules} in Rules and
+// {improveLengthRule} at the end of "Sounding human". The single texts are the
+// template's original wording, so a request without Split renders the same
+// prompt as before the slots existed; Split swaps both, so the prompt never
+// asks for parts and for "a one-liner stays a one-liner" at once.
+const IMPROVE_SINGLE_RULES = {
+  output: `- Output exactly one ready-to-send message.
+- Do NOT use [NEXT].`,
+  length: "and keep the draft's own length and paragraph count, a one-liner stays a one-liner.",
+};
+
+const IMPROVE_SPLIT_RULES = {
+  output: `- Split mode is on for this rewrite. Deliver the improved draft as separate short, text-like sends, separated by [NEXT].
+- ALWAYS return at least 2 parts. Cut the draft at its natural seams (a reaction, then the next thought) and keep its content and order: split it, don't shorten it. A one-liner becomes two short texts. Only a draft that is a single indivisible thought may get a brief natural follow-up as its second part, and that follow-up adds no new facts, promises, prices, or topics.
+- Use 3 parts only when the draft genuinely carries three separate thoughts - never more than 3.
+- Every part is a complete little text of its own, never a sentence cut in half.`,
+  length: "and keep the draft's overall length, spread across the split parts.",
+};
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   'segment-a':
@@ -792,6 +811,15 @@ function splitReplyInstructions(
   return policy.supportsReplyMode && replyMode === 'preferSplit' ? SPLIT_REPLY_INSTRUCTIONS : '';
 }
 
+function improveRules(
+  policy: PromptFeaturePolicy,
+  replyMode: ReplyMode | undefined,
+): typeof IMPROVE_SINGLE_RULES {
+  return policy.supportsReplyMode && replyMode === 'preferSplit'
+    ? IMPROVE_SPLIT_RULES
+    : IMPROVE_SINGLE_RULES;
+}
+
 function segmentInstructions(
   policy: PromptFeaturePolicy,
   pingSegment: PingSegment | undefined,
@@ -859,6 +887,8 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     presetInstructions:
       input.preset === 'situation' ? PRESET_INSTRUCTIONS_BLOCK : '',
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
+    improveOutputRules: improveRules(policy, input.replyMode).output,
+    improveLengthRule: improveRules(policy, input.replyMode).length,
     toneInstructions: toneInstructions(policy, input.replyTone),
     pingOpening: pingInstructions.opening,
     pingContext: pingInstructions.context,

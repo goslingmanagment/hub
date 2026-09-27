@@ -125,6 +125,27 @@ function buildSplitReplyInstructions(
 - Keep each part brief and casual, like real back-to-back texts.`;
 }
 
+function buildImproveRules(
+  feature: PromptFeature,
+  replyMode: PromptBuildInput['replyMode'],
+): { output: string; length: string } {
+  if (feature !== 'improve-draft' || replyMode !== 'preferSplit') {
+    return {
+      output: `- Output exactly one ready-to-send message.
+- Do NOT use [NEXT].`,
+      length: "and keep the draft's own length and paragraph count, a one-liner stays a one-liner.",
+    };
+  }
+
+  return {
+    output: `- Split mode is on for this rewrite. Deliver the improved draft as separate short, text-like sends, separated by [NEXT].
+- ALWAYS return at least 2 parts. Cut the draft at its natural seams (a reaction, then the next thought) and keep its content and order: split it, don't shorten it. A one-liner becomes two short texts. Only a draft that is a single indivisible thought may get a brief natural follow-up as its second part, and that follow-up adds no new facts, promises, prices, or topics.
+- Use 3 parts only when the draft genuinely carries three separate thoughts - never more than 3.
+- Every part is a complete little text of its own, never a sentence cut in half.`,
+    length: "and keep the draft's overall length, spread across the split parts.",
+  };
+}
+
 const TONE_INSTRUCTIONS: Record<Exclude<ReplyTone, 'none'>, string> = {
   casual: `Tone for this reply: casual.
 Make this reply clearly casual: light, friendly, low-key. Prioritize relaxed banter, easy check-ins, and everyday phrasing.
@@ -271,6 +292,8 @@ function buildExpectedFlatUser(input: PromptBuildInput): string {
     fanProfileSection: buildFanProfileSectionOracle(input.fanProfile),
     draftSection: buildDraftSection(input.draftText),
     splitReplyInstructions: buildSplitReplyInstructions(input.feature, input.replyMode),
+    improveOutputRules: buildImproveRules(input.feature, input.replyMode).output,
+    improveLengthRule: buildImproveRules(input.feature, input.replyMode).length,
     toneInstructions: buildToneInstructions(input.feature, input.replyTone),
     pingOpening: 'You are generating a personal outreach message ("ping") requested by the chatter to send to a fan',
     pingContext: 'The chatter chose to reach out now. The fan may have written recently; do not assume they went silent. Create a natural reason to continue the conversation, grounded in what is visible. If the latest fan message asks a question, acknowledge it instead of ignoring it for an opener. A ping should read like a genuine personal text, not a newsletter or a copy-paste blast.',
@@ -349,7 +372,7 @@ describe('prompt caching blocks', () => {
         fanSubscriptionData: 'Tier: VIP',
         pingSegment: feature === 'ping' ? 'segment-a' : undefined,
         fanSilenceDays: feature === 'ping' ? 12 : undefined,
-        replyMode: feature === 'fast-reply' ? 'preferSplit' : undefined,
+        replyMode: feature === 'fast-reply' || feature === 'improve-draft' ? 'preferSplit' : undefined,
       });
       const result = buildPrompt(input);
 
@@ -543,6 +566,8 @@ describe('template variable substitution', () => {
       expect(result.user).not.toContain('{fanSubscriptionSection}');
       expect(result.user).not.toContain('{fanDisplayName}');
       expect(result.user).not.toContain('{splitReplyInstructions}');
+      expect(result.user).not.toContain('{improveOutputRules}');
+      expect(result.user).not.toContain('{improveLengthRule}');
       expect(result.user).not.toContain('{toneInstructions}');
       expect(result.user).not.toContain('{segmentInstructions}');
       expect(result.user).not.toContain('{fanSilenceSection}');
@@ -724,6 +749,66 @@ describe('split reply instructions', () => {
       }),
     );
     expect(result.user).not.toContain('Split mode is on for this reply.');
+  });
+});
+
+describe('improve-draft split mode', () => {
+  it('keeps the single-message rules when Split is off', () => {
+    for (const replyMode of [undefined, 'default'] as const) {
+      const result = buildPrompt(buildTestInput({ feature: 'improve-draft', replyMode }));
+      expect(result.user).toContain('- Output exactly one ready-to-send message.\n- Do NOT use [NEXT].\n');
+      expect(result.user).toContain('a one-liner stays a one-liner.');
+      expect(result.user).not.toContain('Split mode is on');
+    }
+  });
+
+  it('renders the default prompt byte-identical to the template before the slot existed', () => {
+    const legacyTemplate = IMPROVE_DRAFT_TEMPLATE.replace(
+      '{improveOutputRules}',
+      '- Output exactly one ready-to-send message.\n- Do NOT use [NEXT].',
+    ).replace(
+      '{improveLengthRule}',
+      "and keep the draft's own length and paragraph count, a one-liner stays a one-liner.",
+    );
+    const input = buildTestInput({ feature: 'improve-draft' });
+    expect(buildPrompt(input).user).toBe(
+      buildPrompt(input, { 'improve-draft': legacyTemplate }).user,
+    );
+  });
+
+  it('swaps the single-message rules for 2-3 [NEXT] parts when Split is on', () => {
+    const result = buildPrompt(buildTestInput({ feature: 'improve-draft', replyMode: 'preferSplit' }));
+    expect(result.user).toContain('Split mode is on for this rewrite.');
+    expect(result.user).toContain('separated by [NEXT]');
+    expect(result.user).toContain('ALWAYS return at least 2 parts');
+    expect(result.user).toContain('never more than 3');
+    expect(result.user).toContain("and keep the draft's overall length, spread across the split parts.");
+    expect(result.user).not.toContain('a one-liner stays a one-liner');
+    expect(result.user).not.toContain('Output exactly one ready-to-send message.');
+    expect(result.user).not.toContain('Do NOT use [NEXT].');
+    // The fast-reply split text belongs to its own template only.
+    expect(result.user).not.toContain('Split mode is on for this reply.');
+  });
+
+  it('keeps the rules in the uncached context block and the cached prefix unchanged', () => {
+    const single = buildPrompt(buildTestInput({ feature: 'improve-draft' }));
+    const split = buildPrompt(buildTestInput({ feature: 'improve-draft', replyMode: 'preferSplit' }));
+    expect(split.systemBlocks).toEqual(single.systemBlocks);
+    expect(split.userBlocks[0]).toEqual(single.userBlocks[0]);
+    expect(split.userBlocks[1]?.text).toContain('Split mode is on for this rewrite.');
+    expect(split.userBlocks[1]?.cache).toBe('none');
+    expect(split.userBlocks[2]).toEqual(single.userBlocks[2]);
+  });
+
+  it('does not expand an {improveOutputRules} placeholder typed into the draft', () => {
+    const result = buildPrompt(
+      buildTestInput({
+        feature: 'improve-draft',
+        draftText: 'check {improveOutputRules} here',
+        replyMode: 'preferSplit',
+      }),
+    );
+    expect(result.user).toContain('check {improveOutputRules} here');
   });
 });
 

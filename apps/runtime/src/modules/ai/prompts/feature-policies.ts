@@ -145,7 +145,7 @@ export const FEATURE_POLICIES = {
     includesEarnings: true,
     minMessages: 0,
     rerunAction: 'regenerate',
-    supportsReplyMode: false,
+    supportsReplyMode: true,
     supportsReplyTone: false,
     requiresDraft: true,
     usesPingSegment: false,
