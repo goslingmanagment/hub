@@ -230,7 +230,9 @@ export async function claimNextDueAiMediaDescription(
       updated_at = ${input.now}
     where d.id = (
       select id from ai_media_descriptions
-      where status in ('pending', 'budget_deferred')
+      -- awaiting_source rows come back on their retry time (OnlyFans: 1, 5,
+      -- 30 min, then 6 h); a row with no retry waits for its 7-day expiry.
+      where status in ('pending', 'budget_deferred', 'awaiting_source')
         and next_attempt_at <= ${input.now}
         and (lease_until is null or lease_until < ${input.now})
         and page_id in (${pageIds})

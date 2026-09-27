@@ -14,8 +14,10 @@ import {
 // day and a short single-flight marker per file. It never stores or relays
 // file bytes.
 
-export type OfapiMediaVariant = "thumb" | "full";
-export type OfapiMediaLocatorSource = "webhook" | "gateway";
+/** `preview` (0216) is the AI describer's variant; the desktop resolves thumb/full. */
+export type OfapiMediaVariant = "thumb" | "full" | "preview";
+/** `resolve` (0216): a cdn.fansapi.com URL the desktop resolve handed out. */
+export type OfapiMediaLocatorSource = "webhook" | "gateway" | "resolve";
 export type OfapiMediaSigKind = "expires" | "policy" | "fansapi" | "unknown";
 
 export interface OfapiMediaLocatorInput {

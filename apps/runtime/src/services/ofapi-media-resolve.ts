@@ -18,6 +18,7 @@ import {
   recordOfapiMediaFetch,
   refundOfapiMediaBudget,
   releaseOfapiCollectionRequest,
+  upsertOfapiMediaLocators,
   releaseOfapiMediaFlight,
   settleOfapiCollectionRequest,
   type OfapiMediaFetchLogRow,
@@ -40,6 +41,7 @@ import {
   OFAPI_CACHE_CDN_HOST,
   OFAPI_MEDIA_FULL_EXTENSIONS,
   OFAPI_STREAM_CDN_HOST,
+  ofapiMediaLocatorErrorFields,
   parseOfapiMediaUrl,
 } from "./ofapi-media-locators.ts";
 import { OfapiApiError, OfapiCreditAccountingUnavailableError, type OfapiRawResponse } from "./ofapi.ts";
@@ -628,6 +630,25 @@ async function decide(ctx: ResolveContext): Promise<DecisionResult> {
   }
 }
 
+async function persistFansapiHandout(app: AppContext, ctx: ResolveContext, url: string) {
+  const parsed = parseOfapiMediaUrl(url);
+  if (!parsed || parsed.host !== "fansapi" || parsed.sigKind !== "fansapi") return;
+  const known = ctx.locators.find((row) => row.variant === ctx.input.variant) ?? ctx.locators[0];
+  try {
+    await upsertOfapiMediaLocators(app.db, [{
+      ofapiAccountId: ctx.input.accountId, mediaId: ctx.input.mediaId, variant: ctx.input.variant,
+      source: "resolve", pageId: ctx.pageId, url: parsed.url, pathSha256: parsed.pathSha256,
+      sigKind: parsed.sigKind, expiresAt: parsed.expiresAt, mediaType: known?.mediaType ?? null,
+      fileExt: parsed.fileExt, chatId: known?.chatId ?? null, messageId: known?.messageId ?? null,
+      vaultMedia: known?.vaultMedia ?? false, canView: known?.canView ?? null, isReady: known?.isReady ?? null,
+      observedAt: new Date(),
+    }]);
+  } catch (error) {
+    app.logger.warn({ ...ofapiMediaLocatorErrorFields(error), resolveId: ctx.resolveId },
+      "OFAPI cache hand-out locator upsert failed; continuing");
+  }
+}
+
 function replayResponse(row: OfapiMediaFetchLogRow): OfapiMediaResolveResponse {
   const handout = ["free_url", "ofapi_cache", "paid"].includes(row.outcome) ? recalledHandout(row.resolveId) : null;
   return {
@@ -755,6 +776,12 @@ async function resolveFresh(app: AppContext, principal: HumanAuthPrincipal, page
   }
   const urlExpiresAt = decision.urlExpiresAt ? decision.urlExpiresAt.toISOString() : null;
   if (decision.url) rememberHandout(ctx.resolveId, decision.url, urlExpiresAt);
+  if (decision.outcome === "ofapi_cache" && decision.url) {
+    // AI media describer (0216): an OFAPI cache URL is free and readable from
+    // any address; keep it as a locator so the describer (which never calls
+    // OFAPI) can reuse it. Fail-open: never affects the desktop answer.
+    await persistFansapiHandout(app, ctx, decision.url);
+  }
   return {
     resolveId: ctx.resolveId,
     outcome: decision.outcome,
