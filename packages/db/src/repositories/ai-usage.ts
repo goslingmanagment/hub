@@ -1,6 +1,10 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
-import { aiUsageFeatures, type AiUsageFeature } from "@agency_hub_core/shared";
+import {
+  aiUsageFeatures,
+  type AiUsageFeature,
+  type AiUsageLedgerFeature,
+} from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
 import { aiUsageEvents, users } from "../schema.ts";
@@ -37,7 +41,8 @@ export interface InsertAiUsageEventInput {
 
 export interface ReserveAiGatewayUsageEventInput {
   clientEventId: string;
-  feature: AiUsageFeature;
+  /** Ledger features include the system-only lanes (`media-describe`). */
+  feature: AiUsageLedgerFeature;
   model: string;
   pageId: number | null;
   /** NULL when a quota denial is recorded before provider resolution. */
@@ -392,6 +397,9 @@ export async function getAiGatewayPageConsecutiveFailureCount(
       eq(aiUsageEvents.pageId, input.pageId),
       eq(aiUsageEvents.quotaAccepted, true),
       inArray(aiUsageEvents.gatewayOutcome, ["completed", "failed", "cancelled"]),
+      // Chatter generations only: a system lane (the AI media describer,
+      // user_id NULL) has its own breaker and must not page a chatter outage.
+      isNotNull(aiUsageEvents.userId),
     ))
     .orderBy(desc(aiUsageEvents.completedAt), desc(aiUsageEvents.id))
     .limit(threshold);
@@ -472,7 +480,7 @@ export async function getAiGatewayDailyUsageTotals(
 /** Stage 29 per-feature budget check: global (all principals) daily totals. */
 export async function getAiGatewayFeatureDailyTotals(
   db: Database,
-  input: { feature: AiUsageFeature; from: Date; toExclusive: Date },
+  input: { feature: AiUsageLedgerFeature; from: Date; toExclusive: Date },
 ): Promise<AiGatewayDailyUsageTotals> {
   const result = await db.execute(sql`
     select count(*)::int as "requestCount",
@@ -608,6 +616,11 @@ export async function listChatterUsageSummary(
            coalesce(bool_or(fe."costApproximate"), false) as "costApproximate",
            count(*) filter (where fe."isRegeneration")::int as "regenerationCount"
     from filtered_events fe
+    -- System lanes (user_id NULL, ledger-only features such as the AI media
+    -- describer) are not a chatter's usage: they belong to no row of this
+    -- report and must never reach the per-user normalizers below.
+    where fe."userId" is not null
+      and fe.feature::text in (${sql.join(aiUsageFeatures.map((feature) => sql`${feature}`), sql`, `)})
     group by fe."userId", fe.feature
     order by fe."userId" asc, "requestCount" desc, fe.feature asc
   `);
@@ -621,6 +634,7 @@ export async function listChatterUsageSummary(
     where ${aiUsageEvents.completedAt} >= ${input.from}
       and ${aiUsageEvents.completedAt} < ${input.toExclusive}
       and ${aiUsageEvents.provider} is not null
+      and ${aiUsageEvents.userId} is not null
     group by ${aiUsageEvents.userId}, ${aiUsageEvents.provider}
     order by ${aiUsageEvents.userId} asc, "requestCount" desc, ${aiUsageEvents.provider} asc
   `);

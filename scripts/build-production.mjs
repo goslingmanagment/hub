@@ -35,6 +35,9 @@ const runtimeExternal = [
   "pg",
   "pg-boss",
   "pino",
+  // Native libvips binding (AI media describer); the prebuilt
+  // @img/sharp-<platform> package resolves from node_modules at run time.
+  "sharp",
   "socks",
   "undici",
   "zod",

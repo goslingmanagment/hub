@@ -1,0 +1,11 @@
+-- 0211_ai_usage_feature_media_describe.sql
+--
+-- AI media describer (docs/runbooks/ai-media-describe.md): the ledger rows of
+-- the background describe calls use feature `media-describe` with user_id NULL
+-- (system lane). Ledger-only: the value never appears on the wire (client
+-- usage batches, the gateway and the feature routes accept only the public
+-- features).
+--
+-- Alone in its file: a value added by ALTER TYPE cannot be used in the same
+-- transaction (the 0131 rationale).
+ALTER TYPE "ai_usage_feature" ADD VALUE IF NOT EXISTS 'media-describe';

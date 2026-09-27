@@ -23,6 +23,10 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 // (`notification-paging-sweep.ts`) through the durable outbox, so no producer
 // here needs Telegram credentials or runtime config any more. The exported
 // signatures keep accepting `config` so the many call sites stay unchanged.
+/** Global latches of the AI media describer under `ai_provider_failed`. */
+export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
+export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
+
 type IncidentApp = Pick<AppContext, "db"> & {
   logger: Pick<AppContext["logger"], "warn">;
 };
@@ -75,6 +79,15 @@ function openTitleForIncident(
   // the title or the latch.
   if (input.kind === "ofapi_burn_rate" && input.subKey === "auto_redelivery_cap") {
     return "🚨 OFAPI webhook auto-redelivery daily cap reached";
+  }
+  // AI media describer (docs/runbooks/ai-media-describe.md): two global
+  // latches under the AI kind (a new kind is a contract change), each with
+  // its own title so the owner reads what actually stopped.
+  if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_BREAKER_SUBKEY) {
+    return "🚨 AI image describer paused for the day: too many refusals";
+  }
+  if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
+    return "🚨 AI image describer stopped: provider rejected the key (401/403)";
   }
   switch (input.kind) {
     case "auth_blocked":
@@ -230,6 +243,12 @@ function resolveDetailForIncident(
     case "ai_provider_billing":
       return "AI provider billing recovered";
     case "ai_provider_failed":
+      if (input.subKey === AI_MEDIA_DESCRIBE_BREAKER_SUBKEY) {
+        return "AI image describer resumed for the new UTC day";
+      }
+      if (input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
+        return "AI image describer re-enabled by the owner";
+      }
       return "AI provider generation recovered";
     case "capture_payload_parity":
       // THREE conditions share this kind and NOT its latch (G5 slice 3b and

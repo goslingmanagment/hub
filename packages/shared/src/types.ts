@@ -155,6 +155,15 @@ export const aiUsageFeatures = [
 ] as const;
 export type AiUsageFeature = (typeof aiUsageFeatures)[number];
 
+/** Ledger-only features: rows the hub writes for its own system lanes
+ * (`user_id` NULL). They live in the DB enum `ai_usage_feature` but never on
+ * the wire — client usage batches, the gateway and the feature routes accept
+ * only {@link aiUsageFeatures}. `media-describe` is the AI media describer
+ * (one background call per chat image, docs/runbooks/ai-media-describe.md). */
+export const aiUsageLedgerOnlyFeatures = ["media-describe"] as const;
+export const aiUsageLedgerFeatures = [...aiUsageFeatures, ...aiUsageLedgerOnlyFeatures] as const;
+export type AiUsageLedgerFeature = (typeof aiUsageLedgerFeatures)[number];
+
 export const FANSLY_CLIENT_CHECK_ROUTES = [
   "message",
   "group",

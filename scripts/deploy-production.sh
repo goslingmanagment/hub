@@ -470,6 +470,16 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # unavailable), so it runs unchanged after a rollback; a later re-deploy
   # finds the migration already applied.
   "0210_ofapi_media_images.sql"
+  # AI media describer: one enum value (ledger-only feature `media-describe`)
+  # and three new tables (ai_media_descriptions, ai_media_description_links,
+  # ai_media_describe_days), all IF NOT EXISTS, no change to any existing table.
+  # The previous image never names the tables. Its only contact with the enum
+  # value is the owner Usage report, which throws on an unknown feature — so a
+  # rollback is clean while the describer has written no ledger row (it ships
+  # with AI_MEDIA_DESCRIBE_ENABLED off, and a failed deploy rolls back before
+  # anyone enables it). A later re-deploy finds both migrations applied.
+  "0211_ai_usage_feature_media_describe.sql"
+  "0212_ai_media_descriptions.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

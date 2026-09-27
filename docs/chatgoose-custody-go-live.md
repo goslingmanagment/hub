@@ -21,6 +21,11 @@ provider egress is prohibited. Anthropic calls go through the authorized page/ac
 missing proxy config fails closed before quota reservation. Desktop Direct AI remains the explicit
 fallback/default until the desktop gateway rollout is accepted.
 
+Chat media bytes do not rest on the hub. One exception, for the AI path only
+(owner ruling 2026-09-27): the background image describer downloads a chat
+image into worker memory, downscales it and sends it to Anthropic for a short
+text description; only that text is stored (`docs/runbooks/ai-media-describe.md`).
+
 ## Required Running State
 
 Verify from `runtime_instances.running`, not repository defaults:

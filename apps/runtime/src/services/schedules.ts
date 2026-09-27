@@ -22,6 +22,10 @@ import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./proj
 import { ensureProjectionDebtQueue, ensureProjectionDebtSchedule } from "./projection-debt-sweep.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import {
+  ensureAiMediaDescribeSweepQueue,
+  ensureAiMediaDescribeSweepSchedule,
+} from "./ai-media-describe/sweep.ts";
+import {
   ensureNotificationDeliveryOutboxQueue,
   ensureNotificationDeliveryOutboxSchedule,
 } from "./notification-delivery-outbox.ts";
@@ -67,6 +71,7 @@ export async function registerAllSchedules(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
+  await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
@@ -97,6 +102,7 @@ export async function registerAllSchedules(
     ensureMessageArchiveSchedule(boss),
     ensureProjectionDebtSchedule(boss),
     ensureVoiceNotesSweepSchedule(boss),
+    ensureAiMediaDescribeSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),
     ensureNotificationPagingSweepSchedule(boss),
