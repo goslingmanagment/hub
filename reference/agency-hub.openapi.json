@@ -97369,6 +97369,84 @@
                           "full-history",
                           "window"
                         ]
+                      },
+                      "media": {
+                        "type": "object",
+                        "properties": {
+                          "groupRef": {
+                            "type": "string",
+                            "pattern": "^[0-9]{1,32}$"
+                          },
+                          "items": {
+                            "maxItems": 1000,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100000
+                                },
+                                "placement": {
+                                  "type": "string",
+                                  "enum": [
+                                    "inline",
+                                    "appended",
+                                    "preview"
+                                  ]
+                                },
+                                "messageId": {
+                                  "type": "string",
+                                  "pattern": "^[0-9]{1,32}$"
+                                },
+                                "sentAt": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 8640000000000000
+                                },
+                                "sender": {
+                                  "type": "string",
+                                  "enum": [
+                                    "fan",
+                                    "model"
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "photo",
+                                    "video",
+                                    "gif"
+                                  ]
+                                },
+                                "mediaId": {
+                                  "type": "string",
+                                  "pattern": "^[0-9]{1,32}$"
+                                },
+                                "paid": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "n",
+                                "placement",
+                                "messageId",
+                                "sentAt",
+                                "sender",
+                                "kind",
+                                "mediaId",
+                                "paid"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "groupRef",
+                          "items"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

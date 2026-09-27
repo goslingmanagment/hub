@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_FEATURE_CLIENT_MEDIA_MAX_ITEMS,
   AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   COACH_ANSWER_MAX_CHARS,
   FAN_SILENCE_DAYS_MAX,
@@ -139,6 +140,20 @@ describe("aiFeatureStream body limit vs the worst-case schema-valid body", () =>
       pingSegment: "segment-a",
       fanSilenceDays: FAN_SILENCE_DAYS_MAX,
       transcriptCoverage: "full-history",
+      // ids are digits only, so their worst case does not depend on `unit`.
+      media: {
+        groupRef: "9".repeat(32),
+        items: Array.from({ length: AI_FEATURE_CLIENT_MEDIA_MAX_ITEMS }, (_, index) => ({
+          n: index + 1,
+          placement: "appended",
+          messageId: "9".repeat(32),
+          sentAt: 8_640_000_000_000_000,
+          sender: "fan",
+          kind: "photo",
+          mediaId: "9".repeat(32),
+          paid: false,
+        })),
+      },
     },
   });
 

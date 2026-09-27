@@ -20,6 +20,10 @@ import {
   type SpendingSums,
   type TranscriptMessage,
 } from "../prompts/index.ts";
+import type { OnlyFansMessageMedia } from "./media-notes.ts";
+
+export * from "./media-notes.ts";
+export * from "./media-notes-context.ts";
 
 // Kernel Stage 30 — context loaders. Pure over kernel data; their outputs
 // are the exact strings the desktop's assembly produces today, built by the
@@ -84,6 +88,8 @@ export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 export interface TranscriptContext {
   transcript: string;
   messages: TranscriptMessage[];
+  /** Per-message media ids of the served rows (image notes numbering). */
+  mediaByMessage: Map<number, OnlyFansMessageMedia>;
   /** PR3: per-generation context manifest — counts/heads/timings only, no
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
@@ -173,7 +179,22 @@ export async function loadTranscriptContext(
     staleContext: mode === "serve" && unionError,
   };
 
-  return { transcript: formatTranscript(messages), messages, contextManifest };
+  const mediaByMessage = new Map<number, OnlyFansMessageMedia>();
+  for (const message of shaped) {
+    const media = (message.media ?? []).flatMap((item) => (
+      item.id === null || item.id === undefined ? [] : [{ id: String(item.id), type: item.type ?? null }]
+    ));
+    if (media.length > 0) {
+      mediaByMessage.set(message.id, {
+        messageId: message.id,
+        sender: message.isSentByMe ? "model" : "fan",
+        paid: (message.price ?? 0) > 0,
+        media,
+      });
+    }
+  }
+
+  return { transcript: formatTranscript(messages), messages, mediaByMessage, contextManifest };
 }
 
 const SPENDING_TYPE_BY_CANONICAL: Record<string, string> = {
