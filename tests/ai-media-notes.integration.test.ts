@@ -205,6 +205,17 @@ describe("image notes in feature prompts", () => {
     expect(links.rows).toEqual([{ conversation_ref: GROUP, fan_platform_user_id: FAN }]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("promotes a dormant file when a generation shows it", async () => {
+    enable();
+    await seedDescribed("unused");
+    await testDb!.pool.query(`update ai_media_descriptions set status = 'dormant', description = null`);
+    await generate("fast-reply", { transcript: NUMBERED_TRANSCRIPT, media });
+    await vi.waitFor(async () => {
+      const rows = await testDb!.pool.query(`select status from ai_media_descriptions where media_ref = '8001'`);
+      expect(rows.rows[0]?.status).toBe("pending");
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("rejects an unknown field inside clientContext.media", async () => {
     const response = await api!.inject({
       method: "POST",

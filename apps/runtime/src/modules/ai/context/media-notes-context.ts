@@ -95,7 +95,11 @@ export function requestMediaDescriptionsInBackground(
   if (!isAiMediaDescribeWindowOpen(input.policy, input.now)) {
     return;
   }
-  const known = new Set(input.descriptions.map((row) => `${row.variant}:${row.mediaRef}`));
+  // A dormant row (known, waiting for a generation) is exactly what this
+  // generation must make due; every other known row is left alone.
+  const known = new Set(input.descriptions
+    .filter((row) => row.status !== "dormant")
+    .map((row) => `${row.variant}:${row.mediaRef}`));
   const wanted = input.items
     .filter((item) => item.placement === "preview" || !item.paid)
     .filter((item) => isAfterAiMediaDescribeBoundary(input.policy, new Date(item.sentAt)))

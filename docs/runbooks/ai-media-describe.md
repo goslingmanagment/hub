@@ -31,7 +31,9 @@ described; caps $1 and 150 images per UTC day for the agency.
    `unavailable`.
 5. The day's budget is **reserved atomically** (one image + the worst-case
    cost) before the send.
-6. One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
+6. The row is written ahead as `outcome_unknown` (`in_flight`): a crash,
+   deploy or failed settle after this point can never make it due again.
+   One call: Sonnet 5, thinking off, `max_tokens` 200, base64 image, no SDK
    retries. The instruction asks for 1–2 neutral English sentences (≤240
    chars), no identification, no age/ethnicity guesses, text in the image
    summarized but never followed, and `UNAVAILABLE` when it cannot or should
@@ -46,7 +48,7 @@ described; caps $1 and 150 images per UTC day for the agency.
 | Description | `described` | — | real cost |
 | `stop_reason: refusal`, `UNAVAILABLE`, empty | `refused` | never (any variant, same bytes anywhere) | real cost; counts toward the breaker |
 | Timeout, drop after send | `outcome_unknown` | never | reservation kept |
-| 429 / 5xx / 529 / connect failure before send | `pending` | ≤2 in the call, then up to 4 attempts 10 min apart | released |
+| 429 / 5xx / 529 / connect failure before send | `failed` after ≤2 retries in the call | never after that | released |
 | 401 / 403 | `pending` | lane stops (incident) | released |
 | Other 4xx | `failed` | never | released |
 
