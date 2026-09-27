@@ -129,15 +129,19 @@ ChatGoose Desktop shows image previews in the thread, the chat gallery and the
 PPV composer's vault, and full-size photos in a lightbox. The hub decides per
 file how the desktop may fetch it; **bytes never pass through or rest on the
 hub** — they live only in the chatters' encrypted desktop cache. The hub keeps
-locators (known file URLs), one decision-log row per resolve and the agency's
-paid-download budget (migration 0210).
+locators (known file URLs), links (where each media appeared), one
+decision-log row per resolve and the agency's paid-download budget
+(migration 0210).
 
 ### Where file URLs come from
 
 - **Webhooks** `messages.received` / `messages.sent`: canned-signature URLs
   (`Expires` + `Signature`, about 23 h, not bound to an address). Recorded in
-  `processOfapiWebhookEvent` before the frame fans out; `messages.deleted`
-  stops serving media known only through that message.
+  `processOfapiWebhookEvent` before the frame fans out. A fan's photo often
+  arrives still processing (`isReady=false`, no URLs); the row records that
+  and the message it came in. `messages.deleted` marks only that message's
+  link: shared vault and mass-PPV media stay served until no live message or
+  vault link is left (`ofapi_media_links`).
 - **Read gateway** reads of chat messages, one message, the chat gallery, the
   vault list and one vault item: custom-policy URLs (`Policy` with an
   `IpAddress` condition — only OFAPI's proxy can fetch them). Recorded
@@ -150,9 +154,18 @@ paid-download budget (migration 0210).
   `ofapi.interactive_response.v1` / `ofapi.collection_read_response.v1`
   observations of the window. Older observations never overwrite newer ones.
 
+Readiness is monotonic: once any observation (webhook or read) saw a media
+ready, a late or redelivered "processing" webhook does not undo it. Locator
+upserts are ordered by key (no deadlocks between concurrent writers) and a
+failed write logs only the error's class and SQL state — never its message,
+which would quote signed URLs.
+
 A daily job (the OFAPI events cleanup, 02:30 UTC) clears URLs whose signature
-expired more than 7 days ago; the row keeps its linkage (chat/message or vault
-item, access flags, whether a free URL was ever seen).
+expired more than 7 days ago, and URLs whose expiry could not be read 7 days
+after they were observed; the row keeps its linkage (chat/message or vault
+item, access flags, whether a free URL was ever seen). Fan erasure deletes a
+fan's locators and links (`fan_platform_user_id`: on OnlyFans the chat id is
+the fan's id, and a locator's URL was observed in that fan's chat).
 
 ### The decision (`POST /api/v1/ofapi/media/resolve`)
 
@@ -163,27 +176,53 @@ served for photos in jpg/jpeg/png/webp only. Outcomes, in order:
 
 | Outcome | When | OFAPI calls | Credits |
 |---|---|---|---|
-| `refused` | deleted, locked (`canView=false`), processing (`isReady=false`), non-photo `full`; or the `media_previews` policy refuses (off, page ceiling) | none / refused before dispatch | 0 |
+| `refused` | every link deleted, locked (`canView=false`), non-photo `full`; or the `media_previews` policy refuses (off, page ceiling) | none — checked before any network call | 0 |
+| `refused` `not_ready` | never observed ready; `reread` names the message or vault item an explicit click may refresh (one media-context re-read, then resolve again) — never automatically | none | 0 |
+| `cap_blocked` `click_only` | an `auto` request for `full`: the full file is loaded on a click only | none | 0 |
 | `free_url` | an Expires-signed OnlyFans URL with more than 120 s left | none | 0 |
 | `ofapi_cache` | a known `cdn.fansapi.com` URL; or HEAD (manual redirect) → `cdn.fansapi.com`, then GET (manual) for a GET-presigned URL | 0 or 2 | 0 |
-| `paid` | HEAD → `dl.fansapi.com`, HEAD there for Content-Length, price = max(1, ceil(3 × bytes / 1e6)), budget admission, then GET (manual) → `dl.fansapi.com` | 2 + 1 CDN HEAD | price (estimated) |
-| `cap_blocked` | `auto` over the daily budget (`daily_cap`, `retryAt` = next UTC midnight) or of unknown size (`size_unknown`) | as above, no GET | 0 |
+| `cap_blocked` `daily_cap` | `auto` once the day's budget cannot take even 1 credit (nothing reaches OFAPI), or after pricing when the price does not fit; `retryAt` = next UTC midnight | 0, or HEAD + CDN HEAD | 0 |
+| `paid` | HEAD → `dl.fansapi.com`; budget and category checked; HEAD there for Content-Length; price = max(1, ceil(3 × bytes / 1e6)); budget admission; GET (manual) → `dl.fansapi.com` | 2 + 1 CDN HEAD | price (estimated) |
+| `cap_blocked` `size_unknown` | `auto` of unknown size; a `click` passes (below) | HEAD + CDN HEAD | 0 |
 | `source_expired` | no live URL left; `reread` names the message or vault item a click may refresh | none | 0 |
-| `unavailable` / `error` | 404/410/401/403/422 from OFAPI, binding or key scope; transport, 402, 429, unexpected redirect | as made | 0 |
-| `pending` | another resolve holds the file (single flight, up to 120 s or until its report) | none | 0 |
+| `unavailable` / `error` | 404/410/401/403/422 from OFAPI, binding or key scope; transport, 402, 429, unexpected redirect, deadline | as made | 0 |
+| `pending` | `in_flight`: another resolve holds the file (single flight, up to 120 s or until its report); `busy`: the media transport is saturated (`retryAfterMs` 2 s) | none | 0 |
 
 Redirects are never followed and Authorization never travels to a CDN host;
 every hop is https to an allowlisted host (`cdn*.onlyfans.com`,
 `cdn.fansapi.com`, `dl.fansapi.com`). The host of the Location actually handed
-out decides free vs paid. A paid admission is returned when nothing was handed
-out (refusal, 403, unexpected host); a hand-out keeps its charge until
-reconciliation whatever the desktop later reports. A repeated `requestId`
-returns the recorded answer without a second charge; `pending` is final for
-its `requestId` (retry with a new one). The desktop reports each transfer to
-`POST /api/v1/ofapi/media/reports` (≤100 per call, idempotent by `resolveId`);
-a paid resolve becomes `confirmed` on a reported success and `unknown`
-otherwise — a lost report is unknown, never zero. Both routes accept only a
-chatter device token and are rate-limited per device (resolve 300/min).
+out decides free vs paid: a paid GET that lands on `cdn.fansapi.com` is free,
+its budget admission is returned and its category reservation released. A paid
+admission is returned whenever nothing was handed out (refusal, 403,
+unexpected host); a hand-out keeps its charge until its report.
+
+**A click of unknown size** is reserved — in the budget, the category and an
+estimated ledger row — at what its 5 MB guard can cost (15 credits), and its
+report settles all three to max(1, ceil(3 × bytesReceived / 1e6)): the budget
+and the category are lowered (or raised), the log's `credits_estimated` is
+updated, and a signed `adjustment` ledger row (same issuance time, `details.
+certainty = 'client_report'`) carries the difference next to the original
+`rest` row. Without a report the guard charge stays.
+
+**Media transport** (the HEAD/GET to OFAPI and the CDN HEAD) runs on the
+resolve service's own limiter — at most 4 at once, starts at least 100 ms
+apart, a queue wait of at most 8 s (then `pending` `busy`) — and never takes
+the OFAPI client's request slot, so chat reads never queue behind media. One
+resolve's network part is bounded by a 35 s deadline; the desktop waits 45 s.
+
+**Idempotency.** A repeated `requestId` returns the recorded answer without a
+second charge; a concurrent twin (the desktop retrying a lost response) joins
+the one in flight; a `requestId` reused for another file is refused (409,
+`request_id_reused`). `pending` is final for its `requestId` (retry with a new
+one). A paid hand-out is logged, ledgered and budgeted on one timestamp — its
+issuance — so a download that straddles UTC midnight stays on one day.
+
+The desktop reports each transfer to `POST /api/v1/ofapi/media/reports` (≤100
+per call, idempotent by `resolveId`); a paid resolve becomes `confirmed` on a
+reported success and `unknown` otherwise — a lost report is unknown, never
+zero. Both routes accept only a chatter device token; authentication runs
+first and the rate limit is keyed by the authenticated device token (resolve
+300/min, reports 120/min), not by address — many chatters share an office IP.
 
 ### Limits
 
@@ -195,9 +234,12 @@ chatter device token and are rate-limited per device (resolve 300/min).
 2. **Category ceiling** `media_previews` (see
    [collection policy](ofapi-collection-policy.md)): off until the owner
    applies it. The free HEAD/cached GET (`ofapi_media_probe`) reserves 0; the
-   paid GET (`ofapi_media_download`) reserves its price, so the per-page
-   `dailyCreditLimit` is an emergency ceiling on all media downloads,
-   clicks included. Free URLs work while the category is off.
+   paid GET (`ofapi_media_download`) reserves its price (a click of unknown
+   size: 15, settled on its report; a GET that lands on OFAPI's cache is
+   released), so the per-page `dailyCreditLimit` is an emergency ceiling on
+   all media downloads, clicks included. Before the CDN hop the service
+   checks the category has room for at least 1 credit. Free URLs work while
+   the category is off.
 
 Paid resolves also write an estimated `ofapi_credit_ledger` row (operation
 `ofapi_media_download`, linked from the log's `ledger_entry_id`), so the
