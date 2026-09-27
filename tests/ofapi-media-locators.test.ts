@@ -1,16 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { dedupeOfapiMediaLocators } from "@agency_hub_core/db";
+import { dedupeOfapiMediaLocators, ofapiMediaLinksFromLocators, ofapiMediaTransferCredits, type Database } from "@agency_hub_core/db";
 import { findOfapiReadDefinition, classifyOfapiCollectionOperation, OFAPI_COLLECTION_REGISTRY, OFAPI_READ_CATALOG } from "@agency_hub_core/shared";
 
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   decodeCloudFrontPolicy,
+  ofapiMediaLocatorErrorFields,
   ofapiMediaLocatorsFromGatewayBody,
   ofapiMediaLocatorsFromWebhook,
   parseOfapiMediaUrl,
+  recordOfapiGatewayMediaLocators,
   selectOfapiMediaVariantUrls,
 } from "../apps/runtime/src/services/ofapi-media-locators.ts";
-import { ofapiMediaDownloadPrice } from "../apps/runtime/src/services/ofapi-media-resolve.ts";
+import {
+  createOfapiMediaTransportLimiter,
+  ofapiMediaDownloadPrice,
+  OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS,
+} from "../apps/runtime/src/services/ofapi-media-resolve.ts";
 import {
   expiresSignedUrl,
   fansapiCacheUrl,
@@ -149,6 +156,91 @@ describe("locator extraction", () => {
     expect(deduped).toHaveLength(1);
     expect(deduped[0]!.url).toBe(row.url);
   });
+
+  it("orders every batch by key, so concurrent upserts lock rows in one order", () => {
+    const rows = ofapiMediaLocatorsFromWebhook(syntheticMessagesReceived({
+      media: [photoMedia(30, expiresSignedUrl, EXPIRES), photoMedia(4, expiresSignedUrl, EXPIRES), videoMedia(200, expiresSignedUrl, EXPIRES)],
+    }), { pageId: 7, observedAt });
+    const keys = dedupeOfapiMediaLocators([...rows].reverse()).map((row) => `${row.mediaId}|${row.variant}`);
+    expect(keys).toEqual(["200|thumb", "30|full", "30|thumb", "4|full", "4|thumb"]);
+    expect(dedupeOfapiMediaLocators(rows).map((row) => `${row.mediaId}|${row.variant}`)).toEqual(keys);
+  });
+
+  it("derives one link per message and one per vault listing, newest first wins, key-ordered", () => {
+    const message = ofapiMediaLocatorsFromWebhook(syntheticMessagesReceived({ media: [photoMedia(5, expiresSignedUrl, EXPIRES)] }), { pageId: 7, observedAt });
+    const vault = ofapiMediaLocatorsFromGatewayBody({
+      operation: "ofapi_gateway_vault_media", ofapiAccountId: MEDIA_ACCOUNT, pageId: 7, pathname: `/${MEDIA_ACCOUNT}/media/vault`,
+      body: syntheticVaultPage([photoMedia(5, policySignedUrl, EXPIRES)]), observedAt: new Date(observedAt.getTime() + 1_000),
+    });
+    const links = ofapiMediaLinksFromLocators([...vault, ...message]);
+    expect(links).toEqual([
+      { ofapiAccountId: MEDIA_ACCOUNT, mediaId: "5", linkKey: `message:${MEDIA_MESSAGE_ID}`, pageId: 7,
+        chatId: String(MEDIA_FAN_ID), messageId: String(MEDIA_MESSAGE_ID), observedAt },
+      { ofapiAccountId: MEDIA_ACCOUNT, mediaId: "5", linkKey: "vault", pageId: 7, chatId: null, messageId: null,
+        observedAt: new Date(observedAt.getTime() + 1_000) },
+    ]);
+  });
+
+  it("never logs a failed locator write's message: it quotes signed URLs", async () => {
+    const signed = expiresSignedUrl("a/aa/syn9/300x300_syn9.jpg", EXPIRES);
+    const failure = Object.assign(new Error(`Failed query: insert into ofapi_media_locators ... params: ${signed}`), {
+      name: "DrizzleQueryError", cause: Object.assign(new Error(`duplicate ... ${signed}`), { name: "DatabaseError", code: "40P01" }),
+    });
+    expect(ofapiMediaLocatorErrorFields(failure)).toEqual({ errorName: "DrizzleQueryError", causeName: "DatabaseError", errorCode: "40P01" });
+    const warn = vi.fn();
+    const db = { transaction: () => Promise.reject(failure) } as unknown as Database;
+    const app = { db, logger: { warn, info: vi.fn() } } as unknown as Pick<AppContext, "db" | "logger">;
+    await expect(recordOfapiGatewayMediaLocators(app, {
+      operation: "ofapi_gateway_chat_media", ofapiAccountId: MEDIA_ACCOUNT, pageId: 7,
+      pathname: `/${MEDIA_ACCOUNT}/chats/${MEDIA_FAN_ID}/media`,
+      body: syntheticChatMediaPage([photoMedia(9, expiresSignedUrl, EXPIRES)]),
+    })).resolves.toBe(0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(warn.mock.calls[0]);
+    expect(logged).not.toContain("onlyfans.com");
+    expect(logged).not.toContain("Signature");
+    expect(logged).toContain("40P01");
+  });
+});
+
+describe("media transport limiter", () => {
+  it("runs at most `concurrency` hops at once and hands slots over in order", async () => {
+    const limiter = createOfapiMediaTransportLimiter({ concurrency: 2, spacingMs: 0 });
+    const first = await limiter.acquire(1_000);
+    const second = await limiter.acquire(1_000);
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(limiter.active()).toBe(2);
+    const third = limiter.acquire(1_000);
+    let granted = false;
+    void third.then(() => { granted = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(granted).toBe(false);
+    first!();
+    expect(await third).not.toBeNull();
+    expect(limiter.active()).toBe(2);
+  });
+
+  it("gives up after the bounded wait instead of queueing further", async () => {
+    const limiter = createOfapiMediaTransportLimiter({ concurrency: 1, spacingMs: 0 });
+    const held = await limiter.acquire(1_000);
+    const started = Date.now();
+    expect(await limiter.acquire(50)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    held!();
+    // A timed-out waiter never takes a slot later.
+    expect(limiter.active()).toBe(0);
+    expect(await limiter.acquire(50)).not.toBeNull();
+  });
+
+  it("spaces starts", async () => {
+    const limiter = createOfapiMediaTransportLimiter({ concurrency: 4, spacingMs: 60 });
+    const started = Date.now();
+    await limiter.acquire(1_000);
+    await limiter.acquire(1_000);
+    await limiter.acquire(1_000);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(110);
+  });
 });
 
 describe("media transport registration", () => {
@@ -157,6 +249,9 @@ describe("media transport registration", () => {
     expect(ofapiMediaDownloadPrice(333_334)).toBe(2);
     expect(ofapiMediaDownloadPrice(1_000_000)).toBe(3);
     expect(ofapiMediaDownloadPrice(2_500_001)).toBe(8);
+    expect(ofapiMediaTransferCredits(0)).toBe(1);
+    // A click of unknown size is reserved at what its 5 MB guard can cost.
+    expect(OFAPI_MEDIA_UNKNOWN_SIZE_GUARD_CREDITS).toBe(15);
   });
 
   it("registers the free probe and the paid download under media_previews, outside the gateway catalog", () => {
