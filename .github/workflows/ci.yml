@@ -146,6 +146,13 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
+      - name: TEMP resource sampler
+        if: runner.environment == 'self-hosted'
+        run: |
+          nproc; free -m; cat /proc/self/cgroup
+          cg="/sys/fs/cgroup/user.slice/user-$(id -u).slice"; cat "$cg/memory.max" "$cg/memory.events" || true
+          bash scripts/ci-background.sh start sampler bash scripts/ci-diag-sampler.sh
+
       # Contracts come first: the generator rewrites tracked sources in place
       # (contract hash, SDK), and the unit tests started next import them.
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
@@ -258,6 +265,12 @@ jobs:
       - name: Stop background unit tests
         if: always()
         run: bash scripts/ci-background.sh stop unit-tests
+
+      - name: TEMP resource report
+        if: always() && runner.environment == 'self-hosted'
+        run: |
+          bash scripts/ci-background.sh stop sampler
+          cg="/sys/fs/cgroup/user.slice/user-$(id -u).slice"; cat "$cg/memory.events" "$cg/memory.peak" || true
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
