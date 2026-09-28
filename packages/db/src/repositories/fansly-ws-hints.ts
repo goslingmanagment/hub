@@ -83,6 +83,9 @@ export type FanslyWsHintWalk = {
   pagesRead?: number;
   groupDetailCaptured?: boolean;
   rawPageIds?: number[];
+  /** ISO dispatch time of the walk's head page (before = null); finalize
+   * stamps it as the thread's last_message_sync_at. */
+  headReadAt?: string;
 };
 
 export type FanslyWsHintClaim = {

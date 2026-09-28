@@ -124,7 +124,7 @@ describe("Fansly exhausted head debt and ordinary history", () => {
       totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
     }]);
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId: thread.id, messageCoverageStatus: "pending_backfill", enforceRetention: false,
+      conversationId: thread.id, messageCoverageStatus: "pending_backfill", headReadAt: new Date(), enforceRetention: false,
     });
     const calls: Array<string | null> = [];
     const adapter = {
@@ -257,7 +257,7 @@ describe("Fansly pending history off the head catch-up allowlist", () => {
       content: id, totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
     })));
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId: thread.id, messageCoverageStatus: "pending_backfill", enforceRetention: false,
+      conversationId: thread.id, messageCoverageStatus: "pending_backfill", headReadAt: new Date(), enforceRetention: false,
     });
     // Seeded after the list head (09.03 12:00) unless the head is due.
     await testDb.pool.query("update page_dm_threads set last_message_sync_at = $2 where id = $1", [

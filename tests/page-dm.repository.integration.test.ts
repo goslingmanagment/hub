@@ -777,7 +777,7 @@ describe("page DM repository integration", () => {
     await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "complete",
-      lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
+      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
     });
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -871,7 +871,7 @@ describe("page DM repository integration", () => {
     const finalized = await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "complete",
-      lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
+      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
       enforceRetention: false,
     });
     expect(finalized.deletedCount).toBe(0);
@@ -1069,7 +1069,7 @@ describe("page DM repository integration", () => {
     await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "partial_window",
-      lastMessageSyncAt: new Date("2026-03-18T09:00:00.000Z"),
+      headReadAt: new Date("2026-03-18T09:00:00.000Z"),
     });
 
     const storedMessages = await testDb.pool.query<{
@@ -1091,6 +1091,37 @@ describe("page DM repository integration", () => {
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
     expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
+  });
+
+  it("moves last_message_sync_at only for a head read, and never backwards", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-head-read");
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-head-read" }]);
+    if (!fan) throw new Error("test setup: fan creation failed");
+    const headReadAt = new Date("2026-09-22T00:11:00.000Z");
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "head-read", 1), fanId: fan.id, lastMessageSyncAt: headReadAt,
+    });
+    const fresh = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "head-read-fresh", 1), fanId: fan.id,
+    });
+    if (!thread || !fresh) throw new Error("test setup: thread creation failed");
+    const finalize = async (conversationId: number, at: Date | null) => (await finalizePageDmConversationMessageSync(
+      testDb!.db, { conversationId, messageCoverageStatus: "complete", headReadAt: at, enforceRetention: false },
+    )).conversation?.lastMessageSyncAt;
+
+    // A history walk or a summary repair leaves the watermark alone.
+    expect(await finalize(thread.id, null)).toEqual(headReadAt);
+    expect(await finalize(fresh.id, null)).toBeNull();
+    // An older head read cannot hide a head a newer read already certified.
+    expect(await finalize(thread.id, new Date("2026-09-20T00:00:00.000Z"))).toEqual(headReadAt);
+    const later = new Date("2026-09-28T02:07:00.000Z");
+    expect(await finalize(thread.id, later)).toEqual(later);
+    expect(await finalize(fresh.id, headReadAt)).toEqual(headReadAt);
   });
 
   it("backs a failing thread off 5/10/20 minutes, quarantines it on the 4th failure, and clears it", async (context) => {

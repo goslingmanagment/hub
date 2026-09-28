@@ -978,12 +978,27 @@ export async function refreshPageDmConversationWindow(
   });
 }
 
+/**
+ * Closes a message-sync pass over one conversation: recomputes the stored
+ * window, writes the coverage verdict and, when the pass read the head,
+ * advances last_message_sync_at.
+ */
 export async function finalizePageDmConversationMessageSync(
   db: Database,
   input: {
     conversationId: number;
     messageCoverageStatus: MessageCoverageStatus;
-    lastMessageSyncAt?: Date;
+    /**
+     * When this pass read the conversation head: the dispatch time of its
+     * head page (before = null). last_message_sync_at is the time-based
+     * "head already read" watermark the candidate picker compares with
+     * last_message_at, so only a head read may move it, and never backwards.
+     * null leaves it untouched — a history walk from a stored cursor, a
+     * continuation that cannot vouch for its head, or a summary-only repair
+     * never read the head, and stamping "now" would hide a head that arrived
+     * meanwhile. Required so every caller decides.
+     */
+    headReadAt: Date | null;
     /**
      * When false, the per-conversation retention prune is skipped and only the
      * window bookkeeping is recomputed. Stage 1 retention stand-down: sync
@@ -995,7 +1010,7 @@ export async function finalizePageDmConversationMessageSync(
     enforceRetention?: boolean;
   },
 ) {
-  const lastMessageSyncAt = input.lastMessageSyncAt ?? new Date();
+  const headReadAt = input.headReadAt;
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     await resolveCapturedFanslyDmHeads(database, input.conversationId);
@@ -1017,7 +1032,12 @@ export async function finalizePageDmConversationMessageSync(
         oldestStoredMessageId: summary.oldestStoredMessageId,
         messageCoverageStatus: input.messageCoverageStatus,
         messageBackfillComplete: isMessageBackfillComplete(input.messageCoverageStatus),
-        lastMessageSyncAt,
+        ...(headReadAt ? {
+          lastMessageSyncAt: sql`greatest(
+            coalesce(${pageDmConversations.lastMessageSyncAt}, ${headReadAt}::timestamptz),
+            ${headReadAt}::timestamptz
+          )`,
+        } : {}),
         lastFanMessageAt: summary.lastFanMessageAt,
         lastModelMessageAt: summary.lastModelMessageAt,
         updatedAt: new Date(),

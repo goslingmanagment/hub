@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireTargetedPageSyncLease, ensurePageSyncStates, getPageDmConversationById, getPageSyncState,
-  requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, startSyncRun,
+  requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, selectNextPageDmMessageSyncCandidate, startSyncRun,
   upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
@@ -261,6 +261,31 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
     expect((await db.pool.query("select requested_revision,applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows)
       .toEqual([{ requested_revision: 1n, applied_revision: 1n }]);
+  });
+  it("certifies the head only as of the walk's head page, so a head listed since stays due", async () => {
+    const f = await fixture();
+    await f.step();
+    const cursor = async () => (await db.pool.query(
+      "select backfill_cursor from subject_refresh_state where plane='fansly_ws_dm'",
+    )).rows[0].backfill_cursor as { before?: string; headReadAt?: string };
+    expect(await cursor()).toMatchObject({ before: "126", headReadAt: expect.any(String) });
+    // The prod shape: the head page was read days before the continuation
+    // (lilly-2 thread 15378: 22.09 head page, 27.09 finalize), and the list
+    // recorded a newer head in between.
+    await db.pool.query(`update subject_refresh_state
+      set backfill_cursor = jsonb_set(backfill_cursor, '{headReadAt}', '"2026-09-22T00:11:00.000Z"')
+      where plane='fansly_ws_dm'`);
+    await db.pool.query(`update page_dm_threads set last_message_id = '151',
+      last_message_at = '2026-09-27T19:32:00Z' where id = $1`, [f.thread.id]);
+    await f.due(); await f.step(); await f.due(); await f.step();
+    expect(f.calls).toHaveLength(3);
+
+    expect(await getPageDmConversationById(db.db, f.thread.id)).toMatchObject({
+      newestStoredMessageId: "150", lastMessageSyncAt: new Date("2026-09-22T00:11:00.000Z"),
+    });
+    // Before, the continuation stamped "now" and the new head left selection.
+    expect(await selectNextPageDmMessageSyncCandidate(db.db, { platformAccountId: f.page.id }))
+      .toMatchObject({ id: f.thread.id, lastMessageId: "151" });
   });
   it("rolls back all hot writes and settlement together if finalization fails", async () => {
     const f = await fixture();

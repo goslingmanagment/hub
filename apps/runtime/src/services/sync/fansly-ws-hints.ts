@@ -163,6 +163,10 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       telemetry: input.telemetry, platformAccountId: pageId, platform: context.platform,
       pageAccountId: context.page.platformAccountId!, conversation,
     };
+    // A walk continued from an older `before` (possibly days later) has not
+    // read the current head; only this head fetch's time may certify it.
+    // Set before dispatch so the admission save carries it.
+    if ((walk.before ?? null) === null) walk.headReadAt = new Date().toISOString();
     const page = await fetchAndJournalFanslyDmMessagePage(app, {
       requestContext, telemetry: input.telemetry, syncRunId: input.syncRunId,
       platformAccountId: pageId, platform: context.platform, pageAccountId: context.page.platformAccountId!,
@@ -228,6 +232,8 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         currentIds.has(message.platformMessageId) || !existingIds.has(message.platformMessageId)));
       await finalizePageDmConversationMessageSync(db, {
         conversationId: conversation.id, messageCoverageStatus: conversation.messageCoverageStatus, enforceRetention: false,
+        headReadAt: walk.headReadAt !== undefined && Number.isFinite(Date.parse(walk.headReadAt))
+          ? new Date(walk.headReadAt) : null,
       });
       const targetUnconfirmed = await hasUnconfirmedFanslyWsHintTargets(db, claim, conversation.id, policy);
       await advanceFanslyWsHint(db, claim, {

@@ -3106,6 +3106,13 @@ export async function fanslyDmMessagesChunk(
         // Fansly 5xx reaches the partner-unresolvable recovery below, every
         // other failure (including a capture failure) rethrows as before,
         // after the per-thread breaker has seen it.
+        if (state.currentBeforeMessageId === null) {
+          // This page reads the head (incremental, head catch-up, or a first
+          // backfill of an empty thread). Overwritten on every head fetch and
+          // carried by the in-walk checkpoint, so a walk finishing chunks
+          // later certifies the head only as of this read.
+          state.headReadAt = new Date().toISOString();
+        }
         let messagePage;
         try {
           messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
@@ -3276,6 +3283,8 @@ export async function fanslyDmMessagesChunk(
               const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
                 conversationId: currentConversation.id,
                 messageCoverageStatus,
+                // A walk from a stored cursor never read the head.
+                headReadAt: state.headReadAt ? new Date(state.headReadAt) : null,
                 enforceRetention: await isPageDmPruneAllowed(app),
               });
               const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(

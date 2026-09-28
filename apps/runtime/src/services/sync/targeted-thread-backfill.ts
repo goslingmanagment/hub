@@ -527,6 +527,8 @@ export async function runTargetedThreadBackfill(
   let walkFailure: unknown = null;
   /** A page of this walk left a message unstored (no parseable createdAt). */
   let normalizationDebt = false;
+  /** When this walk read the thread head; finalize never stamps it otherwise. */
+  let headReadAt: Date | null = null;
 
   /** The thread summary is the ONLY writer of stored_message_count / oldest id;
    * `upsertPageDmMessages` does not touch it. So a run that wrote messages and
@@ -569,6 +571,8 @@ export async function runTargetedThreadBackfill(
         // The approved boundary when there is one (slice C), otherwise the
         // deepest message we already hold — the walk goes backwards from here.
         let before = input.startBeforeMessageRef ?? conversation.oldestStoredMessageId;
+        // Only a walk of an empty thread starts at (and reads) the head.
+        headReadAt = before === null ? new Date() : null;
 
         while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
           if (leaseFenced) {
@@ -730,6 +734,7 @@ export async function runTargetedThreadBackfill(
           finalizePageDmConversationMessageSync(dbTx, {
             conversationId: threadId,
             messageCoverageStatus,
+            headReadAt,
             enforceRetention,
           }));
         result.messageCoverageStatus = finalized.conversation?.messageCoverageStatus

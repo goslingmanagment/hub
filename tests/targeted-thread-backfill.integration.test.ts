@@ -331,11 +331,14 @@ describe("targeted thread backfill (slice C′)", () => {
     // Released, not completed: the stream keeps whatever the scheduler had
     // queued for it (a fresh page carries an onboarding request => pending).
     expect(state.status).not.toBe("running");
-    const thread = await testDb.pool.query<{ status: string; stored: number }>(
-      'select message_coverage_status as "status", stored_message_count as "stored" from page_dm_threads where id = $1',
+    const thread = await testDb.pool.query<{ status: string; stored: number; syncAt: Date | null }>(
+      `select message_coverage_status as "status", stored_message_count as "stored",
+              last_message_sync_at as "syncAt" from page_dm_threads where id = $1`,
       [targetThreadId],
     );
-    expect(thread.rows[0]).toMatchObject({ status: "complete", stored: 3 });
+    // A walk from the oldest stored message never read the head, so it cannot
+    // certify one: last_message_sync_at stays unset.
+    expect(thread.rows[0]).toMatchObject({ status: "complete", stored: 3, syncAt: null });
   }, 120_000);
 
   it("keeps a walk that left a message without createdAt unstored out of complete", async (context) => {

@@ -5784,6 +5784,58 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     }));
   });
 
+  it("a multi-chunk head walk certifies the head only as of its head page", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const h = dmWalkHarness({
+        storedMessageCount: 10, newestStoredMessageId: "old-1", oldestStoredMessageId: "old-9",
+        messageCoverageStatus: "complete",
+      }, [
+        { items: [walkMessage("msg-80"), walkMessage("m-79")], done: false, raw: { messages: [] } },
+        { items: [walkMessage("m-78"), walkMessage("old-1")], done: false, raw: { messages: [] } },
+      ]);
+      dbMocks.getExistingPageDmMessageIds.mockImplementation(async (_db, input) =>
+        new Set(input.platformMessageIds.filter((id: string) => id === "old-1")));
+
+      vi.setSystemTime(new Date("2026-09-22T00:11:00.000Z"));
+      await h.run();
+      expect(h.checkpoint()).toMatchObject({ currentBeforeMessageId: "m-79", headReadAt: "2026-09-22T00:11:00.000Z" });
+
+      // Days later the continuation reaches known ground: a head the list
+      // recorded meanwhile must stay due, so "now" is not the head-read time.
+      vi.setSystemTime(new Date("2026-09-27T23:42:00.000Z"));
+      await h.run();
+      expect(dbMocks.finalizePageDmConversationMessageSync).toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({
+        conversationId: 777, headReadAt: new Date("2026-09-22T00:11:00.000Z"),
+      }));
+      expect(h.checkpoint()).not.toHaveProperty("headReadAt");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["walks history from the oldest stored message leaves last_message_sync_at alone", { storedMessageCount: 10, newestStoredMessageId: "msg-80", oldestStoredMessageId: "old-1" }, false],
+    ["reads an empty thread from its head stamps that read", {}, true],
+  ] as const)("a backfill that %s", async (_name, conversation, readsHead) => {
+    const h = dmWalkHarness({ ...conversation, messageCoverageStatus: "pending_backfill" }, [
+      { items: [walkMessage("m-1")], done: true, raw: { messages: [] } },
+    ]);
+    const startedAt = Date.now();
+
+    await h.run();
+
+    expect(h.getMessagesPage).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({
+      before: readsHead ? null : "old-1",
+    }));
+    const [, finalizeInput] = dbMocks.finalizePageDmConversationMessageSync.mock.calls[0] ?? [];
+    if (readsHead) {
+      expect(finalizeInput.headReadAt.getTime()).toBeGreaterThanOrEqual(startedAt);
+    } else {
+      expect(finalizeInput.headReadAt).toBeNull();
+    }
+  });
+
   it("counts 429 retries in dm_messages chunk summaries", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {

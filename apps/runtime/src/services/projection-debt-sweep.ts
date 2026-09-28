@@ -70,9 +70,11 @@ export async function runProjectionDebtSweep(
         // finalize never wrote its computed status, and the next sync pass
         // of this conversation recomputes it anyway — the sweep's only job
         // is the summary recount (count/newest/oldest/fan-model timestamps).
+        // It reads no head, so last_message_sync_at stays as it is.
         await finalizePageDmConversationMessageSync(app.db, {
           conversationId: row.conversationId,
           messageCoverageStatus: conversation.messageCoverageStatus,
+          headReadAt: null,
           enforceRetention,
         });
       }
