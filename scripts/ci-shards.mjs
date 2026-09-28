@@ -2,7 +2,7 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// How many integration shards a CI run splits the sync-critical suite into.
+// How many integration shards one CI run splits the sync-critical suite into.
 // GitHub-hosted runs keep three. The owner's PC (CI_POOL=pc) runs several
 // runners side by side, so its count is the repository variable
 // CI_PC_SHARDS. The PC count applies only to a first attempt, the same rule
