@@ -563,9 +563,19 @@ export async function fanslyCatalogChunk(
   if (state.vaultWalkBlockedAlbumRef !== null) {
     // LEGACY BLOCK, lifted. It stopped the walk for every album "until an
     // operator looks", and nothing ever looked: one refused album froze the
-    // vault's inventory while the lane reported success. The refused album
-    // is parked on its own now (below).
-    state = { ...state, vaultWalkBlockedAlbumRef: null };
+    // vault's inventory while the lane reported success. The refused album's
+    // walk still points at the head it already asked, which the repeat guard
+    // would read as a loop; re-open it so it is asked once more and, if the
+    // refusal stands, parked on its own (below).
+    const blockedRef = state.vaultWalkBlockedAlbumRef;
+    const blocked = state.vaultWalk[blockedRef];
+    state = {
+      ...state,
+      vaultWalkBlockedAlbumRef: null,
+      vaultWalk: blocked === undefined
+        ? state.vaultWalk
+        : { ...state.vaultWalk, [blockedRef]: { ...emptyAlbumWalk(), lastCompleteWalkAt: blocked.lastCompleteWalkAt } },
+    };
   }
 
   if (albums.length === 0) {

@@ -636,27 +636,63 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     const page = await seedPage();
     const adapter = adapterStub({
       vaultPage: (params) =>
-        params.before === "0"
+        params.albumId === ref(102) && params.before === "0"
           ? { albumMedia: [{ id: ref(911), mediaId: ref(611), albumId: ref(102) }], media: [] }
           : { albumMedia: [], media: [] },
     });
+    const walkCalls = (albumRef: string) =>
+      adapter.calls.filter((call) => call.route === "vault_media" && call.params.albumId === albumRef);
     const telemetry = telemetryStub();
-    // The day's fixed steps write the cursor; then an older build's block.
+    // The day's fixed steps write the cursor; then an older build's block,
+    // with the refused album's walk left where that build stopped it: at the
+    // head it had already asked.
     await drain(page.id, adapter, telemetry);
     await testDb!.pool.query(
       `update page_sync_cursors
-          set state = jsonb_set(state, '{vaultWalkBlockedAlbumRef}', to_jsonb($2::text))
+          set state = state
+            || jsonb_build_object('vaultWalkBlockedAlbumRef', $2::text)
+            || jsonb_build_object('vaultWalk', jsonb_build_object($2::text, $3::jsonb))
         where page_id = $1 and stream = 'catalog'`,
-      [page.id, ref(101)],
+      [page.id, ref(101), JSON.stringify({
+        beforeRef: "0",
+        lastRequestedBefore: "0",
+        sawRows: false,
+        pages: 1,
+        completedAtLastItemRef: null,
+        done: false,
+        proof: {
+          walkRef: "legacy-walk",
+          startedAt: "2026-08-21T09:00:00.000Z",
+          expectedCount: 4760,
+          headRef: ref(903),
+          seenMediaRefs: [],
+          observationRefs: [1],
+          valid: true,
+        },
+      })],
     );
     expect((await cursor(page.id))?.vaultWalkBlockedAlbumRef).toBe(ref(101));
 
+    await seedAlbum(page.id, ref(101), 4760, ref(903));
     await seedAlbum(page.id, ref(102), 1, ref(904));
     const result = await drain(page.id, adapter, telemetry);
 
-    expect(adapter.calls.filter((call) => call.route === "vault_media")).toHaveLength(2);
+    expect(walkCalls(ref(102))).toHaveLength(2);
     expect(result?.stats?.vaultWalkStatus).toBe("exhausted");
     expect((await cursor(page.id))?.vaultWalkBlockedAlbumRef).toBeNull();
+    // The refused album is asked once more, not taken for a cursor loop, and
+    // a refusal that stands parks it under its own reason.
+    expect(walkCalls(ref(101))).toEqual([expect.objectContaining({
+      params: expect.objectContaining({ before: "0" }),
+    })]);
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_cursor_repeat")).toHaveLength(0);
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_empty_first_page")).toHaveLength(1);
+    const refused = (await coverageRows(page.id))
+      .find((row) => row.plane === "catalog_vault_media" && row.scope_ref === ref(101));
+    expect(refused?.reason_code).toBe("empty_first_page_on_non_empty_album");
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]).toMatchObject({ done: true });
   });
 
   it("treats an empty first page on an EMPTY album as the honest answer", async (context) => {
