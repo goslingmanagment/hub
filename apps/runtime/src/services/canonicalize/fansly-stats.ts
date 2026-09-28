@@ -1066,11 +1066,14 @@ function hasOwn(record: Record<string, unknown>, key: string) {
  * statistics facts. Keep this deliberately exact: a missing field, a non-null
  * aggregation, or any future extra key is still drift and remains unstamped
  * for a parser that understands it.
+ *
+ * ONE definition, shared with the daily month walk (`classifyStatsMonth`):
+ * the body this gate stamps as a window without facts is the body that walk
+ * reads as an empty month, and nothing wider.
  */
-function isExactTerminalNullAccountStatsPayload(
-  payload: Record<string, unknown>,
-): boolean {
-  return Object.keys(payload).length === 2
+export function isExactTerminalNullAccountStatsPayload(payload: unknown): boolean {
+  return isRecord(payload)
+    && Object.keys(payload).length === 2
     && hasOwn(payload, "dataset")
     && hasOwn(payload, "aggregationData")
     && payload.dataset === null
