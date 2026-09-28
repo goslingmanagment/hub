@@ -196,7 +196,12 @@ describe("Fansly DM per-thread breaker", () => {
     const groups: string[] = [];
     const getMessagesPage = vi.fn(async (_context: unknown, params: { groupId: string }) => {
       groups.push(params.groupId);
-      if (failingGroups.has(params.groupId)) throw providerError;
+      // Journaled as the executor's telemetry would, for the outage guard.
+      if (failingGroups.has(params.groupId)) {
+        await journalAttempt(fixture, params.groupId, { state: "failed", httpStatus: 500, failureKind: "http" });
+        throw providerError;
+      }
+      await journalAttempt(fixture, params.groupId, { state: "success" });
       const message = { id: `msg-${params.groupId}`, senderId: `fan-${params.groupId}`, content: "body",
         createdAt: Date.parse("2026-03-09T12:00:00.000Z") };
       return { items: [message], groupId: params.groupId, before: null, done: true, raw: { messages: [message] } };
@@ -220,22 +225,25 @@ describe("Fansly DM per-thread breaker", () => {
     [conversationId],
   )).rows[0] as { failure_count: number; error_class: string; next_retry_at: Date } | undefined;
 
-  it("backs off a thread whose first page fails, so the next chunk reads another thread", async () => {
+  it("backs off a thread whose first page fails and reads another thread in the same chunk", async () => {
     const fixture = await seedBreakerPage();
     const failing = new Set(["poison"]);
     const chunk = breakerChunk(fixture, failing);
 
-    await expect(chunk.run()).rejects.toBe(chunk.providerError);
+    // Before the breaker, the checkpoint pinned the poison thread for good;
+    // then the stream failed and slept on its own ladder with it.
+    const deferred = await chunk.run();
+    expect(chunk.groups).toEqual(["poison", "healthy"]);
     const row = await breakerRow(fixture.poison.id);
     expect(row).toMatchObject({ failure_count: 1, error_class: "fansly_500" });
     expect(row!.next_retry_at.getTime() - Date.now()).toBeGreaterThan(4 * 60_000);
     expect((await getCheckpoint(testDb.db, fixture.page.id, "dm_messages"))?.state).toEqual(emptyDmMessagesCursorState());
-
-    // Before the breaker, the checkpoint pinned the poison thread for good.
-    expect((await chunk.run()).satisfied).toBe(true);
-    expect(chunk.groups).toEqual(["poison", "healthy"]);
     expect(await getPageDmConversationById(testDb.db, fixture.healthy.id))
       .toMatchObject({ newestStoredMessageId: "msg-healthy", messageCoverageStatus: "complete" });
+    // The healthy read is progress; the deferred thread is all that is left,
+    // so the stream sleeps until its window ends instead of completing.
+    expect(deferred).toMatchObject({ satisfied: false, continuationRetryAt: row!.next_retry_at });
+    expect(deferred).not.toHaveProperty("deferral");
 
     // Re-admitted once its window lapses; a completed walk clears the row.
     failing.clear();
@@ -257,10 +265,13 @@ describe("Fansly DM per-thread breaker", () => {
     expect((await getCheckpoint(testDb.db, fixture.page.id, "dm_messages"))?.state)
       .toMatchObject({ currentConversationId: fixture.poison.id });
 
-    // A later good read of any thread ends the outage verdict.
+    // A later good read of any thread ends the outage verdict: each failing
+    // thread is deferred on its own, and a chunk that read nothing else
+    // claims no progress.
     await journalAttempt(fixture, "other-1", { state: "success" }, new Date(Date.now() - 10_000));
-    await expect(chunk.run()).rejects.toBe(chunk.providerError);
+    expect(await chunk.run()).toMatchObject({ satisfied: false, deferral: "fansly_dm_threads_deferred" });
     expect(await breakerRow(fixture.poison.id)).toMatchObject({ failure_count: 1 });
+    expect(await breakerRow(fixture.healthy.id)).toMatchObject({ failure_count: 1 });
   });
 
   it("counts only other groups' provider failures after the page's latest successful read", async () => {

@@ -1191,6 +1191,9 @@ export async function selectNextPageDmMessageSyncCandidate(
   input: {
     platformAccountId: number;
     includeHeadDebt?: boolean;
+    /** Skip threads still carrying breaker failures, even once their window
+     * has lapsed: the chunk has spent its one retry of such a thread. */
+    excludeFailingThreads?: boolean;
     now?: Date;
   },
 ) {
@@ -1257,6 +1260,7 @@ export async function selectNextPageDmMessageSyncCandidate(
           and (h.quarantine_until is null or h.quarantine_until <= ${nowSql})
         )
       )
+      ${input.excludeFailingThreads ? sql`and (h.conversation_id is null or h.failure_count = 0)` : sql``}
       and (
         ${staleHeadMismatchSql}
         or (c.message_coverage_status = 'pending_backfill'::dm_message_coverage_status
@@ -1316,6 +1320,8 @@ export async function selectNextPageDmMessageDeepBackfillCandidate(
     now?: Date;
     /** Stage 17: lift the depth cap so the crawl walks to platform exhaustion. */
     ignoreRetentionLimit?: boolean;
+    /** As in the ordinary picker: the chunk's one failing-thread retry is spent. */
+    excludeFailingThreads?: boolean;
   },
 ) {
   const nowSql = sql`${input.now ?? new Date()}::timestamptz`;
@@ -1372,6 +1378,7 @@ export async function selectNextPageDmMessageDeepBackfillCandidate(
             and (h.quarantine_until is null or h.quarantine_until <= ${nowSql})
           )
         )
+        ${input.excludeFailingThreads ? sql`and (h.conversation_id is null or h.failure_count = 0)` : sql``}
         and c.message_coverage_status = 'partial_window'::dm_message_coverage_status
         and c.stored_message_count > 0
         and not (
@@ -1742,13 +1749,15 @@ export async function getPageConversationPreview(
 // ─── Per-conversation DM message-sync circuit breaker (0086) ───────────────
 // One poison thread (a deterministic per-group refusal) must not wedge a
 // page's whole dm_messages stream. The Fansly dm_messages lane records a
-// failure when a walk's first page fails; failures accrue exponential backoff
-// (next_retry_at) and, from the 4th failure, a quarantine window. Candidate
-// selection skips excluded conversations, re-admission is implicit once the
-// windows lapse. Rows are operational sync state — cleared by a successful
-// read of the conversation (an ordinary walk, a B1 hint walk or a targeted
-// backfill), cascaded away with their thread. The retired OnlyFans crawler's
-// historical rows remain readable here too.
+// failure when a walk's first page fails and moves on to other threads;
+// failures accrue exponential backoff (next_retry_at) and, from the 4th
+// failure, a quarantine window. Candidate selection skips excluded
+// conversations, re-admission is implicit once the windows lapse, and the
+// stream wakes when the earliest window ends (nextConversationSyncRetryAt).
+// Rows are operational sync state — cleared by a successful read of the
+// conversation (an ordinary walk, a B1 hint walk or a targeted backfill),
+// cascaded away with their thread. The retired OnlyFans crawler's historical
+// rows remain readable here too.
 
 export const PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD = 4;
 const PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES = 5;
@@ -1902,6 +1911,32 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
     where conversation_id = ${conversationId}
       and not exists (select 1 from kept)
   `);
+}
+
+/** When the page's first breaker-deferred thread becomes selectable again: the
+ * earliest future end of a backoff or quarantine window among rows still
+ * carrying failures whose thread the lane selects (visible, bound to a fan,
+ * not excluded). Null when no such window is open. The dm_messages stream
+ * sleeps until then instead of completing while deferred threads remain. A
+ * lapsed window is never returned, so a failing row whose thread has nothing
+ * left to read cannot keep the stream awake. */
+export async function nextConversationSyncRetryAt(
+  db: Database,
+  input: { platformAccountId: number; now?: Date },
+): Promise<Date | null> {
+  const nowSql = sql`${input.now ?? new Date()}::timestamptz`;
+  const result = await db.execute<{ retryAt: TimestampValue }>(sql`
+    select min(greatest(h.next_retry_at, h.quarantine_until)) as "retryAt"
+    from page_dm_message_sync_health h
+    join page_dm_threads c on c.id = h.conversation_id
+    where h.platform_account_id = ${input.platformAccountId}
+      and h.failure_count > 0
+      and greatest(h.next_retry_at, h.quarantine_until) > ${nowSql}
+      and c.is_visible = true
+      and c.fan_id is not null
+      and ${dmMessageSyncEligibleSql("c")}
+  `);
+  return parseTimestamp(result.rows[0]?.retryAt ?? null);
 }
 
 /** Conversation-level coverage debt per account: breaker rows still carrying
