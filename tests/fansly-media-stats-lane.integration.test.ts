@@ -351,12 +351,12 @@ async function drain(
   return results;
 }
 
-/** A provider refusal as the adapter throws it after its own retries: HTTP 500
+/** A provider refusal as the adapter throws it, on its first attempt: HTTP 500
  *  and Fansly's error envelope. `error getting graph` is the 90-day window's
  *  answer since 2026-09-05; `error getting media offer` is an item that is gone. */
 function providerRefusal(details: "error getting graph" | "error getting media offer") {
   return new FanslyApiError(
-    "Fansly request failed (500)",
+    `Fansly request failed (500): ${details}`,
     500,
     500,
     JSON.stringify({ success: false, error: { code: 500, details } }),

@@ -679,8 +679,9 @@ const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 /**
  * Did the provider REFUSE the request, rather than the wire fail it?
  *
- * An HTTP error status the route itself answered with, after the adapter's own
- * retries — the 500 `error getting graph` is the production case. Not a 429 and
+ * An HTTP error status the route itself answered with — the 500 `error getting
+ * graph` is the production case, which the adapter fails on its first attempt
+ * because Fansly's error envelope makes it final on this route. Not a 429 and
  * not a `Retry-After` (pacing, which says nothing about the window), not a
  * gateway status, not a transport or proxy failure (no status at all), and not
  * a journaled body we could not read. Only a refusal can be evidence about what

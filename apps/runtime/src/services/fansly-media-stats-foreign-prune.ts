@@ -6,9 +6,10 @@
 // another account's media offer, so each such row can only ever fail. The
 // enqueue now skips them, but the rows queued before that stay, and once the
 // lane honours its failure backoff (M1) each one is a guaranteed failed look
-// per day — up to four attempts with the adapter's retries, more than the
-// daily cap on every page in production (3,626 rows on 2026-09-28). So this
-// runs, owner-approved, on the day that backoff is deployed.
+// per day, more than the daily cap on every page in production (3,626 rows on
+// 2026-09-28; up to four attempts a look while the adapter still retried the
+// route's error envelope, one since M4). So this runs, owner-approved, on the
+// day that backoff is deployed.
 //
 // Owner-run, never scheduled: dry-run is the DEFAULT and is provably read-only
 // (a READ ONLY transaction); `--execute` opts in; a re-run reports zeros. It
