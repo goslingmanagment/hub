@@ -81,9 +81,11 @@ are not refunded or reset across policy generations.
 A spent 24-hour cap is checked before any B1 request is prepared: the claimed
 subject records `budget_exhausted` and retries when enough counted attempts age
 out of the window, without a pacer slot or a consecutive_failures increment,
-and the projector does not wake an event-only DM run until then. Other refusals
-before dispatch (policy disabled or expired, type disabled) also leave
-consecutive_failures unchanged.
+and the projector does not wake an event-only DM run until then. Subjects
+deferred to the same reopening are claimed in the order they were refused
+(`last_visited_at`), so a saturated page serves its backlog first in, first
+out rather than by group id. Other refusals before dispatch (policy disabled or
+expired, type disabled) also leave consecutive_failures unchanged.
 
 A0 full scans after bounded scans must retain the prior certified completion in
 diagnostics.boundaryMs. Inspect complete/incomplete status and below-stop

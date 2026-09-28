@@ -144,6 +144,27 @@ describe("B1 durable coalescing and claim settlement", () => {
     await attempt(3, later(86401));
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts where source='event'")).rows[0].n).toBe(3);
   });
+  it("serves subjects deferred to one budget reopening in deferral order", async () => {
+    const f = await fixture();
+    const reopenAt = later(3600);
+    const deferToReopen = async (at: Date) => {
+      const claim = (await f.claim(at))!;
+      await f.tx(database => advanceFanslyWsHint(database, claim, {
+        walk: claim.walk, complete: false, outcome: "budget_exhausted", now: at, retryAt: reopenAt,
+      }));
+      return claim.groupRef;
+    };
+    // A newer conversation (higher snowflake) is refused first, an older one after it.
+    await f.route(f.event(1, "900"));
+    expect(await deferToReopen(later(1))).toBe("900");
+    await f.route({ ...f.event(2, "100"), receivedAt: later(2) });
+    expect(await deferToReopen(later(2))).toBe("100");
+    expect((await f.rows()).map(row => row.next_due_at)).toEqual([reopenAt, reopenAt]);
+
+    // Before, the tie fell to the lowest group id at every reopening.
+    expect((await f.claim(reopenAt))?.groupRef).toBe("900");
+    expect((await f.claim(reopenAt))?.groupRef).toBe("100");
+  });
   it("names the moment admission reopens with the same rolling count", async () => {
     const f = await fixture();
     for (const [n, seconds] of [[1, -90_000], [2, 0], [3, 60], [4, 120], [5, 180]] as const) {

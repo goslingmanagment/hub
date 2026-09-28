@@ -134,7 +134,10 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
           and r.routed_revision <= subject_refresh_state.requested_revision
           and r.received_at >= ${new Date(policy.activationAt)} and r.generation = ${policy.generation}
           and r.hint_type in ${[...policy.enabledTypes]})
-      order by next_due_at, subject_ref limit 1 for update skip locked
+      -- A spent budget defers every refused subject to the same reopen time.
+      -- Among ties the earliest visit goes first (FIFO by deferral), not the
+      -- lowest group id, which would starve the newest conversations.
+      order by next_due_at, last_visited_at, subject_ref limit 1 for update skip locked
     )
     update subject_refresh_state s set claim_token = ${token}::uuid,
       claimed_revision = case when c.frozen_revision_enabled
