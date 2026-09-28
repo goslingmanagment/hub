@@ -613,11 +613,21 @@ export async function findLatestMediaOfferObservation(
 
 export async function requestAiMediaAcceleratorRead(
   db: Database,
-  input: { pageId: number; groupRef: string; messageRef: string; now: Date },
+  input: {
+    pageId: number;
+    groupRef: string;
+    messageRef: string;
+    now: Date;
+    /** 'fast' when the hub's own WS frame routed it (0215). */
+    lane?: "chunk" | "fast";
+    frameReceivedAt?: Date | null;
+    generation?: string | null;
+  },
 ): Promise<boolean> {
   const inserted = await db.execute(sql`
-    insert into ai_media_accelerator_reads (page_id, group_ref, message_ref, requested_at)
-    values (${input.pageId}, ${input.groupRef}, ${input.messageRef}, ${input.now})
+    insert into ai_media_accelerator_reads (page_id, group_ref, message_ref, requested_at, lane, frame_received_at, generation)
+    values (${input.pageId}, ${input.groupRef}, ${input.messageRef}, ${input.now},
+      ${input.lane ?? "chunk"}, ${input.frameReceivedAt ?? null}, ${input.generation ?? null})
     on conflict (page_id, message_ref) do nothing
     returning id
   `);
@@ -637,7 +647,15 @@ export interface AiMediaAcceleratorClaim {
  */
 export async function claimAiMediaAcceleratorRead(
   db: Database,
-  input: { pageId: number; now: Date; perConversationGapMs: number; staleAfterMs: number },
+  input: {
+    pageId: number;
+    now: Date;
+    perConversationGapMs: number;
+    staleAfterMs: number;
+    /** Only requests at least this old (the chunk step leaves fresh ones to
+     * the fast lane while it serves the page). */
+    minAgeMs?: number;
+  },
 ): Promise<AiMediaAcceleratorClaim | null> {
   await db.execute(sql`
     update ai_media_accelerator_reads set status = 'skipped', outcome = 'stale', finished_at = ${input.now}
@@ -648,6 +666,7 @@ export async function claimAiMediaAcceleratorRead(
   const result = await db.execute<{ id: string; group_ref: string; message_ref: string }>(sql`
     select r.id::text as id, r.group_ref, r.message_ref from ai_media_accelerator_reads r
     where r.page_id = ${input.pageId} and r.status = 'pending'
+      and r.requested_at <= ${new Date(input.now.getTime() - (input.minAgeMs ?? 0))}
       and not exists (
         select 1 from ai_media_accelerator_reads a
         where a.page_id = r.page_id and a.group_ref = r.group_ref
@@ -662,38 +681,83 @@ export async function claimAiMediaAcceleratorRead(
 }
 
 /**
- * Admits one physical attempt against the agency-wide rolling 24 h cap.
- * Returns false (nothing admitted) when the cap is reached.
+ * Admits one physical attempt against the agency-wide rolling 24 h cap
+ * (shared by the chunk step and the fast lane). Compare-and-set on the
+ * pending status: two lanes that both picked the request cannot both send.
+ * Returns true only when this caller admitted it; see
+ * `admitAiMediaAcceleratorReadOutcome` for why not.
  */
 export async function admitAiMediaAcceleratorRead(
   db: Database,
   input: { id: number; requestId: string; limit24h: number; now: Date },
 ): Promise<boolean> {
-  await db.execute(sql`select pg_advisory_xact_lock(815403, 1)`);
+  return (await admitAiMediaAcceleratorReadOutcome(db, input)) === "admitted";
+}
+
+export async function admitAiMediaAcceleratorReadOutcome(
+  db: Database,
+  input: { id: number; requestId: string; limit24h: number; now: Date },
+): Promise<"admitted" | "cap" | "taken"> {
+  return db.transaction(async (tx) => {
+    const database = tx as unknown as Database;
+    await database.execute(sql`select pg_advisory_xact_lock(815403, 1)`);
+    const used = await database.execute<{ n: string }>(sql`
+      select count(*)::text as n from ai_media_accelerator_reads
+      where admitted_at is not null and admitted_at > ${new Date(input.now.getTime() - 24 * 60 * 60 * 1000)}
+    `);
+    if (Number(used.rows[0]?.n ?? 0) >= input.limit24h) {
+      return "cap" as const;
+    }
+    const admitted = await database.execute(sql`
+      update ai_media_accelerator_reads set status = 'admitted', admitted_at = ${input.now}, request_id = ${input.requestId}
+      where id = ${input.id} and status = 'pending'
+      returning id
+    `);
+    return admitted.rows.length === 1 ? "admitted" as const : "taken" as const;
+  });
+}
+
+/** Reads admitted in the rolling 24 h (both lanes). */
+export async function countAiMediaAcceleratorAdmissions24h(db: Database, now: Date): Promise<number> {
   const used = await db.execute<{ n: string }>(sql`
     select count(*)::text as n from ai_media_accelerator_reads
-    where admitted_at is not null and admitted_at > ${new Date(input.now.getTime() - 24 * 60 * 60 * 1000)}
+    where admitted_at is not null and admitted_at > ${new Date(now.getTime() - 24 * 60 * 60 * 1000)}
   `);
-  if (Number(used.rows[0]?.n ?? 0) >= input.limit24h) {
-    return false;
-  }
-  await db.execute(sql`
-    update ai_media_accelerator_reads set status = 'admitted', admitted_at = ${input.now}, request_id = ${input.requestId}
-    where id = ${input.id}
-  `);
-  return true;
+  return Number(used.rows[0]?.n ?? 0);
 }
 
 /** Closes a read; a completed read also settles every other pending request
- * of the same conversation it covered. */
+ * of the same conversation it covered — only the messages the response
+ * really carried when `coveredMessageRefs` is given. */
 export async function finishAiMediaAcceleratorRead(
   db: Database,
-  input: { id: number; pageId: number; groupRef: string; status: "done" | "skipped" | "failed"; outcome: string; now: Date; startedAt: Date },
+  input: {
+    id: number;
+    pageId: number;
+    groupRef: string;
+    status: "done" | "skipped" | "failed";
+    outcome: string;
+    now: Date;
+    startedAt: Date;
+    httpStatus?: number | null;
+    coveredMessageRefs?: readonly string[];
+  },
 ): Promise<void> {
   await db.execute(sql`
-    update ai_media_accelerator_reads set status = ${input.status}, outcome = ${input.outcome}, finished_at = ${input.now}
+    update ai_media_accelerator_reads set status = ${input.status}, outcome = ${input.outcome}, finished_at = ${input.now},
+      http_status = coalesce(${input.httpStatus ?? null}, http_status)
     where id = ${input.id}
   `);
+  if (input.status === "done" && input.coveredMessageRefs) {
+    if (input.coveredMessageRefs.length > 0) {
+      const refs = sql.join(input.coveredMessageRefs.map((ref) => sql`${ref}`), sql`, `);
+      await db.execute(sql`
+        update ai_media_accelerator_reads set status = 'done', outcome = 'covered', finished_at = ${input.now}
+        where page_id = ${input.pageId} and status = 'pending' and message_ref in (${refs})
+      `);
+    }
+    return;
+  }
   if (input.status === "done") {
     await db.execute(sql`
       update ai_media_accelerator_reads set status = 'done', outcome = 'covered', finished_at = ${input.now}
@@ -701,4 +765,141 @@ export async function finishAiMediaAcceleratorRead(
         and requested_at <= ${input.startedAt}
     `);
   }
+}
+
+// ── Fansly fast lane (0215) ──────────────────────────────────────────────────
+
+/** The oldest pending read request of the page, any lane (the fast lane runs
+ * right after the frame; stale requests are closed on the way). Not durable:
+ * the admission's compare-and-set decides who sends. */
+export async function peekAiMediaFastLaneRead(
+  db: Database,
+  input: { pageId: number; now: Date; staleAfterMs: number },
+): Promise<(AiMediaAcceleratorClaim & { generation: string | null; frameReceivedAt: Date | null }) | null> {
+  await db.execute(sql`
+    update ai_media_accelerator_reads set status = 'skipped', outcome = 'stale', finished_at = ${input.now}
+    where page_id = ${input.pageId} and status = 'pending'
+      and requested_at < ${new Date(input.now.getTime() - input.staleAfterMs)}
+  `);
+  const result = await db.execute<{ id: string; group_ref: string; message_ref: string; generation: string | null; frame_received_at: Date | string | null }>(sql`
+    select id::text as id, group_ref, message_ref, generation, frame_received_at from ai_media_accelerator_reads
+    where page_id = ${input.pageId} and status = 'pending'
+    order by requested_at asc, id asc
+    limit 1
+  `);
+  const row = result.rows[0];
+  return row
+    ? {
+      id: Number(row.id),
+      groupRef: row.group_ref,
+      messageRef: row.message_ref,
+      generation: row.generation,
+      frameReceivedAt: toDate(row.frame_received_at),
+    }
+    : null;
+}
+
+/** The physical HTTP start of an admitted read (after the pacing wait). */
+export async function markAiMediaAcceleratorReadDispatched(db: Database, input: { id: number; now: Date }) {
+  await db.execute(sql`update ai_media_accelerator_reads set dispatched_at = ${input.now} where id = ${input.id}`);
+}
+
+/** Whether a Fansly sync request of these pages started and has not finished
+ * (the fast lane never starts a request while one is in flight on its egress). */
+export async function hasUnfinishedFanslySyncAttempt(
+  db: Database,
+  input: { pageIds: readonly number[]; since: Date },
+): Promise<boolean> {
+  if (input.pageIds.length === 0) {
+    return false;
+  }
+  const pageIds = sql.join(input.pageIds.map((id) => sql`${id}`), sql`, `);
+  const result = await db.execute<{ busy: boolean }>(sql`
+    select exists (
+      select 1 from sync_http_attempts
+      where provider = 'fansly' and state = 'started' and finished_at is null
+        and started_at >= ${input.since} and page_id in (${pageIds})
+    ) as busy
+  `);
+  return result.rows[0]?.busy === true;
+}
+
+/** Whether ordinary sync would hold off this page now: any stream cooling
+ * down after a 429/5xx, or the DM stream paused or blocked. */
+export async function getFanslyFastLanePageSyncGate(
+  db: Database,
+  input: { pageId: number; now: Date },
+): Promise<{ cooldown: boolean; held: boolean }> {
+  const result = await db.execute<{ cooldown: boolean; held: boolean }>(sql`
+    select
+      exists (
+        select 1 from page_sync_states
+        where page_id = ${input.pageId} and retry_kind in ('rate_limit', 'provider_5xx')
+          and retry_at is not null and retry_at > ${input.now}
+      ) as cooldown,
+      exists (
+        select 1 from page_sync_states
+        where page_id = ${input.pageId} and stream = 'dm_messages'
+          and (status in ('paused', 'blocked') or blocker_kind is not null)
+      ) as held
+  `);
+  const row = result.rows[0];
+  return { cooldown: row?.cooldown === true, held: row?.held === true };
+}
+
+export interface AiMediaFastLaneHealthRow {
+  pageId: number;
+  unavailableSince: Date | null;
+  reason: string | null;
+  cooldownUntil: Date | null;
+}
+
+export async function listAiMediaFastLaneHealth(db: Database): Promise<AiMediaFastLaneHealthRow[]> {
+  const result = await db.execute(sql`
+    select page_id, unavailable_since, reason, cooldown_until from ai_media_fast_lane_health
+  `);
+  return result.rows.map((raw) => {
+    const row = raw as Record<string, unknown>;
+    return {
+      pageId: Number(row.page_id),
+      unavailableSince: toDate(row.unavailable_since),
+      reason: (row.reason as string | null) ?? null,
+      cooldownUntil: toDate(row.cooldown_until),
+    };
+  });
+}
+
+/** Records whether the lane can work on the page; the first unavailable
+ * moment is kept until it recovers (the > 10 min incident clock). */
+export async function setAiMediaFastLaneHealth(
+  db: Database,
+  input: { pageId: number; available: boolean; reason: string | null; now: Date },
+): Promise<void> {
+  await db.execute(sql`
+    insert into ai_media_fast_lane_health (page_id, unavailable_since, reason, updated_at)
+    values (${input.pageId}, ${input.available ? null : input.now}, ${input.reason}, ${input.now})
+    on conflict (page_id) do update set
+      unavailable_since = case
+        when ${input.available} then null
+        else coalesce(ai_media_fast_lane_health.unavailable_since, excluded.unavailable_since)
+      end,
+      reason = excluded.reason,
+      updated_at = excluded.updated_at
+  `);
+}
+
+/** A provider answer (429/5xx/401/403) pauses the lane for the page; it
+ * survives restarts. */
+export async function setAiMediaFastLaneCooldown(
+  db: Database,
+  input: { pageId: number; until: Date; reason: string; now: Date },
+): Promise<void> {
+  await db.execute(sql`
+    insert into ai_media_fast_lane_health (page_id, cooldown_until, reason, updated_at)
+    values (${input.pageId}, ${input.until}, ${input.reason}, ${input.now})
+    on conflict (page_id) do update set
+      cooldown_until = greatest(coalesce(ai_media_fast_lane_health.cooldown_until, excluded.cooldown_until), excluded.cooldown_until),
+      reason = excluded.reason,
+      updated_at = excluded.updated_at
+  `);
 }

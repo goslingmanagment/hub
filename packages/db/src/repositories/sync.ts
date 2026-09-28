@@ -2774,6 +2774,10 @@ export async function reserveSyncProviderRateLimit(
       egressKey: string;
     }>;
     now?: Date;
+    /** Keep every reserved scope closed at least this long after the slot:
+     * a caller whose request may run longer than the spacing holds the
+     * egress for its whole timeout, so no later reservation overlaps it. */
+    holdMs?: number;
   },
 ) {
   const now = input.now ?? new Date();
@@ -2837,7 +2841,7 @@ export async function reserveSyncProviderRateLimit(
       row.nextAvailableAt > current ? row.nextAvailableAt : current, now);
 
     for (const row of lockedRows) {
-      const nextAvailableAt = new Date(scheduledAt.getTime() + row.minSpacingMs);
+      const nextAvailableAt = new Date(scheduledAt.getTime() + Math.max(row.minSpacingMs, input.holdMs ?? 0));
       await database.execute(sql`
         update sync_rate_limits
         set next_available_at = ${nextAvailableAt},

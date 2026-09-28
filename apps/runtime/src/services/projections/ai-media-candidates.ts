@@ -16,6 +16,7 @@ import {
   aiMediaNotesPolicyForPage,
   isAfterAiMediaDescribeBoundary,
   isAiMediaDescribeWindowOpen,
+  type AiMediaDescribePagePolicy,
 } from "../ai-media-describe/policy.ts";
 import { FANSLY_WS_SIGNAL_EVENT } from "../canonicalize/fansly-ws.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
@@ -75,6 +76,89 @@ async function headSeq(app: ProjectorApp, accountId: number): Promise<number> {
     select max(account_seq)::text as seq from domain_events where account_id = ${accountId}
   `);
   return Number(result.rows[0]?.seq ?? 0);
+}
+
+export interface AiMediaAttachmentsEvent {
+  data: unknown;
+  observationId: number;
+  occurredAt: Date;
+  messageRef: string | null;
+  conversationRef: string | null;
+}
+
+/**
+ * One canonical `message.attachments_observed` event → fan media candidates
+ * (idempotent upsert). Shared by the minutely projector and the Fansly fast
+ * lane, which applies the events of its own fresh read at once; the
+ * projector replays the same events later without effect. 'deferred' means a
+ * running erasure holds the fence: stop and try again later.
+ */
+export async function applyAiMediaAttachmentsEvent(
+  app: ProjectorApp,
+  input: {
+    pageId: number;
+    ownRef: string;
+    policy: AiMediaDescribePagePolicy;
+    liveChatOnly: boolean;
+    event: AiMediaAttachmentsEvent;
+  },
+): Promise<{ status: "applied" | "deferred"; candidates: number; pendingIds: number[] }> {
+  const data = asRecord(input.event.data) ?? {};
+  const result = { status: "applied" as "applied" | "deferred", candidates: 0, pendingIds: [] as number[] };
+  const messageRef = asText(data.messageId) ?? input.event.messageRef;
+  const groupRef = asText(data.conversationRef) ?? input.event.conversationRef;
+  const senderRef = asText(data.senderRef);
+  const createdAtRaw = asText(data.messageCreatedAt);
+  const messageAt = createdAtRaw ? new Date(createdAtRaw) : null;
+  if (
+    !messageRef || !groupRef || !senderRef || senderRef === input.ownRef
+    || !isAfterAiMediaDescribeBoundary(input.policy, messageAt)
+  ) {
+    return result;
+  }
+  const attachments = Array.isArray(data.attachments) ? data.attachments.map(asRecord).filter((row) => row !== null) : [];
+  if (attachments.length === 0) return result;
+  const live = !input.liveChatOnly || await hasRecentAiGenerationInConversation(app.db, {
+    pageId: input.pageId,
+    conversationRefs: [groupRef, senderRef],
+    since: new Date(Date.now() - LIVE_CHAT_WINDOW_MS),
+  });
+  for (const attachment of attachments) {
+    const contentType = Number(attachment.contentType);
+    const bundleRef = asText(attachment.bundleRef);
+    const mediaRef = contentType === 2 ? bundleRef ?? asText(attachment.contentRef)
+      : contentType === 1 ? asText(attachment.mediaOfferRef) ?? asText(attachment.contentRef) : null;
+    if (!mediaRef) continue;
+    const kind = contentType === 2 ? "bundle" : mediaKindFromMime(asText(attachment.mimeType));
+    if (!kind) continue;
+    const upserted = await upsertAiMediaDescriptionCandidate(app.db, {
+      pageId: input.pageId,
+      platform: "fansly",
+      mediaRef,
+      variant: kind === "photo" || kind === "bundle" ? "full" : "poster",
+      mediaKind: kind,
+      senderRole: "fan",
+      fanPlatformUserId: senderRef,
+      status: live ? "pending" : "dormant",
+      sourceObservationId: input.event.observationId,
+      link: {
+        messageRef,
+        conversationRef: groupRef,
+        fanPlatformUserId: senderRef,
+        senderRole: "fan",
+        messageAt,
+      },
+      observedAt: input.event.occurredAt,
+    });
+    if (upserted.status === "deferred") {
+      return { ...result, status: "deferred" };
+    }
+    if (upserted.status === "applied") {
+      result.candidates += 1;
+      if (upserted.descriptionStatus === "pending") result.pendingIds.push(upserted.descriptionId);
+    }
+  }
+  return result;
 }
 
 export interface AiMediaCandidatesResult extends Record<string, unknown> {
@@ -144,58 +228,25 @@ export async function runAiMediaCandidatesProjection(
           continue;
         }
         if (event.type !== ATTACHMENTS_EVENT || !event.observationId) continue;
-        const messageRef = asText(data.messageId) ?? event.messageRef;
-        const groupRef = asText(data.conversationRef) ?? event.conversationRef;
-        const senderRef = asText(data.senderRef);
-        const createdAtRaw = asText(data.messageCreatedAt);
-        const messageAt = createdAtRaw ? new Date(createdAtRaw) : null;
-        if (
-          !messageRef || !groupRef || !senderRef || senderRef === page.own_ref
-          || !isAfterAiMediaDescribeBoundary(policy, messageAt)
-        ) {
-          continue;
-        }
-        const attachments = Array.isArray(data.attachments) ? data.attachments.map(asRecord).filter((row) => row !== null) : [];
-        if (attachments.length === 0) continue;
-        const live = !liveChatOnly || await hasRecentAiGenerationInConversation(app.db, {
+        const applied = await applyAiMediaAttachmentsEvent(app, {
           pageId: accountId,
-          conversationRefs: [groupRef, senderRef],
-          since: new Date(Date.now() - LIVE_CHAT_WINDOW_MS),
+          ownRef: page.own_ref,
+          policy,
+          liveChatOnly,
+          event: {
+            data: event.data,
+            observationId: event.observationId,
+            occurredAt: event.occurredAt,
+            messageRef: event.messageRef,
+            conversationRef: event.conversationRef,
+          },
         });
-        for (const attachment of attachments) {
-          const contentType = Number(attachment.contentType);
-          const bundleRef = asText(attachment.bundleRef);
-          const mediaRef = contentType === 2 ? bundleRef ?? asText(attachment.contentRef)
-            : contentType === 1 ? asText(attachment.mediaOfferRef) ?? asText(attachment.contentRef) : null;
-          if (!mediaRef) continue;
-          const kind = contentType === 2 ? "bundle" : mediaKindFromMime(asText(attachment.mimeType));
-          if (!kind) continue;
-          const result = await upsertAiMediaDescriptionCandidate(app.db, {
-            pageId: accountId,
-            platform: "fansly",
-            mediaRef,
-            variant: kind === "photo" || kind === "bundle" ? "full" : "poster",
-            mediaKind: kind,
-            senderRole: "fan",
-            fanPlatformUserId: senderRef,
-            status: live ? "pending" : "dormant",
-            sourceObservationId: event.observationId,
-            link: {
-              messageRef,
-              conversationRef: groupRef,
-              fanPlatformUserId: senderRef,
-              senderRole: "fan",
-              messageAt,
-            },
-            observedAt: event.occurredAt,
-          });
-          if (result.status === "deferred") {
-            // A running erasure holds the fence: stop before this event and
-            // resume from it on the next tick.
-            return totals;
-          }
-          if (result.status === "applied") totals.candidates += 1;
+        if (applied.status === "deferred") {
+          // A running erasure holds the fence: stop before this event and
+          // resume from it on the next tick.
+          return totals;
         }
+        totals.candidates += applied.candidates;
       }
       watermark = events[events.length - 1]!.accountSeq;
       await setProjectionWatermark(app.db, AI_MEDIA_CANDIDATES_PROJECTION, accountId, watermark);

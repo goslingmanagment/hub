@@ -3957,6 +3957,11 @@ export const aiMediaAcceleratorReads = pgTable(
     requestId: text("request_id"),
     admittedAt: timestamp("admitted_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    lane: text("lane").$type<"chunk" | "fast">().default("chunk").notNull(),
+    frameReceivedAt: timestamp("frame_received_at", { withTimezone: true }),
+    generation: text("generation"),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    httpStatus: integer("http_status"),
   },
   (table) => ({
     messageUniq: unique("ai_media_accelerator_reads_message_uniq").on(table.pageId, table.messageRef),
@@ -3969,6 +3974,16 @@ export const aiMediaAcceleratorReads = pgTable(
     groupIdx: index("ai_media_accelerator_reads_group_idx").on(table.pageId, table.groupRef, table.admittedAt),
   }),
 );
+
+export const aiMediaFastLaneHealth = pgTable("ai_media_fast_lane_health", {
+  pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
+    onDelete: "cascade",
+  }),
+  unavailableSince: timestamp("unavailable_since", { withTimezone: true }),
+  reason: text("reason"),
+  cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const aiAcceptanceEvents = pgTable(
   "ai_acceptance_events",

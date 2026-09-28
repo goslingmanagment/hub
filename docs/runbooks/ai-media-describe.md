@@ -86,6 +86,60 @@ candidate, or a `dormant` one promoted), and only for messages after the page's
 - `fan-summary` (full and short) never gets notes (`usesImageNotes: false`
   in `feature-policies.ts`): its recap becomes the fan dossier.
 
+## Fansly fast lane
+
+Without it, a fresh fan photo waits for four minute ticks (canonicalizer,
+projector, DM chunk, sweep): 2.5–5 minutes, ~28 minutes in a brand-new chat.
+The fast lane (`services/ai-media-describe/fansly-fast-lane.ts`,
+`AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE`) starts from the hub's own B0 frame:
+
+1. After the frame's capture commits (never inside the serial writer), the
+   frame is scanned for `message_created` from a fan with a media offer or a
+   bundle (`contentType` 1/2; tips never). One row per message goes to
+   `ai_media_accelerator_reads` (`lane = 'fast'`, the frame's generation).
+2. Per page, one at a time, after ~1 s of coalescing: gates without a request
+   — lane cooldown, any stream of the page cooling down after 429/5xx, the DM
+   stream paused or blocked, the frame's credential/proxy generation still
+   current, the shared rolling 24 h cap (`..._ACCELERATOR_DAILY_LIMIT`).
+3. The read `/message?groupId&limit=25` (new chats too — addressed by the
+   frame's groupId, no roster row needed) reserves its slot in the egress's
+   shared pacing queue and **holds it for its whole 5 s timeout**, so no later
+   request of that egress starts beside it. Right before dispatch it checks
+   that no sync request of the egress is unfinished (`sync_http_attempts`),
+   retries that check twice 2 s apart, then admits itself (compare-and-set on
+   the request, one attempt). `dispatched_at` records the real start.
+4. The response is journaled (raw + observation only), the canonicalizer's
+   own parser runs over it, and `applyAiMediaAttachmentsEvent` (the
+   projector's code) makes the fan's files due. The describe loop takes them
+   within a second. Only requests whose messages the response carried are
+   closed as `covered`.
+5. 429 pauses the lane on every page of the egress for max(Retry-After,
+   15 min); 5xx 5 min; 401/403 30 min; transport errors 1 min
+   (`ai_media_fast_lane_health.cooldown_until`). The ordinary sync keeps its
+   own handling.
+
+`shadow` routes and counts (`outcome = 'shadow_ready'` or `shadow_<gate>`)
+without a request. While the lane serves a page, the in-chunk accelerator only
+picks up requests older than 60 s. Health is checked every minute; one
+agency-wide incident (`ai_provider_failed` / `media_describe_fast_lane`)
+opens when a serving page was unavailable for over 10 minutes (socket down,
+cap spent, cooldown) and resolves itself.
+
+```sql
+-- fast lane reads and their outcomes, last 24 h
+select lane, status, outcome, http_status, count(*),
+  percentile_cont(0.5) within group (order by extract(epoch from dispatched_at - frame_received_at)) wait_p50_s
+from ai_media_accelerator_reads where requested_at > now() - interval '24 hours'
+group by 1, 2, 3, 4 order by 5 desc;
+
+-- a fast lane read overlapping a sync request of the same page (must be 0)
+select count(*) from ai_media_accelerator_reads r join sync_http_attempts a
+  on a.page_id = r.page_id and a.provider = 'fansly'
+ and a.started_at < coalesce(r.finished_at, r.dispatched_at + interval '5 seconds')
+ and coalesce(a.finished_at, a.started_at + interval '30 seconds') > r.dispatched_at
+where r.lane = 'fast' and r.dispatched_at > now() - interval '24 hours';
+```
+
 ## Switches (console → Settings, all live)
 
 | Key | Default | Meaning |
@@ -98,6 +152,9 @@ candidate, or a `dormant` one promoted), and only for messages after the page's
 | `AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY` | on | fan media described on arrival only in chats with an AI generation in 7 days |
 | `AI_MEDIA_DESCRIBE_MODEL_MEDIA` | `teasers` | creator media: `teasers` or `teasers+free` |
 | `AI_MEDIA_DESCRIBE_LOOP_ENABLED` | off | describe due rows within seconds (1 s loop) instead of per minute; re-read every 15 s |
+| `AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE` | `off` | `shadow` routes and counts; `serve` reads a fan's fresh media conversation at once |
+| `AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES` | empty | comma-separated page labels, or `*` |
+| `AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT` | 60 | reads per rolling 24 h, shared by the fast lane and the in-chunk accelerator |
 | `ANTHROPIC_MEDIA_API_KEY` | unset | optional separate key/workspace (env, restart) |
 
 `since` is the enable boundary: only messages strictly newer are described; a

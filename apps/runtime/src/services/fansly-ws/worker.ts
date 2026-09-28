@@ -11,6 +11,18 @@ import { readFanslyPageGeneration, readProbeGeneration, readProbeSnapshot } from
 import { openFanslyReceiverSocket } from "../egress/fansly-receiver-socket.ts";
 import { receiveFanslyConnection, type FanslyWsStopReason } from "./connection.ts";
 
+/** Told about every committed frame, after the commit and outside the serial
+ * writer; it must never block or fail the capture (the AI media fast lane). */
+export type FanslyWsCapturedListener = (input: {
+  pageId: number;
+  label: string;
+  generation: string;
+  ownRef: string;
+  observationId: number;
+  frame: string;
+  receivedAt: Date;
+}) => void;
+
 export function fanslyWsPages(config: Pick<AppContext["config"], "fanslyWsCaptureEnabled" | "fanslyWsCapturePageAllowlist">) {
   if (config.fanslyWsCaptureEnabled !== true) return new Set<string>();
   return new Set((config.fanslyWsCapturePageAllowlist ?? "").split(",")
@@ -19,7 +31,7 @@ export function fanslyWsPages(config: Pick<AppContext["config"], "fanslyWsCaptur
 
 /** Worker-local supervisor. The only cross-process authority is each page's
  * dedicated PostgreSQL session. Live config is read at most every ten seconds. */
-export function startFanslyWsWorker(app: AppContext) {
+export function startFanslyWsWorker(app: AppContext, options: { onCaptured?: FanslyWsCapturedListener } = {}) {
   const pages = new Map<string, { controller: AbortController; done: Promise<void> }>();
   let stopped = false;
   let polling = false;
@@ -39,7 +51,7 @@ export function startFanslyWsWorker(app: AppContext) {
       for (const label of desired) {
         if (pages.has(label)) continue;
         const controller = new AbortController();
-        const done = runPage(app, label, controller.signal).catch(() => {
+        const done = runPage(app, label, controller.signal, options.onCaptured).catch(() => {
           app.logger.warn({ pageLabel: label }, "Fansly B0 stopped; inspect connection receipts");
         }).finally(() => pages.delete(label));
         pages.set(label, { controller, done });
@@ -60,7 +72,7 @@ export function startFanslyWsWorker(app: AppContext) {
   };
 }
 
-async function runPage(app: AppContext, label: string, signal: AbortSignal) {
+async function runPage(app: AppContext, label: string, signal: AbortSignal, onCaptured?: FanslyWsCapturedListener) {
   let failures = 0;
   let previousGeneration: string | null = null;
   while (!signal.aborted) {
@@ -113,10 +125,18 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
       reason = await receiveFanslyConnection({
         open: () => openFanslyReceiverSocket(egress), token, signal: controller.signal,
         onStable: () => { failures = 0; },
-        capture: (frame, ordinal, receivedAt) => serial(() => captureFanslyWsFrame(owned.db, {
-          connectionId: id, pageId, generation, accountRef: expectedAccountId,
-          frame, ordinal, receivedAt, validate,
-        })),
+        capture: async (frame, ordinal, receivedAt) => {
+          const observationId = await serial(() => captureFanslyWsFrame(owned.db, {
+            connectionId: id, pageId, generation, accountRef: expectedAccountId,
+            frame, ordinal, receivedAt, validate,
+          }));
+          if (onCaptured) {
+            try {
+              onCaptured({ pageId, label, generation, ownRef: expectedAccountId, observationId, frame, receivedAt });
+            } catch { /* A listener never costs the journal a frame. */ }
+          }
+          return observationId;
+        },
         settle: (observationId, nodes) => serial(() => settleFanslyWsDecode(owned.db, observationId, nodes)),
         guard: (verified) => serial(async () => {
           await validate(owned.db);

@@ -198,9 +198,11 @@ describe("LIVE_CONFIG_KEYS", () => {
       // H3: the Fansly freshness accelerator switch and its budget.
       "aiMediaDescribeFanslyAcceleratorEnabled",
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
+      "aiMediaDescribeFanslyFastLaneMode",
+      "aiMediaDescribeFanslyFastLanePages",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
-    expect(LIVE_CONFIG_KEYS.size).toBe(93);
+    expect(LIVE_CONFIG_KEYS.size).toBe(95);
   });
 });

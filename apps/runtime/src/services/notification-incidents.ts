@@ -26,6 +26,8 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
+/** The Fansly fast lane was unavailable on a describer page for > 10 min. */
+export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
 
 type IncidentApp = Pick<AppContext, "db"> & {
   logger: Pick<AppContext["logger"], "warn">;
@@ -88,6 +90,9 @@ function openTitleForIncident(
   }
   if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
     return "🚨 AI image describer stopped: provider rejected the key (401/403)";
+  }
+  if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+    return "⚠️ Fansly image fast lane unavailable for over 10 minutes";
   }
   switch (input.kind) {
     case "auth_blocked":
@@ -248,6 +253,9 @@ function resolveDetailForIncident(
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
         return "AI image describer re-enabled by the owner";
+      }
+      if (input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+        return "Fansly image fast lane available again";
       }
       return "AI provider generation recovered";
     case "capture_payload_parity":
