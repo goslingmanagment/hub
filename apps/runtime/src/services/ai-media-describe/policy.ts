@@ -83,3 +83,35 @@ export function isAiMediaDescribeWindowOpen(policy: AiMediaDescribePagePolicy, n
 export function isAfterAiMediaDescribeBoundary(policy: AiMediaDescribePagePolicy, messageAt: Date | null) {
   return messageAt !== null && messageAt.getTime() > policy.since.getTime();
 }
+
+export type FanslyFastLaneMode = "off" | "shadow" | "serve";
+
+export interface FanslyFastLaneSwitches extends AiMediaDescribeSwitches {
+  aiMediaDescribeFanslyFastLaneMode?: string;
+  aiMediaDescribeFanslyFastLanePages?: string;
+  fanslyWsCaptureEnabled?: boolean;
+  fanslyWsCapturePageAllowlist?: string;
+}
+
+/** The fast lane's mode for a page: off unless the page is on the allowlist
+ * (comma-separated exact labels, or `*` for every describer page), the page
+ * may show notes at all and the hub's own socket captures it (the lane's only
+ * signal). */
+export function fanslyFastLaneModeForPage(config: FanslyFastLaneSwitches, pageLabel: string): FanslyFastLaneMode {
+  const mode = config.aiMediaDescribeFanslyFastLaneMode;
+  if ((mode !== "shadow" && mode !== "serve") || aiMediaNotesPolicyForPage(config, pageLabel) === null) {
+    return "off";
+  }
+  const captured = config.fanslyWsCaptureEnabled === true && (config.fanslyWsCapturePageAllowlist ?? "")
+    .split(",").map((label) => label.trim()).includes(pageLabel);
+  if (!captured) {
+    return "off";
+  }
+  const pages = (config.aiMediaDescribeFanslyFastLanePages ?? "")
+    .split(",").map((label) => label.trim()).filter((label) => label.length > 0);
+  return pages.includes("*") || pages.includes(pageLabel) ? mode : "off";
+}
+
+export function isFanslyFastLaneServing(config: FanslyFastLaneSwitches, pageLabel: string) {
+  return fanslyFastLaneModeForPage(config, pageLabel) === "serve";
+}

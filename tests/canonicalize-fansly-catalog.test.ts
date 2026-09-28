@@ -159,7 +159,7 @@ describe("fansly-catalog: vaults", () => {
     expect(albums).toHaveLength(6);
     for (const album of albums) {
       expect(album.data.vaultKind).toBe("creator");
-      expect(album.dedupKey).toMatch(/^album:v1:7:creator:0009\d{14}:[0-9a-f]{64}$/u);
+      expect(album.dedupKey).toMatch(/^album:v2:7:creator:0009\d{14}:[0-9a-f]{64}:obs:1$/u);
     }
   });
 
@@ -415,6 +415,75 @@ describe("fansly-catalog: subscription tiers (FEAT-002)", () => {
     const after = ofType(drafts("subscription_tiers", payload), "subscription.tier_plan_observed")
       .find((draft) => draft.data.planRef === "000900000000000401")?.dedupKey;
     expect(after).not.toBe(before);
+  });
+});
+
+describe("fansly-catalog: row events per LOOK (J12)", () => {
+  /** Every row kind with its own head, and the listing that serves it. */
+  const ROW_KINDS = [
+    { kind: "vault_albums", fixture: "vault-albums", types: ["vault.album_observed"] },
+    {
+      kind: "subscription_tiers",
+      fixture: "subscription-tiers",
+      types: ["subscription.tier_observed", "subscription.tier_plan_observed"],
+    },
+    { kind: "gift_codes", fixture: "gift-codes", types: ["promo.gift_code_observed"] },
+    {
+      kind: "automated_messages",
+      fixture: "automated-messages",
+      types: ["automation.definition_observed"],
+    },
+    { kind: "account_walls", fixture: "account-walls", types: ["page.wall_observed"] },
+  ] as const;
+
+  function rowKeys(kind: string, payload: unknown, types: readonly string[], id: number): string[] {
+    return canonicalizeFanslyCatalogObservation(
+      { ...observation(kind, payload), id },
+      { nativeAccountRefByAccountId: new Map() },
+    ).filter((draft) => types.includes(draft.type)).map((draft) => draft.dedupKey);
+  }
+
+  it("replays one observation to the same keys, and gives a later look new ones", () => {
+    for (const row of ROW_KINDS) {
+      const payload = fixture(row.fixture);
+      const first = rowKeys(row.kind, payload, row.types, 1);
+      expect(first.length, row.kind).toBeGreaterThan(0);
+      for (const key of first) {
+        expect(key, row.kind).toMatch(/:v2:.*:[0-9a-f]{64}:obs:1$/u);
+      }
+      // Replay stays a no-op: the same observation mints the same keys.
+      expect(rowKeys(row.kind, payload, row.types, 1), row.kind).toEqual(first);
+      // Unchanged content at a later look is a new event: it advances the
+      // head's last_observed_at instead of vanishing into the first key.
+      const later = rowKeys(row.kind, payload, row.types, 2);
+      for (const [index, key] of later.entries()) {
+        expect(key, row.kind).not.toBe(first[index]);
+      }
+    }
+  });
+
+  it("keeps a row that goes A→B→A: the third look is a new key, not A's old one", () => {
+    // A promo added to a plan and then removed again. Keyed on the hash
+    // alone, the third look hashed to the first look's key and was dropped,
+    // so the head kept the promo that was gone.
+    type Tiers = { rows: { plans: { promos: unknown[] }[] }[] };
+    const withoutPromo = fixture("subscription-tiers") as Tiers;
+    const promo = (fixture("subscription-tiers") as Tiers).rows[0]!.plans[0]!.promos;
+    withoutPromo.rows[0]!.plans[0]!.promos = [];
+    const withPromo = fixture("subscription-tiers") as Tiers;
+    expect(withPromo.rows[0]!.plans[0]!.promos).toEqual(promo);
+    const planKey = (payload: unknown, id: number) => canonicalizeFanslyCatalogObservation(
+      { ...observation("subscription_tiers", payload), id },
+      { nativeAccountRefByAccountId: new Map() },
+    ).find((draft) => draft.type === "subscription.tier_plan_observed"
+      && draft.data.planRef === "000900000000000401")!;
+
+    const a = planKey(withoutPromo, 1);
+    const b = planKey(withPromo, 2);
+    const again = planKey(withoutPromo, 3);
+    expect(b.data.contentHash).not.toBe(a.data.contentHash);
+    expect(again.data.contentHash).toBe(a.data.contentHash);
+    expect(new Set([a.dedupKey, b.dedupKey, again.dedupKey]).size).toBe(3);
   });
 });
 

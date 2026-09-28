@@ -7,7 +7,6 @@ import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTy
 import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
-  deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -59,6 +58,8 @@ import {
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
 } from "./services/ai-media-describe/sweep.ts";
+import { createFanslyFastLane } from "./services/ai-media-describe/fansly-fast-lane.ts";
+import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
@@ -327,7 +328,10 @@ export async function startWorkerServices(
       }
     };
 
-    const rawPayloads = await timed("rawPayloads", () => deleteExpiredRawPayloads(app.db, now));
+    // Raw payloads are captured facts and are never deleted on a schedule: this
+    // job keeps its historical queue name but no longer touches
+    // sync_raw_payloads. Only the owner-initiated erasure removes them.
+
     // Pending device credentials are deliberately short-lived custody, not an
     // audit fact. Reuse the already-scheduled nightly retention job so crashed
     // Desktop reservations cannot accumulate forever.
@@ -343,7 +347,6 @@ export async function startWorkerServices(
     const summary = {
       ...timings,
       totalMs: Object.values(timings).reduce((sum, value) => sum + value, 0),
-      rawPayloadsDeleted: rawPayloads.rowCount ?? 0,
       syncObservability: {
         cutoff: observability.cutoff.toISOString(),
         deletedAttempts: observability.deletedAttempts,
@@ -451,7 +454,9 @@ export async function startWorkerServices(
     // neither this file nor the CLI is a table that silently stops filling.
     // Each entry stays isolated in its own try/catch inside runProjectionTick:
     // every projection owns its watermark, so a poison fact in one must stay
-    // retryable without starving the neighbours sharing this pg-boss tick.
+    // retryable without starving the neighbours sharing this pg-boss tick. A
+    // failed run is retried account by account, so one page's poison fact
+    // does not park the other pages of the same projection either.
     const startedAt = Date.now();
     const tick = await runProjectionTick(app, {
       // Defect 2026-08-22: isolation is not fairness. A full pass over the
@@ -548,7 +553,14 @@ export async function startWorkerServices(
 
   // Stage 21: the v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
-  const fanslyWs = startFanslyWsWorker(app);
+  // Describe within seconds (AI_MEDIA_DESCRIBE_LOOP_ENABLED); shares the
+  // minutely job's slot, so still one image at a time from this process.
+  const aiMediaDescribeLoop = startAiMediaDescribeLoop(app);
+
+  // AI media fast lane (AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE, off): told
+  // about each committed B0 frame; reads a fan's fresh media conversation.
+  const fanslyFastLane = createFanslyFastLane(app);
+  const fanslyWs = startFanslyWsWorker(app, { onCaptured: fanslyFastLane.onCaptured });
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
@@ -630,7 +642,13 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
+      await aiMediaDescribeLoop.stop().catch((error) => {
+        app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
+      });
       await fanslyWs.stop();
+      await fanslyFastLane.stop().catch((error) => {
+        app.logger.warn({ err: error }, "AI media fast lane failed during shutdown");
+      });
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
       });

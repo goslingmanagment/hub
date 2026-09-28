@@ -17,6 +17,8 @@ export interface FanslyRequestContext {
     provider: "fansly" | "onlyfans";
     scope: string;
   }>) => Promise<number>) | null;
+  /** Per-request timeout override (default 30 s); the fetch is aborted. */
+  requestTimeoutMs?: number | null;
 }
 
 export interface FanslyAccount {

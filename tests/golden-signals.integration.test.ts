@@ -362,10 +362,52 @@ describe("golden signals (Stage 25)", () => {
       metadata: {},
       occurredAt: new Date(),
     });
-    await runGoldenSignalSample(appStub());
+    const result = await runGoldenSignalSample(appStub());
     const legacy = await harness.pool.query(
       "select status from notification_incidents where incident_key = 'golden_signal_lag:global'",
     );
     expect(legacy.rows[0].status).toBe("resolved");
+    // The legacy key has no subKey: it is not an orphaned per-metric latch.
+    expect(result.retired).toEqual([]);
+  });
+
+  it("retires the latch of a metric a version bump renamed, only after the grace period (J3)", async () => {
+    // `now` stamps opened_at/last_seen_at: the latch was last refreshed then.
+    const openLatch = async (metric: string, lastSeenAgoMs: number) => {
+      await openNotificationIncident(harness.db, {
+        incidentKey: `golden_signal_lag:global:${metric}`,
+        kind: "golden_signal_lag",
+        platformAccountId: null,
+        errorSummary: `${metric} over threshold`,
+        now: new Date(Date.now() - lastSeenAgoMs),
+      });
+    };
+    const statusOf = async (metric: string) => (await harness.pool.query(
+      "select status from notification_incidents where incident_key = $1",
+      [`golden_signal_lag:global:${metric}`],
+    )).rows[0]?.status;
+
+    // A series the current registry no longer carries (the v0 name of the
+    // posts family), last refreshed an hour ago: nothing samples it again.
+    const stale = "obs_backlog_pull_posts_v0";
+    // Same shape, but refreshed a minute ago: another build may still own it.
+    const fresh = "obs_backlog_pull_stats_v0";
+    // A current registry metric with no sample this run keeps its latch
+    // (absence is never health), however old its last_seen_at.
+    const current = "command_settle";
+    await openLatch(stale, 60 * 60_000);
+    await openLatch(fresh, 60_000);
+    await openLatch(current, 60 * 60_000);
+
+    const result = await runGoldenSignalSample(appStub());
+    expect(await statusOf(stale)).toBe("resolved");
+    expect(await statusOf(fresh)).toBe("open");
+    expect(await statusOf(current)).toBe("open");
+    expect(result.retired).toEqual([stale]);
+    expect(result.resolved).not.toContain(stale);
+
+    // Idempotent: a resolved orphan is not retired twice.
+    const again = await runGoldenSignalSample(appStub());
+    expect(again.retired).toEqual([]);
   });
 });

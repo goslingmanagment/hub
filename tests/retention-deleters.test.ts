@@ -17,6 +17,10 @@ import { describe, expect, it } from "vitest";
 //   - terminal typing command expiry after its short idempotency window
 //   - expired pending device-token custody (10-minute activation window)
 //   - pg-boss's own archival tables
+// Raw payloads (sync_raw_payloads) are explicitly NOT on that list: they are
+// captured facts, and the nightly `fansly.raw-payload-cleanup` job keeps only
+// its name. The last test in this file pins that the erasure is their only
+// deleter.
 // The Stage 28 erasure module is the one sanctioned NON-scheduled deleter:
 // owner-initiated, dry-run default, tombstoned in erasure_log.
 // Projection reset helpers are also sanctioned: they only clear rebuildable
@@ -309,5 +313,43 @@ describe("retention deleter enumeration (Stage 28)", () => {
     expect(source).toContain(
       "where n.nspname in ('tiered_pending_drop', 'capture_pending_drop') and c.relkind = 'r'",
     );
+  });
+
+  // sync.ts is on the file allowlist for the observability prune, so the file
+  // test above cannot see a raw-payload purge added next to it. The nightly
+  // job used to run `delete from sync_raw_payloads where retain_until < now`,
+  // harmless only because every writer stamps retain_until 100 years out; one
+  // writer with a normal date would have silently destroyed captured facts.
+  it("nothing but the owner-initiated erasure deletes raw payloads", () => {
+    const root = join(__dirname, "..");
+    let output: string;
+    try {
+      output = execFileSync(
+        "grep",
+        [
+          "-rliE",
+          "syncRawPayloads|sync_raw_payloads",
+          "--include=*.ts",
+          "--include=*.mts",
+          "--include=*.js",
+          "--include=*.mjs",
+          "--exclude-dir=node_modules",
+          "--exclude-dir=dist",
+          "apps",
+          "packages",
+          "scripts",
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+    } catch {
+      output = "";
+    }
+    const rawDeleter = /\.delete\(\s*syncRawPayloads\b|delete\s+from\s+(?:\$\{\s*syncRawPayloads\b|"?sync_raw_payloads\b)/i;
+    const deleters = output
+      .split("\n")
+      .filter((file) => file.trim() !== "")
+      .filter((file) => rawDeleter.test(readFileSync(join(root, file), "utf8")))
+      .sort();
+    expect(deleters).toEqual(["apps/runtime/src/services/erasure/index.ts"]);
   });
 });

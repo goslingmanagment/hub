@@ -5,7 +5,9 @@ import {
   probeStatsMonth,
 } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import {
+  advanceBroadcastWalk,
   backfillContinuationAt,
+  broadcastMessageRows,
   classifyStatsWindow,
   emptyFanslyStatsCursorState,
   isEmptyStatsMonth,
@@ -148,6 +150,104 @@ describe("stats backfill cursor state", () => {
     const parsedCompleted = parseFanslyStatsCursorState(completed, NOW)!;
     expect(parsedCompleted.lastSweepDay).toBeNull();
     expect(parsedCompleted.sweepDay).toBeNull();
+  });
+});
+
+describe("the broadcast walks", () => {
+  const OPEN = { before: null, floorReached: false, pagesInSweep: 0 };
+
+  it("reads `messages` by NAME, not the first array in the body", () => {
+    // Media-less mass DMs: every sidecar empty, `accountMedia` ahead of the
+    // page. The first array is empty and the page is not.
+    const mediaLess = {
+      accountMedia: [],
+      accountMediaBundles: [],
+      messages: [{ id: "900" }, { id: "800" }],
+      tipGoals: [],
+      tips: [],
+    };
+    expect(broadcastMessageRows(mediaLess)).toHaveLength(2);
+    expect(advanceBroadcastWalk(OPEN, mediaLess)).toEqual({
+      walk: { before: "800", floorReached: false, pagesInSweep: 1 },
+      stepDone: false,
+      stop: null,
+    });
+    expect(advanceBroadcastWalk(OPEN, { tips: [], messages: [{ id: "20" }, { id: "19" }] })
+      .walk.before).toBe("19");
+    expect(advanceBroadcastWalk(OPEN, [{ id: "5" }, { id: "4" }]).walk.before).toBe("4");
+  });
+
+  it("reaches the floor on an EMPTY page, whatever the sidecars carry", () => {
+    expect(advanceBroadcastWalk(
+      { ...OPEN, before: "800" },
+      { accountMedia: [{ id: "m1" }], messages: [] },
+    )).toEqual({
+      walk: { before: null, floorReached: true, pagesInSweep: 0 },
+      stepDone: true,
+      stop: "empty_page",
+    });
+  });
+
+  it("ends a walk it cannot move rather than repeat it, and names why", () => {
+    // Fansly ignoring `before` serves the same page again.
+    const repeated = advanceBroadcastWalk(
+      { ...OPEN, before: "800" },
+      { messages: [{ id: "900" }, { id: "800" }] },
+    );
+    expect(repeated.stop).toBe("cursor_not_advancing");
+    expect(repeated.walk.floorReached).toBe(true);
+    expect(advanceBroadcastWalk(OPEN, { messages: [{}] }).stop).toBe("no_row_ids");
+    expect(advanceBroadcastWalk(OPEN, { foo: 1 }).stop).toBe("malformed_shape");
+  });
+
+  it("takes three pages a sweep and keeps its place for the next", () => {
+    const page = (id: string) => ({ messages: [{ id }] });
+    const first = advanceBroadcastWalk(OPEN, page("30"));
+    const second = advanceBroadcastWalk(first.walk, page("20"));
+    const third = advanceBroadcastWalk(second.walk, page("10"));
+    expect([first.stepDone, second.stepDone, third.stepDone]).toEqual([false, false, true]);
+    expect(third.walk).toEqual({ before: "10", floorReached: false, pagesInSweep: 0 });
+    expect(third.stop).toBeNull();
+  });
+
+  it("polls only the head once the floor is reached", () => {
+    const floor = { before: null, floorReached: true, pagesInSweep: 0 };
+    expect(advanceBroadcastWalk(floor, { messages: [{ id: "1" }] }))
+      .toEqual({ walk: floor, stepDone: true, stop: null });
+  });
+
+  it("starts the DELETED walk once from a cursor saved before it existed", () => {
+    const legacy = JSON.parse(JSON.stringify({
+      ...emptyFanslyStatsCursorState(NOW),
+      mode: "steady",
+      backfill: null,
+      broadcastFloorReached: true,
+    })) as Record<string, unknown>;
+    for (const key of [
+      "broadcastWalkStop",
+      "deletedBroadcastBefore",
+      "deletedBroadcastFloorReached",
+      "deletedBroadcastPagesInSweep",
+      "deletedBroadcastWalkStop",
+    ]) {
+      delete legacy[key];
+    }
+    const parsed = parseFanslyStatsCursorState(legacy, NOW)!;
+    expect(parsed.broadcastFloorReached).toBe(true);
+    expect(parsed.broadcastWalkStop).toBeNull();
+    expect(parsed.deletedBroadcastFloorReached).toBe(false);
+    expect(parsed.deletedBroadcastBefore).toBeNull();
+    expect(parsed.deletedBroadcastPagesInSweep).toBe(0);
+    expect(parsed.deletedBroadcastWalkStop).toBeNull();
+
+    const walking = {
+      ...parsed,
+      broadcastWalkStop: "empty_page" as const,
+      deletedBroadcastBefore: "77",
+      deletedBroadcastPagesInSweep: 2,
+    };
+    expect(parseFanslyStatsCursorState(JSON.parse(JSON.stringify(walking)), NOW))
+      .toEqual(walking);
   });
 });
 

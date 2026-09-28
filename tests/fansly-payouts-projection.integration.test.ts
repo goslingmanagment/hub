@@ -28,6 +28,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -153,6 +154,37 @@ async function checksums(pageId: number): Promise<Record<string, string>> {
     out[table] = `${record.rows}:${record.digest ?? "empty"}`;
   }
   return out;
+}
+
+/**
+ * A look that reached the ledger as a ROSTER and nothing else: the first
+ * method roster again, at a later instant, with no row event before it. That
+ * is what an unchanged returning method minted under the hash-only
+ * `payoutmethod:v1` row key (the row events deduped), and a truncate-and-replay
+ * of that history still feeds the projector exactly this.
+ */
+async function appendRosterOnlyLook(pageId: number) {
+  const [roster] = await rows<{ data: unknown; schema_version: number; observation_id: string }>(
+    `select data, schema_version, observation_id::text
+       from domain_events
+      where account_id = $1 and type = 'payout.method_list_observed'
+      order by account_seq limit 1`,
+    [pageId],
+  );
+  const occurredAt = new Date();
+  const observationId = Number(roster!.observation_id);
+  await appendProjectionOnlyDomainEvents(testDb!.db, pageId, [{
+    type: "payout.method_list_observed",
+    occurredAt,
+    data: roster!.data,
+    schemaVersion: roster!.schema_version,
+    observationId,
+    dedupKey: `test:roster-only-look:${pageId}`,
+  }], {
+    occurredAt,
+    observationId,
+    dedupKey: `test:roster-only-look:checkpoint:${pageId}`,
+  });
 }
 
 /** Every string anywhere in a value, so a credential cannot hide in a jsonb
@@ -450,12 +482,41 @@ describe("[sync-critical] WP-F7 payouts projection", () => {
     );
     expect(stillMarked[0]!.missing_since).toEqual(firstMark);
 
-    // AND IT COMES BACK UNCHANGED. This is the case the per-LOOK roster key
-    // exists for: the row event dedupes (identical content hash) and the ref set
-    // is identical to the one before it vanished, so only a roster keyed on the
-    // OBSERVATION can un-mark it.
+    // AND IT COMES BACK UNCHANGED. Its row event is keyed per LOOK
+    // (`payoutmethod:v2`), so it reaches the projector and its own upsert clears
+    // the mark. Under the hash-only `payoutmethod:v1` key that row event
+    // deduped, and only the roster could un-mark it; the roster's clear half
+    // stays for those events (the next test replays that shape).
     await seedObservation(page.id, "payout_methods", "m4", both);
     await project(page.id);
+    const cleared = await rows(
+      `select missing_since from page_payout_methods
+        where page_id = $1 and method_ref = $2`,
+      [page.id, "000900000000009002"],
+    );
+    expect(cleared[0]!.missing_since).toBeNull();
+  });
+
+  it("un-marks a returning method from the roster alone, as hash-keyed row events replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const both = fixture("payout-methods").rows as Record<string, unknown>[];
+    await seedObservation(page.id, "payout_methods", "m1", both);
+    await project(page.id);
+    await seedObservation(page.id, "payout_methods", "m2", [both[0]]);
+    await project(page.id);
+
+    // The method comes back UNCHANGED in the ledger's older shape: a roster
+    // with no row event before it (see `appendRosterOnlyLook`). No upsert runs,
+    // so the roster's clear half is the only thing that can un-mark it — the
+    // case a rebuild over pre-`payoutmethod:v2` history depends on.
+    await appendRosterOnlyLook(page.id);
+    const result = await runFanslyPayoutsProjection(appStub(), { accountId: page.id });
+    expect(result.methods).toBe(0);
+    expect(result.clearedMissing).toBe(1);
     const cleared = await rows(
       `select missing_since from page_payout_methods
         where page_id = $1 and method_ref = $2`,

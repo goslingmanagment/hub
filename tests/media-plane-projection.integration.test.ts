@@ -128,6 +128,8 @@ function paidVideoPayload(options: {
   messageAt: Date;
   orderAt?: Date;
   withOrder?: boolean;
+  /** Live order-history rows carry `orderId`; DM sidecar rows do not. */
+  orderId?: string;
 }) {
   const seconds = Math.floor(options.messageAt.getTime() / 1000);
   const orderSeconds = Math.floor((options.orderAt ?? options.messageAt).getTime() / 1000);
@@ -189,6 +191,7 @@ function paidVideoPayload(options: {
       accountMediaId: `offer-${options.messageId}`,
       type: 0,
       createdAt: orderSeconds,
+      ...(options.orderId === undefined ? {} : { orderId: options.orderId }),
     }],
   };
 }
@@ -390,6 +393,50 @@ describe("media plane — one paid DM page, end to end", () => {
     const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0, limit: 200 });
     expect(events.filter((event) => event.type === "message.ppv_unlocked")).toHaveLength(1);
     expect(events.filter((event) => event.type === "media.order_observed")).toHaveLength(1);
+  });
+
+  it("order_ref is the orderId of an order-history-first order and stays NULL for a DM-first one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const messageAt = new Date("2026-08-19T12:00:00Z");
+    // Order history sees purchase 1 first: its orderId becomes order_ref.
+    await seedObservation(
+      page.id,
+      "purchase_history",
+      "ph-first",
+      paidVideoPayload({ messageId: "message-1", messageAt, orderId: "order-1" }),
+    );
+    // A DM sees purchase 2 first; order history serves its orderId later.
+    await seedObservation(
+      page.id,
+      "dm_messages",
+      "dm-first",
+      paidVideoPayload({ messageId: "message-2", messageAt }),
+    );
+    await project(page.id);
+    resetCanonicalizeSweepRuntime();
+    await seedObservation(
+      page.id,
+      "purchase_history",
+      "ph-second",
+      paidVideoPayload({ messageId: "message-2", messageAt, orderId: "order-2" }),
+    );
+    await project(page.id);
+
+    // The later order-history sighting dedupes on the composite key and cannot
+    // backfill it: DM-first orders — most of them live — keep order_ref NULL,
+    // so the column is NOT a complete order-id map.
+    expect(await rows(
+      `select media_offer_ref, order_ref from media_orders where page_id = $1
+        order by media_offer_ref`,
+      [page.id],
+    )).toEqual([
+      { media_offer_ref: "offer-message-1", order_ref: "order-1" },
+      { media_offer_ref: "offer-message-2", order_ref: null },
+    ]);
   });
 
   it("§3.2b: a pre-2024 message keeps its TRUE time on the archive row while the event is clamped", async (context) => {

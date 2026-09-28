@@ -358,10 +358,15 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(1_000_000),
   AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY: booleanSchema.default(true),
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
+  // Describe within seconds: the worker's 1 s loop over due rows (default off).
+  AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   // Fansly freshness accelerator: one head read of a conversation when a WS
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT: z.coerce.number().int().min(0).default(60),
+  // Fansly fast lane: a head read right after the hub's own WS frame (off).
+  AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
+  AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES: z.string().default(""),
   // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
   // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
   // one flip per verification window, never a bundle and never a restart.
@@ -666,10 +671,16 @@ export interface AppConfig {
   aiMediaDescribeLiveChatOnly?: boolean;
   /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
+  /** The worker describes due rows within seconds (1 s loop), not per minute. */
+  aiMediaDescribeLoopEnabled?: boolean;
   /** Fansly: one head read per fan media WS signal (own budget, default off). */
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
   aiMediaDescribeFanslyAcceleratorDailyLimit?: number;
+  /** Fansly fast lane: off, shadow (route and count only) or serve. */
+  aiMediaDescribeFanslyFastLaneMode?: "off" | "shadow" | "serve";
+  /** Fast lane allowlist: comma-separated page labels, or `*`. */
+  aiMediaDescribeFanslyFastLanePages?: string;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
@@ -986,8 +997,11 @@ export function loadConfig(
     aiMediaDescribeDailyMicroUsdLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT,
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
+    aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     aiMediaDescribeFanslyAcceleratorEnabled: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED,
     aiMediaDescribeFanslyAcceleratorDailyLimit: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT,
+    aiMediaDescribeFanslyFastLaneMode: parsed.AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE,
+    aiMediaDescribeFanslyFastLanePages: parsed.AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_PAGES,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,

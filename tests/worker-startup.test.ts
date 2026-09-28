@@ -5,7 +5,6 @@ const dbMocks = vi.hoisted(() => ({
   deleteExpiredPendingDeviceTokens: vi.fn(),
   // These two return values the nightly handler now reads for its timing line,
   // so the mocks return the real shapes rather than undefined.
-  deleteExpiredRawPayloads: vi.fn(async () => ({ rowCount: 0 })),
   deleteExpiredSyncObservability: vi.fn(async (_db: unknown, cutoff: Date) => ({
     cutoff,
     steps: [],

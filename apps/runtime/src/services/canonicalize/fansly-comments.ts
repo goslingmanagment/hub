@@ -22,9 +22,11 @@
 //
 // ── THE TWO EVENTS ──────────────────────────────────────────────────────────
 //
-// `post.comment_observed` per reply, dedup-keyed on the comment's CONTENT hash
-// so an edit appends a new event (a revision) while a re-read of the same bytes
-// appends nothing.
+// `post.comment_observed` per reply PER LOOK, dedup-keyed on the comment's
+// CONTENT hash and the observation (`comment:v2`). An edit is a new hash (a
+// revision the head's `changed_at` records); a re-read of the same bytes is one
+// more small event that only advances `last_observed_at`; and a return to an
+// earlier body (A→B→A) is no longer swallowed by the key A minted first.
 //
 // `post.comment_list_observed` per walk — the ROSTER, and the same idea WP-F3
 // arrived at: row events say what IS, and nothing in them says what ISN'T. A
@@ -268,10 +270,12 @@ export function canonicalizeFanslyCommentsObservation(
       postRef: parentPostRef,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      // AN EDIT IS A REVISION: the hash is over the comment's material, so an
-      // edited body appends a new event and the head moves, while the fortieth
-      // re-read of unchanged bytes appends nothing.
-      dedupKey: `comment:v1:${pageRef}:${commentRef}:${hash}`,
+      // ONE ROW EVENT PER LOOK (`comment:v2`), the roster's rule applied to the
+      // row. A key on the hash alone dropped a comment that went A→B→A (liked
+      // then unliked, pinned then unpinned): the third look hashed to A's old
+      // key and the head stayed at B. Replay of one observation is still a no-op;
+      // the head's `changed_at` moves only when the hash does (post-comments).
+      dedupKey: `comment:v2:${pageRef}:${commentRef}:${hash}:obs:${observation.id}`,
     });
   }
 

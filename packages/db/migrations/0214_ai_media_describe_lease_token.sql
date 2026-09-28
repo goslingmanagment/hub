@@ -1,0 +1,12 @@
+-- 0214_ai_media_describe_lease_token.sql
+--
+-- AI media describer: claim ownership (docs/runbooks/ai-media-describe.md).
+--
+-- Every claim writes a fresh random token; every settle of that claim must
+-- present it (compare-and-set), so a worker whose lease expired can never
+-- overwrite, or send for, a row another worker has claimed since. The token
+-- is kept after a settle (only the next claim replaces it), so the final
+-- settle after the write-ahead `outcome_unknown` still matches its claim.
+--
+-- Purely additive, IF NOT EXISTS; existing rows keep NULL until claimed.
+alter table ai_media_descriptions add column if not exists lease_token uuid;

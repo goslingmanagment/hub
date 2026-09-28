@@ -2061,7 +2061,7 @@ export class FanslyAdapter {
         const response = await fetch(url, {
           method: "GET",
           headers: buildFanslyRequestHeaders(context.session, pathname),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(context.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
           dispatcher: this.getDispatcher(context.proxy),
         });
         const text = await response.text();

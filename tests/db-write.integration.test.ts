@@ -7,6 +7,7 @@ import {
   type StoredPlatformCredentialBundle,
 } from "@agency_hub_core/shared";
 import {
+  countTransactionsBySource,
   createOnlyFansPage,
   createFanslyPage,
   createModel,
@@ -2793,6 +2794,63 @@ describe("db write safety", () => {
         creator_net_amount_mills: 5000n,
       },
     ]);
+  });
+
+  it("counts a page's ledger rows per source, inactive rows included", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const db = testDb.db;
+    const model = await createModel(db, {
+      slug: "ledger-count-model",
+      name: "Ledger Count Model",
+    });
+    if (!model) throw new Error("fixture model was not created");
+    const page = await createFanslyPage(db, {
+      modelId: model.id,
+      label: "ledger-count-page",
+    });
+    const otherPage = await createFanslyPage(db, {
+      modelId: model.id,
+      label: "ledger-count-other-page",
+    });
+    if (!page || !otherPage) throw new Error("fixture pages were not created");
+    const seed = (input: {
+      platformAccountId: number;
+      source: "fansly:rest" | "harvest";
+      transactionId: string;
+      suppressAs?: "reversal_without_settled_original";
+    }) => upsertTransaction(db, {
+      ...input,
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+
+    await seed({ platformAccountId: page.id, source: "fansly:rest", transactionId: "rest-1" });
+    await seed({ platformAccountId: page.id, source: "fansly:rest", transactionId: "rest-2" });
+    await seed({
+      platformAccountId: page.id,
+      source: "fansly:rest",
+      transactionId: "rest-inactive",
+      suppressAs: "reversal_without_settled_original",
+    });
+    await seed({ platformAccountId: page.id, source: "harvest", transactionId: "harvest-1" });
+    await seed({ platformAccountId: otherPage.id, source: "fansly:rest", transactionId: "other-rest-1" });
+
+    await expect(countTransactionsBySource(db, { platformAccountId: page.id, source: "fansly:rest" }))
+      .resolves.toBe(3);
+    await expect(countTransactionsBySource(db, { platformAccountId: page.id, source: "harvest" }))
+      .resolves.toBe(1);
+    await expect(countTransactionsBySource(db, { platformAccountId: otherPage.id, source: "fansly:rest" }))
+      .resolves.toBe(1);
   });
 
   it("maps Fansly raw type 20001 into the tip revenue bucket end to end", async (context) => {

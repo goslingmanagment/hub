@@ -153,11 +153,26 @@ export async function upsertStatsTrafficBucket(
       source_event_id = ${pick("stats_traffic_buckets", "source_event_id")},
       source_observation_id = ${pick("stats_traffic_buckets", "source_observation_id")},
       source_account_seq = ${pick("stats_traffic_buckets", "source_account_seq")},
-      -- A revisable trailing bucket the platform RESTATED. Only a genuinely
-      -- different body reaches here (the dedup key carries the content hash),
-      -- so counting it is counting revisions, not re-captures.
+      -- A revisable trailing bucket the platform RESTATED. The content hash
+      -- also carries the requested window (and the label mapping), and the
+      -- window shifts on every daily look, so a hash change is a RE-CAPTURE
+      -- as often as a revision. Only a changed metric counts.
       revision_count = case
-        when stats_traffic_buckets.content_hash <> excluded.content_hash
+        when (
+          stats_traffic_buckets.views, stats_traffic_buckets.preview_views,
+          stats_traffic_buckets.unique_viewers, stats_traffic_buckets.preview_unique_viewers,
+          stats_traffic_buckets.video_views, stats_traffic_buckets.preview_video_views,
+          stats_traffic_buckets.interaction_time_ms,
+          stats_traffic_buckets.preview_interaction_time_ms,
+          stats_traffic_buckets.video_percent_watched_sum,
+          stats_traffic_buckets.preview_video_percent_watched_sum
+        ) is distinct from (
+          excluded.views, excluded.preview_views,
+          excluded.unique_viewers, excluded.preview_unique_viewers,
+          excluded.video_views, excluded.preview_video_views,
+          excluded.interaction_time_ms, excluded.preview_interaction_time_ms,
+          excluded.video_percent_watched_sum, excluded.preview_video_percent_watched_sum
+        )
         then stats_traffic_buckets.revision_count + 1
         else stats_traffic_buckets.revision_count
       end,

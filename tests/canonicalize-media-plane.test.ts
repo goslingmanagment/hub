@@ -312,7 +312,7 @@ describe("sync-pull media plane — golden shapes", () => {
     expect(attachments.dedupKey).toMatch(/^msgatt:v1:3:message-1:[0-9a-f]{64}$/);
   });
 
-  it("media.order_observed keys on the composite, because the live shape has no order id", () => {
+  it("media.order_observed keys on the composite, because DM order rows have no order id", () => {
     const events = canonicalizeSyncPullObservation(dmObservation(paidVideoPayload()), CONTEXT);
     const order = only(events, "media.order_observed");
 
@@ -327,8 +327,9 @@ describe("sync-pull media plane — golden shapes", () => {
       bundleRef: null,
       buyerRef: FAN_REF,
       orderType: 0,
-      // Nullable until a response is ever observed carrying one; only then,
-      // and only versioned, may it become the key.
+      // A DM sidecar row carries no order id, so a DM-first order keeps a
+      // NULL order_ref for good (see the coexistence test below). Only a
+      // versioned change may ever make an order id the key.
       orderRef: null,
       priceMills: "79000",
       conversationRef: "group-1",
@@ -509,6 +510,30 @@ describe("coexistence: message.ppv_unlocked and media.order_observed", () => {
     // it is the first to see it, without pretending to be the DM sidecar.
     expect(only(history, "media.observed").data.firstOrigin).toBe("order_history");
     expect(only(dm, "media.observed").data.firstOrigin).toBe("dm_sidecar");
+  });
+
+  it("an order-history row records its orderId, under the SAME composite key", () => {
+    const payload = paidVideoPayload();
+    // The live order-history row shape: `orderId`, no `id`.
+    (payload.accountMediaOrders[0] as Record<string, unknown>).orderId = "order-1";
+    const history = only(canonicalizeSyncPullObservation({
+      ...dmObservation(payload),
+      kind: "purchase_history",
+      producer: "sync:fansly:purchase_history",
+    }, CONTEXT), "media.order_observed");
+    const dm = only(
+      canonicalizeSyncPullObservation(dmObservation(paidVideoPayload()), CONTEXT),
+      "media.order_observed",
+    );
+
+    expect(history.data.orderRef).toBe("order-1");
+    expect(dm.data.orderRef).toBeNull();
+    // One key for both sightings: whichever lane mints it first decides
+    // media_orders.order_ref and the other dedupes. A DM-first order (most of
+    // them) therefore keeps order_ref NULL even after order history serves
+    // its orderId — the column is not complete.
+    expect(history.dedupKey).toBe(dm.dedupKey);
+    expect(history.data.contentHash).not.toBe(dm.data.contentHash);
   });
 
   it("the same order seen twice in one response mints one draft", () => {

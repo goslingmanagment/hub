@@ -10,7 +10,10 @@
 //   capture wins" — are both guaranteed WRONG here. Rows are ordered by the
 //   PROVIDER's `occurred_at`, with `notification_ref` as the deterministic
 //   tie-break, and the guard lives in the repository's upsert so no caller can
-//   forget it. `tests/endpoint-scour-projections.integration.test.ts` pins that
+//   forget it. (`platform_notifications`, one row per notification, breaks a
+//   same-`occurred_at` tie by the later look instead, so a read state lands;
+//   the repository header says why that is safe.)
+//   `tests/endpoint-scour-projections.integration.test.ts` pins that
 //   a higher-seq, older-`occurred_at` event cannot regress the head.
 //
 // THREE RULES IT SHARES WITH EVERY OTHER PROJECTOR IN THIS TREE:

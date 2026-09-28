@@ -3871,6 +3871,7 @@ export const aiMediaDescriptions = pgTable(
     attempts: integer("attempts").default(0).notNull(),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow().notNull(),
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    leaseToken: uuid("lease_token"),
     firstMessageAt: timestamp("first_message_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -3956,6 +3957,11 @@ export const aiMediaAcceleratorReads = pgTable(
     requestId: text("request_id"),
     admittedAt: timestamp("admitted_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    lane: text("lane").$type<"chunk" | "fast">().default("chunk").notNull(),
+    frameReceivedAt: timestamp("frame_received_at", { withTimezone: true }),
+    generation: text("generation"),
+    dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    httpStatus: integer("http_status"),
   },
   (table) => ({
     messageUniq: unique("ai_media_accelerator_reads_message_uniq").on(table.pageId, table.messageRef),
@@ -3968,6 +3974,16 @@ export const aiMediaAcceleratorReads = pgTable(
     groupIdx: index("ai_media_accelerator_reads_group_idx").on(table.pageId, table.groupRef, table.admittedAt),
   }),
 );
+
+export const aiMediaFastLaneHealth = pgTable("ai_media_fast_lane_health", {
+  pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
+    onDelete: "cascade",
+  }),
+  unavailableSince: timestamp("unavailable_since", { withTimezone: true }),
+  reason: text("reason"),
+  cooldownUntil: timestamp("cooldown_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export const aiAcceptanceEvents = pgTable(
   "ai_acceptance_events",
@@ -4828,7 +4844,9 @@ export const mediaOrders = pgTable(
     /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
     buyerPlatformUserId: text("buyer_platform_user_id").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    /** Null until a response is observed carrying an order id (§2.3). */
+    /** Fansly `orderId` when the first sighting was an order-history row.
+     * DM sidecar rows carry no id and the first sighting wins, so DM-first
+     * orders (most) stay null — the column is not complete (§2.3). */
     orderRef: text("order_ref"),
     bundleRef: text("bundle_ref"),
     orderType: integer("order_type"),

@@ -180,13 +180,13 @@ describe("WP-F5 the 4-reply parity fixture", () => {
     expect(new Date(String(rows[0]!.data.publishedAt)).getTime()).toBe(seconds * 1000);
   });
 
-  it("keys an edit as a REVISION and an unchanged re-read as a no-op", () => {
+  it("keys an edit as a REVISION and a replay of the same observation as a no-op", () => {
     const payload = fixture("replies-four-with-accounts") as {
       response: { posts: { content: string }[] };
     };
     const before = comments(payload).map((row) => row.dedupKey);
-    // The SAME observation replayed produces the same keys — a re-read of
-    // unchanged bytes appends nothing.
+    // The SAME observation replayed produces the same keys — replay appends
+    // nothing.
     expect(comments(payload).map((row) => row.dedupKey)).toEqual(before);
 
     const edited = JSON.parse(JSON.stringify(payload)) as typeof payload;
@@ -196,7 +196,27 @@ describe("WP-F5 the 4-reply parity fixture", () => {
     // head update, not a silent overwrite.
     expect(after.filter((key, index) => key !== before[index])).toHaveLength(1);
     expect(after[0]).not.toBe(before[0]);
-    expect(after[0]).toMatch(/^comment:v1:7:000910000000000101:[0-9a-f]{64}$/u);
+    expect(after[0]).toMatch(/^comment:v2:7:000910000000000101:[0-9a-f]{64}:obs:1$/u);
+  });
+
+  it("keys every LOOK, so a comment that goes A→B→A is not swallowed (J12)", () => {
+    const payload = fixture("replies-four-with-accounts") as {
+      response: { posts: { likeCount?: number }[] };
+    };
+    const liked = JSON.parse(JSON.stringify(payload)) as typeof payload;
+    liked.response.posts[0]!.likeCount = (payload.response.posts[0]!.likeCount ?? 0) + 1;
+
+    const a = comments(payload, 1)[0]!;
+    const b = comments(liked, 2)[0]!;
+    const again = comments(payload, 3)[0]!;
+    // Liked, then unliked: the third look carries A's hash again…
+    expect(b.data.contentHash).not.toBe(a.data.contentHash);
+    expect(again.data.contentHash).toBe(a.data.contentHash);
+    // …under its own key. Keyed on the hash alone it collided with the first
+    // look's key, never reached the projector, and the head stayed "liked".
+    expect(new Set([a.dedupKey, b.dedupKey, again.dedupKey]).size).toBe(3);
+    // An unchanged later look is its own (small) event too.
+    expect(comments(payload, 4)[0]!.dedupKey).not.toBe(a.dedupKey);
   });
 
   it("emits ONE roster naming every reply, keyed per LOOK", () => {

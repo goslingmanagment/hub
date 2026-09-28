@@ -245,6 +245,56 @@ describe("canonicalization sweep (Stage 8)", () => {
     expect(events.filter(event => event.dedupKey === "txn:fresh")).toHaveLength(1);
   });
 
+  // J1: before the sync family had a shape gate, a drifted Fansly body
+  // canonicalized to zero events and was stamped v6 — consumed for good, with
+  // only a family-wide version bump able to reach it after a parser repair.
+  it("leaves a drifted Fansly sync-pull body unstamped for a future parser", async () => {
+    const family = CANONICALIZER_FAMILIES.find(item => item.source === "pull" && item.lane === "sync")!;
+    async function capture(name: string, kind: string, payload: unknown) {
+      const receipt = await insertObservation(testDb!.db, {
+        source: "pull", producer: `sync:fansly:${kind}`, platform: "fansly", accountId: 3,
+        kind, payload, payloadHash: sha256(name), idempotencyKey: `drift:${name}`,
+      });
+      return receipt.observationId;
+    }
+    const driftedTransactions = await capture("txn", "earnings_transactions", { total: 1, data: {} });
+    const driftedMessages = await capture("dm", "dm_messages", { messages: { changed: true } });
+    const valid = await capture("valid", "earnings_transactions", {
+      total: 1,
+      data: [{ transactionId: "ftx-ok", correlationAccountId: "fan-2", type: 2110, amount: 100,
+        destinationAmount: 80, status: 2, createdAt: Date.parse("2026-09-07T09:00:00Z") }],
+    });
+    async function versions() {
+      const rows = await testDb!.pool.query<{ id: string; parse_version: number }>(
+        "select id::text, parse_version from observations where idempotency_key like 'drift:%' order by id",
+      );
+      return new Map(rows.rows.map(item => [Number(item.id), item.parse_version]));
+    }
+
+    const first = await runCanonicalization(appStub(), { families: [family] });
+    expect(first).toMatchObject({ scanned: 3, stamped: 1, appended: 1, skippedUnparseable: 2, errored: 0 });
+    expect(first.unparseableSamples).toEqual([
+      { observationId: driftedTransactions, family: "pull:sync", kind: "earnings_transactions",
+        reasonCode: "transactions_data_not_array" },
+      { observationId: driftedMessages, family: "pull:sync", kind: "dm_messages",
+        reasonCode: "messages_not_array" },
+    ]);
+    const afterFirst = await versions();
+    expect(afterFirst.get(driftedTransactions)).toBe(0);
+    expect(afterFirst.get(driftedMessages)).toBe(0);
+    expect(afterFirst.get(valid)).toBe(family.version);
+    const events = await listEventsSince(testDb!.db, { accountId: 3, afterSeq: 0 });
+    expect(events.map(event => event.dedupKey)).toEqual(["txn:ftx-ok"]);
+
+    // The next sweep re-judges only the drifted rows, and still refuses them.
+    resetCanonicalizeSweepRuntime();
+    const second = await runCanonicalization(appStub(), { families: [family] });
+    expect(second).toMatchObject({ scanned: 2, stamped: 0, appended: 0, skippedUnparseable: 2, errored: 0 });
+    const afterSecond = await versions();
+    expect(afterSecond.get(driftedTransactions)).toBe(0);
+    expect(afterSecond.get(driftedMessages)).toBe(0);
+  });
+
   it("rejects stale cursor writers, including a writer from before a wrap", async () => {
     const first = await getCanonicalizeSweepCursor(testDb!.db, "concurrent-sweep");
     const second = await getCanonicalizeSweepCursor(testDb!.db, first.key);
