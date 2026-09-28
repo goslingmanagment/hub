@@ -1,0 +1,338 @@
+{
+  "checked_at": "2026-09-27T11:02:11.596552+00:00",
+  "package_version": "2026.927.830",
+  "extension_id": "odcgbfiaikgmamdjkiipobgolcpahmki",
+  "source_url": "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=140.0.0.0&acceptformat=crx3&x=id%3Dodcgbfiaikgmamdjkiipobgolcpahmki%26installsource%3Dondemand%26uc",
+  "snapshot_path": "/Users/dmitriy/code/agency/fbuddy-analysis/snapshots/2026.927.830",
+  "crx_bytes": 3698765,
+  "crx_sha256": "3fd413555f9d8a4b8754e7ee198f22f1d0d885367e59331c9d1d39c118b8ecce",
+  "crx_verification": {
+    "extensionId": "odcgbfiaikgmamdjkiipobgolcpahmki",
+    "expectedExtensionId": "odcgbfiaikgmamdjkiipobgolcpahmki",
+    "crxFormat": 3,
+    "headerBytes": 1308,
+    "zipBytes": 3697445,
+    "sha256": "3fd413555f9d8a4b8754e7ee198f22f1d0d885367e59331c9d1d39c118b8ecce",
+    "proofs": [
+      {
+        "algorithm": "RSA-SHA256",
+        "publicKeySha256": "b5e4096227b83f82101fc2aa49f2a251accde3d98471464dd17d1819b43786b0",
+        "keyExtensionId": "lfoeajgcchlidpicbabpmckkejpckcfb",
+        "signatureValid": true
+      },
+      {
+        "algorithm": "RSA-SHA256",
+        "publicKeySha256": "e32615808a6c0c39a88fe16eb2f07ca85b405c120280f5dc82e12bc926e2d795",
+        "keyExtensionId": "odcgbfiaikgmamdjkiipobgolcpahmki",
+        "signatureValid": true
+      },
+      {
+        "algorithm": "ECDSA-SHA256",
+        "publicKeySha256": "61f7f2a6bfcf74cd0bc1fe2497cc9b04254c658f79f2145392867ea8366367cf",
+        "keyExtensionId": "gbphpckglpmphemnalmbpocejhmmjlae",
+        "signatureValid": true
+      }
+    ],
+    "hasValidIdentityProof": true
+  },
+  "zip_crc_error": null,
+  "file_count": 33,
+  "all_extracted_files_match_archive": true,
+  "raw_files": [
+    {
+      "path": "background.js",
+      "bytes": 285206,
+      "sha256": "377a4a765d6b9f3a11554c4f0d95045c745af438c83648bb2b96870fbd01bc98",
+      "matches_archive": true
+    },
+    {
+      "path": "popup.html",
+      "bytes": 442,
+      "sha256": "b3a74f2067d965e62583a9e0b87ea23c43a520142ac013373d2520b34beb92a9",
+      "matches_archive": true
+    },
+    {
+      "path": "media-processor.js",
+      "bytes": 1962944,
+      "sha256": "f26f0a6db6e81050046b715e95fbb1b48b773a477c88fb809181d4e22830bb60",
+      "matches_archive": true
+    },
+    {
+      "path": "chunks/popup-YfJ3obO0.js",
+      "bytes": 808722,
+      "sha256": "6d7a09029b8987b26d6c36881379cab61d115908901746e0f5c45ca4eb3c0837",
+      "matches_archive": true
+    },
+    {
+      "path": "content-scripts/fansly-goals-refresh.js",
+      "bytes": 65706,
+      "sha256": "b48f812f8e3f17f472d4dd5760031461300a9053779d38d47b68fb7f1cfecd00",
+      "matches_archive": true
+    },
+    {
+      "path": "content-scripts/main.css",
+      "bytes": 208034,
+      "sha256": "3a8d276fa0c2cee34f580de3310b1b9b6ac1de616a90f044e45c6c6bf035e59c",
+      "matches_archive": true
+    },
+    {
+      "path": "content-scripts/main.js",
+      "bytes": 4553264,
+      "sha256": "4aa3ae5d3e5cf7f0a98c23331c98f57a7f636b1519c22caa57830bdf58ee4e21",
+      "matches_archive": true
+    },
+    {
+      "path": "electron-background-bootstrap.js",
+      "bytes": 155,
+      "sha256": "4685fcd32f72583d7520178d66c8c1ff2ae7d7a5467eb7ea944e524db032c058",
+      "matches_archive": true
+    },
+    {
+      "path": "manifest.json",
+      "bytes": 1131,
+      "sha256": "6252df2343f50cf5e6d029682024709cd753995a24f52684cce2cda7c60a0bf1",
+      "matches_archive": true
+    },
+    {
+      "path": "icon/48.png",
+      "bytes": 1957,
+      "sha256": "94f20578e5c045ef6089c7d407fe90ea84fb4c606fe851330572af157aaca8a1",
+      "matches_archive": true
+    },
+    {
+      "path": "icon/128.png",
+      "bytes": 6447,
+      "sha256": "cf50931e181bcafbd86b53296db52367a61cae7f1dabd006046c16a835472e75",
+      "matches_archive": true
+    },
+    {
+      "path": "icon/16.png",
+      "bytes": 605,
+      "sha256": "260b87a7c2b7dbcb1af0cb81f24d4fb87251468f3148f0769a67da4664b47289",
+      "matches_archive": true
+    },
+    {
+      "path": "icon/32.png",
+      "bytes": 1210,
+      "sha256": "9e1e673e775529c9ed08830168a8354773e9910b1237d440fb3c62b12a8119d5",
+      "matches_archive": true
+    },
+    {
+      "path": "icon/96.png",
+      "bytes": 4329,
+      "sha256": "f071d7b9af53f8fb6ea1a48a4fbc6f1b95eb1d179852d947434374d9d81ff393",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/tr.json",
+      "bytes": 418148,
+      "sha256": "9cdc1eb00650e59a3f313310d6a7d3bc64bf162a1761871f8a5db746098b065e",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/nl.json",
+      "bytes": 403813,
+      "sha256": "90b461e266268960a121fc31dbcf2dbdbeaa6d6fefdbbf4e9e99c5d5661ddd50",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/ja.json",
+      "bytes": 487189,
+      "sha256": "190da72292f6434aaf97564c71959b78e6201fc5cc4c00055495eb84656a7965",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/de.json",
+      "bytes": 424006,
+      "sha256": "1c978393656231de0d329b07213e556a8cd2010ca54b1c38392d224426ec5be9",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/ru.json",
+      "bytes": 653485,
+      "sha256": "e46a881d3aaab5c85baed8ec27f094d3128668ea052f88cd86aae5d2e44f0189",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/zh-CN.json",
+      "bytes": 339135,
+      "sha256": "958818d240a0b43d26f9f16c65e74494c37fe4f18b89b5772d51750d4dbe677a",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/en.json",
+      "bytes": 356836,
+      "sha256": "1e24c7d2df2886b8c64801d81bee8aa4b53e2f8b5e596ab117c3e22c534d2e6f",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/fr.json",
+      "bytes": 456819,
+      "sha256": "3b213c5c0318b72f66486b31217dde7480ee688ed1ac36879b97cbb34518283b",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/pt-BR.json",
+      "bytes": 422274,
+      "sha256": "8b818ba9b5ef55bbcb41b3351840da239d63170465c1f2f32378d1a05b584a6d",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/ko.json",
+      "bytes": 428011,
+      "sha256": "35edc1b326037c761f9196475eb3d03555cc6602a09e803f11bbe6cd2e543343",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/zh-TW.json",
+      "bytes": 344263,
+      "sha256": "e7712c0e8607da82aa6957eb50c892f529754f4969a4bac71140b0606537d06a",
+      "matches_archive": true
+    },
+    {
+      "path": "i18n/main/es.json",
+      "bytes": 439798,
+      "sha256": "18150fcd92f19200d6cbb7aca07801396a9e9e7d9e7123772fed3cba1435e836",
+      "matches_archive": true
+    },
+    {
+      "path": "assets/popup-Ct7lrPOW.css",
+      "bytes": 204032,
+      "sha256": "66565d9639f5ce37c9e46ca26f9d0cdaac613b0b4a4462093f1f0595763e1c76",
+      "matches_archive": true
+    },
+    {
+      "path": "electron-background.html",
+      "bytes": 336,
+      "sha256": "7b1398d27ed14a734e264ca9f10dcef21d1497c3bcbdd582adfe4cc9d0acac14",
+      "matches_archive": true
+    },
+    {
+      "path": "injections/window-bridge.js",
+      "bytes": 2663,
+      "sha256": "4cd90851e267f5982e2106bf2747f4ecf6cd4e3f5cd56440bb8fd038cd897a05",
+      "matches_archive": true
+    },
+    {
+      "path": "injections/fbuddy-videojs-player.js",
+      "bytes": 35787,
+      "sha256": "3bfaafde2bb90cd14b0afee3cdee8192532a563b0af06c3fbec5707188fff5f7",
+      "matches_archive": true
+    },
+    {
+      "path": "injections/fbuddy-network-hook.js",
+      "bytes": 11834,
+      "sha256": "fd343337ef8f95d3421ca6af4071243b2123027c3e7c9a9174eb737c50e6cac5",
+      "matches_archive": true
+    },
+    {
+      "path": "injections/fbuddy-restricted-words-guard.js",
+      "bytes": 10148,
+      "sha256": "95ab9d831f3b8cbef54c48af6cb56a05ac53b263fc6469e68bc5c4a43e20b9c0",
+      "matches_archive": true
+    },
+    {
+      "path": "_metadata/verified_contents.json",
+      "bytes": 5061,
+      "sha256": "422170596148aeac6eee1a5b7292e01da0ca0c556e53aa32592060eb9efec8a3",
+      "matches_archive": true
+    }
+  ],
+  "evidence_boundary": "Static analysis of this exact CRX; readable files are formatted projections. No extension installation or live Fansly requests were performed.",
+  "selected_ast_verification": {
+    "parser": "acorn",
+    "scope": "FunctionDeclaration and MethodDefinition",
+    "excluded_fields": [
+      "start",
+      "end",
+      "raw",
+      "loc"
+    ],
+    "results": [
+      {
+        "name": "refreshAuthTokenFromLocalStorage",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "fanslyRequest",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "setClientHeaders",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "getMe",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "sendMessageToGroup",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "createBroadcastGroup",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "sendBroadcastMessage",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "createHlsMediaAccess",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "assertHlsSession",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "refreshHlsMedia",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "ORe",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "aLe",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "F0",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      },
+      {
+        "name": "Sat",
+        "rawMatches": 1,
+        "readableMatches": 1,
+        "equal": true
+      }
+    ]
+  }
+}

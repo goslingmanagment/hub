@@ -40,49 +40,8 @@ Hub круглосуточно собирает сообщения, подпис
 
 Сайт FBuddy: [https://fbuddy.net/](https://fbuddy.net/). Документация: [https://docs.fbuddy.net/](https://docs.fbuddy.net/).
 
-**Сервисы и API**
+Разбор кода расширения FBuddy (пакет 2026.927.830): [fbuddy/](fbuddy/README.md).
 
-- [OnlyFansAPI](https://onlyfansapi.com/)
-- [ApiFansly / FanslyAPI](https://apifansly.com/)
-- [CreatorAPI](https://creator-api.com/)
-- [The Only API](https://theonlyapi.com/)
-- [OFAuth](https://ofauth.com/)
-- [ofapis](https://ofapis.com/)
-- [OFMAPI](https://ofmapi.com/)
-- [ModelVI](https://modelvi.com/for-agencies)
-- [Fansly API — `fansly-api.com`](https://www.fansly-api.com/)
-- [FansAPI — `fansapi.com`](https://www.fansapi.com/)
-- [`of-api.actulus.net`](https://of-api.actulus.net/terms-of-service)
-- [OnlyMonster](https://onlymonster.ai/)
-- [Infloww](https://infloww.com/)
-- [FansMetric](https://fansmetric.com/)
-- [Substy](https://substy.ai/)
-- [CreatorHero](https://www.creatorhero.com/)
-- [Supercreator](https://www.supercreator.app/)
-- [Fans-CRM](https://fans-crm.com/)
-- [BuddyX](https://buddyx.app/)
-- [Chatterly](https://usechatterly.com/)
-- [OFManager](https://www.ofmanager.com/)
-- [CreatorXone](https://creatorx.one/about/)
-- [Usly](https://www.usly.app/)
-- [Many-Fans](https://many-fans.com/about)
-- [FBuddy](https://fbuddy.net/)
-- [Notiscale](https://notiscale.com/)
-- [FanHelm](https://fanhelm.com/)
-- [Creatorboost](https://creatorboost.app/)
-- [ChatPersona](https://chatpersona.ai/)
-- [Chatterbox](https://chatterbox.one/)
-- [ScaleChatter](https://scalechatter.com/)
-- [FlirtFlow](https://www.flirtflow.ai/)
-- [Anlora](https://meetanlora.com/)
-- [OnlyAI](https://www.onlyai.world/)
-- [Botly](https://botly.chat/)
-- [Unly](https://unly.ai/)
-- [Harpoon](https://getharpoon.com/)
-- [FanClaw](https://fanclaw.ai/)
-- [GPTease](https://gptease.ai/)
-- [Fansly Scheduler Bot](https://fanslybot.com/fansly-api)
-- [Fansly Creator Bot](https://docs.fanslycreatorbot.com/creators/sync)
-- [Aurifan](https://aurifan.com/for)
-- [Fansly Scraper от jupri на Apify](https://apify.com/jupri/fansly)
-- [Fansly API от apimirai на RapidAPI](https://rapidapi.com/apimirai/api/fansly-api)
+**Сторонние сервисы и API**
+
+Изучено 44 сервиса и API (22 сентября 2026): готового решения под эти требования не найдено.
