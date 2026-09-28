@@ -85,6 +85,7 @@ const sharedMocks = vi.hoisted(() => ({
   refreshPageMetadata: vi.fn(),
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
   captureFanslyFollowerPayload: vi.fn((value: unknown) => value),
+  captureFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
   trimFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
 }));
 
@@ -335,6 +336,8 @@ describe("sync executor handlers", () => {
     });
     sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
     sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
+    sharedMocks.captureFanslyMessagingGroupsPayload.mockReset();
+    sharedMocks.captureFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
     fanHydrationMocks.lookupHydratedFans.mockImplementation(async (
       app: { adapter?: { getAccountsByIdsPage?: ((requestContext: unknown, ids: string[]) => Promise<{ parsed: Array<{ id: string; username: string | null; displayName: string | null; createdAt?: number | null }> }>) | undefined } },
@@ -5655,6 +5658,54 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     await h.run();
     expect(h.getMessagesPage).toHaveBeenCalledTimes(1);
     expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+  });
+
+  /** One conversation, one scripted message page per chunk; the checkpoint
+   *  round-trips through the real cursor parser between chunks. */
+  function dmWalkHarness(conversation: Record<string, unknown>, pages: Array<Record<string, unknown>>) {
+    let checkpoint: Record<string, unknown> | null = null;
+    dbMocks.getCheckpoint.mockImplementation(async () => checkpoint ? { state: checkpoint } : null);
+    dbMocks.upsertCheckpointProgress.mockImplementation(async (_db, input) => {
+      checkpoint = input.state;
+      return {};
+    });
+    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate());
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation(conversation));
+    const getMessagesPage = vi.fn(async (context: { requestObserver: { onRequestEvent(event: unknown): Promise<void> } }) => {
+      const n = getMessagesPage.mock.calls.length;
+      await context.requestObserver.onRequestEvent({
+        requestId: `walk-${n}`, operation: "messages", endpointTemplate: "/message",
+        method: "GET", attemptNumber: 1, timestamp: new Date(), state: "started",
+      });
+      const page = pages[n - 1];
+      if (!page) throw new Error(`unexpected messages call #${n}`);
+      return { groupId: "group-1", before: null, ...page };
+    });
+    const telemetry = createTelemetry();
+    const app = { db: {}, config: { syncSharedRateLimitEnabled: true }, adapter: { getMessagesPage } };
+    const run = () => fanslyDmMessagesChunk(app as never, {
+      pageContext: { platform: "fansly", page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+        session: {}, proxy: null }, streamState: { requestSeq: 1 }, syncRunId: 906,
+      telemetry, budget: new SyncChunkBudget(1),
+    } as never);
+    return { run, getMessagesPage, telemetry, checkpoint: () => checkpoint };
+  }
+
+  it("journals a rejected message page, then refuses it before tips, normalization or completion", async () => {
+    const raw = { messages: null, accountMedia: [{ id: "media-1" }] };
+    const h = dmWalkHarness({}, [{ items: [], done: false, contractAccepted: false, raw }]);
+
+    await expect(h.run()).rejects.toThrow("Fansly messages response contract rejected; captured before refusal");
+
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({
+      endpoint: "dm_messages", responsePayload: { contractAccepted: false, raw },
+    }), expect.anything());
+    expect(tipContextMocks.materializeFanslyDmTipContextsBestEffort).not.toHaveBeenCalled();
+    expect(dbMocks.getExistingPageDmMessageIds).not.toHaveBeenCalled();
+    expect(dbMocks.upsertPageDmMessages).not.toHaveBeenCalled();
+    // An empty refused page would otherwise read as provider history exhausted.
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: null });
   });
 
   it("counts 429 retries in dm_messages chunk summaries", async () => {

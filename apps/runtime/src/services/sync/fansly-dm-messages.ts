@@ -235,7 +235,9 @@ export async function fetchAndJournalFanslyDmMessagePage(
     syncRunId: input.syncRunId,
     endpoint: "dm_messages",
     requestParams,
-    responsePayload: page.raw,
+    responsePayload: page.contractAccepted === false
+      ? { contractAccepted: false, raw: page.raw }
+      : page.raw,
     mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "dm_messages",
     retainUntil: dmRetentionDate(),
@@ -243,6 +245,12 @@ export async function fetchAndJournalFanslyDmMessagePage(
     action: "inserting dm_messages raw payload",
     platform: "fansly",
   });
+  // Refuse a drifted body only after it is journaled. Its empty item list
+  // must never reach normalization, where no oldest id reads as provider
+  // history exhausted and the thread would be finalized complete.
+  if (page.contractAccepted === false) {
+    throw new Error("Fansly messages response contract rejected; captured before refusal");
+  }
   await materializeFanslyDmTipContextsBestEffort(app, {
     accountId: input.platformAccountId,
     requestParams,

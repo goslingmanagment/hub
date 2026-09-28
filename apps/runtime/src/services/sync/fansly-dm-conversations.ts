@@ -68,10 +68,10 @@ import {
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import {
+  captureFanslyMessagingGroupsPayload,
   dmRetentionDate,
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
-  trimFanslyMessagingGroupsPayload,
   normalizeFanslyTimestamp,
 } from "./shared.ts";
 import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
@@ -484,7 +484,7 @@ export async function fanslyDmConversationsChunk(
       : null;
     const nextPageCount = state.pageCount + 1;
 
-    const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw);
+    const capturedPayload = captureFanslyMessagingGroupsPayload(page.raw, page.contractAccepted);
     const listCapture = await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
@@ -498,6 +498,14 @@ export async function fanslyDmConversationsChunk(
       action: "inserting dm conversations raw payload",
       platform: "fansly",
     });
+
+    // A body the adapter refused is journaled above, then refused here, before
+    // the provider-total guards: its missing total must not read as drift and
+    // restart the sweep. The checkpoint is untouched, so the next dispatch
+    // re-reads this offset at the normal cadence.
+    if ("contractAccepted" in capturedPayload) {
+      throw new Error("Fansly messaging groups response contract rejected; captured before refusal");
+    }
 
     if (currentProviderTotalMode === "present" && currentProviderReportedTotal === null) {
       await restartSweepAfterCapturedContractDrift({
@@ -793,7 +801,9 @@ export async function fanslyDmConversationsChunk(
           syncRunId: input.syncRunId,
           endpoint: "dm_messages",
           requestParams: headRepairRequestParams,
-          responsePayload: headRepair.raw,
+          responsePayload: headRepair.contractAccepted === false
+            ? { contractAccepted: false, raw: headRepair.raw }
+            : headRepair.raw,
           mapperVersion: FANSLY_MAPPER_VERSION,
           payloadKind: "dm_messages",
           retainUntil: dmRetentionDate(),
@@ -801,6 +811,9 @@ export async function fanslyDmConversationsChunk(
           action: "inserting dm_messages head-repair raw payload",
           platform: "fansly",
         });
+        if (headRepair.contractAccepted === false) {
+          throw new Error("Fansly head-repair messages response contract rejected; captured before refusal");
+        }
         await materializeFanslyDmTipContextsBestEffort(app, {
           accountId: input.pageContext.page.id,
           requestParams: headRepairRequestParams,

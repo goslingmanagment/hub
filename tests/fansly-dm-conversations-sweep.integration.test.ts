@@ -234,6 +234,72 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
     expect(checkpoint?.cursorLastSucceededRunId ?? null).toBeNull();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("journals a refused list page and throws without restarting the sweep or moving its cursor", async () => {
+    if (!testDb) throw new Error("Test database required");
+    const telemetry = fakeTelemetry();
+    const raw = { data: "drifted", aggregationData: { total: 2 } };
+    const { stored, calls } = await seedPage("sweep-list-contract", {
+      pages: [
+        groupsPage({ conversations: ["grp-1"], total: 2, offset: 0, done: false }),
+        // What the adapter returns for a body that failed its contract. Its
+        // total is absent, so a check placed after the provider-total guards
+        // would read it as drift from "present" and restart the whole sweep.
+        { total: undefined, items: [], accounts: [], groups: [], offset: 100, done: false,
+          contractAccepted: false, raw } as unknown as ReturnType<typeof groupsPage>,
+      ],
+    });
+
+    await expect(runChunk(stored, telemetry, 5))
+      .rejects.toThrow("Fansly messaging groups response contract rejected; captured before refusal");
+
+    expect(calls.map((call) => call.method)).toEqual(["messaging_groups", "messaging_groups"]);
+    const { rows } = await testDb.pool.query<{ payload: Record<string, unknown> }>(
+      "select payload from observations where account_id=$1 and kind='dm_conversations' order by id",
+      [stored.page.id],
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.payload).toEqual({
+      contractAccepted: false,
+      responseShape: {
+        response: "object", data: "string", aggregationData: "object", total: "number",
+        groups: "undefined", accounts: "undefined", dataLength: null, groupsLength: null, accountsLength: null,
+      },
+      captured: { data: [], aggregationData: { total: 2, accounts: [], groups: [] } },
+    });
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    expect(Object.keys(await readThreads(stored.page.id))).toEqual(["grp-1"]);
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.state).toMatchObject({
+      generation: 1, offset: 100, observedCount: 1, pageCount: 1,
+      providerTotalMode: "present", providerReportedTotal: 2,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("journals a refused head-repair page and throws before the page is applied", async () => {
+    if (!testDb) throw new Error("Test database required");
+    const raw = { messages: "drifted" };
+    const { stored } = await seedPage("sweep-head-repair-contract", {
+      pages: [groupsPage({
+        conversations: [{ groupId: "grp-1", lastMessageId: null, headMissing: true }],
+        total: 1, offset: 0, done: true,
+      })],
+    });
+    appContext.adapter.getMessagesPage = vi.fn(async () => ({
+      items: [], groupId: "grp-1", before: null, done: false, contractAccepted: false, raw,
+    }));
+
+    await expect(runChunk(stored, fakeTelemetry(), 5))
+      .rejects.toThrow("Fansly head-repair messages response contract rejected; captured before refusal");
+
+    expect(appContext.adapter.getMessagesPage).toHaveBeenCalledTimes(1);
+    expect((await testDb.pool.query(
+      "select payload from observations where account_id=$1 and kind='dm_messages'", [stored.page.id],
+    )).rows).toEqual([{ payload: { contractAccepted: false, raw } }]);
+    expect(await readThreads(stored.page.id)).toEqual({});
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.state).toMatchObject({ offset: 0, observedCount: 0, pageCount: 0 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("finalizes a small inbox in one chunk: one request, certified, unseen threads hidden", async (context) => {
     if (!testDb) {
       context.skip();
