@@ -10,7 +10,7 @@
 // flags never re-litigate core source. Only external dependency: zod.
 //
 // Usage: node scripts/vendor-sdk.mjs <target-dir>
-//   e.g. node scripts/vendor-sdk.mjs ../of-desktop/packages/kernel-sdk
+//   e.g. node scripts/vendor-sdk.mjs ../onlyfans-chat/packages/kernel-sdk
 //
 // The output is a generated artifact: regenerate (never hand-edit) after any
 // contracts change, and commit the refresh in the consuming repo. The vendor

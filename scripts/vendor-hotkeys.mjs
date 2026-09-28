@@ -7,8 +7,8 @@
 // hotkey change must not drag undeployed contracts into a client.
 //
 // Usage: node scripts/vendor-hotkeys.mjs <target-dir> [--allow-dirty]
-//   e.g. node scripts/vendor-hotkeys.mjs ../fansly-ext/vendor/chatgoose-hotkeys
-//        node scripts/vendor-hotkeys.mjs ../of-desktop/packages/chatgoose-hotkeys
+//   e.g. node scripts/vendor-hotkeys.mjs ../fansly-chat/vendor/chatgoose-hotkeys
+//        node scripts/vendor-hotkeys.mjs ../onlyfans-chat/packages/chatgoose-hotkeys
 //
 // Both clients must ship the same manifest sha256 from the same source commit.
 

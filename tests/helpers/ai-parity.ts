@@ -11,7 +11,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // stable reference); the kernel's migrated builder must produce
 // byte-identical PromptPayloads for identical fixture inputs.
 
-export const DESKTOP_ROOT = "/Users/dmitriy/code/goose/of-desktop";
+export const DESKTOP_ROOT = "/Users/dmitriy/code/1-platform/onlyfans-chat";
 export const FROZEN_DESKTOP_COMMIT = "1db76a4ae13dd1cb4180f73b854426d490fd3f7c";
 const DESKTOP_SHARED_SRC = join(DESKTOP_ROOT, "packages", "shared", "src");
 const KERNEL_PROMPTS_ROOT = join(

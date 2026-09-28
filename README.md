@@ -223,7 +223,7 @@ What the script does:
 
 Every successful **push to main** CI run saves the exact image tested by the
 Chromium and startup smoke checks, then publishes it to
-`ghcr.io/goslingmanagment/core/runtime:<full-commit-sha>` after Quality Gate.
+`ghcr.io/goslingmanagment/hub/runtime:<full-commit-sha>` after Quality Gate.
 The publish job summary contains its immutable `@sha256:…` reference. PR and
 manual CI runs verify code but do not publish. A failed gate never publishes.
 
@@ -233,7 +233,7 @@ and use the digest from that successful run:
 
 ```bash
 scripts/deploy-production.sh --mode pull \
-  --pull-image ghcr.io/goslingmanagment/core/runtime@sha256:<64-hex-digest> \
+  --pull-image ghcr.io/goslingmanagment/hub/runtime@sha256:<64-hex-digest> \
   user@server --verify-url https://YOUR_DOMAIN
 ```
 
