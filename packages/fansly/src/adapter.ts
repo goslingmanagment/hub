@@ -74,6 +74,9 @@ type RequestResult<T> = {
 };
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** How much of Fansly's `error.details` an error message carries. The whole
+ *  body stays in `responseSnippet`. */
+const ERROR_DETAILS_MAX_CHARS = 200;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
 /**
@@ -275,6 +278,20 @@ function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
   return isRecord(value) &&
     (value.success === undefined || typeof value.success === "boolean") &&
     (value.error === undefined || value.error === null || isApiError(value.error));
+}
+
+/**
+ * Fansly's own APPLICATION error, well-formed: `success: false` with a numeric
+ * `error.code` and a non-empty `error.details`, e.g.
+ * `{"success":false,"error":{"code":500,"details":"error getting graph"}}`.
+ * A proxy or gateway page, an empty body or a bare `{success:false}` is not one.
+ */
+function isFanslyErrorEnvelope(envelope: ApiEnvelope<unknown> | null): boolean {
+  return envelope !== null &&
+    envelope.success === false &&
+    typeof envelope.error?.code === "number" &&
+    typeof envelope.error.details === "string" &&
+    envelope.error.details.trim().length > 0;
 }
 
 function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | null {
@@ -552,6 +569,9 @@ export class FanslyAdapter {
         afterDate: params.afterDate.toISOString(),
         periodMs: params.periodMs,
       },
+      // A 500 with Fansly's error envelope is this route's answer for a gone
+      // item or a refused span, and a retry has never changed it.
+      finalServerErrorEnvelope: true,
       summarizeResponse: summarizeUnknownResponse,
     });
 
@@ -2079,6 +2099,17 @@ export class FanslyAdapter {
        * answer from an absent one and the journal records which.
        */
       emptyStatuses?: readonly number[];
+      /**
+       * An HTTP 5xx that carries a well-formed Fansly error envelope
+       * (`isFanslyErrorEnvelope`) is FINAL on this route: the application's
+       * own answer about this request, not the wire's, so it fails on the
+       * first attempt. Opt-in per method, because only `/it/moie/statsnew` is
+       * measured: none of its thousands of such retries in a week recovered
+       * (`error getting graph`, `error getting media offer`). A `Retry-After`,
+       * a body that is not such an envelope, a 429 and a transport failure keep
+       * the retries every route has.
+       */
+      finalServerErrorEnvelope?: boolean;
       summarizeResponse?: (parsed: T) => Record<string, unknown>;
     },
   ): Promise<RequestResult<T>> {
@@ -2149,6 +2180,17 @@ export class FanslyAdapter {
         // Redact BEFORE slicing: a cut through a credential URL leaves a
         // fragment the redactor no longer recognises as one (decision #248).
         const responseSnippet = redactSensitiveText(text).slice(0, 400);
+        // Fansly puts the reason in `error.details`, not `message`. Redacted
+        // before it is sliced, like the snippet.
+        const envelopeDetails = envelope?.error?.details === undefined
+          || envelope.error.details.trim().length === 0
+          ? undefined
+          : redactSensitiveText(envelope.error.details.trim()).slice(0, ERROR_DETAILS_MAX_CHARS);
+        /** The provider's message when it sent one; otherwise ours, with the
+         *  provider's details after it. */
+        const failureMessage = (fallback: string) =>
+          envelopeMessage
+            ?? (envelopeDetails === undefined ? fallback : `${fallback}: ${envelopeDetails}`);
         const retryAfterHeader = response.headers.get("retry-after");
         const observedAt = Date.now();
         // Unclamped on purpose: the provider's deadline is a fact, and a
@@ -2173,10 +2215,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "http",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly authorization failed (${response.status})`),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+              failureMessage(`Fansly authorization failed (${response.status})`),
               response.status,
               envelope?.error?.code,
               responseSnippet,
@@ -2202,10 +2244,19 @@ export class FanslyAdapter {
           };
         }
 
+        // The route's own deterministic answer, where the route opts in (see
+        // `finalServerErrorEnvelope`): it falls through to the terminal failure
+        // below on the first attempt. A `Retry-After` says "come back later",
+        // which is the opposite claim, so it keeps its retries.
+        const finalServerError = options.finalServerErrorEnvelope === true
+          && response.status >= 500
+          && retryAfterHeader === null
+          && isFanslyErrorEnvelope(envelope);
         if (
           [429, 500, 502, 503, 504].includes(response.status)
           && executionContext.retriesRemaining > 0
           && !retryAfterExceedsInProcessClamp
+          && !finalServerError
         ) {
           return {
             kind: "retry",
@@ -2217,7 +2268,7 @@ export class FanslyAdapter {
               observedAt,
             ),
             responseMetadata: failureResponseMetadata,
-            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
           };
         }
 
@@ -2226,10 +2277,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "http",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? `Fansly request failed (${response.status})`,
+              failureMessage(`Fansly request failed (${response.status})`),
               response.status,
               envelope?.error?.code,
               responseSnippet,
@@ -2243,10 +2294,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "provider",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? "Fansly response envelope was unsuccessful",
+            errorMessage: failureMessage("Fansly response envelope was unsuccessful"),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? "Fansly response envelope was unsuccessful",
+              failureMessage("Fansly response envelope was unsuccessful"),
               response.status,
               envelope?.error?.code,
               responseSnippet,

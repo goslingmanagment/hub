@@ -187,22 +187,28 @@ const OBSERVATION_KIND = "media_offer_stats";
  *  coverage row per item would be a second queue, of the same cardinality, in a
  *  table whose contract is "how far back does this plane reach". */
 const DAY_MS = 24 * 60 * 60 * 1000;
-const HOUR_MS = 60 * 60 * 1000;
 
 const DAILY_PERIOD_MS = 86_400_000;
-const HOURLY_PERIOD_MS = 3_600_000;
 
 /**
- * THE STEADY WINDOW PER TIER.
+ * THE STEADY WINDOW PER TIER — every tier reads DAILY buckets.
  *
- * Fresh items are read at HOURLY granularity over the last day because that is
- * where the numbers actually move; everything older is read daily. The spans are
- * constants rather than config keys for the reason §6.1 gives: they describe how
- * traffic decays with an item's age, and the one thing an operator should be
- * turning is how much of that decay the lane can afford — the daily cap — plus
- * the long-tail cycle, which A6 names explicitly.
+ * Fresh items read the last 31 days: an item that young is covered from its
+ * publication day on, so every visit restates the daily buckets the dashboard
+ * reads — the partial launch-day bucket included — instead of leaving them as
+ * the first-sight backfill wrote them. It is also the span the route is proven
+ * to honour, and exactly the backfill's first window, which a first visit then
+ * reuses rather than asks twice. The fresh tier used to read the last 24 hours
+ * at HOURLY granularity; nothing reads per-media hourly buckets, and the daily
+ * series behind the sparklines ended at an item's first visit. The hourly rows
+ * already captured stay; none are produced any more.
+ *
+ * The spans are constants rather than config keys for the reason §6.1 gives:
+ * they describe how traffic decays with an item's age, and the one thing an
+ * operator should be turning is how much of that decay the lane can afford —
+ * the daily cap — plus the long-tail cycle, which A6 names explicitly.
  */
-const FRESH_TRAILING_HOURS = 24;
+const FRESH_TRAILING_DAYS = 31;
 const MID_TRAILING_DAYS = 30;
 const LONG_TAIL_TRAILING_DAYS = 90;
 
@@ -673,8 +679,9 @@ const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 /**
  * Did the provider REFUSE the request, rather than the wire fail it?
  *
- * An HTTP error status the route itself answered with, after the adapter's own
- * retries — the 500 `error getting graph` is the production case. Not a 429 and
+ * An HTTP error status the route itself answered with — the 500 `error getting
+ * graph` is the production case, which the adapter fails on its first attempt
+ * because Fansly's error envelope makes it final on this route. Not a 429 and
  * not a `Retry-After` (pacing, which says nothing about the window), not a
  * gateway status, not a transport or proxy failure (no status at all), and not
  * a journaled body we could not read. Only a refusal can be evidence about what
@@ -1417,6 +1424,20 @@ export async function fanslyMediaStatsChunk(
     let buckets = 0;
     let served = 0;
 
+    // ALREADY ANSWERED THIS VISIT, at no cost. A fresh item's first visit opens
+    // its backfill with `[now − 31 d, now]` daily, which IS the fresh steady
+    // window: asked again, it would be the byte-identical request the repeat
+    // guard stops, and a refresh stopped by that guard never answers the dirty
+    // mark. The backfill's journaled answer is the refresh, and its buckets
+    // were counted there. A key in `issued` that a steady plan can ask for was
+    // journaled: a backfill window that fails ends the visit before this runs.
+    // Only a refresh whose EVERY window was answered is taken this way — the
+    // long tail's split plan shares just its first window with the backfill,
+    // and keeps its own rules.
+    if (windows.every((window) => issued.has(windowKey(window)))) {
+      return { status: "ok", buckets, complete: true, served: windows.length };
+    }
+
     // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
     // multi-call unit keeps. Three split windows started with two calls left
     // were read, discarded unstamped, and read again next chunk: up to five
@@ -1801,12 +1822,11 @@ export async function fanslyMediaStatsChunk(
 /**
  * The steady windows for a tier, newest first.
  *
- * Fresh reads the last 24 hours at HOURLY granularity, mid the last 30 days
- * daily, long tail the last 90 days daily — as ONE window where the route
- * honours 90 days, and as three 31-day windows where it does not. The split
- * TRIPLES what a long-tail visit costs, which is why the mode is durable, is
- * announced once, and is reported in the progress block rather than discovered
- * silently on every visit.
+ * Fresh reads the last 31 days daily, mid the last 30 days daily, long tail the
+ * last 90 days daily — as ONE window where the route honours 90 days, and as
+ * three 31-day windows where it does not. The split TRIPLES what a long-tail
+ * visit costs, which is why the mode is durable, is announced once, and is
+ * reported in the progress block rather than discovered silently on every visit.
  */
 export function steadyWindows(
   tier: MediaStatsTier,
@@ -1816,9 +1836,9 @@ export function steadyWindows(
   const end = now.getTime();
   if (tier === "fresh") {
     return [{
-      periodMs: HOURLY_PERIOD_MS,
+      periodMs: DAILY_PERIOD_MS,
       beforeMs: end,
-      afterMs: end - FRESH_TRAILING_HOURS * HOUR_MS,
+      afterMs: end - FRESH_TRAILING_DAYS * DAY_MS,
     }];
   }
   if (tier === "mid") {

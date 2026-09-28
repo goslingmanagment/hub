@@ -992,13 +992,13 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
     const now = new Date("2026-08-22T12:00:00.000Z");
 
-    // FRESH — trailing 24 h at hourly granularity, which is where a new item's
-    // numbers actually move.
+    // FRESH — trailing 31 d, daily: an item that young is covered from its
+    // publication day on.
     await adapter.getMediaOfferStats(context(), {
       mediaOfferId: "000900000000004001",
       beforeDate: now,
-      afterDate: new Date(now.getTime() - 24 * 60 * 60_000),
-      periodMs: 3_600_000,
+      afterDate: new Date(now.getTime() - 31 * 24 * 60 * 60_000),
+      periodMs: 86_400_000,
     });
     // MID — trailing 30 d, daily.
     await adapter.getMediaOfferStats(context(), {
@@ -1048,13 +1048,13 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     }
 
     // THE PERIOD PER TIER, in epoch milliseconds, as strings on the wire.
-    expect(urls[0]?.searchParams.get("period")).toBe("3600000");
+    expect(urls[0]?.searchParams.get("period")).toBe("86400000");
     expect(urls[1]?.searchParams.get("period")).toBe("86400000");
     expect(urls[2]?.searchParams.get("period")).toBe("86400000");
 
     expect(urls[0]?.searchParams.get("beforeDate")).toBe(String(now.getTime()));
     expect(urls[0]?.searchParams.get("afterDate")).toBe(
-      String(now.getTime() - 24 * 60 * 60_000),
+      String(now.getTime() - 31 * 24 * 60 * 60_000),
     );
     expect(urls[2]?.searchParams.get("beforeDate")).toBe(String(backfillBefore.getTime()));
     expect(urls[2]?.searchParams.get("afterDate")).toBe(String(backfillAfter.getTime()));
@@ -1181,6 +1181,122 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     expect(failure?.status).toBe(401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+  });
+
+  const STATS_WINDOW = {
+    mediaOfferId: "media-1",
+    beforeDate: new Date("2026-08-22T00:00:00.000Z"),
+    afterDate: new Date("2026-07-22T00:00:00.000Z"),
+    periodMs: 86_400_000,
+  };
+  /** Fansly's own answer for a refused span (production, every attempt of the
+   *  90-day window since 2026-09-05) and for a gone item. */
+  const errorEnvelope = (details: string) => ({ success: false, error: { code: 500, details } });
+  const bodyResponse = (body: string, init: ResponseInit) =>
+    new Response(body, { headers: { "content-type": "application/json" }, ...init });
+
+  for (const details of ["error getting graph", "error getting media offer"]) {
+    it(`fails a 500 carrying Fansly's error envelope on the FIRST attempt (${details})`, async () => {
+      const { FanslyAdapter, fetchMock } = harness;
+      // A fresh Response per call: were it retried, every attempt would answer.
+      fetchMock.mockImplementation(async () =>
+        toJsonResponse(errorEnvelope(details), { status: 500 }));
+      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+      const { events, requestObserver } = captureEvents();
+      const failure = await adapter.getMediaOfferStats(context({ requestObserver }), STATS_WINDOW)
+        .then(() => null, (error: unknown) => error as {
+          status?: number;
+          code?: number;
+          message?: string;
+          retryAfterAt?: Date | null;
+        });
+      await adapter.close();
+
+      // Deterministic on this route: no retry has ever recovered one, and each
+      // would be one more attempt against the lane's daily cap.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(events.filter((event) => event.state === "started")).toHaveLength(1);
+      expect(failure).toMatchObject({ status: 500, code: 500, retryAfterAt: null });
+      // The reason is in `error.details`, and now in the message too.
+      expect(failure?.message).toBe(`Fansly request failed (500): ${details}`);
+      expect(events.find((event) => event.state === "failed")?.errorMessage)
+        .toBe(`Fansly request failed (500): ${details}`);
+    });
+  }
+
+  for (
+    const [label, response] of [
+      ["an HTML 500", () => bodyResponse("<html>Internal Server Error</html>", { status: 500 })],
+      ["a bare {success:false} 500", () => toJsonResponse({ success: false }, { status: 500 })],
+      ["an envelope 500 with a Retry-After", () =>
+        toJsonResponse(errorEnvelope("error getting graph"), {
+          status: 500,
+          headers: { "content-type": "application/json", "retry-after": "0" },
+        })],
+      ["an envelope 429", () =>
+        toJsonResponse(errorEnvelope("rate limited"), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "0" },
+        })],
+    ] as const
+  ) {
+    it(`still retries ${label} on this route`, async () => {
+      const { FanslyAdapter, fetchMock } = harness;
+      fetchMock
+        .mockResolvedValueOnce(response())
+        .mockResolvedValueOnce(toJsonResponse({ success: true, response: { dataset: {} } }));
+      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+      const result = await adapter.getMediaOfferStats(context(), STATS_WINDOW);
+      await adapter.close();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.raw).toEqual({ dataset: {} });
+    });
+  }
+
+  it("keeps retrying the same envelope 500 on every OTHER route", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock
+      .mockResolvedValueOnce(toJsonResponse(errorEnvelope("error getting graph"), { status: 500 }))
+      .mockResolvedValueOnce(toJsonResponse({ success: true, response: { dataset: {} } }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    await adapter.getAccountStats(context(), {
+      beforeDate: STATS_WINDOW.beforeDate,
+      afterDate: STATS_WINDOW.afterDate,
+      periodMs: 86_400_000,
+    });
+    await adapter.close();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(String(fetchMock.mock.calls[0]![0])).pathname).toBe("/it/amoie/stats");
+  });
+
+  it("puts Fansly's error details in the message on every route, after the provider's own message", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock
+      .mockResolvedValueOnce(toJsonResponse(errorEnvelope("error getting graph"), { status: 500 }))
+      .mockResolvedValueOnce(toJsonResponse(
+        { success: false, error: { code: 1, message: "bad request", details: "missing id" } },
+        { status: 400 },
+      ));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    // One attempt left today: the route's own retries cannot run.
+    const lastAttempt = context({ remainingAttempts: () => 1 });
+    const accountStats = await adapter.getAccountStats(lastAttempt, {
+      beforeDate: STATS_WINDOW.beforeDate,
+      afterDate: STATS_WINDOW.afterDate,
+      periodMs: 86_400_000,
+    }).then(() => null, (error: unknown) => error as { status?: number; message?: string });
+    const withMessage = await adapter.getTrackingLinks(lastAttempt)
+      .then(() => null, (error: unknown) => error as { status?: number; message?: string });
+    await adapter.close();
+
+    expect(accountStats).toMatchObject({
+      status: 500,
+      message: "Fansly request failed (500): error getting graph",
+    });
+    // A provider `message` is still the message, verbatim.
+    expect(withMessage).toMatchObject({ status: 400, message: "bad request" });
   });
 
   it("redacts a failed response body BEFORE slicing it, so a credential cut at the 400-char edge cannot leak (decision #248)", async () => {
