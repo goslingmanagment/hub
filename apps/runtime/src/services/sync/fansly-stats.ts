@@ -171,7 +171,8 @@ const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
 const BACKFILL_NARROW_FLOOR_DAYS = 7;
 /** Two consecutive empty windows (or months), then ONE probe further back. */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
-/** Pages of mass-DM history the first-enable walk takes per daily sweep. */
+/** Pages of mass-DM history each first-enable walk (live, deleted) takes per
+ *  daily sweep. */
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
 /** `recapstats` — the step that completes the sweep and stamps `lastSweepDay`. */
 const LAST_SWEEP_STEP = 10;
@@ -283,6 +284,15 @@ export interface FanslyStatsCursorState {
    *  first-enable walk cannot hold the sweep at step 6 for days and starve the
    *  daily traffic capture behind it. */
   broadcastPagesInSweep: number;
+  /** Why the live walk reached its floor; null while it is open, or when it
+   *  got there before the reason was kept. */
+  broadcastWalkStop: BroadcastWalkStop | null;
+  /** The same walk over the DELETED list (step 7), with the same bound. A
+   *  cursor from before it existed starts it once. */
+  deletedBroadcastBefore: string | null;
+  deletedBroadcastFloorReached: boolean;
+  deletedBroadcastPagesInSweep: number;
+  deletedBroadcastWalkStop: BroadcastWalkStop | null;
   backfill: {
     daily: DailyBackfillState;
     hourly: HourlyBackfillState;
@@ -437,6 +447,11 @@ export function parseFanslyStatsCursorState(
     broadcastBefore: asNullableString(state.broadcastBefore),
     broadcastFloorReached: state.broadcastFloorReached === true,
     broadcastPagesInSweep: Math.max(0, asInt(state.broadcastPagesInSweep, 0)),
+    broadcastWalkStop: parseBroadcastWalkStop(state.broadcastWalkStop),
+    deletedBroadcastBefore: asNullableString(state.deletedBroadcastBefore),
+    deletedBroadcastFloorReached: state.deletedBroadcastFloorReached === true,
+    deletedBroadcastPagesInSweep: Math.max(0, asInt(state.deletedBroadcastPagesInSweep, 0)),
+    deletedBroadcastWalkStop: parseBroadcastWalkStop(state.deletedBroadcastWalkStop),
     backfill: backfillRecord === null ? null : {
       daily: parseDailyBackfill(backfillRecord.daily, now),
       hourly: parseHourlyBackfill(backfillRecord.hourly, now),
@@ -602,6 +617,11 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     broadcastBefore: null,
     broadcastFloorReached: false,
     broadcastPagesInSweep: 0,
+    broadcastWalkStop: null,
+    deletedBroadcastBefore: null,
+    deletedBroadcastFloorReached: false,
+    deletedBroadcastPagesInSweep: 0,
+    deletedBroadcastWalkStop: null,
     backfill: {
       daily: emptyDailyBackfill(now),
       hourly: {
@@ -739,10 +759,6 @@ function payloadRows(payload: unknown): unknown[] {
     }
   }
   return [];
-}
-
-function rowCount(payload: unknown): number {
-  return payloadRows(payload).length;
 }
 
 /**
@@ -1569,6 +1585,39 @@ export async function fanslyStatsSnapshotChunk(
     return null;
   };
 
+  /**
+   * One page of a broadcast list's `before` walk — the live list at step 6, the
+   * deleted list at step 7 — journaled BEFORE the walk moves. A walk that ends
+   * on anything but an empty page says so once, as an anomaly.
+   */
+  const readBroadcastPage = async (
+    kind: "broadcast_stats" | "broadcast_stats_deleted",
+    walk: BroadcastWalk,
+  ) => {
+    const before = walk.floorReached ? null : walk.before;
+    const response = await app.adapter.getBroadcastStatsPage(requestContext, {
+      before,
+      limit: null,
+      deleted: kind === "broadcast_stats_deleted",
+    });
+    await persist(kind, {
+      before,
+      walk: walk.floorReached ? "head" : "first_enable_backfill",
+    }, response.raw);
+    const next = advanceBroadcastWalk(walk, response.raw);
+    if (next.stop !== null && next.stop !== "empty_page") {
+      await input.telemetry.addAnomaly({
+        code: "fansly_stats_broadcast_walk_stopped",
+        severity: "warn",
+        message:
+          "A Fansly broadcast history walk stopped on something other than an empty page; "
+          + "the list is treated as read to its floor",
+        details: { kind, stop: next.stop, before },
+      });
+    }
+    return next;
+  };
+
   // ── STEADY DAILY SWEEP ────────────────────────────────────────────────────
   const today = utcDayKey(now);
   if (state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null) {
@@ -1751,60 +1800,40 @@ export async function fanslyStatsSnapshotChunk(
       // broadcast `before` cursor to the floor — every page journaled — because
       // mass-DM performance before today is otherwise unrecoverable; afterwards
       // only the first page is polled.
-      const response = await app.adapter.getBroadcastStatsPage(requestContext, {
-        before: state.broadcastFloorReached ? null : state.broadcastBefore,
-        limit: null,
-        deleted: false,
+      const next = await readBroadcastPage("broadcast_stats", {
+        before: state.broadcastBefore,
+        floorReached: state.broadcastFloorReached,
+        pagesInSweep: state.broadcastPagesInSweep,
       });
-      await persist("broadcast_stats", {
-        before: state.broadcastFloorReached ? null : state.broadcastBefore,
-        walk: state.broadcastFloorReached ? "head" : "first_enable_backfill",
-      }, response.raw);
-      const rows = rowCount(response.raw);
-      const pagesInSweep = state.broadcastPagesInSweep + 1;
-      if (state.broadcastFloorReached) {
-        state = { ...state, stepIndex: 7, broadcastPagesInSweep: 0 };
-      } else if (rows === 0) {
-        state = {
-          ...state,
-          broadcastFloorReached: true,
-          broadcastBefore: null,
-          stepIndex: 7,
-          broadcastPagesInSweep: 0,
-        };
-      } else {
-        const nextBefore = oldestBroadcastRef(response.raw);
-        // A cursor that does not advance is a walk that would never end.
-        state = nextBefore === null || nextBefore === state.broadcastBefore
-          ? {
-            ...state,
-            broadcastFloorReached: true,
-            broadcastBefore: null,
-            stepIndex: 7,
-            broadcastPagesInSweep: 0,
-          }
-          // BOUNDED PER SWEEP. Without this the first-enable walk would hold the
-          // sweep at step 6 until the whole broadcast history was read — and
-          // `lastSweepDay` only advances at the last step, so the DAILY traffic
-          // capture behind it would stall for as many days as the walk took.
-          // Three pages a day finishes any realistic history in under a fortnight
-          // and never blocks the head poll.
-          : pagesInSweep >= BROADCAST_BACKFILL_PAGES_PER_SWEEP
-          ? { ...state, broadcastBefore: nextBefore, stepIndex: 7, broadcastPagesInSweep: 0 }
-          : { ...state, broadcastBefore: nextBefore, broadcastPagesInSweep: pagesInSweep };
-      }
+      state = {
+        ...state,
+        broadcastBefore: next.walk.before,
+        broadcastFloorReached: next.walk.floorReached,
+        broadcastPagesInSweep: next.walk.pagesInSweep,
+        broadcastWalkStop: next.stop ?? state.broadcastWalkStop,
+        stepIndex: next.stepDone ? 7 : 6,
+      };
       await saveProgress();
       continue;
     }
 
     if (state.stepIndex === 7) {
-      const response = await app.adapter.getBroadcastStatsPage(requestContext, {
-        before: null,
-        limit: null,
-        deleted: true,
+      // The DELETED list is paged the same way and walked the same way: a
+      // withdrawn broadcast and its sales exist nowhere else, and its head
+      // holds only the newest page of them.
+      const next = await readBroadcastPage("broadcast_stats_deleted", {
+        before: state.deletedBroadcastBefore,
+        floorReached: state.deletedBroadcastFloorReached,
+        pagesInSweep: state.deletedBroadcastPagesInSweep,
       });
-      await persist("broadcast_stats_deleted", {}, response.raw);
-      state = { ...state, stepIndex: 8 };
+      state = {
+        ...state,
+        deletedBroadcastBefore: next.walk.before,
+        deletedBroadcastFloorReached: next.walk.floorReached,
+        deletedBroadcastPagesInSweep: next.walk.pagesInSweep,
+        deletedBroadcastWalkStop: next.stop ?? state.deletedBroadcastWalkStop,
+        stepIndex: next.stepDone ? 8 : 7,
+      };
       await saveProgress();
       continue;
     }
@@ -1875,18 +1904,105 @@ export async function fanslyStatsSnapshotChunk(
   };
 }
 
+// ── the broadcast walks (steps 6 and 7) ──────────────────────────────────────
+
+/**
+ * Why a broadcast list's `before` walk reached its floor. Only `empty_page` is
+ * the provider saying so; the others end the walk rather than repeat it, and
+ * raise an anomaly so they cannot pass for a real floor.
+ */
+export type BroadcastWalkStop =
+  | "empty_page"
+  | "no_row_ids"
+  | "cursor_not_advancing"
+  | "malformed_shape";
+
+const BROADCAST_WALK_STOPS: ReadonlySet<string> = new Set<BroadcastWalkStop>([
+  "empty_page",
+  "no_row_ids",
+  "cursor_not_advancing",
+  "malformed_shape",
+]);
+
+function parseBroadcastWalkStop(value: unknown): BroadcastWalkStop | null {
+  return typeof value === "string" && BROADCAST_WALK_STOPS.has(value)
+    ? value as BroadcastWalkStop
+    : null;
+}
+
+/** One broadcast list's walk, as the cursor keeps it. */
+export interface BroadcastWalk {
+  before: string | null;
+  floorReached: boolean;
+  pagesInSweep: number;
+}
+
+/**
+ * The `messages[]` of one broadcast-stats page, BY NAME, or null when the body
+ * carries none. The body also carries `accountMedia`, `accountMediaBundles`,
+ * `tipGoals` and `tips` sidecars, so its first array is not the page: an empty
+ * sidecar ahead of a full page of broadcasts would read as the floor.
+ */
+export function broadcastMessageRows(payload: unknown): unknown[] | null {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  const record = asRecord(payload);
+  return record !== null && Array.isArray(record.messages) ? record.messages : null;
+}
+
+/**
+ * One page of a broadcast `before` walk, folded into the walk.
+ *
+ * At the floor only the head is polled and the step is done. Otherwise an
+ * empty page is the floor, a page whose oldest id is missing or does not move
+ * the cursor ends the walk rather than repeating it, and the walk is BOUNDED
+ * PER SWEEP: without that the first-enable walk would hold the sweep on this
+ * step until the whole history was read — and `lastSweepDay` only advances at
+ * the last step, so the DAILY traffic capture behind it would stall for as
+ * many days as the walk took. Three pages a day finishes any realistic history
+ * in under a fortnight and never blocks the head poll.
+ */
+export function advanceBroadcastWalk(
+  walk: BroadcastWalk,
+  payload: unknown,
+  pagesPerSweep = BROADCAST_BACKFILL_PAGES_PER_SWEEP,
+): { walk: BroadcastWalk; stepDone: boolean; stop: BroadcastWalkStop | null } {
+  if (walk.floorReached) {
+    return { walk: { ...walk, pagesInSweep: 0 }, stepDone: true, stop: null };
+  }
+  const floor = (stop: BroadcastWalkStop) => ({
+    walk: { before: null, floorReached: true, pagesInSweep: 0 },
+    stepDone: true,
+    stop,
+  });
+  const rows = broadcastMessageRows(payload);
+  if (rows === null) {
+    return floor("malformed_shape");
+  }
+  if (rows.length === 0) {
+    return floor("empty_page");
+  }
+  const nextBefore = oldestBroadcastRef(payload);
+  if (nextBefore === null) {
+    return floor("no_row_ids");
+  }
+  // A cursor that does not advance is a walk that would never end.
+  if (nextBefore === walk.before) {
+    return floor("cursor_not_advancing");
+  }
+  const pagesInSweep = walk.pagesInSweep + 1;
+  return pagesInSweep >= pagesPerSweep
+    ? { walk: { before: nextBefore, floorReached: false, pagesInSweep: 0 }, stepDone: true, stop: null }
+    : { walk: { before: nextBefore, floorReached: false, pagesInSweep }, stepDone: false, stop: null };
+}
+
 /** The `before` cursor for the next broadcast page: the oldest id this page
  *  served. Returns null when the shape carries none — which ends the walk
  *  rather than repeating it. */
 function oldestBroadcastRef(payload: unknown): string | null {
-  const record = asRecord(payload);
-  const rows = record === null
-    ? (Array.isArray(payload) ? payload : [])
-    : Array.isArray(record.messages)
-    ? record.messages
-    : [];
   let oldest: string | null = null;
-  for (const row of rows) {
+  for (const row of broadcastMessageRows(payload) ?? []) {
     const item = asRecord(row);
     const id = item === null ? null : asNullableString(item.id);
     if (id === null) {

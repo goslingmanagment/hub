@@ -72,9 +72,13 @@ function emptyStatsBody() {
  * real one does: `attemptsPerCall` above 1 is what a retried request looks like
  * to everything downstream of `executeObservedRequest`.
  */
-function adapterStub(options: { attemptsPerCall?: number } = {}) {
+function adapterStub(options: {
+  attemptsPerCall?: number;
+  broadcastFor?: (params: { before: string | null; deleted: boolean }) => unknown;
+} = {}) {
   const attemptsPerCall = options.attemptsPerCall ?? 1;
   const calls: string[] = [];
+  const broadcastRequests: Array<{ before: string | null; deleted: boolean }> = [];
   const answer = async (
     name: string,
     context: { requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null },
@@ -91,6 +95,7 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
   };
   return {
     calls,
+    broadcastRequests,
     getAccountStats: vi.fn(async (context: never) => answer("account_stats", context, emptyStatsBody())),
     getEarningsStatsWindow: vi.fn(async (context: never) =>
       answer("earnings_stats", context, [])
@@ -102,9 +107,13 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
     getDiscoveryMediaSuggestions: vi.fn(async (context: never) =>
       answer("discovery", context, { mediaOfferSuggestions: [] })
     ),
-    getBroadcastStatsPage: vi.fn(async (context: never) =>
-      answer("broadcast", context, { messages: [] })
-    ),
+    getBroadcastStatsPage: vi.fn(async (
+      context: never,
+      params: { before: string | null; deleted: boolean },
+    ) => {
+      broadcastRequests.push({ before: params.before, deleted: params.deleted });
+      return answer("broadcast", context, options.broadcastFor?.(params) ?? { messages: [] });
+    }),
     getBroadcastScheduled: vi.fn(async (context: never) =>
       answer("broadcast_scheduled", context, { scheduledBroadcastMessages: [] })
     ),
@@ -1501,6 +1510,89 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       else expect(state.stepIndex).toBe(2);
     },
   );
+
+  it("walks BOTH broadcast lists to an empty page, reading `messages` by name", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Today's sweep has reached the broadcast steps with neither list walked.
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.mode = "steady";
+    seeded.backfill = null;
+    seeded.sweepDay = utcDayKey(NOW);
+    seeded.stepIndex = 6;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    const pages: Record<string, unknown> = {
+      // Media-less mass DMs: the empty `accountMedia` sidecar is the body's
+      // FIRST array, and the page behind it is full.
+      "live:": { accountMedia: [], accountMediaBundles: [], messages: [{ id: "300" }, { id: "200" }], tipGoals: [], tips: [] },
+      "live:200": { accountMedia: [], messages: [] },
+      "deleted:": { messages: [{ id: "90" }, { id: "80" }] },
+      "deleted:80": { messages: [{ id: "70" }] },
+      "deleted:70": { messages: [] },
+    };
+    const adapter = adapterStub({
+      broadcastFor: (params) =>
+        pages[`${params.deleted ? "deleted" : "live"}:${params.before ?? ""}`] ?? { messages: [] },
+    });
+    const telemetry = telemetryStub();
+
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget()),
+      );
+      if (result.satisfied) break;
+    }
+
+    expect(adapter.broadcastRequests).toEqual([
+      { deleted: false, before: null },
+      { deleted: false, before: "200" },
+      { deleted: true, before: null },
+      { deleted: true, before: "80" },
+      { deleted: true, before: "70" },
+    ]);
+    // Every page journaled, each beside the cursor that asked for it.
+    const params = await testDb.pool.query(
+      `select request_params from sync_raw_payloads
+        where page_id = $1 and endpoint = 'broadcast_stats_deleted' order by id`,
+      [page.id],
+    );
+    expect(params.rows.map((row) => (row as { request_params: unknown }).request_params)).toEqual([
+      { before: null, walk: "first_enable_backfill" },
+      { before: "80", walk: "first_enable_backfill" },
+      { before: "70", walk: "first_enable_backfill" },
+    ]);
+    const walked = (await cursor(page.id))!;
+    expect(walked.lastSweepDay).toBe(utcDayKey(NOW));
+    expect(walked.broadcastFloorReached).toBe(true);
+    expect(walked.broadcastWalkStop).toBe("empty_page");
+    expect(walked.deletedBroadcastFloorReached).toBe(true);
+    expect(walked.deletedBroadcastWalkStop).toBe("empty_page");
+    expect(telemetry.anomalies).toHaveLength(0);
+
+    // At the floor, the next day's sweep polls each list's head once.
+    adapter.broadcastRequests.length = 0;
+    const tomorrow = new Date("2026-08-20T09:00:00.000Z");
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(), tomorrow),
+      );
+      if (result.satisfied) break;
+    }
+    expect(adapter.broadcastRequests).toEqual([
+      { deleted: false, before: null },
+      { deleted: true, before: null },
+    ]);
+  });
 
   // THE NEGATIVE PINS. Each names a mechanism that was DELETED by decision, and
   // a key reappearing is how a deleted mechanism comes back without one.
