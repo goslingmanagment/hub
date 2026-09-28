@@ -14,10 +14,11 @@ chunk. A running chunk can finish its already selected work after a change.
 The flag records semantic transaction revisions plus receipts for the two
 ordinary earnings calls per selected spender. It adds no HTTP request, changes
 no cadence and does not select dirty targets. Existing earnings enablement,
-page allowlisting, request budget and contiguous-prefix rejection behavior
-still apply. Zero/negative and missing-roster dirty targets remain visible debt.
-The baseline rotation can still stall on a deterministic fan rejection; C2c
-owns the separately gated selection and per-fan continuation policy.
+page allowlisting and request budget still apply. Zero/negative and
+missing-roster dirty targets remain visible debt. The receipts also let the
+daily walk cross a deterministic fan rejection instead of stalling (see
+[Crossing a rejected fan](#crossing-a-rejected-fan)); a page without this flag
+keeps the contiguous-prefix stop. C2c owns the separately gated selection.
 
 Migrations 0180/0181 extend operational state and add a metadata-only reader.
 0179 is reserved by C1 PR166; recheck unapplied numbers and decision reservations
@@ -129,6 +130,9 @@ request sequence, a completed zero cursor and current lease ownership. The
 `completedAt` and last successful read timestamp stay unchanged. Stream
 settlement time is not a new provider-check time.
 
+A generation that crossed a rejected fan was committed with a quality hold;
+its reuse settles held again, never as success.
+
 A newer explicit request or ordinary next scheduled generation still walks.
 Partial progress carrying an older `completedAt` still continues. Reset/erasure
 removes the applicable checkpoint through the existing path. There is no new
@@ -152,15 +156,37 @@ endpoint for that fan since then is more than an hour after the newest insert.
 It writes only the three fields above; the next ordinary claim and valid
 unchanged receipt performs the acknowledgement, so no request is added.
 
+## Crossing a rejected fan
+
+On a shadow page without isolated recovery, a fan-scoped rejection normally
+stops the daily walk at its contiguous prefix, and the executor retries or
+blocks the stream. The walk instead crosses the fan when all of these hold:
+
+- the rejection is HTTP 400 or 410, or a 404 on that endpoint's third failed
+  receipt in a row (the executor's two `provider_404` retries supply the first
+  two);
+- there is no provider cooldown (`Retry-After`);
+- the endpoint's `rejected` receipt for this attempt is durable;
+- fewer than three fans were crossed in this chunk. The next rejection falls
+  back to the stop, so a provider-wide burst still blocks the stream.
+
+The crossed fan is not retried in that generation and its other endpoint is
+not requested; its receipt keeps the debt. Each crossing is a
+`fan_earnings_fan_rejected` warning with `crossed: true`. The generation keeps
+`crossedFans` in its checkpoint, stamps no success on partial progress, and
+finishes with the `fan_earnings_unconfirmed_coverage` quality hold, keeping the
+last certified `completedAt`. The next generation reads the fan again.
+
 ## Rollback and next gate
 
 On diagnostic failures, capture/latency regression or unexplained discrepancies,
 disable only `fanslyFanEarningsShadowPageAllowlist` with the audited UI. Preserve
 pending revisions and receipts. Daily rotation continues; disabling shadow does
 not roll back C2a v2 events or earnings projections. A code rollback must retain
-the compatible C2a reader and additive schema. A runtime from before 0217
-ignores the signal/baseline fields: it returns to the strict unchanged-response
-rule, and its reads leave those fields stale in the conservative direction.
+the compatible C2a reader and additive schema. An older runtime ignores the
+0217 signal/baseline fields and the crossing checkpoint state: it returns to the
+strict unchanged-response rule and the rejection stop, and its reads leave those
+fields stale in the conservative direction.
 
 C2c may change selection/rotation only after measured quiet-correction detection
 within the existing freshness bound or a separate owner decision on max-age.

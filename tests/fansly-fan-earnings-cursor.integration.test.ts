@@ -1,6 +1,8 @@
 // W8.2 / A43 (decision #133): the fan_earnings cursor is a contiguous
 // successful prefix. A fan-scoped rejection stops the walk; no later fan may
 // move the durable cursor across it, and the failed run may not stamp success.
+// These pages have no shadow receipts; the bounded crossing of a durable
+// deterministic rejection is covered by fan-earnings-legacy-crossing.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 

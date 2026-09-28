@@ -33,9 +33,10 @@ completed provider recalculation.
 The attempt reservation is strict and conservative: a crash after admission
 still costs budget, retries cannot bypass the cap, and toggling flags does not
 reset usage. Per-target 400/404/410 without cooldown do not block unrelated daily
-work. A daily spender's own rejection still follows the original contiguous
-walk policy. Global auth/cooldown and persistence failures keep their ordinary
-executor handling.
+work. A daily spender's own rejection follows the daily walk's policy: the
+contiguous-prefix stop, or on a shadow page a bounded crossing of a
+deterministic rejection. Global auth/cooldown and persistence failures keep
+their ordinary executor handling.
 
 Use only production `read_only` in a READ ONLY transaction:
 
@@ -74,7 +75,9 @@ and measured cost. Retain the daily baseline until those requirements are met.
 Additional gates are `fanslyFanEarningsRecoveryEnabled=false` and
 `fanslyFanEarningsRecoveryPageAllowlist` empty. They also require the addressed
 selection gates and a positive attempt budget. With recovery off the preceding
-Decision 345 behavior remains unchanged, including the daily rejection stop.
+Decision 345 behavior remains unchanged, except that a shadow page's daily walk
+crosses a deterministic rejection within its own limits (shadow runbook,
+"Crossing a rejected fan") instead of stopping.
 
 When enabled, daily selection uses its own durable cursor and strict receipts.
 A fan-scoped 400/404/410 without cooldown leaves endpoint debt and allows the
