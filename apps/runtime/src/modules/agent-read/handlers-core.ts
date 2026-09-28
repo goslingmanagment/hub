@@ -808,7 +808,10 @@ export async function handleAgentPerson(
         // only the literal `expired`, so `ended` and `cancelled` came back
         // `unknown` here and `expired` from #10 — two answers about one
         // subscription, depending on which operation was asked.
-        subscriptionState: agentSubscriptionState(subscription.canonicalStatus),
+        subscriptionState: agentSubscriptionState(
+          subscription.canonicalStatus,
+          subscription.isCurrent,
+        ),
         subscriptionTierName: subscription.tierName,
         subscriptionPriceMills: toSafeNumber(subscription.priceMills),
         renewPriceMills: toSafeNumber(subscription.renewPriceMills),

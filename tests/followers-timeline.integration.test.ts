@@ -34,6 +34,7 @@ describe("C1 restricted followers run timeline", () => {
 
   it("exposes the real handler's decision, counts and locked queue receipt without private material", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
+    await db.pool.query("update page_sync_states set applied_seq = request_seq where page_id = $1", [fixture.page.id]);
     await fixture.runHandlerAndFinishTelemetry();
     const result = await read();
     expect(result.records).toEqual([expect.objectContaining({
@@ -42,10 +43,22 @@ describe("C1 restricted followers run timeline", () => {
       sections: expect.objectContaining({
         decision: expect.objectContaining({ countMismatch: true, requested: true, requestedSeq: 2 }),
         counts: { activeFollowerCount: 1, sourceFollowerCount: 2, pageCount: 1, processedThisChunk: 1 },
-        queueBefore: { requestedSeq: 1, appliedSeq: 0 },
+        queueBefore: { requestedSeq: 1, appliedSeq: 1 },
       }),
     })]);
     expect(JSON.stringify(result)).not.toMatch(/test-token|fan-1|authorization|lease_token/);
+  });
+
+  it("keeps a request coalesced into outstanding work identifiable but outside known receipts", async () => {
+    const fixture = await followersDiagnosticFixture(db, "count");
+    await fixture.runHandlerAndFinishTelemetry();
+    expect((await read()).records).toEqual([expect.objectContaining({
+      run_id: fixture.run.id, decision_valid: true, queue_valid: false,
+      sections: expect.objectContaining({
+        decision: expect.objectContaining({ requested: true, requestedSeq: 1 }),
+        queueBefore: { requestedSeq: 1, appliedSeq: 0 },
+      }),
+    })]);
   });
 
   it("keeps revisions, roster generations and uncertified completions distinct", async () => {

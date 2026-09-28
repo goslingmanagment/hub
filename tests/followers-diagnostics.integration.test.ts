@@ -21,10 +21,14 @@ describe("C1 followers decision receipts", () => {
   const report = async () => (await db.pool.query(
     "select fansly_followers_diagnostic_report($1, $2) as report", [FROM, TO],
   )).rows[0].report;
+  const settleQueue = (pageId: number) => db.pool.query(
+    "update page_sync_states set applied_seq = request_seq where page_id = $1", [pageId],
+  );
 
   it.each(["none", "count", "missing", "unchanged"] as const)(
     "records %s while preserving requests, presence and the real queue decision", async mode => {
       const fixture = await followersDiagnosticFixture(db, mode);
+      await settleQueue(fixture.page.id);
       const before = Number(await fixture.queue());
       expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
       expect(Number(await fixture.queue()) - before).toBe(mode === "none" ? 0 : 1);
@@ -40,7 +44,8 @@ describe("C1 followers decision receipts", () => {
       expect(output.queue).toEqual([expect.objectContaining({
         requested: mode === "none" ? 0 : 1,
         known_queue_receipts: mode === "none" ? 0 : 1,
-        requests_with_pending_work: mode === "none" ? 0 : 1,
+        unknown_queue_receipts: 0,
+        requests_with_pending_work: 0,
       })]);
       const presence = await db.pool.query(
         "select count(*)::int as n from page_fans where platform_account_id = $1 and external_presence_at is not null",
@@ -51,9 +56,43 @@ describe("C1 followers decision receipts", () => {
     },
   );
 
+  it("coalesces a decision into outstanding reconcile work without touching its queue row", async () => {
+    const fixture = await followersDiagnosticFixture(db, "count");
+    // Followers has run before; its reconcile sweep waits for a snapshot restart.
+    await db.pool.query(
+      "update page_sync_states set succeeded_at = now() where page_id = $1 and stream = 'followers'",
+      [fixture.page.id],
+    );
+    await db.pool.query(`update page_sync_states
+      set status = 'pending', blocker_kind = null, blocker_code = null, blocker_message = null,
+          blocked_at = null, retry_at = now() + interval '15 minutes'
+      where page_id = $1 and stream = 'followers_reconcile'`, [fixture.page.id]);
+    const reconcileRow = async () => (await db.pool.query(
+      "select to_jsonb(s) as row from page_sync_states s where page_id = $1 and stream = 'followers_reconcile'",
+      [fixture.page.id],
+    )).rows[0].row;
+    const before = await reconcileRow();
+    expect(before.request_seq).toBeGreaterThan(before.applied_seq);
+
+    expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
+    expect(await reconcileRow()).toEqual(before);
+    const note = await db.pool.query(
+      "select details -> 'followersReconcile' as d from sync_run_events where sync_run_id = $1 and details ? 'followersReconcile'",
+      [fixture.run.id],
+    );
+    expect(note.rows).toEqual([{ d: expect.objectContaining({
+      requested: true, coalesced: true, requestedSeq: before.request_seq,
+      queueBefore: { requestedSeq: before.request_seq, appliedSeq: before.applied_seq },
+    }) }]);
+    // The C1 report predates coalescing and keeps such receipts unknown.
+    expect((await report()).queue).toEqual([expect.objectContaining({
+      requested: 1, known_queue_receipts: 0, unknown_queue_receipts: 1, requests_with_pending_work: 0,
+    })]);
+  });
+
   it("distinguishes a clean queue from pending work using the locked request receipt", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
-    await db.pool.query("update page_sync_states set applied_seq = request_seq where page_id = $1", [fixture.page.id]);
+    await settleQueue(fixture.page.id);
     await fixture.runHandlerAndFinishTelemetry();
     expect((await report()).queue).toEqual([expect.objectContaining({
       requested: 1, known_queue_receipts: 1, unknown_queue_receipts: 0, requests_with_pending_work: 0,
@@ -67,6 +106,14 @@ describe("C1 followers decision receipts", () => {
       [before, before + 1], [before + 1, before + 2],
     ]);
     expect(receipts.every(row => row.queueBefore!.requestedSeq > row.queueBefore!.appliedSeq)).toBe(true);
+    const coalesced = await requestPageSync(db.db, {
+      pageId: fixture.page.id, streams: ["followers_reconcile"], source: "anomaly",
+      includeQueueState: true, coalesceOutstanding: true,
+    });
+    expect(coalesced).toEqual([{
+      stream: "followers_reconcile", requestedSeq: before + 2, coalesced: true,
+      queueBefore: { requestedSeq: before + 2, appliedSeq: receipts[0]!.queueBefore!.appliedSeq },
+    }]);
     const ordinary = await requestPageSync(db.db, {
       pageId: fixture.page.id, streams: ["followers_reconcile"], source: "anomaly",
     });
@@ -81,6 +128,7 @@ describe("C1 followers decision receipts", () => {
       create trigger reject_followers_note before insert on sync_run_events
       for each row execute function reject_followers_note()`);
     try {
+      await settleQueue(fixture.page.id);
       const before = Number(await fixture.queue());
       expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
       expect(Number(await fixture.queue()) - before).toBe(1);

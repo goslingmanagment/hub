@@ -3076,6 +3076,12 @@ export async function requestPageSync(
     dependencyOptions?: PageSyncDependencyOptions;
     /** Diagnostic receipt from the same locked row; omitted for ordinary callers. */
     includeQueueState?: boolean;
+    /**
+     * Fold this request into an outstanding revision instead of bumping it.
+     * For intent-free repeats only: a bump would discard the in-flight
+     * cursor, its restart bound and any backoff of the outstanding work.
+     */
+    coalesceOutstanding?: boolean;
   },
 ) {
   const now = input.now ?? new Date();
@@ -3083,6 +3089,7 @@ export async function requestPageSync(
   const results: Array<{
     stream: SyncStream;
     requestedSeq: number;
+    coalesced?: true;
     queueBefore?: { requestedSeq: number; appliedSeq: number };
   }> = [];
 
@@ -3124,6 +3131,20 @@ export async function requestPageSync(
       // can consume the same durable subject queue itself.
       if (input.source === "event" && (stream !== "dm_messages" || current.status !== "idle"
         || current.requestSeq > current.appliedSeq)) continue;
+
+      // The outstanding revision already carries this request. Leave the row
+      // untouched, so its lease, backoff and cursor revision stay valid.
+      if (input.coalesceOutstanding && current.requestSeq > current.appliedSeq) {
+        results.push({
+          stream,
+          requestedSeq: current.requestSeq,
+          coalesced: true,
+          ...(input.includeQueueState ? {
+            queueBefore: { requestedSeq: current.requestSeq, appliedSeq: current.appliedSeq },
+          } : {}),
+        });
+        continue;
+      }
 
       const nextRequestSeq = current.requestSeq + 1;
       const rawRequestPayload = input.source === "event" ? { fanslyWsHintOnly: true }

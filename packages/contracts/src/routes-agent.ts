@@ -665,7 +665,8 @@ export const agentPredicateCatalogSchema = z.object({
 
 export const agentTransactionTypeEnum = transactionTypeEnum;
 export const agentTransactionStateEnum = transactionStateEnum;
-/** DERIVED from `page_subscriptions.canonical_status`, never the raw column. */
+/** DERIVED from `page_subscriptions.canonical_status` and `is_current`, never
+ *  the raw column: a retired row whose last status was active is `expired`. */
 export const agentSubscriptionStateEnum = z.enum(["active", "expired", "unknown"]);
 export const agentCoverageStatusEnum = z.enum(["pending_backfill", "partial_window", "complete"]);
 export const agentSenderRoleEnum = z.enum(["fan", "model", "system", "unknown"]);

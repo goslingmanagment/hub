@@ -8,8 +8,19 @@ type SubscribersCursorState = {
   historyBackfilledAt: string | null;
   offset: number;
   observedCount: number;
+  /** Distinct subscription ids summed per page: the generation rows a
+   * multi-page walk must find before it retires unseen subscriptions. */
+  distinctObservedCount: number;
   pageCount: number;
   providerReportedTotal: number | null;
+  /** Restarts of this walk after its provider total shifted or its pages overlapped. */
+  restartCount: number;
+  /** Why this revision's active walk retired nothing past the restart bound;
+   * the history walk carries it so the revision's completion records it. */
+  activeWithheldReason?: string;
+  /** Why this history walk cannot certify the archive past the restart bound;
+   * the walk still reads on to its last page. */
+  historyWithheldReason?: string;
 };
 
 type FollowersCursorState = {
@@ -193,13 +204,22 @@ export function parseSubscribersCursorState(
     : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
+  const distinctObservedCount = asNumber(state.distinctObservedCount) ?? observedCount;
   const pageCount = asNumber(state.pageCount);
   const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  const restartCount = asNumber(state.restartCount) ?? 0;
+  const activeWithheldReason = typeof state.activeWithheldReason === "string"
+    ? state.activeWithheldReason
+    : undefined;
+  const historyWithheldReason = typeof state.historyWithheldReason === "string"
+    ? state.historyWithheldReason
+    : undefined;
   if (
     generation === null ||
     mode === null ||
     offset === null ||
     observedCount === null ||
+    distinctObservedCount === null ||
     pageCount === null ||
     providerReportedTotal === undefined
   ) {
@@ -213,8 +233,12 @@ export function parseSubscribersCursorState(
     historyBackfilledAt,
     offset,
     observedCount,
+    distinctObservedCount,
     pageCount,
     providerReportedTotal,
+    restartCount,
+    ...(activeWithheldReason === undefined ? {} : { activeWithheldReason }),
+    ...(historyWithheldReason === undefined ? {} : { historyWithheldReason }),
   };
 }
 

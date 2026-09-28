@@ -1192,6 +1192,27 @@ export async function deactivatePageFollowsByGeneration(
   return result.rows.map((row) => pageFollowIdFromText(row.id));
 }
 
+/** Distinct current subscriptions a subscriber walk has stamped with its
+ * generation: the membership a multi-page walk must prove before it retires
+ * unseen rows. */
+export async function countCurrentPageSubscriptionsByGeneration(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    generation: number;
+  },
+) {
+  const result = await db.execute<{ count: string | number }>(sql`
+    select count(*)::int as count
+    from page_subscriptions
+    where platform_account_id = ${input.platformAccountId}
+      and last_seen_generation = ${input.generation}
+      and is_current = true
+  `);
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export async function deactivatePageSubscriptionsByGeneration(
   db: Database,
   input: {
