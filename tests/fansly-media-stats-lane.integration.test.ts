@@ -19,8 +19,10 @@ import {
   emptyFanslyMediaStatsCursorState,
   estimateMediaStatsCycle,
   fanslyMediaStatsChunk,
+  mediaBackfillFirstMonthProbe,
   mediaStatsWindowIsEmpty,
   parseFanslyMediaStatsCursorState,
+  parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
   steadyWindows,
@@ -859,88 +861,217 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(rows.filter((row) => row.request_params.mode === "steady")).toHaveLength(1);
   });
 
-  it("walks the first-sight backfill back to the empty floor in 31-day windows", async (ctx) => {
+  /**
+   * Traffic in the last 100 days and in the item's FIRST month, all-zero rows
+   * everywhere else — which is what this route serves for any quiet window,
+   * back to 2006, and the reason a walk counting ROWS never found a floor.
+   */
+  function recentAndFirstMonthBody(createdMs: number, firstMonth: boolean) {
+    const recentFloorMs = NOW.getTime() - 100 * DAY_MS;
+    return (params: AdapterCall) => {
+      const afterMs = params.afterDate.getTime();
+      const beforeMs = params.beforeDate.getTime();
+      const traffic = beforeMs > recentFloorMs
+        || (firstMonth && afterMs < createdMs + 31 * DAY_MS && beforeMs > createdMs);
+      const window = {
+        mediaOfferRef: params.mediaOfferId,
+        afterMs,
+        beforeMs,
+        periodMs: params.periodMs,
+      };
+      return traffic ? statsBody(window) : allZeroBody(window);
+    };
+  }
+
+  function backfillWindows(rows: Awaited<ReturnType<typeof journaled>>) {
+    return rows
+      .filter((row) => row.request_params.mode === "backfill")
+      .map((row) => ({
+        afterMs: Date.parse(String(row.request_params.afterDate)),
+        beforeMs: Date.parse(String(row.request_params.beforeDate)),
+      }));
+  }
+
+  it("walks back to the item's CREATION when a first-month probe finds traffic", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
-    // Published 400 days ago, traffic only in the last 100: the creation floor
-    // is nowhere near, so what stops this walk is the EMPTY-WINDOW rule.
-    await seedMedia(page.id, [{
-      ref: ref(440),
-      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
-    }]);
-
-    // Traffic for 100 days, and ALL-ZERO rows before it — which is what this
-    // route actually serves for any window back to 2006, and the reason a walk
-    // counting ROWS never found a floor at all.
-    const floorMs = NOW.getTime() - 100 * DAY_MS;
-    const adapter = adapterStub({
-      body: (params) => {
-        const servedBefore = params.beforeDate.getTime();
-        const servedAfter = params.afterDate.getTime();
-        if (servedBefore <= floorMs) {
-          return allZeroBody({
-            mediaOfferRef: params.mediaOfferId,
-            afterMs: servedAfter,
-            beforeMs: servedBefore,
-            periodMs: params.periodMs,
-          });
-        }
-        return statsBody({
-          mediaOfferRef: params.mediaOfferId,
-          afterMs: servedAfter,
-          beforeMs: servedBefore,
-          periodMs: params.periodMs,
-        });
-      },
-    });
+    // Published 400 days ago, traffic in its first month and in the last 100
+    // days, silence between. Two empty windows used to END this walk 300 days
+    // above creation and call it a floor — the premise "an item cannot have
+    // traffic before it was published" only holds for a walk moving FORWARD
+    // from publication, and this one walks back from today.
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    await seedMedia(page.id, [{ ref: ref(440), createdAtPlatform: new Date(createdMs) }]);
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, true) });
     const telemetry = telemetryStub();
-    // TWO VISITS, a long-tail cycle apart. A visit walks four windows and then
-    // stamps the row, so the rest of this item's history arrives on its next
-    // turn rather than by holding the whole lane on one item.
-    await drain(page.id, adapter, telemetry);
-    const afterFirstVisit = await listSubjectRefreshState(testDb.db, {
-      pageId: page.id,
-      plane: "media_stats",
-    });
-    expect(afterFirstVisit[0]?.lastVisitedAt).not.toBeNull();
-    expect(afterFirstVisit[0]?.backfillCursor).toMatchObject({ done: false });
-    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
 
-    const rows = await journaled(page.id);
-    const backfill = rows.filter((row) => row.request_params.mode === "backfill");
-    // 31-day windows, backwards, each derived from the RETURNED bounds with one
-    // day of overlap: the provider snaps to its own bucket grid, and stepping
-    // back from OUR bound would drift a bucket per window.
-    expect(backfill.length).toBeGreaterThanOrEqual(5);
-    const bounds = backfill.map((row) => ({
-      afterMs: Date.parse(String(row.request_params.afterDate)),
-      beforeMs: Date.parse(String(row.request_params.beforeDate)),
-    }));
-    for (const window of bounds) {
+    // FOUR VISITS, a long-tail cycle apart: a visit walks four windows and
+    // stamps the row, so the history arrives over several turns.
+    for (let visit = 0; visit < 4; visit += 1) {
+      await drain(page.id, adapter, telemetry, {
+        now: new Date(NOW.getTime() + visit * 31 * DAY_MS),
+      });
+    }
+
+    const windows = backfillWindows(await journaled(page.id));
+    for (const window of windows) {
       expect(Math.round((window.beforeMs - window.afterMs) / DAY_MS)).toBe(31);
     }
-    for (let index = 1; index < bounds.length; index += 1) {
-      // Strictly backwards, and CONTIGUOUS: adjacent windows overlap by a day
-      // while the provider is still serving bounds, and meet exactly once an
-      // empty window serves none.
-      expect(bounds[index]!.beforeMs).toBeLessThan(bounds[index - 1]!.beforeMs);
-      expect(bounds[index]!.beforeMs).toBeGreaterThanOrEqual(bounds[index - 1]!.afterMs);
+    // NO WINDOW TWICE — not the second empty one, not the probe's.
+    expect(new Set(windows.map((window) => `${window.afterMs}:${window.beforeMs}`)).size)
+      .toBe(windows.length);
+    // ONE PROBE, straddling creation: a day before it, the item's first month.
+    const probeBeforeMs = createdMs + 30 * DAY_MS;
+    const probeAt = windows.findIndex((window) => window.beforeMs === probeBeforeMs);
+    expect(probeAt).toBeGreaterThan(1);
+    expect(windows[probeAt]!.afterMs).toBe(createdMs - DAY_MS);
+    // It came after two empty windows, and the walk RESUMED right below the
+    // second of them — the bookmark, not a re-read of it.
+    const secondEmpty = windows[probeAt - 1]!;
+    expect(windows[probeAt + 1]!.beforeMs).toBe(secondEmpty.afterMs);
+    // THE GAP IS WALKED, backwards and contiguous, empty windows and all: no
+    // streak ends it before it reaches the probe window.
+    const gap = windows.slice(probeAt + 1);
+    expect(gap.length).toBeGreaterThan(2);
+    for (let index = 1; index < gap.length; index += 1) {
+      expect(gap[index]!.beforeMs).toBeLessThan(gap[index - 1]!.beforeMs);
+      expect(gap[index]!.beforeMs).toBeGreaterThanOrEqual(gap[index - 1]!.afterMs);
     }
+    expect(gap.at(-1)!.afterMs).toBeLessThanOrEqual(probeBeforeMs);
 
     const queue = await listSubjectRefreshState(testDb.db, {
       pageId: page.id,
       plane: "media_stats",
     });
-    // The FLOOR, reached and NAMED — the empty windows are journaled, because
-    // an empty window IS the floor evidence.
+    // The floor is CREATION, reached — not two quiet months.
     expect(queue[0]?.backfillCursor).toMatchObject({
       done: true,
-      stopReason: "empty_window_streak",
-      floorBasis: "empty_window",
+      stopReason: "created_at_floor",
+      floorBasis: "created_at",
+      probeSpent: true,
+      probeResumeBeforeMs: null,
+      probeHitBeforeMs: null,
+      floorAt: new Date(createdMs - DAY_MS).toISOString(),
+    });
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_window_not_honoured"
+      || anomaly.code === "fansly_media_stats_window_repeat"
+    )).toHaveLength(0);
+  });
+
+  it("ends at the empty floor after ONE first-month probe comes back empty too", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    await seedMedia(page.id, [{ ref: ref(441), createdAtPlatform: new Date(createdMs) }]);
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, false) });
+    const telemetry = telemetryStub();
+
+    for (let visit = 0; visit < 3; visit += 1) {
+      await drain(page.id, adapter, telemetry, {
+        now: new Date(NOW.getTime() + visit * 31 * DAY_MS),
+      });
+    }
+
+    const windows = backfillWindows(await journaled(page.id));
+    // Four windows of traffic, two empty ones, then EXACTLY ONE probe — and
+    // nothing after it, on this visit or the next.
+    expect(windows).toHaveLength(7);
+    expect(windows.at(-1)).toEqual({
+      afterMs: createdMs - DAY_MS,
+      beforeMs: createdMs + 30 * DAY_MS,
+    });
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    // NAMED for what it rests on: two idle windows and an idle first month.
+    expect(queue[0]?.backfillCursor).toMatchObject({
+      done: true,
+      stopReason: "empty_window_probe",
+      floorBasis: "empty_window_probe",
+      probeSpent: true,
     });
     expect(telemetry.anomalies.filter((anomaly) =>
       anomaly.code === "fansly_media_stats_window_not_honoured"
     )).toHaveLength(0);
+  });
+
+  it("re-arms a walk that ended on two empty windows with the probe, directly", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // THE LEGACY CURSORS (production: 277 of them, 108 more than a window above
+    // creation). A walk that stopped on two empty windows keeps the SECOND of
+    // them in its cursor and in its durable repeat guard. Re-entering the
+    // empty-window branch would re-issue that window, trip the guard, and halve
+    // or stop the item; the repair arms the probe instead.
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    const secondEmptyBeforeMs = NOW.getTime() - 151 * DAY_MS;
+    const legacy = (nextBeforeMs: number) => ({
+      version: 1,
+      nextBeforeMs,
+      emptyStreak: 2,
+      done: true,
+      floorAt: new Date(NOW.getTime() - 121 * DAY_MS).toISOString(),
+      stopReason: "empty_window_streak",
+      floorBasis: "empty_window",
+      guard: {
+        spanDays: 31,
+        narrowed: false,
+        lastBeforeMs: nextBeforeMs,
+        lastAfterMs: nextBeforeMs - 31 * DAY_MS,
+        lastObservationId: null,
+      },
+    });
+    await seedMedia(page.id, [{ ref: ref(442), createdAtPlatform: new Date(createdMs) }], {
+      queueCursor: legacy(secondEmptyBeforeMs),
+    });
+    // …and one that stopped within a window of its creation: no room for a
+    // probe, so it stays exactly as it is.
+    await seedMedia(page.id, [{
+      ref: ref(443),
+      createdAtPlatform: new Date(NOW.getTime() - 80 * DAY_MS),
+    }], { queueCursor: legacy(NOW.getTime() - 31 * DAY_MS) });
+
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, false) });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    const backfill = adapter.calls.filter((call) =>
+      call.periodMs === 86_400_000 && call.beforeDate.getTime() !== NOW.getTime()
+    );
+    // ONE request of history, and it is the probe — not the second empty window.
+    expect(backfill).toHaveLength(1);
+    expect(backfill[0]!.mediaOfferId).toBe(ref(442));
+    expect(backfill[0]!.beforeDate.getTime()).toBe(createdMs + 30 * DAY_MS);
+    expect(backfill[0]!.afterDate.getTime()).toBe(createdMs - DAY_MS);
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_window_not_honoured"
+      || anomaly.code === "fansly_media_stats_window_repeat"
+    )).toHaveLength(0);
+
+    const repaired = await queueRow(page.id, ref(442));
+    expect(repaired.backfillCursor).toMatchObject({
+      done: true,
+      floorBasis: "empty_window_probe",
+      probeSpent: true,
+      // The window stays whole: nothing was halved.
+      guard: { spanDays: 31, narrowed: false },
+    });
+    expect((await queueRow(page.id, ref(443))).backfillCursor).toMatchObject({
+      done: true,
+      floorBasis: "empty_window",
+      stopReason: "empty_window_streak",
+    });
+
+    // ONCE: the next turn of either item asks for no history at all.
+    const before = adapter.calls.length;
+    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
+    const later = adapter.calls.slice(before);
+    expect(later.length).toBeGreaterThan(0);
+    for (const call of later) {
+      expect(call.beforeDate.getTime()).toBe(NOW.getTime() + 31 * DAY_MS);
+    }
   });
 
   it("stops at the item's own CREATION, and repairs a cursor already past it", async (ctx) => {
@@ -1715,6 +1846,55 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
 });
 
 describe("media_stats — the pure helpers", () => {
+  it("parses a pre-probe cursor as a walk that has spent no probe", () => {
+    expect(parseMediaBackfillCursor({ ...BACKFILL_DONE }, NOW)).toMatchObject({
+      done: true,
+      probeSpent: false,
+      probeResumeBeforeMs: null,
+      probeHitBeforeMs: null,
+    });
+    const armed = parseMediaBackfillCursor({
+      ...BACKFILL_DONE,
+      probeSpent: true,
+      probeResumeBeforeMs: 1_700_000_000_000,
+      probeHitBeforeMs: 1_600_000_000_000,
+    }, NOW);
+    expect(armed).toMatchObject({
+      probeSpent: true,
+      probeResumeBeforeMs: 1_700_000_000_000,
+      probeHitBeforeMs: 1_600_000_000_000,
+    });
+  });
+
+  it("aims the one probe at the FIRST month, and only where there is a gap to jump", () => {
+    const created = new Date(NOW.getTime() - 400 * DAY_MS);
+    const guard = { spanDays: 31, narrowed: false, lastAfterMs: null, lastBeforeMs: null, lastObservationId: null };
+    // Stopped 151 days back: the bookmark is the window below, and the probe
+    // opens a day before creation.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: created, firstSeenAt: null },
+    )).toEqual({
+      probeBeforeMs: created.getTime() + 30 * DAY_MS,
+      resumeBeforeMs: NOW.getTime() - 182 * DAY_MS,
+    });
+    // First sight is the basis when the platform served no creation date.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: null, firstSeenAt: created },
+    )?.probeBeforeMs).toBe(created.getTime() + 30 * DAY_MS);
+    // No basis, nothing to aim at.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: null, firstSeenAt: null },
+    )).toBeNull();
+    // No room: the next ordinary window already reaches the creation basis.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: created.getTime() + 62 * DAY_MS, guard },
+      { createdAtPlatform: created, firstSeenAt: null },
+    )).toBeNull();
+  });
+
   it("reads the subject from the key the route actually serves", () => {
     expect(servedMediaOfferRef({ dataset: { datasetMediaOfferId: "abc" } })).toBe("abc");
     expect(servedMediaOfferRef({ dataset: {} })).toBeNull();

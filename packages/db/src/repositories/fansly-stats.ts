@@ -1047,6 +1047,8 @@ export interface CaptureCoverageRow {
   cursor: Record<string, unknown>;
   proofObservationId: number | null;
   reasonCode: string | null;
+  /** When this claim was last written. */
+  updatedAt: Date;
 }
 
 export async function listCaptureCoverage(
@@ -1061,7 +1063,8 @@ export async function listCaptureCoverage(
       page_id as "pageId", platform, plane, scope_ref as "scopeRef", status,
       acquisition_mode as "acquisitionMode", proof,
       oldest_captured_at as "oldestCapturedAt", newest_captured_at as "newestCapturedAt",
-      cursor, proof_observation_id as "proofObservationId", reason_code as "reasonCode"
+      cursor, proof_observation_id as "proofObservationId", reason_code as "reasonCode",
+      updated_at as "updatedAt"
     from capture_coverage
     where page_id = ${input.pageId}${planeFilter}
     order by plane asc, scope_ref asc
@@ -1087,6 +1090,7 @@ export async function listCaptureCoverage(
         ? null
         : Number(record.proofObservationId),
       reasonCode: record.reasonCode === null ? null : String(record.reasonCode),
+      updatedAt: new Date(record.updatedAt as string),
     };
   });
 }

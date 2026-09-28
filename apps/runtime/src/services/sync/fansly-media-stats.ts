@@ -68,6 +68,11 @@
 //     with a name: `floorBasis: 'created_at'`. It is also the repair for the
 //     eight cursors already sitting at 2006 — they hit it on their next visit.
 //
+// Empty windows alone are NOT a floor: the walk runs backwards from today, so
+// two of them prove only that the item was idle lately. They buy ONE probe of
+// the item's first month; only an empty probe ends the walk on emptiness
+// (`floorBasis: 'empty_window_probe'`).
+//
 // ── 2c. EVERY VISIT COUNTS AS A VISIT ──────────────────────────────────────
 //
 // `last_visited_at` is what retires an item from the never-visited band, and a
@@ -208,9 +213,14 @@ const LONG_TAIL_TRAILING_DAYS = 90;
  */
 const BACKFILL_WINDOW_DAYS = 31;
 const BACKFILL_OVERLAP_DAYS = 1;
-/** Two consecutive all-empty windows ⇒ the floor. Unlike the ACCOUNT lane there
- *  is no year-further-back probe: an item cannot have traffic before it was
- *  published, so an empty window here is not the [E10] long-idle-account case. */
+/**
+ * Two consecutive all-empty windows, then ONE probe of the item's FIRST month.
+ *
+ * The walk runs BACKWARDS from today, so two empty windows prove only that the
+ * item was idle recently — [E10], exactly as on the account lane — not that it
+ * had no traffic before. The first month after publication is where most of an
+ * item's views fall, so that is where the one probe looks. See `runBackfill`.
+ */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 /**
  * How far past an item's own creation the walk may still ask.
@@ -303,9 +313,20 @@ interface MediaBackfillCursor {
   /** Why it stopped, when it stopped for a reason other than the floor. */
   stopReason: string | null;
   /** WHAT ended the walk: `created_at` (the item did not exist before this),
-   *  `empty_window` (two all-empty windows), or null while it is still open.
-   *  A floor with a name is a floor an operator can argue with. */
+   *  `empty_window_probe` (two all-empty windows, then an all-empty first
+   *  month), `empty_window` (two all-empty windows with no room or no basis for
+   *  a probe), or null while it is still open. A floor with a name is a floor an
+   *  operator can argue with. */
   floorBasis: string | null;
+  /** The one first-month probe has been spent. */
+  probeSpent: boolean;
+  /** Where the ordinary walk resumes if the probe finds traffic: the window
+   *  below the second empty one. Non-null only while the probe is pending. */
+  probeResumeBeforeMs: number | null;
+  /** The upper bound of a probe that FOUND traffic. The resumed walk fills the
+   *  gap above it, no empty streak may end it there, and reaching it ends the
+   *  walk at `created_at` — the probe window already covers the rest. */
+  probeHitBeforeMs: number | null;
   guard: BackfillWindowGuard;
 }
 
@@ -321,6 +342,10 @@ function asInt(value: unknown, fallback: number): number {
 
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asNullableSafeInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function asLongTailMode(value: unknown): LongTailWindowMode {
@@ -395,6 +420,9 @@ export function parseMediaBackfillCursor(
     floorAt: asNullableString(record?.floorAt),
     stopReason: asNullableString(record?.stopReason),
     floorBasis: asNullableString(record?.floorBasis),
+    probeSpent: record?.probeSpent === true,
+    probeResumeBeforeMs: asNullableSafeInt(record?.probeResumeBeforeMs),
+    probeHitBeforeMs: asNullableSafeInt(record?.probeHitBeforeMs),
     guard: parseWindowGuard(record?.guard, BACKFILL_WINDOW_DAYS),
   };
 }
@@ -414,6 +442,40 @@ export function mediaBackfillCreationFloorMs(
 ): number | null {
   const basis = candidate.createdAtPlatform ?? candidate.firstSeenAt;
   return basis === null ? null : basis.getTime() - BACKFILL_CREATION_SLACK_DAYS * DAY_MS;
+}
+
+/**
+ * THE ONE PROBE a walk may spend after two empty windows, or null when it may
+ * not — and then the two empty windows end the walk, as they always did.
+ *
+ * The probe asks for the item's FIRST month: a window that opens a day before
+ * the creation basis (the same `coalesce` as the creation floor) and spans the
+ * walk's current window. The bookmark is the window BELOW the second empty one
+ * — that one is journaled — so a probe that finds traffic resumes exactly where
+ * the ordinary walk would have gone next.
+ *
+ * No basis: nothing to aim at. No ROOM: the ordinary walk's next window already
+ * reaches the creation basis, so there is no gap for a probe to jump — the
+ * remaining span is less than one window above it.
+ *
+ * Still a heuristic, and named as one: vault media can be created long before
+ * it is posted, so an empty first month is not proof the item never had
+ * traffic. It is a far better one than "the last two months were quiet".
+ */
+export function mediaBackfillFirstMonthProbe(
+  cursor: Pick<MediaBackfillCursor, "nextBeforeMs" | "guard">,
+  candidate: { createdAtPlatform: Date | null; firstSeenAt: Date | null },
+): { probeBeforeMs: number; resumeBeforeMs: number } | null {
+  const basis = candidate.createdAtPlatform ?? candidate.firstSeenAt;
+  if (basis === null) {
+    return null;
+  }
+  const spanMs = cursor.guard.spanDays * DAY_MS;
+  const resumeBeforeMs = cursor.nextBeforeMs - spanMs;
+  if (resumeBeforeMs <= basis.getTime() + spanMs) {
+    return null;
+  }
+  return { probeBeforeMs: basis.getTime() - DAY_MS + spanMs, resumeBeforeMs };
 }
 
 /**
@@ -1028,6 +1090,23 @@ export async function fanslyMediaStatsChunk(
       }
     };
 
+    // LEGACY REPAIR: a walk that ended on two empty windows before the probe
+    // existed, with room for one. It reopens with the probe ARMED — never by
+    // re-entering the empty-window branch, which would re-issue the second
+    // empty window, trip the durable repeat guard and halve or stop the item.
+    // Once only: `probeSpent` is set, and a probed walk never ends here again.
+    if (cursor.done && cursor.floorBasis === "empty_window" && !cursor.probeSpent) {
+      const probe = mediaBackfillFirstMonthProbe(cursor, candidate);
+      if (probe !== null) {
+        cursor.done = false;
+        cursor.stopReason = null;
+        cursor.floorBasis = null;
+        cursor.probeSpent = true;
+        cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+        cursor.nextBeforeMs = probe.probeBeforeMs;
+      }
+    }
+
     if (!cursor.done) {
       const walk = await runBackfill(candidate, cursor, issued);
       if (walk.status === "failed") {
@@ -1096,8 +1175,18 @@ export async function fanslyMediaStatsChunk(
     buckets: number;
   }
 
-  /** Backwards 31-day daily windows, to the empty floor or to the item's own
-   *  creation — whichever comes first. */
+  /**
+   * Backwards 31-day daily windows, to the item's own creation.
+   *
+   * Two empty windows in a row do NOT end the walk by themselves: walking back
+   * from today, they prove only that the item was idle lately. They spend the
+   * one first-month probe (`mediaBackfillFirstMonthProbe`). An empty probe ends
+   * the walk at `empty_window_probe`; a probe that finds traffic sends the walk
+   * back to the gap it jumped, which it walks — empty windows and all — until
+   * it reaches the probe window, and that is `created_at`. Without a creation
+   * basis, or with less than a window left above it, two empty windows end the
+   * walk as they always did.
+   */
   async function runBackfill(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
@@ -1117,6 +1206,16 @@ export async function fanslyMediaStatsChunk(
         cursor.done = true;
         cursor.stopReason = "created_at_floor";
         cursor.floorBasis = "created_at";
+        break;
+      }
+      // THE GAP ABOVE A PROBE THAT FOUND TRAFFIC, WALKED: the next window would
+      // reach into the probe's, which is journaled and covers the item's first
+      // month. Also before the budget, and also free.
+      if (cursor.probeHitBeforeMs !== null && cursor.nextBeforeMs <= cursor.probeHitBeforeMs) {
+        cursor.done = true;
+        cursor.stopReason = "created_at_floor";
+        cursor.floorBasis = "created_at";
+        cursor.probeHitBeforeMs = null;
         break;
       }
       if (!hasDayCapacity()) {
@@ -1185,12 +1284,35 @@ export async function fanslyMediaStatsChunk(
 
       if (outcome.empty) {
         cursor.emptyStreak += 1;
-        if (cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
-          // The floor. Two consecutive EMPTY windows — no non-zero counter in
-          // either — means the item had no traffic before this point, and unlike
-          // the account lane there is no [E10] long-idle case to probe past,
-          // because an item cannot have traffic before it was published. Every
-          // empty response is journaled: the empty window IS the floor evidence.
+        if (cursor.probeResumeBeforeMs !== null) {
+          // THE PROBE CAME BACK EMPTY TOO: two idle windows and an idle first
+          // month. A floor, and named for what it rests on. Every empty
+          // response is journaled: the empty window IS the floor evidence.
+          cursor.done = true;
+          cursor.stopReason = "empty_window_probe";
+          cursor.floorBasis = "empty_window_probe";
+          cursor.probeResumeBeforeMs = null;
+          break;
+        }
+        if (
+          cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
+          && cursor.probeHitBeforeMs === null
+        ) {
+          // Two consecutive EMPTY windows — no non-zero counter in either —
+          // prove the item was idle LATELY, not that it had no traffic before:
+          // this walk runs backwards from today. Spend the one probe on the
+          // item's first month, and bookmark the ordinary walk.
+          const probe = cursor.probeSpent
+            ? null
+            : mediaBackfillFirstMonthProbe(cursor, candidate);
+          if (probe !== null) {
+            cursor.probeSpent = true;
+            cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+            cursor.nextBeforeMs = probe.probeBeforeMs;
+            continue;
+          }
+          // No room and no basis for a probe: the two empty windows are the
+          // floor, as they always were.
           cursor.done = true;
           cursor.stopReason = "empty_window_streak";
           cursor.floorBasis = "empty_window";
@@ -1207,6 +1329,19 @@ export async function fanslyMediaStatsChunk(
         cursor.floorAt = cursor.floorAt === null || servedFloor < cursor.floorAt
           ? servedFloor
           : cursor.floorAt;
+      }
+      if (cursor.probeResumeBeforeMs !== null) {
+        // THE PROBE FOUND TRAFFIC: the windows it jumped are unexamined, not
+        // empty. Back to the bookmark; the walk ends when it reaches the probe.
+        cursor.probeHitBeforeMs = Math.min(
+          requested.beforeMs,
+          outcome.served.beforeMs ?? requested.beforeMs,
+        );
+        cursor.nextBeforeMs = cursor.probeResumeBeforeMs;
+        cursor.probeResumeBeforeMs = null;
+        continue;
+      }
+      if (outcome.served.afterMs !== null) {
         // DERIVED FROM THE RETURNED BOUNDS, with one day of overlap: the
         // provider snaps windows to its own bucket grid, and a walk that stepped
         // back from OUR bound would drift a bucket per window and leave holes.

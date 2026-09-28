@@ -17,6 +17,7 @@ import {
   parseFanslyStatsCursorState,
   rollUtcDay,
   servedEarningsWindow,
+  trustedAccountCreatedAt,
   utcDayKey,
   windowsAreContiguous,
   windowWasHonoured,
@@ -72,8 +73,22 @@ describe("stats backfill cursor state", () => {
     expect(parsed!.backfill!.daily.trailingCaptured).toBe(true);
     expect(parsed!.backfill!.daily.floorAt).toBe("2019-01-01T00:00:00.000Z");
     expect(parsed!.callsToday).toBe(7);
+    // A pre-probe-hit cursor parses as a walk with no gap to fill.
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBeNull();
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBeNull();
     expect(parsed!.stepIndex).toBe(4);
     expect(parsed!.sweepDay).toBe("2026-08-19");
+  });
+
+  it("round-trips the probe HIT, which keeps an empty gap from ending the walk", () => {
+    const state = emptyFanslyStatsCursorState(NOW);
+    state.backfill!.daily.probeHitMonthIndex = monthIndexOf(NOW) - 15;
+    state.backfill!.earnings.probeHitAfterMs = Date.UTC(2025, 3, 14);
+    state.backfill!.earnings.probeHitBeforeMs = Date.UTC(2025, 4, 15) - 1;
+    const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW);
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBe(monthIndexOf(NOW) - 15);
+    expect(parsed!.backfill!.earnings.probeHitAfterMs).toBe(Date.UTC(2025, 3, 14));
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBe(Date.UTC(2025, 4, 15) - 1);
   });
 
   it("clamps a step index past the last step instead of wedging the lane", () => {
@@ -146,6 +161,16 @@ describe("account creation floor", () => {
 
   it("does not invent a floor when account metadata is absent", () => {
     expect(monthPredatesAccountCreation(2020 * 12, null)).toBe(false);
+  });
+
+  it("believes only a plausible creation date, since a known one ends no walk early", () => {
+    // With a creation date the walks step all the way to it: an epoch or a
+    // future value would walk to 1970 or stop at once, so both are unknown.
+    expect(trustedAccountCreatedAt(accountCreatedAt, NOW)).toBe(accountCreatedAt);
+    expect(trustedAccountCreatedAt(null, NOW)).toBeNull();
+    expect(trustedAccountCreatedAt(new Date(0), NOW)).toBeNull();
+    expect(trustedAccountCreatedAt(new Date("2014-12-31T23:59:59.999Z"), NOW)).toBeNull();
+    expect(trustedAccountCreatedAt(new Date(NOW.getTime() + 1), NOW)).toBeNull();
   });
 });
 
