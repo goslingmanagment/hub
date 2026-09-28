@@ -260,7 +260,7 @@ export async function hasDueAiMediaDescriptions(
   const result = await db.execute<{ due: boolean }>(sql`
     select exists (
       select 1 from ai_media_descriptions
-      where status in ('pending', 'budget_deferred')
+      where status in ('pending', 'budget_deferred', 'awaiting_source')
         and next_attempt_at <= ${input.now}
         and (lease_until is null or lease_until < ${input.now})
         and page_id in (${pageIds})

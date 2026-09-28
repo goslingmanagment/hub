@@ -13,8 +13,8 @@ import {
 } from "./policy.ts";
 
 // OnlyFans candidates for the AI media describer (plan §5). The webhook
-// handler has no pg-boss handle, so it writes candidate rows and the minutely
-// describer sweep does the work. Runs right after the webhook's media
+// handler only writes candidate rows; the describe loop (within a second) or
+// the minutely sweep does the work. Runs right after the webhook's media
 // locators are recorded (free Expires URLs, ~23 h):
 //   - messages.received: the fan's photos / video posters — due now in a chat
 //     with an AI generation in 7 days, dormant otherwise;

@@ -18,7 +18,8 @@ import type { AiMediaSource, AiMediaSourceResolution } from "./worker.ts";
 // `policy` URLs (address-bound to OFAPI's proxy) are ignored. ZERO OFAPI calls:
 // no resolve, no HEAD, no message re-read — a locator lookup in the hub's own
 // database is the whole source. No free URL → awaiting_source, looked at again
-// after 1, 5 and 30 minutes and then every 6 hours until the 7-day expiry.
+// after 1, 5 and 30 minutes and then every 6 hours until the 7-day expiry —
+// or at once when a free locator is recorded for the file.
 
 const MIN_REMAINING_MS = 120_000;
 const RETRY_SCHEDULE_MS = [60_000, 5 * 60_000, 30 * 60_000];
@@ -39,10 +40,11 @@ function usable(row: OfapiMediaLocatorRow, now: Date): boolean {
 }
 
 /** Variant preference: the mid-size `preview` first; a photo falls back to
- * `full`, a video/GIF poster to `thumb`. */
+ * `full` and then to the `thumb` the desktop loads on its own (~300 px — a
+ * coarser description beats none), a video/GIF poster to `thumb`. */
 function preference(row: AiMediaDescriptionRow, mediaType: string | null): Array<OfapiMediaLocatorRow["variant"]> {
   const still = row.variant === "poster" || (mediaType !== null && mediaType !== "photo");
-  return still ? ["preview", "thumb"] : ["preview", "full"];
+  return still ? ["preview", "thumb"] : ["preview", "full", "thumb"];
 }
 
 function retryAt(row: AiMediaDescriptionRow, now: Date): Date {

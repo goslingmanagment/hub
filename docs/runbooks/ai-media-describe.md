@@ -167,7 +167,10 @@ where r.lane = 'fast' and r.dispatched_at > now() - interval '24 hours';
   Candidates: `messages.received` fan media (live/dormant as above) and
   `messages.sent` PPV teasers (`previews[]`, due at once — the free link lives
   ~23 h). No free URL → `awaiting_source`, looked at again after 1, 5 and 30
-  minutes, then every 6 hours, `unavailable` after 7 days.
+  minutes, then every 6 hours, `unavailable` after 7 days — and at once when a
+  free locator (webhook Expires, OFAPI cache hand-out) is recorded for the
+  file. A photo falls back to the desktop's own `thumb` (~300 px) when no
+  larger free rendition exists.
 
 ## Switches (console → Settings, all live)
 

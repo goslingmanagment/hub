@@ -4,6 +4,7 @@ import {
   createModel,
   createOnlyFansPage,
   setPageOfapiAccountId,
+  upsertAiMediaDescriptionCandidate,
   upsertOfapiMediaLocators,
   type AiMediaDescriptionRow,
 } from "@agency_hub_core/db";
@@ -72,7 +73,7 @@ function row(overrides: Partial<AiMediaDescriptionRow>): AiMediaDescriptionRow {
   return {
     id: 1, pageId, platform: "onlyfans", mediaRef: "1", variant: "full", mediaKind: "photo", senderRole: "fan",
     fanPlatformUserId: String(MEDIA_FAN_ID), status: "pending", description: null, sourceObservationId: 1,
-    contentSha256: null, attempts: 1, firstMessageAt: new Date(MESSAGE_AT), nextAttemptAt: new Date(), ...overrides,
+    contentSha256: null, attempts: 1, firstMessageAt: new Date(MESSAGE_AT), nextAttemptAt: new Date(), leaseToken: null, ...overrides,
   };
 }
 
@@ -127,6 +128,33 @@ describe("OnlyFans source (free only, zero OFAPI calls)", () => {
     expect(poster.kind === "url" && poster.url).toContain("480x848_syn4000004");
     await expect(onlyfansAiMediaSource.resolve(app, row({ mediaRef: "4000005", senderRole: "model" }), { now: new Date(), modelMedia: "teasers+free" }))
       .resolves.toMatchObject({ kind: "skip", reason: "locked" });
+  });
+});
+
+describe("OnlyFans source arrival", () => {
+  it("a file waiting for a source becomes due the moment a free URL is recorded", async () => {
+    const waiting = await upsertAiMediaDescriptionCandidate(app.db, {
+      pageId, platform: "onlyfans", mediaRef: "4000009", variant: "full", mediaKind: "photo", senderRole: "fan",
+      fanPlatformUserId: String(MEDIA_FAN_ID), status: "awaiting_source", sourceObservationId: null,
+      link: { messageRef: "m-9", conversationRef: String(MEDIA_FAN_ID), fanPlatformUserId: String(MEDIA_FAN_ID), senderRole: "fan", messageAt: new Date(MESSAGE_AT) },
+      observedAt: new Date(),
+    });
+    expect(waiting.status).toBe("applied");
+    const before = await testDb!.pool.query(`select status from ai_media_descriptions where media_ref = '4000009'`);
+    expect(before.rows[0].status).toBe("awaiting_source");
+    // An address-bound URL is not a source: still waiting.
+    await upsertOfapiMediaLocators(app.db, ofapiMediaLocatorsFromWebhook(
+      { ...syntheticMessagesReceived({ media: [photoMedia(4000009, policySignedUrl, FRESH)] }) },
+      { pageId, observedAt: new Date() },
+    ));
+    expect((await testDb!.pool.query(`select status from ai_media_descriptions where media_ref = '4000009'`)).rows[0].status).toBe("awaiting_source");
+    // A free Expires URL: due now.
+    await upsertOfapiMediaLocators(app.db, ofapiMediaLocatorsFromWebhook(
+      { ...syntheticMessagesReceived({ media: [photoMedia(4000009, expiresSignedUrl, FRESH)] }) },
+      { pageId, observedAt: new Date(Date.now() + 1000) },
+    ));
+    const after = await testDb!.pool.query(`select status, next_attempt_at <= now() as due from ai_media_descriptions where media_ref = '4000009'`);
+    expect(after.rows[0]).toEqual({ status: "pending", due: true });
   });
 });
 
