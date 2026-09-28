@@ -2495,6 +2495,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
       platformAccountId: 14,
       generation: 1,
+      lastSeenBefore: expect.any(Date),
     });
     expect(dbMocks.refreshFanPageSubscriberState).toHaveBeenCalledWith(tx, 14);
     expect(dbMocks.rebuildSubscriberRollups).toHaveBeenCalledWith(tx, 14);
@@ -2641,6 +2642,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       updatedAt: null,
       endsAt: "2026-04-09T00:00:00.000Z",
     }));
+    const WALK_STARTED_AT = "2026-07-02T00:00:00.000Z";
     const resumeWalk = (overrides: Record<string, unknown> = {}) => {
       dbMocks.getCheckpoint.mockResolvedValue({
         state: {
@@ -2654,6 +2656,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
           pageCount: 1,
           providerReportedTotal: 150,
           restartCount: 0,
+          walkStartedAt: WALK_STARTED_AT,
           ...overrides,
         },
       });
@@ -2742,11 +2745,97 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
           pageCount: 0,
           providerReportedTotal: null,
           restartCount: 1,
+          walkStartedAt: expect.any(String),
         },
       });
+      // The rewalk fences from its own start, not the abandoned walk's.
+      const restartState = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state;
+      expect(Date.parse(restartState.walkStartedAt)).toBeGreaterThan(Date.parse(WALK_STARTED_AT));
       expect(fanHydrationMocks.lookupHydratedFans).not.toHaveBeenCalled();
       expect(db.transaction).not.toHaveBeenCalled();
       expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
+    });
+
+    it("rewalks a pre-fence cursor from offset zero under a fresh generation and start", async () => {
+      resumeWalk({ walkStartedAt: undefined });
+      dbMocks.maxPageSubscriptionGeneration.mockResolvedValue(7);
+      const startedAfter = Date.now();
+
+      const { result, telemetry, tx, getSubscribersPage } = await runWalk({
+        total: 50,
+        items: subscriberItems("active", 50),
+        done: true,
+      });
+
+      expect(getSubscribersPage).toHaveBeenCalledWith(
+        expect.any(Object),
+        { limit: 100, offset: 0, status: "3,4" },
+      );
+      expect(result).toMatchObject({ satisfied: true, stats: { generation: 8, pageCount: 1 } });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      const fence = dbMocks.deactivatePageSubscriptionsByGeneration.mock.calls[0]?.[1].lastSeenBefore as Date;
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
+        platformAccountId: 14,
+        generation: 8,
+        lastSeenBefore: fence,
+      });
+      expect(fence.getTime()).toBeGreaterThanOrEqual(startedAfter);
+      // Not a provider anomaly: the bounded restart allowance is untouched.
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({ generation: 8, restartCount: 0, walkStartedAt: fence.toISOString() }),
+      }));
+    });
+
+    it("fences a pre-fence cursor that has not read past offset zero without a rewalk", async () => {
+      resumeWalk({
+        walkStartedAt: undefined,
+        offset: 0,
+        observedCount: 0,
+        distinctObservedCount: 0,
+        pageCount: 0,
+        providerReportedTotal: null,
+      });
+      const startedAfter = Date.now();
+
+      const { result, tx } = await runWalk({ total: 50, items: subscriberItems("active", 50), done: true });
+
+      expect(result).toMatchObject({ satisfied: true, stats: { generation: 7 } });
+      expect(dbMocks.maxPageSubscriptionGeneration).not.toHaveBeenCalled();
+      const fence = dbMocks.deactivatePageSubscriptionsByGeneration.mock.calls[0]?.[1].lastSeenBefore as Date;
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
+        platformAccountId: 14,
+        generation: 7,
+        lastSeenBefore: fence,
+      });
+      expect(fence.getTime()).toBeGreaterThanOrEqual(startedAfter);
+    });
+
+    it("takes a fresh start before retrying a first read that never wrote a page", async () => {
+      // A failed or yielded first read leaves the walk's stored start behind,
+      // and its retry keeps the same revision, so it resumes this cursor.
+      resumeWalk({
+        offset: 0,
+        observedCount: 0,
+        distinctObservedCount: 0,
+        pageCount: 0,
+        providerReportedTotal: null,
+      });
+      const startedAfter = Date.now();
+
+      const { result, tx } = await runWalk({ total: 50, items: subscriberItems("active", 50), done: true });
+
+      expect(result).toMatchObject({ satisfied: true, stats: { generation: 7, pageCount: 1 } });
+      expect(dbMocks.maxPageSubscriptionGeneration).not.toHaveBeenCalled();
+      const fence = dbMocks.deactivatePageSubscriptionsByGeneration.mock.calls[0]?.[1].lastSeenBefore as Date;
+      expect(fence.getTime()).toBeGreaterThanOrEqual(startedAfter);
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
+        platformAccountId: 14,
+        generation: 7,
+        lastSeenBefore: fence,
+      });
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({ generation: 7, restartCount: 0, walkStartedAt: fence.toISOString() }),
+      }));
     });
 
     it("restarts only the archive-only history walk when the expired total shifts", async () => {
@@ -3002,6 +3091,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
         platformAccountId: 14,
         generation: 7,
+        lastSeenBefore: new Date(WALK_STARTED_AT),
       });
     });
 
