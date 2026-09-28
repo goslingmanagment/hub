@@ -44,6 +44,12 @@
 // per look, replaying the same observation mints the same key (a no-op), and
 // the head upserts pick by `last_observed_at`, so every look is safe to apply.
 //
+// GIFT CODES ARE NOT A SINGLE-ROW HEAD. `page_promo_links` keys them by the
+// capture's UTC day (the tracking half's daily snapshot), so a look on a new
+// day inserts that day's row rather than advancing the previous one: the table
+// now holds the documented snapshot, one row per code per capture day, and it
+// is the latest day's row whose `last_observed_at` advances.
+//
 // ── THE OTHER FOUR RULES ─────────────────────────────────────────────────────
 //
 // 1. **TIME (§3.2b).** Every event here is RECEIPT-TIME: `occurredAt` is the

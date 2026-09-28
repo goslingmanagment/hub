@@ -27,6 +27,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -178,6 +179,38 @@ async function checksums(pageId: number): Promise<Record<string, string>> {
     out[table] = `${record.rows}:${record.digest ?? "empty"}`;
   }
   return out;
+}
+
+/**
+ * A look that reached the ledger as a ROSTER and nothing else: the first
+ * roster of `listingKind` again, at a later instant, with no row event before
+ * it. That is what an unchanged returning row minted under the hash-only `:v1:`
+ * row keys (the row events deduped), and a truncate-and-replay of that history
+ * still feeds the projector exactly this.
+ */
+async function appendRosterOnlyLook(pageId: number, listingKind: string) {
+  const [roster] = await rows<{ data: unknown; schema_version: number; observation_id: string }>(
+    `select data, schema_version, observation_id::text
+       from domain_events
+      where account_id = $1 and type = 'catalog.listing_observed'
+        and data->>'listingKind' = $2
+      order by account_seq limit 1`,
+    [pageId, listingKind],
+  );
+  const occurredAt = new Date();
+  const observationId = Number(roster!.observation_id);
+  await appendProjectionOnlyDomainEvents(testDb!.db, pageId, [{
+    type: "catalog.listing_observed",
+    occurredAt,
+    data: roster!.data,
+    schemaVersion: roster!.schema_version,
+    observationId,
+    dedupKey: `test:roster-only-look:${pageId}:${listingKind}`,
+  }], {
+    occurredAt,
+    observationId,
+    dedupKey: `test:roster-only-look:checkpoint:${pageId}:${listingKind}`,
+  });
 }
 
 /** Seed everything the fixtures describe, once. */
@@ -474,6 +507,33 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
         [page.id],
       ),
     ).toHaveLength(0);
+  });
+
+  it("clears missing_since from the roster alone, as hash-keyed row events replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedAll(page.id);
+    await project(page.id);
+    await seedObservation(page.id, "account_walls", "w2", { rows: [] });
+    await project(page.id);
+    const marked = async () => await rows(
+      `select 1 from page_walls where page_id = $1 and missing_since is not null`,
+      [page.id],
+    );
+    expect(await marked()).toHaveLength(3);
+
+    // The walls come back UNCHANGED in the ledger's older shape: a roster with
+    // no row event before it (see `appendRosterOnlyLook`). No upsert runs, so
+    // the roster's clear half is the only thing that can un-mark them — the
+    // case a rebuild over pre-`:v2:` history depends on.
+    await appendRosterOnlyLook(page.id, "page_walls");
+    const result = await runFanslyCatalogProjection(appStub(), { accountId: page.id });
+    expect(result.walls).toBe(0);
+    expect(result.clearedMissing).toBe(3);
+    expect(await marked()).toHaveLength(0);
   });
 
   it("counts raw vault membership across albums without conflating offers", async (context) => {

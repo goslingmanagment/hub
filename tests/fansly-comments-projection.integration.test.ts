@@ -25,6 +25,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -159,6 +160,43 @@ async function checksums(pageId: number): Promise<Record<string, string>> {
     out[table] = `${record.rows}:${record.digest ?? "empty"}`;
   }
   return out;
+}
+
+/**
+ * A look that reached the ledger as a ROSTER and nothing else: the first
+ * roster again, at a later instant, with no row event before it. That is what
+ * an unchanged returning comment minted under the hash-only `comment:v1` row
+ * key (the row events deduped), and a truncate-and-replay of that history
+ * still feeds the projector exactly this.
+ */
+async function appendRosterOnlyLook(pageId: number) {
+  const [roster] = await rows<{
+    post_ref: string;
+    data: unknown;
+    schema_version: number;
+    observation_id: string;
+  }>(
+    `select post_ref, data, schema_version, observation_id::text
+       from domain_events
+      where account_id = $1 and type = 'post.comment_list_observed'
+      order by account_seq limit 1`,
+    [pageId],
+  );
+  const occurredAt = new Date();
+  const observationId = Number(roster!.observation_id);
+  await appendProjectionOnlyDomainEvents(testDb!.db, pageId, [{
+    type: "post.comment_list_observed",
+    occurredAt,
+    postRef: roster!.post_ref,
+    data: roster!.data,
+    schemaVersion: roster!.schema_version,
+    observationId,
+    dedupKey: `test:roster-only-look:${pageId}`,
+  }], {
+    occurredAt,
+    observationId,
+    dedupKey: `test:roster-only-look:checkpoint:${pageId}`,
+  });
 }
 
 /** A walk row, the way the handler and the creator-posts hook write them. */
@@ -374,6 +412,29 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     const result = await project(page.id);
     expect(result.comments).toBe(4);
     expect(result.clearedMissing).toBe(0);
+    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+  });
+
+  it("CLEARS the mark from the roster alone, as hash-keyed row events replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedObservation(page.id, "four", fixture("replies-four-with-accounts"));
+    await project(page.id);
+    await seedObservation(page.id, "empty", fixture("replies-empty"));
+    await project(page.id);
+    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
+
+    // The comments come back UNCHANGED in the ledger's older shape: a roster
+    // with no row event before it (see `appendRosterOnlyLook`). No upsert runs,
+    // so the roster's clear half is the only thing that can un-mark them — the
+    // case a rebuild over pre-`comment:v2` history depends on.
+    await appendRosterOnlyLook(page.id);
+    const result = await runFanslyCommentsProjection(appStub(), { accountId: page.id });
+    expect(result.comments).toBe(0);
+    expect(result.clearedMissing).toBe(3);
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
   });
 

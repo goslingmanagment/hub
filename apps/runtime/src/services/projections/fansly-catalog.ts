@@ -23,9 +23,11 @@
 // clears its own mark through the ordinary upsert, because row events are
 // keyed per LOOK (their `:v2:` keys) — but under the `:v1:` hash-only keys a
 // gift code revoked and reinstated UNCHANGED emitted no row event at all (its
-// content hash was the one it had before), and only the roster could un-mark
-// it. The roster keeps doing so,
-// which is also why it is keyed per LOOK rather than per ref-set.
+// content hash was the one it had before), and those events still replay. A
+// gift code needs the roster even now: its rows are keyed per capture DAY, so
+// one that returns on a later day lands in a new row and the marked day's row
+// is left for the roster to clear. The roster un-marks in every case, which
+// is also why it is keyed per LOOK rather than per ref-set.
 //
 // ORDER MATTERS, and it is guaranteed by the canonicalizer: the roster is the
 // LAST draft of its observation, so every row it describes has already been
