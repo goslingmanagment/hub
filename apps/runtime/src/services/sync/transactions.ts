@@ -96,6 +96,24 @@ class UnstableFanslyIncrementalScanError extends Error {
   }
 }
 
+// Offset drift (a sale landing between pages shifts every later offset) makes
+// the persisted backfill snapshot unresumable: every retry would re-read the
+// same offset against the frozen total and fail again. A short final page with
+// a stable total (backfill_total_mismatch) is NOT drift and stays resumable.
+type FanslyBackfillInvalidationReason =
+  | "backfill_total_changed"
+  | "backfill_offset_overlap";
+
+class UnstableFanslyBackfillScanError extends Error {
+  constructor(
+    message: string,
+    readonly reason: FanslyBackfillInvalidationReason,
+  ) {
+    super(message);
+    this.name = "UnstableFanslyBackfillScanError";
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -540,6 +558,43 @@ async function safelyInvalidateFanslyIncrementalProgress(
       provider: "fansly",
       stream: "transactions",
     }, "Failed to invalidate unstable Fansly incremental checkpoint progress");
+  }
+}
+
+async function safelyInvalidateFanslyBackfillProgress(
+  app: AppContext,
+  input: {
+    pageLabel: string;
+    platformAccountId: number;
+  },
+  reason: FanslyBackfillInvalidationReason,
+  originalErr: unknown,
+) {
+  try {
+    // A literal null cursor: the next run must restart the backfill from
+    // offset 0 with a fresh total, never fall through to the incremental path
+    // and silently abandon the unscanned tail of history.
+    await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.platformAccountId,
+      stream: "transactions",
+      cursorTimestamp: null,
+      state: {
+        pageLabel: input.pageLabel,
+        invalidatedBackfillScan: {
+          reason,
+          invalidatedAt: new Date().toISOString(),
+        },
+      },
+    });
+  } catch (cleanupError) {
+    app.logger.warn({
+      err: cleanupError,
+      originalErr,
+      pageLabel: input.pageLabel,
+      platformAccountId: input.platformAccountId,
+      provider: "fansly",
+      stream: "transactions",
+    }, "Failed to invalidate unstable Fansly backfill checkpoint progress");
   }
 }
 
@@ -1261,7 +1316,10 @@ async function syncTransactionsBackfill(
             snapshotEnd: state.snapshotEnd,
           },
         });
-        throw new Error("Fansly transaction backfill total changed during an offset scan");
+        throw new UnstableFanslyBackfillScanError(
+          "Fansly transaction backfill total changed during an offset scan",
+          "backfill_total_changed",
+        );
       }
 
       if (page.items.length === 0 && !page.done) {
@@ -1309,7 +1367,10 @@ async function syncTransactionsBackfill(
             snapshotEnd: state.snapshotEnd,
           },
         });
-        throw new Error("Fansly transaction backfill saw overlapping rows between offset pages");
+        throw new UnstableFanslyBackfillScanError(
+          "Fansly transaction backfill saw overlapping rows between offset pages",
+          "backfill_offset_overlap",
+        );
       }
 
       const pageOldestSeenAt = page.items.reduce<Date | null>(
@@ -1428,6 +1489,12 @@ async function syncTransactionsBackfill(
         provider: "fansly",
         stream: "transactions",
       }, "Failed to flush Fansly dirty range after backfill error");
+    }
+
+    // After the flush: flushAndClear rewrites the backfill state, so the
+    // invalidation must be the last checkpoint write.
+    if (error instanceof UnstableFanslyBackfillScanError) {
+      await safelyInvalidateFanslyBackfillProgress(app, input, error.reason, error);
     }
 
     throw error;

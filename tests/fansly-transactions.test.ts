@@ -1419,6 +1419,201 @@ describe("syncTransactions", () => {
     ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+
+    // The dirty-range flush rewrites the backfill state first; the
+    // invalidation must land after it or the frozen snapshot comes back.
+    const progressWrites = dbMocks.upsertCheckpointProgress.mock.calls.map((call) => call[1]);
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalled();
+    expect(progressWrites.at(-2)).toMatchObject({
+      state: { mode: "backfill", offset: 1, providerReportedTotal: 2, dirtyFrom: null },
+    });
+    const invalidatedProgress = progressWrites.at(-1);
+    expect(invalidatedProgress).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: null,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedBackfillScan: {
+          reason: "backfill_total_changed",
+        },
+      },
+    });
+    expect(invalidatedProgress?.state).not.toHaveProperty("mode");
+
+    // The next run starts a fresh snapshot from offset 0 with the new total.
+    dbMocks.getCheckpoint.mockResolvedValueOnce({
+      cursorTimestamp: invalidatedProgress?.cursorTimestamp,
+      state: invalidatedProgress?.state,
+    });
+    getTransactionsPage.mockReset().mockResolvedValueOnce({
+      items: [
+        buildTransaction("tx-new", "2026-03-11T00:00:00.000Z"),
+        buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"),
+        buildTransaction("tx-2", "2026-03-09T00:00:00.000Z"),
+      ],
+      total: 3,
+      done: true,
+      raw: { page: "restart" },
+    });
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 124,
+      telemetry: createTelemetry() as never,
+    })).resolves.toMatchObject({ satisfied: true, processedTransactions: 3 });
+
+    expect(getTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(getTransactionsPage).toHaveBeenCalledWith(expect.anything(), { limit: 100, offset: 0 });
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        cursorTimestamp: new Date("2026-03-11T00:00:00.000Z"),
+        lastSuccessfulRunId: 124,
+      }),
+    );
+  });
+
+  it("invalidates a resumed Fansly backfill whose provider total grew between chunks", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: null,
+      state: {
+        mode: "backfill",
+        completed: false,
+        provider: "fansly",
+        phase: "transactions",
+        snapshotEnd: "2026-03-14T00:00:00.000Z",
+        providerReportedTotal: 2,
+        newestSeenAt: "2026-03-10T00:00:00.000Z",
+        dirtyFrom: null,
+        processedTransactions: 1,
+        processedChargebacks: 0,
+        transactionPages: 1,
+        chargebackPages: 0,
+        offset: 1,
+        lastPageTransactionIds: ["tx-1"],
+      },
+    });
+    const telemetry = createTelemetry();
+    // A new sale shifted every offset by one: offset 1 now holds tx-1 again.
+    const getTransactionsPage = vi.fn().mockResolvedValue({
+      items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+      total: 3,
+      done: false,
+      raw: { page: "resume" },
+    });
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: telemetry as never,
+    })).rejects.toThrow("Fansly transaction backfill total changed during an offset scan");
+
+    expect(getTransactionsPage).toHaveBeenCalledWith(expect.anything(), { limit: 100, offset: 1 });
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      cursorTimestamp: null,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedBackfillScan: {
+          reason: "backfill_total_changed",
+        },
+      },
+    });
+  });
+
+  it.each([
+    [
+      "an upstream failure",
+      () => Promise.reject(new Error("upstream failed")),
+      "upstream failed",
+    ],
+    [
+      "an invalid total",
+      () => Promise.resolve({ items: [], total: null, done: false, contractAccepted: false, raw: {} }),
+      "Fansly transaction backfill page returned an invalid total",
+    ],
+  ])("keeps Fansly backfill progress resumable after %s", async (_label, secondPage, message) => {
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    const getTransactionsPage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [buildTransaction("tx-1", "2026-03-10T00:00:00.000Z")],
+        total: 2,
+        done: false,
+        raw: { page: 1 },
+      })
+      .mockImplementationOnce(secondPage);
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage,
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await expect(syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    })).rejects.toThrow(message);
+
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      cursorTimestamp: null,
+      state: {
+        mode: "backfill",
+        offset: 1,
+        providerReportedTotal: 2,
+      },
+    });
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1].state)
+      .not.toHaveProperty("invalidatedBackfillScan");
   });
 
   it("captures and refuses a Fansly backfill page with an unsafe total", async () => {
@@ -1539,6 +1734,16 @@ describe("syncTransactions", () => {
       "tx-1",
       "tx-2",
     ]);
+    // Not drift: a stable total with a short page stays resumable at the
+    // processed offset instead of restarting full passes.
+    expect(dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]).toMatchObject({
+      cursorTimestamp: null,
+      state: {
+        mode: "backfill",
+        offset: 2,
+        providerReportedTotal: 3,
+      },
+    });
   });
 
   it("refuses to finalize a Fansly backfill when adjacent offset pages overlap", async () => {
@@ -1598,6 +1803,19 @@ describe("syncTransactions", () => {
     ]);
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
     expect(dbMocks.upsertTransaction.mock.calls.map((call) => call[1].transactionId)).toEqual(["tx-1"]);
+    const invalidatedProgress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1];
+    expect(invalidatedProgress).toMatchObject({
+      platformAccountId: 1,
+      stream: "transactions",
+      cursorTimestamp: null,
+      state: {
+        pageLabel: "fansly-page",
+        invalidatedBackfillScan: {
+          reason: "backfill_offset_overlap",
+        },
+      },
+    });
+    expect(invalidatedProgress?.state).not.toHaveProperty("mode");
   });
 
   it("looks up backfill Fansly fan hydration before opening each DB transaction", async () => {
