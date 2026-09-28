@@ -1,9 +1,9 @@
 {
-  "checked_at": "2026-09-27T11:02:11.596552+00:00",
+  "checked_at": "2026-09-28T05:25:22.065Z",
   "package_version": "2026.927.830",
   "extension_id": "odcgbfiaikgmamdjkiipobgolcpahmki",
   "source_url": "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=140.0.0.0&acceptformat=crx3&x=id%3Dodcgbfiaikgmamdjkiipobgolcpahmki%26installsource%3Dondemand%26uc",
-  "snapshot_path": "/Users/dmitriy/code/agency/fbuddy-analysis/snapshots/2026.927.830",
+  "snapshot_path": "/Users/dmitriy/code/1-platform/fbuddy-analysis/snapshots/2026.927.830",
   "crx_bytes": 3698765,
   "crx_sha256": "3fd413555f9d8a4b8754e7ee198f22f1d0d885367e59331c9d1d39c118b8ecce",
   "crx_verification": {
@@ -238,7 +238,7 @@
       "matches_archive": true
     }
   ],
-  "evidence_boundary": "Static analysis of this exact CRX; readable files are formatted projections. No extension installation or live Fansly requests were performed.",
+  "evidence_boundary": "Static analysis of this exact CRX plus isolated function checks with mocked I/O and no network. Readable files are formatted projections. No extension installation or live Fansly requests were performed.",
   "selected_ast_verification": {
     "parser": "acorn",
     "scope": "FunctionDeclaration and MethodDefinition",
@@ -333,6 +333,101 @@
         "readableMatches": 1,
         "equal": true
       }
-    ]
+    ],
+    "parser_version": "8.18.0"
+  },
+  "readable_ast_verification": {
+    "parser": "acorn",
+    "parser_version": "8.18.0",
+    "parse_options": {
+      "ecmaVersion": "latest",
+      "sourceType": "module"
+    },
+    "excluded_fields": [
+      "start",
+      "end",
+      "loc",
+      "raw"
+    ],
+    "javascript_files": 10,
+    "equal_without_extra_normalization": 8,
+    "equal_after_equivalent_normalization": 10,
+    "unexplained_differences": 0,
+    "normalizations": [
+      {
+        "file": "chunks/popup-YfJ3obO0.js",
+        "kind": "associative_logical_grouping",
+        "operator": "&&",
+        "raw_line": 79,
+        "readable_line": 13458
+      },
+      {
+        "file": "content-scripts/main.js",
+        "kind": "associative_logical_grouping",
+        "operator": "&&",
+        "raw_line": 88,
+        "readable_line": 13545
+      },
+      {
+        "file": "content-scripts/main.js",
+        "kind": "unquoted_noncomputed_property_key",
+        "name": "ˆ",
+        "raw_line": 399,
+        "readable_line": 154221
+      }
+    ],
+    "results": [
+      {
+        "file": "background.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "chunks/popup-YfJ3obO0.js",
+        "equal_without_extra_normalization": false,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "content-scripts/fansly-goals-refresh.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "content-scripts/main.js",
+        "equal_without_extra_normalization": false,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "electron-background-bootstrap.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "injections/fbuddy-network-hook.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "injections/fbuddy-restricted-words-guard.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "injections/fbuddy-videojs-player.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "injections/window-bridge.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      },
+      {
+        "file": "media-processor.js",
+        "equal_without_extra_normalization": true,
+        "equal_after_equivalent_normalization": true
+      }
+    ],
+    "evidence_boundary": "Syntax-tree comparison only; the recorded normalizations preserve logical evaluation order and property names. This does not establish live behavior."
   }
 }
