@@ -1201,6 +1201,7 @@ export async function handleAgentSearchMessages(
         isSentByMe: row.isSentByMe,
         rank: row.rank,
         snippet: body.includeSnippet ? row.snippet : null,
+        deletedAt: isoOrNull(row.deletedAt),
         fieldStates: {},
         provenance: {
           ingestPaths: ["unknown" as const],

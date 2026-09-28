@@ -1440,6 +1440,10 @@ export const agentSearchLocatorSchema = z.object({
   /** Only when `includeSnippet` is true. A FLAT window of +/-120 characters
    *  around the first match, no `ts_headline`. Still requires `read:messages`. */
   snippet: z.string().max(300).nullable(),
+  /** Set when the platform deleted the message. A Fansly deletion keeps the
+   *  text, so a deleted message still matches and still has a snippet; this
+   *  marks the hit, like `state: "deleted"` on the transcript. */
+  deletedAt: agentIsoTimestamp.nullable(),
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   provenance: agentProvenanceSchema,
 }).strict();

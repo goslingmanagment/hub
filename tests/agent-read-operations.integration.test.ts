@@ -861,6 +861,25 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(rows[0]!.request_summary.qLength).toBe(6);
   });
 
+  it("#7 marks a hit the platform deleted: a Fansly deletion keeps the text, so it still matches", async () => {
+    await testDb!.pool.query(
+      "update message_archive set deleted_at = '2026-03-05T00:00:00Z' where message_ref = 'm-2'",
+    );
+    const response = await agentPost("/api/v1/agent/search/messages", {
+      q: "custom",
+      from: "2026-03-01T00:00:00Z",
+      to: "2026-03-10T00:00:00Z",
+      includeSnippet: true,
+    });
+    expect(response.statusCode).toBe(200);
+    const hits = Object.fromEntries(response.json().items.map(
+      (item: { messageRef: string; deletedAt: string | null; snippet: string | null }) =>
+        [item.messageRef, [item.deletedAt, item.snippet]],
+    ));
+    expect(hits["m-1"]).toEqual([null, "did you send the custom video yet"]);
+    expect(hits["m-2"]).toEqual(["2026-03-05T00:00:00.000Z", "yes baby, sending the custom now"]);
+  });
+
   it("#8 probes coverage per scope, with the journal floor", async () => {
     const response = await agentGet(`/api/v1/agent/coverage?${JANUARY}`);
     expect(response.statusCode).toBe(200);

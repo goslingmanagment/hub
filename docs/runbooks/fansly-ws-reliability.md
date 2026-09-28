@@ -128,22 +128,37 @@ attachments, tips and reply refs stay. Nothing is inserted: a message deleted
 before Hub captured it stays absent. Only exact evidence counts: a
 `mutation_debt` receipt with a known generation and native group whose group
 matches the stored thread. A correlation or bulk marker is not expanded to
-other recipients. B0 must capture the frame; B1 flags do not gate the marks.
+other recipients. There is no separate flag: B0 capture of a page
+(`fanslyWsCapturePageAllowlist`) is what leads, via receipts, to marks on its
+stored messages. B1 flags do not gate the marks.
 
 Readers keep their existing deleted-row behavior. The desktop/dashboard
 conversation view, thread windows (stored count, newest/oldest ids) and AI
-context skip deleted rows, as they do for OnlyFans tombstones. The thread head
-and its preview stay with the Fansly conversation list, which moves them back
-on its next scan. Agent Read transcripts return
-the row with `state: "deleted"`, `deletedAt` and its text (`includeDeleted`
-defaults to true), and the person timeline shows it as `message.deleted`. A
-later REST read of the message does not clear a mark.
+context skip deleted rows, as they do for OnlyFans tombstones. Agent Read
+transcripts return the row with `state: "deleted"`, `deletedAt` and its text
+(`includeDeleted` defaults to true); Agent Read search and the dashboard
+archive search return the hit with `deletedAt`; the person timeline shows it as
+`message.deleted`. A later REST read of the message does not clear a mark.
 
-The message-archive sweep applies receipts of the last 7 days every minute,
-which also marks an archive row that appeared after its deletion receipt. The
-archive shadow rebuild re-applies all receipts. Receipts filed before this
-code existed need the owner-run backfill once; it reads only Hub's receipts,
-makes no Fansly call and is idempotent:
+Exception, the thread head: its id, time and preview stay with the Fansly
+conversation list, their only writer, and that list can keep naming a deleted
+message as the head (13 threads in production on 2026-09-28, rewritten by
+list scans days after the deletion). The inbox preview of such a thread keeps
+showing the deleted text, unmarked, while the conversation view hides the
+message. A stored head that is marked still counts as captured, so it opens no
+head debt.
+
+The message-archive sweep applies, every minute, the receipts filed in the
+last hour. This marks new deletions and an archive row that appeared after its
+deletion receipt (canonicalization lags about 90 s). The same pass re-derives a
+thread window that a concurrent conversation-list write reverted after a mark;
+without that it would keep counting the deleted row until the next REST walk.
+The archive shadow rebuild re-applies all receipts.
+
+The first sweep after deploy reaches only the receipts filed in the hour
+before it. All older receipts, and anything a canonicalization backlog longer
+than the hour left unmarked, need the owner-run backfill. It reads only Hub's
+receipts, makes no Fansly call, is idempotent and is safe to re-run:
 
 ```sh
 pnpm --silent cli archive:backfill-fansly-ws-deletions             # read-only dry run
@@ -151,8 +166,13 @@ pnpm --silent cli archive:backfill-fansly-ws-deletions --execute   # after owner
 ```
 
 The dry run prints the exact deletions and the live hot and archive rows they
-name per page; `--account <id>` limits it to one page. Roll back code, not
-data: a mark keeps the content, and nothing needs repair after a rollback.
+name per page; `--account <id>` limits it to one page.
+
+Rollback: marks persist after a code rollback. The marked rows stay hidden
+from the conversation view, the thread windows and the AI context, and stay
+frozen: `upsertPageDmMessages` never refreshes a marked row, and no code path
+unmarks one. Rolling back code therefore does not undo wrong marks; they would
+need a separate, owner-approved unmark repair, which does not exist.
 
 ```sql
 select p.label, count(*) filter (where m.deleted_at is not null) as marked_hot

@@ -82,10 +82,10 @@ export interface MessageArchiveProjectionResult {
    */
   purchases: PpvPurchaseApplyCounts;
   /**
-   * D-6: the recent-window Fansly WS deletion reconcile that also closes
-   * every sweep. Exact deletion receipts mark hot and archive rows deleted
-   * (content kept), including an archive row that appeared after its
-   * deletion. Zeros when nothing was new.
+   * D-6: the going-forward Fansly WS deletion reconcile that also closes
+   * every sweep. Exact deletion receipts filed in the last hour mark hot and
+   * archive rows deleted (content kept), including an archive row that
+   * appeared after its deletion. Zeros when nothing was new.
    */
   wsDeletions: FanslyWsDeletionApplyCounts;
 }
@@ -101,7 +101,7 @@ export async function runMessageArchiveProjection(
     tombstoned: 0,
     opened: 0,
     purchases: { hotPurchasedMarked: 0, messageArchiveOpened: 0, dmArchiveOpened: 0 },
-    wsDeletions: { hotMarked: 0, archiveMarked: 0 },
+    wsDeletions: { hotMarked: 0, archiveMarked: 0, windowsRepaired: 0 },
   };
   const platformCache = new Map<number, string | null>();
   const accounts = input?.accountId != null

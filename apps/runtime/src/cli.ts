@@ -2242,7 +2242,8 @@ export function buildProgram() {
         console.log(
           `${result.dryRun ? "[dry-run] would mark" : "marked"}: `
             + `hot ${result.hotMarked}, message_archive ${result.archiveMarked} `
-            + `(${result.deletions} exact deletions in scope)`,
+            + `(${result.deletions} exact deletions in scope); `
+            + `${result.dryRun ? "would repair" : "repaired"} ${result.windowsRepaired} drifted thread windows`,
         );
       } finally {
         await app.close();

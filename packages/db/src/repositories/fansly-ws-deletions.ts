@@ -18,7 +18,8 @@
 // deletion, so every caller writes the same timestamp.
 //
 // Three callers, one fact definition (the PPV purchase precedent):
-//   * the minutely recent-window reconcile in the message-archive sweep,
+//   * the minutely reconcile of recently FILED receipts in the message-archive
+//     sweep,
 //   * the owner-run history backfill (archive:backfill-fansly-ws-deletions),
 //   * the message-archive shadow rebuild (re-marks the shadow after replay).
 // Every writer is conditional on the row not being marked yet, so any caller
@@ -32,9 +33,11 @@ import type { ArchiveTargetTable } from "./message-archive.ts";
 export interface FanslyWsDeletionScope {
   /** One internal page id; null/absent = every Fansly page. */
   accountId?: number | null;
-  /** Only receipts received at or after this instant (the recent-window
-   * reconcile); null/absent = all history. */
-  since?: Date | null;
+  /** Only addresses with an exact receipt FILED (fansly_ws_hint_receipts.
+   * created_at) at or after this instant: the minutely reconcile. Filing time,
+   * not frame time, so a hint projector backlog cannot age a receipt out of
+   * the window before it is filed. null/absent = all history. */
+  filedSince?: Date | null;
 }
 
 function archiveTarget(target: ArchiveTargetTable) {
@@ -45,10 +48,19 @@ function archiveTarget(target: ArchiveTargetTable) {
 }
 
 /** Earliest exact deletion receipt per (page, group, message). The predicate
- * matches the partial index fansly_ws_hint_exact_delete. */
+ * matches the partial index fansly_ws_hint_exact_delete. With `filedSince`,
+ * only addresses with a receipt filed in the window are selected, but the date
+ * is still the earliest receipt of ALL of them, so every caller writes the same
+ * timestamp. */
 function deletionsCte(scope: FanslyWsDeletionScope): SQL {
   const accountFilter = scope.accountId == null ? sql`` : sql`and r.page_id = ${scope.accountId}`;
-  const sinceFilter = scope.since == null ? sql`` : sql`and r.received_at >= ${scope.since}`;
+  const filedFilter = scope.filedSince == null ? sql`` : sql`
+        and exists (
+          select 1 from fansly_ws_hint_receipts f
+          where f.page_id = r.page_id and f.group_ref = r.group_ref
+            and f.message_ref = r.message_ref and f.outcome = 'mutation_debt'
+            and f.generation is not null and f.created_at >= ${scope.filedSince}
+        )`;
   return sql`
     deletions as (
       select r.page_id, r.group_ref, r.message_ref, min(r.received_at) as deleted_at
@@ -59,7 +71,7 @@ function deletionsCte(scope: FanslyWsDeletionScope): SQL {
         and r.group_ref is not null
         and r.message_ref is not null
         ${accountFilter}
-        ${sinceFilter}
+        ${filedFilter}
       group by r.page_id, r.group_ref, r.message_ref
     )`;
 }
@@ -138,6 +150,49 @@ export async function markFanslyWsHotDeletion(
     returning id
   `);
   return result.rows.length > 0;
+}
+
+/**
+ * Threads in scope whose stored window still counts a marked row: the newest
+ * or oldest stored id names a marked row, or stored_message_count exceeds the
+ * live rows. The mark's own window refresh runs outside the page sync lease,
+ * and the Fansly conversation-list writer writes the window back from a
+ * snapshot it read before its transaction. A list chunk in flight across a
+ * mark can therefore revert the refresh; the reconcile re-derives these
+ * windows on its next pass. Only threads holding a row an in-scope exact
+ * receipt marked are considered, so an in-flight REST walk (which only adds
+ * rows and recomputes the window itself) is not touched.
+ */
+export async function listFanslyWsDeletionWindowDrift(
+  db: Database,
+  scope: FanslyWsDeletionScope,
+): Promise<number[]> {
+  const result = await db.execute<{ id: string }>(sql`
+    with ${deletionsCte(scope)},
+    threads as (
+      select distinct m.conversation_id as id
+      from deletions d
+      join page_dm_messages m
+        on m.platform_account_id = d.page_id and m.platform_message_id = d.message_ref
+      join page_dm_threads t
+        on t.id = m.conversation_id and t.platform_conversation_id = d.group_ref
+      where m.deleted_at is not null
+    )
+    select t.id::text as id
+    from threads x
+    join page_dm_threads t on t.id = x.id
+    where exists (
+        select 1 from page_dm_messages n
+        where n.conversation_id = t.id and n.deleted_at is not null
+          and n.platform_message_id in (t.newest_stored_message_id, t.oldest_stored_message_id)
+      )
+      or t.stored_message_count > (
+        select count(*) from page_dm_messages l
+        where l.conversation_id = t.id and l.deleted_at is null
+      )
+    order by t.id
+  `);
+  return result.rows.map((row) => Number(row.id));
 }
 
 /** message_archive (or its shadow): deleted_at for every exact deletion, text
