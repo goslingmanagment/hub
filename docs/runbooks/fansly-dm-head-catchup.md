@@ -34,6 +34,10 @@ The list sweep may wake pending history after all head debt is exhausted while
 the report continues to show the unresolved IDs. That history resumes from the
 oldest stored cursor, even if the expected head is still missing. This does not fix a
 provider-deleted head or change coverage into proof of exact-ID capture.
+Pages off the allowlist apply the same rule once the head has been read: a
+pending thread whose head is not newer than its last head read resumes history
+from the oldest stored cursor instead of rereading that head. A newer head is
+still read first, once.
 
 ## Separate owner gates
 

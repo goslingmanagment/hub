@@ -172,6 +172,7 @@ import {
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
+  isDmHeadStaleByTime,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
@@ -2915,10 +2916,14 @@ export async function fanslyDmMessagesChunk(
 
         const headTarget = headCatchupEnabled && currentMode !== "deep_backfill"
           ? await getFanslyDmHeadTarget(app.db, { conversationId: conversation.id }) : null;
-        if (headCatchupEnabled && headTarget === null && currentMode === "incremental" &&
-          conversation.messageCoverageStatus === "pending_backfill") {
-          // An exhausted head can still differ from the newest stored message.
-          // Resume ordinary history from its oldest cursor instead of rereading that head.
+        if (headTarget === null && currentMode === "incremental" &&
+          conversation.messageCoverageStatus === "pending_backfill" &&
+          (headCatchupEnabled || !isDmHeadStaleByTime(conversation))) {
+          // A head can keep differing from the newest stored message after it
+          // was read (list lag, or an id /message never returns). Pending
+          // history without a due head read resumes from its oldest cursor
+          // instead of rereading that head forever. Off the catch-up allowlist
+          // a time-stale head is still read once first.
           currentMode = "backfill";
         }
         const nextState: DmMessagesCursorState = {

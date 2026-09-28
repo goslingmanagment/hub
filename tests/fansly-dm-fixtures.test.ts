@@ -8,7 +8,10 @@ import {
   normalizeFanslyTimestamp,
   trimFanslyMessagingGroupsPayload,
 } from "../apps/runtime/src/services/sync/shared.ts";
-import { resolveDmConversationCoverageStatus } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
+import {
+  isDmHeadStaleByTime,
+  resolveDmConversationCoverageStatus,
+} from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
 
 async function loadResponseFixture<T>(name: string) {
@@ -201,6 +204,10 @@ describe("Fansly DM fixtures", () => {
     ["incremental", "partial_window", true, false, false, "partial_window", "partial_window"],
     // Never pending_backfill: that would re-offer the thread at priority 1 forever.
     ["incremental", "pending_backfill", true, false, false, "pending_backfill", "pending_backfill"],
+    // A head walk that reaches the provider's end has read the whole history.
+    ["incremental", "pending_backfill", false, true, false, "complete", "partial_window"],
+    ["incremental", "pending_backfill", true, true, false, "complete", "partial_window"],
+    ["incremental", "partial_window", false, true, false, "partial_window", "partial_window"],
   ] as const)("coverage verdict for %s over %s (overlap %s, exhausted %s, cap %s) never claims complete with normalization debt", (
     currentMode, existingStatus, overlapFound, providerHistoryExhausted, hitWindowCap, clean, withDebt,
   ) => {
@@ -208,6 +215,19 @@ describe("Fansly DM fixtures", () => {
     expect(resolveDmConversationCoverageStatus(input)).toBe(clean);
     expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: false })).toBe(clean);
     expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: true })).toBe(withDebt);
+  });
+
+  it("treats a head as due only when it differs from the newest stored message and arrived after the last head read", () => {
+    const headAt = new Date("2026-03-10T12:00:00.000Z");
+    const base = {
+      lastMessageId: "head", newestStoredMessageId: "older", lastMessageAt: headAt, lastMessageSyncAt: null,
+    };
+    expect(isDmHeadStaleByTime(base)).toBe(true);
+    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: new Date("2026-03-10T11:59:59.000Z") })).toBe(true);
+    expect(isDmHeadStaleByTime({ ...base, lastMessageSyncAt: headAt })).toBe(false);
+    expect(isDmHeadStaleByTime({ ...base, lastMessageAt: null, lastMessageSyncAt: headAt })).toBe(false);
+    expect(isDmHeadStaleByTime({ ...base, newestStoredMessageId: "head" })).toBe(false);
+    expect(isDmHeadStaleByTime({ ...base, lastMessageId: null, newestStoredMessageId: null })).toBe(false);
   });
 
   it("normalizes provider DM tip units into stored cents", () => {

@@ -36,6 +36,22 @@ export function assertDmSharedRateLimitEnabled(app: AppContext) {
   }
 }
 
+/** The list head differs from the newest stored message and arrived after the
+ * last head read: a head read is due. Mirrors the time-based stale-head
+ * predicate in page-dm.ts selectNextPageDmMessageSyncCandidate; keep the two
+ * in step. */
+export function isDmHeadStaleByTime(conversation: {
+  lastMessageId: string | null;
+  newestStoredMessageId: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSyncAt: Date | null;
+}) {
+  return conversation.lastMessageId !== conversation.newestStoredMessageId && (
+    conversation.lastMessageSyncAt === null ||
+    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt)
+  );
+}
+
 export function resolveDmConversationCoverageStatus(input: {
   currentMode: "backfill" | "deep_backfill" | "incremental";
   existingStatus: MessageCoverageStatus;
@@ -60,6 +76,11 @@ function resolveDmWalkCoverageStatus(
   input: Parameters<typeof resolveDmConversationCoverageStatus>[0],
 ): MessageCoverageStatus {
   if (input.currentMode === "incremental") {
+    // An incremental walk starts at the head and its pages are contiguous, so
+    // reaching the provider's end means the whole history is stored.
+    if (input.providerHistoryExhausted && input.existingStatus === "pending_backfill") {
+      return "complete";
+    }
     return input.existingStatus;
   }
 

@@ -81,6 +81,7 @@ import { persistDmShadowReport } from "./dm-shadow-report.ts";
 import { createDmShadowWitnessPointers, DM_SHADOW_WITNESS_LIMIT } from "./dm-shadow-witness.ts";
 import {
   assertDmSharedRateLimitEnabled,
+  isDmHeadStaleByTime,
   normalizeDmTimestampWithAnomaly,
   resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
@@ -221,12 +222,7 @@ export function shouldRequestDmMessagesFollowup(conversation: {
     return true;
   }
 
-  if (conversation.lastMessageId === conversation.newestStoredMessageId) {
-    return false;
-  }
-
-  return conversation.lastMessageSyncAt === null ||
-    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt);
+  return isDmHeadStaleByTime(conversation);
 }
 
 export async function fanslyDmConversationsChunk(
