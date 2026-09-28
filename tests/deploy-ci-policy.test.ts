@@ -45,8 +45,6 @@ const swaggerRequire = createRequire(testRequire.resolve("@fastify/swagger"));
 const yaml = swaggerRequire("yaml") as { parse: (text: string) => Workflow };
 const workflowText = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const workflow = yaml.parse(workflowText);
-// TEMP (measurement runs only): ignore the resource sampler steps.
-for (const config of Object.values(workflow.jobs)) config.steps = config.steps.filter(item => !item.name.startsWith("TEMP "));
 const nightly = yaml.parse(readFileSync(new URL("../.github/workflows/nightly.yml", import.meta.url), "utf8"));
 
 function job(name: string): Job {
@@ -666,7 +664,7 @@ describe("CI static job: unit tests beside the image checks", () => {
     ]);
     expect(step("static", start).id).toBe("unit-tests");
     expect(shell(step("static", start))).toBe([
-      "bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=4",
+      "bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5",
       'echo "started=true" >> "$GITHUB_OUTPUT"',
       "",
     ].join("\n"));
@@ -807,7 +805,7 @@ describe("CI static job: unit tests beside the image checks", () => {
     const run = simulateStatic({ environment: "self-hosted", unitExit: 0 });
     expect(run.conclusion).toBe("success");
     expect(run.outcomes).toMatchObject({ [start]: "success", Typecheck: "success", [unit]: "success", [stop]: "success" });
-    expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=4\nunit tests finished\n");
+    expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
     expect(run.group).not.toBeNull();
     expect(run.leftovers).toBe(false);
   });
@@ -818,7 +816,7 @@ describe("CI static job: unit tests beside the image checks", () => {
       expect(run.conclusion, `${failAt} unit=${unitExit}`).toBe("failure");
       expect(run.outcomes[failAt]).toBe("failure");
       expect(run.outcomes[unit]).toBe(unitExit === 0 ? "success" : "failure");
-      expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=4\nunit tests finished\n");
+      expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
       expect(run.outcomes[stop]).toBe("success");
       expect(run.outcomes["Remove this run's image"]).toBe("success");
       expect(run.leftovers).toBe(false);
@@ -853,7 +851,7 @@ describe("CI static job: unit tests beside the image checks", () => {
     expect(run.conclusion).toBe("cancelled");
     expect(run.outcomes).toMatchObject({ "Chromium Headless Shell runtime smoke": "skipped", [unit]: "skipped", [stop]: "success",
       "Remove this run's image": "success" });
-    expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=4\n");
+    expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=5\n");
     expect(run.group).not.toBeNull();
     expect(run.leftovers).toBe(false);
   });

@@ -146,13 +146,6 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
-      - name: TEMP resource sampler
-        if: runner.environment == 'self-hosted'
-        run: |
-          nproc; free -m; cat /proc/self/cgroup
-          cg="/sys/fs/cgroup/user.slice/user-$(id -u).slice"; cat "$cg/memory.max" "$cg/memory.events" || true
-          bash scripts/ci-background.sh start sampler bash scripts/ci-diag-sampler.sh
-
       # Contracts come first: the generator rewrites tracked sources in place
       # (contract hash, SDK), and the unit tests started next import them.
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
@@ -167,13 +160,17 @@ jobs:
       # Self-hosted: the unit tests run in a process group of their own beside
       # typecheck → lint → image build → smokes, and "Reliable unit tests"
       # joins them. The PC's 24 threads are shared with the integration shards
-      # running at the same time. Hosted runners (2 vCPUs) skip this and run
-      # the unit tests in that step instead, after the smokes, as before.
+      # running at the same time; typecheck (single-threaded tsc) is the long
+      # pole of the other branch, and five workers finish the unit tests about
+      # when that branch ends (measured on the PC: 6 workers ~70 s, 4 ~97 s,
+      # against ~90 s for the checks) without adding load that buys nothing.
+      # Hosted runners (2 vCPUs) skip this and run the unit tests in that step
+      # instead, after the smokes, as before.
       - name: Start reliable unit tests in the background
         id: unit-tests
         if: runner.environment == 'self-hosted'
         run: |
-          bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=4
+          bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5
           echo "started=true" >> "$GITHUB_OUTPUT"
 
       # Check backend types once. Docker explicitly consumes this successful
@@ -265,12 +262,6 @@ jobs:
       - name: Stop background unit tests
         if: always()
         run: bash scripts/ci-background.sh stop unit-tests
-
-      - name: TEMP resource report
-        if: always() && runner.environment == 'self-hosted'
-        run: |
-          bash scripts/ci-background.sh stop sampler
-          cg="/sys/fs/cgroup/user.slice/user-$(id -u).slice"; cat "$cg/memory.events" "$cg/memory.peak" || true
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
