@@ -5,6 +5,7 @@ import {
   assertOwnedPageSyncLease,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
+  countCurrentPageSubscriptionsByGeneration,
   countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
@@ -197,6 +198,8 @@ const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
+const SUBSCRIBERS_MAX_WALK_RESTARTS = 2;
+const SUBSCRIBERS_WALK_RESTART_DELAY_MS = 60_000;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
@@ -1407,6 +1410,31 @@ export async function onlyfansSubscribersChunk(
   } satisfies StreamChunkResult;
 }
 
+type SubscribersWalkRestartReason = "total_changed" | "partial_result" | "offset_duplicates";
+
+/** Rewalk from offset zero under the same request revision. */
+async function subscribersWalkRestartState(
+  db: Parameters<typeof maxPageSubscriptionGeneration>[0],
+  platformAccountId: number,
+  state: SubscribersCursorState,
+): Promise<SubscribersCursorState> {
+  const walk = {
+    offset: 0,
+    observedCount: 0,
+    distinctObservedCount: 0,
+    pageCount: 0,
+    providerReportedTotal: null,
+    restartCount: state.restartCount + 1,
+  };
+  if (state.mode === "expired") {
+    // The active walk already finalized; only the archive-only history is reread.
+    return { ...state, ...walk };
+  }
+  // A fresh generation keeps rows stamped by the abandoned walk from counting as seen.
+  const storedGeneration = await maxPageSubscriptionGeneration(db, platformAccountId);
+  return { ...state, ...walk, generation: Math.max(state.generation, storedGeneration) + 1 };
+}
+
 export async function fanslySubscribersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1450,8 +1478,10 @@ export async function fanslySubscribersChunk(
       historyBackfilledAt: previousHistoryBackfilledAt,
       offset: 0,
       observedCount: 0,
+      distinctObservedCount: 0,
       pageCount: 0,
       providerReportedTotal: null,
+      restartCount: 0,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -1461,6 +1491,29 @@ export async function fanslySubscribersChunk(
   }
 
   let processedThisChunk = 0;
+  const restartWalk = async (
+    walk: SubscribersCursorState,
+    reason: SubscribersWalkRestartReason,
+    restartState: SubscribersCursorState,
+    checkpoint: Awaited<ReturnType<typeof upsertCheckpointProgress>>,
+  ) => {
+    await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(checkpoint));
+    return {
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: spreadFanslyContinuation(new Date(), SUBSCRIBERS_WALK_RESTART_DELAY_MS),
+      continuationRequestSource: "scheduled",
+      stats: {
+        generation: restartState.generation,
+        mode: walk.mode,
+        pageCount: walk.pageCount,
+        processedThisChunk,
+        restartCount: restartState.restartCount,
+        restartReason: reason,
+        destructiveFinalization: false,
+      },
+    } satisfies StreamChunkResult;
+  };
 
   // A non-empty subscribers page is followed by one batched account lookup.
   // Reserve both calls so a chunk never starts a page it cannot hydrate.
@@ -1490,10 +1543,39 @@ export async function fanslySubscribersChunk(
     if (page.contractAccepted === false) {
       throw new Error("Fansly subscribers response contract rejected; captured before refusal");
     }
+    // Offsets index one provider snapshot. A shifted total moves rows between
+    // pages already read and pages still ahead, so this walk can no longer be
+    // certified; resuming at the same offset against the first total never
+    // converges. Restart it, bounded, before spending the account lookup.
+    const pageTotal = page.total ?? null;
+    const totalChanged = state.providerReportedTotal !== null && pageTotal !== state.providerReportedTotal;
+    if (totalChanged) {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_total_changed",
+        severity: "warn",
+        message: "Subscriber total changed during an offset walk; the walk cannot certify membership",
+        details: {
+          mode: state.mode,
+          previousTotal: state.providerReportedTotal,
+          currentTotal: pageTotal,
+          offset: state.offset,
+          pageCount: state.pageCount,
+          restartCount: state.restartCount,
+        },
+      });
+      if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+        const restartState = await subscribersWalkRestartState(app.db, input.pageContext.page.id, state);
+        return restartWalk(state, "total_changed", restartState, await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state: restartState,
+        }));
+      }
+    }
     state = {
       ...state,
       pageCount: state.pageCount + 1,
-      providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+      providerReportedTotal: totalChanged ? pageTotal : state.providerReportedTotal ?? pageTotal,
     };
 
     if (state.mode === "active" && state.offset === 0 && page.items.length === 0) {
@@ -1511,21 +1593,10 @@ export async function fanslySubscribersChunk(
       }
     }
 
-    const hydratedFans = await lookupHydratedFans(app, {
-      requestContext,
-      platformUserIds: page.items.map((item) => item.subscriberId),
-      telemetry: input.telemetry,
-      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
-    });
-    const nextPageState = page.done
-      ? state
-      : {
-        ...state,
-        offset: state.offset + 100,
-        observedCount: state.observedCount + page.items.length,
-      };
     const finalObservedCount = state.observedCount + page.items.length;
-    if (page.done && state.providerReportedTotal !== null && finalObservedCount !== state.providerReportedTotal) {
+    const partialResult = !totalChanged && page.done && state.providerReportedTotal !== null &&
+      finalObservedCount !== state.providerReportedTotal;
+    if (partialResult) {
       await input.telemetry.addAnomaly({
         code: "subscribers_partial_page_guard",
         severity: "warn",
@@ -1537,20 +1608,55 @@ export async function fanslySubscribersChunk(
           mode: state.mode,
         },
       });
-      throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
+      // One response is one snapshot, and its retry re-reads it from offset
+      // zero. A multi-page walk would resume at this offset forever instead.
+      if (state.pageCount === 1) {
+        throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
+      }
+      if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+        const restartState = await subscribersWalkRestartState(app.db, input.pageContext.page.id, state);
+        return restartWalk(state, "partial_result", restartState, await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state: restartState,
+        }));
+      }
     }
+    // Past the restart bound, keep what this walk saw and retire nothing.
+    const withheldReason: SubscribersWalkRestartReason | null = totalChanged
+      ? "total_changed"
+      : partialResult ? "partial_result" : null;
+    const lastPage = page.done || withheldReason !== null;
+
+    const hydratedFans = await lookupHydratedFans(app, {
+      requestContext,
+      platformUserIds: page.items.map((item) => item.subscriberId),
+      telemetry: input.telemetry,
+      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
+    });
+    const pageDistinctCount = new Set(page.items.map((item) => item.id)).size;
+    const nextPageState = lastPage
+      ? state
+      : {
+        ...state,
+        offset: state.offset + 100,
+        observedCount: state.observedCount + page.items.length,
+        distinctObservedCount: state.distinctObservedCount + pageDistinctCount,
+      };
 
     const shouldBackfillHistory =
       state.mode === "active" &&
-      page.done &&
+      lastPage &&
       state.historyBackfilledAt === null;
     const historyState: SubscribersCursorState = {
       ...state,
       mode: "expired",
       offset: 0,
       observedCount: 0,
+      distinctObservedCount: 0,
       pageCount: 0,
       providerReportedTotal: null,
+      restartCount: 0,
     };
 
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
@@ -1613,17 +1719,51 @@ export async function fanslySubscribersChunk(
         await upsertArchivedPageSubscriptions(dbTx, subscriptionInputs);
       }
 
-      if (state.mode === "active" && page.done) {
-        await deactivatePageSubscriptionsByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        });
+      if (state.mode === "active" && lastPage) {
+        let finalWithheldReason: SubscribersWalkRestartReason | null = withheldReason;
+        let membership: { generationCurrentCount: number; expectedCount: number } | null = null;
+        if (finalWithheldReason === null && state.pageCount > 1) {
+          // Summed page lengths cannot tell a row served on two pages from two
+          // rows, and such an overlap leaves a current row unseen. Rows stamped
+          // with this generation are the distinct subscriptions the walk saw.
+          const generationCurrentCount = await countCurrentPageSubscriptionsByGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+          });
+          const expectedCount = state.distinctObservedCount + pageDistinctCount;
+          if (generationCurrentCount < expectedCount) {
+            membership = { generationCurrentCount, expectedCount };
+            if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+              const restartState = await subscribersWalkRestartState(dbTx, input.pageContext.page.id, state);
+              return {
+                kind: "restart" as const,
+                restartState,
+                membership,
+                checkpoint: await upsertCheckpointProgress(dbTx, {
+                  platformAccountId: input.pageContext.page.id,
+                  stream: "subscribers",
+                  state: restartState,
+                }),
+                processedThisPage: subscriptionInputs.length,
+              };
+            }
+            finalWithheldReason = "offset_duplicates";
+          }
+        }
+        if (finalWithheldReason === null) {
+          await deactivatePageSubscriptionsByGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+          });
+        }
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         if (shouldBackfillHistory) {
           return {
             kind: "progress" as const,
             nextState: historyState,
+            withheldReason: finalWithheldReason,
+            membership,
             checkpoint: await upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
               stream: "subscribers",
@@ -1634,12 +1774,15 @@ export async function fanslySubscribersChunk(
         }
         return {
           kind: "complete" as const,
+          withheldReason: finalWithheldReason,
+          membership,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "subscribers",
             state: {
               ...state,
               observedCount: finalObservedCount,
+              ...(finalWithheldReason === null ? {} : { destructiveFinalization: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1647,11 +1790,13 @@ export async function fanslySubscribersChunk(
         };
       }
 
-      if (state.mode === "expired" && page.done) {
+      if (state.mode === "expired" && lastPage) {
         const historyBackfilledAt = new Date().toISOString();
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         return {
           kind: "complete" as const,
+          withheldReason,
+          membership: null,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "subscribers",
@@ -1659,6 +1804,9 @@ export async function fanslySubscribersChunk(
               ...state,
               observedCount: finalObservedCount,
               historyBackfilledAt,
+              // Archive writes are non-destructive, so an uncertified history
+              // walk still closes instead of re-walking the archive every hour.
+              ...(withheldReason === null ? {} : { historyCertified: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1669,6 +1817,8 @@ export async function fanslySubscribersChunk(
       return {
         kind: "progress" as const,
         nextState: nextPageState,
+        withheldReason: null,
+        membership: null,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",
@@ -1678,6 +1828,27 @@ export async function fanslySubscribersChunk(
       };
     });
     processedThisChunk += pageWrite.processedThisPage;
+
+    if (pageWrite.membership) {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_offset_duplicates",
+        severity: "warn",
+        message: "Subscriber offset walk saw fewer distinct subscriptions than rows served; refusing destructive finalization",
+        details: {
+          generation: state.generation,
+          generationCurrentCount: pageWrite.membership.generationCurrentCount,
+          expectedCount: pageWrite.membership.expectedCount,
+          pageCount: state.pageCount,
+          restartCount: state.restartCount,
+        },
+      });
+    }
+    if (pageWrite.kind === "restart") {
+      return restartWalk(state, "offset_duplicates", pageWrite.restartState, pageWrite.checkpoint);
+    }
+    const withheldStats = pageWrite.withheldReason === null ? {} : state.mode === "active"
+      ? { destructiveFinalization: false, finalizationWithheld: true, withheldReason: pageWrite.withheldReason }
+      : { historyCertified: false, withheldReason: pageWrite.withheldReason };
 
     if (pageWrite.kind === "complete") {
       await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
@@ -1690,6 +1861,7 @@ export async function fanslySubscribersChunk(
           pageCount: state.pageCount,
           processedThisChunk,
           providerReportedTotal: state.providerReportedTotal,
+          ...withheldStats,
         },
       } satisfies StreamChunkResult;
     }

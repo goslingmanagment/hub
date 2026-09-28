@@ -8,8 +8,13 @@ type SubscribersCursorState = {
   historyBackfilledAt: string | null;
   offset: number;
   observedCount: number;
+  /** Distinct subscription ids summed per page: the generation rows a
+   * multi-page walk must find before it retires unseen subscriptions. */
+  distinctObservedCount: number;
   pageCount: number;
   providerReportedTotal: number | null;
+  /** Restarts of this walk after its provider total shifted or its pages overlapped. */
+  restartCount: number;
 };
 
 type FollowersCursorState = {
@@ -186,13 +191,16 @@ export function parseSubscribersCursorState(
     : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
+  const distinctObservedCount = asNumber(state.distinctObservedCount) ?? observedCount;
   const pageCount = asNumber(state.pageCount);
   const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  const restartCount = asNumber(state.restartCount) ?? 0;
   if (
     generation === null ||
     mode === null ||
     offset === null ||
     observedCount === null ||
+    distinctObservedCount === null ||
     pageCount === null ||
     providerReportedTotal === undefined
   ) {
@@ -206,8 +214,10 @@ export function parseSubscribersCursorState(
     historyBackfilledAt,
     offset,
     observedCount,
+    distinctObservedCount,
     pageCount,
     providerReportedTotal,
+    restartCount,
   };
 }
 
