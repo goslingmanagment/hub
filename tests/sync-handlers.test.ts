@@ -5679,14 +5679,20 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
 
   /** One conversation, one scripted message page per chunk; the checkpoint
    *  round-trips through the real cursor parser between chunks. */
-  function dmWalkHarness(conversation: Record<string, unknown>, pages: Array<Record<string, unknown>>) {
+  function dmWalkHarness(
+    conversation: Record<string, unknown>,
+    pages: Array<Record<string, unknown>>,
+    options: { deep?: boolean } = {},
+  ) {
     let checkpoint: Record<string, unknown> | null = null;
     dbMocks.getCheckpoint.mockImplementation(async () => checkpoint ? { state: checkpoint } : null);
     dbMocks.upsertCheckpointProgress.mockImplementation(async (_db, input) => {
       checkpoint = input.state;
       return {};
     });
-    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate());
+    // Deep: the ordinary picker finds nothing, so the idle deep path picks.
+    (options.deep ? dbMocks.selectNextPageDmMessageDeepBackfillCandidate : dbMocks.selectNextPageDmMessageSyncCandidate)
+      .mockResolvedValueOnce(buildDmMessageSyncCandidate());
     dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation(conversation));
     const getMessagesPage = vi.fn(async (context: { requestObserver: { onRequestEvent(event: unknown): Promise<void> } }) => {
       const n = getMessagesPage.mock.calls.length;
@@ -5699,7 +5705,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       return { groupId: "group-1", before: null, ...page };
     });
     const telemetry = createTelemetry();
-    const app = { db: {}, config: { syncSharedRateLimitEnabled: true }, adapter: { getMessagesPage } };
+    const app = {
+      db: {},
+      config: { syncSharedRateLimitEnabled: true, ...(options.deep ? { fanslyDmDeepBackfillEnabled: true } : {}) },
+      adapter: { getMessagesPage },
+    };
     const run = () => fanslyDmMessagesChunk(app as never, {
       pageContext: { platform: "fansly", page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
         session: {}, proxy: null }, streamState: { requestSeq: 1 }, syncRunId: 906,
@@ -5772,6 +5782,31 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
     expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
     expect(h.checkpoint()).not.toHaveProperty("normalizationDebt");
+  });
+
+  it.each([
+    ["reaches the provider's end", "complete", true],
+    ["stops short of the provider's end", "partial_window", false],
+  ] as const)("a deep walk whose page below the stored oldest holds only an unparseable message and %s finalizes %s", async (
+    _name, verdict, done,
+  ) => {
+    const h = dmWalkHarness({
+      storedMessageCount: 25, oldestStoredMessageId: "m-25", messageCoverageStatus: "partial_window",
+    }, [{ items: [walkMessage("m-24", null)], done, raw: { messages: [] } }], { deep: true });
+
+    await h.run();
+
+    expect(dbMocks.selectNextPageDmMessageDeepBackfillCandidate).toHaveBeenCalledOnce();
+    expect(h.getMessagesPage).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ before: "m-25" }));
+    expect(dbMocks.upsertPageDmMessages).toHaveBeenCalledExactlyOnceWith({}, []);
+    // Nothing was stored, so a partial_window verdict at the provider's end
+    // would hand the same thread back to the deep picker on every run.
+    expect(dbMocks.finalizePageDmConversationMessageSync)
+      .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: verdict }));
+    expect(h.telemetry.addAnomaly).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      code: "dm_message_timestamp_unparseable",
+      details: expect.objectContaining({ messageIds: ["m-24"], valueTypes: ["null"] }),
+    }));
   });
 
   it("an incremental walk over an unparseable head downgrades a complete thread", async () => {

@@ -1801,6 +1801,9 @@ export async function recordConversationSyncFailure(
   const quarantineHoursSql = sql.raw(String(PAGE_DM_SYNC_QUARANTINE_HOURS));
   const quarantineThresholdSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD));
 
+  // The doubling's exponent is clamped before the multiply: 5min * 2^35
+  // overflows interval, and the raised error would roll every later breaker
+  // write back. 2^7 already passes the 6h cap.
   const result = await db.execute<{
     failureCount: NumericValue;
     nextRetryAt: TimestampValue;
@@ -1823,7 +1826,7 @@ export async function recordConversationSyncFailure(
       last_attempt_at = excluded.last_attempt_at,
       next_retry_at = excluded.last_attempt_at + least(
         make_interval(mins => ${backoffBaseSql})
-          * power(2, page_dm_message_sync_health.failure_count),
+          * power(2, least(page_dm_message_sync_health.failure_count, 16)),
         make_interval(hours => ${backoffCapSql})
       ),
       quarantine_until = case

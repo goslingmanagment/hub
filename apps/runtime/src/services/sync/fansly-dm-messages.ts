@@ -68,8 +68,10 @@ export function resolveDmConversationCoverageStatus(input: {
   // gap. partial_window, never pending_backfill: the ordinary picker treats it
   // like complete, so the downgrade re-reads nothing. Only the deep backfill
   // (off by default) walks partial_window threads, from the oldest stored id;
-  // it cannot revisit the gap and may certify the thread complete again, so
-  // the dm_message_timestamp_unparseable anomaly is the lasting signal.
+  // it cannot revisit the gap and may certify the thread complete again, also
+  // over an unparseable tail of its own that no re-pick could store (the
+  // executor waives that debt), so the dm_message_timestamp_unparseable
+  // anomaly is the lasting signal.
   return input.normalizationDebt === true && status === "complete" ? "partial_window" : status;
 }
 
@@ -227,7 +229,8 @@ export interface FanslyDmMessagePageOutcome {
   oldestMessageId: string | null;
   providerHistoryExhausted: boolean;
   /** At least one returned message had no parseable createdAt and was left
-   * unstored; the walk that read it cannot certify the thread complete. */
+   * unstored; the walk that read it cannot certify the thread complete, save
+   * the executor's deep walk that reached the provider's end. */
   normalizationDebt: boolean;
 }
 
@@ -376,7 +379,7 @@ export async function normalizeFanslyDmMessagePage(
     await input.telemetry.addAnomaly({
       code: "dm_message_timestamp_unparseable",
       severity: "error",
-      message: "DM message without a parseable createdAt was left unstored; the thread is not certified complete",
+      message: "DM message without a parseable createdAt was left unstored",
       details: {
         conversationId: input.conversation.id,
         groupId: input.conversation.platformConversationId,

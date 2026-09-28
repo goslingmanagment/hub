@@ -3298,7 +3298,12 @@ export async function fanslyDmMessagesChunk(
             overlapFound,
             providerHistoryExhausted,
             hitWindowCap,
-            normalizationDebt,
+            // A deep walk's one page below the oldest stored message reached
+            // the provider's end: its unparseable tail can never be stored, so
+            // partial_window would hand the unchanged thread straight back to
+            // the deep picker. The anomaly stays the record of the skip.
+            normalizationDebt: normalizationDebt &&
+              !(currentMode === "deep_backfill" && providerHistoryExhausted),
           });
           // #135 A2b: the message upsert commits on its own; the thread-summary
           // recompute + checkpoint advance ride a SECOND transaction. The

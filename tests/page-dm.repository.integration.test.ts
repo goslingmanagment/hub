@@ -1152,7 +1152,7 @@ describe("page DM repository integration", () => {
     expect(await knownGround("unstored")).toEqual(["m-1", "m-2", "m-3", "m-4"]);
   });
 
-  it("backs a failing thread off 5/10/20 minutes, quarantines it on the 4th failure, and clears it", async (context) => {
+  it("backs a failing thread off 5/10/20 minutes up to 6h, quarantines it on the 4th failure, and clears it", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -1181,6 +1181,10 @@ describe("page DM repository integration", () => {
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] }))
       .toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+    // The backoff holds at the 6h cap; 5min * 2^35 once overflowed interval
+    // and rolled the 36th write back.
+    for (let failureCount = 5; failureCount < 40; failureCount += 1) await fail();
+    expect(await fail()).toEqual({ failureCount: 40, nextRetryAt: minutes(360), quarantineUntil: minutes(360) });
 
     await clearConversationSyncHealth(testDb.db, thread.id);
     expect(await getConversationSyncHealth(testDb.db, thread.id)).toBeNull();
