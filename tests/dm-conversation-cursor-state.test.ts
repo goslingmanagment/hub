@@ -237,6 +237,25 @@ describe("dm_conversations sweep state (tagged union)", () => {
     })!)).toMatchObject({ unchangedPageStreak: 4 });
   });
 
+  it("persists the repeat-only page streak only while it is positive", () => {
+    const withStreak = { ...V2_STATE, repeatOnlyPageStreak: 1 };
+    const parsed = parseDmConversationSweepState(withStreak);
+
+    expect(parsed).toMatchObject({ kind: "in_progress", repeatOnlyPageStreak: 1 });
+    expect(serializeDmConversationSweepState(parsed!)).toEqual(withStreak);
+    // A reset streak leaves no key, so the document stays byte-identical to
+    // the one every earlier writer produced.
+    const reset = {
+      ...(parsed as Extract<NonNullable<typeof parsed>, { kind: "in_progress" }>),
+      repeatOnlyPageStreak: 0,
+    };
+    expect(serializeDmConversationSweepState(reset)).toEqual({ ...V2_STATE });
+    for (const garbled of [0, -1, 1.5, "one", null]) {
+      expect(parseDmConversationSweepState({ ...V2_STATE, repeatOnlyPageStreak: garbled }), String(garbled))
+        .toEqual(parseDmConversationSweepState({ ...V2_STATE }));
+    }
+  });
+
   it("migrates a v1 in-progress document into the in_progress arm", () => {
     const parsed = parseDmConversationSweepState(v1State({
       snapshotConversationIds: Array.from({ length: 200 }, (_, index) => `group-${index}`),
@@ -535,6 +554,29 @@ describe("dm_messages cursor state: normalization debt", () => {
 
   it("is cleared by the empty state every completion and reset writes", () => {
     expect(emptyDmMessagesCursorState()).not.toHaveProperty("normalizationDebt");
+  });
+});
+
+describe("dm_messages cursor state: new-thread history pages", () => {
+  const walking = {
+    version: 1,
+    currentConversationId: 777,
+    currentPlatformConversationId: "group-1",
+    currentBeforeMessageId: "m-25",
+    currentMode: "backfill",
+  } as const;
+
+  it("round-trips the counter, so the extra-page cap holds across chunks", () => {
+    const state = { ...walking, newThreadHistoryPages: 3 };
+    expect(parseDmMessagesCursorState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  });
+
+  it("drops a zero, negative, fractional or non-numeric counter, and an older checkpoint parses without it", () => {
+    for (const newThreadHistoryPages of [0, -1, 1.5, "2", null]) {
+      expect(parseDmMessagesCursorState({ ...walking, newThreadHistoryPages })).toEqual(walking);
+    }
+    expect(parseDmMessagesCursorState({ ...walking })).toEqual(walking);
+    expect(emptyDmMessagesCursorState()).not.toHaveProperty("newThreadHistoryPages");
   });
 });
 

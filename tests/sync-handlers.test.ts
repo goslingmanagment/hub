@@ -37,6 +37,7 @@ const dbMocks = vi.hoisted(() => ({
   getExistingPageDmMessageIds: vi.fn(),
   getPageDmMessageIdsAtOrBefore: vi.fn(),
   getPageDmConversationById: vi.fn(),
+  getPageDmOnboardedAt: vi.fn(),
   listPageDmConversationsByPlatformConversationIds: vi.fn(),
   listPageDmThreadIdsStampedWithGeneration: vi.fn(),
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
@@ -269,6 +270,9 @@ describe("sync executor handlers", () => {
     // models an abandoned walk's pages above it.
     dbMocks.getPageDmMessageIdsAtOrBefore.mockImplementation(async (_db, input) => new Set(input.platformMessageIds));
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
+    // No onboarding known: a first read stops at its start window unless a
+    // test dates the page's DM onboarding.
+    dbMocks.getPageDmOnboardedAt.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     // G3: tests that reach a checkpoint write declare the row-side generation
     // set with stubGenerationSetCount(); the default is "no rows stamped",
@@ -3544,6 +3548,307 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
   });
 
+  describe("a cross-page repeat in a sweep without a provider total", () => {
+    // Offset paging over the recency-sorted list: a thread below the cursor
+    // got a message, jumped to the top, and pushed group-overlap from the
+    // previous page onto this one.
+    function runRepeatPage(done: boolean) {
+      const telemetry = createTelemetry();
+      const getMessagingGroupsPage = vi.fn(async (
+        requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      ) => {
+        await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+        return {
+          total: null,
+          items: [
+            { groupId: "group-overlap", flags: 0, unreadCount: 0, partnerAccountId: "fan-1" },
+            { groupId: "group-new", flags: 0, unreadCount: 0, partnerAccountId: "fan-2" },
+          ],
+          accounts: [],
+          groups: [],
+          offset: 100,
+          done,
+          raw: { data: [], aggregationData: { total: null, accounts: [], groups: [] } },
+        };
+      });
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      dbMocks.getCheckpoint.mockResolvedValue({
+        state: {
+          version: 2,
+          mode: "full_scan",
+          generation: 7,
+          offset: 100,
+          observedCount: 2,
+          pageCount: 1,
+          providerTotalMode: "absent",
+          providerReportedTotal: null,
+          unchangedPageStreak: 0,
+          fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+          lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+        },
+      });
+      dbMocks.listPageDmThreadIdsStampedWithGeneration.mockResolvedValue(["group-overlap"]);
+      // Page one stamped group-a and group-overlap; this page adds group-new.
+      stubGenerationSetCount(3);
+
+      const result = fanslyDmConversationsChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(1),
+      } as never);
+      return { result, telemetry, db };
+    }
+
+    it("counts the repeated id once and certifies the completed sweep instead of restarting it", async () => {
+      const { result, telemetry, db } = runRepeatPage(true);
+
+      await expect(result).resolves.toMatchObject({
+        satisfied: true,
+        stats: {
+          observedCount: 3,
+          generationSetCount: 3,
+          membershipCertified: true,
+          destructiveFinalization: false,
+          fullSweepCompleted: true,
+          crossPageRepeats: 1,
+        },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      // Applied whole: the repeated row is refreshed with the later observation.
+      expect(dbMocks.upsertPageDmConversation.mock.calls.map((call) => call[1].platformConversationId))
+        .toEqual(["group-overlap", "group-new"]);
+      expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+        platformConversationId: "group-overlap", lastSeenGeneration: 7,
+      }));
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(db, expect.objectContaining({
+        lastSuccessfulRunId: 900,
+        state: expect.objectContaining({ generation: 7, observedCount: 3, membershipCertified: true }),
+      }));
+      expect(telemetry.addNote).toHaveBeenCalledWith(
+        expect.stringContaining("counted them once and continued"),
+        expect.objectContaining({
+          code: "dm_conversations_cross_page_repeat_counted_once",
+          repeatedConversationIds: ["group-overlap"],
+          repeatCount: 1,
+          providerTotalMode: "absent",
+        }),
+      );
+    });
+
+    it("carries the deduplicated count in the mid-sweep checkpoint", async () => {
+      const { result, telemetry, db } = runRepeatPage(false);
+
+      await expect(result).resolves.toMatchObject({
+        satisfied: false,
+        stats: { observedCount: 3, offset: 200, crossPageRepeats: 1, fullSweepCompleted: false },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith(db, expect.objectContaining({
+        state: expect.objectContaining({ generation: 7, offset: 200, observedCount: 3, pageCount: 2 }),
+      }));
+      // The count agrees with the rows, so no divergence is reported.
+      expect(telemetry.addNote).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: "dm_conversations_dual_proof_page_divergence" }),
+      );
+    });
+  });
+
+  describe("a page of nothing but repeats in a sweep without a provider total", () => {
+    const FULL_PAGE_IDS = Array.from({ length: 100 }, (_, index) => `group-${index}`);
+
+    function fullPageApp(input: { ids: readonly string[]; done: boolean }) {
+      const getMessagingGroupsPage = vi.fn(async (
+        requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+        _params: { offset?: number },
+      ) => {
+        await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+        return {
+          total: null,
+          items: input.ids.map((groupId, index) => ({
+            groupId, flags: 0, unreadCount: 0, partnerAccountId: `fan-${index}`,
+          })),
+          accounts: [],
+          groups: [],
+          offset: 0,
+          done: input.done,
+          raw: { data: [], aggregationData: { total: null, accounts: [], groups: [] } },
+        };
+      });
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      // The row-side stamps the sweep reads its repeats from, kept by the
+      // upserts themselves so every page sees what the earlier ones applied.
+      const stamped = new Set<string>();
+      dbMocks.upsertPageDmConversation.mockImplementation(async (_db, row: {
+        platformConversationId: string;
+        lastSeenGeneration: number | null;
+      }) => {
+        if (row.lastSeenGeneration !== null) stamped.add(row.platformConversationId);
+        return undefined;
+      });
+      dbMocks.listPageDmThreadIdsStampedWithGeneration.mockImplementation(async (_db, query: {
+        platformConversationIds: string[];
+      }) => query.platformConversationIds.filter((id) => stamped.has(id)));
+      dbMocks.countPageDmThreadsByGeneration.mockImplementation(async () => stamped.size);
+      // Known threads with no head on record, like the head-less items above:
+      // nothing to repair, so the list reads are the only requests spent.
+      dbMocks.listPageDmConversationsByPlatformConversationIds.mockImplementation(async (_db, query: {
+        platformConversationIds: string[];
+      }) => query.platformConversationIds.map((platformConversationId, index) => buildDmConversation({
+        id: 1_000 + index,
+        platformConversationId,
+        partnerPlatformUserId: `fan-${index}`,
+        lastMessageId: null,
+      })));
+      return { app, getMessagingGroupsPage, stamped };
+    }
+
+    function runChunk(app: never, telemetry: ReturnType<typeof createTelemetry>, maxRequests: number) {
+      return fanslyDmConversationsChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(maxRequests),
+      } as never);
+    }
+
+    it("restarts instead of advancing silently when the provider returns the same full page for every offset", async () => {
+      const telemetry = createTelemetry();
+      const { app, getMessagingGroupsPage } = fullPageApp({ ids: FULL_PAGE_IDS, done: false });
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+
+      // Room for six list pages: without the bound the sweep spends all of
+      // them on the same hundred ids and yields as ordinary progress.
+      await expect(runChunk(app, telemetry, 6)).rejects.toThrow("restarted the DM conversation sweep");
+
+      // Offset 0 applies the page, offset 100 is one repeat-only page (a real
+      // shift can do that once), offset 200 is the second in a row.
+      expect(getMessagingGroupsPage.mock.calls.map((call) => call[1].offset)).toEqual([0, 100, 200]);
+      expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "dm_conversations_repeat_only_page_guard",
+        severity: "error",
+        details: expect.objectContaining({
+          repeatOnlyPageStreak: 2,
+          repeatCount: 100,
+          observedCount: 100,
+          pageCount: 3,
+          offset: 200,
+          providerTotalMode: "absent",
+          abandonedGeneration: 1,
+          restartGeneration: 2,
+        }),
+      }));
+      // The first repeat-only page was applied and its streak persisted; the
+      // second was refused before any write.
+      expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledTimes(200);
+      const progressStates = dbMocks.upsertCheckpointProgress.mock.calls.map((call) => call[1].state);
+      expect(progressStates).toContainEqual(expect.objectContaining({
+        generation: 1, offset: 200, observedCount: 100, pageCount: 2, repeatOnlyPageStreak: 1,
+      }));
+      expect(progressStates.at(-1)).toMatchObject({ generation: 2, offset: 0, observedCount: 0, pageCount: 0 });
+      expect(progressStates.at(-1)).not.toHaveProperty("repeatOnlyPageStreak");
+      expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    });
+
+    it("carries the streak across chunks that read one list page each", async () => {
+      const telemetry = createTelemetry();
+      const { app, stamped } = fullPageApp({ ids: FULL_PAGE_IDS, done: false });
+      for (const id of FULL_PAGE_IDS) stamped.add(id);
+      dbMocks.getCheckpoint.mockResolvedValue({
+        state: {
+          version: 2,
+          mode: "full_scan",
+          generation: 7,
+          offset: 200,
+          observedCount: 100,
+          pageCount: 2,
+          providerTotalMode: "absent",
+          providerReportedTotal: null,
+          unchangedPageStreak: 1,
+          fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+          lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+          repeatOnlyPageStreak: 1,
+        },
+      });
+
+      await expect(runChunk(app, telemetry, 1)).rejects.toThrow("restarted the DM conversation sweep");
+
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "dm_conversations_repeat_only_page_guard",
+        details: expect.objectContaining({ repeatOnlyPageStreak: 2, offset: 200 }),
+      }));
+      expect(dbMocks.upsertPageDmConversation).not.toHaveBeenCalled();
+    });
+
+    it("resets the streak on a page that adds a new id and never counts the final page", async () => {
+      const telemetry = createTelemetry();
+      const { app, stamped } = fullPageApp({ ids: ["group-0", "group-new"], done: false });
+      stamped.add("group-0");
+      const resumed = {
+        version: 2,
+        mode: "full_scan",
+        generation: 7,
+        offset: 200,
+        observedCount: 100,
+        pageCount: 2,
+        providerTotalMode: "absent",
+        providerReportedTotal: null,
+        unchangedPageStreak: 1,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+        repeatOnlyPageStreak: 1,
+      };
+      dbMocks.getCheckpoint.mockResolvedValue({ state: resumed });
+
+      await expect(runChunk(app, telemetry, 1)).resolves.toMatchObject({
+        satisfied: false,
+        stats: { observedCount: 101, offset: 300, crossPageRepeats: 1 },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      const progress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]?.state;
+      expect(progress).toMatchObject({ generation: 7, offset: 300, observedCount: 101 });
+      expect(progress).not.toHaveProperty("repeatOnlyPageStreak");
+
+      // A final page of nothing but repeats ends the sweep: the streak it
+      // would have reached is moot.
+      const finalTelemetry = createTelemetry();
+      const final = fullPageApp({ ids: ["group-0"], done: true });
+      final.stamped.add("group-0");
+      dbMocks.getCheckpoint.mockResolvedValue({ state: { ...resumed, observedCount: 1 } });
+
+      await expect(runChunk(final.app, finalTelemetry, 1)).resolves.toMatchObject({
+        stats: { observedCount: 1, fullSweepCompleted: true },
+      });
+      expect(finalTelemetry.addAnomaly).not.toHaveBeenCalled();
+    });
+  });
+
   it("captures and restarts dm_conversations when one page repeats an id against itself", async () => {
     const telemetry = createTelemetry();
     const getMessagingGroupsPage = vi.fn(async (
@@ -6043,6 +6348,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
       storedMessageCount: 0, messageCoverageStatus: "pending_backfill",
     }));
+    // The page (2026-02-02) predates the page's DM onboarding: old history.
+    dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-03-01T00:00:00.000Z"));
     dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
     h.getMessagesPage.mockImplementation(async (context) => {
       await context.requestObserver.onRequestEvent({
@@ -6188,6 +6495,85 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     } else {
       expect(h.telemetry.addAnomaly).not.toHaveBeenCalled();
     }
+  });
+
+  describe("the first read of a thread whose history began after the page's DM onboarding", () => {
+    // walkMessage dates every message 2026-02-02.
+    const fullPage = (page: number) => ({
+      items: Array.from({ length: 25 }, (_, i) => walkMessage(`p${page}-${i}`)),
+      done: false,
+      raw: { messages: [] },
+    });
+    const firstRead = { storedMessageCount: 0, messageCoverageStatus: "pending_backfill" };
+
+    it("walks past the 25-message start window to the provider's end", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      const h = dmWalkHarness(firstRead, [
+        fullPage(1),
+        { items: [walkMessage("p2-0"), walkMessage("p2-1")], done: true, raw: { messages: [] } },
+      ]);
+
+      await h.run();
+      expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+      expect(h.checkpoint()).toMatchObject({
+        currentConversationId: 777, currentMode: "backfill", currentBeforeMessageId: "p1-24", newThreadHistoryPages: 1,
+      });
+
+      await h.run();
+      expect(h.getMessagesPage.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+        expect.objectContaining({ before: null }), expect.objectContaining({ before: "p1-24" }),
+      ]);
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "complete" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+      expect(h.checkpoint()).not.toHaveProperty("newThreadHistoryPages");
+      expect(dbMocks.getPageDmOnboardedAt).toHaveBeenCalledOnce();
+    });
+
+    it("stops an old thread at its start window when the page reaches history older than onboarding", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-03-01T00:00:00.000Z"));
+      const h = dmWalkHarness(firstRead, [fullPage(1)]);
+
+      await h.run();
+
+      expect(h.getMessagesPage).toHaveBeenCalledOnce();
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    });
+
+    it("keeps the start window for a thread whose first read already finished", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      // storedMessageCount 0 with a settled status: the history below is the
+      // deep backfill's, not a first read.
+      const h = dmWalkHarness({ storedMessageCount: 0, messageCoverageStatus: "partial_window" }, [fullPage(1)]);
+
+      await h.run();
+
+      expect(h.getMessagesPage).toHaveBeenCalledOnce();
+      expect(dbMocks.getPageDmOnboardedAt).not.toHaveBeenCalled();
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+    });
+
+    it("caps the extra pages across chunks and settles the thread partial_window", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      const pages = Array.from({ length: 9 }, (_, i) => fullPage(i + 1));
+      const h = dmWalkHarness(firstRead, pages);
+
+      // One request per chunk: the counter has to survive the checkpoint.
+      for (let chunk = 1; chunk <= 7; chunk += 1) {
+        await h.run();
+        expect(h.checkpoint()).toMatchObject({ newThreadHistoryPages: chunk });
+      }
+      expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+
+      await h.run();
+      expect(h.getMessagesPage).toHaveBeenCalledTimes(8);
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    });
   });
 
   it("carries normalization debt across chunks, so a later exhausted page cannot certify the walk", async () => {
