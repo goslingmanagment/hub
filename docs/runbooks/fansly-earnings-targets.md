@@ -23,18 +23,20 @@ work. No new per-fan maximum age is promised. Zero/negative/not-yet-discovered
 fans are eligible through their native dirty reference; they do not enter the
 positive-spender daily roster implicitly.
 
-Lifetime and monthly have independent claims/receipts. Only a changed valid
-snapshot settles a signaled revision. Empty, unchanged, malformed or rejected
-responses remain debt with backoff; `last_checked_at` differs from
-`last_changed_at`. A transient or semantic signal is not proof of a completed
-provider recalculation.
+Lifetime and monthly have independent claims/receipts. A changed valid snapshot
+settles a signaled revision; an unchanged one settles it only against a baseline
+first seen after the signal (see the shadow runbook). Empty, malformed, rejected
+and other unchanged responses remain debt with backoff; `last_checked_at`
+differs from `last_changed_at`. A transient or semantic signal is not proof of a
+completed provider recalculation.
 
 The attempt reservation is strict and conservative: a crash after admission
 still costs budget, retries cannot bypass the cap, and toggling flags does not
 reset usage. Per-target 400/404/410 without cooldown do not block unrelated daily
-work. A daily spender's own rejection still follows the original contiguous
-walk policy. Global auth/cooldown and persistence failures keep their ordinary
-executor handling.
+work. A daily spender's own rejection follows the daily walk's policy: the
+contiguous-prefix stop, or on a shadow page a bounded crossing of a
+deterministic rejection. Global auth/cooldown and persistence failures keep
+their ordinary executor handling.
 
 Use only production `read_only` in a READ ONLY transaction:
 
@@ -73,7 +75,9 @@ and measured cost. Retain the daily baseline until those requirements are met.
 Additional gates are `fanslyFanEarningsRecoveryEnabled=false` and
 `fanslyFanEarningsRecoveryPageAllowlist` empty. They also require the addressed
 selection gates and a positive attempt budget. With recovery off the preceding
-Decision 345 behavior remains unchanged, including the daily rejection stop.
+Decision 345 behavior remains unchanged, except that a shadow page's daily walk
+crosses a deterministic rejection within its own limits (shadow runbook,
+"Crossing a rejected fan") instead of stopping.
 
 When enabled, daily selection uses its own durable cursor and strict receipts.
 A fan-scoped 400/404/410 without cooldown leaves endpoint debt and allows the
@@ -108,13 +112,16 @@ A pending1 → posted2 transaction with every other semantic field unchanged sti
 requests both endpoint rechecks. Pending amounts may already be included in the
 provider aggregates; unchanged valid content can settle this status-only revision
 after a baseline. `earnings_content_revision` keeps prior money/type/binding debt
-strict, including when status R+1 arrives during a fetch for money R. Check/change
-counters and timestamps remain separate. Other statuses and empty/invalid bodies
-do not use this exception.
+under the baseline rule (unchanged content confirms it only against a baseline
+first seen after it), including when status R+1 arrives during a fetch for
+money R. Check/change counters and timestamps remain separate. Other statuses
+and empty/invalid bodies do not use this exception.
 
-Migration0201 conservatively classifies all old debt as content-changing. For an
-already-known page/fan, use `fansly_earnings_refresh_status(page_label, fan_ref)` as
-`read_only` inside READ ONLY to inspect exact revisions and receipt provenance.
+Migration0201 conservatively classifies all old debt as content-changing.
+Migration 0217 records only signal/baseline evidence for rows it can prove, and
+normal receipts then settle them. For an already-known page/fan, use
+`fansly_earnings_refresh_status(page_label, fan_ref)` as `read_only` inside READ
+ONLY to inspect exact revisions, signal/baseline times and receipt provenance.
 Do not infer the cause from a single current transaction or aggregate response.
 A legacy repair requires separately retained before/after proof covering all
 outstanding signals, exact CAS preconditions and independent review; change only

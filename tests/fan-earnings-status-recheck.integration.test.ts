@@ -93,7 +93,10 @@ describe("Fansly pending-to-posted earnings rechecks", () => {
       where page_id = $1`, [f.page.id]);
     await observe(await claim());
     expect(await lifetime()).toMatchObject({ applied_revision: 1n, last_refresh_outcome: "unconfirmed" });
-    await markFanEarningsDirty(db.db, { pageId: f.page.id, fanRefs: ["fan-a"], now: at(), statusOnly: true });
+    const carriedAt = at();
+    await markFanEarningsDirty(db.db, { pageId: f.page.id, fanRefs: ["fan-a"], now: carriedAt, statusOnly: true });
+    // The old writer's revision is carried forward with this later mark's time.
+    expect(await lifetime()).toMatchObject({ earnings_content_signal_at: carriedAt });
     await observe(await claim());
     expect(await lifetime()).toMatchObject({
       requested_revision: 3n, applied_revision: 1n, earnings_content_revision: 2n,
