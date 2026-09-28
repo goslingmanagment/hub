@@ -41,15 +41,18 @@
 //
 // THE COMMERCE SIGNAL, and its whole extent: a 2007/2008/32007/45012 event
 // marks the purchased media DIRTY in `subject_refresh_state`
-// (`plane='media_stats'`, `next_due_at = now`). It FETCHES NOTHING. WP-F4 owns
-// the fetching; this is the "somebody bought this, its counters moved" note.
+// (`plane='media_stats'`, due at the purchase). It FETCHES NOTHING. WP-F4 owns
+// the fetching; this is the "somebody bought this, its counters moved" note —
+// so a purchase older than the lane's widest window, one the item was already
+// visited after, or one against a known bundle marks nothing
+// (`markMediaStatsPurchaseDirty`).
 
 import {
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
   listEventAccounts,
   listEventsSince,
-  markSubjectRefreshDirty,
+  markMediaStatsPurchaseDirty,
   setProjectionWatermark,
   upsertPlatformNotification,
   upsertPostLike,
@@ -82,10 +85,6 @@ export const FANSLY_ENGAGEMENT_PROJECTION_TABLES = [
   "platform_notifications",
   "post_likes",
 ] as const;
-
-/** Where a purchase signal lands. WP-F4 reads this plane. */
-const PURCHASE_SIGNAL_PLANE = "media_stats" as const;
-const PURCHASE_SIGNAL_REASON = "purchase_notification" as const;
 
 export interface FanslyEngagementProjectionResult extends Record<string, unknown> {
   accounts: number;
@@ -241,15 +240,16 @@ export async function runFanslyEngagementProjection(
               continue;
             }
             const occurredAt = isoDate(data.occurredAtSeconds);
-            const result = await markSubjectRefreshDirty(app.db, {
+            const result = await markMediaStatsPurchaseDirty(app.db, {
               pageId: accountId,
-              plane: PURCHASE_SIGNAL_PLANE,
               subjectRef,
-              dirtyReason: PURCHASE_SIGNAL_REASON,
               // Due NOW. A purchase is the strongest freshness signal this
               // system has: somebody paid, and the counters behind that number
               // are what the creator will ask about.
-              nextDueAt: occurredAt ?? event.occurredAt,
+              purchasedAt: occurredAt ?? event.occurredAt,
+              // Receipt time: the deep backfill delivers year-old purchases,
+              // and a replay has to decide "too old" the same way every time.
+              receivedAt: event.occurredAt,
             });
             if (result.applied) {
               totals.purchaseSignals += 1;

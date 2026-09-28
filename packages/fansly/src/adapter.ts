@@ -112,8 +112,9 @@ export const POST_BATCH_SIZE = 100;
  * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
  *
  * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
- * are OPTIONS preflights), so this is the honest handling of a case we have
- * never seen rather than a contract we have observed. It is scoped to that ONE
+ * are OPTIONS preflights), and production's "no replies" is a 200 with an empty
+ * `posts[]` — so this is the handling of a case we have never seen rather than
+ * a contract we have observed. It is scoped to that ONE
  * method deliberately: everywhere else an envelope-less body is a failure, and
  * a global softening would let a truncated response read as "no data" on every
  * lane at once.
@@ -1470,12 +1471,12 @@ export class FanslyAdapter {
    *
    * ── `emptyStatuses: [204]`, on THIS METHOD ONLY ───────────────────────────
    *
-   * "No replies" has never been observed live in any form: NO GET anywhere in
-   * the HAR returned 204 (all 197 are OPTIONS preflights). 200 with an empty
-   * `posts[]`, a 204, and an empty body are therefore all handled as the same
-   * honest answer, and none of the three is live-proven. The 204 branch returns
-   * `{__empty: true, httpStatus}` rather than throwing, so the walk can journal
-   * "this post has no comments" instead of recording a lane failure.
+   * NO GET anywhere in the HAR returned 204 (all 197 are OPTIONS preflights),
+   * and production has since answered "no replies" only as a 200 with an empty
+   * `posts[]` — never a 204, never an empty body. The 204 / empty-body branch
+   * returns `{__empty: true, httpStatus}` rather than throwing, so the walk
+   * journals the response instead of recording a lane failure; the parser then
+   * treats the marker as clear-only, never as proof that a comment is gone.
    */
   async getPostRepliesPage(
     context: FanslyRequestContext,

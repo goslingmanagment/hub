@@ -1077,14 +1077,46 @@ function isExactTerminalNullAccountStatsPayload(
     && payload.aggregationData === null;
 }
 
+/**
+ * Does a stats `dataset` carry its datapoints as ARRAYS?
+ *
+ * `datapoints` must be one; `profileDatapoints` is absent on the per-media
+ * route and may be null, but is never anything else. A dataset missing its
+ * `datapoints` reads as "no datapoints" to every parser here — an EMPTY
+ * window, which the lanes turn into a floor claim. So a drift there must stay
+ * unstamped, and this ONE predicate is both this gate's rule and the lanes'
+ * (`classifyStatsWindow`): a body one side calls an empty window is never a
+ * body the other calls unreadable.
+ */
+export function fanslyStatsDatasetHasDatapointArrays(
+  dataset: Record<string, unknown>,
+): boolean {
+  return Array.isArray(dataset.datapoints)
+    && (
+      dataset.profileDatapoints === undefined
+      || dataset.profileDatapoints === null
+      || Array.isArray(dataset.profileDatapoints)
+    );
+}
+
+/** A top-level list, or a record wrapping one — what `envelopeArray` reads. */
+function isEnvelopeCollection(payload: unknown): boolean {
+  return Array.isArray(payload)
+    || (isRecord(payload) && Object.values(payload).some((value) => Array.isArray(value)));
+}
+
 export type FanslyStatsObservationParseRejectionCode =
   | "account_id_missing"
   | "kind_not_supported"
   | "payload_not_object"
   | "payload_not_collection"
+  | "payload_not_array"
   | "dataset_missing"
   | "dataset_not_object"
+  | "datapoints_not_array"
   | "account_stats_terminal_null_shape_invalid"
+  | "broadcast_messages_missing"
+  | "broadcast_scheduled_missing"
   | "media_offer_suggestions_invalid";
 
 /** Fixed-code shape-gate detail. It never includes provider values. */
@@ -1098,7 +1130,12 @@ export function diagnoseFanslyStatsObservationRejection(
   switch (observation.kind) {
     case "account_stats": {
       if (!isRecord(payload)) return { code: "payload_not_object" };
-      if (isRecord(payload.dataset) || isExactTerminalNullAccountStatsPayload(payload)) {
+      if (isRecord(payload.dataset)) {
+        return fanslyStatsDatasetHasDatapointArrays(payload.dataset)
+          ? null
+          : { code: "datapoints_not_array" };
+      }
+      if (isExactTerminalNullAccountStatsPayload(payload)) {
         return null;
       }
       if (!hasOwn(payload, "dataset")) return { code: "dataset_missing" };
@@ -1111,18 +1148,35 @@ export function diagnoseFanslyStatsObservationRejection(
     case "media_offer_stats":
       if (!isRecord(payload)) return { code: "payload_not_object" };
       if (!hasOwn(payload, "dataset")) return { code: "dataset_missing" };
-      return isRecord(payload.dataset) ? null : { code: "dataset_not_object" };
+      if (!isRecord(payload.dataset)) return { code: "dataset_not_object" };
+      return fanslyStatsDatasetHasDatapointArrays(payload.dataset)
+        ? null
+        : { code: "datapoints_not_array" };
     case "earnings_stats_snapshot":
-    case "earnings_monthlystats_snapshot":
-    case "tracking_links":
-    case "polls":
-    case "recapstats":
-    case "broadcast_stats":
-    case "broadcast_stats_deleted":
-    case "broadcast_scheduled":
       return Array.isArray(payload) || isRecord(payload)
         ? null
         : { code: "payload_not_collection" };
+    // Each of the rest is gated on the shape its parser actually reads, so a
+    // drifted body — `{}`, an error envelope, the other container — stays
+    // unstamped instead of being consumed with zero events.
+    case "tracking_links":
+      // The adapter's own contract for this route is a top-level array.
+      return Array.isArray(payload) ? null : { code: "payload_not_array" };
+    case "earnings_monthlystats_snapshot":
+    case "polls":
+    case "recapstats":
+      return isEnvelopeCollection(payload) ? null : { code: "payload_not_collection" };
+    case "broadcast_stats":
+    case "broadcast_stats_deleted":
+      // `broadcastStatsDrafts` reads a record's `messages`; a top-level array
+      // would be parsed as `{}` — zero events, guaranteed.
+      return isRecord(payload) && Array.isArray(payload.messages)
+        ? null
+        : { code: "broadcast_messages_missing" };
+    case "broadcast_scheduled":
+      return isRecord(payload) && Array.isArray(payload.scheduledBroadcastMessages)
+        ? null
+        : { code: "broadcast_scheduled_missing" };
     case "discovery_feed":
       if (!isRecord(payload)) return { code: "payload_not_object" };
       return Array.isArray(payload.mediaOfferSuggestions)

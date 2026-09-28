@@ -279,10 +279,10 @@ export interface MarkSubjectDirtyInput {
 /**
  * Mark a subject DIRTY so the lane that owns its plane visits it next.
  *
- * WP-F2's only write into this table, and it FETCHES NOTHING: a purchase
- * notification says the media's sale counters moved, WP-F4 is what acts on it.
- * The signal is idempotent — a second purchase on the same media re-marks the
- * same row rather than queueing twice.
+ * The unconditional mark, and it FETCHES NOTHING. WP-F2's purchase signal goes
+ * through `markMediaStatsPurchaseDirty`, which adds the guards a purchase needs
+ * (too old, already answered, a bundle ref). The mark is idempotent — a second
+ * signal on the same subject re-marks the same row rather than queueing twice.
  *
  * `next_due_at` moves EARLIER only. A row already due sooner is not pushed back
  * by a later signal: dirty means "visit it", and the earliest claim wins.
@@ -776,14 +776,17 @@ export interface PostEngagementRefreshCandidate {
 /**
  * The chunk's refresh list, in the decay order WP-F6 declares.
  *
- * DUE-NESS IS COMPUTED FROM `published_at` AND `last_visited_at` AGAINST `now`,
- * not read from `next_due_at`. Same reasoning as the replies walk: the tier a
- * post belongs to changes as the post AGES, so a stored due date freezes each
- * row's cadence at the tier it was in when it was last visited — a post that
+ * SUCCESS DUE-NESS IS COMPUTED FROM `published_at` AND `last_visited_at` AGAINST
+ * `now`, not read from `next_due_at`. Same reasoning as the replies walk: the
+ * tier a post belongs to changes as the post AGES, so a stored due date freezes
+ * each row's cadence at the tier it was in when it was last visited — a post that
  * crossed from fresh into mid would keep being re-read daily forever. The column
  * is still maintained (it is the shared table's contract and what its partial
  * index covers) and the DIRTY path is read through `dirty_reason`, which no
- * cutoff can suppress.
+ * cutoff can suppress. Failure rows are the exception, as in the replies walk:
+ * success resets `consecutive_failures` to zero, while a failure waits for its
+ * stored `next_due_at` backoff, so an unserved or failing batch cannot hold band
+ * zero — or the head of the due band — and re-send the same ids until the cap.
  *
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
@@ -845,6 +848,10 @@ export async function listPostEngagementRefreshChunk(
        and p.platform_post_id = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'post_engagement'
+       and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now}
+       )
        and (
          s.last_visited_at is null
          or s.dirty_reason is not null
@@ -924,7 +931,8 @@ export async function recordPostEngagementRefreshVisits(
  * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
  * moving it would retire the post from the never-refreshed band on the strength
  * of an error. What moves is the failure counter — the number an operator reads
- * to tell "this post is unreachable" from "we have not got to it yet".
+ * to tell "this post is unreachable" from "we have not got to it yet" — and
+ * `next_due_at`, which is the backoff the chunk query enforces.
  */
 export async function recordPostEngagementRefreshFailures(
   db: Database,
@@ -1071,6 +1079,10 @@ export function mediaStatsIntervalDays(
  * `refresh_class` is seeded `fresh` and then RECOMPUTED at read time from the
  * item's age (see the chunk query): a class stored at seed time would freeze
  * every item in the tier it happened to be in on the day the lane was enabled.
+ *
+ * Known gap: `creator_media` keeps no owner, so this sweep cannot skip the
+ * media fans sent in DMs the way `upsertCreatorMedia` does — a page's first
+ * enable queues them too, and `fansly:media-stats-prune-foreign` removes them.
  */
 export async function seedMediaStatsQueue(
   db: Database,
@@ -1166,6 +1178,79 @@ export async function markMediaStatsTopMediaDirty(
   return { marked: result.rowCount ?? 0 };
 }
 
+/**
+ * How old a purchase may be, measured at RECEIPT, and still mark its media
+ * dirty: the widest steady window the media lane reads (the 90-day long-tail
+ * refresh). A refresh the mark triggers cannot reach a purchase older than
+ * that, and the deep notification backfill delivers year-old purchases every
+ * week. Measured against receipt, not `now`, so a replay decides the same way.
+ */
+export const MEDIA_STATS_PURCHASE_SIGNAL_HORIZON_DAYS = 90;
+
+/**
+ * WP-F2's purchase signal: "somebody bought this, its counters moved — worth a
+ * call TODAY". Mark the bought media DIRTY in the `media_stats` plane, due at
+ * the purchase instant. It FETCHES NOTHING.
+ *
+ * Only a signal that can still move a number the lane has not read:
+ *
+ * - A purchase more than `MEDIA_STATS_PURCHASE_SIGNAL_HORIZON_DAYS` older than
+ *   its receipt marks nothing (no row is created either).
+ * - A row VISITED AT OR AFTER the purchase is not re-marked: its numbers already
+ *   include it. The top-50 mark has the same guard, for the same reason. This
+ *   is also what keeps a truncate-and-replay of the engagement projection from
+ *   re-dirtying every answered item.
+ * - A ref the page already knows as a BUNDLE is not a media subject — the route
+ *   reads media offers — so it gets no row. Its members are not marked either.
+ *
+ * Any other unknown ref still gets a row, as before: the purchase may simply be
+ * projected ahead of its media head, and the chunk query only admits rows with
+ * a `creator_media` head. `next_due_at` moves EARLIER only, and
+ * `consecutive_failures` is left to the lane that fetches.
+ */
+export async function markMediaStatsPurchaseDirty(
+  db: Database,
+  input: {
+    pageId: number;
+    subjectRef: string;
+    /** The provider's purchase instant, or the receipt when it served none. */
+    purchasedAt: Date;
+    /** When the notification was received — the event's own instant. */
+    receivedAt: Date;
+  },
+): Promise<{ applied: boolean }> {
+  const horizon = new Date(
+    input.receivedAt.getTime() - MEDIA_STATS_PURCHASE_SIGNAL_HORIZON_DAYS * DAY_MS,
+  );
+  if (input.purchasedAt.getTime() < horizon.getTime()) {
+    return { applied: false };
+  }
+  const result = await db.execute(sql`
+    insert into subject_refresh_state (
+      page_id, plane, subject_ref, refresh_class, next_due_at, dirty_reason
+    )
+    select ${input.pageId}, 'media_stats', ${input.subjectRef}, 'dirty',
+           ${input.purchasedAt}, 'purchase_notification'
+     where not exists (
+       select 1 from creator_media_bundles b
+        where b.page_id = ${input.pageId}
+          and b.bundle_ref = ${input.subjectRef}
+     )
+    on conflict (page_id, plane, subject_ref) do update set
+      refresh_class = 'dirty',
+      next_due_at = least(
+        coalesce(subject_refresh_state.next_due_at, excluded.next_due_at),
+        excluded.next_due_at
+      ),
+      dirty_reason = excluded.dirty_reason,
+      updated_at = now()
+     where subject_refresh_state.last_visited_at is null
+        or subject_refresh_state.last_visited_at < excluded.next_due_at
+    returning page_id
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
 export interface MediaStatsRefreshCandidate {
   subjectRef: string;
   /** The platform's own publication instant, or null when it never served one. */
@@ -1194,13 +1279,19 @@ export interface MediaStatsRefreshCandidate {
  *       a month.
  *   (3) DUE BY CLASS, oldest visit first — the round-robin.
  *
- * DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`, not
- * read from `next_due_at`. Same reasoning as the two post planes: the tier an
+ * SUCCESS DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`,
+ * not read from `next_due_at`. Same reasoning as the two post planes: the tier an
  * item belongs to changes as the item AGES and the long-tail cycle is a LIVE
  * config key, so a stored due date freezes each row's cadence at the tier and
  * the cycle in force when it was last visited. The column is still maintained —
  * it is the shared table's contract and what its partial index covers — and the
  * DIRTY path is read through `dirty_reason`, which no cutoff can suppress.
+ *
+ * Failure rows are the exception, the replies walk's rule: success resets
+ * `consecutive_failures` to zero, while a failure waits for its stored
+ * `next_due_at` backoff — in EVERY band, dirty included — so an item that fails
+ * on every look cannot lead each chunk and spend the day's cap on itself. A new
+ * dirty signal moves `next_due_at` earlier and so re-admits it once.
  *
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
@@ -1281,6 +1372,10 @@ export async function listMediaStatsRefreshChunk(
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
        and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now}
+       )
+       and (
          s.dirty_reason is not null
          or s.last_visited_at is null
          or s.last_visited_at < ${dueCutoff}
@@ -1327,6 +1422,10 @@ export async function listMediaStatsRefreshChunk(
  * that cost: 1 198 calls landed on 8 media items while 5 507 queue rows still
  * read "never visited", because nothing retires an item from that band until
  * its whole history is walked.
+ *
+ * It resets `consecutive_failures`, so it is for a visit that did NOT fail. A
+ * failed visit keeps its cursor through `recordMediaStatsBackfillCursor`, which
+ * leaves the failure and its backoff standing.
  */
 export async function recordMediaStatsBackfillProgress(
   db: Database,
@@ -1340,6 +1439,38 @@ export async function recordMediaStatsBackfillProgress(
     update subject_refresh_state s
        set backfill_cursor = ${JSON.stringify(input.backfillCursor)}::jsonb,
            consecutive_failures = 0,
+           updated_at = now()
+     where s.page_id = ${input.pageId}
+       and s.plane = 'media_stats'
+       and s.subject_ref = ${input.subjectRef}
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
+/**
+ * Keep the backfill cursor of a visit that FAILED part way — and nothing else.
+ *
+ * A visit can journal several backfill windows and then fail: on a later
+ * window, or on the tier's steady window. Those windows are captured facts, and
+ * a cursor that forgot them re-read the same history on every admission
+ * (production 2026-09: one backfill window re-read 32 times). So the cursor moves.
+ *
+ * NOTHING ELSE DOES. `consecutive_failures` and `next_due_at` are the backoff
+ * `recordMediaStatsFailure` has just written; `last_visited_at` stays put
+ * because a failed look is not a look; `dirty_reason` stays because a purchase
+ * signal survives a failed fetch.
+ */
+export async function recordMediaStatsBackfillCursor(
+  db: Database,
+  input: {
+    pageId: number;
+    subjectRef: string;
+    backfillCursor: Record<string, unknown>;
+  },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    update subject_refresh_state s
+       set backfill_cursor = ${JSON.stringify(input.backfillCursor)}::jsonb,
            updated_at = now()
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
@@ -1404,8 +1535,9 @@ export async function recordMediaStatsVisit(
  * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
  * moving it would retire the item from the never-visited band on the strength of
  * an error. What moves is the failure counter — the number an operator reads to
- * tell "this media is unreachable" from "we have not got to it yet". The dirty
- * mark stays, so a purchase signal survives a failed fetch.
+ * tell "this media is unreachable" from "we have not got to it yet" — and
+ * `next_due_at`, which is the backoff the chunk query enforces. The dirty mark
+ * stays, so a purchase signal survives a failed fetch.
  */
 export async function recordMediaStatsFailure(
   db: Database,
@@ -1428,14 +1560,16 @@ export interface MediaStatsRefreshProgress {
   queueSize: number;
   /** `creator_media` rows for this page. Ahead of `queueSize` while a first
    *  seeding is still running, which is what makes an unfinished seed read as
-   *  incomplete rather than as complete-and-small. */
+   *  incomplete rather than as complete-and-small — and ahead for good by the
+   *  media fans sent in DMs, which are kept but never queued. */
   mediaKnown: number;
   fresh: number;
   mid: number;
   longTail: number;
   dirty: number;
   neverVisited: number;
-  /** Items whose class says they are due right now (dirty included). */
+  /** Items whose class says they are due right now (dirty included) and that
+   *  are not waiting out a failure backoff — what the chunk query admits. */
   dueNow: number;
   /** Items whose first-sight backfill has reached its floor or stopped. */
   backfillComplete: number;
@@ -1450,7 +1584,9 @@ export interface MediaStatsRefreshProgress {
  *
  * The classes are recomputed here from the item's AGE, exactly as the chunk
  * query does — not read from `refresh_class`, which is only ever the tier of the
- * LAST visit and is `dirty` for anything WP-F2 marked.
+ * LAST visit and is `dirty` for anything WP-F2 marked. `dueNow` applies the
+ * chunk query's failure backoff too: an item the lane will not touch today is
+ * not due today.
  */
 export async function countMediaStatsRefreshProgress(
   db: Database,
@@ -1488,6 +1624,8 @@ export async function countMediaStatsRefreshProgress(
              s.last_visited_at,
              s.dirty_reason,
              s.backfill_cursor,
+             s.consecutive_failures,
+             s.next_due_at,
              ${tier} as tier
         from subject_refresh_state s
         join creator_media m
@@ -1504,11 +1642,14 @@ export async function countMediaStatsRefreshProgress(
            count(*) filter (where q.dirty_reason is not null)::text as dirty,
            count(*) filter (where q.last_visited_at is null)::text as never_visited,
            count(*) filter (
-             where q.dirty_reason is not null
-                or q.last_visited_at is null
-                or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
-                or (q.tier = 'mid' and q.last_visited_at < ${midDue})
-                or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
+             where (q.consecutive_failures = 0 or q.next_due_at <= ${input.now})
+               and (
+                 q.dirty_reason is not null
+                 or q.last_visited_at is null
+                 or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
+                 or (q.tier = 'mid' and q.last_visited_at < ${midDue})
+                 or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
+               )
            )::text as due_now,
            count(*) filter (where q.backfill_cursor ->> 'done' = 'true')::text
              as backfill_complete,

@@ -8,15 +8,21 @@ import {
   listMediaStatsRefreshChunk,
   listSubjectRefreshState,
   markSubjectRefreshDirty,
+  recordMediaStatsFailure,
+  upsertCheckpointProgress,
 } from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   countMediaStatBuckets,
+  emptyFanslyMediaStatsCursorState,
   estimateMediaStatsCycle,
   fanslyMediaStatsChunk,
+  mediaBackfillFirstMonthProbe,
   mediaStatsWindowIsEmpty,
   parseFanslyMediaStatsCursorState,
+  parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
   steadyWindows,
@@ -345,6 +351,39 @@ async function drain(
   return results;
 }
 
+/** A provider refusal as the adapter throws it after its own retries: HTTP 500
+ *  and Fansly's error envelope. `error getting graph` is the 90-day window's
+ *  answer since 2026-09-05; `error getting media offer` is an item that is gone. */
+function providerRefusal(details: "error getting graph" | "error getting media offer") {
+  return new FanslyApiError(
+    "Fansly request failed (500)",
+    500,
+    500,
+    JSON.stringify({ success: false, error: { code: 500, details } }),
+  );
+}
+
+function spanDays(call: AdapterCall): number {
+  return (call.beforeDate.getTime() - call.afterDate.getTime()) / DAY_MS;
+}
+
+/** Start the page from a lane state it already learned, e.g. a proven 90 days. */
+async function seedLaneState(pageId: number, patch: Record<string, unknown>) {
+  await upsertCheckpointProgress(testDb!.db, {
+    platformAccountId: pageId,
+    stream: "media_stats",
+    cursorText: String(patch.longTailWindowMode ?? "unproven"),
+    state: { ...emptyFanslyMediaStatsCursorState(NOW), ...patch },
+  });
+}
+
+async function queueRow(pageId: number, subjectRef: string) {
+  const queue = await listSubjectRefreshState(testDb!.db, { pageId, plane: "media_stats" });
+  const row = queue.find((entry) => entry.subjectRef === subjectRef);
+  if (row === undefined) throw new Error(`no media_stats row for ${subjectRef}`);
+  return row;
+}
+
 describe("media_stats lane — the gate", () => {
   it("is INERT until both the flag and the fail-closed allowlist say otherwise", async (ctx) => {
     if (!testDb) return ctx.skip();
@@ -532,6 +571,67 @@ describe("media_stats lane — the queue", () => {
     expect(byRef.get(ref(301))?.dirtyReason).toBeNull();
     expect(await cursor(page.id)).toMatchObject({ topMarkedDay: "2026-08-22" });
   });
+
+  it("holds a FAILED row out until its backoff — dirty band included — unless a new signal arrives", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const failing = ref(310);
+    const healthy = ref(311);
+    await seedMedia(page.id, [
+      { ref: failing, createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+      { ref: healthy, createdAtPlatform: new Date(NOW.getTime() - 3 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // The healthy row was visited long ago and never failed: ordinary due-ness.
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = $3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, healthy, new Date(NOW.getTime() - 10 * DAY_MS)],
+    );
+    const refsAt = async (now: Date) =>
+      (await listMediaStatsRefreshChunk(testDb!.db, {
+        pageId: page.id,
+        limit: 10,
+        now,
+        longTailCycleDays: 30,
+      })).map((row) => row.subjectRef);
+    const backOff = () =>
+      recordMediaStatsFailure(testDb!.db, {
+        pageId: page.id,
+        subjectRef: failing,
+        nextDueAt: new Date(NOW.getTime() + DAY_MS),
+      });
+
+    // The progress block reports the same backlog the selector admits.
+    const dueAt = async (now: Date) =>
+      (await countMediaStatsRefreshProgress(testDb!.db, {
+        pageId: page.id,
+        now,
+        longTailCycleDays: 30,
+      })).dueNow;
+
+    // Never visited is band one, ahead of the healthy row — until it fails.
+    expect(await refsAt(NOW)).toEqual([failing, healthy]);
+    expect(await dueAt(NOW)).toBe(2);
+    await backOff();
+    expect(await refsAt(NOW)).toEqual([healthy]);
+    expect(await dueAt(NOW)).toBe(1);
+    expect(await refsAt(new Date(NOW.getTime() + DAY_MS))).toEqual([failing, healthy]);
+    expect(await dueAt(new Date(NOW.getTime() + DAY_MS))).toBe(2);
+
+    // A NEW purchase signal moves `next_due_at` earlier and re-admits it once…
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: failing,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    expect(await refsAt(NOW)).toEqual([failing, healthy]);
+    // …and a dirty row that fails again waits like any other: band zero is not
+    // a licence to spend the day's cap on an item that fails every look.
+    await backOff();
+    expect(await refsAt(NOW)).toEqual([healthy]);
+  });
 });
 
 describe("media_stats lane — the windows and their guards", () => {
@@ -553,6 +653,64 @@ describe("media_stats lane — the windows and their guards", () => {
       plane: "media_stats",
     });
     expect(queue[0]?.lastVisitedAt).toBeNull();
+  });
+
+  it("fails a window whose body names ANOTHER item, and tolerates one naming none", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // An open walk, so the body would otherwise count: all-zero, it is the
+    // "empty window" half of a floor claim — about a different media item.
+    await seedMedia(page.id, [{
+      ref: ref(405),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }]);
+    await seedMedia(page.id, [{
+      ref: ref(406),
+      createdAtPlatform: new Date(NOW.getTime() - 5 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    const adapter = adapterStub({
+      body: (params) => {
+        const window = {
+          afterMs: params.afterDate.getTime(),
+          beforeMs: params.beforeDate.getTime(),
+          periodMs: params.periodMs,
+        };
+        if (params.mediaOfferId === ref(405)) {
+          return allZeroBody({ ...window, mediaOfferRef: ref(999) });
+        }
+        // The canonicalizer's documented tolerance: no subject in the body, to
+        // be attributed from request_params later. Not a mismatch.
+        const unnamed = statsBody({ ...window, mediaOfferRef: params.mediaOfferId });
+        delete (unnamed.dataset as Record<string, unknown>).datasetMediaOfferId;
+        return unnamed;
+      },
+    });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // Journaled FIRST, both of them.
+    expect(await journaled(page.id)).toHaveLength(2);
+    const mismatches = telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_subject_mismatch"
+    );
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]?.details).toMatchObject({
+      mediaOfferRef: ref(405),
+      servedMediaOfferRef: ref(999),
+    });
+    // A failed look: backoff, no stamp, and the walk did NOT count the window.
+    const mismatched = await queueRow(page.id, ref(405));
+    expect(mismatched.lastVisitedAt).toBeNull();
+    expect(mismatched.consecutiveFailures).toBe(1);
+    expect(parseMediaBackfillCursor(mismatched.backfillCursor, NOW)).toMatchObject({
+      emptyStreak: 0,
+      done: false,
+      guard: { lastBeforeMs: null },
+    });
+    // The unnamed body is processed as ever.
+    const unnamed = await queueRow(page.id, ref(406));
+    expect(unnamed.lastVisitedAt).not.toBeNull();
+    expect(unnamed.consecutiveFailures).toBe(0);
   });
 
   it("asks the tier's window: 24 h hourly, 30 d daily, 90 d daily", async (ctx) => {
@@ -772,88 +930,217 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(rows.filter((row) => row.request_params.mode === "steady")).toHaveLength(1);
   });
 
-  it("walks the first-sight backfill back to the empty floor in 31-day windows", async (ctx) => {
+  /**
+   * Traffic in the last 100 days and in the item's FIRST month, all-zero rows
+   * everywhere else — which is what this route serves for any quiet window,
+   * back to 2006, and the reason a walk counting ROWS never found a floor.
+   */
+  function recentAndFirstMonthBody(createdMs: number, firstMonth: boolean) {
+    const recentFloorMs = NOW.getTime() - 100 * DAY_MS;
+    return (params: AdapterCall) => {
+      const afterMs = params.afterDate.getTime();
+      const beforeMs = params.beforeDate.getTime();
+      const traffic = beforeMs > recentFloorMs
+        || (firstMonth && afterMs < createdMs + 31 * DAY_MS && beforeMs > createdMs);
+      const window = {
+        mediaOfferRef: params.mediaOfferId,
+        afterMs,
+        beforeMs,
+        periodMs: params.periodMs,
+      };
+      return traffic ? statsBody(window) : allZeroBody(window);
+    };
+  }
+
+  function backfillWindows(rows: Awaited<ReturnType<typeof journaled>>) {
+    return rows
+      .filter((row) => row.request_params.mode === "backfill")
+      .map((row) => ({
+        afterMs: Date.parse(String(row.request_params.afterDate)),
+        beforeMs: Date.parse(String(row.request_params.beforeDate)),
+      }));
+  }
+
+  it("walks back to the item's CREATION when a first-month probe finds traffic", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
-    // Published 400 days ago, traffic only in the last 100: the creation floor
-    // is nowhere near, so what stops this walk is the EMPTY-WINDOW rule.
-    await seedMedia(page.id, [{
-      ref: ref(440),
-      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
-    }]);
-
-    // Traffic for 100 days, and ALL-ZERO rows before it — which is what this
-    // route actually serves for any window back to 2006, and the reason a walk
-    // counting ROWS never found a floor at all.
-    const floorMs = NOW.getTime() - 100 * DAY_MS;
-    const adapter = adapterStub({
-      body: (params) => {
-        const servedBefore = params.beforeDate.getTime();
-        const servedAfter = params.afterDate.getTime();
-        if (servedBefore <= floorMs) {
-          return allZeroBody({
-            mediaOfferRef: params.mediaOfferId,
-            afterMs: servedAfter,
-            beforeMs: servedBefore,
-            periodMs: params.periodMs,
-          });
-        }
-        return statsBody({
-          mediaOfferRef: params.mediaOfferId,
-          afterMs: servedAfter,
-          beforeMs: servedBefore,
-          periodMs: params.periodMs,
-        });
-      },
-    });
+    // Published 400 days ago, traffic in its first month and in the last 100
+    // days, silence between. Two empty windows used to END this walk 300 days
+    // above creation and call it a floor — the premise "an item cannot have
+    // traffic before it was published" only holds for a walk moving FORWARD
+    // from publication, and this one walks back from today.
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    await seedMedia(page.id, [{ ref: ref(440), createdAtPlatform: new Date(createdMs) }]);
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, true) });
     const telemetry = telemetryStub();
-    // TWO VISITS, a long-tail cycle apart. A visit walks four windows and then
-    // stamps the row, so the rest of this item's history arrives on its next
-    // turn rather than by holding the whole lane on one item.
-    await drain(page.id, adapter, telemetry);
-    const afterFirstVisit = await listSubjectRefreshState(testDb.db, {
-      pageId: page.id,
-      plane: "media_stats",
-    });
-    expect(afterFirstVisit[0]?.lastVisitedAt).not.toBeNull();
-    expect(afterFirstVisit[0]?.backfillCursor).toMatchObject({ done: false });
-    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
 
-    const rows = await journaled(page.id);
-    const backfill = rows.filter((row) => row.request_params.mode === "backfill");
-    // 31-day windows, backwards, each derived from the RETURNED bounds with one
-    // day of overlap: the provider snaps to its own bucket grid, and stepping
-    // back from OUR bound would drift a bucket per window.
-    expect(backfill.length).toBeGreaterThanOrEqual(5);
-    const bounds = backfill.map((row) => ({
-      afterMs: Date.parse(String(row.request_params.afterDate)),
-      beforeMs: Date.parse(String(row.request_params.beforeDate)),
-    }));
-    for (const window of bounds) {
+    // FOUR VISITS, a long-tail cycle apart: a visit walks four windows and
+    // stamps the row, so the history arrives over several turns.
+    for (let visit = 0; visit < 4; visit += 1) {
+      await drain(page.id, adapter, telemetry, {
+        now: new Date(NOW.getTime() + visit * 31 * DAY_MS),
+      });
+    }
+
+    const windows = backfillWindows(await journaled(page.id));
+    for (const window of windows) {
       expect(Math.round((window.beforeMs - window.afterMs) / DAY_MS)).toBe(31);
     }
-    for (let index = 1; index < bounds.length; index += 1) {
-      // Strictly backwards, and CONTIGUOUS: adjacent windows overlap by a day
-      // while the provider is still serving bounds, and meet exactly once an
-      // empty window serves none.
-      expect(bounds[index]!.beforeMs).toBeLessThan(bounds[index - 1]!.beforeMs);
-      expect(bounds[index]!.beforeMs).toBeGreaterThanOrEqual(bounds[index - 1]!.afterMs);
+    // NO WINDOW TWICE — not the second empty one, not the probe's.
+    expect(new Set(windows.map((window) => `${window.afterMs}:${window.beforeMs}`)).size)
+      .toBe(windows.length);
+    // ONE PROBE, straddling creation: a day before it, the item's first month.
+    const probeBeforeMs = createdMs + 30 * DAY_MS;
+    const probeAt = windows.findIndex((window) => window.beforeMs === probeBeforeMs);
+    expect(probeAt).toBeGreaterThan(1);
+    expect(windows[probeAt]!.afterMs).toBe(createdMs - DAY_MS);
+    // It came after two empty windows, and the walk RESUMED right below the
+    // second of them — the bookmark, not a re-read of it.
+    const secondEmpty = windows[probeAt - 1]!;
+    expect(windows[probeAt + 1]!.beforeMs).toBe(secondEmpty.afterMs);
+    // THE GAP IS WALKED, backwards and contiguous, empty windows and all: no
+    // streak ends it before it reaches the probe window.
+    const gap = windows.slice(probeAt + 1);
+    expect(gap.length).toBeGreaterThan(2);
+    for (let index = 1; index < gap.length; index += 1) {
+      expect(gap[index]!.beforeMs).toBeLessThan(gap[index - 1]!.beforeMs);
+      expect(gap[index]!.beforeMs).toBeGreaterThanOrEqual(gap[index - 1]!.afterMs);
     }
+    expect(gap.at(-1)!.afterMs).toBeLessThanOrEqual(probeBeforeMs);
 
     const queue = await listSubjectRefreshState(testDb.db, {
       pageId: page.id,
       plane: "media_stats",
     });
-    // The FLOOR, reached and NAMED — the empty windows are journaled, because
-    // an empty window IS the floor evidence.
+    // The floor is CREATION, reached — not two quiet months.
     expect(queue[0]?.backfillCursor).toMatchObject({
       done: true,
-      stopReason: "empty_window_streak",
-      floorBasis: "empty_window",
+      stopReason: "created_at_floor",
+      floorBasis: "created_at",
+      probeSpent: true,
+      probeResumeBeforeMs: null,
+      probeHitBeforeMs: null,
+      floorAt: new Date(createdMs - DAY_MS).toISOString(),
+    });
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_window_not_honoured"
+      || anomaly.code === "fansly_media_stats_window_repeat"
+    )).toHaveLength(0);
+  });
+
+  it("ends at the empty floor after ONE first-month probe comes back empty too", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    await seedMedia(page.id, [{ ref: ref(441), createdAtPlatform: new Date(createdMs) }]);
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, false) });
+    const telemetry = telemetryStub();
+
+    for (let visit = 0; visit < 3; visit += 1) {
+      await drain(page.id, adapter, telemetry, {
+        now: new Date(NOW.getTime() + visit * 31 * DAY_MS),
+      });
+    }
+
+    const windows = backfillWindows(await journaled(page.id));
+    // Four windows of traffic, two empty ones, then EXACTLY ONE probe — and
+    // nothing after it, on this visit or the next.
+    expect(windows).toHaveLength(7);
+    expect(windows.at(-1)).toEqual({
+      afterMs: createdMs - DAY_MS,
+      beforeMs: createdMs + 30 * DAY_MS,
+    });
+    const queue = await listSubjectRefreshState(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+    });
+    // NAMED for what it rests on: two idle windows and an idle first month.
+    expect(queue[0]?.backfillCursor).toMatchObject({
+      done: true,
+      stopReason: "empty_window_probe",
+      floorBasis: "empty_window_probe",
+      probeSpent: true,
     });
     expect(telemetry.anomalies.filter((anomaly) =>
       anomaly.code === "fansly_media_stats_window_not_honoured"
     )).toHaveLength(0);
+  });
+
+  it("re-arms a walk that ended on two empty windows with the probe, directly", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // THE LEGACY CURSORS (production: 277 of them, 108 more than a window above
+    // creation). A walk that stopped on two empty windows keeps the SECOND of
+    // them in its cursor and in its durable repeat guard. Re-entering the
+    // empty-window branch would re-issue that window, trip the guard, and halve
+    // or stop the item; the repair arms the probe instead.
+    const createdMs = NOW.getTime() - 400 * DAY_MS;
+    const secondEmptyBeforeMs = NOW.getTime() - 151 * DAY_MS;
+    const legacy = (nextBeforeMs: number) => ({
+      version: 1,
+      nextBeforeMs,
+      emptyStreak: 2,
+      done: true,
+      floorAt: new Date(NOW.getTime() - 121 * DAY_MS).toISOString(),
+      stopReason: "empty_window_streak",
+      floorBasis: "empty_window",
+      guard: {
+        spanDays: 31,
+        narrowed: false,
+        lastBeforeMs: nextBeforeMs,
+        lastAfterMs: nextBeforeMs - 31 * DAY_MS,
+        lastObservationId: null,
+      },
+    });
+    await seedMedia(page.id, [{ ref: ref(442), createdAtPlatform: new Date(createdMs) }], {
+      queueCursor: legacy(secondEmptyBeforeMs),
+    });
+    // …and one that stopped within a window of its creation: no room for a
+    // probe, so it stays exactly as it is.
+    await seedMedia(page.id, [{
+      ref: ref(443),
+      createdAtPlatform: new Date(NOW.getTime() - 80 * DAY_MS),
+    }], { queueCursor: legacy(NOW.getTime() - 31 * DAY_MS) });
+
+    const adapter = adapterStub({ body: recentAndFirstMonthBody(createdMs, false) });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    const backfill = adapter.calls.filter((call) =>
+      call.periodMs === 86_400_000 && call.beforeDate.getTime() !== NOW.getTime()
+    );
+    // ONE request of history, and it is the probe — not the second empty window.
+    expect(backfill).toHaveLength(1);
+    expect(backfill[0]!.mediaOfferId).toBe(ref(442));
+    expect(backfill[0]!.beforeDate.getTime()).toBe(createdMs + 30 * DAY_MS);
+    expect(backfill[0]!.afterDate.getTime()).toBe(createdMs - DAY_MS);
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_window_not_honoured"
+      || anomaly.code === "fansly_media_stats_window_repeat"
+    )).toHaveLength(0);
+
+    const repaired = await queueRow(page.id, ref(442));
+    expect(repaired.backfillCursor).toMatchObject({
+      done: true,
+      floorBasis: "empty_window_probe",
+      probeSpent: true,
+      // The window stays whole: nothing was halved.
+      guard: { spanDays: 31, narrowed: false },
+    });
+    expect((await queueRow(page.id, ref(443))).backfillCursor).toMatchObject({
+      done: true,
+      floorBasis: "empty_window",
+      stopReason: "empty_window_streak",
+    });
+
+    // ONCE: the next turn of either item asks for no history at all.
+    const before = adapter.calls.length;
+    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
+    const later = adapter.calls.slice(before);
+    expect(later.length).toBeGreaterThan(0);
+    for (const call of later) {
+      expect(call.beforeDate.getTime()).toBe(NOW.getTime() + 31 * DAY_MS);
+    }
   });
 
   it("stops at the item's own CREATION, and repairs a cursor already past it", async (ctx) => {
@@ -961,6 +1248,9 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(mediaStatsWindowIsEmpty(typed)).toBe(true);
     // No datapoints at all is empty, as it always was.
     expect(mediaStatsWindowIsEmpty({ dataset: { datapoints: [] } })).toBe(true);
+    // …but a dataset whose datapoints drifted away is not: that body is
+    // unreadable, and reading it as empty is how a floor gets claimed.
+    expect(mediaStatsWindowIsEmpty({ dataset: { datasetMediaOfferId: ref(470) } })).toBe(false);
     // A window with real numbers is not.
     expect(mediaStatsWindowIsEmpty(statsBody({
       mediaOfferRef: ref(470),
@@ -1061,7 +1351,8 @@ describe("media_stats lane — the cap", () => {
     ], { queueCursor: BACKFILL_DONE });
 
     const adapter = adapterStub({
-      fail: (params) => params.mediaOfferId === ref(601) ? new Error("boom") : null,
+      fail: (params) =>
+        params.mediaOfferId === ref(601) ? providerRefusal("error getting media offer") : null,
     });
     const telemetry = telemetryStub();
     await drain(page.id, adapter, telemetry);
@@ -1083,6 +1374,589 @@ describe("media_stats lane — the cap", () => {
     expect(telemetry.anomalies.some((anomaly) =>
       anomaly.code === "fansly_media_stats_item_failed"
     )).toBe(true);
+  });
+
+  for (
+    const [label, failure] of [
+      ["a dead proxy", () => new TypeError("fetch failed", {
+        cause: new Error("Socks5 proxy rejected connection - NotAllowed"),
+      })],
+      ["a 429 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (429)", 429, 429, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+      ["a 503 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (503)", 503, 503, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+    ] as const
+  ) {
+    it(`leaves ${label} to the executor instead of charging it to the item`, async (ctx) => {
+      if (!testDb) return ctx.skip();
+      const page = await seedPage();
+      await seedMedia(page.id, [
+        { ref: ref(631), createdAtPlatform: new Date(NOW.getTime() - 1 * DAY_MS) },
+        { ref: ref(632), createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+      ], { queueCursor: BACKFILL_DONE });
+      const thrown = failure();
+      const adapter = adapterStub({ fail: () => thrown });
+      const telemetry = telemetryStub();
+
+      // The SAME throwable reaches the executor: its status and `retryAfterAt`
+      // are what `classifyTaskFailure` turns into the retry class and the wake-up.
+      await expect(fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry)))
+        .rejects.toBe(thrown);
+      // The walk stopped at the wall: it did not carry on into the next item.
+      expect(adapter.calls.map((call) => call.mediaOfferId)).toEqual([ref(631)]);
+      // And the item was not charged for the page's outage.
+      for (const subjectRef of [ref(631), ref(632)]) {
+        const row = await queueRow(page.id, subjectRef);
+        expect(row.consecutiveFailures).toBe(0);
+        expect(row.lastVisitedAt).toBeNull();
+        expect(row.nextDueAt?.toISOString()).toBe(NOW.toISOString());
+      }
+      expect(telemetry.anomalies.map((anomaly) => anomaly.code))
+        .not.toContain("fansly_media_stats_item_failed");
+    });
+  }
+
+  it("keeps a 4xx that carries Retry-After scoped to its item", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedMedia(page.id, [
+      { ref: ref(641), createdAtPlatform: new Date(NOW.getTime() - 1 * DAY_MS) },
+      { ref: ref(642), createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // Re-raised, the executor would read no deadline for a 400 and park the
+    // whole stream as provider_bad_data.
+    const adapter = adapterStub({
+      fail: (params) => params.mediaOfferId === ref(641)
+        ? new FanslyApiError("bad request", 400, 400, undefined, new Date(NOW.getTime() + 600_000))
+        : null,
+    });
+    await drain(page.id, adapter, telemetryStub());
+
+    expect(adapter.calls.map((call) => call.mediaOfferId)).toContain(ref(642));
+    expect((await queueRow(page.id, ref(641))).consecutiveFailures).toBe(1);
+  });
+
+  it("lets healthy items run while failed items wait out their backoff", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // Five items that fail on every look, NEWEST, so without a backoff they
+    // head every chunk and a sixth, healthy item behind them is never reached.
+    const deadRefs = Array.from({ length: 5 }, (_unused, index) => ref(610 + index));
+    const healthyRef = ref(620);
+    await seedMedia(page.id, [
+      ...deadRefs.map((deadRef, index) => ({
+        ref: deadRef,
+        createdAtPlatform: new Date(NOW.getTime() - (index + 1) * DAY_MS),
+      })),
+      { ref: healthyRef, createdAtPlatform: new Date(NOW.getTime() - 10 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+
+    const adapter = adapterStub({
+      fail: (params) =>
+        deadRefs.includes(params.mediaOfferId) ? providerRefusal("error getting media offer") : null,
+    });
+    const telemetry = telemetryStub();
+    const chunkAt = async (now: Date) => {
+      const before = adapter.calls.length;
+      await fanslyMediaStatsChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(5), now),
+      );
+      return adapter.calls.slice(before).map((call) => call.mediaOfferId);
+    };
+
+    expect(await chunkAt(NOW)).toEqual(deadRefs);
+    // A minute later the continuation reaches the healthy item: every dead one
+    // is waiting for the `next_due_at` its failure wrote.
+    expect(await chunkAt(new Date(NOW.getTime() + 60_000))).toEqual([healthyRef]);
+    // A day on, the backoff has run out and each dead item gets ONE more look.
+    expect(await chunkAt(new Date(NOW.getTime() + DAY_MS + 60_000))).toEqual(deadRefs);
+
+    for (const deadRef of deadRefs) {
+      const row = await queueRow(page.id, deadRef);
+      expect(row.consecutiveFailures).toBe(2);
+      expect(row.lastVisitedAt).toBeNull();
+    }
+    // Waiting is not completeness: five items have still never been looked at.
+    expect((await coverageRows(page.id))[0]).toMatchObject({ status: "in_progress" });
+  });
+});
+
+describe("media_stats lane — a failed visit keeps its backfill progress", () => {
+  for (const failure of ["thrown", "unreadable"] as const) {
+    it(`resumes at the window that failed (${failure}), not at the top of the walk`, async (ctx) => {
+      if (!testDb) return ctx.skip();
+      const page = await seedPage();
+      const mediaRef = ref(1010);
+      // Mid tier, never visited, with more history than one visit walks.
+      await seedMedia(page.id, [{
+        ref: mediaRef,
+        createdAtPlatform: new Date(NOW.getTime() - 150 * DAY_MS),
+      }]);
+      // Day one: the first backfill window is answered, the SECOND fails — as
+      // a thrown error, or as a body journaled and refused by the parser.
+      const failingBeforeMs = NOW.getTime() - 30 * DAY_MS;
+      let dayOne = true;
+      const failsToday = (params: AdapterCall) =>
+        dayOne && params.beforeDate.getTime() === failingBeforeMs;
+      const adapter = adapterStub({
+        fail: (params) =>
+          failure === "thrown" && failsToday(params)
+            ? providerRefusal("error getting media offer")
+            : null,
+        body: (params) =>
+          failure === "unreadable" && failsToday(params) ? { aggregationData: {} } : undefined,
+      });
+      const telemetry = telemetryStub();
+      await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+      const afterFailure = await queueRow(page.id, mediaRef);
+      // The answered window is KEPT, and the guard remembers it — not the
+      // window that failed, which was never answered.
+      expect(afterFailure.backfillCursor).toMatchObject({
+        nextBeforeMs: failingBeforeMs,
+        done: false,
+        guard: {
+          spanDays: 31,
+          lastBeforeMs: NOW.getTime(),
+          lastAfterMs: NOW.getTime() - 31 * DAY_MS,
+        },
+      });
+      // Still a failed look: not stamped, and the backoff stands.
+      expect(afterFailure.lastVisitedAt).toBeNull();
+      expect(afterFailure.consecutiveFailures).toBe(1);
+      expect(afterFailure.nextDueAt?.toISOString()).toBe(NEXT_DAY.toISOString());
+
+      dayOne = false;
+      const before = adapter.calls.length;
+      await fanslyMediaStatsChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(), NEXT_DAY),
+      );
+      // The failed window, asked again at its FULL span: not the top of the
+      // walk re-anchored at a new `now`, and not a "repeat" to halve or stop.
+      const resumed = adapter.calls[before]!;
+      expect(resumed.beforeDate.getTime()).toBe(failingBeforeMs);
+      expect(spanDays(resumed)).toBe(31);
+      expect(telemetry.anomalies.filter((anomaly) =>
+        anomaly.code === "fansly_media_stats_window_not_honoured"
+      )).toHaveLength(0);
+      // The window journaled on day one was never read again.
+      expect(adapter.calls.filter((call) => call.beforeDate.getTime() === NOW.getTime()))
+        .toHaveLength(1);
+      expect((await queueRow(page.id, mediaRef)).lastVisitedAt).not.toBeNull();
+    });
+  }
+
+  it("keeps a backfill that FINISHED when the steady window then fails", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1020);
+    // Fresh, ten days old: its creation floor closes the walk after two windows.
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 10 * DAY_MS),
+    }], { queueCursor: {} });
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: mediaRef,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    let dayOne = true;
+    const adapter = adapterStub({
+      // The fresh tier's steady window is the hourly one.
+      fail: (params) =>
+        dayOne && params.periodMs === 3_600_000 ? providerRefusal("error getting media offer") : null,
+    });
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+    expect(adapter.calls.map((call) => call.periodMs)).toEqual([86_400_000, 86_400_000, 3_600_000]);
+
+    const afterFailure = await queueRow(page.id, mediaRef);
+    expect(afterFailure.backfillCursor).toMatchObject({ done: true, floorBasis: "created_at" });
+    expect(afterFailure.lastVisitedAt).toBeNull();
+    expect(afterFailure.consecutiveFailures).toBe(1);
+    // A purchase signal survives a failed fetch.
+    expect(afterFailure.dirtyReason).toBe("purchase_notification");
+
+    dayOne = false;
+    const before = adapter.calls.length;
+    await fanslyMediaStatsChunk(
+      appStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(), NEXT_DAY),
+    );
+    // The history is done, so the next visit is the steady window alone.
+    expect(adapter.calls.slice(before).map((call) => call.periodMs)).toEqual([3_600_000]);
+    const visited = await queueRow(page.id, mediaRef);
+    expect(visited.lastVisitedAt).not.toBeNull();
+    expect(visited.dirtyReason).toBeNull();
+    expect(visited.consecutiveFailures).toBe(0);
+  });
+
+  it("writes nothing when the FIRST window fails", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1030);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 150 * DAY_MS),
+    }], { queueCursor: {} });
+    const adapter = adapterStub({ fail: () => providerRefusal("error getting media offer") });
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+
+    expect(adapter.calls).toHaveLength(1);
+    const row = await queueRow(page.id, mediaRef);
+    // Nothing was accepted, so there is nothing to keep: the cursor is not
+    // re-anchored at this visit's `now`.
+    expect(row.backfillCursor).toEqual({});
+    expect(row.consecutiveFailures).toBe(1);
+  });
+});
+
+describe("media_stats lane — a multi-window refresh is reserved whole", () => {
+  /** How many requests repeated an earlier (item, after, before) exactly. */
+  function repeatedWindows(calls: AdapterCall[]): number {
+    const keys = calls.map((call) =>
+      `${call.mediaOfferId}:${call.afterDate.getTime()}:${call.beforeDate.getTime()}`
+    );
+    return keys.length - new Set(keys).size;
+  }
+
+  it("never STARTS a split long tail it cannot finish in the chunk", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "split_31", longTailWindowAnnounced: true });
+    await seedMedia(page.id, [0, 1, 2].map((index) => ({
+      ref: ref(700 + index),
+      createdAtPlatform: new Date(NOW.getTime() - (400 + index) * DAY_MS),
+    })), { queueCursor: BACKFILL_DONE });
+
+    const adapter = adapterStub();
+    await drain(page.id, adapter, telemetryStub());
+
+    // Three items, three windows each, and not one window read twice. With a
+    // five-request chunk the second item used to start with two calls left,
+    // be discarded unstamped, and be read again whole: 13 calls for 9.
+    expect(adapter.calls).toHaveLength(9);
+    expect(repeatedWindows(adapter.calls)).toBe(0);
+    for (const index of [0, 1, 2]) {
+      expect((await queueRow(page.id, ref(700 + index))).lastVisitedAt).not.toBeNull();
+    }
+  });
+
+  it("reads each item ONCE across the split discovery, too", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedMedia(page.id, [0, 1].map((index) => ({
+      ref: ref(710 + index),
+      createdAtPlatform: new Date(NOW.getTime() - (400 + index) * DAY_MS),
+    })), { queueCursor: BACKFILL_DONE });
+    // The route answers anything wider than 31 days with its default trailing
+    // 31: the discovery flips the page to split on the first item.
+    const adapter = adapterStub({
+      body: (params) => statsBody({
+        mediaOfferRef: params.mediaOfferId,
+        afterMs: params.afterDate.getTime(),
+        beforeMs: params.beforeDate.getTime(),
+        periodMs: params.periodMs,
+        ...(spanDays(params) > 31
+          ? { servedAfterMs: params.beforeDate.getTime() - 31 * DAY_MS }
+          : {}),
+      }),
+    });
+    await drain(page.id, adapter, telemetryStub());
+
+    expect(adapter.calls.map(spanDays)).toEqual([90, 31, 31, 31, 31, 31, 31]);
+    expect(repeatedWindows(adapter.calls)).toBe(0);
+  });
+
+  it("defers a split unit the DAY cannot finish, before any call", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // Two attempts left today: tomorrow reads the unit whole, today spends
+    // nothing on a half that would be read again.
+    await seedLaneState(page.id, {
+      longTailWindowMode: "split_31",
+      longTailWindowAnnounced: true,
+      callsToday: 3,
+    });
+    await seedMedia(page.id, [{
+      ref: ref(715),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+
+    const adapter = adapterStub();
+    const result = await fanslyMediaStatsChunk(
+      appStub(adapter, { fanslyMediaStatsDailyCallBudget: 5 }),
+      input(page.id, telemetryStub()),
+    );
+
+    expect(adapter.calls).toHaveLength(0);
+    expect(result.satisfied).toBe(false);
+    expect(result.stats).toMatchObject({ deferred: "daily_call_budget" });
+    expect(result.continuationRetryAt!.getTime())
+      .toBeGreaterThanOrEqual(Date.parse("2026-08-23T00:00:00.000Z"));
+    expect((await queueRow(page.id, ref(715))).lastVisitedAt).toBeNull();
+  });
+
+  it("still takes a partial split refresh on a visit that journaled history", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "split_31", longTailWindowAnnounced: true });
+    // A walk already under way: four backfill windows, then one slot left.
+    // The visit is recorded either way, so the one fresh window it can afford
+    // is kept rather than skipped — the reservation is only for a refresh that
+    // would otherwise be thrown away.
+    await seedMedia(page.id, [{
+      ref: ref(720),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], {
+      queueCursor: {
+        ...BACKFILL_DONE,
+        nextBeforeMs: NOW.getTime() - 100 * DAY_MS,
+        emptyStreak: 0,
+        done: false,
+        stopReason: null,
+      },
+    });
+
+    const adapter = adapterStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+
+    expect(adapter.calls).toHaveLength(5);
+    const last = adapter.calls.at(-1)!;
+    expect(last.beforeDate.getTime()).toBe(NOW.getTime());
+    expect(spanDays(last)).toBe(31);
+    expect((await queueRow(page.id, ref(720))).lastVisitedAt).not.toBeNull();
+  });
+});
+
+describe("media_stats lane — the 90-day window refused with an HTTP error", () => {
+  /** Fansly since 2026-09-05: any per-media window over 31 days is refused with
+   *  a 500, while the same item answers 31-day windows. */
+  const refusesNinety = (params: AdapterCall) =>
+    spanDays(params) > 31 ? providerRefusal("error getting graph") : null;
+  const splitAnomalies = (telemetry: ReturnType<typeof telemetryStub>) =>
+    telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_long_tail_window_split"
+    );
+
+  it("moves a page that had PROVEN 90 days to three 31-day windows", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+    const purchased = ref(1110);
+    const other = ref(1111);
+    await seedMedia(page.id, [
+      { ref: purchased, createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS) },
+      { ref: other, createdAtPlatform: new Date(NOW.getTime() - 500 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: purchased,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+
+    const adapter = adapterStub({ fail: refusesNinety });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // ONE refused 90-day window, then the split plan for the same item — its
+    // first 31-day window is the evidence.
+    expect(adapter.calls.filter((call) => call.mediaOfferId === purchased).map(spanDays))
+      .toEqual([90, 31, 31, 31]);
+    // Every later long-tail item goes straight to the split plan.
+    const otherSpans = adapter.calls.filter((call) => call.mediaOfferId === other).map(spanDays);
+    expect(otherSpans.length).toBeGreaterThan(0);
+    expect(otherSpans.every((span) => span === 31)).toBe(true);
+
+    // A NEW fact about the route, announced although the mode was announced
+    // before.
+    const splits = splitAnomalies(telemetry);
+    expect(splits).toHaveLength(1);
+    expect(splits[0]?.details).toMatchObject({
+      trigger: "http_error",
+      httpStatus: 500,
+      previousMode: "ninety",
+      mediaOfferRef: purchased,
+    });
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+
+    // The item was READ: stamped, its failure cleared, its purchase answered.
+    const row = await queueRow(page.id, purchased);
+    expect(row.lastVisitedAt).not.toBeNull();
+    expect(row.consecutiveFailures).toBe(0);
+    expect(row.dirtyReason).toBeNull();
+  });
+
+  it("never takes a probe's 31-day answer as proof of 90 days", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // No lane state: the page is `unproven`.
+    await seedMedia(page.id, [{
+      ref: ref(1120),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    const adapter = adapterStub({ fail: refusesNinety });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    expect(adapter.calls.map(spanDays)).toEqual([90, 31, 31, 31]);
+    // The probe's first window is an honoured, covered 31-day window. Read by
+    // the 90-day discovery it would "prove" 90 days on a page that refuses them.
+    expect(telemetry.anomalies.some((anomaly) =>
+      anomaly.code === "fansly_media_stats_long_tail_window_proven"
+    )).toBe(false);
+    expect(splitAnomalies(telemetry)[0]?.details).toMatchObject({ previousMode: "unproven" });
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+  });
+
+  it("changes nothing when the item fails on 31 days too, and probes once a day", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+    const first = ref(1130);
+    const second = ref(1131);
+    await seedMedia(page.id, [
+      { ref: first, createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS) },
+      { ref: second, createdAtPlatform: new Date(NOW.getTime() - 500 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // Both items are gone: every window fails, whatever its span.
+    const adapter = adapterStub({ fail: () => providerRefusal("error getting media offer") });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // The first item's probe fails too, and spends the page's probe for the
+    // day: the second item gets no probe of its own.
+    expect(adapter.calls.map((call) => [call.mediaOfferId, spanDays(call)])).toEqual([
+      [first, 90],
+      [first, 31],
+      [second, 90],
+    ]);
+    expect(await cursor(page.id)).toMatchObject({
+      longTailWindowMode: "ninety",
+      longTailProbeFailedDay: "2026-08-22",
+    });
+    expect(splitAnomalies(telemetry)).toHaveLength(0);
+    // A failed probe is a second failed look, and it backs off with the item.
+    expect((await queueRow(page.id, first)).consecutiveFailures).toBe(2);
+    expect((await queueRow(page.id, second)).consecutiveFailures).toBe(1);
+    expect((await queueRow(page.id, first)).nextDueAt?.toISOString()).toBe(NEXT_DAY.toISOString());
+  });
+
+  for (
+    const [label, failure, pageLevel] of [
+      ["a transport error", () => new Error("Socks5 proxy rejected connection"), true],
+      ["a 429", () => new FanslyApiError("Fansly request failed (429)", 429, 429), true],
+      ["a gateway 503", () => new FanslyApiError("Fansly request failed (503)", 503), false],
+    ] as const
+  ) {
+    it(`does not probe after ${label} — that is the wire, not the route`, async (ctx) => {
+      if (!testDb) return ctx.skip();
+      const page = await seedPage();
+      await seedLaneState(page.id, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+      await seedMedia(page.id, [{
+        ref: ref(1140),
+        createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+      }], { queueCursor: BACKFILL_DONE });
+      const adapter = adapterStub({ fail: (params) => spanDays(params) > 31 ? failure() : null });
+      const telemetry = telemetryStub();
+      // The wire and the provider's pace are the page's: they leave the chunk
+      // for the executor before any fallback could read them.
+      const chunk = fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+      if (pageLevel) {
+        await expect(chunk).rejects.toThrow();
+      } else {
+        await chunk;
+      }
+
+      expect(adapter.calls.map(spanDays)).toEqual([90]);
+      expect(await cursor(page.id)).toMatchObject({
+        longTailWindowMode: "ninety",
+        longTailProbeFailedDay: null,
+      });
+      expect(splitAnomalies(telemetry)).toHaveLength(0);
+    });
+  }
+
+  it("does not probe without chunk capacity", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+    await seedMedia(page.id, [{
+      ref: ref(1150),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    const adapter = adapterStub({ fail: refusesNinety });
+    await fanslyMediaStatsChunk(
+      appStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(1)),
+    );
+
+    expect(adapter.calls.map(spanDays)).toEqual([90]);
+    // Nothing was learned and no probe was spent.
+    expect(await cursor(page.id)).toMatchObject({
+      longTailWindowMode: "ninety",
+      longTailProbeFailedDay: null,
+    });
+  });
+
+  it("takes a 31-day window its own backfill answered this visit as the evidence", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedLaneState(page.id, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+    const mediaRef = ref(1160);
+    // Never visited, history open: the backfill's first window is
+    // `[now − 31 d, now]` daily — exactly the split plan's first window.
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: {} });
+    const adapter = adapterStub({ fail: refusesNinety });
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    // Four backfill windows and the refused 90-day window spend the chunk's
+    // five requests. None is left for a probe, and none is needed.
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 31, 90]);
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+    expect(splitAnomalies(telemetry)[0]?.details).toMatchObject({ trigger: "http_error" });
+    // The backfill visit counts as a visit, as it always did.
+    const row = await queueRow(page.id, mediaRef);
+    expect(row.lastVisitedAt).not.toBeNull();
+    expect(row.consecutiveFailures).toBe(0);
+  });
+
+  it("still takes that evidence after the day's probe failed", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // An earlier item spent the page's probe today; the limit is on new
+    // requests, not on a window this visit already answered.
+    await seedLaneState(page.id, {
+      longTailWindowMode: "ninety",
+      longTailWindowAnnounced: true,
+      longTailProbeFailedDay: "2026-08-22",
+    });
+    const mediaRef = ref(1161);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: {} });
+    const adapter = adapterStub({ fail: refusesNinety });
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 31, 90]);
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+    expect(splitAnomalies(telemetry)[0]?.details).toMatchObject({ trigger: "http_error" });
+    const row = await queueRow(page.id, mediaRef);
+    expect(row.lastVisitedAt).not.toBeNull();
+    expect(row.consecutiveFailures).toBe(0);
   });
 });
 
@@ -1204,6 +2078,23 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
     expect(estimate.quarterlyOrWorse).toBe(true);
   });
 
+  it("counts a SPLIT long tail at three calls a visit", () => {
+    // M = 2 000 again, on a page whose route refuses 90 days: each long-tail
+    // visit is three 31-day windows, so the long tail wants three times the
+    // calls and comes round three times slower on the same leftover.
+    const estimate = estimateMediaStatsCycle({
+      fresh: 150,
+      mid: 750,
+      longTail: 1_100,
+      dailyCap: 300,
+      longTailCycleDays: 30,
+      longTailRequestsPerVisit: 3,
+    });
+    expect(estimate.requestsPerDayWanted).toBe(Math.round(150 + 750 / 7 + (3 * 1_100) / 30));
+    expect(estimate.estimatedCycleDays).toBe(Math.round((3 * 1_100) / (300 - 150 - 750 / 7)));
+    expect(estimate.saturating).toBe(true);
+  });
+
   it("reads the class census from the item's AGE, not from refresh_class", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
@@ -1245,6 +2136,55 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
 });
 
 describe("media_stats — the pure helpers", () => {
+  it("parses a pre-probe cursor as a walk that has spent no probe", () => {
+    expect(parseMediaBackfillCursor({ ...BACKFILL_DONE }, NOW)).toMatchObject({
+      done: true,
+      probeSpent: false,
+      probeResumeBeforeMs: null,
+      probeHitBeforeMs: null,
+    });
+    const armed = parseMediaBackfillCursor({
+      ...BACKFILL_DONE,
+      probeSpent: true,
+      probeResumeBeforeMs: 1_700_000_000_000,
+      probeHitBeforeMs: 1_600_000_000_000,
+    }, NOW);
+    expect(armed).toMatchObject({
+      probeSpent: true,
+      probeResumeBeforeMs: 1_700_000_000_000,
+      probeHitBeforeMs: 1_600_000_000_000,
+    });
+  });
+
+  it("aims the one probe at the FIRST month, and only where there is a gap to jump", () => {
+    const created = new Date(NOW.getTime() - 400 * DAY_MS);
+    const guard = { spanDays: 31, narrowed: false, lastAfterMs: null, lastBeforeMs: null, lastObservationId: null };
+    // Stopped 151 days back: the bookmark is the window below, and the probe
+    // opens a day before creation.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: created, firstSeenAt: null },
+    )).toEqual({
+      probeBeforeMs: created.getTime() + 30 * DAY_MS,
+      resumeBeforeMs: NOW.getTime() - 182 * DAY_MS,
+    });
+    // First sight is the basis when the platform served no creation date.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: null, firstSeenAt: created },
+    )?.probeBeforeMs).toBe(created.getTime() + 30 * DAY_MS);
+    // No basis, nothing to aim at.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: NOW.getTime() - 151 * DAY_MS, guard },
+      { createdAtPlatform: null, firstSeenAt: null },
+    )).toBeNull();
+    // No room: the next ordinary window already reaches the creation basis.
+    expect(mediaBackfillFirstMonthProbe(
+      { nextBeforeMs: created.getTime() + 62 * DAY_MS, guard },
+      { createdAtPlatform: created, firstSeenAt: null },
+    )).toBeNull();
+  });
+
   it("reads the subject from the key the route actually serves", () => {
     expect(servedMediaOfferRef({ dataset: { datasetMediaOfferId: "abc" } })).toBe("abc");
     expect(servedMediaOfferRef({ dataset: {} })).toBeNull();

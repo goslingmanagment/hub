@@ -114,6 +114,53 @@ async function seedObservation(pageId: number, key: string, payload: unknown, re
   });
 }
 
+/** Received two days after the census fixture's newest purchase (2026-08-19),
+ *  so its purchases stay inside the purchase-signal horizon whatever the wall
+ *  clock says: that horizon is measured from RECEIPT. */
+const CENSUS_RECEIVED_AT = new Date("2026-08-21T12:00:00.000Z");
+
+/** One page carrying ONE 2007 purchase, built from the census template. */
+function purchasePage(options: { id: string; correlationId: string; createdAt: Date }) {
+  const census = fixture("notifications-census.json");
+  const template = (census.notifications as Record<string, unknown>[])
+    .find((row) => row.type === 2007)!;
+  const seconds = Math.floor(options.createdAt.getTime() / 1000);
+  return {
+    ...census,
+    notifications: [{
+      ...template,
+      id: options.id,
+      idString: options.id,
+      correlationId: options.correlationId,
+      createdAt: seconds,
+      acknowledgedAt: seconds + 60,
+    }],
+  };
+}
+
+async function mediaStatsRow(pageId: number, subjectRef: string) {
+  const [row] = await rows<{
+    dirty_reason: string | null;
+    refresh_class: string | null;
+    next_due_at: Date | null;
+  }>(
+    `select dirty_reason, refresh_class, next_due_at from subject_refresh_state
+      where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+    [pageId, subjectRef],
+  );
+  return row ?? null;
+}
+
+/** A media_stats row the lane has ANSWERED: visited, clean, due in a week. */
+async function seedVisitedRow(pageId: number, subjectRef: string, visitedAt: Date) {
+  await testDb!.pool.query(
+    `insert into subject_refresh_state (
+       page_id, plane, subject_ref, refresh_class, next_due_at, last_visited_at
+     ) values ($1, 'media_stats', $2, 'mid', $3::timestamptz + interval '7 days', $3)`,
+    [pageId, subjectRef, visitedAt],
+  );
+}
+
 async function project(pageId: number) {
   await runCanonicalization(appStub(), { kinds: ["notifications"] });
   return runFanslyEngagementProjection(appStub(), { accountId: pageId });
@@ -226,7 +273,12 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       return;
     }
     const page = await seedPage();
-    await seedObservation(page.id, "census", fixture("notifications-census.json"));
+    await seedObservation(
+      page.id,
+      "census",
+      fixture("notifications-census.json"),
+      CENSUS_RECEIVED_AT,
+    );
     const result = await project(page.id);
 
     // The verbatim row is there…
@@ -265,6 +317,113 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     // AND THE POINT: the code the shipped spec called "PostLikeUndo" wrote
     // nothing to the like table. Not one row.
     expect(await count("post_likes", page.id)).toBe(0);
+  });
+
+  it("marks nothing for a purchase older than the horizon at RECEIPT", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // The deep backfill delivers year-old purchases every week. No refresh the
+    // mark triggers reaches back that far, so it would buy a call for nothing.
+    await seedObservation(page.id, "stale", purchasePage({
+      id: "000989999999990001",
+      correlationId: "000920000000009001",
+      createdAt: new Date("2026-05-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    await seedObservation(page.id, "recent", purchasePage({
+      id: "000989999999990002",
+      correlationId: "000920000000009002",
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    const result = await project(page.id);
+
+    // The notification row is stored either way: only the SIGNAL is dropped.
+    expect(await count("platform_notifications", page.id)).toBe(2);
+    expect(result.purchaseSignals).toBe(1);
+    expect(await mediaStatsRow(page.id, "000920000000009001")).toBeNull();
+    expect(await mediaStatsRow(page.id, "000920000000009002")).toMatchObject({
+      dirty_reason: "purchase_notification",
+      refresh_class: "dirty",
+    });
+  });
+
+  it("does not re-mark an item VISITED after the purchase, and does re-mark one visited before", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const answered = "000920000000009011";
+    const stale = "000920000000009012";
+    await seedVisitedRow(page.id, answered, new Date("2026-08-20T06:00:00.000Z"));
+    await seedVisitedRow(page.id, stale, new Date("2026-08-18T06:00:00.000Z"));
+    const purchasedAt = new Date("2026-08-19T06:00:00.000Z");
+    await seedObservation(page.id, "answered", purchasePage({
+      id: "000989999999990011",
+      correlationId: answered,
+      createdAt: purchasedAt,
+    }), CENSUS_RECEIVED_AT);
+    await seedObservation(page.id, "stale", purchasePage({
+      id: "000989999999990012",
+      correlationId: stale,
+      createdAt: purchasedAt,
+    }), CENSUS_RECEIVED_AT);
+    await project(page.id);
+
+    // Its numbers already include the purchase: a re-read would spend a call on
+    // numbers we have.
+    expect(await mediaStatsRow(page.id, answered)).toMatchObject({
+      dirty_reason: null,
+      refresh_class: "mid",
+    });
+    const remarked = await mediaStatsRow(page.id, stale);
+    expect(remarked).toMatchObject({ dirty_reason: "purchase_notification", refresh_class: "dirty" });
+    expect(remarked?.next_due_at?.toISOString()).toBe(purchasedAt.toISOString());
+
+    // A REBUILD replays every purchase. It must not re-dirty what the lane has
+    // answered since — a repair that should cost zero platform calls.
+    await testDb.pool.query(
+      `update subject_refresh_state
+          set last_visited_at = $3, dirty_reason = null, refresh_class = 'mid'
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, stale, new Date("2026-08-21T06:00:00.000Z")],
+    );
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    for (const subjectRef of [answered, stale]) {
+      expect(await mediaStatsRow(page.id, subjectRef)).toMatchObject({ dirty_reason: null });
+    }
+  });
+
+  it("queues no media_stats row for a purchase against a known BUNDLE", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const bundleRef = "000920000000009021";
+    await testDb.pool.query(
+      `insert into creator_media_bundles (
+         page_id, platform, bundle_ref, member_refs, first_observed_at, last_observed_at,
+         content_hash, source_event_id, source_observation_id, source_account_seq
+       ) values ($1, 'fansly', $2, $3::text[], $4, $4, $5, 1, 1, 1)`,
+      [page.id, bundleRef, ["000920000000009022"], CENSUS_RECEIVED_AT, "e".repeat(64)],
+    );
+    await seedObservation(page.id, "bundle", purchasePage({
+      id: "000989999999990021",
+      correlationId: bundleRef,
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    await project(page.id);
+
+    // The route reads media offers: a bundle ref is never a subject it can
+    // answer. Its members are not marked either — that is not this signal.
+    expect(await count("platform_notifications", page.id)).toBe(1);
+    expect(await mediaStatsRow(page.id, bundleRef)).toBeNull();
+    expect(await mediaStatsRow(page.id, "000920000000009022")).toBeNull();
   });
 
   it("dedupes by id across OVERLAPPING pages", async (context) => {

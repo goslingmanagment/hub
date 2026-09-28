@@ -68,6 +68,11 @@
 //     with a name: `floorBasis: 'created_at'`. It is also the repair for the
 //     eight cursors already sitting at 2006 — they hit it on their next visit.
 //
+// Empty windows alone are NOT a floor: the walk runs backwards from today, so
+// two of them prove only that the item was idle lately. They buy ONE probe of
+// the item's first month; only an empty probe ends the walk on emptiness
+// (`floorBasis: 'empty_window_probe'`).
+//
 // ── 2c. EVERY VISIT COUNTS AS A VISIT ──────────────────────────────────────
 //
 // `last_visited_at` is what retires an item from the never-visited band, and a
@@ -128,6 +133,7 @@ import {
   listMediaStatsRefreshChunk,
   markMediaStatsTopMediaDirty,
   mediaStatsIntervalDays,
+  recordMediaStatsBackfillCursor,
   recordMediaStatsBackfillProgress,
   recordMediaStatsFailure,
   recordMediaStatsVisit,
@@ -155,6 +161,7 @@ import {
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
   fanslyUtcDayKey,
+  isSubjectScopedFanslyFailure,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
@@ -207,9 +214,14 @@ const LONG_TAIL_TRAILING_DAYS = 90;
  */
 const BACKFILL_WINDOW_DAYS = 31;
 const BACKFILL_OVERLAP_DAYS = 1;
-/** Two consecutive all-empty windows ⇒ the floor. Unlike the ACCOUNT lane there
- *  is no year-further-back probe: an item cannot have traffic before it was
- *  published, so an empty window here is not the [E10] long-idle-account case. */
+/**
+ * Two consecutive all-empty windows, then ONE probe of the item's FIRST month.
+ *
+ * The walk runs BACKWARDS from today, so two empty windows prove only that the
+ * item was idle recently — [E10], exactly as on the account lane — not that it
+ * had no traffic before. The first month after publication is where most of an
+ * item's views fall, so that is where the one probe looks. See `runBackfill`.
+ */
 const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 /**
  * How far past an item's own creation the walk may still ask.
@@ -278,8 +290,14 @@ export interface FanslyMediaStatsCursorState {
   /** The UTC day the top-50 dirty marks were last refreshed. Zero calls. */
   topMarkedDay: string | null;
   longTailWindowMode: LongTailWindowMode;
-  /** The mode discovery is announced ONCE, ever. */
+  /** The narrow-answer discovery is announced ONCE, ever. A downgrade after an
+   *  HTTP refusal of the 90-day window is announced when it happens. */
   longTailWindowAnnounced: boolean;
+  /** The UTC day a 31-day probe after a refused 90-day window last FAILED on
+   *  this page. One failed probe per page per day: an item that is simply gone
+   *  fails on 31 days too, and must not buy a second failing request on every
+   *  admission. */
+  longTailProbeFailedDay: string | null;
 }
 
 /** The per-MEDIA first-sight backfill, stored in
@@ -296,9 +314,20 @@ interface MediaBackfillCursor {
   /** Why it stopped, when it stopped for a reason other than the floor. */
   stopReason: string | null;
   /** WHAT ended the walk: `created_at` (the item did not exist before this),
-   *  `empty_window` (two all-empty windows), or null while it is still open.
-   *  A floor with a name is a floor an operator can argue with. */
+   *  `empty_window_probe` (two all-empty windows, then an all-empty first
+   *  month), `empty_window` (two all-empty windows with no room or no basis for
+   *  a probe), or null while it is still open. A floor with a name is a floor an
+   *  operator can argue with. */
   floorBasis: string | null;
+  /** The one first-month probe has been spent. */
+  probeSpent: boolean;
+  /** Where the ordinary walk resumes if the probe finds traffic: the window
+   *  below the second empty one. Non-null only while the probe is pending. */
+  probeResumeBeforeMs: number | null;
+  /** The upper bound of a probe that FOUND traffic. The resumed walk fills the
+   *  gap above it, no empty streak may end it there, and reaching it ends the
+   *  walk at `created_at` — the probe window already covers the rest. */
+  probeHitBeforeMs: number | null;
   guard: BackfillWindowGuard;
 }
 
@@ -314,6 +343,10 @@ function asInt(value: unknown, fallback: number): number {
 
 function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asNullableSafeInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function asLongTailMode(value: unknown): LongTailWindowMode {
@@ -341,6 +374,7 @@ export function parseFanslyMediaStatsCursorState(
     topMarkedDay: asNullableString(state.topMarkedDay),
     longTailWindowMode: asLongTailMode(state.longTailWindowMode),
     longTailWindowAnnounced: state.longTailWindowAnnounced === true,
+    longTailProbeFailedDay: asNullableString(state.longTailProbeFailedDay),
   };
 }
 
@@ -355,6 +389,7 @@ export function emptyFanslyMediaStatsCursorState(now: Date): FanslyMediaStatsCur
     topMarkedDay: null,
     longTailWindowMode: "unproven",
     longTailWindowAnnounced: false,
+    longTailProbeFailedDay: null,
   };
 }
 
@@ -386,6 +421,9 @@ export function parseMediaBackfillCursor(
     floorAt: asNullableString(record?.floorAt),
     stopReason: asNullableString(record?.stopReason),
     floorBasis: asNullableString(record?.floorBasis),
+    probeSpent: record?.probeSpent === true,
+    probeResumeBeforeMs: asNullableSafeInt(record?.probeResumeBeforeMs),
+    probeHitBeforeMs: asNullableSafeInt(record?.probeHitBeforeMs),
     guard: parseWindowGuard(record?.guard, BACKFILL_WINDOW_DAYS),
   };
 }
@@ -405,6 +443,40 @@ export function mediaBackfillCreationFloorMs(
 ): number | null {
   const basis = candidate.createdAtPlatform ?? candidate.firstSeenAt;
   return basis === null ? null : basis.getTime() - BACKFILL_CREATION_SLACK_DAYS * DAY_MS;
+}
+
+/**
+ * THE ONE PROBE a walk may spend after two empty windows, or null when it may
+ * not — and then the two empty windows end the walk, as they always did.
+ *
+ * The probe asks for the item's FIRST month: a window that opens a day before
+ * the creation basis (the same `coalesce` as the creation floor) and spans the
+ * walk's current window. The bookmark is the window BELOW the second empty one
+ * — that one is journaled — so a probe that finds traffic resumes exactly where
+ * the ordinary walk would have gone next.
+ *
+ * No basis: nothing to aim at. No ROOM: the ordinary walk's next window already
+ * reaches the creation basis, so there is no gap for a probe to jump — the
+ * remaining span is less than one window above it.
+ *
+ * Still a heuristic, and named as one: vault media can be created long before
+ * it is posted, so an empty first month is not proof the item never had
+ * traffic. It is a far better one than "the last two months were quiet".
+ */
+export function mediaBackfillFirstMonthProbe(
+  cursor: Pick<MediaBackfillCursor, "nextBeforeMs" | "guard">,
+  candidate: { createdAtPlatform: Date | null; firstSeenAt: Date | null },
+): { probeBeforeMs: number; resumeBeforeMs: number } | null {
+  const basis = candidate.createdAtPlatform ?? candidate.firstSeenAt;
+  if (basis === null) {
+    return null;
+  }
+  const spanMs = cursor.guard.spanDays * DAY_MS;
+  const resumeBeforeMs = cursor.nextBeforeMs - spanMs;
+  if (resumeBeforeMs <= basis.getTime() + spanMs) {
+    return null;
+  }
+  return { probeBeforeMs: basis.getTime() - DAY_MS + spanMs, resumeBeforeMs };
 }
 
 /**
@@ -482,6 +554,11 @@ export interface MediaStatsCycleEstimate {
  * to 1, and the number returned means "at LEAST this many days" — the long tail
  * is not being funded at all, which is what `saturating` and the due backlog
  * report.
+ *
+ * A long-tail visit is one call only while the route honours 90 days. On a page
+ * in `split_31` it is THREE, so the long-tail term — wanted and funded alike —
+ * is scaled by `longTailRequestsPerVisit`; leaving it at one would report a
+ * third of the real cost.
  */
 export function estimateMediaStatsCycle(input: {
   fresh: number;
@@ -489,14 +566,18 @@ export function estimateMediaStatsCycle(input: {
   longTail: number;
   dailyCap: number;
   longTailCycleDays: number;
+  /** Calls one long-tail visit costs: 1, or `LONG_TAIL_SPLIT_WINDOWS` in
+   *  `split_31`. Default 1. */
+  longTailRequestsPerVisit?: number;
 }): MediaStatsCycleEstimate {
   const cycleDays = Math.max(1, input.longTailCycleDays);
   const weekly = input.mid / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL;
-  const wanted = input.fresh + weekly + input.longTail / cycleDays;
+  const longTailCalls = input.longTail * Math.max(1, input.longTailRequestsPerVisit ?? 1);
+  const wanted = input.fresh + weekly + longTailCalls / cycleDays;
   const leftover = input.dailyCap - input.fresh - weekly;
   const estimatedCycleDays = input.longTail === 0
     ? cycleDays
-    : Math.round(input.longTail / Math.max(1, leftover));
+    : Math.round(longTailCalls / Math.max(1, leftover));
   return {
     requestsPerDayWanted: Math.round(wanted),
     estimatedCycleDays,
@@ -517,7 +598,7 @@ const MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL = 7;
  * `dataset.datasetMediaOfferId` is the key the route actually serves (HAR
  * 2026-08-19, 6/6). The other two spellings are accepted because a payload that
  * cannot be attributed is a payload whose buckets are unusable, and tolerating a
- * rename costs nothing.
+ * rename costs nothing. Every window checks it against the item it asked for.
  */
 export function servedMediaOfferRef(payload: unknown): string | null {
   const record = asRecord(payload);
@@ -578,8 +659,38 @@ export function servedWindowCoversRequest(
   return served.afterMs - requested.afterMs <= DAY_MS;
 }
 
-function isAuthFailure(error: unknown): boolean {
-  return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
+/** What a failed window was failed WITH: the provider's HTTP status when it
+ *  answered at all, and whether it asked us to come back later. */
+interface WindowFailure {
+  httpStatus: number | null;
+  retryAfter: boolean;
+}
+
+/** Gateway and availability statuses: the service in front of the route was
+ *  down, which says nothing about the request. */
+const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
+/**
+ * Did the provider REFUSE the request, rather than the wire fail it?
+ *
+ * An HTTP error status the route itself answered with, after the adapter's own
+ * retries — the 500 `error getting graph` is the production case. Not a 429 and
+ * not a `Retry-After` (pacing, which says nothing about the window), not a
+ * gateway status, not a transport or proxy failure (no status at all), and not
+ * a journaled body we could not read. Only a refusal can be evidence about what
+ * the ROUTE honours.
+ */
+function isProviderRefusal(failure: WindowFailure): boolean {
+  return failure.httpStatus !== null
+    && failure.httpStatus >= 400
+    && failure.httpStatus !== 429
+    && !GATEWAY_STATUSES.has(failure.httpStatus)
+    && !failure.retryAfter;
+}
+
+/** The per-visit repeat guard's key: the identical `(period, after, before)`. */
+function windowKey(window: { periodMs: number; afterMs: number; beforeMs: number }): string {
+  return `${window.periodMs}:${window.afterMs}:${window.beforeMs}`;
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -672,6 +783,12 @@ export async function fanslyMediaStatsChunk(
   const hasDayCapacity = attemptBudget.hasCapacity;
   const hasChunkCapacity = () =>
     input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity();
+  const today = utcDayKey(now);
+
+  /** The most recent "failed" window's failure. Written on both failure paths
+   *  of `requestWindow` and read straight after one, by the one caller that must
+   *  tell a refusal from a flaky wire: the 90-day fallback. */
+  let lastWindowFailure: WindowFailure | null = null;
 
   /**
    * ONE window, journaled FIRST and judged afterwards.
@@ -691,7 +808,7 @@ export async function fanslyMediaStatsChunk(
     params: { periodMs: number; afterMs: number; beforeMs: number; mode: string; tier: string },
     issued: Set<string>,
   ): Promise<WindowOutcome | "repeat" | "failed"> => {
-    const key = `${params.periodMs}:${params.afterMs}:${params.beforeMs}`;
+    const key = windowKey(params);
     if (issued.has(key)) {
       await input.telemetry.addAnomaly({
         code: "fansly_media_stats_window_repeat",
@@ -721,20 +838,25 @@ export async function fanslyMediaStatsChunk(
       });
       raw = response.raw;
     } catch (error) {
-      // A dead session is the executor's business, not this loop's: re-raise it
-      // untouched so the auth pause fires. Everything else is scoped to ONE
-      // media item — a single unreachable item must not wedge a queue of
-      // thousands.
-      if (isAuthFailure(error)) {
+      // Only a failure ABOUT THIS ITEM is scoped to it — a single unreachable
+      // item must not wedge a queue of thousands. A dead session, the
+      // provider's pace, a dead proxy or a lost lease is about the PAGE:
+      // re-raised untouched so the executor's auth pause, `Retry-After` and
+      // backoff ladder fire, and the item is not charged for it.
+      if (!isSubjectScopedFanslyFailure(error)) {
         throw error;
       }
+      lastWindowFailure = {
+        httpStatus: error instanceof FanslyApiError ? error.status ?? null : null,
+        retryAfter: error instanceof FanslyApiError && error.retryAfterAt !== null,
+      };
       await input.telemetry.addAnomaly({
         code: "fansly_media_stats_item_failed",
         severity: "warn",
         message: "Fansly per-media statistics failed for one item; the queue continues",
         details: {
           mediaOfferRef: subjectRef,
-          status: error instanceof FanslyApiError ? error.status ?? null : null,
+          status: lastWindowFailure.httpStatus,
         },
       });
       await recordMediaStatsFailure(app.db, {
@@ -755,11 +877,35 @@ export async function fanslyMediaStatsChunk(
       }, raw);
     if (classifyStatsWindow(raw) === "invalid") {
       invalidResponses += 1;
+      lastWindowFailure = { httpStatus: null, retryAfter: false };
       await input.telemetry.addAnomaly({
         code: "fansly_media_stats_invalid_response",
         severity: "warn",
         message: "Fansly per-media statistics response was journaled but did not match the parser contract",
         details: { mediaOfferRef: subjectRef },
+      });
+      await recordMediaStatsFailure(app.db, {
+        pageId,
+        subjectRef,
+        nextDueAt: new Date(now.getTime() + DAY_MS),
+      });
+      return "failed";
+    }
+    // A BODY ABOUT ANOTHER ITEM. The canonicalizer attributes buckets by the
+    // SERVED id, so no data is misfiled — but this item's walk and coverage
+    // must not advance on it. A body that names no subject is tolerated, as
+    // the canonicalizer tolerates it: a later version can attribute it from
+    // request_params.
+    const servedRef = servedMediaOfferRef(raw);
+    if (servedRef !== null && servedRef !== subjectRef) {
+      invalidResponses += 1;
+      lastWindowFailure = { httpStatus: null, retryAfter: false };
+      await input.telemetry.addAnomaly({
+        code: "fansly_media_stats_subject_mismatch",
+        severity: "warn",
+        message:
+          "Fansly per-media statistics response was journaled but describes a different media item",
+        details: { mediaOfferRef: subjectRef, servedMediaOfferRef: servedRef },
       });
       await recordMediaStatsFailure(app.db, {
         pageId,
@@ -869,7 +1015,6 @@ export async function fanslyMediaStatsChunk(
   // dirty band costs NOTHING — no call, no window — and it is the cheapest
   // freshness this lane can buy. Once a UTC day: re-marking on every dispatch
   // would keep fifty items permanently dirty and starve the round-robin.
-  const today = utcDayKey(now);
   if (state.topMarkedDay !== today) {
     const marked = await markMediaStatsTopMediaDirty(app.db, {
       pageId,
@@ -935,7 +1080,16 @@ export async function fanslyMediaStatsChunk(
    * retiring an item from the never-visited band on the strength of an error is
    * how an unreachable item disappears), and a steady refresh cut in half by the
    * cap when no backfill window was journaled either — tomorrow re-reads it whole
-   * rather than half.
+   * rather than half. Which is why such a refresh RESERVES its whole cost before
+   * its first window: a split long tail that starts with two calls left in the
+   * chunk would otherwise spend them on windows the next chunk asks for again.
+   * A failed look still KEEPS the backfill windows it had journaled before it
+   * failed: those are in the cursor, not in the stamp. A PAGE-level failure (a
+   * dead proxy, a 429, a lost lease) is not a look at all: it leaves the visit
+   * for the executor and the item untouched, and the item's next turn resumes
+   * from its stored cursor — the one this visit started from, so the windows
+   * it journaled before the wall are asked again, once per outage. Keeping
+   * them would be a write after a failure that may be a lost lease.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
@@ -947,11 +1101,45 @@ export async function fanslyMediaStatsChunk(
     let journaledWindows = 0;
     let status: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
 
+    /**
+     * A FAILED VISIT KEEPS ITS PROGRESS. The failure — counter and backoff — is
+     * already recorded against the item. What the walk accepted before it failed
+     * is journaled, and a cursor that forgot it re-read the same history on every
+     * admission. The cursor only ever records ACCEPTED windows (the guard is set
+     * after the answer), so the item's next turn asks for the window that failed.
+     * Cursor only: the stamp, the dirty mark and the backoff stay as they are.
+     */
+    const keepFailedVisitProgress = async () => {
+      if (JSON.stringify(backfillCursorJson(cursor)) !== cursorAtEntry) {
+        await recordMediaStatsBackfillCursor(app.db, {
+          pageId,
+          subjectRef: candidate.subjectRef,
+          backfillCursor: backfillCursorJson(cursor),
+        });
+      }
+    };
+
+    // LEGACY REPAIR: a walk that ended on two empty windows before the probe
+    // existed, with room for one. It reopens with the probe ARMED — never by
+    // re-entering the empty-window branch, which would re-issue the second
+    // empty window, trip the durable repeat guard and halve or stop the item.
+    // Once only: `probeSpent` is set, and a probed walk never ends here again.
+    if (cursor.done && cursor.floorBasis === "empty_window" && !cursor.probeSpent) {
+      const probe = mediaBackfillFirstMonthProbe(cursor, candidate);
+      if (probe !== null) {
+        cursor.done = false;
+        cursor.stopReason = null;
+        cursor.floorBasis = null;
+        cursor.probeSpent = true;
+        cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+        cursor.nextBeforeMs = probe.probeBeforeMs;
+      }
+    }
+
     if (!cursor.done) {
       const walk = await runBackfill(candidate, cursor, issued);
       if (walk.status === "failed") {
-        // The failure is already recorded against the item and its cursor is
-        // left where it was, so the next dispatch retries the same window.
+        await keepFailedVisitProgress();
         return "skipped";
       }
       buckets += walk.buckets;
@@ -961,11 +1149,21 @@ export async function fanslyMediaStatsChunk(
 
     // THE STEADY WINDOW, budget permitting. On a visit whose backfill is not yet
     // done this is the part that gets dropped first: history is durable in the
-    // cursor and today's numbers will still be there tomorrow.
+    // cursor — a failed steady window included — and today's numbers will still
+    // be there tomorrow.
     let steadyComplete = false;
     if (status !== "deferred" && status !== "yielded" && hasDayCapacity() && hasChunkCapacity()) {
-      const steady = await runSteady(candidate, cursor, issued);
+      // With nothing else durable in this visit, a partial refresh is thrown
+      // away and re-read whole — so it is reserved whole, up front.
+      const steady = await runSteady(
+        candidate,
+        cursor,
+        issued,
+        state.longTailWindowMode,
+        journaledWindows === 0,
+      );
       if (steady.status === "failed") {
+        await keepFailedVisitProgress();
         return "skipped";
       }
       buckets += steady.buckets;
@@ -1014,8 +1212,18 @@ export async function fanslyMediaStatsChunk(
     buckets: number;
   }
 
-  /** Backwards 31-day daily windows, to the empty floor or to the item's own
-   *  creation — whichever comes first. */
+  /**
+   * Backwards 31-day daily windows, to the item's own creation.
+   *
+   * Two empty windows in a row do NOT end the walk by themselves: walking back
+   * from today, they prove only that the item was idle lately. They spend the
+   * one first-month probe (`mediaBackfillFirstMonthProbe`). An empty probe ends
+   * the walk at `empty_window_probe`; a probe that finds traffic sends the walk
+   * back to the gap it jumped, which it walks — empty windows and all — until
+   * it reaches the probe window, and that is `created_at`. Without a creation
+   * basis, or with less than a window left above it, two empty windows end the
+   * walk as they always did.
+   */
   async function runBackfill(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
@@ -1035,6 +1243,16 @@ export async function fanslyMediaStatsChunk(
         cursor.done = true;
         cursor.stopReason = "created_at_floor";
         cursor.floorBasis = "created_at";
+        break;
+      }
+      // THE GAP ABOVE A PROBE THAT FOUND TRAFFIC, WALKED: the next window would
+      // reach into the probe's, which is journaled and covers the item's first
+      // month. Also before the budget, and also free.
+      if (cursor.probeHitBeforeMs !== null && cursor.nextBeforeMs <= cursor.probeHitBeforeMs) {
+        cursor.done = true;
+        cursor.stopReason = "created_at_floor";
+        cursor.floorBasis = "created_at";
+        cursor.probeHitBeforeMs = null;
         break;
       }
       if (!hasDayCapacity()) {
@@ -1061,8 +1279,6 @@ export async function fanslyMediaStatsChunk(
         });
         break;
       }
-      cursor.guard.lastBeforeMs = requested.beforeMs;
-      cursor.guard.lastAfterMs = requested.afterMs;
 
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: DAILY_PERIOD_MS,
@@ -1074,8 +1290,13 @@ export async function fanslyMediaStatsChunk(
       windows += 1;
       backfillWindows += 1;
       if (outcome === "failed") {
+        // The guard is NOT set: a window that failed — or came back unreadable —
+        // was not answered, so the item's next turn retries it as a window, not
+        // as a repeat to halve or stop on.
         return { status: "failed", windows: journaledWindows, buckets };
       }
+      cursor.guard.lastBeforeMs = requested.beforeMs;
+      cursor.guard.lastAfterMs = requested.afterMs;
       if (outcome === "repeat") {
         await handleUnhonouredWindow(candidate.subjectRef, cursor, requested, {
           trigger: "repeat_request",
@@ -1100,12 +1321,35 @@ export async function fanslyMediaStatsChunk(
 
       if (outcome.empty) {
         cursor.emptyStreak += 1;
-        if (cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
-          // The floor. Two consecutive EMPTY windows — no non-zero counter in
-          // either — means the item had no traffic before this point, and unlike
-          // the account lane there is no [E10] long-idle case to probe past,
-          // because an item cannot have traffic before it was published. Every
-          // empty response is journaled: the empty window IS the floor evidence.
+        if (cursor.probeResumeBeforeMs !== null) {
+          // THE PROBE CAME BACK EMPTY TOO: two idle windows and an idle first
+          // month. A floor, and named for what it rests on. Every empty
+          // response is journaled: the empty window IS the floor evidence.
+          cursor.done = true;
+          cursor.stopReason = "empty_window_probe";
+          cursor.floorBasis = "empty_window_probe";
+          cursor.probeResumeBeforeMs = null;
+          break;
+        }
+        if (
+          cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
+          && cursor.probeHitBeforeMs === null
+        ) {
+          // Two consecutive EMPTY windows — no non-zero counter in either —
+          // prove the item was idle LATELY, not that it had no traffic before:
+          // this walk runs backwards from today. Spend the one probe on the
+          // item's first month, and bookmark the ordinary walk.
+          const probe = cursor.probeSpent
+            ? null
+            : mediaBackfillFirstMonthProbe(cursor, candidate);
+          if (probe !== null) {
+            cursor.probeSpent = true;
+            cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+            cursor.nextBeforeMs = probe.probeBeforeMs;
+            continue;
+          }
+          // No room and no basis for a probe: the two empty windows are the
+          // floor, as they always were.
           cursor.done = true;
           cursor.stopReason = "empty_window_streak";
           cursor.floorBasis = "empty_window";
@@ -1122,6 +1366,19 @@ export async function fanslyMediaStatsChunk(
         cursor.floorAt = cursor.floorAt === null || servedFloor < cursor.floorAt
           ? servedFloor
           : cursor.floorAt;
+      }
+      if (cursor.probeResumeBeforeMs !== null) {
+        // THE PROBE FOUND TRAFFIC: the windows it jumped are unexamined, not
+        // empty. Back to the bookmark; the walk ends when it reaches the probe.
+        cursor.probeHitBeforeMs = Math.min(
+          requested.beforeMs,
+          outcome.served.beforeMs ?? requested.beforeMs,
+        );
+        cursor.nextBeforeMs = cursor.probeResumeBeforeMs;
+        cursor.probeResumeBeforeMs = null;
+        continue;
+      }
+      if (outcome.served.afterMs !== null) {
         // DERIVED FROM THE RETURNED BOUNDS, with one day of overlap: the
         // provider snaps windows to its own bucket grid, and a walk that stepped
         // back from OUR bound would drift a bucket per window and leave holes.
@@ -1135,34 +1392,60 @@ export async function fanslyMediaStatsChunk(
   }
 
   /** What one item's steady refresh did. `complete` means every window the tier
-   *  asks for came back — a half-read tier is not a refresh. */
+   *  asks for came back — a half-read tier is not a refresh. `served` counts the
+   *  windows that did. */
   interface SteadyResult {
     status: "ok" | "deferred" | "yielded" | "failed";
     buckets: number;
     complete: boolean;
+    served: number;
   }
 
   /** The tier's trailing window: one call, except a long tail on a route that
-   *  refuses 90 days. */
+   *  refuses 90 days. `planMode` is the long-tail plan to run — the page's
+   *  mode, unless the 90-day fallback is probing the split plan before it
+   *  commits to it. `reserveWhole` is set when a partial refresh would be
+   *  discarded: the unit then never STARTS without room for all its windows. */
   async function runSteady(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
     issued: Set<string>,
+    planMode: LongTailWindowMode = state.longTailWindowMode,
+    reserveWhole = false,
   ): Promise<SteadyResult> {
-    const windows = steadyWindows(candidate.tier, now, state.longTailWindowMode);
+    const windows = steadyWindows(candidate.tier, now, planMode);
     let buckets = 0;
     let served = 0;
+
+    // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
+    // multi-call unit keeps. Three split windows started with two calls left
+    // were read, discarded unstamped, and read again next chunk: up to five
+    // calls an item for three. Clamped to the budgets themselves, so a cap or
+    // chunk smaller than the unit still makes progress instead of yielding
+    // forever. The per-window checks below stay: retries count too.
+    if (reserveWhole) {
+      if (!attemptBudget.hasCapacity(Math.min(windows.length, dailyCap))) {
+        return { status: "deferred", buckets, complete: false, served };
+      }
+      if (
+        !input.budget.hasRequestCapacity(Math.min(windows.length, input.budget.maxRequests))
+        || !input.budget.hasWallClockCapacity()
+      ) {
+        return { status: "yielded", buckets, complete: false, served };
+      }
+    }
 
     for (const [index, window] of windows.entries()) {
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
-        // long-tail refresh. What was fetched is journaled; the refresh is NOT
-        // complete, so an item with nothing else to show for the visit stays
-        // unvisited and tomorrow re-reads it whole rather than half.
-        return { status: "deferred", buckets, complete: false };
+        // long-tail refresh — retries count against it too. What was fetched is
+        // journaled; the refresh is NOT complete, so an item with nothing else
+        // to show for the visit stays unvisited and tomorrow re-reads it whole
+        // rather than half.
+        return { status: "deferred", buckets, complete: false, served };
       }
       if (!hasChunkCapacity()) {
-        return { status: "yielded", buckets, complete: false };
+        return { status: "yielded", buckets, complete: false, served };
       }
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: window.periodMs,
@@ -1172,7 +1455,10 @@ export async function fanslyMediaStatsChunk(
         tier: candidate.tier,
       }, issued);
       if (outcome === "failed") {
-        return { status: "failed", buckets, complete: false };
+        if (candidate.tier === "long_tail" && index === 0 && planMode !== "split_31") {
+          return await fallBackFromNinetyDays(candidate, cursor, issued, planMode);
+        }
+        return { status: "failed", buckets, complete: false, served };
       }
       if (outcome === "repeat") {
         break;
@@ -1184,7 +1470,9 @@ export async function fanslyMediaStatsChunk(
       //
       // It runs on the FIRST long-tail window only, and it is durable and
       // page-scoped: the answer is a property of the route, not of one item.
-      if (candidate.tier === "long_tail" && index === 0) {
+      // It reads the plan IN USE, never the page's mode: a split-plan probe's
+      // honoured 31-day window proves nothing about 90 days.
+      if (candidate.tier === "long_tail" && index === 0 && planMode !== "split_31") {
         // BOTH checks. `windowWasHonoured` is the loop guard every call carries;
         // the coverage check is what sees a same-end, narrower answer, which is
         // the only shape a refused TRAILING window can take.
@@ -1218,8 +1506,15 @@ export async function fanslyMediaStatsChunk(
           await saveProgress();
           // Re-run this item under the split plan, from the top. The window just
           // fetched is journaled either way — it is simply not the window we
-          // asked for.
-          const rerun = await runSteady(candidate, cursor, issued);
+          // asked for. The same reservation holds: a split unit that does not
+          // fit yields, and the next chunk reads it whole under the new mode.
+          const rerun = await runSteady(
+            candidate,
+            cursor,
+            issued,
+            state.longTailWindowMode,
+            reserveWhole,
+          );
           return { ...rerun, buckets: buckets + rerun.buckets };
         }
         if (covered && state.longTailWindowMode === "unproven") {
@@ -1239,7 +1534,81 @@ export async function fanslyMediaStatsChunk(
       }
     }
 
-    return { status: "ok", buckets, complete: served === windows.length };
+    return { status: "ok", buckets, complete: served === windows.length, served };
+  }
+
+  /**
+   * THE 90-DAY WINDOW REFUSED OUTRIGHT — the shape the discovery above never
+   * sees.
+   *
+   * The discovery reads a SUCCESSFUL answer that is narrower than asked. Since
+   * 2026-09-05 the provider answers the 90-day per-media window with an HTTP 500
+   * (`error getting graph`) instead, while the same items still answer 31-day
+   * windows. A failure returned before the discovery ran, so a page that had
+   * proven 90 days failed every long-tail refresh, every day, and the split
+   * fallback built for exactly this case was never reached.
+   *
+   * One failed window is no evidence about the ROUTE — the item may simply be
+   * gone. So the page moves to `split_31` only after a provider HTTP refusal
+   * AND when this same item answers the split plan's first 31-day window: one
+   * already answered earlier in this visit (its backfill asked for exactly that
+   * window, for free), or ONE probe now, budget permitting. A probe that fails
+   * too spends the page's probe for the UTC day and changes nothing; the item
+   * backs off like any failed look. A spent probe never discards the free
+   * evidence: a later visit that answered that window still switches the page.
+   */
+  async function fallBackFromNinetyDays(
+    candidate: MediaStatsRefreshCandidate,
+    cursor: MediaBackfillCursor,
+    issued: Set<string>,
+    previousMode: LongTailWindowMode,
+  ): Promise<SteadyResult> {
+    const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, served: 0 };
+    const refusal = lastWindowFailure;
+    if (refusal === null || !isProviderRefusal(refusal)) return failed;
+    const [probeWindow] = steadyWindows(candidate.tier, now, "split_31");
+    const answeredThisVisit = probeWindow !== undefined && issued.has(windowKey(probeWindow));
+    // The day's failed probe and the budget limit only a NEW request: evidence
+    // this visit already holds costs nothing.
+    if (
+      !answeredThisVisit
+      && (state.longTailProbeFailedDay === today || !(hasDayCapacity() && hasChunkCapacity()))
+    ) {
+      return failed;
+    }
+
+    // NOT reserved whole: ONE answered 31-day window is the evidence, and the
+    // split it proves is found once per page.
+    const probe = await runSteady(candidate, cursor, issued, "split_31");
+    if (!answeredThisVisit && probe.served === 0) {
+      if (probe.status === "failed") {
+        state = { ...state, longTailProbeFailedDay: today };
+        await saveProgress();
+      }
+      return failed;
+    }
+
+    state = { ...state, longTailWindowMode: "split_31", longTailWindowAnnounced: true };
+    // ALWAYS announced, unlike the one-time discovery: a page that had PROVEN
+    // 90 days and lost them is a new fact about the route, and it triples what
+    // a long-tail visit costs.
+    await input.telemetry.addAnomaly({
+      code: "fansly_media_stats_long_tail_window_split",
+      severity: "info",
+      message:
+        "Fansly refused the 90-day per-media window with an HTTP error while the same item "
+        + "answers 31 days; long-tail refresh now takes three 31-day windows, which TRIPLES "
+        + "what a long-tail visit costs",
+      details: {
+        mediaOfferRef: candidate.subjectRef,
+        trigger: "http_error",
+        httpStatus: refusal.httpStatus,
+        previousMode,
+        requestedSpanDays: LONG_TAIL_TRAILING_DAYS,
+      },
+    });
+    await saveProgress();
+    return probe;
   }
 
   /**
@@ -1260,6 +1629,7 @@ export async function fanslyMediaStatsChunk(
       longTail: progress.longTail,
       dailyCap,
       longTailCycleDays,
+      longTailRequestsPerVisit: state.longTailWindowMode === "split_31" ? LONG_TAIL_SPLIT_WINDOWS : 1,
     });
     // Due work this dispatch could not reach today. Reported, never acted on:
     // these are simply first in tomorrow's queue.

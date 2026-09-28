@@ -11,7 +11,8 @@
 //    decays with its age is a property of the platform.
 //  - DUE-NESS FROM `published_at` AND `last_visited_at`, never from a stored
 //    `next_due_at` — a post that AGES out of `fresh` must slow down, and a
-//    frozen due date would keep it on a daily cadence forever.
+//    frozen due date would keep it on a daily cadence forever. The one
+//    exception is a FAILED row, which waits for its `next_due_at` backoff.
 //  - THE PRIORITY ORDER: never-refreshed first, then dirty, then due-by-decay.
 //  - A FAILED LOOK IS NOT A LOOK: `last_visited_at` does not move.
 //  - THE QUEUE SURVIVES A REBUILD (§3.4 operational state), which is why it is
@@ -363,5 +364,56 @@ describe("[sync-critical] WP-F6 the post_engagement refresh queue", () => {
     expect(row.rows[0]?.consecutive_failures).toBe(2);
     expect((await countPostEngagementRefreshProgress(testDb.db, page.id)).subjectsRefreshed)
       .toBe(0);
+  });
+
+  it("holds a failed post out of the batch until its backoff", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("f6q-backoff");
+    const refsAt = async (now: Date, limit = 10) =>
+      (await listPostEngagementRefreshChunk(testDb!.db, { pageId: page.id, limit, now }))
+        .map((row) => row.subjectRef);
+    const backOff = (subjectRef: string) =>
+      recordPostEngagementRefreshFailures(testDb!.db, {
+        pageId: page.id,
+        subjectRefs: [subjectRef],
+        nextDueAt: new Date(NOW.getTime() + DAY_MS),
+      });
+
+    // BAND ZERO. A never-refreshed post the provider does not serve — deleted,
+    // say — is newest, so without a backoff it heads every batch.
+    await seedPost(page.id, "never-dead", daysAgo(1));
+    await seedPost(page.id, "never-ok", daysAgo(2));
+    expect(await refsAt(NOW, 1)).toEqual(["never-dead"]);
+    await backOff("never-dead");
+    expect(await refsAt(NOW, 1)).toEqual(["never-ok"]);
+    // The backoff runs out and the post gets one more look.
+    expect(await refsAt(new Date(NOW.getTime() + DAY_MS), 1)).toEqual(["never-dead"]);
+
+    // THE DUE BAND. Oldest visit first, so a visited-then-failing post would
+    // lead the due posts for as long as it keeps failing.
+    await visited(page.id, "never-ok", NOW);
+    await seedPost(page.id, "mid-fail", daysAgo(60));
+    await seedPost(page.id, "mid-due", daysAgo(60));
+    await visited(page.id, "mid-fail", daysAgo(40));
+    await visited(page.id, "mid-due", daysAgo(10));
+    expect(await refsAt(NOW)).toEqual(["mid-fail", "mid-due"]);
+    await backOff("mid-fail");
+    expect(await refsAt(NOW)).toEqual(["mid-due"]);
+
+    // A SUCCESS resets the counter, and the row is due by its tier again.
+    await recordPostEngagementRefreshVisits(testDb.db, {
+      pageId: page.id,
+      visitedAt: NOW,
+      visits: [{
+        subjectRef: "mid-fail",
+        tier: "mid",
+        nextDueAt: new Date(NOW.getTime() + 7 * DAY_MS),
+      }],
+    });
+    expect(await refsAt(NOW)).toEqual(["mid-due"]);
+    expect(await refsAt(new Date(NOW.getTime() + 8 * DAY_MS))).toContain("mid-fail");
   });
 });

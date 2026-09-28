@@ -8,6 +8,7 @@ import {
   advanceBroadcastWalk,
   backfillContinuationAt,
   broadcastMessageRows,
+  classifyStatsWindow,
   emptyFanslyStatsCursorState,
   isEmptyStatsMonth,
   monthFromIndex,
@@ -19,6 +20,7 @@ import {
   parseFanslyStatsCursorState,
   rollUtcDay,
   servedEarningsWindow,
+  trustedAccountCreatedAt,
   utcDayKey,
   windowsAreContiguous,
   windowWasHonoured,
@@ -74,8 +76,22 @@ describe("stats backfill cursor state", () => {
     expect(parsed!.backfill!.daily.trailingCaptured).toBe(true);
     expect(parsed!.backfill!.daily.floorAt).toBe("2019-01-01T00:00:00.000Z");
     expect(parsed!.callsToday).toBe(7);
+    // A pre-probe-hit cursor parses as a walk with no gap to fill.
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBeNull();
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBeNull();
     expect(parsed!.stepIndex).toBe(4);
     expect(parsed!.sweepDay).toBe("2026-08-19");
+  });
+
+  it("round-trips the probe HIT, which keeps an empty gap from ending the walk", () => {
+    const state = emptyFanslyStatsCursorState(NOW);
+    state.backfill!.daily.probeHitMonthIndex = monthIndexOf(NOW) - 15;
+    state.backfill!.earnings.probeHitAfterMs = Date.UTC(2025, 3, 14);
+    state.backfill!.earnings.probeHitBeforeMs = Date.UTC(2025, 4, 15) - 1;
+    const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW);
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBe(monthIndexOf(NOW) - 15);
+    expect(parsed!.backfill!.earnings.probeHitAfterMs).toBe(Date.UTC(2025, 3, 14));
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBe(Date.UTC(2025, 4, 15) - 1);
   });
 
   it("clamps a step index past the last step instead of wedging the lane", () => {
@@ -246,6 +262,20 @@ describe("account creation floor", () => {
 
   it("does not invent a floor when account metadata is absent", () => {
     expect(monthPredatesAccountCreation(2020 * 12, null)).toBe(false);
+  });
+
+  it("believes only a plausible creation date, since a known one ends no walk early", () => {
+    // With a creation date the walks step all the way to it: an epoch or a
+    // future value would walk to 1970 or stop at once, so both are unknown.
+    expect(trustedAccountCreatedAt(accountCreatedAt, NOW)).toBe(accountCreatedAt);
+    expect(trustedAccountCreatedAt(null, NOW)).toBeNull();
+    expect(trustedAccountCreatedAt(new Date(0), NOW)).toBeNull();
+    // Older than the platform is bad metadata, not a floor: every month in
+    // between would be a guaranteed-empty request.
+    expect(trustedAccountCreatedAt(new Date("2018-12-31T23:59:59.999Z"), NOW)).toBeNull();
+    const oldestBelieved = new Date("2019-01-01T00:00:00.000Z");
+    expect(trustedAccountCreatedAt(oldestBelieved, NOW)).toBe(oldestBelieved);
+    expect(trustedAccountCreatedAt(new Date(NOW.getTime() + 1), NOW)).toBeNull();
   });
 });
 
@@ -529,6 +559,27 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     // must not be mistaken for evidence that the provider has no older data.
     expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
     expect(isEmptyStatsMonth(null)).toBe(false);
+    // A dataset whose datapoints drifted is not an empty month either.
+    expect(isEmptyStatsMonth({ dataset: {} })).toBe(false);
+  });
+
+  it("reads a dataset without datapoint ARRAYS as invalid, never as an empty window", () => {
+    // Two "empty" windows are a floor claim. A missing or drifted `datapoints`
+    // used to read as empty — false completeness from a body nothing can parse.
+    expect(classifyStatsWindow({ dataset: {} })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: "x" } })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: 3 } }))
+      .toBe("invalid");
+    expect(classifyStatsWindow({ dataset: null })).toBe("invalid");
+    // The served shapes: the per-media route carries no profileDatapoints.
+    expect(classifyStatsWindow({ dataset: { datapoints: [] } })).toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: null } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [{ timestamp: 1 }] } })).toBe("nonempty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [{}] } }))
+      .toBe("nonempty");
   });
 });
 

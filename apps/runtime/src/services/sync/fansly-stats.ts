@@ -45,10 +45,12 @@
 // therefore captures the trailing window ONCE — the one window the bounds are
 // honoured for, because it is the window the route would have served anyway —
 // and then walks BACKWARDS BY CALENDAR MONTH, newest month first, one call per
-// month. It stops after two consecutive empty months PLUS one probe about a
-// year further back ([E10]: an empty month on a long-idle account proves
-// inactivity, not a retention floor), and it journals every empty response,
-// because an empty month IS the floor evidence.
+// month. Where the account's own creation date is known, THAT is the floor and
+// the walk steps to it month by month. Where it is not, the walk stops after two
+// consecutive empty months PLUS one probe about a year further back ([E10]: an
+// empty month on a long-idle account proves inactivity, not a retention floor),
+// and it journals every empty response, because an empty month IS the floor
+// evidence. The earnings walk below follows the same two rules.
 //
 // Every lane checks the served bounds. Daily/monthly capture keeps its own
 // provider-specific guard. Earnings uses a durable UTC-day window walk: a full
@@ -76,6 +78,7 @@ import {
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { fanslyStatsDatasetHasDatapointArrays } from "../canonicalize/fansly-stats.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
@@ -157,9 +160,23 @@ const BACKFILL_HOURLY_STEP_DAYS = 4;
  */
 const MONTH_FORM_TRAILING_DAYS = 30;
 /** Two consecutive empty MONTHS, then ONE probe this many months further back —
- *  [E10] in the unit this walk actually steps in. */
+ *  [E10] in the unit this walk actually steps in. Only where the account's
+ *  creation date is unknown: a known one is the floor, and nothing is probed. */
 const BACKFILL_PROBE_JUMP_MONTHS = 12;
 const BACKFILL_PROBE_JUMP_DAYS = 365;
+/**
+ * The oldest account creation date the walks BELIEVE.
+ *
+ * With a known creation date the daily and earnings walks step all the way to
+ * it and never stop on empty windows, so a garbage or epoch value in page
+ * metadata would walk to 1970. Anything older than this or later than now is
+ * treated as unknown, and the [E10] probe rule applies instead. The bound sits
+ * before the platform itself existed, not at the 2015 instant the all-time
+ * monthly call below sends: every month between the two would be a
+ * guaranteed-empty request on first enable, and a Fansly creation date older
+ * than Fansly is not a floor, it is bad metadata.
+ */
+const PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS = Date.UTC(2019, 0, 1);
 /** The same 31 days for `/account/wallets/earnings/stats`, chosen on LESS
  *  evidence: the one observed call carried a 30-day window and nothing anywhere
  *  shows this route answering a longer one. The unhonoured-window guard below is
@@ -235,6 +252,13 @@ interface DailyBackfillState {
    * year.
    */
   probeResumeMonthIndex: number | null;
+  /**
+   * The probe month that FOUND data, while the resumed walk fills the gap above
+   * it. Empty months in that gap are unexamined history, not a floor: two of
+   * them in a row must not end the walk before it reaches the month the probe
+   * already proved. Reaching it skips it (it is journaled) and clears this.
+   */
+  probeHitMonthIndex: number | null;
   done: boolean;
   /** ISO instant of the oldest bucket the provider ever served. */
   floorAt: string | null;
@@ -254,6 +278,10 @@ interface EarningsBackfillState {
   emptyStreak: number;
   probeSpent: boolean;
   probeResumeBeforeMs: number | null;
+  /** The probe window that FOUND rows, while the resumed walk fills the gap
+   *  above it — the daily walk's `probeHitMonthIndex`, in this walk's unit. */
+  probeHitAfterMs: number | null;
+  probeHitBeforeMs: number | null;
   done: boolean;
   guard: BackfillWindowGuard;
 }
@@ -371,6 +399,7 @@ function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
     emptyStreak: asInt(record?.emptyStreak, 0),
     probeSpent: record?.probeSpent === true,
     probeResumeMonthIndex: asNullableInt(record?.probeResumeMonthIndex),
+    probeHitMonthIndex: asNullableInt(record?.probeHitMonthIndex),
     done: record?.done === true,
     floorAt: asNullableString(record?.floorAt),
     guard: parseWindowGuard(record?.guard, BACKFILL_DAILY_WINDOW_DAYS),
@@ -395,6 +424,8 @@ function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState
     emptyStreak: asInt(record?.emptyStreak, 0),
     probeSpent: record?.probeSpent === true,
     probeResumeBeforeMs: asNullableInt(record?.probeResumeBeforeMs),
+    probeHitAfterMs: asNullableInt(record?.probeHitAfterMs),
+    probeHitBeforeMs: asNullableInt(record?.probeHitBeforeMs),
     done: record?.done === true,
     guard: parseWindowGuard(record?.guard, BACKFILL_EARNINGS_WINDOW_DAYS),
   };
@@ -469,10 +500,42 @@ function emptyDailyBackfill(now: Date): DailyBackfillState {
     emptyStreak: 0,
     probeSpent: false,
     probeResumeMonthIndex: null,
+    probeHitMonthIndex: null,
     done: false,
     floorAt: null,
     guard: emptyWindowGuard(BACKFILL_DAILY_WINDOW_DAYS),
   };
+}
+
+/** An earnings walk that has asked for nothing yet, starting below `nextBeforeMs`. */
+function emptyEarningsBackfill(nextBeforeMs: number, done: boolean): EarningsBackfillState {
+  return {
+    nextBeforeMs,
+    walk: null,
+    emptyStreak: 0,
+    probeSpent: false,
+    probeResumeBeforeMs: null,
+    probeHitAfterMs: null,
+    probeHitBeforeMs: null,
+    done,
+    guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
+  };
+}
+
+/**
+ * The account creation date, when it is one the walks can stand on — or null.
+ *
+ * A known creation date is a HARD floor: nothing about this account predates
+ * it. An unknown one leaves the walks on the [E10] probe rule, which is a
+ * heuristic about inactivity. See `PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS` for why
+ * an implausible value counts as unknown rather than as a floor.
+ */
+export function trustedAccountCreatedAt(value: Date | null, now: Date): Date | null {
+  return value !== null
+    && value.getTime() >= PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS
+    && value.getTime() <= now.getTime()
+    ? value
+    : null;
 }
 
 /** `year * 12 + (month - 1)` for an instant, in UTC — the unit the daily
@@ -583,11 +646,12 @@ function pointCarriesTraffic(point: unknown): boolean {
  * reads this.
  */
 export function isEmptyStatsMonth(payload: unknown): boolean {
-  if (isEmptyStatsWindow(payload)) {
+  const classification = classifyStatsWindow(payload);
+  if (classification === "empty") {
     return true;
   }
   const dataset = statsDataset(payload);
-  if (dataset === null) {
+  if (classification === "invalid" || dataset === null) {
     return false;
   }
   for (const key of ["datapoints", "profileDatapoints"] as const) {
@@ -630,15 +694,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
         done: false,
         guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
       },
-      earnings: {
-        nextBeforeMs: now.getTime(),
-        walk: null,
-        emptyStreak: 0,
-        probeSpent: false,
-        probeResumeBeforeMs: null,
-        done: false,
-        guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
-      },
+      earnings: emptyEarningsBackfill(now.getTime(), false),
     },
   };
 }
@@ -664,14 +720,23 @@ export function isEmptyStatsWindow(payload: unknown): boolean {
   return classifyStatsWindow(payload) === "empty";
 }
 
+/**
+ * Valid only with the datapoints as ARRAYS — the canonicalizer's own gate
+ * predicate. A dataset whose `datapoints` is missing or drifted used to read
+ * as "no datapoints", i.e. EMPTY, and two of those are a floor claim: false
+ * completeness from a body nothing can parse. Now it is invalid, which every
+ * caller already handles loudly, after journaling.
+ */
 export function classifyStatsWindow(payload: unknown) {
   return classifyFanslyResponse(payload, {
-    isValid: (value) => statsDataset(value) !== null,
+    isValid: (value) => {
+      const dataset = statsDataset(value);
+      return dataset !== null && fanslyStatsDatasetHasDatapointArrays(dataset);
+    },
     isEmpty: (value) => {
       const dataset = statsDataset(value)!;
-      const datapoints = Array.isArray(dataset.datapoints) ? dataset.datapoints : [];
       const profile = Array.isArray(dataset.profileDatapoints) ? dataset.profileDatapoints : [];
-      return datapoints.length === 0 && profile.length === 0;
+      return (dataset.datapoints as unknown[]).length === 0 && profile.length === 0;
     },
   });
 }
@@ -816,8 +881,9 @@ export async function fanslyStatsSnapshotChunk(
 
   const now = input.now ?? new Date();
   const pageId = input.pageContext.page.id;
-  const accountCreatedAt = parseFanslyMetadataAccountCreatedAt(
-    input.pageContext.page.metadata,
+  const accountCreatedAt = trustedAccountCreatedAt(
+    parseFanslyMetadataAccountCreatedAt(input.pageContext.page.metadata),
+    now,
   );
   const dailyCap = Math.max(1, effective.fanslyStatsSnapshotDailyCallBudget ?? 25);
   const hourlyEnabled = effective.fanslyStatsHourlyEnabled !== false;
@@ -988,15 +1054,7 @@ export async function fanslyStatsSnapshotChunk(
           done: true,
           guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
         },
-        earnings: {
-          nextBeforeMs: now.getTime(),
-          walk: null,
-          emptyStreak: 0,
-          probeSpent: false,
-          probeResumeBeforeMs: null,
-          done: true,
-          guard: emptyWindowGuard(BACKFILL_EARNINGS_WINDOW_DAYS),
-        },
+        earnings: emptyEarningsBackfill(now.getTime(), true),
       };
       reopened.daily = {
         ...reopened.daily,
@@ -1029,6 +1087,84 @@ export async function fanslyStatsSnapshotChunk(
         details: {
           plane: CAPTURE_COVERAGE_PLANES.statsAccountDaily,
           nextMonth: monthLabel(resumeAt),
+        },
+      });
+    }
+  }
+
+  // ── RECOVERY: earnings floors claimed from two empty windows ──────────────
+  //
+  // `provider_exhausted` / `empty_window_streak` on the earnings plane was
+  // written by a walk that had no creation floor: two empty windows and one
+  // empty probe a year back, on an account that may simply have been quiet for
+  // a while. Where the account's creation date is known and lies more than one
+  // window below what that walk reached, the claim is SUPERSEDED: only the
+  // earnings walk reopens, where it stopped, and walks to creation. Production
+  // 2026-09-28: lilly-1 was floored at 2025-11-16 with 2024-05..06 earnings
+  // (created 2024-05-05) outside the walked span.
+  //
+  // ONCE, and self-limiting like the recovery above: the reopen overwrites the
+  // row immediately, and with a known creation date the walk never ends on an
+  // empty streak again, so the reason code that triggers this cannot come back.
+  const earningsClosed = state.backfill === null || state.backfill.earnings.done;
+  if (earningsClosed && accountCreatedAt !== null) {
+    const claimed = (await listCaptureCoverage(app.db, {
+      pageId,
+      plane: CAPTURE_COVERAGE_PLANES.statsEarnings,
+    })).find((row) => row.scopeRef === "" && row.reasonCode === "empty_window_streak");
+    const unwalkedBelow = claimed !== undefined && (
+      claimed.oldestCapturedAt === null
+      || claimed.oldestCapturedAt.getTime() - accountCreatedAt.getTime()
+        > BACKFILL_EARNINGS_WINDOW_DAYS * DAY_MS
+    );
+    if (claimed !== undefined && unwalkedBelow) {
+      // Where the old walk would have asked next: just below the oldest window
+      // that carried rows, or — when none ever did — below the two empty
+      // windows it walked before its probe, which ended no later than the
+      // claim was written.
+      const resumeBeforeMs = claimed.oldestCapturedAt === null
+        ? claimed.updatedAt.getTime() - BACKFILL_EMPTY_STREAK_LIMIT
+          * BACKFILL_EARNINGS_WINDOW_DAYS * DAY_MS
+        : claimed.oldestCapturedAt.getTime() - 1;
+      const reopened = state.backfill ?? {
+        // Nothing else reopens: the daily and hourly planes finished on their
+        // own evidence.
+        daily: { ...emptyDailyBackfill(now), done: true },
+        hourly: {
+          nextBeforeMs: now.getTime(),
+          daysWalked: 0,
+          done: true,
+          guard: emptyWindowGuard(BACKFILL_HOURLY_STEP_DAYS),
+        },
+        earnings: emptyEarningsBackfill(now.getTime(), true),
+      };
+      reopened.earnings = emptyEarningsBackfill(resumeBeforeMs, false);
+      state = { ...state, mode: "backfill", backfill: reopened };
+      await coverage(
+        CAPTURE_COVERAGE_PLANES.statsEarnings,
+        "in_progress",
+        "none",
+        {
+          oldestCapturedAt: claimed.oldestCapturedAt,
+          newestCapturedAt: now,
+          reasonCode: "account_creation_floor_supersedes_empty_window",
+          cursor: {
+            resumeBefore: new Date(resumeBeforeMs).toISOString(),
+            accountCreatedAt: accountCreatedAt.toISOString(),
+          },
+        },
+      );
+      await saveProgress();
+      await input.telemetry.addAnomaly({
+        code: "fansly_stats_earnings_walk_resumed",
+        severity: "info",
+        message:
+          "Fansly earnings history resumes toward the account creation date; the empty-window "
+          + "floor is superseded",
+        details: {
+          plane: CAPTURE_COVERAGE_PLANES.statsEarnings,
+          resumeBefore: new Date(resumeBeforeMs).toISOString(),
+          accountCreatedAt: accountCreatedAt.toISOString(),
         },
       });
     }
@@ -1235,6 +1371,20 @@ export async function fanslyStatsSnapshotChunk(
 
         // ── STEP 2: THE MONTH WALK, newest month first ─────────────────────
         const monthIndex = backfill.daily.nextMonthIndex ?? monthIndexOf(now) - 1;
+        // THE GAP ABOVE A PROBE THAT FOUND DATA IS WALKED: the probe month
+        // itself is already journaled, so step past it. From here the walk is
+        // an ordinary one again, with a fresh streak — and its one probe spent.
+        const probeHit = backfill.daily.probeHitMonthIndex;
+        if (probeHit !== null && monthIndex <= probeHit) {
+          backfill.daily.probeHitMonthIndex = null;
+          backfill.daily.emptyStreak = 0;
+          if (monthIndex === probeHit) {
+            backfill.daily.nextMonthIndex = probeHit - 1;
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            continue;
+          }
+        }
         // Do not spend the probe on a month in which the account did not yet
         // exist. This is a hard, page-local floor already captured from the
         // account response, and it also heals cursors that were previously
@@ -1358,7 +1508,14 @@ export async function fanslyStatsSnapshotChunk(
         if (isEmptyStatsMonth(response.raw)) {
           const streak = backfill.daily.emptyStreak + 1;
           backfill.daily.emptyStreak = streak;
-          if (streak >= BACKFILL_EMPTY_STREAK_LIMIT && !backfill.daily.probeSpent) {
+          if (accountCreatedAt !== null || backfill.daily.probeHitMonthIndex !== null) {
+            // EMPTY MONTHS PROVE INACTIVITY, NOT A FLOOR, and here there is a
+            // better floor to walk to: the account's own creation month, which
+            // `monthPredatesAccountCreation` ends the walk at — or the month a
+            // probe already proved has data. No streak ends this walk, and no
+            // probe jumps over months it would then have to come back for.
+            backfill.daily.nextMonthIndex = monthIndex - 1;
+          } else if (streak >= BACKFILL_EMPTY_STREAK_LIMIT && !backfill.daily.probeSpent) {
             // [E10]: an empty month on a long-idle account proves INACTIVITY,
             // not a retention floor. Spend one probe a year further back before
             // calling it a floor, and remember where the ordinary walk was so a
@@ -1401,7 +1558,9 @@ export async function fanslyStatsSnapshotChunk(
           if (backfill.daily.probeResumeMonthIndex !== null) {
             // The probe PROVED there is older history, so the eleven months it
             // jumped over are unexamined rather than absent. Resume at the gap;
-            // the walk will reach the probe month again on its own.
+            // the walk will reach the probe month again on its own, and no
+            // empty streak in the gap may end it before it does.
+            backfill.daily.probeHitMonthIndex = monthIndex;
             backfill.daily.nextMonthIndex = backfill.daily.probeResumeMonthIndex;
             backfill.daily.probeResumeMonthIndex = null;
           } else {
@@ -1465,6 +1624,47 @@ export async function fanslyStatsSnapshotChunk(
 
       if (!backfill.earnings.done) {
         const earningsGuard = backfill.earnings.guard;
+        // Both checks sit between windows only: a window split across chunks
+        // (`continue` below) is finished before the walk decides anything.
+        if (backfill.earnings.walk === null) {
+          // THE GAP ABOVE A PROBE THAT FOUND ROWS IS WALKED: once the next
+          // window would reach into the probe's, step past the probe window —
+          // it is journaled — with a fresh streak and the one probe spent.
+          const probeHitBeforeMs = backfill.earnings.probeHitBeforeMs;
+          if (probeHitBeforeMs !== null && backfill.earnings.nextBeforeMs <= probeHitBeforeMs) {
+            backfill.earnings.nextBeforeMs = Math.min(
+              backfill.earnings.nextBeforeMs,
+              (backfill.earnings.probeHitAfterMs ?? probeHitBeforeMs) - 1,
+            );
+            backfill.earnings.probeHitAfterMs = null;
+            backfill.earnings.probeHitBeforeMs = null;
+            backfill.earnings.emptyStreak = 0;
+          }
+          // THE ACCOUNT'S CREATION IS THE FLOOR. Nothing this account earned
+          // predates it, so a walk that has passed it is done — the same hard,
+          // page-local floor the daily walk stops at, claimed without egress.
+          if (
+            accountCreatedAt !== null
+            && backfill.earnings.nextBeforeMs <= accountCreatedAt.getTime()
+          ) {
+            backfill.earnings.done = true;
+            await coverage(
+              CAPTURE_COVERAGE_PLANES.statsEarnings,
+              "provider_exhausted",
+              // The floor comes from page metadata rather than this lane's
+              // journal, so there is no observation id to claim as lineage.
+              "none",
+              {
+                newestCapturedAt: now,
+                reasonCode: "account_creation_floor",
+                cursor: { accountCreatedAt: accountCreatedAt.toISOString() },
+              },
+            );
+            state = { ...state, backfill: { ...backfill } };
+            await saveProgress();
+            continue;
+          }
+        }
         backfill.earnings.walk ??= startEarningsWindow(
           backfill.earnings.nextBeforeMs - earningsGuard.spanDays * DAY_MS,
           backfill.earnings.nextBeforeMs,
@@ -1502,8 +1702,15 @@ export async function fanslyStatsSnapshotChunk(
         backfill.earnings.walk = null;
         if (windowRows === 0) {
           backfill.earnings.emptyStreak += 1;
+          // Where the creation date is known, or while the walk is filling the
+          // gap above a probe that found rows, an empty window only steps back
+          // (`nextBeforeMs` already sits below it): empty windows prove
+          // inactivity, and a better floor is ahead.
+          const streakMayEnd = accountCreatedAt === null
+            && backfill.earnings.probeHitBeforeMs === null;
           if (
-            backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
+            streakMayEnd
+            && backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
             && !backfill.earnings.probeSpent
           ) {
             // Empty windows prove inactivity, not a retention floor. Bookmark
@@ -1512,7 +1719,9 @@ export async function fanslyStatsSnapshotChunk(
             backfill.earnings.probeSpent = true;
             backfill.earnings.probeResumeBeforeMs = backfill.earnings.nextBeforeMs;
             backfill.earnings.nextBeforeMs -= BACKFILL_PROBE_JUMP_DAYS * DAY_MS;
-          } else if (backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT) {
+          } else if (
+            streakMayEnd && backfill.earnings.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT
+          ) {
             backfill.earnings.done = true;
             await coverage(
               CAPTURE_COVERAGE_PLANES.statsEarnings,
@@ -1527,6 +1736,11 @@ export async function fanslyStatsSnapshotChunk(
         } else {
           backfill.earnings.emptyStreak = 0;
           if (backfill.earnings.probeResumeBeforeMs !== null) {
+            // The probe PROVED older earnings: resume at the gap it jumped,
+            // remembering the probe window so the walk steps past it — and no
+            // empty streak ends the walk — once it gets there.
+            backfill.earnings.probeHitAfterMs = walk.afterMs;
+            backfill.earnings.probeHitBeforeMs = walk.beforeMs;
             backfill.earnings.nextBeforeMs = backfill.earnings.probeResumeBeforeMs;
             backfill.earnings.probeResumeBeforeMs = null;
           }
