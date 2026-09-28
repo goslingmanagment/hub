@@ -10,10 +10,13 @@ export type FanEarningsReceipt = {
   retryAfterAt?: Date | null;
 };
 
-/** Unchanged content cannot confirm a money/type/binding correction. An exact
- * status-only transition can finish after a valid recheck against a baseline,
- * once all content-changing revisions are settled. Neither path consumes R+1
- * or invents a content change. Legacy writers retain the strict reason. */
+/** A changed valid snapshot settles the claimed R. An unchanged valid recheck
+ * settles R only when every content-changing (money/type/binding) revision is
+ * applied or preceded the first sighting of this baseline, i.e. the baseline
+ * read was claimed at or after it; a first baseline confirms nothing. Exact
+ * status-only transitions need no content change. Neither path consumes R+1
+ * or invents a change. Legacy writers' strict reason keeps every revision
+ * content-changing. */
 export async function settleFanEarningsReceipt(
   db: Database,
   claim: FanEarningsClaim,
@@ -30,10 +33,11 @@ export async function settleFanEarningsReceipt(
       select s.*,
         ${valid} and s.last_content_fingerprint is not null
           and s.last_content_fingerprint is distinct from ${receipt.fingerprint} as changed,
+        ${valid} and s.last_content_fingerprint is distinct from ${receipt.fingerprint} as new_baseline,
         s.claimed_revision > s.applied_revision as had_signal,
-        ${valid} and s.last_content_fingerprint is not null
-          and s.dirty_reason = 'transaction_status_change'
-          and s.earnings_content_revision <= s.applied_revision as status_rechecked
+        ${valid} and s.last_content_fingerprint = ${receipt.fingerprint} as unchanged,
+        case when s.dirty_reason = 'transaction_status_change' then s.earnings_content_revision
+          else s.requested_revision end as content_revision
       from subject_refresh_state s
       where s.page_id = ${claim.pageId} and s.plane = ${fanEarningsPlane(claim.window)}
         and s.subject_ref = ${claim.fanRef} and s.claim_token = ${claim.token}::uuid
@@ -41,7 +45,8 @@ export async function settleFanEarningsReceipt(
         and s.claim_expires_at > ${receipt.checkedAt}
       for update
     ), confirmed as (
-      select owned.*, changed or coalesce(status_rechecked, false) as can_settle from owned
+      select owned.*, changed or coalesce(unchanged and (content_revision <= applied_revision
+        or content_baseline_revision >= content_revision), false) as can_settle from owned
     )
     update subject_refresh_state s set
       applied_revision = case when o.can_settle then o.claimed_revision else o.applied_revision end,
@@ -54,6 +59,10 @@ export async function settleFanEarningsReceipt(
         then ${receipt.observationId} else o.last_checked_observation_id end,
       last_content_fingerprint = case when ${valid}
         then ${receipt.fingerprint} else o.last_content_fingerprint end,
+      content_baseline_at = case when o.new_baseline
+        then ${receipt.checkedAt} else o.content_baseline_at end,
+      content_baseline_revision = case when o.new_baseline
+        then o.claimed_revision else o.content_baseline_revision end,
       last_refresh_outcome = case when ${valid} and o.had_signal and not o.can_settle
         then 'unconfirmed' else ${receipt.outcome} end,
       refresh_receipts = o.refresh_receipts + 1,

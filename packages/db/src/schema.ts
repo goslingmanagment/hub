@@ -5743,6 +5743,12 @@ export const subjectRefreshState = pgTable(
     appliedRevision: bigint("applied_revision", { mode: "number" }).default(0).notNull(),
     /** Latest earnings signal that requires changed aggregate content. */
     earningsContentRevision: bigint("earnings_content_revision", { mode: "number" }).default(0).notNull(),
+    /** When that content revision's signal was recorded (0217). */
+    earningsContentSignalAt: timestamp("earnings_content_signal_at", { withTimezone: true }),
+    /** First sighting of the current fingerprint and the revision its claim
+     * covered; an unchanged recheck confirms content revisions up to it. */
+    contentBaselineAt: timestamp("content_baseline_at", { withTimezone: true }),
+    contentBaselineRevision: bigint("content_baseline_revision", { mode: "number" }),
     claimedRevision: bigint("claimed_revision", { mode: "number" }),
     claimToken: uuid("claim_token"),
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),

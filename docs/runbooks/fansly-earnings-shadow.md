@@ -105,9 +105,16 @@ Those times are local checks, not the provider's undisclosed correction time.
 The most recent attempt has a separate observation pointer, so a failed/empty
 attempt cannot masquerade as the successful check's source.
 
-The first baseline or an unchanged response after a signal remains unconfirmed;
-empty responses never mint zero. Invalid money or another fan's payload cannot
-settle a check. A changed snapshot acknowledges only the claimed R, leaving R+1.
+A changed snapshot acknowledges only the claimed R, leaving R+1. An unchanged
+valid response acknowledges R only when the current baseline was first seen
+after every content-changing (money/type/binding) signal: the read that first
+saw that fingerprint was claimed at or after the signal's revision, so its
+request followed the signal. The first baseline itself confirms nothing; the
+next unchanged read does. A baseline seen before the signal stays unconfirmed
+until the content changes, even if that earlier read already included the
+purchase. Exact status-only signals keep their own rule (targets runbook).
+Empty responses never mint zero. Invalid money or another fan's payload cannot
+settle a check.
 Unknown/inconsistent transaction attribution is separate debt until a semantic
 update resolves it. Retry state is stored with a fifteen-minute floor and a
 longer provider Retry-After; current daily rotation is the only retry mechanism.
@@ -129,13 +136,31 @@ flag or operator action; rollback restores the possibility of repeated work
 without changing persisted checkpoint format. This fix does not pass C2c or
 establish any production savings or historical attribution.
 
+## Signal and baseline times (migration 0217)
+
+Each endpoint row records `earnings_content_signal_at` (when its current
+content revision was signalled), `content_baseline_at` (when the current
+fingerprint was first seen) and `content_baseline_revision` (the claimed
+revision of that first read). `fansly_earnings_refresh_status` returns them as
+`contentSignalAt`, `contentBaselineAt` and `contentBaselineRevision`. Null means
+unknown: rows from before 0217 or from an older writer stay strict.
+
+Migration 0217 proves existing pending debt from retained evidence only: the
+endpoint row was created by its first signal's transaction batch, every content
+revision since is one transaction insert for that fan, and every capture of that
+endpoint for that fan since then is more than an hour after the newest insert.
+It writes only the three fields above; the next ordinary claim and valid
+unchanged receipt performs the acknowledgement, so no request is added.
+
 ## Rollback and next gate
 
 On diagnostic failures, capture/latency regression or unexplained discrepancies,
 disable only `fanslyFanEarningsShadowPageAllowlist` with the audited UI. Preserve
 pending revisions and receipts. Daily rotation continues; disabling shadow does
 not roll back C2a v2 events or earnings projections. A code rollback must retain
-the compatible C2a reader and additive schema.
+the compatible C2a reader and additive schema. A runtime from before 0217
+ignores the signal/baseline fields: it returns to the strict unchanged-response
+rule, and its reads leave those fields stale in the conservative direction.
 
 C2c may change selection/rotation only after measured quiet-correction detection
 within the existing freshness bound or a separate owner decision on max-age.
