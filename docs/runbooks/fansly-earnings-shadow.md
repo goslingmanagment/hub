@@ -162,20 +162,36 @@ On a shadow page without isolated recovery, a fan-scoped rejection normally
 stops the daily walk at its contiguous prefix, and the executor retries or
 blocks the stream. The walk instead crosses the fan when all of these hold:
 
-- the rejection is HTTP 400 or 410, or a 404 on that endpoint's third failed
-  receipt in a row (the executor's two `provider_404` retries supply the first
-  two);
+- the rejection is HTTP 400 or 410, or a 404 that is that endpoint's third
+  rejected receipt in a row (`consecutive_rejections`, migration 0217). Any other
+  receipt resets that run, including a 5xx, a timeout or an empty or invalid
+  answer. Normally the three are the first attempt and the executor's two
+  `provider_404` retries of the same fan. When other failures came just before
+  the 404s, the executor can block the stream (`provider_404_exhausted`) before
+  the third rejection, and nothing is crossed;
 - there is no provider cooldown (`Retry-After`);
 - the endpoint's `rejected` receipt for this attempt is durable;
-- fewer than three fans were crossed in this chunk. The next rejection falls
-  back to the stop, so a provider-wide burst still blocks the stream.
+- fewer than three fans were crossed in a row in this walk since a fan was last
+  read successfully. The checkpoint keeps this run (`consecutiveCrossings`)
+  across chunks, because a default five-request chunk holds only two or three
+  fans. A fresh-skipped fan makes no request and does not reset it.
+
+The fourth rejected fan in a row stops the walk at its contiguous prefix, so a
+provider-wide burst still blocks the stream. A retry resumes the same run and
+stops on the same fan until that fan reads successfully.
 
 The crossed fan is not retried in that generation and its other endpoint is
-not requested; its receipt keeps the debt. Each crossing is a
-`fan_earnings_fan_rejected` warning with `crossed: true`. The generation keeps
-`crossedFans` in its checkpoint, stamps no success on partial progress, and
-finishes with the `fan_earnings_unconfirmed_coverage` quality hold, keeping the
-last certified `completedAt`. The next generation reads the fan again.
+not requested; its receipt keeps the debt. Each rejection is a
+`fan_earnings_fan_rejected` warning with `crossed`, `rejectedInRow` and
+`consecutiveCrossings`. The generation keeps `crossedFans` in its checkpoint,
+stamps no success on partial progress, and finishes with the
+`fan_earnings_unconfirmed_coverage` quality hold, keeping the last certified
+`completedAt`. The next generation starts a new run and reads the fan again.
+
+More than three genuinely rejected spenders in a row cannot be crossed:
+`retry` stops on the same fan, and `reset` walks the roster again and stops at
+the same place. Such a page needs isolated recovery (targets runbook,
+"Isolated daily recovery").
 
 ## Rollback and next gate
 
@@ -186,7 +202,9 @@ not roll back C2a v2 events or earnings projections. A code rollback must retain
 the compatible C2a reader and additive schema. An older runtime ignores the
 0217 signal/baseline fields and the crossing checkpoint state: it returns to the
 strict unchanged-response rule and the rejection stop, and its reads leave those
-fields stale in the conservative direction.
+fields stale in the conservative direction. Its receipts also leave
+`consecutive_rejections` unchanged, so after rolling forward a 404's run can
+still include rejections from before the rollback.
 
 C2c may change selection/rotation only after measured quiet-correction detection
 within the existing freshness bound or a separate owner decision on max-age.

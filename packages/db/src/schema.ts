@@ -5734,6 +5734,9 @@ export const subjectRefreshState = pgTable(
     nextDueAt: timestamp("next_due_at", { withTimezone: true }),
     lastVisitedAt: timestamp("last_visited_at", { withTimezone: true }),
     consecutiveFailures: integer("consecutive_failures").default(0).notNull(),
+    /** Earnings receipts in a row rejected by the provider (0217); any other
+     * receipt resets it, unlike consecutiveFailures. */
+    consecutiveRejections: integer("consecutive_rejections").default(0).notNull(),
     dirtyReason: text("dirty_reason"),
     knownCount: integer("known_count"),
     backfillCursor: jsonbSafe("backfill_cursor").$type<Record<string, unknown>>().default({})

@@ -18,6 +18,17 @@ COMMENT ON COLUMN subject_refresh_state.content_baseline_at IS
 COMMENT ON COLUMN subject_refresh_state.content_baseline_revision IS
   'Every revision up to this one preceded the first sighting of the current fingerprint; null when unproven.';
 
+-- The daily walk crosses a fan's 404 only after that endpoint was rejected
+-- three times in a row. consecutive_failures also counts 5xx, timeouts and
+-- empty or invalid bodies, so rejections keep their own run, which any other
+-- receipt resets. Existing rows start at 0, a lower bound.
+ALTER TABLE subject_refresh_state
+  ADD COLUMN consecutive_rejections integer NOT NULL DEFAULT 0,
+  ADD CONSTRAINT subject_refresh_state_rejections_check CHECK (consecutive_rejections >= 0);
+
+COMMENT ON COLUMN subject_refresh_state.consecutive_rejections IS
+  'Receipts in a row whose request the provider rejected (400/404/410); any other receipt resets it.';
+
 -- Existing pending content debt keeps its strict hold unless retained evidence
 -- proves the baseline followed every content signal. The proof needs all of:
 -- the endpoint row was created by the first signal's transaction batch; each

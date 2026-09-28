@@ -197,6 +197,22 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     expect(lifeAfter.last_content_fingerprint).toBe("b".repeat(64));
   });
 
+  it("counts an endpoint's rejections in a row apart from its other failures", async () => {
+    const fail = async (outcome: "rejected" | "failed", seconds: number) =>
+      settleFanEarningsReceipt(db.db, await claim(seconds), {
+        outcome, observationId: null, fingerprint: null, checkedAt: at(seconds + 1),
+      });
+    await fail("rejected", 0);
+    await fail("rejected", 2);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 2, consecutive_rejections: 2 });
+    await fail("failed", 4);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 3, consecutive_rejections: 0 });
+    await fail("rejected", 6);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 4, consecutive_rejections: 1 });
+    await settle(await claim(8), "a", 9);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 0, consecutive_rejections: 0 });
+  });
+
   it("reports per-endpoint ages, uncovered roster and receipt loss without fan identities", async () => {
     await dirty();
     await db.pool.query("update page_fans set total_creator_net_mills = 0");

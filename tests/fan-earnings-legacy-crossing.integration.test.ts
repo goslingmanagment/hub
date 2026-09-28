@@ -1,6 +1,6 @@
 // A legacy (non-recovery) shadow walk crosses one fan's deterministic rejection
-// once its receipt is durable, at most FAN_EARNINGS_MAX_CROSSINGS_PER_CHUNK per
-// chunk, and finishes that generation with a quality hold. Nothing is retried
+// once its receipt is durable, at most three fans in a row across the walk's
+// chunks, and finishes that generation with a quality hold. Nothing is retried
 // and no extra request is made.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -73,7 +73,8 @@ describe("legacy fan-earnings walk crossing", () => {
         details: expect.objectContaining({ platformUserId: "fan-b", status, window, crossed: true }),
       }));
       expect(await endpoint(f, "fan-b", window)).toMatchObject({
-        last_refresh_outcome: "rejected", consecutive_failures: 1, claim_token: null,
+        last_refresh_outcome: "rejected", consecutive_failures: 1, consecutive_rejections: 1,
+        claim_token: null,
       });
       const held = await checkpoint(f);
       expect(held?.state).toMatchObject({ cursorFanId: 0, qualityHold: HOLD, crossedFans: 1 });
@@ -96,7 +97,7 @@ describe("legacy fan-earnings walk crossing", () => {
     },
   );
 
-  it("crosses a 404 only on its endpoint's third failed receipt in a row", async () => {
+  it("crosses a 404 only on its endpoint's third rejected receipt in a row", async () => {
     const f = await legacy();
     reject(f, ["fan-b"], 404);
     await expect(f.chunk(20)).rejects.toThrow("gone");
@@ -108,7 +109,29 @@ describe("legacy fan-earnings walk crossing", () => {
     expect(f.visits.map((visit) => visit.fanRef)).toEqual([
       "fan-a", "fan-a", "fan-b", "fan-b", "fan-b", "fan-c", "fan-c",
     ]);
-    expect(await endpoint(f, "fan-b", "lifetime")).toMatchObject({ consecutive_failures: 3 });
+    expect(await endpoint(f, "fan-b", "lifetime")).toMatchObject({
+      consecutive_failures: 3, consecutive_rejections: 3,
+    });
+  });
+
+  it("does not count 5xx failures toward a 404's three rejections", async () => {
+    const f = await legacy();
+    reject(f, ["fan-b"], 503);
+    await expect(f.chunk(20)).rejects.toThrow("gone");
+    await expect(f.chunk(20)).rejects.toThrow("gone");
+    reject(f, ["fan-b"], 404);
+    await expect(f.chunk(20)).rejects.toThrow("gone");
+    expect(await endpoint(f, "fan-b", "lifetime")).toMatchObject({
+      last_refresh_outcome: "rejected", consecutive_failures: 3, consecutive_rejections: 1,
+    });
+    expect((await checkpoint(f))?.state).toEqual({ cursorFanId: f.fans[0]!.id });
+    await expect(f.chunk(20)).rejects.toThrow("gone");
+    expect(await f.chunk(20)).toMatchObject({
+      satisfied: true, qualityHold: HOLD, stats: { fansCrossed: 1 },
+    });
+    expect(await endpoint(f, "fan-b", "lifetime")).toMatchObject({
+      consecutive_failures: 5, consecutive_rejections: 3,
+    });
   });
 
   it("keeps the stop under a provider cooldown", async () => {
@@ -146,17 +169,48 @@ describe("legacy fan-earnings walk crossing", () => {
     expect(await f.rows()).toEqual([]);
   });
 
-  it("stops after the per-chunk crossing limit and resumes the held generation", async () => {
-    const f = await legacy(["fan-c", "fan-d", "fan-e"]);
-    reject(f, ["fan-a", "fan-b", "fan-c", "fan-d"], 400);
-    await expect(f.chunk(40)).rejects.toThrow("gone");
-    expect(f.visits.map((visit) => visit.fanRef)).toEqual(["fan-a", "fan-b", "fan-c", "fan-d"]);
+  it("stops a burst after three crossings in a row across default-budget chunks", async () => {
+    const f = await legacy(["fan-c", "fan-d", "fan-e", "fan-f"]);
+    reject(f, f.allFans.map((fan) => fan.platformUserId), 400, "monthly");
+    // Both calls per fan: a five-request chunk crosses at most two such fans.
+    expect(await f.chunk()).toMatchObject({ satisfied: false, stats: { fansCrossed: 2 } });
+    expect((await checkpoint(f))?.state).toEqual({
+      cursorFanId: f.allFans[1]!.id, crossedFans: 2, consecutiveCrossings: 2,
+    });
+    const input = await f.chunkInput(5);
+    await expect(f.owned(() => executeFanEarningsChunk(f.app, input))).rejects.toThrow("gone");
+    const telemetry = input.telemetry as unknown as { addAnomaly: unknown };
+    expect(telemetry.addAnomaly).toHaveBeenLastCalledWith(expect.objectContaining({
+      details: expect.objectContaining({ platformUserId: "fan-d", crossed: false, consecutiveCrossings: 3 }),
+    }));
     const stopped = await checkpoint(f);
-    expect(stopped?.state).toEqual({ cursorFanId: f.allFans[2]!.id, crossedFans: 3 });
+    expect(stopped?.state).toEqual({
+      cursorFanId: f.allFans[2]!.id, crossedFans: 3, consecutiveCrossings: 3,
+    });
     expect(stopped?.cursorLastSucceededRunId ?? null).toBeNull();
 
+    // A retry stops on the same fan while the provider still rejects it.
+    await expect(f.chunk()).rejects.toThrow("gone");
+    expect(f.visits.slice(-2)).toEqual([
+      { fanRef: "fan-d", window: "lifetime" }, { fanRef: "fan-d", window: "monthly" },
+    ]);
+    expect((await checkpoint(f))?.state).toEqual(stopped?.state);
+
+    // Once the provider answers, the run resets and the walk finishes held.
+    f.beforeResponse.mockReset();
+    expect(await f.chunk()).toMatchObject({ satisfied: false, stats: { fansFetched: 2 } });
+    expect((await checkpoint(f))?.state).toEqual({ cursorFanId: f.allFans[4]!.id, crossedFans: 3 });
+    expect(await f.chunk()).toMatchObject({
+      satisfied: true, qualityHold: HOLD, stats: { fansFetched: 1, fansCrossed: 0 },
+    });
+    expect((await checkpoint(f))?.state).toMatchObject({ cursorFanId: 0, crossedFans: 3 });
+  });
+
+  it("resets the run of crossings when a fan reads successfully", async () => {
+    const f = await legacy(["fan-c", "fan-d", "fan-e"]);
+    reject(f, ["fan-a", "fan-b", "fan-c", "fan-e"], 400);
     expect(await f.chunk(40)).toMatchObject({
-      satisfied: true, qualityHold: HOLD, stats: { fansFetched: 1, fansCrossed: 1 },
+      satisfied: true, qualityHold: HOLD, stats: { fansFetched: 1, fansCrossed: 4 },
     });
     expect((await checkpoint(f))?.state).toMatchObject({ cursorFanId: 0, crossedFans: 4 });
   });
@@ -166,7 +220,9 @@ describe("legacy fan-earnings walk crossing", () => {
     reject(f, ["fan-b"], 400);
     expect(await f.chunk(4)).toMatchObject({ satisfied: false, stats: { fansFetched: 1, fansCrossed: 1 } });
     const partial = await checkpoint(f);
-    expect(partial?.state).toEqual({ cursorFanId: f.fans[1]!.id, crossedFans: 1 });
+    expect(partial?.state).toEqual({
+      cursorFanId: f.fans[1]!.id, crossedFans: 1, consecutiveCrossings: 1,
+    });
     expect(partial?.cursorLastSucceededRunId ?? null).toBeNull();
     expect(await f.chunk(20)).toMatchObject({
       satisfied: true, qualityHold: HOLD, stats: { fansFetched: 1, fansCrossed: 0 },

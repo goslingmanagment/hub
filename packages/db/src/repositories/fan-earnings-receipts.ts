@@ -26,6 +26,7 @@ export async function settleFanEarningsReceipt(
 ): Promise<boolean> {
   const valid = receipt.outcome === "observed" && receipt.observationId !== null
     && receipt.fingerprint !== null;
+  const rejected = receipt.outcome === "rejected";
   const retryAt = new Date(Math.max(
     receipt.checkedAt.getTime() + 15 * 60_000,
     receipt.retryAfterAt?.getTime() ?? 0,
@@ -72,6 +73,7 @@ export async function settleFanEarningsReceipt(
       refresh_changes = o.refresh_changes + case when o.changed then 1 else 0 end,
       unsignaled_changes = o.unsignaled_changes + case when o.changed and not o.had_signal then 1 else 0 end,
       consecutive_failures = case when ${valid} then 0 else o.consecutive_failures + 1 end,
+      consecutive_rejections = case when ${rejected} then o.consecutive_rejections + 1 else 0 end,
       refresh_class = case when o.requested_revision >
         case when o.can_settle then o.claimed_revision else o.applied_revision end then 'dirty' else null end,
       next_due_at = case
@@ -89,17 +91,17 @@ export async function settleFanEarningsReceipt(
 
 /** A walk may cross an endpoint's rejection only after its own receipt is
  * durable: stored at or after `since`, with the claim released. Returns that
- * endpoint's current run of receipts without a valid response, or null. */
+ * endpoint's current run of rejected receipts, or null. */
 export async function findDurableFanEarningsRejection(
   db: Database,
   input: { pageId: number; fanRef: string; window: FanEarningsRefreshWindow; since: Date },
-): Promise<{ consecutiveFailures: number } | null> {
-  const result = await db.execute<{ consecutive_failures: number }>(sql`
-    select consecutive_failures from subject_refresh_state
+): Promise<{ consecutiveRejections: number } | null> {
+  const result = await db.execute<{ consecutive_rejections: number }>(sql`
+    select consecutive_rejections from subject_refresh_state
     where page_id = ${input.pageId} and plane = ${fanEarningsPlane(input.window)}
       and subject_ref = ${input.fanRef} and claim_token is null
       and last_refresh_outcome = 'rejected' and last_visited_at >= ${input.since}
   `);
   const row = result.rows[0];
-  return row ? { consecutiveFailures: Number(row.consecutive_failures) } : null;
+  return row ? { consecutiveRejections: Number(row.consecutive_rejections) } : null;
 }
