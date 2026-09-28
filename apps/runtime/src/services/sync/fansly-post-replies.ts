@@ -265,8 +265,10 @@ export const rollUtcDay = rollFanslyUtcDay;
  *
  * `null` means "this is not a reply page" — a shape the walk refuses to read as
  * an answer. An empty array means "no replies", which INCLUDES the adapter's
- * `{__empty: true}` marker for a 204 or a zero-length body: all three forms are
- * the same honest answer, and none of the three has ever been observed live.
+ * `{__empty: true}` marker for a 204 or a zero-length body. The live "no
+ * replies" is a 200 with an empty `posts[]`; the marker has never been served,
+ * so the walk flags it (`fansly_replies_empty_body`) and the parser never
+ * marks a comment missing from it.
  */
 export function replyRows(payload: unknown): Record<string, unknown>[] | null {
   const record = asRecord(payload);
@@ -592,6 +594,24 @@ export async function fanslyPostRepliesChunk(
         });
         walkUsable = false;
         break;
+      }
+      const emptyMarker = asRecord(raw);
+      if (emptyMarker?.__empty === true) {
+        // A 204 or a zero-length body — a form this route has never served
+        // (its "no replies" is `posts: []`). The walk still counts the look,
+        // and the parser keeps the marker from marking any comment missing;
+        // this is how the first live one gets noticed at all.
+        await input.telemetry.addAnomaly({
+          code: "fansly_replies_empty_body",
+          severity: "warn",
+          message:
+            "Fansly reply page came back as a 204 or an empty body; journaled, no comment marked missing",
+          details: {
+            postRef: candidate.subjectRef,
+            before: requestedBefore,
+            httpStatus: emptyMarker.httpStatus ?? null,
+          },
+        });
       }
 
       const pageIds = rows.map((row) => asNullableString(row.id) ?? "");

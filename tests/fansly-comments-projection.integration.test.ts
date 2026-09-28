@@ -411,6 +411,33 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
   });
 
+  it("marks nothing missing from the adapter's 204 / empty-body marker", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedObservation(page.id, "four", fixture("replies-four-with-accounts"));
+    await project(page.id);
+
+    // The route's live "no replies" is a 200 with `posts: []`; a 204 or an
+    // empty 2xx body has never been served. Read as an answer, a proxy that
+    // swallowed one body would mark every comment on the post deleted.
+    for (const httpStatus of [204, 200]) {
+      await seedObservation(page.id, `marker-${httpStatus}`, {
+        walk: { postId: "000910000000000001", before: null },
+        response: { __empty: true, httpStatus },
+      });
+      const result = await project(page.id);
+      expect(result.markedMissing).toBe(0);
+      expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+    }
+
+    // The proven empty answer still reconciles.
+    await seedObservation(page.id, "empty", fixture("replies-empty"));
+    expect((await project(page.id)).markedMissing).toBe(3);
+  });
+
   it("reproduces every row — `missing_since` included — from the ledger alone", async (
     context,
   ) => {

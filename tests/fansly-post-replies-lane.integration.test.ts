@@ -599,19 +599,28 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     const page = await seedPage();
     await seedPost(page.id, ref(1), "2026-08-01T00:00:00.000Z");
     // The adapter's SYNTHETIC 204 marker. No GET anywhere in the capture ever
-    // returned 204, so this is the honest handling of a case never observed.
+    // returned 204, and production's "no replies" is a 200 with `posts: []`, so
+    // this is the handling of a case never observed.
     const adapter = adapterStub({ reply: () => ({ __empty: true, httpStatus: 204 }) });
     const telemetry = telemetryStub();
     const result = await drain(page.id, adapter, telemetry);
 
     expect(result?.satisfied).toBe(true);
-    expect(telemetry.anomalies).toEqual([]);
+    // The first live one has to be VISIBLE: the look still counts, but the
+    // parser will not mark any comment missing from it.
+    expect(telemetry.anomalies).toEqual([
+      expect.objectContaining({
+        code: "fansly_replies_empty_body",
+        severity: "warn",
+        details: { postRef: ref(1), before: null, httpStatus: 204 },
+      }),
+    ]);
     const rows = await walkRows(page.id);
     expect(rows[0]?.lastVisitedAt).not.toBeNull();
     expect(rows[0]?.knownCount).toBe(0);
     expect(rows[0]?.consecutiveFailures).toBe(0);
-    // The empty body is still JOURNALED — it is the evidence that this post has
-    // no comments, and the roster the projector marks `missing_since` from.
+    // The empty body is still JOURNALED — capture first; the roster it yields
+    // clears marks but never sets `missing_since`.
     expect(await requestParams(page.id, "post_replies")).toHaveLength(1);
   });
 

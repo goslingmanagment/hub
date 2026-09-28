@@ -252,16 +252,32 @@ describe("WP-F5 the shapes that decide `missing_since`", () => {
     expect(all[0]?.data.possiblyTruncated).toBe(false);
   });
 
-  it("reads the SYNTHETIC 204 marker the same way", () => {
+  it("reads the SYNTHETIC 204 marker as no rows, but never as proof of deletion", () => {
     // Named `synthetic_get_204` because no GET anywhere in the capture returned
-    // 204 (all 197 are OPTIONS preflights). This is the honest handling of a
-    // case never observed, not an observed contract.
+    // 204 (all 197 are OPTIONS preflights), and production's "no replies" is a
+    // 200 with `posts: []`. This is the handling of a case never observed, not
+    // an observed contract.
     const payload = fixture("synthetic_get_204");
     expect(canParseFanslyCommentsObservation(observation(payload))).toBe(true);
     const all = drafts(payload);
     expect(all).toHaveLength(1);
     expect(all[0]?.data.count).toBe(0);
     expect(all[0]?.data.parentPostRef).toBe("000910000000000003");
+    // Stamped, and its roster clears — but it may never mark the complement: a
+    // proxy that swallowed a body would read as every comment deleted.
+    expect(all[0]?.data.possiblyTruncated).toBe(true);
+  });
+
+  it("treats an EMPTY 2xx body the same as the 204 marker", () => {
+    const payload = {
+      walk: { postId: "000910000000000003", before: null },
+      response: { __empty: true, httpStatus: 200 },
+    };
+    expect(canParseFanslyCommentsObservation(observation(payload))).toBe(true);
+    const all = drafts(payload);
+    expect(all).toHaveLength(1);
+    expect(all[0]?.data.refs).toEqual([]);
+    expect(all[0]?.data.possiblyTruncated).toBe(true);
   });
 
   it("REFUSES a body it cannot recognize, leaving the observation unstamped", () => {

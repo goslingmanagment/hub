@@ -120,20 +120,30 @@ function walkEnvelope(payload: unknown): WalkEnvelope | null {
  *
  * `null` means "this body is not a reply page at all" — refused by the shape
  * gate and left unstamped for a future parser. An EMPTY ARRAY means "no
- * replies", which is a legitimate, load-bearing answer: it is what marks a
- * post's stored comments missing.
+ * replies". A parsed empty `posts[]` is a legitimate, load-bearing answer: it
+ * is what marks a post's stored comments missing.
  */
 function replyRows(response: unknown): Record<string, unknown>[] | null {
-  // The adapter's honest empty answer for a 204 or a zero-length body. Not
-  // live-proven — no GET in the capture ever returned 204 — and treated as
-  // "no replies" exactly like an empty `posts[]`.
-  if (isRecord(response) && response.__empty === true) {
+  // The adapter's `{__empty: true}` marker for a 204 or a zero-length 2xx body
+  // reads as no rows, so the observation is stamped rather than parked. It is
+  // NOT the live "no replies" answer — that is a 200 with `posts: []`, and no
+  // reply GET has ever come back 204 or empty — so its roster is clear-only:
+  // see `isAdapterEmptyMarker`.
+  if (isAdapterEmptyMarker(response)) {
     return [];
   }
   if (!isRecord(response) || !Array.isArray(response.posts)) {
     return null;
   }
   return recordArray(response.posts);
+}
+
+/** The adapter's synthetic empty answer: a 204 or a zero-length 2xx body. A
+ *  form nobody has seen the route serve proves nothing about the comments a
+ *  post no longer has — a proxy that swallowed a body would otherwise read as
+ *  every comment deleted. */
+function isAdapterEmptyMarker(response: unknown): boolean {
+  return isRecord(response) && response.__empty === true;
 }
 
 /** The `accounts[]` sidecar, indexed by account ref. It was EMPTY in 2 of 5
@@ -196,8 +206,11 @@ export function canonicalizeFanslyCommentsObservation(
   // response cannot establish, so its rows carry the same doubt a full page
   // does. Over-marking here is deliberate: `possiblyTruncated` is a claim about
   // what we can PROVE, and one response can prove nothing about a second page
-  // on a route whose pagination has never been observed.
-  const possiblyTruncated = rows.length >= REPLIES_FULL_PAGE_THRESHOLD || walk.before !== null;
+  // on a route whose pagination has never been observed. The adapter's empty
+  // marker proves nothing either: its roster clears, it never marks missing.
+  const possiblyTruncated = isAdapterEmptyMarker(response)
+    || rows.length >= REPLIES_FULL_PAGE_THRESHOLD
+    || walk.before !== null;
 
   const drafts: CanonicalEventDraft[] = [];
   const refs: string[] = [];
