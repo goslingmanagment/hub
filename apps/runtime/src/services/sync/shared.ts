@@ -152,7 +152,9 @@ export async function persistRawPayload(
   // the raw insert — a failed capture fails the chunk (which retries); never a
   // silent drop. The idempotency key is unique per fetch by construction
   // (page:stream:run:requestSeq.fetchN — the fetch counter lives on the
-  // executor context, so multi-page walks journal every page); outside the
+  // executor context, so multi-page walks journal every page; continuation
+  // chunks share requestSeq and restart fetchN, so an in-context caller MUST
+  // pass syncRunId or its key repeats across chunks); outside the
   // page-executor context a UUID takes its place — retries then produce extra
   // observations with distinct keys, which the Stage 7 reconciliation expects.
   const context = getPageSyncExecutionContext();
@@ -652,6 +654,11 @@ export async function refreshPageMetadata(
     });
     await persistRawPayload(app.db, {
       platformAccountId: pageContext.page.id,
+      // The run id keeps the observation key unique per chunk: continuation
+      // chunks of one request share requestSeq and restart the fetch counter,
+      // so without it followers_reconcile's terminal account_me collided with
+      // the sweep-start one and was silently dropped by the key claim.
+      syncRunId: telemetry?.metadata.runId ?? null,
       endpoint: "account_me",
       requestParams: {},
       responsePayload: accountMe.raw,
