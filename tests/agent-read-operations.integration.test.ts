@@ -1641,6 +1641,59 @@ describe("[sync-critical] agent read plane operations", () => {
     expect(dataset.json().items[0].fields.subscriptionState).toBe("expired");
   });
 
+  it("#3 and #10 read a RETIRED subscription whose last status was active as expired", async () => {
+    // A sync that no longer sees a subscription in the provider's active list
+    // sets `is_current = false` and leaves `canonical_status` at the last value
+    // it saw. Reading the status alone told agents an ended subscription was
+    // still live, while #3 said `isCurrent: false` about the same row.
+    await testDb!.pool.query(
+      `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id,
+         raw_status, canonical_status, price_mills, renew_price_mills, source_created_at, ends_at,
+         is_current)
+       select 'sub-retired', $1::bigint, f.id, 3, 'active', 5000, 5000,
+         timestamptz '2026-01-01T00:00:00Z', timestamptz '2026-02-01T00:00:00Z', false
+       from fans f where f.platform_user_id = $2
+       union all
+       select 'sub-live', $1::bigint, f.id, 3, 'active', 5000, 5000,
+         timestamptz '2026-03-01T00:00:00Z', timestamptz '2026-04-01T00:00:00Z', true
+       from fans f where f.platform_user_id = $2`,
+      [pageId, FAN_PLATFORM_USER_ID],
+    );
+
+    const person = (await agentGet(`/api/v1/agent/people/fansly/${FAN_PLATFORM_USER_ID}`)).json();
+    const personStates = Object.fromEntries(
+      (person.subscriptions as Array<{
+        subscriptionRef: string;
+        subscriptionState: string;
+        isCurrent: boolean;
+      }>).map((row) => [row.subscriptionRef, [row.subscriptionState, row.isCurrent]]),
+    );
+    expect(personStates).toEqual({
+      "sub-retired": ["expired", false],
+      "sub-live": ["active", true],
+    });
+
+    const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
+    const dataset = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/subscriptions/query",
+      window,
+    );
+    expect(Object.fromEntries(
+      (dataset.json().items as Array<{
+        fields: { subscriptionRef: string; subscriptionState: string };
+      }>).map((item) => [item.fields.subscriptionRef, item.fields.subscriptionState]),
+    )).toEqual({ "sub-retired": "expired", "sub-live": "active" });
+
+    // …and an agent counting live subscriptions no longer counts the ended one.
+    const active = await agentPost(
+      "/api/v1/agent/pages/lora-2/datasets/subscriptions/query",
+      { ...window, filters: [{ field: "subscriptionState", op: "eq", value: "active" }] },
+    );
+    expect(active.statusCode).toBe(200);
+    expect(active.json().items.map((item: { fields: { subscriptionRef: string } }) =>
+      item.fields.subscriptionRef)).toEqual(["sub-live"]);
+  });
+
   it("windows subscription relationships by start, not expiry", async () => {
     await testDb!.pool.query(
       `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id,
