@@ -48,13 +48,17 @@ transport/proxy/contract failure) records a row in
 `page_dm_message_sync_health` and clears the `dm_messages` pin in one
 lease-owned transaction; the chunk then fails with the original error, so the
 stream's classification and backoff are unchanged. The thread backs off 5, 10
-and 20 minutes, then is quarantined for 6 hours from its fourth failure; a
-completed walk of the thread clears the row. A walk that already wrote pages
-keeps its pin. When two or more other groups of the page have failed since its
-last successful message read, the failure is treated as a page-wide outage and
-opens no breaker. While a Fansly row carries failures, `/health/sync` reports
-`dm_messages:coverage_degraded` for the page and a targeted backfill of that
-thread refuses with `breaker_open`. Inspect rows read-only:
+and 20 minutes, then is quarantined for 6 hours from its fourth failure. A
+successful read of the thread clears the row: a completed ordinary walk, a
+finished B1 hint walk, or any page of a targeted backfill. A walk that already
+wrote pages keeps its pin. When two or more other groups of the page have
+failed since its last successful message read, the failure is treated as a
+page-wide outage and opens no breaker. While a Fansly row carries failures and
+its thread is still selectable (visible, bound to a fan, not excluded),
+`/health/sync` reports `dm_messages:coverage_degraded` for the page; a thread
+retired by exclusion, hiding or unbinding stops counting, and its row applies
+again only if the thread returns. A targeted backfill of a thread inside its
+window refuses with `breaker_open`. Inspect rows read-only:
 
 ```sql
 select conversation_id, failure_count, error_class, last_attempt_at,

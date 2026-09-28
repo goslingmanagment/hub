@@ -6,7 +6,8 @@
 //      every vendor page verbatim;
 //   2. the retention-depth override is a per-run parameter — a run without it
 //      refuses, and the global config is never written;
-//   3. an open circuit-breaker window refuses BEFORE any vendor traffic;
+//   3. an open circuit-breaker window refuses BEFORE any vendor traffic, and
+//      a successful read clears a lapsed one;
 //   4. the run holds the page's real dm_messages sync lease: a regular
 //      executor cannot lease the stream while the targeted run walks, and a
 //      lease already held by the regular path aborts the targeted run instead
@@ -19,6 +20,7 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  getConversationSyncHealth,
   listUnresolvedProjectionDebt,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   storeFanslySession,
@@ -457,6 +459,35 @@ describe("targeted thread backfill (slice C′)", () => {
     // No lease was taken and no sync run was opened for a refused thread.
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null });
     expect(result.syncRunId).toBeNull();
+  }, 120_000);
+
+  it("clears a lapsed breaker row once the thread answers", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await testDb.pool.query(`
+      insert into page_dm_message_sync_health (
+        conversation_id, platform_account_id, failure_count, error_class,
+        last_error, last_attempt_at, next_retry_at, quarantine_until
+      ) values ($1, $2, 1, 'fansly_500', 'boom', now() - interval '10 minutes',
+                now() - interval '5 minutes', null)
+    `, [targetThreadId, page.id]);
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toHaveLength(1);
+    // Before, the row outlived the read: a thread whose history is complete
+    // is not offered to the regular crawl again, and the page stayed
+    // coverage_degraded on /health/sync.
+    expect(await getConversationSyncHealth(testDb.db, targetThreadId)).toBeNull();
   }, 120_000);
 
   it("aborts when the regular sync path already holds the page's dm_messages lease", async (context) => {

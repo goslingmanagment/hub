@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import {
   acquireTargetedPageSyncLease,
   assertOwnedPageSyncLease,
+  clearConversationSyncHealth,
   ensurePageSyncStates,
   finalizePageDmConversationMessageSync,
   getCheckpoint,
@@ -609,6 +610,11 @@ export async function runTargetedThreadBackfill(
 
           await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
             await upsertPageDmMessages(dbTx, messagePage.normalizedMessages);
+            // The group answered: end its per-thread breaker streak (the run
+            // refuses an open window, so only a lapsed one gets here). A
+            // thread whose history this run completes may never be walked by
+            // the regular crawl again to clear the row.
+            await clearConversationSyncHealth(dbTx, threadId);
           });
 
           result.requests += 1;

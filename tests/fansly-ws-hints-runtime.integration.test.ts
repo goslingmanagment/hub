@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireTargetedPageSyncLease, ensurePageSyncStates, getPageDmConversationById, getPageSyncState,
+  acquireTargetedPageSyncLease, countConversationSyncFailuresByAccount, ensurePageSyncStates,
+  getConversationSyncHealth, getPageDmConversationById, getPageSyncState, recordConversationSyncFailure,
   requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, selectNextPageDmMessageSyncCandidate, startSyncRun,
   upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
@@ -261,6 +262,25 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
     expect((await db.pool.query("select requested_revision,applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows)
       .toEqual([{ requested_revision: 1n, applied_revision: 1n }]);
+  });
+  it("ends the thread's breaker streak when the hint walk reaches its boundary", async () => {
+    const f = await fixture();
+    // A transient first-page 5xx breakered the thread in the ordinary lane.
+    await recordConversationSyncFailure(db.db, {
+      conversationId: f.thread.id, platformAccountId: f.page.id, errorClass: "fansly_500",
+      errorMessage: "error getting group messages",
+    });
+    const debt = () => countConversationSyncFailuresByAccount(db.db, { platformAccountIds: [f.page.id] });
+    await f.step(); await f.due(); await f.step();
+    // Staged pages write nothing to the thread yet.
+    expect(await debt()).toEqual([{ platformAccountId: f.page.id, failingConversationCount: 1 }]);
+    await f.due(); await f.step();
+    expect(f.calls).toHaveLength(3);
+    expect(await getConversationSyncHealth(db.db, f.thread.id)).toBeNull();
+    expect(await debt()).toEqual([]);
+    // The head is stored now, so the ordinary lane would never walk the
+    // thread again; before, the row kept /health/sync degraded for good.
+    expect(await selectNextPageDmMessageSyncCandidate(db.db, { platformAccountId: f.page.id })).toBeNull();
   });
   it("certifies the head only as of the walk's head page, so a head listed since stays due", async () => {
     const f = await fixture();

@@ -1,6 +1,6 @@
 import {
   admitFanslyWsHintAttempt, advanceFanslyWsHint, assertOwnedPageSyncLease,
-  claimFanslyWsHint, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
+  claimFanslyWsHint, clearConversationSyncHealth, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
   listPageDmConversationsByPlatformConversationIds, lockFanslyWsGeneration,
   listFanslyWsHintRawPages, nextFanslyWsHintBudgetAt,
   getExistingPageDmMessageIds, hasUnconfirmedFanslyWsHintTargets,
@@ -247,6 +247,9 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         headReadAt: walk.headReadAt !== undefined && Number.isFinite(Date.parse(walk.headReadAt))
           ? new Date(walk.headReadAt) : null,
       });
+      // The group answered: end its per-thread breaker streak. With the head
+      // stored the ordinary lane may never walk it again to clear the row.
+      await clearConversationSyncHealth(db, conversation.id);
       const targetUnconfirmed = await hasUnconfirmedFanslyWsHintTargets(db, claim, conversation.id, policy);
       await advanceFanslyWsHint(db, claim, {
         // The contiguous material is safe for ordinary polling. A missing

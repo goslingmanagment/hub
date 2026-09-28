@@ -11,6 +11,7 @@ import {
   createFanslyPage,
   createModel,
   deletePageDmMessageByPlatformMessageId,
+  excludePageDmConversationMessageSync,
   finalizePageDmConversationMessageSync,
   getConversationSyncHealth,
   getPageDmMessageIdsAtOrBefore,
@@ -1194,6 +1195,52 @@ describe("page DM repository integration", () => {
       failureCount: 0, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] })).toEqual([]);
+  });
+
+  it("stops counting a breakered thread as coverage debt once the lane no longer selects it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker-retired");
+    const groups = ["live", "excluded", "hidden", "unbound"] as const;
+    const fans = await upsertFans(testDb.db, groups.map((group) => ({
+      platform: "fansly" as const, platformUserId: `fan-breaker-${group}`,
+    })));
+    const threads = new Map<string, number>();
+    for (const [index, group] of groups.entries()) {
+      const thread = await upsertPageDmConversation(testDb.db, {
+        ...generationThreadInput(page.id, `breaker-${group}`, 1), fanId: fans[index]!.id,
+      });
+      if (!thread) throw new Error("test setup: thread creation failed");
+      threads.set(group, thread.id);
+      await recordConversationSyncFailure(testDb.db, {
+        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
+        errorMessage: "error getting group messages",
+      });
+    }
+    const debt = () => countConversationSyncFailuresByAccount(testDb!.db, { platformAccountIds: [page.id] });
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 4 }]);
+
+    // The partner-unresolvable exclusion retires a thread after its 5xx
+    // streak; the list sweep hides a vanished group; a thread can lose its fan.
+    expect(await excludePageDmConversationMessageSync(testDb.db, {
+      conversationId: threads.get("excluded")!, platformAccountId: page.id,
+      partnerPlatformUserId: "partner-breaker-excluded",
+      reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+    })).toBe(true);
+    await testDb.pool.query("update page_dm_threads set is_visible = false where id = $1", [threads.get("hidden")]);
+    await testDb.pool.query("update page_dm_threads set fan_id = null where id = $1", [threads.get("unbound")]);
+
+    // Before, every such row kept the page's /health/sync degraded for good.
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+    expect(await getConversationSyncHealth(testDb.db, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
+    await clearConversationSyncHealth(testDb.db, threads.get("live")!);
+    expect(await debt()).toEqual([]);
+    // A thread that returns to the lane carries its failures again.
+    await testDb.pool.query("update page_dm_threads set is_visible = true where id = $1", [threads.get("hidden")]);
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
   });
 
   it("offers a breakered thread to neither picker until its window lapses", async (context) => {

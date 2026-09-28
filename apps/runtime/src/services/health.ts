@@ -316,7 +316,9 @@ export async function getPublicSyncHealth(
     // mirror coverage debt and must not keep /health/sync at 503 after the
     // retirement fence. The Fansly dm_messages lane writes the table (its
     // per-thread breaker), so a Fansly page stays coverage_degraded while a
-    // thread's failures are uncleared, until that thread syncs.
+    // thread the lane still selects carries failures: until a successful read
+    // of that thread clears them, or the thread leaves the lane (excluded,
+    // hidden, unbound).
     if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }

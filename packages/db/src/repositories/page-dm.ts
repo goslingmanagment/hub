@@ -1716,9 +1716,10 @@ export async function getPageConversationPreview(
 // failure when a walk's first page fails; failures accrue exponential backoff
 // (next_retry_at) and, from the 4th failure, a quarantine window. Candidate
 // selection skips excluded conversations, re-admission is implicit once the
-// windows lapse. Rows are operational sync state — cleared on a successful
-// sync of the conversation, cascaded away with their thread. The retired
-// OnlyFans crawler's historical rows remain readable here too.
+// windows lapse. Rows are operational sync state — cleared by a successful
+// read of the conversation (an ordinary walk, a B1 hint walk or a targeted
+// backfill), cascaded away with their thread. The retired OnlyFans crawler's
+// historical rows remain readable here too.
 
 export const PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD = 4;
 const PAGE_DM_SYNC_FAILURE_BACKOFF_BASE_MINUTES = 5;
@@ -1872,20 +1873,27 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
 }
 
 /** Conversation-level coverage debt per account: breaker rows still carrying
- * failures. They clear only when THEIR conversation actually syncs — the
- * health signal while poison threads sit out. Rows kept only for
+ * failures. They clear only when THEIR conversation is read successfully —
+ * the health signal while poison threads sit out. A thread the lane no longer
+ * selects (excluded, hidden, unbound) sits out for good and stops counting;
+ * its row stays and applies again if the thread returns. Rows kept only for
  * preferred_page_limit (failure_count = 0) do not count. */
 export async function countConversationSyncFailuresByAccount(
   db: Database,
   input?: { platformAccountIds?: readonly number[] },
 ): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> {
   const accountFilter = input?.platformAccountIds && input.platformAccountIds.length > 0
-    ? sql`where h.platform_account_id in (${sql.join(input.platformAccountIds.map((id) => sql`${id}`), sql`, `)}) and h.failure_count > 0`
-    : sql`where h.failure_count > 0`;
+    ? sql`and h.platform_account_id in (${sql.join(input.platformAccountIds.map((id) => sql`${id}`), sql`, `)})`
+    : sql``;
   const result = await db.execute<{ platformAccountId: NumericValue; count: NumericValue }>(sql`
     select h.platform_account_id as "platformAccountId", count(*)::bigint as "count"
     from page_dm_message_sync_health h
-    ${accountFilter}
+    join page_dm_threads c on c.id = h.conversation_id
+    where h.failure_count > 0
+      ${accountFilter}
+      and c.is_visible = true
+      and c.fan_id is not null
+      and ${dmMessageSyncEligibleSql("c")}
     group by h.platform_account_id
   `);
   return result.rows.map((row) => ({
