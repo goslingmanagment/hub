@@ -117,8 +117,17 @@ describe("media describer response classification", () => {
     ["sentinel", message({ content: [{ type: "text", text: "UNAVAILABLE" }] }), "unavailable_sentinel"],
     ["sentinel with tail", message({ content: [{ type: "text", text: "Unavailable." }] }), "unavailable_sentinel"],
     ["empty answer", message({ content: [{ type: "text", text: "   " }] }), "empty"],
+    ["a refusal in words", message({ content: [{ type: "text", text: "I can't describe this image, as it depicts explicit content." }] }), "declined_text"],
+    ["a refusal in words (cannot)", message({ content: [{ type: "text", text: "I cannot help with this image." }] }), "declined_text"],
+    ["an apology", message({ content: [{ type: "text", text: "Sorry, I am unable to describe this." }] }), "declined_text"],
   ])("treats %s as a terminal refusal", (_label, response, reason) => {
     expect(classifyMediaDescribeResponse(MODEL, response)).toMatchObject({ kind: "refused", reason });
+  });
+
+  it("keeps descriptions that merely start with I-words", () => {
+    for (const text of ["Image of a sunset over the sea.", "Icons of three apps on a phone screen."]) {
+      expect(classifyMediaDescribeResponse(MODEL, message({ content: [{ type: "text", text }] }))).toMatchObject({ kind: "described" });
+    }
   });
 });
 
