@@ -37,6 +37,7 @@ const dbMocks = vi.hoisted(() => ({
   getExistingPageDmMessageIds: vi.fn(),
   getPageDmMessageIdsAtOrBefore: vi.fn(),
   getPageDmConversationById: vi.fn(),
+  getPageDmOnboardedAt: vi.fn(),
   listPageDmConversationsByPlatformConversationIds: vi.fn(),
   listPageDmThreadIdsStampedWithGeneration: vi.fn(),
   markPageDmConversationsInvisibleByGeneration: vi.fn(),
@@ -269,6 +270,9 @@ describe("sync executor handlers", () => {
     // models an abandoned walk's pages above it.
     dbMocks.getPageDmMessageIdsAtOrBefore.mockImplementation(async (_db, input) => new Set(input.platformMessageIds));
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
+    // No onboarding known: a first read stops at its start window unless a
+    // test dates the page's DM onboarding.
+    dbMocks.getPageDmOnboardedAt.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     // G3: tests that reach a checkpoint write declare the row-side generation
     // set with stubGenerationSetCount(); the default is "no rows stamped",
@@ -6162,6 +6166,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
       storedMessageCount: 0, messageCoverageStatus: "pending_backfill",
     }));
+    // The page (2026-02-02) predates the page's DM onboarding: old history.
+    dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-03-01T00:00:00.000Z"));
     dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
     h.getMessagesPage.mockImplementation(async (context) => {
       await context.requestObserver.onRequestEvent({
@@ -6307,6 +6313,85 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     } else {
       expect(h.telemetry.addAnomaly).not.toHaveBeenCalled();
     }
+  });
+
+  describe("the first read of a thread whose history began after the page's DM onboarding", () => {
+    // walkMessage dates every message 2026-02-02.
+    const fullPage = (page: number) => ({
+      items: Array.from({ length: 25 }, (_, i) => walkMessage(`p${page}-${i}`)),
+      done: false,
+      raw: { messages: [] },
+    });
+    const firstRead = { storedMessageCount: 0, messageCoverageStatus: "pending_backfill" };
+
+    it("walks past the 25-message start window to the provider's end", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      const h = dmWalkHarness(firstRead, [
+        fullPage(1),
+        { items: [walkMessage("p2-0"), walkMessage("p2-1")], done: true, raw: { messages: [] } },
+      ]);
+
+      await h.run();
+      expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+      expect(h.checkpoint()).toMatchObject({
+        currentConversationId: 777, currentMode: "backfill", currentBeforeMessageId: "p1-24", newThreadHistoryPages: 1,
+      });
+
+      await h.run();
+      expect(h.getMessagesPage.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+        expect.objectContaining({ before: null }), expect.objectContaining({ before: "p1-24" }),
+      ]);
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "complete" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+      expect(h.checkpoint()).not.toHaveProperty("newThreadHistoryPages");
+      expect(dbMocks.getPageDmOnboardedAt).toHaveBeenCalledOnce();
+    });
+
+    it("stops an old thread at its start window when the page reaches history older than onboarding", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-03-01T00:00:00.000Z"));
+      const h = dmWalkHarness(firstRead, [fullPage(1)]);
+
+      await h.run();
+
+      expect(h.getMessagesPage).toHaveBeenCalledOnce();
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    });
+
+    it("keeps the start window for a thread whose first read already finished", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      // storedMessageCount 0 with a settled status: the history below is the
+      // deep backfill's, not a first read.
+      const h = dmWalkHarness({ storedMessageCount: 0, messageCoverageStatus: "partial_window" }, [fullPage(1)]);
+
+      await h.run();
+
+      expect(h.getMessagesPage).toHaveBeenCalledOnce();
+      expect(dbMocks.getPageDmOnboardedAt).not.toHaveBeenCalled();
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+    });
+
+    it("caps the extra pages across chunks and settles the thread partial_window", async () => {
+      dbMocks.getPageDmOnboardedAt.mockResolvedValue(new Date("2026-01-01T00:00:00.000Z"));
+      const pages = Array.from({ length: 9 }, (_, i) => fullPage(i + 1));
+      const h = dmWalkHarness(firstRead, pages);
+
+      // One request per chunk: the counter has to survive the checkpoint.
+      for (let chunk = 1; chunk <= 7; chunk += 1) {
+        await h.run();
+        expect(h.checkpoint()).toMatchObject({ newThreadHistoryPages: chunk });
+      }
+      expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+
+      await h.run();
+      expect(h.getMessagesPage).toHaveBeenCalledTimes(8);
+      expect(dbMocks.finalizePageDmConversationMessageSync)
+        .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+      expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    });
   });
 
   it("carries normalization debt across chunks, so a later exhausted page cannot certify the walk", async () => {

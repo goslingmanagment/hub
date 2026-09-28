@@ -94,6 +94,10 @@ type DmMessagesCursorState = {
    * stamps it as last_message_sync_at; a walk without it (from a stored
    * cursor, or checkpointed before the field existed) leaves that alone. */
   headReadAt?: string;
+  /** Pages this first read has walked past the 25-message start window
+   * because the thread's history began after the page's DM onboarding;
+   * bounded by PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES across chunks. */
+  newThreadHistoryPages?: number;
 };
 
 // OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
@@ -790,6 +794,10 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     // Unparseable means unknown: preserve last_message_sync_at, never "now".
     ...(typeof state.headReadAt === "string" && Number.isFinite(Date.parse(state.headReadAt))
       ? { headReadAt: state.headReadAt }
+      : {}),
+    ...(typeof state.newThreadHistoryPages === "number" && Number.isSafeInteger(state.newThreadHistoryPages) &&
+        state.newThreadHistoryPages > 0
+      ? { newThreadHistoryPages: state.newThreadHistoryPages }
       : {}),
   };
 }

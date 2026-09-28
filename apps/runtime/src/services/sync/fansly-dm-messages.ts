@@ -102,6 +102,22 @@ function resolveDmWalkCoverageStatus(
   return input.existingStatus;
 }
 
+/**
+ * Every message on this page was sent at or after the page's DM onboarding
+ * (getPageDmOnboardedAt): it is history of a conversation that began while
+ * Hub was watching the page, which a first read may walk on through past its
+ * start window. An older message is the pre-onboarding depth the deep
+ * backfill owns (off), and a message without a parseable date cannot be
+ * placed, so either one ends the walk as before.
+ */
+export function isDmMessagePageAfterOnboarding(
+  page: { normalizedMessages: readonly { createdAt: Date }[]; normalizationDebt: boolean },
+  onboardedAt: Date | null,
+) {
+  return onboardedAt !== null && !page.normalizationDebt && page.normalizedMessages.length > 0 &&
+    page.normalizedMessages.every((message) => message.createdAt.getTime() >= onboardedAt.getTime());
+}
+
 function isClearlyImplausibleDmTimestamp(timestamp: Date, now = new Date()) {
   return timestamp.getTime() < Date.UTC(2010, 0, 1) ||
     timestamp.getTime() > now.getTime() + (24 * 60 * 60 * 1000);

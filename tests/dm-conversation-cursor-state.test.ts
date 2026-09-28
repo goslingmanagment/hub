@@ -538,6 +538,29 @@ describe("dm_messages cursor state: normalization debt", () => {
   });
 });
 
+describe("dm_messages cursor state: new-thread history pages", () => {
+  const walking = {
+    version: 1,
+    currentConversationId: 777,
+    currentPlatformConversationId: "group-1",
+    currentBeforeMessageId: "m-25",
+    currentMode: "backfill",
+  } as const;
+
+  it("round-trips the counter, so the extra-page cap holds across chunks", () => {
+    const state = { ...walking, newThreadHistoryPages: 3 };
+    expect(parseDmMessagesCursorState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  });
+
+  it("drops a zero, negative, fractional or non-numeric counter, and an older checkpoint parses without it", () => {
+    for (const newThreadHistoryPages of [0, -1, 1.5, "2", null]) {
+      expect(parseDmMessagesCursorState({ ...walking, newThreadHistoryPages })).toEqual(walking);
+    }
+    expect(parseDmMessagesCursorState({ ...walking })).toEqual(walking);
+    expect(emptyDmMessagesCursorState()).not.toHaveProperty("newThreadHistoryPages");
+  });
+});
+
 describe("dm_messages cursor head-read time", () => {
   const walking = {
     version: 1,

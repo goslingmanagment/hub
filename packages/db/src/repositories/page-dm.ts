@@ -19,6 +19,15 @@ type NumericValue = number | string | bigint | null | undefined;
 
 export const PAGE_DM_PREVIEW_LIMIT = 25;
 export const PAGE_DM_LIVE_BACKFILL_CAP = 25;
+/**
+ * How many message pages past PAGE_DM_LIVE_BACKFILL_CAP the FIRST read of a
+ * conversation that began after the page's DM onboarding may walk toward the
+ * provider's end (getPageDmOnboardedAt; the Fansly dm_messages backfill). At
+ * 25 messages a page that is 200 messages with the window. A safety net: such
+ * a thread normally reaches its start in one or two extra requests, and the
+ * walk still stops at the first message older than onboarding.
+ */
+export const PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES = 7;
 export const PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT = 200;
 export const PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT = 1000;
 export const PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT;
@@ -318,6 +327,22 @@ export async function countPageDmVisibleThreadsBelowGeneration(
     throw new Error("Expected page_dm_threads visible-below-generation count to be a non-negative safe integer");
   }
   return count;
+}
+
+/**
+ * The page's DM onboarding: when Hub first listed any of its conversations
+ * (the earliest first_seen_at). History older than this was already there
+ * when Hub started watching the page — the depth the deep backfill owns —
+ * while a conversation whose every message is newer began under Hub's watch.
+ * An erasure that removes the earliest rows only moves it later, which reads
+ * less history, never more. Null when the page has no conversation yet.
+ */
+export async function getPageDmOnboardedAt(db: Database, platformAccountId: number) {
+  const [row] = await db
+    .select({ onboardedAt: sql<TimestampValue>`min(${pageDmConversations.firstSeenAt})` })
+    .from(pageDmConversations)
+    .where(eq(pageDmConversations.platformAccountId, platformAccountId));
+  return parseTimestamp(row?.onboardedAt);
 }
 
 export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {

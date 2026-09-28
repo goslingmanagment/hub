@@ -19,6 +19,7 @@ import {
   getPageDmConversationById,
   getCheckpoint,
   getPageSyncExecutionContext,
+  getPageDmOnboardedAt,
   getCurrentSubscribers,
   getSyncRun,
   listFanslyPurchaseHistoryCaptures,
@@ -28,6 +29,7 @@ import {
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
   PAGE_DM_LIVE_BACKFILL_CAP,
+  PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES,
   PageSyncLeaseLostError,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   recordConversationSyncFailure,
@@ -178,6 +180,7 @@ import {
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
   isDmHeadStaleByTime,
+  isDmMessagePageAfterOnboarding,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
@@ -3024,6 +3027,9 @@ export async function fanslyDmMessagesChunk(
   let deepBackfillRequests = 0;
   let deepBackfillPaused = false;
   let deepBackfillSelectionReason: "quota" | "idle" | null = null;
+  // Read at most once per chunk, and only when a first read fills its start
+  // window: the one question the new-thread history walk asks the database.
+  let dmOnboardedAt: Date | null | undefined;
 
   const emitDmMessagesChunkSummary = async () => {
     if (emittedDmMessagesChunkSummary) {
@@ -3484,9 +3490,29 @@ export async function fanslyDmMessagesChunk(
           );
 
         const { oldestMessageId, providerHistoryExhausted } = messagePage;
-        const hitWindowCap =
+        const windowFilled =
           currentMode === "backfill" &&
           (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
+        // The first read of a thread (still pending_backfill) whose history
+        // began after the page's DM onboarding walks on past the start window
+        // toward the provider's end, so a new dialog that grew past 25
+        // messages before its first read keeps its beginning. Old threads
+        // stop at the window as before: the page's first message older than
+        // onboarding ends the walk, deep backfill stays off, and the extra
+        // pages are capped across chunks inside the chunk's own budget.
+        const newThreadHistoryPages = state.newThreadHistoryPages ?? 0;
+        let readsNewThreadHistory = false;
+        if (
+          windowFilled && !overlapFound && !providerHistoryExhausted &&
+          currentConversation.messageCoverageStatus === "pending_backfill" &&
+          newThreadHistoryPages < PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES
+        ) {
+          if (dmOnboardedAt === undefined) {
+            dmOnboardedAt = await getPageDmOnboardedAt(app.db, input.pageContext.page.id);
+          }
+          readsNewThreadHistory = isDmMessagePageAfterOnboarding(messagePage, dmOnboardedAt);
+        }
+        const hitWindowCap = windowFilled && !readsNewThreadHistory;
         const headCatchup = state.headCatchup;
         const targetFound = headCatchup && normalizedMessages.some(
           (message) => message.platformMessageId === headCatchup.messageId,
@@ -3645,6 +3671,7 @@ export async function fanslyDmMessagesChunk(
           } } : {}),
           currentBeforeMessageId: oldestMessageId,
           ...(normalizationDebt ? { normalizationDebt: true as const } : {}),
+          ...(readsNewThreadHistory ? { newThreadHistoryPages: newThreadHistoryPages + 1 } : {}),
         };
         if (targetAttemptFinished) delete state.headCatchup;
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
