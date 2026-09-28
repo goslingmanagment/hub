@@ -359,6 +359,10 @@ function providerRefusal(details: "error getting graph" | "error getting media o
   );
 }
 
+function spanDays(call: AdapterCall): number {
+  return (call.beforeDate.getTime() - call.afterDate.getTime()) / DAY_MS;
+}
+
 async function queueRow(pageId: number, subjectRef: string) {
   const queue = await listSubjectRefreshState(testDb!.db, { pageId, plane: "media_stats" });
   const row = queue.find((entry) => entry.subjectRef === subjectRef);
@@ -1199,6 +1203,135 @@ describe("media_stats lane — the cap", () => {
     }
     // Waiting is not completeness: five items have still never been looked at.
     expect((await coverageRows(page.id))[0]).toMatchObject({ status: "in_progress" });
+  });
+});
+
+describe("media_stats lane — a failed visit keeps its backfill progress", () => {
+  for (const failure of ["thrown", "unreadable"] as const) {
+    it(`resumes at the window that failed (${failure}), not at the top of the walk`, async (ctx) => {
+      if (!testDb) return ctx.skip();
+      const page = await seedPage();
+      const mediaRef = ref(1010);
+      // Mid tier, never visited, with more history than one visit walks.
+      await seedMedia(page.id, [{
+        ref: mediaRef,
+        createdAtPlatform: new Date(NOW.getTime() - 150 * DAY_MS),
+      }]);
+      // Day one: the first backfill window is answered, the SECOND fails — as
+      // a thrown error, or as a body journaled and refused by the parser.
+      const failingBeforeMs = NOW.getTime() - 30 * DAY_MS;
+      let dayOne = true;
+      const failsToday = (params: AdapterCall) =>
+        dayOne && params.beforeDate.getTime() === failingBeforeMs;
+      const adapter = adapterStub({
+        fail: (params) =>
+          failure === "thrown" && failsToday(params) ? new Error("socket hang up") : null,
+        body: (params) =>
+          failure === "unreadable" && failsToday(params) ? { aggregationData: {} } : undefined,
+      });
+      const telemetry = telemetryStub();
+      await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+      const afterFailure = await queueRow(page.id, mediaRef);
+      // The answered window is KEPT, and the guard remembers it — not the
+      // window that failed, which was never answered.
+      expect(afterFailure.backfillCursor).toMatchObject({
+        nextBeforeMs: failingBeforeMs,
+        done: false,
+        guard: {
+          spanDays: 31,
+          lastBeforeMs: NOW.getTime(),
+          lastAfterMs: NOW.getTime() - 31 * DAY_MS,
+        },
+      });
+      // Still a failed look: not stamped, and the backoff stands.
+      expect(afterFailure.lastVisitedAt).toBeNull();
+      expect(afterFailure.consecutiveFailures).toBe(1);
+      expect(afterFailure.nextDueAt?.toISOString()).toBe(NEXT_DAY.toISOString());
+
+      dayOne = false;
+      const before = adapter.calls.length;
+      await fanslyMediaStatsChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(), NEXT_DAY),
+      );
+      // The failed window, asked again at its FULL span: not the top of the
+      // walk re-anchored at a new `now`, and not a "repeat" to halve or stop.
+      const resumed = adapter.calls[before]!;
+      expect(resumed.beforeDate.getTime()).toBe(failingBeforeMs);
+      expect(spanDays(resumed)).toBe(31);
+      expect(telemetry.anomalies.filter((anomaly) =>
+        anomaly.code === "fansly_media_stats_window_not_honoured"
+      )).toHaveLength(0);
+      // The window journaled on day one was never read again.
+      expect(adapter.calls.filter((call) => call.beforeDate.getTime() === NOW.getTime()))
+        .toHaveLength(1);
+      expect((await queueRow(page.id, mediaRef)).lastVisitedAt).not.toBeNull();
+    });
+  }
+
+  it("keeps a backfill that FINISHED when the steady window then fails", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1020);
+    // Fresh, ten days old: its creation floor closes the walk after two windows.
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 10 * DAY_MS),
+    }], { queueCursor: {} });
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: mediaRef,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    let dayOne = true;
+    const adapter = adapterStub({
+      // The fresh tier's steady window is the hourly one.
+      fail: (params) => dayOne && params.periodMs === 3_600_000 ? new Error("socket hang up") : null,
+    });
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+    expect(adapter.calls.map((call) => call.periodMs)).toEqual([86_400_000, 86_400_000, 3_600_000]);
+
+    const afterFailure = await queueRow(page.id, mediaRef);
+    expect(afterFailure.backfillCursor).toMatchObject({ done: true, floorBasis: "created_at" });
+    expect(afterFailure.lastVisitedAt).toBeNull();
+    expect(afterFailure.consecutiveFailures).toBe(1);
+    // A purchase signal survives a failed fetch.
+    expect(afterFailure.dirtyReason).toBe("purchase_notification");
+
+    dayOne = false;
+    const before = adapter.calls.length;
+    await fanslyMediaStatsChunk(
+      appStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(), NEXT_DAY),
+    );
+    // The history is done, so the next visit is the steady window alone.
+    expect(adapter.calls.slice(before).map((call) => call.periodMs)).toEqual([3_600_000]);
+    const visited = await queueRow(page.id, mediaRef);
+    expect(visited.lastVisitedAt).not.toBeNull();
+    expect(visited.dirtyReason).toBeNull();
+    expect(visited.consecutiveFailures).toBe(0);
+  });
+
+  it("writes nothing when the FIRST window fails", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1030);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 150 * DAY_MS),
+    }], { queueCursor: {} });
+    const adapter = adapterStub({ fail: () => new Error("socket hang up") });
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+
+    expect(adapter.calls).toHaveLength(1);
+    const row = await queueRow(page.id, mediaRef);
+    // Nothing was accepted, so there is nothing to keep: the cursor is not
+    // re-anchored at this visit's `now`.
+    expect(row.backfillCursor).toEqual({});
+    expect(row.consecutiveFailures).toBe(1);
   });
 });
 

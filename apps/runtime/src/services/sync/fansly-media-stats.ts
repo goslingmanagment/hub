@@ -128,6 +128,7 @@ import {
   listMediaStatsRefreshChunk,
   markMediaStatsTopMediaDirty,
   mediaStatsIntervalDays,
+  recordMediaStatsBackfillCursor,
   recordMediaStatsBackfillProgress,
   recordMediaStatsFailure,
   recordMediaStatsVisit,
@@ -935,7 +936,8 @@ export async function fanslyMediaStatsChunk(
    * retiring an item from the never-visited band on the strength of an error is
    * how an unreachable item disappears), and a steady refresh cut in half by the
    * cap when no backfill window was journaled either — tomorrow re-reads it whole
-   * rather than half.
+   * rather than half. A failed look still KEEPS the backfill windows it had
+   * journaled before it failed: those are in the cursor, not in the stamp.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
@@ -947,11 +949,28 @@ export async function fanslyMediaStatsChunk(
     let journaledWindows = 0;
     let status: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
 
+    /**
+     * A FAILED VISIT KEEPS ITS PROGRESS. The failure — counter and backoff — is
+     * already recorded against the item. What the walk accepted before it failed
+     * is journaled, and a cursor that forgot it re-read the same history on every
+     * admission. The cursor only ever records ACCEPTED windows (the guard is set
+     * after the answer), so the item's next turn asks for the window that failed.
+     * Cursor only: the stamp, the dirty mark and the backoff stay as they are.
+     */
+    const keepFailedVisitProgress = async () => {
+      if (JSON.stringify(backfillCursorJson(cursor)) !== cursorAtEntry) {
+        await recordMediaStatsBackfillCursor(app.db, {
+          pageId,
+          subjectRef: candidate.subjectRef,
+          backfillCursor: backfillCursorJson(cursor),
+        });
+      }
+    };
+
     if (!cursor.done) {
       const walk = await runBackfill(candidate, cursor, issued);
       if (walk.status === "failed") {
-        // The failure is already recorded against the item and its cursor is
-        // left where it was, so the next dispatch retries the same window.
+        await keepFailedVisitProgress();
         return "skipped";
       }
       buckets += walk.buckets;
@@ -961,11 +980,13 @@ export async function fanslyMediaStatsChunk(
 
     // THE STEADY WINDOW, budget permitting. On a visit whose backfill is not yet
     // done this is the part that gets dropped first: history is durable in the
-    // cursor and today's numbers will still be there tomorrow.
+    // cursor — a failed steady window included — and today's numbers will still
+    // be there tomorrow.
     let steadyComplete = false;
     if (status !== "deferred" && status !== "yielded" && hasDayCapacity() && hasChunkCapacity()) {
       const steady = await runSteady(candidate, cursor, issued);
       if (steady.status === "failed") {
+        await keepFailedVisitProgress();
         return "skipped";
       }
       buckets += steady.buckets;
@@ -1061,8 +1082,6 @@ export async function fanslyMediaStatsChunk(
         });
         break;
       }
-      cursor.guard.lastBeforeMs = requested.beforeMs;
-      cursor.guard.lastAfterMs = requested.afterMs;
 
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: DAILY_PERIOD_MS,
@@ -1074,8 +1093,13 @@ export async function fanslyMediaStatsChunk(
       windows += 1;
       backfillWindows += 1;
       if (outcome === "failed") {
+        // The guard is NOT set: a window that failed — or came back unreadable —
+        // was not answered, so the item's next turn retries it as a window, not
+        // as a repeat to halve or stop on.
         return { status: "failed", windows: journaledWindows, buckets };
       }
+      cursor.guard.lastBeforeMs = requested.beforeMs;
+      cursor.guard.lastAfterMs = requested.afterMs;
       if (outcome === "repeat") {
         await handleUnhonouredWindow(candidate.subjectRef, cursor, requested, {
           trigger: "repeat_request",

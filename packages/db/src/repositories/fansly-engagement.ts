@@ -1321,6 +1321,10 @@ export async function listMediaStatsRefreshChunk(
  * that cost: 1 198 calls landed on 8 media items while 5 507 queue rows still
  * read "never visited", because nothing retires an item from that band until
  * its whole history is walked.
+ *
+ * It resets `consecutive_failures`, so it is for a visit that did NOT fail. A
+ * failed visit keeps its cursor through `recordMediaStatsBackfillCursor`, which
+ * leaves the failure and its backoff standing.
  */
 export async function recordMediaStatsBackfillProgress(
   db: Database,
@@ -1334,6 +1338,38 @@ export async function recordMediaStatsBackfillProgress(
     update subject_refresh_state s
        set backfill_cursor = ${JSON.stringify(input.backfillCursor)}::jsonb,
            consecutive_failures = 0,
+           updated_at = now()
+     where s.page_id = ${input.pageId}
+       and s.plane = 'media_stats'
+       and s.subject_ref = ${input.subjectRef}
+  `);
+  return { applied: (result.rowCount ?? 0) > 0 };
+}
+
+/**
+ * Keep the backfill cursor of a visit that FAILED part way — and nothing else.
+ *
+ * A visit can journal several backfill windows and then fail: on a later
+ * window, or on the tier's steady window. Those windows are captured facts, and
+ * a cursor that forgot them re-read the same history on every admission
+ * (production 2026-09: one backfill window re-read 32 times). So the cursor moves.
+ *
+ * NOTHING ELSE DOES. `consecutive_failures` and `next_due_at` are the backoff
+ * `recordMediaStatsFailure` has just written; `last_visited_at` stays put
+ * because a failed look is not a look; `dirty_reason` stays because a purchase
+ * signal survives a failed fetch.
+ */
+export async function recordMediaStatsBackfillCursor(
+  db: Database,
+  input: {
+    pageId: number;
+    subjectRef: string;
+    backfillCursor: Record<string, unknown>;
+  },
+): Promise<{ applied: boolean }> {
+  const result = await db.execute(sql`
+    update subject_refresh_state s
+       set backfill_cursor = ${JSON.stringify(input.backfillCursor)}::jsonb,
            updated_at = now()
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
