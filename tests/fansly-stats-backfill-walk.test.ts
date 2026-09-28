@@ -170,7 +170,11 @@ describe("account creation floor", () => {
     expect(trustedAccountCreatedAt(accountCreatedAt, NOW)).toBe(accountCreatedAt);
     expect(trustedAccountCreatedAt(null, NOW)).toBeNull();
     expect(trustedAccountCreatedAt(new Date(0), NOW)).toBeNull();
-    expect(trustedAccountCreatedAt(new Date("2014-12-31T23:59:59.999Z"), NOW)).toBeNull();
+    // Older than the platform is bad metadata, not a floor: every month in
+    // between would be a guaranteed-empty request.
+    expect(trustedAccountCreatedAt(new Date("2018-12-31T23:59:59.999Z"), NOW)).toBeNull();
+    const oldestBelieved = new Date("2019-01-01T00:00:00.000Z");
+    expect(trustedAccountCreatedAt(oldestBelieved, NOW)).toBe(oldestBelieved);
     expect(trustedAccountCreatedAt(new Date(NOW.getTime() + 1), NOW)).toBeNull();
   });
 });

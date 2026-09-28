@@ -1544,7 +1544,8 @@ export interface MediaStatsRefreshProgress {
   longTail: number;
   dirty: number;
   neverVisited: number;
-  /** Items whose class says they are due right now (dirty included). */
+  /** Items whose class says they are due right now (dirty included) and that
+   *  are not waiting out a failure backoff — what the chunk query admits. */
   dueNow: number;
   /** Items whose first-sight backfill has reached its floor or stopped. */
   backfillComplete: number;
@@ -1559,7 +1560,9 @@ export interface MediaStatsRefreshProgress {
  *
  * The classes are recomputed here from the item's AGE, exactly as the chunk
  * query does — not read from `refresh_class`, which is only ever the tier of the
- * LAST visit and is `dirty` for anything WP-F2 marked.
+ * LAST visit and is `dirty` for anything WP-F2 marked. `dueNow` applies the
+ * chunk query's failure backoff too: an item the lane will not touch today is
+ * not due today.
  */
 export async function countMediaStatsRefreshProgress(
   db: Database,
@@ -1597,6 +1600,8 @@ export async function countMediaStatsRefreshProgress(
              s.last_visited_at,
              s.dirty_reason,
              s.backfill_cursor,
+             s.consecutive_failures,
+             s.next_due_at,
              ${tier} as tier
         from subject_refresh_state s
         join creator_media m
@@ -1613,11 +1618,14 @@ export async function countMediaStatsRefreshProgress(
            count(*) filter (where q.dirty_reason is not null)::text as dirty,
            count(*) filter (where q.last_visited_at is null)::text as never_visited,
            count(*) filter (
-             where q.dirty_reason is not null
-                or q.last_visited_at is null
-                or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
-                or (q.tier = 'mid' and q.last_visited_at < ${midDue})
-                or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
+             where (q.consecutive_failures = 0 or q.next_due_at <= ${input.now})
+               and (
+                 q.dirty_reason is not null
+                 or q.last_visited_at is null
+                 or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
+                 or (q.tier = 'mid' and q.last_visited_at < ${midDue})
+                 or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
+               )
            )::text as due_now,
            count(*) filter (where q.backfill_cursor ->> 'done' = 'true')::text
              as backfill_complete,

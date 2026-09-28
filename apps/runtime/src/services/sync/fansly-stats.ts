@@ -169,12 +169,14 @@ const BACKFILL_PROBE_JUMP_DAYS = 365;
  *
  * With a known creation date the daily and earnings walks step all the way to
  * it and never stop on empty windows, so a garbage or epoch value in page
- * metadata would walk to 1970. Anything older than this — the same "before any
- * plausible account" instant the all-time monthly call below sends — or later
- * than now is treated as unknown, and the [E10] probe rule applies instead. Ten
- * years of months is the accepted first-enable price (A29).
+ * metadata would walk to 1970. Anything older than this or later than now is
+ * treated as unknown, and the [E10] probe rule applies instead. The bound sits
+ * before the platform itself existed, not at the 2015 instant the all-time
+ * monthly call below sends: every month between the two would be a
+ * guaranteed-empty request on first enable, and a Fansly creation date older
+ * than Fansly is not a floor, it is bad metadata.
  */
-const PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS = Date.UTC(2015, 0, 1);
+const PLAUSIBLE_ACCOUNT_CREATED_AFTER_MS = Date.UTC(2019, 0, 1);
 /** The same 31 days for `/account/wallets/earnings/stats`, chosen on LESS
  *  evidence: the one observed call carried a 30-day window and nothing anywhere
  *  shows this route answering a longer one. The unhonoured-window guard below is

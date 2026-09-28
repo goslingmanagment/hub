@@ -1087,7 +1087,9 @@ export async function fanslyMediaStatsChunk(
    * failed: those are in the cursor, not in the stamp. A PAGE-level failure (a
    * dead proxy, a 429, a lost lease) is not a look at all: it leaves the visit
    * for the executor and the item untouched, and the item's next turn resumes
-   * from its stored cursor.
+   * from its stored cursor — the one this visit started from, so the windows
+   * it journaled before the wall are asked again, once per outage. Keeping
+   * them would be a write after a failure that may be a lost lease.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,

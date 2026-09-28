@@ -601,11 +601,22 @@ describe("media_stats lane — the queue", () => {
         nextDueAt: new Date(NOW.getTime() + DAY_MS),
       });
 
+    // The progress block reports the same backlog the selector admits.
+    const dueAt = async (now: Date) =>
+      (await countMediaStatsRefreshProgress(testDb!.db, {
+        pageId: page.id,
+        now,
+        longTailCycleDays: 30,
+      })).dueNow;
+
     // Never visited is band one, ahead of the healthy row — until it fails.
     expect(await refsAt(NOW)).toEqual([failing, healthy]);
+    expect(await dueAt(NOW)).toBe(2);
     await backOff();
     expect(await refsAt(NOW)).toEqual([healthy]);
+    expect(await dueAt(NOW)).toBe(1);
     expect(await refsAt(new Date(NOW.getTime() + DAY_MS))).toEqual([failing, healthy]);
+    expect(await dueAt(new Date(NOW.getTime() + DAY_MS))).toBe(2);
 
     // A NEW purchase signal moves `next_due_at` earlier and re-admits it once…
     await markSubjectRefreshDirty(testDb.db, {
