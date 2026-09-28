@@ -658,7 +658,9 @@ export async function findPageDmMessageByPlatformMessageId(
     : null;
 }
 
-/** Tombstones a stored DM message; returns its conversation id when a live row was removed. */
+/** Tombstones a stored DM message; returns its conversation id when a live row was removed.
+ * OnlyFans webhook deletions only: a Fansly WS deletion keeps the content
+ * (markFanslyWsHotDeletion in fansly-ws-deletions.ts). */
 export async function deletePageDmMessageByPlatformMessageId(
   db: Database,
   input: {

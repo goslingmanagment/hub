@@ -102,8 +102,10 @@ failure or specific uncovered risk.
 
 The minutely canonicalizer/projector routes only metadata from durable B0
 frames. An event-ID receipt and subject dirty revision commit together.
-Unknown children, decoder bounds and deletes remain explicit debt. A batch does
-not discard valid siblings. Existing B0 envelopes without generation metadata
+Unknown children, decoder bounds and deletes remain explicit debt. A delete is
+never routed as a hint; its exact receipt only marks the stored copies deleted
+(fansly-ws-reliability.md, Platform deletions). A batch does not discard valid
+siblings. Existing B0 envelopes without generation metadata
 remain in the journal and cannot dispatch from an invented generation.
 
 One `(page, fansly_ws_dm, group)` row absorbs bursts. The existing scheduler

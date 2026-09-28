@@ -68,7 +68,8 @@ source_deleted means an exact retained delete settled the operational target
 following a contiguous REST walk. It does not mean the message was stored in the
 business archive; hot_applied_at stays null for a deleted-only target. Its
 settlement_observation_id points to retained deletion evidence. Mutation receipts
-stay mutation_debt; this is not a B2 tombstone projector.
+stay mutation_debt; applying them to stored messages is described under
+[Platform deletions](#platform-deletions).
 
 A terminal transport/timeout event for the admitted B1 request records
 `target_transport`/`target_timeout` and retries after 60 seconds, then 120, up to
@@ -111,8 +112,70 @@ Custody is the stored expected identity, not fabricated account verification.
 Later source mutations remain distinct from materialization/tombstones in the
 reader. A manifest is a current inspection, not reusable write authorization.
 
-There is no supported WS-to-message_archive projector in this code. The six rows
-are not claimed recovered. A separate B2 change must define native sender/fan
+There is no supported WS-to-message_archive projector for message material in
+this code (deletion marks on already stored rows are separate, see below). The
+six rows are not claimed recovered. A separate B2 change must define native sender/fan
 identity for groups absent from REST, source-event deduplication/provenance,
 tombstone ordering, owner-erasure fencing and replay before applying a reviewed
 production recovery. Do not create a fake visible REST thread to bypass it.
+
+## Platform deletions
+
+A Fansly DM deletion reported by the account socket (serviceId 5, event type
+10) marks the copies Hub already holds as deleted: `page_dm_messages.deleted_at`
+and `message_archive.deleted_at`, dated by the earliest exact receipt. Text,
+attachments, tips and reply refs stay. Nothing is inserted: a message deleted
+before Hub captured it stays absent. Only exact evidence counts: a
+`mutation_debt` receipt with a known generation and native group whose group
+matches the stored thread. A correlation or bulk marker is not expanded to
+other recipients. There is no separate flag: B0 capture of a page
+(`fanslyWsCapturePageAllowlist`) is what leads, via receipts, to marks on its
+stored messages. B1 flags do not gate the marks.
+
+Readers keep their existing deleted-row behavior. The desktop/dashboard
+conversation view, thread windows (stored count, newest/oldest ids) and AI
+context skip deleted rows, as they do for OnlyFans tombstones. Agent Read
+transcripts return the row with `state: "deleted"`, `deletedAt` and its text
+(`includeDeleted` defaults to true); Agent Read search and the dashboard
+archive search return the hit with `deletedAt`; the person timeline shows it as
+`message.deleted`. A later REST read of the message does not clear a mark.
+
+Exception, the thread head: its id, time and preview stay with the Fansly
+conversation list, their only writer, and that list can keep naming a deleted
+message as the head (13 threads in production on 2026-09-28, rewritten by
+list scans days after the deletion). The inbox preview of such a thread keeps
+showing the deleted text, unmarked, while the conversation view hides the
+message. A stored head that is marked still counts as captured, so it opens no
+head debt.
+
+The message-archive sweep applies, every minute, the receipts filed in the
+last hour. This marks new deletions and an archive row that appeared after its
+deletion receipt (canonicalization lags about 90 s). The same pass re-derives a
+thread window that a concurrent conversation-list write reverted after a mark;
+without that it would keep counting the deleted row until the next REST walk.
+The archive shadow rebuild re-applies all receipts.
+
+The first sweep after deploy reaches only the receipts filed in the hour
+before it. All older receipts, and anything a canonicalization backlog longer
+than the hour left unmarked, need the owner-run backfill. It reads only Hub's
+receipts, makes no Fansly call, is idempotent and is safe to re-run:
+
+```sh
+pnpm --silent cli archive:backfill-fansly-ws-deletions             # read-only dry run
+pnpm --silent cli archive:backfill-fansly-ws-deletions --execute   # after owner approval
+```
+
+The dry run prints the exact deletions and the live hot and archive rows they
+name per page; `--account <id>` limits it to one page.
+
+Rollback: marks persist after a code rollback. The marked rows stay hidden
+from the conversation view, the thread windows and the AI context, and stay
+frozen: `upsertPageDmMessages` never refreshes a marked row, and no code path
+unmarks one. Rolling back code therefore does not undo wrong marks; they would
+need a separate, owner-approved unmark repair, which does not exist.
+
+```sql
+select p.label, count(*) filter (where m.deleted_at is not null) as marked_hot
+from page_dm_messages m join pages p on p.id = m.platform_account_id
+where p.platform = 'fansly' group by p.label;
+```

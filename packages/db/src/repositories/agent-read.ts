@@ -1446,6 +1446,9 @@ export interface AgentSearchRow {
   isSentByMe: boolean;
   rank: number;
   snippet: string | null;
+  /** Set when the platform deleted the message. A Fansly WS deletion keeps the
+   * text, so a deleted message can still match; this marks the hit. */
+  deletedAt: Date | null;
 }
 
 /**
@@ -1514,7 +1517,7 @@ export async function searchAgentArchive(
 
   const result = await db.execute<Record<string, unknown>>(sql`
     select p.label, ma.platform, ma.conversation_ref, ma.message_ref, ma.occurred_at,
-           ma.sender_role, ma.is_sent_by_me,
+           ma.sender_role, ma.is_sent_by_me, ma.deleted_at,
            ts_rank(to_tsvector('simple', ma.text_plain),
                    websearch_to_tsquery('simple', ${input.query}))::float8 as rank,
            ${snippet} as snippet
@@ -1536,6 +1539,7 @@ export async function searchAgentArchive(
       isSentByMe: row.is_sent_by_me === true,
       rank: Math.max(0, Number(row.rank ?? 0)),
       snippet: row.snippet == null ? null : String(row.snippet),
+      deletedAt: date(row.deleted_at),
     })),
     witnesses: witnessesFor(["message_archive"]),
   };

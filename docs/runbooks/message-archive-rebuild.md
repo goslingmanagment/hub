@@ -44,9 +44,11 @@ Per account, one transaction, restartable (a re-run clears that account's
 shadow scope first): (1) legacy-seed LIFT — verbatim copy, provenance
 preserved, never re-derived; (2) event replay from seq 0 behind the HARD
 detached-partition gate (checked at start AND at end of the transaction);
-(3) account-scoped backfill re-run; (4) PPV purchases re-applied last
+(3) account-scoped backfill re-run; (4) PPV purchases re-applied
 (unlock events plus hot `purchased_at`, `is_opened` only ever to true — the
-same facts as `archive:backfill-ppv-purchases`). The live table is not touched. Rollback
+same facts as `archive:backfill-ppv-purchases`); (5) Fansly WS deletion marks
+re-applied last (exact deletion receipts, `deleted_at` only, text kept — the
+same facts as `archive:backfill-fansly-ws-deletions`). The live table is not touched. Rollback
 at this stage = simply don't switch (dropping the shadow is a separate owner
 decision; nothing reads it).
 
