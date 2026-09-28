@@ -65,6 +65,7 @@ import { runDmCorrectionsLineageIntake } from "./services/dm-corrections-lineage
 import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
+import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -2106,6 +2107,38 @@ export function buildProgram() {
             + `(already ${result.alreadyRepaired}, missing-obs ${result.missingObservation}, `
             + `missing-item ${result.missingItem}, out-of-range ${result.outOfRange}, `
             + `errored ${result.errored}) of ${result.scanned} scanned`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // M11. An owner-run one-off like the two below: dry-run is the default
+  // (inside a READ ONLY transaction), `--execute` opts in, a re-run reports
+  // zeros. It deletes queue state only and makes no Fansly call.
+  program
+    .command("fansly:media-stats-prune-foreign")
+    .description(
+      "M11: delete the never-visited media_stats queue rows of media the page does not own "
+        + "(every media.observed for the ref names another account, e.g. a fan's DM media), "
+        + "which the route can only ever fail. Heads and journal stay. Dry-run default; idempotent",
+    )
+    .option("--execute", "actually delete (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runFanslyMediaStatsForeignPrune(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+        for (const page of result.pages) {
+          console.log(`page ${page.pageId} (${page.pageLabel}): ${page.rows} (failing ${page.failing})`);
+        }
+        console.log(
+          `${result.dryRun ? "[dry-run] would delete" : "deleted"} ${result.rows} `
+            + `foreign media_stats rows (failing ${result.failing}) on ${result.pages.length} page(s)`,
         );
       } finally {
         await app.close();

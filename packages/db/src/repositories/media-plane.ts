@@ -125,9 +125,10 @@ export interface UpsertCreatorMediaInput {
  * (prod: ~3.6k queued, none ever answered). The media head is still written —
  * other readers want it — but the queue row is skipped when the media's owner
  * and the page's own account ref are both known and differ; either one unknown
- * fails open. Rows queued before this check stay queued: `creator_media` keeps
- * no owner, so neither the chunk query nor `seedMediaStatsQueue` (first enable
- * only) can tell them apart.
+ * fails open. `creator_media` keeps no owner, so neither the chunk query nor
+ * `seedMediaStatsQueue` (first enable only) can tell such rows apart; the ones
+ * queued before this check are removed by the owner-run one-off
+ * `fansly:media-stats-prune-foreign`, which reads the owner from the events.
  */
 export async function upsertCreatorMedia(
   db: Database,

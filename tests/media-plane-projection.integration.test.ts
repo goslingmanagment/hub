@@ -35,6 +35,7 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runFanslyMediaStatsForeignPrune } from "../apps/runtime/src/services/fansly-media-stats-foreign-prune.ts";
 import {
   MEDIA_PLANE_PROJECTION,
   rebuildMediaPlaneProjection,
@@ -463,6 +464,97 @@ describe("media plane — one paid DM page, end to end", () => {
       [page.id],
     );
     expect(queued.map((row) => row.subject_ref)).toEqual(["offer-message-1", "offer-no-owner"]);
+  });
+
+  it("prunes the fan's rows queued before the owner check, on an owner's --execute only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const first = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    const own = first.accountMedia[0]!;
+    first.accountMedia.push(
+      { ...own, id: "offer-fan-sent", accountId: FAN_REF, mediaId: "raw-fan-sent" },
+      { ...own, id: "offer-fan-visited", accountId: FAN_REF, mediaId: "raw-fan-visited" },
+      { ...own, id: "offer-mixed", accountId: FAN_REF, mediaId: "raw-mixed" },
+      { ...own, id: "offer-no-owner", accountId: undefined as never, mediaId: "raw-no-owner" },
+    );
+    // The same ref observed ONCE as the page's own keeps its row.
+    const second = paidVideoPayload({
+      messageId: "message-2",
+      messageAt: new Date("2026-08-20T12:00:00Z"),
+      withOrder: false,
+    });
+    second.accountMedia.push({ ...own, id: "offer-mixed", accountId: OWN_REF, mediaId: "raw-mixed" });
+    await seedObservation(page.id, "dm_messages", "prune-1", first);
+    await seedObservation(page.id, "dm_messages", "prune-2", second);
+    await project(page.id);
+
+    // The queue as it stood before the owner check: every head had a row, and
+    // a purchase can queue a ref no media event names.
+    await testDb.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+       select $1, 'media_stats', ref, 'fresh', now()
+         from unnest($2::text[]) as ref
+       on conflict (page_id, plane, subject_ref) do nothing`,
+      [page.id, ["offer-fan-sent", "offer-fan-visited", "offer-mixed", "offer-orphan"]],
+    );
+    await testDb.pool.query(
+      `update subject_refresh_state set consecutive_failures = 3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-fan-sent'`,
+      [page.id],
+    );
+    // A served window proves the page can read it, whatever the event says.
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = now()
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-fan-visited'`,
+      [page.id],
+    );
+    const queued = async () =>
+      (await rows<{ subject_ref: string }>(
+        `select subject_ref from subject_refresh_state
+          where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+        [page.id],
+      )).map((row) => row.subject_ref);
+    const everything = [
+      "offer-fan-sent",
+      "offer-fan-visited",
+      "offer-message-1",
+      "offer-message-2",
+      "offer-mixed",
+      "offer-no-owner",
+      "offer-orphan",
+    ];
+    expect(await queued()).toEqual(everything);
+    const expected = [{ pageId: page.id, pageLabel: "plane-page", rows: 1, failing: 1 }];
+
+    // Dry-run is the default: it counts, per page, and writes nothing.
+    const dry = await runFanslyMediaStatsForeignPrune(appStub());
+    expect(dry).toEqual({ dryRun: true, pages: expected, rows: 1, failing: 1 });
+    expect(await queued()).toEqual(everything);
+    // Another page's scope finds nothing here.
+    expect((await runFanslyMediaStatsForeignPrune(appStub(), { accountId: page.id + 1 })).pages)
+      .toEqual([]);
+
+    const executed = await runFanslyMediaStatsForeignPrune(appStub(), {
+      dryRun: false,
+      accountId: page.id,
+    });
+    expect(executed).toEqual({ dryRun: false, pages: expected, rows: 1, failing: 1 });
+    expect(await queued()).toEqual(everything.filter((ref) => ref !== "offer-fan-sent"));
+    // Queue state only: the fan's media head stays.
+    expect(await rows(
+      `select 1 from creator_media where page_id = $1 and media_offer_ref = 'offer-fan-sent'`,
+      [page.id],
+    )).toHaveLength(1);
+    // And a second run finds nothing to do.
+    expect(await runFanslyMediaStatsForeignPrune(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, pages: [], rows: 0, failing: 0 });
   });
 
   it("is idempotent: a second sweep + projection changes nothing", async (context) => {

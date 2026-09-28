@@ -140,6 +140,14 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/dm-analytics.ts",
   "packages/db/src/repositories/dm-message-archive.ts",
   "packages/db/src/repositories/fan-metadata.ts",
+  // M11: an owner-run queue repair, never scheduled, dry-run by default (a
+  // READ ONLY transaction). deleteForeignMediaStatsQueueRows removes only
+  // never-visited `media_stats` rows of `subject_refresh_state` — capture-plane
+  // operational state (§3.4), no captured fact — for media another account
+  // owns, which the route can only ever fail. Every observation, event and
+  // `creator_media` head stays, and the enqueue's owner check keeps the rows
+  // from coming back.
+  "packages/db/src/repositories/fansly-engagement.ts",
   "packages/db/src/repositories/message-archive.ts",
   // observations.ts left this list when the insert protocol became atomic:
   // its only delete was the compensating release of a failed key claim, and
