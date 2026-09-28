@@ -7,6 +7,7 @@ import * as binding from "../apps/runtime/src/services/egress/fansly-binding-pre
 import { readProbeGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
+import { getPageSyncBlocks, getSyncBlocksOverview } from "../apps/runtime/src/services/sync-blocks.ts";
 import { getPublicSyncHealth } from "../apps/runtime/src/services/health.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -116,5 +117,18 @@ describe("checked Fansly B1 generation repair", () => {
     expect(off.pages[0]?.blocks.messages_live.metrics.fanslyWsHints).toEqual({ state: "inactive" });
     const offHealth = await getPublicSyncHealth(f.app, { pageIds: [f.page.id] });
     expect(mismatchedHealth.body.pages.map(p => p.issues)).toEqual(offHealth.body.pages.map(p => p.issues));
+  });
+  it("keeps the mismatch on the dashboard sync surfaces until the checked re-pin, then clears it", async () => {
+    const f = await fixture();
+    const overview = async () => (await getSyncBlocksOverview(f.app, { pageIds: [f.page.id] }))
+      .pages[0]?.blocks.messages_live.metrics.fanslyWsHints;
+    const detail = async () => (await getPageSyncBlocks(f.app, { pageLabel: f.page.label }))
+      .page.blocks.messages_live.metrics.fanslyWsHints;
+    expect(await overview()).toMatchObject({ state: "generation_mismatch", currentGeneration: f.generation });
+    expect(await detail()).toMatchObject({ state: "generation_mismatch" });
+    const preview = await f.preview();
+    expect(await applyFanslyWsPolicyRepair(f.app, preview.proposal)).toEqual({ state: "applied" });
+    expect(await overview()).toMatchObject({ state: "matching", configuredGeneration: f.generation });
+    expect(await detail()).toMatchObject({ state: "matching" });
   });
 });

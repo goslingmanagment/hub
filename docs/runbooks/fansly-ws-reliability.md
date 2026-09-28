@@ -46,9 +46,12 @@ is required for live overrides. Old disabled receipts remain retained and are
 not automatically re-routed. A reverse repin to a stale generation is not a
 repair; rollback to B1-off is the operational containment option.
 
-Detailed sync-block responses expose messages_live.metrics.fanslyWsHints. A
-mismatch is informational, not a deploy-health failure or an archive completeness
-certificate. The command also exposes it when ordinary REST is healthy.
+Detailed sync-block responses expose messages_live.metrics.fanslyWsHints, and
+the dashboard's Settings → Sync renders a `generation_mismatch` as an
+"Event-driven refresh paused" line on Messages Live (with the preview command on
+the page detail). It clears on the next refresh after apply. A mismatch is
+informational, not a paged incident, a deploy-health failure or an archive
+completeness certificate. The command also exposes it when ordinary REST is healthy.
 
 ## Settlement and failure checks
 

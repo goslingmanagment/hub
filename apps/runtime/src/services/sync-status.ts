@@ -1768,7 +1768,8 @@ export async function getSyncStatusSnapshot(
 
       const blockList = SYNC_DOMAIN_BLOCKS.map((block) => blocks[block]);
       // Additive latency diagnostics, deliberately excluded from block health
-      // and deploy gating. The existing metrics bag is exposed by sync-blocks.
+      // and deploy gating. The existing metrics bag is exposed by sync-blocks;
+      // the dashboard's Sync tab turns a generation_mismatch into a status line.
       const hintDiagnostic = hintDiagnostics.get(page.id);
       if (hintDiagnostic) blocks.messages_live.metrics.fanslyWsHints = hintDiagnostic;
       return {

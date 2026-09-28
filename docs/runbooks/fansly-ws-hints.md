@@ -11,10 +11,14 @@ Every Fansly page carries a policy without `expiresAt` and without
 policy stays pinned to the page's generation. When a chatter's session or the
 page proxy rotates, `fansly_ws_connections.generation` changes, receipts start
 reporting `disabled`, and hints stop for that page until the policy is re-pinned
-to the new digest (read it from `fansly_ws_connections` under `read_only`, edit
-the policy, verify all-role convergence). Nothing is lost meanwhile: the bounded
-walk still discovers new messages within 30 minutes and the certified full within
-its interval. The sections below record the original canary procedure.
+to the new digest with the checked `fansly:ws-policy` preview/apply
+(`fansly-ws-reliability.md`); re-pinning stays a manual step. While hints are
+enabled for the page, Settings → Sync shows "Event-driven refresh paused" on its
+Messages Live row and detail card; the line is recomputed on every read and
+clears once the policy matches. It pages nobody and does not change block state
+or `/health/sync`. Nothing is lost meanwhile: the bounded walk still discovers
+new messages within 30 minutes and the certified full within its interval. The
+sections below record the original canary procedure.
 
 ## Configuration
 
