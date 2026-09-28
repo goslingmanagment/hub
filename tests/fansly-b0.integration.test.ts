@@ -262,7 +262,7 @@ describe("B0 PostgreSQL ownership and journal", () => {
       expect(lost).toMatchObject({ closed_at: null, stop_reason: null });
       expect(warn).toHaveBeenCalledWith(
         { pageLabel: f.page.label, connectionId: lost.id, stopReason: "disabled", closeError: "P0001" },
-        "Fansly B0 connection close not recorded; the next owner marks it abandoned",
+        "Fansly B0 connection close not confirmed; if it did not commit, the next owner marks it abandoned",
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain("injected");
       await testDb.pool.query(allowClose);
@@ -275,14 +275,14 @@ describe("B0 PostgreSQL ownership and journal", () => {
       expect(next.gap_since).toEqual(abandoned.last_guard_at);
     }, 30_000);
 
-    it("keeps an auth refusal in process, logs it as an error, and a restart retries the generation once", async () => {
+    it("keeps an auth refusal in the page loop, logs it as an error, and the next page start retries the generation once", async () => {
       const f = await workerFixture(() => '{"t":0,"d":"{\\"code\\":401}"}');
       const error = vi.spyOn(f.app.logger, "error");
       let worker = startFanslyWsWorker(f.app);
       try {
         await vi.waitFor(() => expect(error).toHaveBeenCalledWith(
           { pageLabel: f.page.label, connectionId: expect.any(String), stopReason: "auth_refused", closeError: "P0001" },
-          "Fansly B0 auth refusal not persisted; a restart retries this generation once",
+          "Fansly B0 auth refusal not confirmed; if it did not commit, the next page start retries this generation once",
         ), { timeout: 10_000 });
         expect(await isFanslyWsGenerationBlocked(testDb.db, f.page.id, f.generation)).toBe(false);
         expect(f.open).toHaveBeenCalledOnce();
@@ -293,7 +293,7 @@ describe("B0 PostgreSQL ownership and journal", () => {
         await vi.waitFor(async () => expect(await isFanslyWsGenerationBlocked(testDb.db, f.page.id, f.generation))
           .toBe(true), { timeout: 15_000 });
       } finally { await worker.stop(); }
-      // The stated residual: one more refused auth attempt after the restart.
+      // The stated residual: one more refused auth attempt on the next page start.
       expect(f.open).toHaveBeenCalledTimes(2);
       expect((await f.rows()).map((row) => row.stop_reason)).toEqual(["abandoned", "auth_refused"]);
     }, 30_000);

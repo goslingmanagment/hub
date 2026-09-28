@@ -136,16 +136,20 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
         const closing = owner;
         const id = connectionId;
         // No retry through app.db: only the lock-owning session writes. The
-        // next owner of this page closes the row as `abandoned`.
+        // next owner of this page closes the row as `abandoned`. A client-side
+        // timeout or lost session may still have committed the close.
         if (id) await serial(() => finishFanslyWsConnection(closing.db, id, reason)).catch((error: unknown) => {
           const fields = { pageLabel: label, connectionId: id, stopReason: reason,
             closeError: closeErrorClass(error, closing.alive) };
-          // Residual: `abandoned` does not block the generation, so after a
-          // restart a lost refusal gets one more WS auth attempt.
+          // Residual: `abandoned` does not block the generation. The wait loop
+          // below blocks only this runner; the next start of this page (worker
+          // restart, disable/re-enable, live-config stop) gets one more WS auth.
           if (reason === "auth_refused") {
-            app.logger.error(fields, "Fansly B0 auth refusal not persisted; a restart retries this generation once");
+            app.logger.error(fields,
+              "Fansly B0 auth refusal not confirmed; if it did not commit, the next page start retries this generation once");
           } else {
-            app.logger.warn(fields, "Fansly B0 connection close not recorded; the next owner marks it abandoned");
+            app.logger.warn(fields,
+              "Fansly B0 connection close not confirmed; if it did not commit, the next owner marks it abandoned");
           }
         });
         await owner.close();
