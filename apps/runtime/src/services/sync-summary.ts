@@ -1,5 +1,6 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import {
+  activePageSyncRetryAt,
   getSyncStreamsForPlatform,
   listCheckpointStates,
   listPageSyncStates,
@@ -111,7 +112,7 @@ function toStreamSyncUx(
     status: task.status,
     stalled: isStalled(task, now),
     pending: task.requestSeq > task.appliedSeq || task.status === "pending",
-    retryAt: iso(task.retryAt),
+    retryAt: iso(activePageSyncRetryAt(task.retryAt, now)),
     progress: progressFor(task),
     recentErrors: {
       total429s: 0,

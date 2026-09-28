@@ -1,6 +1,7 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import { getFanslyWsHintDiagnostic } from "./fansly-ws-policy-repair.ts";
 import {
+  activePageSyncRetryAt,
   getOfapiFinancialTruthSummaries,
   getLatestSettledOfapiDmEventTimes,
   getSyncStreamsForPlatform,
@@ -1025,7 +1026,7 @@ function deriveTaskState(
       state = "backfilling";
     }
   } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
-    const budgetReason = buildOfapiBudgetStatusReason(task.progress, task.retryAt);
+    const budgetReason = buildOfapiBudgetStatusReason(task.progress, activePageSyncRetryAt(task.retryAt, now));
     if (budgetReason) {
       state = budgetReason.code === "ofapi_request_budget" ? "scheduled" : "delayed";
       statusReason = budgetReason;
@@ -1084,7 +1085,7 @@ function deriveTaskState(
     progressedAt: iso(task.progressedAt),
     failedAt: iso(task.failedAt),
     nextDueAt: iso(nextDueAt),
-    nextRetryAt: iso(task.retryAt),
+    nextRetryAt: iso(activePageSyncRetryAt(task.retryAt, now)),
     queueAgeSeconds,
     freshnessAgeSeconds,
     isFresh,
