@@ -173,7 +173,7 @@ jobs:
         id: unit-tests
         if: runner.environment == 'self-hosted'
         run: |
-          bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=6
+          bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=4
           echo "started=true" >> "$GITHUB_OUTPUT"
 
       # Check backend types once. Docker explicitly consumes this successful
