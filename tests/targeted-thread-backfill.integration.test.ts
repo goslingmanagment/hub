@@ -24,6 +24,7 @@ import {
   storeFanslySession,
   upsertCheckpointProgress,
   upsertFans,
+  upsertPageDmMessages,
 } from "@agency_hub_core/db";
 import {
   encryptJson,
@@ -808,5 +809,116 @@ describe("targeted thread backfill (slice C′)", () => {
     // The captured facts still landed.
     expect(await countMessages(targetThreadId)).toBe(1);
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+  }, 120_000);
+  it.each(["subscribers", "catalog", "media_stats"])(
+    "finalizes the verdict when a %s chunk runs mid-walk: it cannot touch thread rows",
+    async (stream) => {
+      const { page, targetThreadId } = await seedPageWithThreads();
+      appContext = {
+        ...appContext,
+        adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, [], {
+          beforeReturn: async () => {
+            await testDb!.pool.query(`
+              update page_sync_states
+              set status = 'running', leased_seq = request_seq, lease_owner = 'regular-executor',
+                  lease_token = 'other-lease', lease_heartbeat_at = now(),
+                  lease_expires_at = now() + interval '2 minutes', started_at = now()
+              where page_id = $1 and stream = $2
+            `, [page.id, stream]);
+          },
+        }) as never,
+      };
+
+      const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+      // Before, 7 of 8 prod refusals came from streams like these.
+      expect(result).toMatchObject({
+        outcome: "completed", providerHistoryExhausted: true, projectionDebtRecorded: false,
+        messageCoverageStatus: "complete",
+      });
+      expect(await listUnresolvedProjectionDebt(appContext.db, 10)).toHaveLength(0);
+    },
+    120_000,
+  );
+
+  /** Stores a10..a14 for the target thread, so a boundary can sit inside the
+   *  stored window. The seeded summary already names a10 as the oldest. */
+  async function storeTargetWindow(threadId: number, pageId: number, status?: string) {
+    await upsertPageDmMessages(appContext.db, ["a14", "a13", "a12", "a11", "a10"].map((id, index) => ({
+      conversationId: threadId, platformAccountId: pageId, platformMessageId: id,
+      senderPlatformUserId: `fan-${TARGET_GROUP_ID}`, senderRole: "fan" as const,
+      createdAt: new Date(Date.UTC(2026, 0, 16, 12, 0, 0) - index * 60_000), content: id,
+      totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+    })));
+    if (status) {
+      await testDb!.pool.query(
+        "update page_dm_threads set message_coverage_status = $2 where id = $1", [threadId, status],
+      );
+    }
+  }
+
+  async function coverage(threadId: number) {
+    return (await testDb!.pool.query<{ status: string }>(
+      'select message_coverage_status as "status" from page_dm_threads where id = $1', [threadId],
+    )).rows[0]?.status;
+  }
+
+  it("certifies a thread complete when an approved boundary at the stored oldest message exhausts", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await storeTargetWindow(targetThreadId, page.id);
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, {
+      threadId: targetThreadId, startBeforeMessageRef: "a10",
+    });
+
+    expect(calls).toEqual([{ groupId: TARGET_GROUP_ID, before: "a10", limit: 25 }]);
+    expect(result).toMatchObject({ outcome: "completed", messageCoverageStatus: "complete" });
+    expect(await coverage(targetThreadId)).toBe("complete");
+  }, 120_000);
+
+  it.each(["partial_window", "complete"])(
+    "keeps a %s thread's coverage when a boundary inside the stored window overlaps at once",
+    async (status) => {
+      const { page, targetThreadId } = await seedPageWithThreads();
+      await storeTargetWindow(targetThreadId, page.id, status);
+      const calls: AdapterCall[] = [];
+      appContext = {
+        ...appContext,
+        adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a11", "a10"], done: false }] }, calls) as never,
+      };
+
+      const result = await runTargetedThreadBackfill(appContext, {
+        threadId: targetThreadId, startBeforeMessageRef: "a12",
+      });
+
+      // Nothing below the stored oldest message was read: overlap on an
+      // interior boundary is no evidence of full coverage (nor of less).
+      expect(calls).toEqual([{ groupId: TARGET_GROUP_ID, before: "a12", limit: 25 }]);
+      expect(result).toMatchObject({ overlapFound: true, providerHistoryExhausted: false });
+      expect(await coverage(targetThreadId)).toBe(status);
+    },
+    120_000,
+  );
+
+  it("does not certify the gap above an unstored boundary that exhausts", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await storeTargetWindow(targetThreadId, page.id);
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a02", "a01"], done: true }] }, []) as never,
+    };
+
+    // a09..a03 were never read: the walk starts below them.
+    const result = await runTargetedThreadBackfill(appContext, {
+      threadId: targetThreadId, startBeforeMessageRef: "a03",
+    });
+
+    expect(result).toMatchObject({ outcome: "completed", providerHistoryExhausted: true });
+    expect(await coverage(targetThreadId)).toBe("partial_window");
   }, 120_000);
 });
