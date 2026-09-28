@@ -1931,6 +1931,33 @@ describe("media_stats lane — the 90-day window refused with an HTTP error", ()
     expect(row.lastVisitedAt).not.toBeNull();
     expect(row.consecutiveFailures).toBe(0);
   });
+
+  it("still takes that evidence after the day's probe failed", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // An earlier item spent the page's probe today; the limit is on new
+    // requests, not on a window this visit already answered.
+    await seedLaneState(page.id, {
+      longTailWindowMode: "ninety",
+      longTailWindowAnnounced: true,
+      longTailProbeFailedDay: "2026-08-22",
+    });
+    const mediaRef = ref(1161);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: {} });
+    const adapter = adapterStub({ fail: refusesNinety });
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 31, 90]);
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+    expect(splitAnomalies(telemetry)[0]?.details).toMatchObject({ trigger: "http_error" });
+    const row = await queueRow(page.id, mediaRef);
+    expect(row.lastVisitedAt).not.toBeNull();
+    expect(row.consecutiveFailures).toBe(0);
+  });
 });
 
 describe("media_stats lane — the honesty block", () => {

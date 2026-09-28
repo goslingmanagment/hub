@@ -1554,7 +1554,8 @@ export async function fanslyMediaStatsChunk(
    * already answered earlier in this visit (its backfill asked for exactly that
    * window, for free), or ONE probe now, budget permitting. A probe that fails
    * too spends the page's probe for the UTC day and changes nothing; the item
-   * backs off like any failed look.
+   * backs off like any failed look. A spent probe never discards the free
+   * evidence: a later visit that answered that window still switches the page.
    */
   async function fallBackFromNinetyDays(
     candidate: MediaStatsRefreshCandidate,
@@ -1564,16 +1565,15 @@ export async function fanslyMediaStatsChunk(
   ): Promise<SteadyResult> {
     const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, served: 0 };
     const refusal = lastWindowFailure;
-    if (
-      refusal === null
-      || !isProviderRefusal(refusal)
-      || state.longTailProbeFailedDay === today
-    ) {
-      return failed;
-    }
+    if (refusal === null || !isProviderRefusal(refusal)) return failed;
     const [probeWindow] = steadyWindows(candidate.tier, now, "split_31");
     const answeredThisVisit = probeWindow !== undefined && issued.has(windowKey(probeWindow));
-    if (!answeredThisVisit && !(hasDayCapacity() && hasChunkCapacity())) {
+    // The day's failed probe and the budget limit only a NEW request: evidence
+    // this visit already holds costs nothing.
+    if (
+      !answeredThisVisit
+      && (state.longTailProbeFailedDay === today || !(hasDayCapacity() && hasChunkCapacity()))
+    ) {
       return failed;
     }
 
