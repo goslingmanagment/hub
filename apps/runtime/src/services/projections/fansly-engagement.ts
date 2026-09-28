@@ -56,7 +56,9 @@ import {
   setProjectionWatermark,
   upsertPlatformNotification,
   upsertPostLike,
+  type DomainEventRow,
   type EngagementPlatform,
+  type UpsertPlatformNotificationInput,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
 
@@ -114,6 +116,53 @@ function isoDate(value: unknown): Date | null {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * The `platform_notifications` row one `notification.observed` event projects
+ * to, or null when the projector skips the event. Parsed HERE, once, for the
+ * projector and for the owner-run read-state replay
+ * (`fansly:notifications-replay-read-state`), so the two can never date or
+ * skip a notification differently.
+ */
+export function platformNotificationInputFromEvent(
+  pageId: number,
+  platform: EngagementPlatform,
+  event: Pick<DomainEventRow, "id" | "accountSeq" | "occurredAt" | "observationId" | "data">,
+): UpsertPlatformNotificationInput | null {
+  const data = eventData(event.data);
+  const contentHash = asText(data.contentHash) ?? "";
+  const notificationRef = asText(data.notificationRef);
+  if (contentHash.length !== 64 || notificationRef === null) {
+    return null;
+  }
+  const typeCode = asInt(data.rawTypeCode);
+  // The provider's own instant. A row with no `createdAt` has no place on a
+  // time-ordered head, and a fabricated one would order the state machine by
+  // a lie — so the row is skipped and the event stays in the ledger for a
+  // parser that can date it.
+  const occurredAt = isoDate(data.occurredAtSeconds);
+  if (typeCode === null || occurredAt === null) {
+    return null;
+  }
+  return {
+    pageId,
+    platform,
+    notificationRef,
+    // RAW. Never a label, never filtered against a known set.
+    typeCode,
+    correlationRef: asText(data.correlationRef),
+    correlationGroupRef: asText(data.correlationGroupRef),
+    metadata: eventData(data.metadataJson),
+    // Dated from `data`, never from event.occurredAt.
+    occurredAt,
+    acknowledgedAt: isoDate(data.acknowledgedAtSeconds),
+    observedAt: event.occurredAt,
+    contentHash,
+    sourceEventId: event.id,
+    sourceObservationId: event.observationId,
+    sourceAccountSeq: event.accountSeq,
+  };
 }
 
 export async function runFanslyEngagementProjection(
@@ -192,34 +241,15 @@ export async function runFanslyEngagementProjection(
           }
 
           case "notification.observed": {
-            const typeCode = asInt(data.rawTypeCode);
-            // The provider's own instant. A row with no `createdAt` has no
-            // place on a time-ordered head, and a fabricated one would order
-            // the state machine by a lie — so the row is skipped and the event
-            // stays in the ledger for a parser that can date it.
-            const occurredAt = isoDate(data.occurredAtSeconds);
-            if (typeCode === null || occurredAt === null) {
+            const notification = platformNotificationInputFromEvent(
+              accountId,
+              engagementPlatform,
+              event,
+            );
+            if (notification === null) {
               continue;
             }
-            const metadata = eventData(data.metadataJson);
-            const result = await upsertPlatformNotification(app.db, {
-              pageId: accountId,
-              platform: engagementPlatform,
-              notificationRef,
-              // RAW. Never a label, never filtered against a known set.
-              typeCode,
-              correlationRef: asText(data.correlationRef),
-              correlationGroupRef: asText(data.correlationGroupRef),
-              metadata,
-              // Dated from `data`, never from event.occurredAt.
-              occurredAt,
-              acknowledgedAt: isoDate(data.acknowledgedAtSeconds),
-              observedAt: event.occurredAt,
-              contentHash,
-              sourceEventId: event.id,
-              sourceObservationId: event.observationId,
-              sourceAccountSeq: event.accountSeq,
-            });
+            const result = await upsertPlatformNotification(app.db, notification);
             if (result.applied) {
               totals.notifications += 1;
               totals.applied += 1;

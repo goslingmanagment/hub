@@ -429,7 +429,8 @@ export const DYNAMIC_OBSERVATION_KIND_RULES: readonly DynamicObservationKindRule
       /^(auth|user|api_key|device_token|page|model|config|erasure|agent_key)\./.test(kind),
   },
   // NOT a rule, and deliberately so: services/observations-rejournal.ts writes
-  // `kind = rawRow.endpoint`. It mints no NEW value space — every kind it can
+  // `kind = rawRow.endpoint` (and observations-account-me-rejournal.ts writes
+  // `account_me`). Neither mints a NEW value space — every kind they can
   // write is already a registered sync-plane kind above, so the static half of
   // the ratchet already covers it. A rule here would only launder future
   // unregistered sync kinds through the word "dynamic".

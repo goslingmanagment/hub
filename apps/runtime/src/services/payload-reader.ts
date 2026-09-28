@@ -170,6 +170,10 @@
 //                                                 ABORTS rather than insert an
 //                                                 empty observation under a
 //                                                 deterministic key)
+//   services/observations-account-me-rejournal.ts catch → unavailableBody
+//                                                 (the capture is skipped, never
+//                                                 journaled empty; a re-run
+//                                                 resumes)
 //
 // One more site reads bodies without this seam, inside packages/db, and #223
 // gave it the same law by hand: repositories/ofapi-message-coverage.ts, whose

@@ -36,6 +36,7 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runNotificationReadStateReplay } from "../apps/runtime/src/services/fansly-notification-read-state-replay.ts";
 import {
   FANSLY_ENGAGEMENT_PROJECTION,
   FANSLY_ENGAGEMENT_PROJECTION_TABLES,
@@ -595,6 +596,187 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect((await project(page.id)).applied).toBe(0);
     await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
     expect(await checksum(page.id)).toEqual(before);
+  });
+
+  it("replays the read looks the pre-J7 guard discarded, and touches nothing else (fansly:notifications-replay-read-state)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const all = base.notifications as Record<string, unknown>[];
+    const stale = { ...all[5]! };
+    const pending = { ...all[1]! };
+    const staleRef = stale.idString as string;
+    const pendingRef = pending.idString as string;
+    const readAt = 1787050500;
+    const look = (notifications: Record<string, unknown>[]) => ({ ...base, notifications });
+    type Head = {
+      acknowledged_at: Date | null;
+      content_hash: string;
+      source_event_id: string;
+      source_observation_id: string;
+      source_account_seq: string;
+      last_observed_at: Date;
+    };
+    const headOf = async (ref: string) => (await rows<Head>(
+      `select acknowledged_at, content_hash, source_event_id::text, source_observation_id::text,
+              source_account_seq::text, last_observed_at
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+    const table = () => rows(
+      "select * from platform_notifications where page_id = $1 order by notification_ref",
+      [page.id],
+    );
+    const watermark = async () => (await rows<{ high_seq: string }>(
+      "select high_seq::text from projection_seq_watermarks where projection = $1 and account_id = $2",
+      [FANSLY_ENGAGEMENT_PROJECTION, page.id],
+    ))[0]!.high_seq;
+
+    // Purchases in the ledger — what a projection rebuild would re-apply.
+    await seedObservation(page.id, "census", fixture("notifications-census.json"), CENSUS_RECEIVED_AT);
+    // First looks: both notifications unread.
+    await seedObservation(page.id, "look-1", look([
+      { ...stale, acknowledgedAt: null },
+      { ...pending, acknowledgedAt: null },
+    ]), new Date("2026-08-19T10:00:00.000Z"));
+    await project(page.id);
+    const firstLook = await headOf(staleRef);
+    expect(firstLook.acknowledged_at).toBeNull();
+
+    // The read look of `stale`, consumed the way the PRE-J7 guard consumed it:
+    // it lost the createdAt tie, and only last_observed_at moved.
+    resetCanonicalizeSweepRuntime();
+    const readLook = await seedObservation(page.id, "look-2", look([
+      { ...stale, acknowledgedAt: readAt },
+    ]), new Date("2026-08-19T11:00:00.000Z"));
+    await project(page.id);
+    await testDb.pool.query(
+      `update platform_notifications
+          set acknowledged_at = null, content_hash = $3, source_event_id = $4,
+              source_observation_id = $5, source_account_seq = $6
+        where page_id = $1 and notification_ref = $2`,
+      [page.id, staleRef, firstLook.content_hash, firstLook.source_event_id,
+        firstLook.source_observation_id, firstLook.source_account_seq],
+    );
+    expect((await headOf(staleRef)).last_observed_at.toISOString()).toBe("2026-08-19T11:00:00.000Z");
+
+    // `pending`'s read look is in the ledger ABOVE the watermark: the live
+    // projector's to apply, not the repair's.
+    resetCanonicalizeSweepRuntime();
+    await seedObservation(page.id, "look-2b", look([
+      { ...pending, acknowledgedAt: readAt },
+    ]), new Date("2026-08-19T12:00:00.000Z"));
+    await runCanonicalization(appStub(), { kinds: ["notifications"] });
+
+    // The purchase signals were applied once; clear them so any re-application
+    // is visible.
+    await testDb.pool.query("delete from subject_refresh_state where page_id = $1", [page.id]);
+    const before = await table();
+    const watermarkBefore = await watermark();
+
+    // ── dry-run (the default): the count, and not one write ─────────────────
+    const expected = {
+      events: 1,
+      heads: 1,
+      acknowledged: 1,
+      unacknowledged: 0,
+      deferred: 0,
+      erasureFenced: 0,
+      pages: [{ pageId: page.id, events: 1, heads: 1, acknowledged: 1, unacknowledged: 0 }],
+    };
+    expect(await runNotificationReadStateReplay(appStub())).toEqual({ dryRun: true, ...expected });
+    expect(await table()).toEqual(before);
+
+    // ── execute ─────────────────────────────────────────────────────────────
+    expect(await runNotificationReadStateReplay(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, ...expected });
+    const healed = await headOf(staleRef);
+    expect(healed.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    expect(healed.source_observation_id).toBe(String(readLook.observationId));
+    // Nothing else moved: not the look above the watermark, not the watermark,
+    // not any other row, and no purchase was re-applied.
+    expect((await headOf(pendingRef)).acknowledged_at).toBeNull();
+    expect(await watermark()).toBe(watermarkBefore);
+    const others = (list: Record<string, unknown>[]) =>
+      list.filter((row) => row.notification_ref !== staleRef);
+    expect(others(await table())).toEqual(others(before));
+    expect(await count("subject_refresh_state", page.id)).toBe(0);
+
+    // ── a re-run finds nothing ──────────────────────────────────────────────
+    const zero = {
+      events: 0, heads: 0, acknowledged: 0, unacknowledged: 0, deferred: 0, erasureFenced: 0, pages: [],
+    };
+    expect(await runNotificationReadStateReplay(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, ...zero });
+    expect(await runNotificationReadStateReplay(appStub())).toEqual({ dryRun: true, ...zero });
+
+    // The projector lands the rest, and the repaired table is what a
+    // truncate-and-replay produces — which, unlike the repair, re-marks the
+    // purchased media due.
+    await project(page.id);
+    expect((await headOf(pendingRef)).acknowledged_at).not.toBeNull();
+    const repaired = await checksum(page.id);
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    expect(await checksum(page.id)).toEqual(repaired);
+    expect(await count("subject_refresh_state", page.id)).toBeGreaterThan(0);
+  });
+
+  it("a replayed look that ties the head at the same instant settles in one run (J7 repair)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Two looks journaled at the SAME instant: unread, then read. The pre-J7
+    // guard kept the first; the fixed guard (>=) gives the head to the later
+    // one in ledger order. Once it has it, the earlier look — which ties it
+    // exactly — must not be replayed back over it on the next run.
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const target = { ...(base.notifications as Record<string, unknown>[])[5]! };
+    const ref = target.idString as string;
+    const at = new Date("2026-08-19T10:00:00.000Z");
+    const readAt = 1787050500;
+    const unread = await seedObservation(page.id, "same-1", {
+      ...base, notifications: [{ ...target, acknowledgedAt: null }],
+    }, at);
+    const read = await seedObservation(page.id, "same-2", {
+      ...base, notifications: [{ ...target, acknowledgedAt: readAt }],
+    }, at);
+    await project(page.id);
+    const head = async () => (await rows<{ acknowledged_at: Date | null; source_observation_id: string }>(
+      `select acknowledged_at, source_observation_id::text
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+    expect((await head()).source_observation_id).toBe(String(read.observationId));
+
+    // The pre-J7 state: the first look kept the head.
+    const [first] = await rows<{ id: string; account_seq: string; hash: string }>(
+      `select id::text, account_seq::text, data->>'contentHash' as hash from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, unread.observationId],
+    );
+    await testDb.pool.query(
+      `update platform_notifications
+          set acknowledged_at = null, content_hash = $3, source_event_id = $4,
+              source_observation_id = $5, source_account_seq = $6
+        where page_id = $1 and notification_ref = $2`,
+      [page.id, ref, first!.hash, first!.id, unread.observationId, first!.account_seq],
+    );
+
+    const done = await runNotificationReadStateReplay(appStub(), { dryRun: false });
+    expect(done).toMatchObject({ events: 1, heads: 1, acknowledged: 1 });
+    expect(await head()).toEqual({
+      acknowledged_at: new Date(readAt * 1000),
+      source_observation_id: String(read.observationId),
+    });
+
+    const again = await runNotificationReadStateReplay(appStub(), { dryRun: false });
+    expect(again).toMatchObject({ events: 0, heads: 0, pages: [] });
+    expect((await head()).source_observation_id).toBe(String(read.observationId));
   });
 
   it("reproduces every row from a truncate-and-replay, leaving subject_refresh_state alone", async (context) => {
