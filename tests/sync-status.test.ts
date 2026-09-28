@@ -1171,6 +1171,63 @@ describe("sync status service", () => {
     });
   });
 
+  it("drops a retry deadline that pending work has already waited out", async () => {
+    // The planner keeps a passed retry_at on pending work (starvation aging
+    // counts the wait from it); status must read it as neither a retry nor a
+    // budget wait.
+    dbMocks.listVisiblePages.mockResolvedValue([
+      buildVisiblePage({
+        platform: "onlyfans",
+        username: "loravie",
+        ofapiAccountId: "acct_lora",
+      }),
+    ]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({
+        stream: "subscribers",
+        status: "pending",
+        requestSeq: 2,
+        appliedSeq: 1,
+        requestedAt: new Date("2026-03-24T11:50:00.000Z"),
+        retryAt: new Date("2026-03-24T11:59:00.000Z"),
+        succeededAt: new Date("2026-03-24T11:40:00.000Z"),
+        progress: {
+          mode: "audience_sweep",
+          offset: 1880,
+          pageCount: 98,
+          ofapiBudgetBlock: "ofapi_daily_credit_budget",
+        },
+      }),
+    ]);
+    dbMocks.listSyncMonitorStreamRows.mockResolvedValue([
+      buildMonitorRow({
+        stream: "subscribers",
+        platform: "onlyfans",
+        status: "pending",
+        succeededAt: new Date("2026-03-24T11:40:00.000Z"),
+      }),
+    ]);
+
+    const snapshot = await getSyncStatusSnapshot({
+      db: {},
+      config: { ofapiAudienceSyncEnabled: true },
+    } as never, {
+      pageIds: [7],
+      now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+
+    expect(snapshot.pages[0]?.blocks.audience).toMatchObject({
+      state: "scheduled",
+      statusReason: null,
+      nextRetryAt: null,
+    });
+    expect(snapshot.pages[0]?.blocks.audience.substreams[0]).toMatchObject({
+      stream: "subscribers",
+      state: "scheduled",
+      nextRetryAt: null,
+    });
+  });
+
   it("treats fresh queue waits as healthy when a sibling page is actively using the same queue group", async () => {
     dbMocks.listVisiblePages.mockResolvedValue([
       buildVisiblePage(),
