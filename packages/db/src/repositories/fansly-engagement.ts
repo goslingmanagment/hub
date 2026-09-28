@@ -752,14 +752,17 @@ export interface PostEngagementRefreshCandidate {
 /**
  * The chunk's refresh list, in the decay order WP-F6 declares.
  *
- * DUE-NESS IS COMPUTED FROM `published_at` AND `last_visited_at` AGAINST `now`,
- * not read from `next_due_at`. Same reasoning as the replies walk: the tier a
- * post belongs to changes as the post AGES, so a stored due date freezes each
- * row's cadence at the tier it was in when it was last visited — a post that
+ * SUCCESS DUE-NESS IS COMPUTED FROM `published_at` AND `last_visited_at` AGAINST
+ * `now`, not read from `next_due_at`. Same reasoning as the replies walk: the
+ * tier a post belongs to changes as the post AGES, so a stored due date freezes
+ * each row's cadence at the tier it was in when it was last visited — a post that
  * crossed from fresh into mid would keep being re-read daily forever. The column
  * is still maintained (it is the shared table's contract and what its partial
  * index covers) and the DIRTY path is read through `dirty_reason`, which no
- * cutoff can suppress.
+ * cutoff can suppress. Failure rows are the exception, as in the replies walk:
+ * success resets `consecutive_failures` to zero, while a failure waits for its
+ * stored `next_due_at` backoff, so an unserved or failing batch cannot hold band
+ * zero — or the head of the due band — and re-send the same ids until the cap.
  *
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
@@ -821,6 +824,10 @@ export async function listPostEngagementRefreshChunk(
        and p.platform_post_id = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'post_engagement'
+       and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now}
+       )
        and (
          s.last_visited_at is null
          or s.dirty_reason is not null
@@ -900,7 +907,8 @@ export async function recordPostEngagementRefreshVisits(
  * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
  * moving it would retire the post from the never-refreshed band on the strength
  * of an error. What moves is the failure counter — the number an operator reads
- * to tell "this post is unreachable" from "we have not got to it yet".
+ * to tell "this post is unreachable" from "we have not got to it yet" — and
+ * `next_due_at`, which is the backoff the chunk query enforces.
  */
 export async function recordPostEngagementRefreshFailures(
   db: Database,
@@ -1170,13 +1178,19 @@ export interface MediaStatsRefreshCandidate {
  *       a month.
  *   (3) DUE BY CLASS, oldest visit first — the round-robin.
  *
- * DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`, not
- * read from `next_due_at`. Same reasoning as the two post planes: the tier an
+ * SUCCESS DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`,
+ * not read from `next_due_at`. Same reasoning as the two post planes: the tier an
  * item belongs to changes as the item AGES and the long-tail cycle is a LIVE
  * config key, so a stored due date freezes each row's cadence at the tier and
  * the cycle in force when it was last visited. The column is still maintained —
  * it is the shared table's contract and what its partial index covers — and the
  * DIRTY path is read through `dirty_reason`, which no cutoff can suppress.
+ *
+ * Failure rows are the exception, the replies walk's rule: success resets
+ * `consecutive_failures` to zero, while a failure waits for its stored
+ * `next_due_at` backoff — in EVERY band, dirty included — so an item that fails
+ * on every look cannot lead each chunk and spend the day's cap on itself. A new
+ * dirty signal moves `next_due_at` earlier and so re-admits it once.
  *
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
@@ -1256,6 +1270,10 @@ export async function listMediaStatsRefreshChunk(
        and m.media_offer_ref = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
+       and (
+         s.consecutive_failures = 0
+         or s.next_due_at <= ${input.now}
+       )
        and (
          s.dirty_reason is not null
          or s.last_visited_at is null
@@ -1380,8 +1398,9 @@ export async function recordMediaStatsVisit(
  * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
  * moving it would retire the item from the never-visited band on the strength of
  * an error. What moves is the failure counter — the number an operator reads to
- * tell "this media is unreachable" from "we have not got to it yet". The dirty
- * mark stays, so a purchase signal survives a failed fetch.
+ * tell "this media is unreachable" from "we have not got to it yet" — and
+ * `next_due_at`, which is the backoff the chunk query enforces. The dirty mark
+ * stays, so a purchase signal survives a failed fetch.
  */
 export async function recordMediaStatsFailure(
   db: Database,

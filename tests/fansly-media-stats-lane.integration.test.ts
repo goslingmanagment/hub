@@ -8,7 +8,9 @@ import {
   listMediaStatsRefreshChunk,
   listSubjectRefreshState,
   markSubjectRefreshDirty,
+  recordMediaStatsFailure,
 } from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
@@ -345,6 +347,25 @@ async function drain(
   return results;
 }
 
+/** A provider refusal as the adapter throws it after its own retries: HTTP 500
+ *  and Fansly's error envelope. `error getting graph` is the 90-day window's
+ *  answer since 2026-09-05; `error getting media offer` is an item that is gone. */
+function providerRefusal(details: "error getting graph" | "error getting media offer") {
+  return new FanslyApiError(
+    "Fansly request failed (500)",
+    500,
+    500,
+    JSON.stringify({ success: false, error: { code: 500, details } }),
+  );
+}
+
+async function queueRow(pageId: number, subjectRef: string) {
+  const queue = await listSubjectRefreshState(testDb!.db, { pageId, plane: "media_stats" });
+  const row = queue.find((entry) => entry.subjectRef === subjectRef);
+  if (row === undefined) throw new Error(`no media_stats row for ${subjectRef}`);
+  return row;
+}
+
 describe("media_stats lane — the gate", () => {
   it("is INERT until both the flag and the fail-closed allowlist say otherwise", async (ctx) => {
     if (!testDb) return ctx.skip();
@@ -531,6 +552,56 @@ describe("media_stats lane — the queue", () => {
     // CURRENT top-50 that earns a call.
     expect(byRef.get(ref(301))?.dirtyReason).toBeNull();
     expect(await cursor(page.id)).toMatchObject({ topMarkedDay: "2026-08-22" });
+  });
+
+  it("holds a FAILED row out until its backoff — dirty band included — unless a new signal arrives", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const failing = ref(310);
+    const healthy = ref(311);
+    await seedMedia(page.id, [
+      { ref: failing, createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+      { ref: healthy, createdAtPlatform: new Date(NOW.getTime() - 3 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // The healthy row was visited long ago and never failed: ordinary due-ness.
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = $3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, healthy, new Date(NOW.getTime() - 10 * DAY_MS)],
+    );
+    const refsAt = async (now: Date) =>
+      (await listMediaStatsRefreshChunk(testDb!.db, {
+        pageId: page.id,
+        limit: 10,
+        now,
+        longTailCycleDays: 30,
+      })).map((row) => row.subjectRef);
+    const backOff = () =>
+      recordMediaStatsFailure(testDb!.db, {
+        pageId: page.id,
+        subjectRef: failing,
+        nextDueAt: new Date(NOW.getTime() + DAY_MS),
+      });
+
+    // Never visited is band one, ahead of the healthy row — until it fails.
+    expect(await refsAt(NOW)).toEqual([failing, healthy]);
+    await backOff();
+    expect(await refsAt(NOW)).toEqual([healthy]);
+    expect(await refsAt(new Date(NOW.getTime() + DAY_MS))).toEqual([failing, healthy]);
+
+    // A NEW purchase signal moves `next_due_at` earlier and re-admits it once…
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: failing,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    expect(await refsAt(NOW)).toEqual([failing, healthy]);
+    // …and a dirty row that fails again waits like any other: band zero is not
+    // a licence to spend the day's cap on an item that fails every look.
+    await backOff();
+    expect(await refsAt(NOW)).toEqual([healthy]);
   });
 });
 
@@ -1083,6 +1154,51 @@ describe("media_stats lane — the cap", () => {
     expect(telemetry.anomalies.some((anomaly) =>
       anomaly.code === "fansly_media_stats_item_failed"
     )).toBe(true);
+  });
+
+  it("lets healthy items run while failed items wait out their backoff", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // Five items that fail on every look, NEWEST, so without a backoff they
+    // head every chunk and a sixth, healthy item behind them is never reached.
+    const deadRefs = Array.from({ length: 5 }, (_unused, index) => ref(610 + index));
+    const healthyRef = ref(620);
+    await seedMedia(page.id, [
+      ...deadRefs.map((deadRef, index) => ({
+        ref: deadRef,
+        createdAtPlatform: new Date(NOW.getTime() - (index + 1) * DAY_MS),
+      })),
+      { ref: healthyRef, createdAtPlatform: new Date(NOW.getTime() - 10 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+
+    const adapter = adapterStub({
+      fail: (params) =>
+        deadRefs.includes(params.mediaOfferId) ? providerRefusal("error getting media offer") : null,
+    });
+    const telemetry = telemetryStub();
+    const chunkAt = async (now: Date) => {
+      const before = adapter.calls.length;
+      await fanslyMediaStatsChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(5), now),
+      );
+      return adapter.calls.slice(before).map((call) => call.mediaOfferId);
+    };
+
+    expect(await chunkAt(NOW)).toEqual(deadRefs);
+    // A minute later the continuation reaches the healthy item: every dead one
+    // is waiting for the `next_due_at` its failure wrote.
+    expect(await chunkAt(new Date(NOW.getTime() + 60_000))).toEqual([healthyRef]);
+    // A day on, the backoff has run out and each dead item gets ONE more look.
+    expect(await chunkAt(new Date(NOW.getTime() + DAY_MS + 60_000))).toEqual(deadRefs);
+
+    for (const deadRef of deadRefs) {
+      const row = await queueRow(page.id, deadRef);
+      expect(row.consecutiveFailures).toBe(2);
+      expect(row.lastVisitedAt).toBeNull();
+    }
+    // Waiting is not completeness: five items have still never been looked at.
+    expect((await coverageRows(page.id))[0]).toMatchObject({ status: "in_progress" });
   });
 });
 
