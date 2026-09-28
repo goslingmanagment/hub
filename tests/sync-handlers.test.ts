@@ -1049,6 +1049,12 @@ describe("sync executor handlers", () => {
     });
     dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
     dbMocks.countActivePageFollows.mockResolvedValue(0);
+    dbMocks.requestPageSync.mockResolvedValue([{
+      stream: "followers_reconcile",
+      requestedSeq: 7,
+      coalesced: true,
+      queueBefore: { requestedSeq: 7, appliedSeq: 6 },
+    }]);
 
     try {
       const result = await executeFollowersChunk(app, {
@@ -1097,6 +1103,16 @@ describe("sync executor handlers", () => {
         streams: ["followers_reconcile"],
         source: "anomaly",
         includeQueueState: true,
+        coalesceOutstanding: true,
+      });
+      expect(telemetry.addNote).toHaveBeenCalledWith("Fansly followers reconcile decision", {
+        followersReconcile: expect.objectContaining({
+          countMismatch: true,
+          requested: true,
+          requestedSeq: 7,
+          queueBefore: { requestedSeq: 7, appliedSeq: 6 },
+          coalesced: true,
+        }),
       });
     } finally {
       vi.useRealTimers();

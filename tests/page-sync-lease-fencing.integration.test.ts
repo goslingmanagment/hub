@@ -1241,4 +1241,208 @@ describe("page sync lease fencing", () => {
       await testDb.stop();
     }
   }, 30_000);
+
+  it("coalesces an intent-free request into outstanding work without touching its row", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date("2026-03-24T12:00:00.000Z");
+    const at = (seconds: number) => new Date(now.getTime() + seconds * 1_000);
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "coalesce-model",
+        name: "Coalesce Model",
+      });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
+      const page = await createFanslyPage(testDb.db, {
+        modelId: model.id,
+        label: "coalesce-page",
+      });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
+
+      await ensurePageSyncStates(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      // Settle every other stream so the lease below can only take the reconcile.
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set applied_seq = greatest(applied_seq, request_seq),
+              status = 'idle',
+              succeeded_at = $1,
+              updated_at = $1
+          where page_id = $2
+            and stream <> 'followers_reconcile'
+        `,
+        [now, page.id],
+      );
+      await refreshPageSyncDependencies(testDb.db, {
+        pageId: page.id,
+        now,
+      });
+      const [requested] = await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers_reconcile"],
+        source: "manual",
+        now,
+      });
+      const outstandingSeq = requested!.requestedSeq;
+
+      const reconcileRow = async () => {
+        const result = await testDb.pool.query<{ row: Record<string, unknown> }>(
+          `
+            select to_jsonb(s) as row
+            from page_sync_states s
+            where page_id = $1
+              and stream = 'followers_reconcile'
+          `,
+          [page.id],
+        );
+        return result.rows[0]?.row;
+      };
+      const expectCoalesced = async (requestAt: Date) => {
+        const before = await reconcileRow();
+        const receipts = await requestPageSync(testDb.db, {
+          pageId: page.id,
+          streams: ["followers_reconcile"],
+          source: "anomaly",
+          includeQueueState: true,
+          coalesceOutstanding: true,
+          now: requestAt,
+        });
+        expect(receipts).toEqual([{
+          stream: "followers_reconcile",
+          requestedSeq: outstandingSeq,
+          coalesced: true,
+          queueBefore: { requestedSeq: outstandingSeq, appliedSeq: before?.applied_seq },
+        }]);
+        expect(await reconcileRow()).toEqual(before);
+      };
+      const lease = async (leaseToken: string, leaseAt: Date) => {
+        const acquired = await acquirePageSyncLease(testDb.db, {
+          pageId: page.id,
+          workerId: "worker-1",
+          leaseToken,
+          leaseTtlMs: 60_000,
+          now: leaseAt,
+        });
+        expect(acquired).toMatchObject({
+          stream: "followers_reconcile",
+          leasedSeq: outstandingSeq,
+        });
+        return acquired!;
+      };
+
+      // A live lease keeps its revision, so the running sweep's cursor stays valid.
+      await lease("lease-1", at(1));
+      await expectCoalesced(at(2));
+
+      // The snapshot-restart wait keeps its retry_at instead of restarting at once.
+      const restartAt = at(900);
+      await yieldPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers_reconcile",
+        requestSeq: outstandingSeq,
+        leaseToken: "lease-1",
+        retryAt: restartAt,
+        now: at(3),
+      });
+      await expectCoalesced(at(4));
+      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+        status: "pending",
+        requestSeq: outstandingSeq,
+        retryAt: restartAt,
+      });
+
+      // A non-provider backoff is honoured instead of being cancelled.
+      await lease("lease-2", at(901));
+      await retryPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers_reconcile",
+        requestSeq: outstandingSeq,
+        leaseToken: "lease-2",
+        retryKind: "transient_network",
+        errorCode: null,
+        errorSummary: "fetch failed",
+        now: at(902),
+      });
+      await expectCoalesced(at(903));
+      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+        status: "retrying",
+        retryKind: "transient_network",
+        retryAt: at(962),
+      });
+
+      // A blast-radius block keeps the request its cursor revision is bound to.
+      await lease("lease-3", at(1_000));
+      await blockPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "followers_reconcile",
+        requestSeq: outstandingSeq,
+        leaseToken: "lease-3",
+        blockerKind: "provider_bad_data",
+        blockerCode: "followers_reconcile_deactivation_blast_radius",
+        blockerMessage: "Blast radius exceeded",
+        errorCode: null,
+        errorSummary: "Blast radius exceeded",
+        now: at(1_001),
+      });
+      await expectCoalesced(at(1_002));
+      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+        status: "blocked",
+        requestSeq: outstandingSeq,
+      });
+
+      // Ordinary callers still bump outstanding work.
+      expect(await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers_reconcile"],
+        source: "anomaly",
+        now: at(1_003),
+      })).toEqual([{ stream: "followers_reconcile", requestedSeq: outstandingSeq + 1 }]);
+
+      // Settled work still gets exactly one new request.
+      await testDb.pool.query(
+        `
+          update page_sync_states
+          set applied_seq = request_seq,
+              status = 'idle',
+              blocker_kind = null,
+              blocker_code = null,
+              blocker_message = null,
+              blocked_at = null
+          where page_id = $1
+            and stream = 'followers_reconcile'
+        `,
+        [page.id],
+      );
+      expect(await requestPageSync(testDb.db, {
+        pageId: page.id,
+        streams: ["followers_reconcile"],
+        source: "anomaly",
+        includeQueueState: true,
+        coalesceOutstanding: true,
+        now: at(1_004),
+      })).toEqual([{
+        stream: "followers_reconcile",
+        requestedSeq: outstandingSeq + 2,
+        queueBefore: { requestedSeq: outstandingSeq + 1, appliedSeq: outstandingSeq + 1 },
+      }]);
+      expect(await getPageSyncState(testDb.db, page.id, "followers_reconcile")).toMatchObject({
+        status: "pending",
+        requestSeq: outstandingSeq + 2,
+        dispatchSource: "anomaly",
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
 });

@@ -341,6 +341,9 @@ async function triggerFollowersReconcileAnomaly(
     streams: ["followers_reconcile"],
     source: "anomaly",
     includeQueueState: true,
+    // A mid-sweep bump would restart the sweep from offset zero and reset its
+    // snapshot-restart bound; the outstanding revision already reconciles.
+    coalesceOutstanding: true,
     ...pageSyncDependencyInput(app),
   });
   return receipts?.find(row => row.stream === "followers_reconcile") ?? null;
@@ -1960,6 +1963,7 @@ export async function executeFollowersChunk(
             pageCount: state.pageCount, processedThisChunk },
           knownCheckpoint: Boolean(state.knownFollowId), pageDone: page.done,
           requestedSeq: receipt?.requestedSeq ?? null, queueBefore: receipt?.queueBefore ?? null,
+          coalesced: receipt?.coalesced === true,
         },
       });
 
