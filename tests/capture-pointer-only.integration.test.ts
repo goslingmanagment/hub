@@ -439,10 +439,11 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
 
     await hideCatalogBodies();
 
-    // `dm_messages` belongs to the sync-pull family, which has NO canParse
-    // shape gate — four of the six families do not. Before #223 the null
-    // payload canonicalized to zero events and fell straight through to
-    // markObservationParsed.
+    // `dm_messages` belongs to the sync-pull family, which had NO canParse
+    // shape gate until J1 — four of the six families did not. Before #223 the
+    // null payload canonicalized to zero events and fell straight through to
+    // markObservationParsed. An unavailable body is still counted apart from
+    // an unparseable one: the seam refuses it before any shape gate runs.
     const result = await runCanonicalization(appStub(), { kinds: ["dm_messages"] });
 
     expect(result.scanned).toBe(1);

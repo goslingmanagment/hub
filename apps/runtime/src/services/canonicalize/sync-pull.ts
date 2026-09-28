@@ -29,6 +29,7 @@ import {
   isRecord,
   type CanonicalEventDraft,
   type CanonicalizableObservation,
+  type CanonicalParseRejection,
 } from "./types.ts";
 
 // v5 (WP-F0(b)): the SAME dm_messages / purchase_history observations now also
@@ -214,6 +215,68 @@ function fanslyDmMessages(
   return events;
 }
 
+export type SyncPullObservationParseRejectionCode =
+  | "payload_not_object"
+  | "transactions_data_not_array"
+  | "messages_not_array"
+  | "purchase_rows_missing"
+  | "row_not_object";
+
+/**
+ * Shape gate for the Fansly kinds (J1). Without it a drifted body canonicalized
+ * to zero events and was stamped consumed, indistinguishable from an empty
+ * page, so a later parser repair could only reach it through a family-wide
+ * version bump (months of DM history). Rejected rows stay at parse_version 0
+ * and age the family's backlog gauge instead.
+ *
+ * Structural only. An empty row array is a real empty page, and a record row
+ * without a transactionId / message id is still skipped by the canonicalizer,
+ * as before. A non-record element refuses the whole page: that mirrors the
+ * lanes' own contracts (the DM and transactions item loops throw on one, the
+ * purchase lane requires every row to be a record). Other platforms and kinds
+ * are not gated. Fixed codes only, never provider values.
+ */
+export function diagnoseSyncPullObservationRejection(
+  observation: Pick<CanonicalizableObservation, "kind" | "platform" | "payload">,
+): (CanonicalParseRejection & { code: SyncPullObservationParseRejectionCode }) | null {
+  if (observation.platform !== "fansly") {
+    return null;
+  }
+  const payload = observation.payload;
+  let rows: unknown[] | null;
+  switch (observation.kind) {
+    case "earnings_transactions":
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      if (!Array.isArray(payload.data)) return { code: "transactions_data_not_array" };
+      rows = payload.data;
+      break;
+    case "dm_messages":
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      if (!Array.isArray(payload.messages)) return { code: "messages_not_array" };
+      rows = payload.messages;
+      break;
+    case "purchase_history":
+    case "purchase_history_contract_probe":
+      if (!isRecord(payload)) return { code: "payload_not_object" };
+      // The lane's own journaled terminal target rejection
+      // (rejectedFanslyPurchaseHistoryPayload): a recorded outcome, not drift.
+      if (isRecord(payload.error)) return null;
+      rows = fanslyPurchaseRows(payload);
+      if (rows === null) return { code: "purchase_rows_missing" };
+      break;
+    default:
+      return null;
+  }
+  const itemIndex = rows.findIndex((row) => !isRecord(row));
+  return itemIndex === -1 ? null : { code: "row_not_object", itemIndex };
+}
+
+export function canParseSyncPullObservation(
+  observation: Pick<CanonicalizableObservation, "kind" | "platform" | "payload">,
+): boolean {
+  return diagnoseSyncPullObservationRejection(observation) === null;
+}
+
 export function canonicalizeSyncPullObservation(
   observation: CanonicalizableObservation,
   context?: SyncPullCanonicalizeContext,
@@ -252,6 +315,20 @@ function canonicalJson(value: unknown): unknown {
   return value;
 }
 
+/** The order rows of a purchase-history page or a DM page's inline orders,
+ *  first array wins. One locator for the canonicalizer and its shape gate so
+ *  the two cannot disagree about which rows a page carries. */
+function fanslyPurchaseRows(payload: Record<string, unknown>): unknown[] | null {
+  if (Array.isArray(payload.accountMediaOrderHistory)) {
+    return payload.accountMediaOrderHistory;
+  }
+  if (Array.isArray(payload.accountMediaOrders)) {
+    return payload.accountMediaOrders;
+  }
+  const aggregation = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  return Array.isArray(aggregation.accountMediaOrders) ? aggregation.accountMediaOrders : null;
+}
+
 /** Inline DM order rows may omit orderId, while paginated order-history rows
  *  expose it as their cursor. Keep the historical composite dedup key for
  *  replay compatibility across both shapes. */
@@ -259,16 +336,7 @@ function fanslyPurchaseEvents(observation: CanonicalizableObservation): Canonica
   if (!isRecord(observation.payload)) {
     return [];
   }
-  const aggregation = isRecord(observation.payload.aggregationData)
-    ? observation.payload.aggregationData
-    : {};
-  const rows = Array.isArray(observation.payload.accountMediaOrderHistory)
-    ? observation.payload.accountMediaOrderHistory
-    : Array.isArray(observation.payload.accountMediaOrders)
-      ? observation.payload.accountMediaOrders
-    : Array.isArray(aggregation.accountMediaOrders)
-      ? aggregation.accountMediaOrders
-      : null;
+  const rows = fanslyPurchaseRows(observation.payload);
   if (!rows) {
     return [];
   }
