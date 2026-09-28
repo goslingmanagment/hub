@@ -123,6 +123,19 @@ function descriptionKey(mediaRef: string, variant: string) {
   return `${variant}:${mediaRef}`;
 }
 
+/** Per describable file: whether its note reached this prompt, and why not.
+ * Ids and outcomes only (the acceptance metric of first-reply coverage). */
+export interface MediaNotesManifestEntry {
+  mediaId: string;
+  n: number;
+  note: "described" | "not_recognized" | "pending" | "over_limit" | "none";
+}
+
+const NEVER_DESCRIBED = new Set<string>(["failed", "unavailable", "outcome_unknown", "skipped_policy"]);
+
+/** At most this many entries are kept per generation (newest first). */
+export const MEDIA_NOTES_MANIFEST_ENTRY_LIMIT = 40;
+
 export interface MediaNotesManifest {
   items: number;
   mismatch: boolean;
@@ -131,6 +144,8 @@ export interface MediaNotesManifest {
   notRecognized: number;
   pending: number;
   overLimit: number;
+  /** Present when notes are active; newest first, capped. */
+  entries?: MediaNotesManifestEntry[];
 }
 
 export interface RenderedMediaNotes {
@@ -182,6 +197,13 @@ export function renderFanslyMediaNotes(input: {
   const byKey = new Map(input.descriptions.map((row) => [descriptionKey(row.mediaRef, row.variant), row]));
   const notes = new Map<number, string>();
   if (input.active) {
+    const entries: MediaNotesManifestEntry[] = [];
+    manifest.entries = entries;
+    const record = (item: MediaNoteItem, note: MediaNotesManifestEntry["note"]) => {
+      if (entries.length < MEDIA_NOTES_MANIFEST_ENTRY_LIMIT) {
+        entries.push({ mediaId: item.mediaId, n: item.n, note });
+      }
+    };
     let mediaLeft = input.limits.media;
     let teasersLeft = input.limits.teasers;
     for (const item of [...input.items].sort((left, right) => right.n - left.n)) {
@@ -196,11 +218,14 @@ export function renderFanslyMediaNotes(input: {
           : null;
       if (note === null) {
         manifest.pending += 1;
+        // Not ready yet, or never will be (failed, unavailable, skipped).
+        record(item, row && NEVER_DESCRIBED.has(row.status) ? "none" : "pending");
         continue;
       }
       const pool = item.placement === "preview" ? teasersLeft : mediaLeft;
       if (pool <= 0) {
         manifest.overLimit += 1;
+        record(item, "over_limit");
         continue;
       }
       if (item.placement === "preview") {
@@ -211,8 +236,10 @@ export function renderFanslyMediaNotes(input: {
       notes.set(item.n, note);
       if (note === MEDIA_NOTE_NOT_RECOGNIZED) {
         manifest.notRecognized += 1;
+        record(item, "not_recognized");
       } else {
         manifest.described += 1;
+        record(item, "described");
       }
     }
   }

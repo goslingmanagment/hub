@@ -59,6 +59,7 @@ import {
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
 } from "./services/ai-media-describe/sweep.ts";
+import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
 import { runOfapiCaptureMaterialization } from "./services/ofapi-capture-materialization.ts";
@@ -548,6 +549,10 @@ export async function startWorkerServices(
 
   // Stage 21: the v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
+  // Describe within seconds (AI_MEDIA_DESCRIBE_LOOP_ENABLED); shares the
+  // minutely job's slot, so still one image at a time from this process.
+  const aiMediaDescribeLoop = startAiMediaDescribeLoop(app);
+
   const fanslyWs = startFanslyWsWorker(app);
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
@@ -630,6 +635,9 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
+      await aiMediaDescribeLoop.stop().catch((error) => {
+        app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
+      });
       await fanslyWs.stop();
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");

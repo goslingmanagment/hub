@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
-  claimDueAiMediaDescriptions,
+  claimNextDueAiMediaDescription,
   countRecentAiMediaDescribeOutcomes,
   expireAwaitingSourceAiMediaDescriptions,
   finalizeAiGatewayUsageEvent,
@@ -59,7 +59,9 @@ import {
 // The AI media describer sweep (plan §6/§9). One claimed row at a time
 // (parallelism 1: libvips and the provider see at most one image from this
 // process), every paid step behind the day's atomic reservation, every
-// provider send behind the row's lease (single flight).
+// provider send behind the row's lease and its ownership token (single
+// flight). Rows are claimed one by one, fresh files first, so a new photo
+// never waits behind a batch; every settle is stamped with the real time.
 //
 // Logging rule: ids, statuses and error codes only — never a URL, a
 // signature, image bytes or a description.
@@ -67,6 +69,8 @@ import {
 export const AI_MEDIA_DESCRIBE_FEATURE = "media-describe" as const;
 export const AI_MEDIA_DESCRIBE_LEASE_MS = 3 * 60 * 1000;
 export const AI_MEDIA_DESCRIBE_SWEEP_LIMIT = 10;
+/** Files whose first message is this recent are claimed before the backlog. */
+export const AI_MEDIA_DESCRIBE_FRESH_MS = 15 * 60 * 1000;
 /** A row waiting for a free source this long becomes unavailable. */
 export const AI_MEDIA_AWAITING_SOURCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const AI_MEDIA_BREAKER_DAILY_REFUSALS = 25;
@@ -103,12 +107,15 @@ export interface AiMediaDescribeDeps {
   /** Null when no Anthropic key is configured (the sweep then idles). */
   clientFactory: MediaDescribeClientFactory | null;
   download?: (input: { url: string; pageId: number }) => Promise<MediaDownloadResult>;
+  /** The clock; read at every step (claim, reservation, settle). */
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
 }
 
 export interface AiMediaDescribeSweepResult extends Record<string, unknown> {
   skipped?: "disabled" | "no_pages" | "no_client" | "account_stopped" | "breaker";
+  /** Rows whose claim was taken over by another worker before a settle. */
+  leaseLost?: number;
   claimed: number;
   sent: number;
   outcomes: Record<string, number>;
@@ -133,6 +140,15 @@ async function defaultDownload(app: AppContext, input: { url: string; pageId: nu
   } finally {
     await egress.close().catch(() => undefined);
   }
+}
+
+/** Page ids the describer may work on now (enabled policy, open window). */
+export async function listActiveAiMediaDescribePageIds(
+  app: AppContext,
+  policiesRaw: string | undefined,
+  now: Date,
+): Promise<number[]> {
+  return (await loadActivePages(app, policiesRaw, now)).map((page) => page.id);
 }
 
 interface ActivePage {
@@ -234,18 +250,20 @@ function sha256Hex(bytes: Uint8Array) {
 export async function runAiMediaDescribeSweep(
   app: AppContext,
   deps: AiMediaDescribeDeps,
+  options: { limit?: number; shouldContinue?: () => boolean } = {},
 ): Promise<AiMediaDescribeSweepResult> {
-  const now = (deps.now ?? (() => new Date()))();
+  const clock = deps.now ?? (() => new Date());
+  const startedAt = clock();
   const result: AiMediaDescribeSweepResult = { claimed: 0, sent: 0, outcomes: {} };
   const effective = await loadEffectiveConfig(app.db, app.config);
   if (effective.aiMediaDescribeEnabled !== true) {
     return { ...result, skipped: "disabled" };
   }
   await expireAwaitingSourceAiMediaDescriptions(app.db, {
-    olderThan: new Date(now.getTime() - AI_MEDIA_AWAITING_SOURCE_TTL_MS),
-    now,
+    olderThan: new Date(startedAt.getTime() - AI_MEDIA_AWAITING_SOURCE_TTL_MS),
+    now: startedAt,
   });
-  const pages = await loadActivePages(app, effective.aiMediaDescribePagePolicies, now);
+  const pages = await loadActivePages(app, effective.aiMediaDescribePagePolicies, startedAt);
   if (pages.length === 0) {
     return { ...result, skipped: "no_pages" };
   }
@@ -255,38 +273,44 @@ export async function runAiMediaDescribeSweep(
   if (await isAccountStopped(app)) {
     return { ...result, skipped: "account_stopped" };
   }
-  if (await reconcileBreakerLatch(app, now)) {
+  if (await reconcileBreakerLatch(app, startedAt)) {
     return { ...result, skipped: "breaker" };
   }
 
   const pagesById = new Map(pages.map((page) => [page.id, page]));
-  const claimed = await claimDueAiMediaDescriptions(app.db, {
-    pageIds: pages.map((page) => page.id),
-    now,
-    limit: AI_MEDIA_DESCRIBE_SWEEP_LIMIT,
-    leaseMs: AI_MEDIA_DESCRIBE_LEASE_MS,
-  });
-  result.claimed = claimed.length;
   const model = effective.aiMediaDescribeModel ?? MEDIA_DESCRIBE_DEFAULT_MODEL;
   const limits = {
     images: Math.max(0, effective.aiMediaDescribeDailyImageLimit ?? 150),
     microUsd: Math.max(0, effective.aiMediaDescribeDailyMicroUsdLimit ?? 1_000_000),
   };
-  let stop = false;
-  for (const row of claimed) {
-    if (stop) {
-      // A stop latched mid-sweep: release the rest untouched for a later look.
-      await finishAiMediaDescription(app.db, { id: row.id, status: row.status, now, nextAttemptAt: row.nextAttemptAt });
-      continue;
+  const limit = Math.max(0, options.limit ?? AI_MEDIA_DESCRIBE_SWEEP_LIMIT);
+  for (let index = 0; index < limit; index += 1) {
+    if (options.shouldContinue && !options.shouldContinue()) {
+      // Shutting down: nothing new is claimed, nothing new is sent.
+      break;
     }
+    const claimAt = clock();
+    const leaseToken = randomUUID();
+    const row = await claimNextDueAiMediaDescription(app.db, {
+      pageIds: pages.map((page) => page.id),
+      now: claimAt,
+      leaseMs: AI_MEDIA_DESCRIBE_LEASE_MS,
+      leaseToken,
+      freshSince: new Date(claimAt.getTime() - AI_MEDIA_DESCRIBE_FRESH_MS),
+    });
+    if (!row) {
+      break;
+    }
+    result.claimed += 1;
     const page = pagesById.get(row.pageId)!;
     let outcome: RowOutcome;
     const progress = { sent: false };
     try {
       outcome = await processRow(app, deps, {
         row,
+        leaseToken,
         page,
-        now,
+        clock,
         model,
         limits,
         modelMedia: effective.aiMediaDescribeModelMedia ?? "teasers",
@@ -301,22 +325,27 @@ export async function runAiMediaDescribeSweep(
       // Once the request may have left, the row is already written ahead as
       // outcome_unknown (or carries its real result): never make it due again.
       if (!progress.sent) {
+        const failedAt = clock();
         await finishAiMediaDescription(app.db, {
           id: row.id,
+          leaseToken,
           status: row.attempts >= MAX_TRANSIENT_ATTEMPTS ? "failed" : "pending",
-          now,
+          now: failedAt,
           errorCode: "internal_error",
-          nextAttemptAt: new Date(now.getTime() + TRANSIENT_RETRY_MS),
+          nextAttemptAt: new Date(failedAt.getTime() + TRANSIENT_RETRY_MS),
         });
       }
       outcome = { status: "internal_error", sent: progress.sent };
     }
     result.outcomes[outcome.status] = (result.outcomes[outcome.status] ?? 0) + 1;
+    if (outcome.status === "lease_lost") {
+      result.leaseLost = (result.leaseLost ?? 0) + 1;
+    }
     if (outcome.sent) {
       result.sent += 1;
     }
     if (outcome.stop) {
-      stop = true;
+      break;
     }
   }
   return result;
@@ -333,8 +362,10 @@ async function processRow(
   deps: AiMediaDescribeDeps,
   input: {
     row: AiMediaDescriptionRow;
+    /** The claim's ownership token; every settle presents it. */
+    leaseToken: string;
     page: ActivePage;
-    now: Date;
+    clock: () => Date;
     model: string;
     limits: { images: number; microUsd: number };
     modelMedia: "teasers" | "teasers+free";
@@ -342,12 +373,23 @@ async function processRow(
     progress: { sent: boolean };
   },
 ): Promise<RowOutcome> {
-  const { row, page, now } = input;
+  const { row, page, clock } = input;
+  const now = clock();
   const finish = async (
     status: Parameters<typeof finishAiMediaDescription>[1]["status"],
-    extra: Omit<Parameters<typeof finishAiMediaDescription>[1], "id" | "status" | "now"> = {},
-  ) => {
-    await finishAiMediaDescription(app.db, { id: row.id, status, now, ...extra });
+    extra: Omit<Parameters<typeof finishAiMediaDescription>[1], "id" | "leaseToken" | "status" | "now"> = {},
+  ): Promise<boolean> => {
+    const owned = await finishAiMediaDescription(app.db, {
+      id: row.id,
+      leaseToken: input.leaseToken,
+      status,
+      now: clock(),
+      ...extra,
+    });
+    if (!owned) {
+      app.logger.warn({ descriptionId: row.id, status }, "ai media describe settle skipped: the claim was taken over");
+    }
+    return owned;
   };
 
   // Enable boundary: never a message at or before the page's `since`.
@@ -411,14 +453,15 @@ async function processRow(
 
   // Cheap pre-check before any network: a latched breaker or an exhausted
   // day defers without touching the CDN.
-  const today = await getAiMediaDescribeDay(app.db, utcDay(now));
+  const checkedAt = clock();
+  const today = await getAiMediaDescribeDay(app.db, utcDay(checkedAt));
   if (
     today?.breakerTrippedAt
     || (today && (today.imagesReserved >= input.limits.images || today.microUsdReserved >= input.limits.microUsd))
     || input.limits.images === 0
     || input.limits.microUsd === 0
   ) {
-    await finish("budget_deferred", { errorCode: "daily_cap", nextAttemptAt: nextUtcMidnight(now) });
+    await finish("budget_deferred", { errorCode: "daily_cap", nextAttemptAt: nextUtcMidnight(checkedAt) });
     return { status: "budget_deferred", sent: false, stop: true };
   }
 
@@ -430,7 +473,7 @@ async function processRow(
     if (transient && row.attempts < MAX_TRANSIENT_ATTEMPTS) {
       await finish("pending", {
         errorCode: `download_${downloaded.reason}`,
-        nextAttemptAt: new Date(now.getTime() + TRANSIENT_RETRY_MS),
+        nextAttemptAt: new Date(clock().getTime() + TRANSIENT_RETRY_MS),
       });
       return { status: "download_retry", sent: false };
     }
@@ -465,22 +508,24 @@ async function processRow(
     return { status: "unavailable", sent: false };
   }
   if (!page.proxy) {
-    await finish("pending", { errorCode: "proxy_missing", nextAttemptAt: new Date(now.getTime() + TRANSIENT_RETRY_MS) });
+    await finish("pending", { errorCode: "proxy_missing", nextAttemptAt: new Date(clock().getTime() + TRANSIENT_RETRY_MS) });
     return { status: "proxy_missing", sent: false };
   }
 
-  // Atomic reservation of the image and its worst-case cost, BEFORE the send.
-  const day = utcDay(now);
+  // Atomic reservation of the image and its worst-case cost, BEFORE the send,
+  // on the UTC day of the reservation itself (not of the sweep start).
+  const reservedAt = clock();
+  const day = utcDay(reservedAt);
   const reserveMicroUsd = estimateMediaDescribeReserveMicroUsd(input.model, prepared);
   const reserved = await reserveAiMediaDescribeBudget(app.db, {
     day,
     microUsd: reserveMicroUsd,
     imageLimit: input.limits.images,
     microUsdLimit: input.limits.microUsd,
-    now,
+    now: reservedAt,
   });
   if (!reserved) {
-    await finish("budget_deferred", { errorCode: "daily_cap", nextAttemptAt: nextUtcMidnight(now) });
+    await finish("budget_deferred", { errorCode: "daily_cap", nextAttemptAt: nextUtcMidnight(reservedAt) });
     return { status: "budget_deferred", sent: false, stop: true };
   }
 
@@ -496,14 +541,40 @@ async function processRow(
       provider: "anthropic",
       conversationId: link?.conversationRef ?? null,
       isRegeneration: false,
-      reservedAt: now,
+      reservedAt,
     },
   });
 
   // Write-ahead: from here the request may reach the provider. A crash, a
   // deploy or a failed settle leaves the row outcome_unknown — terminal, never
-  // sent again — instead of a pending row a later sweep would resend.
-  await finish("outcome_unknown", { errorCode: "in_flight", contentSha256, source: resolution.source, model: input.model });
+  // sent again — instead of a pending row a later sweep would resend. It is
+  // also the pre-send ownership check: a claim taken over since never sends.
+  const owned = await finish("outcome_unknown", { errorCode: "in_flight", contentSha256, source: resolution.source, model: input.model });
+  if (!owned) {
+    // Nothing left: the reservation and the ledger row go back as unsent.
+    await finalizeAiGatewayUsageEvent(app.db, {
+      userId: null,
+      event: {
+        clientEventId,
+        providerResponseId: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: 0,
+        costApproximate: false,
+        gatewayOutcome: "failed",
+        errorCode: "lease_lost",
+        failurePhase: "provider_response",
+        providerHttpStatus: null,
+        durationMs: 0,
+        isCacheHit: false,
+        completedAt: clock(),
+      },
+    });
+    await settleAiMediaDescribeBudget(app.db, { day, microUsdDelta: -reserveMicroUsd, releaseImage: true, now: clock() });
+    return { status: "lease_lost", sent: false };
+  }
   input.progress.sent = true;
 
   const startedAt = Date.now();
@@ -515,7 +586,7 @@ async function processRow(
     clientFactory: deps.clientFactory!,
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
   });
-  const completedAt = (deps.now ?? (() => new Date()))();
+  const completedAt = clock();
   const durationMs = Date.now() - startedAt;
 
   const settleLedger = async (fields: {

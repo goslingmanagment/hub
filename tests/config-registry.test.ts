@@ -180,6 +180,7 @@ describe("config registry", () => {
     "aiMediaDescribeDailyMicroUsdLimit",
     "aiMediaDescribeLiveChatOnly",
     "aiMediaDescribeModelMedia",
+    "aiMediaDescribeLoopEnabled",
     "aiMediaDescribeFanslyAcceleratorEnabled",
     "aiMediaDescribeFanslyAcceleratorDailyLimit",
     // Agent Read Plane (slice 0a): read per request / per cycle so the owner's

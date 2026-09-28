@@ -47,13 +47,24 @@ export function resolveAiMediaDescribeClientFactory(
   return key ? createPageProxyMediaDescribeClientFactory(key) : null;
 }
 
+// One describe slot per process: the minutely job and the seconds loop share
+// it, so libvips and the provider still see at most one image at a time.
+let describeSlot: Promise<unknown> = Promise.resolve();
+
+function withDescribeSlot<T>(run: () => Promise<T>): Promise<T> {
+  const next = describeSlot.then(run, run);
+  describeSlot = next.catch(() => undefined);
+  return next;
+}
+
 export async function runAiMediaDescribeSweepJob(
   app: AppContext,
   overrides: Partial<AiMediaDescribeDeps> = {},
+  options: { limit?: number; shouldContinue?: () => boolean } = {},
 ) {
-  return runAiMediaDescribeSweep(app, {
+  return withDescribeSlot(() => runAiMediaDescribeSweep(app, {
     sources: AI_MEDIA_SOURCES,
     clientFactory: resolveAiMediaDescribeClientFactory(app.config),
     ...overrides,
-  });
+  }, options));
 }

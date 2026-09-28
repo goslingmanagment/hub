@@ -358,6 +358,8 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(1_000_000),
   AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY: booleanSchema.default(true),
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
+  // Describe within seconds: the worker's 1 s loop over due rows (default off).
+  AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   // Fansly freshness accelerator: one head read of a conversation when a WS
   // frame says a fan sent media. OFF until the owner enables it after stage 1.
   AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED: booleanSchema.default(false),
@@ -666,6 +668,8 @@ export interface AppConfig {
   aiMediaDescribeLiveChatOnly?: boolean;
   /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
+  /** The worker describes due rows within seconds (1 s loop), not per minute. */
+  aiMediaDescribeLoopEnabled?: boolean;
   /** Fansly: one head read per fan media WS signal (own budget, default off). */
   aiMediaDescribeFanslyAcceleratorEnabled?: boolean;
   /** Agency-wide accelerator reads per rolling 24 h. */
@@ -986,6 +990,7 @@ export function loadConfig(
     aiMediaDescribeDailyMicroUsdLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT,
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
+    aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     aiMediaDescribeFanslyAcceleratorEnabled: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED,
     aiMediaDescribeFanslyAcceleratorDailyLimit: parsed.AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_DAILY_LIMIT,
     agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
