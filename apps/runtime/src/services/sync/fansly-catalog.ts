@@ -46,9 +46,11 @@
 // AND THE GUARD STAYS ANYWAY. An empty page is treated as "end of pages" ONLY
 // after a non-empty one, or on the first page of an album whose `itemCount` is
 // 0. An empty FIRST page on an album the platform says is non-empty means the
-// request was not honoured: the sublane stops with `partial_provider_surface`
-// and ONE anomaly, and it never loops. That is WP-F1's lesson — a walk that
-// re-asks the question it cannot answer spends a day's cap proving it.
+// request was not honoured: THAT album's walk is parked with
+// `partial_provider_surface` and ONE anomaly, and it never loops. That is
+// WP-F1's lesson — a walk that re-asks the question it cannot answer spends a
+// day's cap proving it. The album is asked again only when its head or count
+// moves, or at the weekly recheck; the rest of the vault keeps walking.
 //
 // ── WHAT NEVER LEAVES THE JOURNAL ───────────────────────────────────────────
 //
@@ -175,8 +177,10 @@ export interface FanslyCatalogCursorState {
   vaultWalk: Record<string, VaultAlbumWalkState>;
   /** Durable round-robin position, independent of the HTTP/page budget. */
   vaultWalkAfterAlbumRef?: string | null;
-  /** Set when a walk hit an empty FIRST page on an album the platform says is
-   *  non-empty. The sublane stops; the anomaly is raised once. */
+  /** DEPRECATED. An empty FIRST page on an album the platform says is
+   *  non-empty used to set this and stop the whole vault walk; it now parks
+   *  only that album. Still parsed so older cursors load; the vault walk
+   *  clears it and nothing sets it any more. */
   vaultWalkBlockedAlbumRef: string | null;
   /** True once every known album's walk has completed at least once. */
   vaultWalkExhausted: boolean;
@@ -557,9 +561,11 @@ export async function fanslyCatalogChunk(
   let walkStatus: string = state.vaultWalkExhausted ? "exhausted" : "walking";
 
   if (state.vaultWalkBlockedAlbumRef !== null) {
-    // A blocked sublane stays blocked until an operator looks. It does not stop
-    // the fixed steps or the hydrations — only this walk.
-    walkStatus = "blocked";
+    // LEGACY BLOCK, lifted. It stopped the walk for every album "until an
+    // operator looks", and nothing ever looked: one refused album froze the
+    // vault's inventory while the lane reported success. The refused album
+    // is parked on its own now (below).
+    state = { ...state, vaultWalkBlockedAlbumRef: null };
   }
 
   if (albums.length === 0) {
@@ -697,25 +703,25 @@ export async function fanslyCatalogChunk(
         if (firstPage && !albumClaimsEmpty) {
           // AN EMPTY FIRST PAGE ON A NON-EMPTY ALBUM IS NOT AN EXHAUSTED ALBUM.
           // It is a request the server did not honour, and calling it "no
-          // media" would size WP-F4 against a zero that does not exist. The
-          // sublane STOPS — one anomaly, no loop (WP-F1's lesson).
+          // media" would size WP-F4 against a zero that does not exist. THIS
+          // ALBUM is parked — one anomaly, no loop (WP-F1's lesson) — like the
+          // repeat and page-cap stops above: the recheck rule asks it again
+          // when its head or count moves, or after seven days. No completion
+          // is recorded; a previous proven walk's `lastCompleteWalkAt` stays.
           await input.telemetry.addAnomaly({
             code: "fansly_catalog_vault_empty_first_page",
             severity: "warn",
             message:
               "Fansly served an empty first vault page for a non-empty album; "
-              + "vault walk stopped rather than recording an empty inventory",
+              + "album walk parked rather than recording an empty inventory",
             details: {
               albumRef: album.albumRef,
               itemCount: album.itemCount,
               before: requestedBefore,
             },
           });
-          state = {
-            ...state,
-            vaultWalkBlockedAlbumRef: album.albumRef,
-            vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk },
-          };
+          walk = { ...walk, done: true, completedAtLastItemRef: album.lastItemRef, completedOnUtcDay: state.utcDay };
+          state = { ...state, vaultWalk: { ...state.vaultWalk, [album.albumRef]: walk } };
           await coverage(
             CAPTURE_COVERAGE_PLANES.catalogVaultMedia,
             "partial_provider_surface",
@@ -730,8 +736,7 @@ export async function fanslyCatalogChunk(
             },
           );
           await saveProgress();
-          walkStatus = "blocked";
-          break;
+          continue;
         }
         // THE END OF THE ALBUM. Either a non-empty page came before it, or the
         // platform itself says the album holds nothing — the empty response IS
@@ -808,11 +813,9 @@ export async function fanslyCatalogChunk(
       await saveProgress();
     }
 
-    if (walkStatus !== "blocked") {
-      walkStatus = exhausted ? "exhausted" : "walking";
-      if (exhausted !== state.vaultWalkExhausted) {
-        state = { ...state, vaultWalkExhausted: exhausted };
-      }
+    walkStatus = exhausted ? "exhausted" : "walking";
+    if (exhausted !== state.vaultWalkExhausted) {
+      state = { ...state, vaultWalkExhausted: exhausted };
     }
   }
 
