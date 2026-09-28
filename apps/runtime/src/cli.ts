@@ -67,6 +67,7 @@ import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
 import { runNotificationReadStateReplay } from "./services/fansly-notification-read-state-replay.ts";
+import { runAccountMeRejournal } from "./services/observations-account-me-rejournal.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -2314,6 +2315,49 @@ export function buildProgram() {
             + `(missing ${result.totals.missing}, already ${result.totals.alreadyRejournaled}) `
             + `across ${result.groupsScanned} chunk groups`,
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // J4. Owner-run one-off: dry-run default (READ ONLY, body reads included),
+  // `--execute` opts in, a re-run writes nothing (it reports the earlier
+  // run's rows as already re-journaled), no platform call.
+  program
+    .command("observations:rejournal-account-me")
+    .description(
+      "J4: re-journal the account_me captures whose observation the pre-J4 run-less key "
+        + "dropped (a request journaled fewer account_me bodies than it captured) — verbatim "
+        + "from sync_raw_payloads, producer 'repair:account_me', dated at capture, "
+        + "append-only. Dry-run default; idempotent",
+    )
+    .option("--execute", "actually append (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runAccountMeRejournal(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+        for (const [stream, counts] of Object.entries(result.perStream)) {
+          console.log(
+            `${stream}: missing ${counts.missing}, re-journaled ${counts.rejournaled}, `
+              + `already ${counts.alreadyRejournaled}, body-unavailable ${counts.unavailableBody}, `
+              + `errored ${counts.errored}`,
+          );
+        }
+        console.log(
+          `${result.dryRun ? "[dry-run] would re-journal" : "re-journaled"} `
+            + `${result.totals.rejournaled} account_me capture(s) `
+            + `(missing ${result.totals.missing}, already ${result.totals.alreadyRejournaled}) `
+            + `across ${result.requests} request(s); unpaired requests left alone `
+            + `${result.unpairedRequests}`,
+        );
+        if (result.totals.errored > 0 || result.totals.unavailableBody > 0) {
+          process.exitCode = 1;
+        }
       } finally {
         await app.close();
       }
