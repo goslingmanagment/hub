@@ -1059,8 +1059,11 @@ export async function fanslyMediaStatsChunk(
    * retiring an item from the never-visited band on the strength of an error is
    * how an unreachable item disappears), and a steady refresh cut in half by the
    * cap when no backfill window was journaled either — tomorrow re-reads it whole
-   * rather than half. A failed look still KEEPS the backfill windows it had
-   * journaled before it failed: those are in the cursor, not in the stamp.
+   * rather than half. Which is why such a refresh RESERVES its whole cost before
+   * its first window: a split long tail that starts with two calls left in the
+   * chunk would otherwise spend them on windows the next chunk asks for again.
+   * A failed look still KEEPS the backfill windows it had journaled before it
+   * failed: those are in the cursor, not in the stamp.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
@@ -1124,7 +1127,15 @@ export async function fanslyMediaStatsChunk(
     // be there tomorrow.
     let steadyComplete = false;
     if (status !== "deferred" && status !== "yielded" && hasDayCapacity() && hasChunkCapacity()) {
-      const steady = await runSteady(candidate, cursor, issued);
+      // With nothing else durable in this visit, a partial refresh is thrown
+      // away and re-read whole — so it is reserved whole, up front.
+      const steady = await runSteady(
+        candidate,
+        cursor,
+        issued,
+        state.longTailWindowMode,
+        journaledWindows === 0,
+      );
       if (steady.status === "failed") {
         await keepFailedVisitProgress();
         return "skipped";
@@ -1367,23 +1378,44 @@ export async function fanslyMediaStatsChunk(
   /** The tier's trailing window: one call, except a long tail on a route that
    *  refuses 90 days. `planMode` is the long-tail plan to run — the page's
    *  mode, unless the 90-day fallback is probing the split plan before it
-   *  commits to it. */
+   *  commits to it. `reserveWhole` is set when a partial refresh would be
+   *  discarded: the unit then never STARTS without room for all its windows. */
   async function runSteady(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
     issued: Set<string>,
     planMode: LongTailWindowMode = state.longTailWindowMode,
+    reserveWhole = false,
   ): Promise<SteadyResult> {
     const windows = steadyWindows(candidate.tier, now, planMode);
     let buckets = 0;
     let served = 0;
 
+    // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
+    // multi-call unit keeps. Three split windows started with two calls left
+    // were read, discarded unstamped, and read again next chunk: up to five
+    // calls an item for three. Clamped to the budgets themselves, so a cap or
+    // chunk smaller than the unit still makes progress instead of yielding
+    // forever. The per-window checks below stay: retries count too.
+    if (reserveWhole) {
+      if (!attemptBudget.hasCapacity(Math.min(windows.length, dailyCap))) {
+        return { status: "deferred", buckets, complete: false, served };
+      }
+      if (
+        !input.budget.hasRequestCapacity(Math.min(windows.length, input.budget.maxRequests))
+        || !input.budget.hasWallClockCapacity()
+      ) {
+        return { status: "yielded", buckets, complete: false, served };
+      }
+    }
+
     for (const [index, window] of windows.entries()) {
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
-        // long-tail refresh. What was fetched is journaled; the refresh is NOT
-        // complete, so an item with nothing else to show for the visit stays
-        // unvisited and tomorrow re-reads it whole rather than half.
+        // long-tail refresh — retries count against it too. What was fetched is
+        // journaled; the refresh is NOT complete, so an item with nothing else
+        // to show for the visit stays unvisited and tomorrow re-reads it whole
+        // rather than half.
         return { status: "deferred", buckets, complete: false, served };
       }
       if (!hasChunkCapacity()) {
@@ -1448,8 +1480,15 @@ export async function fanslyMediaStatsChunk(
           await saveProgress();
           // Re-run this item under the split plan, from the top. The window just
           // fetched is journaled either way — it is simply not the window we
-          // asked for.
-          const rerun = await runSteady(candidate, cursor, issued);
+          // asked for. The same reservation holds: a split unit that does not
+          // fit yields, and the next chunk reads it whole under the new mode.
+          const rerun = await runSteady(
+            candidate,
+            cursor,
+            issued,
+            state.longTailWindowMode,
+            reserveWhole,
+          );
           return { ...rerun, buckets: buckets + rerun.buckets };
         }
         if (covered && state.longTailWindowMode === "unproven") {
@@ -1512,6 +1551,8 @@ export async function fanslyMediaStatsChunk(
       return failed;
     }
 
+    // NOT reserved whole: ONE answered 31-day window is the evidence, and the
+    // split it proves is found once per page.
     const probe = await runSteady(candidate, cursor, issued, "split_31");
     if (!answeredThisVisit && probe.served === 0) {
       if (probe.status === "failed") {
