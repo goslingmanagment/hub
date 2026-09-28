@@ -11,6 +11,7 @@ import {
   countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
+  retireLapsedPageSubscriptionsForEmptySnapshot,
   finalizePageDmConversationMessageSync,
   recordFanslyDmHeadAttempt,
   getFanslyDmHeadTarget,
@@ -215,6 +216,11 @@ const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
 const SUBSCRIBERS_MAX_WALK_RESTARTS = 2;
 const SUBSCRIBERS_WALK_RESTART_DELAY_MS = 60_000;
+// Most current subscriptions a stated-empty active snapshot retires on its
+// own, each already lapsed with auto-renew off before the walk began. A share
+// cannot tell one-to-zero from ten-thousand-to-zero; any larger or unexplained
+// drop keeps the empty-first-page guard.
+const SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS = 5;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
@@ -1459,9 +1465,74 @@ async function subscribersWalkRestartState(
     // The active walk already finalized; only the archive-only history is reread.
     return { ...state, ...walk };
   }
-  // A fresh generation keeps rows stamped by the abandoned walk from counting as seen.
+  // A fresh generation keeps rows stamped by the abandoned walk from counting
+  // as seen, and a fresh start keeps them from counting as touched mid-walk.
   const storedGeneration = await maxPageSubscriptionGeneration(db, platformAccountId);
-  return { ...state, ...walk, generation: Math.max(state.generation, storedGeneration) + 1 };
+  return {
+    ...state,
+    ...walk,
+    generation: Math.max(state.generation, storedGeneration) + 1,
+    walkStartedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * A cursor written before the walk-start fence cannot say when its active
+ * walk began. One still at offset zero has stamped nothing it could vouch for,
+ * so its fence starts now, before the read. One already past the first page
+ * rewalks from offset zero under a fresh generation and fence rather than
+ * guess. Neither is a provider anomaly, so the bounded restart allowance is
+ * untouched; the fenced state persists with the walk's next page write.
+ */
+async function fenceLegacySubscribersWalk(
+  db: Parameters<typeof maxPageSubscriptionGeneration>[0],
+  platformAccountId: number,
+  state: SubscribersCursorState,
+): Promise<SubscribersCursorState> {
+  const walkStartedAt = new Date().toISOString();
+  if (state.offset === 0) {
+    return { ...state, walkStartedAt };
+  }
+  const storedGeneration = await maxPageSubscriptionGeneration(db, platformAccountId);
+  return {
+    ...state,
+    generation: Math.max(state.generation, storedGeneration) + 1,
+    walkStartedAt,
+    offset: 0,
+    observedCount: 0,
+    distinctObservedCount: 0,
+    pageCount: 0,
+    providerReportedTotal: null,
+  };
+}
+
+/** Rows touched at or after this instant survive the walk's finalization. */
+function subscribersWalkFence(state: SubscribersCursorState) {
+  if (state.walkStartedAt === null) {
+    throw new Error("Subscriber walk has no start fence; refusing destructive finalization");
+  }
+  return new Date(state.walkStartedAt);
+}
+
+/**
+ * A zero the provider states outright: an accepted contract on the first and
+ * terminal page of an active walk, an explicit active total of zero, and
+ * nothing positive earlier in the same walk. An empty array alone (a missing
+ * total, an absent or rejected contract) is not a statement of zero.
+ */
+function isStatedEmptyActiveSnapshot(
+  state: SubscribersCursorState,
+  page: { contractAccepted?: boolean; total?: number | null; items: unknown[]; done: boolean },
+  totalChanged: boolean,
+) {
+  return state.mode === "active" &&
+    state.offset === 0 &&
+    state.observedCount === 0 &&
+    !totalChanged &&
+    page.contractAccepted === true &&
+    page.done &&
+    page.items.length === 0 &&
+    page.total === 0;
 }
 
 /** The stats trail of a revision whose walks could not be certified past the restart bound. */
@@ -1528,8 +1599,11 @@ export async function fanslySubscribersChunk(
     : null;
   let state: SubscribersCursorState;
   if (existingState) {
-    state = existingState;
+    state = existingState.mode === "active" && existingState.walkStartedAt === null
+      ? await fenceLegacySubscribersWalk(app.db, input.pageContext.page.id, existingState)
+      : existingState;
   } else {
+    const walkStartedAt = new Date().toISOString();
     const storedGeneration = await maxPageSubscriptionGeneration(
       app.db,
       input.pageContext.page.id,
@@ -1545,6 +1619,7 @@ export async function fanslySubscribersChunk(
       pageCount: 0,
       providerReportedTotal: null,
       restartCount: 0,
+      walkStartedAt,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -1641,7 +1716,11 @@ export async function fanslySubscribersChunk(
       providerReportedTotal: totalChanged ? pageTotal : state.providerReportedTotal ?? pageTotal,
     };
 
-    if (state.mode === "active" && state.offset === 0 && page.items.length === 0) {
+    // An empty first page vouches for nothing unless the provider states the
+    // zero outright; even then the finalization transaction retires only the
+    // small, already-lapsed membership it can explain, or refuses.
+    const statedEmptySnapshot = isStatedEmptyActiveSnapshot(state, page, totalChanged);
+    if (!statedEmptySnapshot && state.mode === "active" && state.offset === 0 && page.items.length === 0) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
       if (currentSubscribers.rows.length > 0) {
         await input.telemetry.addAnomaly({
@@ -1650,6 +1729,7 @@ export async function fanslySubscribersChunk(
           message: "Subscriber sync returned zero rows on the first page while current subscriptions already exist",
           details: {
             existingCurrentSubscribers: currentSubscribers.rows.length,
+            reason: "zero_not_stated",
           },
         });
         throw new Error("Subscriber sync returned zero rows; refusing destructive finalization");
@@ -1730,7 +1810,9 @@ export async function fanslySubscribersChunk(
       restartCount: 0,
     };
 
+    let emptySnapshotRetiredCount: number | null = null;
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      emptySnapshotRetiredCount = null;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFans.accounts,
@@ -1821,10 +1903,23 @@ export async function fanslySubscribersChunk(
             finalWithheldReason = "offset_duplicates";
           }
         }
-        if (finalWithheldReason === null) {
+        if (finalWithheldReason === null && statedEmptySnapshot) {
+          // The assessment and the retirement act on one locked set.
+          const retirement = await retireLapsedPageSubscriptionsForEmptySnapshot(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+            walkStartedAt: subscribersWalkFence(state),
+            maxRetirements: SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS,
+          });
+          if (!retirement.certified) {
+            return { kind: "empty_refused" as const, retirement };
+          }
+          emptySnapshotRetiredCount = retirement.retiredCount;
+        } else if (finalWithheldReason === null) {
           await deactivatePageSubscriptionsByGeneration(dbTx, {
             platformAccountId: input.pageContext.page.id,
             generation: state.generation,
+            lastSeenBefore: subscribersWalkFence(state),
           });
         }
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
@@ -1901,6 +1996,26 @@ export async function fanslySubscribersChunk(
         processedThisPage: subscriptionInputs.length,
       };
     });
+    if (pageWrite.kind === "empty_refused") {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_empty_first_page_guard",
+        severity: "warn",
+        message: "Subscriber sync returned zero rows on the first page while current subscriptions already exist",
+        details: {
+          existingCurrentSubscribers: pageWrite.retirement.currentCount,
+          reason: pageWrite.retirement.reason,
+        },
+      });
+      throw new Error("Subscriber sync returned zero rows; refusing destructive finalization");
+    }
+    if (emptySnapshotRetiredCount !== null) {
+      await input.telemetry.addNote("Fansly subscribers stated-empty snapshot certified", {
+        code: "subscribers_empty_snapshot_certified",
+        generation: state.generation,
+        walkStartedAt: state.walkStartedAt,
+        retiredCount: emptySnapshotRetiredCount,
+      });
+    }
     processedThisChunk += pageWrite.processedThisPage;
 
     if (pageWrite.membership) {
