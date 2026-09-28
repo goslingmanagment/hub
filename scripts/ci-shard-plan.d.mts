@@ -1,0 +1,8 @@
+export type ShardWeights = { version: number; firstShardExtraSeconds: number; files: Record<string, number> };
+export type WeightedShardPlan = { shards: string[][]; seconds: number[]; unweighted: string[] };
+export const SHARD_WEIGHTS_PATH: string;
+export const SHARD_WEIGHTS_VERSION: number;
+export function validateShardWeights(document: unknown): ShardWeights;
+export function parseShardWeights(text: string): ShardWeights;
+export function defaultShardWeight(weights: ShardWeights): number;
+export function planWeightedShards(files: readonly string[], weights: ShardWeights, count: number): WeightedShardPlan;

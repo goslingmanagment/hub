@@ -357,3 +357,18 @@ pnpm dev
 ```
 
 `pnpm dev` creates a local `.env` from `.env.example` if needed, generates a local `APP_ENCRYPTION_KEY`, starts the Docker Postgres service, waits for it, runs migrations, then starts the API, worker, and dashboard in one terminal. Use `Ctrl+C` to stop the local Node/Vite processes.
+
+### CI integration shards
+
+CI splits `pnpm test:sync-critical:db` with `--shard=k/N`. The root Vitest
+config packs the files by measured duration from `tests/ci/shard-weights.json`
+instead of by count, and starts shard 1 with the time of the
+`pnpm test:sync-critical:api` step it also runs. A test file without a weight
+takes the median and still runs. Each shard logs its plan
+(`Weighted shard k/N: … predicted`). When shard durations drift apart,
+regenerate the weights from a few recent green full runs on the PC pool and
+commit the file:
+
+```bash
+node scripts/ci-shard-weights.mjs <run-id> <run-id> <run-id> --write
+```
