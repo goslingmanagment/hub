@@ -45,10 +45,16 @@ async function fixture(input: {
   fail: (group: string) => FanslyApiError | null;
   /** The stream's failure streak and open incident before this chunk. */
   streamFailures?: number;
+  /** The partner-account probe's answer; by default the partner resolves. */
+  probeFailure?: () => FanslyApiError;
+  /** Head catch-up on for the page, with each headMismatch thread's list head
+   * recorded as uncaptured head debt. */
+  headCatchup?: boolean;
 }) {
   const app = createTestAppContext(db, { syncSharedRateLimitEnabled: true });
   const { page } = await seedFanslyPage(app.db, app.config.encryptionKey);
   if (!page) throw new Error("Expected a fixture page");
+  if (input.headCatchup) app.config.fanslyDmHeadCatchupPageAllowlist = page.label;
   await db.pool.query("update pages set external_page_id = '999' where id = $1", [page.id]);
   await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
   const run = await startSyncRun(app.db, { platformAccountId: page.id, stream: "dm_messages", trigger: "scheduled" });
@@ -68,6 +74,10 @@ async function fixture(input: {
     });
     if (!thread) throw new Error("Expected a fixture thread");
     threads[spec.group] = thread.id;
+    if (input.headCatchup && spec.headMismatch) {
+      await db.pool.query(`insert into fansly_dm_head_debt (conversation_id, message_id, message_at)
+        values ($1, '960', now() - interval '1 hour')`, [thread.id]);
+    }
     if (spec.failures) {
       await db.pool.query(`insert into page_dm_message_sync_health (conversation_id, platform_account_id,
           failure_count, error_class, last_error, last_attempt_at, next_retry_at, quarantine_until)
@@ -125,18 +135,31 @@ async function fixture(input: {
       },
     });
   }) as never;
-  // The partner still resolves: the poison thread is not excluded.
-  app.adapter.getAccountsByIdsPage = vi.fn(async (context: FanslyRequestContext, ids: string[]) =>
-    executeObservedRequest({
+  // The partner still resolves, so the poison thread is not excluded, unless
+  // the probe itself fails (5xx retried in process like any Fansly call).
+  const probes: Array<{ attempts: number }> = [];
+  app.adapter.getAccountsByIdsPage = vi.fn(async (context: FanslyRequestContext, ids: string[]) => {
+    const failure = input.probeFailure?.() ?? null;
+    const allowance = Math.max(0, context.remainingAttempts?.() ?? Number.MAX_SAFE_INTEGER);
+    const entry = { attempts: 0 };
+    probes.push(entry);
+    return executeObservedRequest({
       observer: context.requestObserver ?? null, requestId: `accounts:${randomUUID()}`, operation: "account",
-      endpointTemplate: "/account", method: "GET", retries: 0,
-      execute: async () => {},
+      endpointTemplate: "/account", method: "GET", retries: Math.min(3, Math.max(0, allowance - 1)),
+      execute: async () => { entry.attempts += 1; },
       onTransportError: (error) => ({ kind: "failed", failureKind: "transport", error }),
-      onResponse: () => {
+      onResponse: (_response, { retriesRemaining }) => {
+        if (failure) {
+          const status = failure.status ?? 0;
+          return retriesRemaining > 0 && status >= 500 && failure.retryAfterAt === null
+            ? { kind: "retry", failureKind: "http", httpStatus: status, retryDelayMs: 0, errorMessage: failure.message }
+            : { kind: "failed", failureKind: "http", httpStatus: status, errorMessage: failure.message, error: failure };
+        }
         const parsed = ids.map((id) => ({ id, username: id }));
         return { kind: "success", httpStatus: 200, value: { parsed, raw: { accounts: parsed } } };
       },
-    })) as never;
+    });
+  }) as never;
 
   const health = async (group: string) => (await db.pool.query(
     `select failure_count, next_retry_at, quarantine_until from page_dm_message_sync_health
@@ -174,7 +197,7 @@ async function fixture(input: {
       .toMatchObject({ qualityHold: "fansly_ws_hint_only" });
     expect(attempts).toHaveLength(before);
   };
-  return { app, page, threads, attempts, health, incidentStatus, stream, journalFailures, execute, wakeB1 };
+  return { app, page, threads, attempts, probes, health, incidentStatus, stream, journalFailures, execute, wakeB1 };
 }
 
 const failOnly = (...groups: string[]) => (group: string) => groups.includes(group) ? poisonError() : null;
@@ -310,13 +333,109 @@ describe("Fansly DM thread isolation through the executor", () => {
     // The page's only open work is the quarantined thread: a B1 wake gets in.
     await f.wakeB1();
 
-    // An ordinary request finds nothing it may read yet, completes without
-    // touching the thread, and leaves the stream open to the next wake.
+    // An ordinary request finds nothing it may read yet. It settles without
+    // touching the thread, as a hold (nothing read while the breaker holds a
+    // thread certifies nothing), and leaves the stream open to the next wake.
     await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["dm_messages"], source: "scheduled" });
-    expect(await f.execute()).toMatchObject({ kind: "success" });
+    expect(await f.execute()).toMatchObject({ kind: "skipped" });
     expect(f.attempts).toHaveLength(2);
-    expect(await f.stream()).toMatchObject({ status: "idle", retryAt: null });
+    expect(await f.stream()).toMatchObject({ status: "idle", retryAt: null, consecutiveFailures: 0 });
     await f.wakeB1();
+  });
+
+  it("does not sleep on a quarantined thread's head debt", async () => {
+    // With head catch-up on, the thread's uncaptured list head is head debt,
+    // and every failure leaves it uncaptured.
+    const f = await fixture({
+      threads: [{ group: "poison", unread: 0, headMismatch: true, failures: 3 }],
+      fail: failOnly("poison"),
+      streamFailures: 22,
+      headCatchup: true,
+    });
+
+    const result = await f.execute();
+
+    expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }]);
+    const poison = await f.health("poison");
+    expect(poison?.failure_count).toBe(4);
+    near(poison?.quarantine_until, Date.now() + 6 * 60 * 60_000);
+    // Not a six-hour wait on the quarantine: a hold, the stream idle.
+    expect(result).toMatchObject({ kind: "skipped", continuationRetryAt: null });
+    expect(await f.stream()).toMatchObject({ status: "idle", retryAt: null, consecutiveFailures: 22 });
+    expect(await f.incidentStatus()).toBe("open");
+
+    await f.wakeB1();
+  });
+
+  it("keeps the streak and incident through requests that find only a quarantined thread", async () => {
+    // The fourth failure reaches the partner probe, whose retried 5xx spends
+    // the rest of the chunk's five requests.
+    const f = await fixture({
+      threads: [{ group: "poison", unread: 0, headMismatch: true, failures: 3 }],
+      fail: failOnly("poison"),
+      streamFailures: 22,
+      probeFailure: () => new FanslyApiError("Fansly request failed (500)", 500),
+    });
+    await f.journalFailures("poison", 3);
+    const before = await f.stream();
+
+    const first = await f.execute();
+
+    expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }]);
+    expect(f.probes).toEqual([{ attempts: 4 }]);
+    expect((await f.health("poison"))?.failure_count).toBe(4);
+    expect(first).toMatchObject({ kind: "yielded", continuationRetryAt: null });
+    expect(await f.stream()).toMatchObject({ status: "pending", consecutiveFailures: 22 });
+
+    // The continuation has nothing it may read: a hold, not a recovery.
+    const continuation = await f.execute();
+    expect(continuation).toMatchObject({ kind: "skipped" });
+    const held = {
+      status: "idle", retryAt: null, consecutiveFailures: 22, lastErrorCode: "http_500",
+      succeededAt: before?.succeededAt, progressedAt: before?.progressedAt,
+    };
+    expect(await f.stream()).toMatchObject(held);
+    expect(await f.incidentStatus()).toBe("open");
+    expect((await db.pool.query("select stats from sync_runs where id = $1", [continuation.runId])).rows[0].stats)
+      .toMatchObject({ qualityHold: DEFERRED });
+
+    // So does an ordinary request during the quarantine.
+    await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["dm_messages"], source: "scheduled" });
+    expect(await f.execute()).toMatchObject({ kind: "skipped" });
+    expect(await f.stream()).toMatchObject(held);
+    expect(await f.incidentStatus()).toBe("open");
+    expect(f.attempts).toHaveLength(1);
+    expect(f.probes).toHaveLength(1);
+    await f.wakeB1();
+  });
+
+  it("fails the stream at the probe's Retry-After deadline before deferring the thread", async () => {
+    const retryAfterAt = new Date(Date.now() + 60 * 60_000);
+    const f = await fixture({
+      threads: [
+        { group: "poison", unread: 9, headMismatch: true, failures: 1 },
+        { group: "healthy", unread: 2 },
+      ],
+      fail: failOnly("poison"),
+      streamFailures: 22,
+      probeFailure: () => new FanslyApiError("Fansly request failed (429)", 429, 429, undefined, retryAfterAt),
+    });
+    await f.journalFailures("poison", 3);
+
+    const result = await f.execute();
+
+    // No other thread is read into the rate limit, and the thread is not
+    // deferred: its pin and breaker state stay as they were.
+    expect(result).toMatchObject({ kind: "failed" });
+    expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }]);
+    expect(f.probes).toEqual([{ attempts: 1 }]);
+    expect(await f.health("poison")).toMatchObject({ failure_count: 1 });
+    expect((await getCheckpoint(f.app.db, f.page.id, "dm_messages"))?.state)
+      .toMatchObject({ currentConversationId: f.threads.poison });
+    expect(await f.stream()).toMatchObject({
+      status: "retrying", retryKind: "rate_limit", retryAt: retryAfterAt, consecutiveFailures: 23,
+    });
+    expect(await f.incidentStatus()).toBe("open");
   });
 
   it("retries at most one failing thread per chunk and runs the next due one in the following chunk", async () => {

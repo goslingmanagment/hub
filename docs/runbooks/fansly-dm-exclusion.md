@@ -57,16 +57,21 @@ backfill.
 
 The stream fails with its ordinary classification and backoff only for
 stream-level failures: every failure listed above as not thread-attributable,
-a failed breaker write, lease loss, and an outage. When two or more other
-groups of the page have failed since its last successful message read, the
-failure is treated as a page-wide outage and opens no breaker. A walk that
-already wrote pages keeps its pin and still fails the stream on a later page:
-restarting it would stop on its own pages and hide the gap below them.
+a failed breaker write, lease loss, and an outage. An auth (401/403), rate-limit
+(429) or Retry-After answer to the partner-account lookup is stream-level too:
+the stream fails with that answer and its deadline, before the thread is
+deferred and with the pin kept, instead of reading other threads into the same
+limit. When two or more other groups of the page have failed since its last
+successful message read, the failure is treated as a page-wide outage and
+opens no breaker. A walk that already wrote pages keeps its pin and still
+fails the stream on a later page: restarting it would stop on its own pages
+and hide the gap below them.
 
 A chunk with accepted message reads settles as ordinary progress (failure
-streak reset, stream incident resolved). A chunk that read no message page,
-and only deferred threads or found nothing but threads inside a backoff
-window, keeps the streak, last error and incident and claims no progress.
+streak reset, stream incident resolved). A chunk that read no message page
+while a selectable thread still carries breaker failures (deferred by this
+chunk or an earlier one, backing off or quarantined) keeps the streak, last
+error and incident and claims no progress.
 
 When only threads inside a short backoff window (their first three failures)
 remain, the stream sleeps until the earliest `next_retry_at` instead of
@@ -80,10 +85,12 @@ several threads failing in turn can push it past.
 
 A quarantine holds nothing open. Every later failure re-arms it for another
 6 hours, so waiting on it would keep the request outstanding for good and shut
-B1 out. The chunk completes instead; if it read nothing and only deferred the
-thread, it settles as a quality hold without success. The stream goes idle,
-B1 wakes reach it again, and the next ordinary request after the quarantine
-ends retries the thread.
+B1 out; with head catch-up on, the thread's uncaptured head debt does not
+hold the stream either. The chunk completes instead; if it read nothing, it
+settles as a quality hold without success, as does any later request that
+finds nothing else to read during the quarantine. The stream goes idle, B1
+wakes reach it again, and the next ordinary request after the quarantine ends
+retries the thread.
 
 While a Fansly row carries failures and its thread is still selectable
 (visible, bound to a fan, not excluded), `/health/sync` reports

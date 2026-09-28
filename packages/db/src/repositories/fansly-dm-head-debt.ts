@@ -63,7 +63,15 @@ export async function recordFanslyDmHeadAttempt(
 }
 
 export async function nextFanslyDmHeadRetryAt(
-  db: Database, input: { platformAccountId: number; conversationId?: number },
+  db: Database, input: {
+    platformAccountId: number;
+    conversationId?: number;
+    /** Leave out threads the DM breaker has quarantined. The dm_messages
+     * stream never sleeps on a quarantine (6 hours, re-armed by every later
+     * failure): its thread waits for the next ordinary request. */
+    excludeQuarantined?: boolean;
+    now?: Date;
+  },
 ): Promise<Date | null> {
   const result = await db.execute<{ retry_at: Date | string | null }>(sql`
     select min(greatest(d.next_retry_at, h.next_retry_at, h.quarantine_until)) as retry_at
@@ -75,6 +83,9 @@ export async function nextFanslyDmHeadRetryAt(
       and coalesce(c.metadata ->> 'messageSyncExcludedReason', '') = ''
       and d.captured_at is null and d.attempts < 5
       ${input.conversationId === undefined ? sql`` : sql`and c.id = ${input.conversationId}`}
+      ${input.excludeQuarantined === true
+        ? sql`and (h.quarantine_until is null or h.quarantine_until <= ${input.now ?? new Date()}::timestamptz)`
+        : sql``}
   `);
   const value = result.rows[0]?.retry_at;
   return value == null ? null : new Date(value);

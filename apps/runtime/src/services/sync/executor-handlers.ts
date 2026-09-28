@@ -19,6 +19,7 @@ import {
   getPageDmConversationById,
   getCheckpoint,
   getConversationSyncHealth,
+  countConversationSyncFailuresByAccount,
   getPageSyncExecutionContext,
   getPageDmOnboardedAt,
   getCurrentSubscribers,
@@ -372,6 +373,16 @@ function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiEr
     return status === 500;
   }
   return status >= 400 && status !== 401 && status !== 403 && status !== 408 && status !== 429;
+}
+
+/** A partner-account probe failure that speaks for the page, not the partner:
+ * auth (401/403), a rate limit (429) or a provider Retry-After deadline. It
+ * fails the stream with its own classification and deadline before the
+ * thread is deferred; carrying on to other threads would walk straight into
+ * the same refusal. */
+function isPageLevelFanslyProbeFailure(error: unknown): error is FanslyApiError {
+  return error instanceof FanslyApiError &&
+    (error.status === 401 || error.status === 403 || error.status === 429 || error.retryAfterAt !== null);
 }
 
 async function triggerFollowersReconcileAnomaly(
@@ -3501,6 +3512,8 @@ export async function fanslyDmMessagesChunk(
             requestContext,
             partnerPlatformUserId,
             { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
+            // Thrown from here, it fails the stream with the pin kept.
+            { rethrow: isPageLevelFanslyProbeFailure },
           );
           if (resolution !== "unresolved") {
             await deferThreadOrFailStream(error, currentConversation, currentMode);
@@ -3778,10 +3791,19 @@ export async function fanslyDmMessagesChunk(
 
     const dmMessagesChunk = await emitDmMessagesChunkSummary();
     // Threads deferred behind their breaker windows are scheduling, not
-    // progress. A chunk that got no message page accepted besides them must
-    // not reset the stream's failure streak, resolve its incidents or claim
-    // completion (StreamChunkResult.deferral).
-    const deferredOnly = acceptedMessagePages === 0 && deferredThreads > 0;
+    // progress. A chunk that got no message page accepted must not reset the
+    // stream's failure streak, resolve its incidents or claim completion
+    // (StreamChunkResult.deferral) while breaker failures are outstanding:
+    // threads it deferred itself, or ones an earlier chunk deferred that now
+    // back off or sit out a quarantine. Otherwise the continuation after a
+    // deferral, or any request during a quarantine, would find nothing to
+    // read and certify recovery.
+    const deferredOnly = acceptedMessagePages === 0 && (
+      deferredThreads > 0 ||
+      (await countConversationSyncFailuresByAccount(app.db, {
+        platformAccountIds: [input.pageContext.page.id],
+      })).length > 0
+    );
     const deferral = deferredOnly ? { deferral: FANSLY_DM_THREADS_DEFERRED } : {};
     const deferredStats = deferredThreads > 0 ? { deferredThreads } : {};
 
@@ -3869,17 +3891,21 @@ export async function fanslyDmMessagesChunk(
       } satisfies StreamChunkResult;
     }
 
-    const headRetryAt = headCatchupEnabled
-      ? await nextFanslyDmHeadRetryAt(app.db, { platformAccountId: input.pageContext.page.id })
-      : null;
     // Only threads waiting out a short backoff window remain: sleep until the
     // first one ends instead of completing, which would leave them to the next
     // request (dm_messages runs on a daily cadence). A chunk that read nothing
     // before going back to that wait made no progress either, so it cannot
-    // turn a deferral into recovery. A quarantine holds nothing open: the
-    // breaker re-arms it on every later failure, so waiting on it would keep
-    // the request outstanding for good, and B1 cannot wake a stream with
-    // ordinary work outstanding (requestPageSync).
+    // turn a deferral into recovery. A quarantine holds nothing open, not even
+    // through a quarantined thread's head debt: the breaker re-arms it on
+    // every later failure, so waiting on it would keep the request outstanding
+    // for good, and B1 cannot wake a stream with ordinary work outstanding
+    // (requestPageSync).
+    const headRetryAt = headCatchupEnabled
+      ? await nextFanslyDmHeadRetryAt(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        excludeQuarantined: true,
+      })
+      : null;
     const deferredRetryAt = await nextConversationSyncBackoffRetryAt(app.db, {
       platformAccountId: input.pageContext.page.id,
     });
@@ -3900,10 +3926,11 @@ export async function fanslyDmMessagesChunk(
     } satisfies StreamChunkResult;
 
     if (deferredOnly) {
-      // Its deferred threads went into quarantine or left the lane (hidden,
-      // unbound, excluded): nothing is left to wait for, and nothing was read.
-      // Settle the request without success; the next ordinary request retries
-      // a quarantined thread once its window ends.
+      // Nothing was read, and nothing is left to wait for: the failing
+      // threads sit out a quarantine, left the lane (hidden, unbound,
+      // excluded) or have nothing to read. Settle the request without
+      // success, the stream going idle; the next ordinary request retries a
+      // quarantined thread once its window ends.
       return {
         satisfied: true, yieldReason: null, qualityHold: FANSLY_DM_THREADS_DEFERRED,
         stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk },

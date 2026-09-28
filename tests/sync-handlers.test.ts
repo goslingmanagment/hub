@@ -27,6 +27,8 @@ const dbMocks = vi.hoisted(() => ({
   // test says so.
   getConversationSyncHealth: vi.fn<typeof DbModule.getConversationSyncHealth>(async () => null),
   nextConversationSyncBackoffRetryAt: vi.fn<typeof DbModule.nextConversationSyncBackoffRetryAt>(async () => null),
+  countConversationSyncFailuresByAccount:
+    vi.fn<typeof DbModule.countConversationSyncFailuresByAccount>(async () => []),
   countActivePageFollows: vi.fn(),
   countCurrentPageSubscriptionsByGeneration: vi.fn(),
   countPageDmThreadsByGeneration: vi.fn(),

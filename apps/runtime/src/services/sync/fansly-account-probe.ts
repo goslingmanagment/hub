@@ -17,11 +17,19 @@ export async function probeFanslyAccountResolution(
   requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0],
   partnerPlatformUserId: string,
   capture: { platformAccountId: number; syncRunId: number },
+  options: {
+    /** Fetch failures the caller must act on itself (auth, a rate limit, a
+     * provider deadline): rethrown instead of an "unknown" verdict. */
+    rethrow?: (error: unknown) => boolean;
+  } = {},
 ): Promise<FanslyAccountResolution> {
   let response: Awaited<ReturnType<AppContext["adapter"]["getAccountsByIdsPage"]>>;
   try {
     response = await app.adapter.getAccountsByIdsPage(requestContext, [partnerPlatformUserId]);
-  } catch {
+  } catch (error) {
+    if (options.rethrow?.(error) === true) {
+      throw error;
+    }
     // Only the probe fetch itself is best-effort ("unknown" verdict); the
     // journal write below stays outside this catch so a failed capture still
     // fails the chunk (Stage 7: never a silent drop).
