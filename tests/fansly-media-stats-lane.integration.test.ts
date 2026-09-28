@@ -713,7 +713,7 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(unnamed.consecutiveFailures).toBe(0);
   });
 
-  it("asks the tier's window: 24 h hourly, 30 d daily, 90 d daily", async (ctx) => {
+  it("asks the tier's window: 31 d daily, 30 d daily, 90 d daily", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
     await seedMedia(page.id, [
@@ -726,9 +726,12 @@ describe("media_stats lane — the windows and their guards", () => {
     await drain(page.id, adapter, telemetryStub());
 
     const byRef = new Map(adapter.calls.map((call) => [call.mediaOfferId, call]));
+    // FRESH reads DAILY buckets over its whole life, not the last day hourly:
+    // the dashboard's daily series is what a fresh visit has to keep current.
     const fresh = byRef.get(ref(401))!;
-    expect(fresh.periodMs).toBe(3_600_000);
-    expect(fresh.beforeDate.getTime() - fresh.afterDate.getTime()).toBe(24 * 60 * 60_000);
+    expect(fresh.periodMs).toBe(86_400_000);
+    expect(fresh.beforeDate.getTime()).toBe(NOW.getTime());
+    expect(fresh.beforeDate.getTime() - fresh.afterDate.getTime()).toBe(31 * DAY_MS);
     const mid = byRef.get(ref(402))!;
     expect(mid.periodMs).toBe(86_400_000);
     expect(mid.beforeDate.getTime() - mid.afterDate.getTime()).toBe(30 * DAY_MS);
@@ -751,6 +754,65 @@ describe("media_stats lane — the windows and their guards", () => {
       "fresh",
       "long_tail",
       "mid",
+    ]);
+  });
+
+  it("takes a fresh item's first backfill window as its refresh, then re-reads its life daily", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(404);
+    const createdMs = NOW.getTime() - 10 * DAY_MS;
+    // Never visited: the backfill opens with `[now − 31 d, now]` daily, which
+    // is exactly the fresh steady window.
+    await seedMedia(page.id, [{ ref: mediaRef, createdAtPlatform: new Date(createdMs) }], {
+      queueCursor: {},
+    });
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: mediaRef,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    const adapter = adapterStub();
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    // Two backfill windows to the creation floor and NO third request: the
+    // first of them already answered the steady window.
+    expect(adapter.calls.map((call) => [call.periodMs, call.beforeDate.getTime(), spanDays(call)]))
+      .toEqual([
+        [86_400_000, NOW.getTime(), 31],
+        [86_400_000, NOW.getTime() - 30 * DAY_MS, 31],
+      ]);
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_window_repeat"
+    )).toHaveLength(0);
+    const firstVisit = await queueRow(page.id, mediaRef);
+    expect(firstVisit.lastVisitedAt).not.toBeNull();
+    // Today's numbers were read, so the purchase mark is answered.
+    expect(firstVisit.dirtyReason).toBeNull();
+
+    // The next day: history done, ONE daily request, and it still reaches back
+    // past the publication day, so the launch-day bucket is restated too.
+    const nextVisit = new Date(NEXT_DAY.getTime() + 60_000);
+    const before = adapter.calls.length;
+    await fanslyMediaStatsChunk(
+      appStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), nextVisit),
+    );
+    const steady = adapter.calls.slice(before);
+    expect(steady).toHaveLength(1);
+    expect(steady[0]!.periodMs).toBe(86_400_000);
+    expect(steady[0]!.beforeDate.getTime()).toBe(nextVisit.getTime());
+    expect(steady[0]!.afterDate.getTime()).toBeLessThan(createdMs);
+    // No hourly window was journaled for this item at all.
+    const rows = await journaled(page.id);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.request_params.periodMs)).toEqual([
+      86_400_000,
+      86_400_000,
+      86_400_000,
     ]);
   });
 
@@ -1554,10 +1616,12 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
     if (!testDb) return ctx.skip();
     const page = await seedPage();
     const mediaRef = ref(1020);
-    // Fresh, ten days old: its creation floor closes the walk after two windows.
+    // Mid tier, forty days old: its creation floor closes the walk after three
+    // windows. (A fresh item's steady window IS its backfill's first window, so
+    // a first visit has no separate steady request to fail.)
     await seedMedia(page.id, [{
       ref: mediaRef,
-      createdAtPlatform: new Date(NOW.getTime() - 10 * DAY_MS),
+      createdAtPlatform: new Date(NOW.getTime() - 40 * DAY_MS),
     }], { queueCursor: {} });
     await markSubjectRefreshDirty(testDb.db, {
       pageId: page.id,
@@ -1568,12 +1632,13 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
     });
     let dayOne = true;
     const adapter = adapterStub({
-      // The fresh tier's steady window is the hourly one.
+      // The mid tier's steady window is the 30-day one; every backfill window
+      // is 31 days.
       fail: (params) =>
-        dayOne && params.periodMs === 3_600_000 ? providerRefusal("error getting media offer") : null,
+        dayOne && spanDays(params) === 30 ? providerRefusal("error getting media offer") : null,
     });
     await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
-    expect(adapter.calls.map((call) => call.periodMs)).toEqual([86_400_000, 86_400_000, 3_600_000]);
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 30]);
 
     const afterFailure = await queueRow(page.id, mediaRef);
     expect(afterFailure.backfillCursor).toMatchObject({ done: true, floorBasis: "created_at" });
@@ -1589,7 +1654,7 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
       input(page.id, telemetryStub(), new SyncChunkBudget(), NEXT_DAY),
     );
     // The history is done, so the next visit is the steady window alone.
-    expect(adapter.calls.slice(before).map((call) => call.periodMs)).toEqual([3_600_000]);
+    expect(adapter.calls.slice(before).map(spanDays)).toEqual([30]);
     const visited = await queueRow(page.id, mediaRef);
     expect(visited.lastVisitedAt).not.toBeNull();
     expect(visited.dirtyReason).toBeNull();

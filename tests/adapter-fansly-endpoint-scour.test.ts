@@ -992,13 +992,13 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
     const now = new Date("2026-08-22T12:00:00.000Z");
 
-    // FRESH — trailing 24 h at hourly granularity, which is where a new item's
-    // numbers actually move.
+    // FRESH — trailing 31 d, daily: an item that young is covered from its
+    // publication day on.
     await adapter.getMediaOfferStats(context(), {
       mediaOfferId: "000900000000004001",
       beforeDate: now,
-      afterDate: new Date(now.getTime() - 24 * 60 * 60_000),
-      periodMs: 3_600_000,
+      afterDate: new Date(now.getTime() - 31 * 24 * 60 * 60_000),
+      periodMs: 86_400_000,
     });
     // MID — trailing 30 d, daily.
     await adapter.getMediaOfferStats(context(), {
@@ -1048,13 +1048,13 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     }
 
     // THE PERIOD PER TIER, in epoch milliseconds, as strings on the wire.
-    expect(urls[0]?.searchParams.get("period")).toBe("3600000");
+    expect(urls[0]?.searchParams.get("period")).toBe("86400000");
     expect(urls[1]?.searchParams.get("period")).toBe("86400000");
     expect(urls[2]?.searchParams.get("period")).toBe("86400000");
 
     expect(urls[0]?.searchParams.get("beforeDate")).toBe(String(now.getTime()));
     expect(urls[0]?.searchParams.get("afterDate")).toBe(
-      String(now.getTime() - 24 * 60 * 60_000),
+      String(now.getTime() - 31 * 24 * 60 * 60_000),
     );
     expect(urls[2]?.searchParams.get("beforeDate")).toBe(String(backfillBefore.getTime()));
     expect(urls[2]?.searchParams.get("afterDate")).toBe(String(backfillAfter.getTime()));
