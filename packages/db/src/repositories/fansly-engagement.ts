@@ -17,6 +17,15 @@
 // instant. It is a snowflake id, so lexicographic order within one length is
 // chronological — the tie-break only has to be STABLE, and it is.
 //
+// ONE EXCEPTION, `platform_notifications`: its row IS one notification
+// (keyed by its ref), and two looks at the same `createdAt` are the same
+// notification at two moments — the later look carries the platform's
+// current read state (`acknowledgedAt`). There, and only there, the
+// observation instant breaks the provider-instant tie. The backfill argument
+// above is about DIFFERENT facts on one state machine (post_likes); it
+// cannot apply within one notification's own read state, and an older look
+// replayed later still loses on its older observation instant.
+//
 // Everything else follows the house shape: guarded upsert returning `applied`,
 // `first_observed_at` only ever moves backwards, NULL is never coalesced to 0,
 // and the raw type code is stored rather than a label (A22-2).
@@ -86,6 +95,12 @@ export interface UpsertPlatformNotificationInput extends EngagementLineage {
  *
  * The guard still matters on a single-keyed row: a restated `createdAt` is a
  * correction, and an older restatement replayed at a higher seq must not win.
+ *
+ * At the SAME `createdAt` the later look wins (the file header's one
+ * exception): the platform serves a notification unread and then read, and
+ * a guard on the provider instant alone froze the head at the first look, so
+ * `acknowledged_at` stayed NULL forever. `>=` keeps a replay of the head's
+ * own event idempotent.
  */
 export async function upsertPlatformNotification(
   db: Database,
@@ -127,9 +142,18 @@ async function upsertPlatformNotificationUnfenced(
   | { status: "unchanged"; applied: false }
 > {
   const current = sql.identifier("platform_notifications");
-  // The head guard for this table compares `occurred_at` alone: the PK already
-  // fixes `notification_ref`, so the ref tie-break can never discriminate here.
-  const newerWins = sql`excluded.occurred_at > ${current}.occurred_at`;
+  // The PK already fixes `notification_ref`, so the ref tie-break can never
+  // discriminate here. The tie-break is the LOOK instant instead: `excluded.
+  // last_observed_at` is this event's observation instant, and the row's is
+  // the latest look seen so far. Every column goes through one guard, so
+  // `acknowledged_at` never splits from its `content_hash` and lineage.
+  const newerWins = sql`(
+    excluded.occurred_at > ${current}.occurred_at
+    or (
+      excluded.occurred_at = ${current}.occurred_at
+      and excluded.last_observed_at >= ${current}.last_observed_at
+    )
+  )`;
   const pick = (column: string) => {
     const name = sql.identifier(column);
     return sql`case when ${newerWins} then excluded.${name} else ${current}.${name} end`;
