@@ -1547,6 +1547,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["ai_media_description_links", "page_id"],
     ["ai_media_descriptions", "page_id"],
     ["ai_media_accelerator_reads", "page_id"],
+    // Fast lane health (0215): per-page availability, no fan material.
+    ["ai_media_fast_lane_health", "page_id"],
     ["ai_generation_content", "page_id"],
     // Voice-notes lane (0109): both are page-scoped and must be purged
     // explicitly. voice_notes REFERENCES pages WITHOUT cascade (it would block

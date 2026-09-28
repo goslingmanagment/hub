@@ -487,6 +487,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # AI media describer claim ownership: one nullable column (lease_token) on
   # ai_media_descriptions; the previous image never names it and settles by id.
   "0214_ai_media_describe_lease_token.sql"
+  # AI media describer, Fansly fast lane: five additive columns with defaults
+  # on ai_media_accelerator_reads (the old image inserts without them) and one
+  # new table (ai_media_fast_lane_health) it never names.
+  "0215_ai_media_fansly_fast_lane.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

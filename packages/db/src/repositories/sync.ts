@@ -2765,6 +2765,24 @@ function normalizeRateLimitDate(value: Date | string) {
   return normalized;
 }
 
+/** Keeps the named scopes of an egress closed until at least `until` (a
+ * request that started later than its slot holds the queue for its whole
+ * timeout from its real start). Never pulls a later reservation forward. */
+export async function extendSyncProviderRateLimitHold(
+  db: Database,
+  input: { provider: "fansly" | "onlyfans"; egressKey: string; scopes: readonly string[]; until: Date },
+) {
+  if (input.scopes.length === 0) {
+    return;
+  }
+  await db.execute(sql`
+    update sync_rate_limits
+    set next_available_at = greatest(next_available_at, ${input.until}), updated_at = now()
+    where provider = ${input.provider} and egress_key = ${input.egressKey}
+      and scope in (${sql.join(input.scopes.map((scope) => sql`${scope}`), sql`, `)})
+  `);
+}
+
 export async function reserveSyncProviderRateLimit(
   db: Database,
   input: {
@@ -2774,6 +2792,10 @@ export async function reserveSyncProviderRateLimit(
       egressKey: string;
     }>;
     now?: Date;
+    /** Keep every reserved scope closed at least this long after the slot:
+     * a caller whose request may run longer than the spacing holds the
+     * egress for its whole timeout, so no later reservation overlaps it. */
+    holdMs?: number;
   },
 ) {
   const now = input.now ?? new Date();
@@ -2837,7 +2859,7 @@ export async function reserveSyncProviderRateLimit(
       row.nextAvailableAt > current ? row.nextAvailableAt : current, now);
 
     for (const row of lockedRows) {
-      const nextAvailableAt = new Date(scheduledAt.getTime() + row.minSpacingMs);
+      const nextAvailableAt = new Date(scheduledAt.getTime() + Math.max(row.minSpacingMs, input.holdMs ?? 0));
       await database.execute(sql`
         update sync_rate_limits
         set next_available_at = ${nextAvailableAt},

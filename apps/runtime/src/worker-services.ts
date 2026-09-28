@@ -59,6 +59,7 @@ import {
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
 } from "./services/ai-media-describe/sweep.ts";
+import { createFanslyFastLane } from "./services/ai-media-describe/fansly-fast-lane.ts";
 import { startAiMediaDescribeLoop } from "./services/ai-media-describe/loop.ts";
 import { runDmCorrectionsReconcile } from "./services/dm-corrections-reconciler.ts";
 import { runOfapiDmReadthroughReconcile } from "./services/ofapi-dm-readthrough.ts";
@@ -553,7 +554,10 @@ export async function startWorkerServices(
   // minutely job's slot, so still one image at a time from this process.
   const aiMediaDescribeLoop = startAiMediaDescribeLoop(app);
 
-  const fanslyWs = startFanslyWsWorker(app);
+  // AI media fast lane (AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE, off): told
+  // about each committed B0 frame; reads a fan's fresh media conversation.
+  const fanslyFastLane = createFanslyFastLane(app);
+  const fanslyWs = startFanslyWsWorker(app, { onCaptured: fanslyFastLane.onCaptured });
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
@@ -639,6 +643,9 @@ export async function startWorkerServices(
         app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
       });
       await fanslyWs.stop();
+      await fanslyFastLane.stop().catch((error) => {
+        app.logger.warn({ err: error }, "AI media fast lane failed during shutdown");
+      });
       await domainEventsSmoke.stop().catch((error) => {
         app.logger.warn({ err: error }, "v2 smoke consumer failed during shutdown");
       });
