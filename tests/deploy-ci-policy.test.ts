@@ -18,6 +18,7 @@ type Step = {
 type Permissions = Record<string, string> | string;
 type Job = {
   name?: string;
+  "runs-on"?: string | string[];
   needs?: string[];
   if?: string;
   env?: Record<string, string>;
@@ -32,7 +33,9 @@ type Workflow = { permissions: Permissions; jobs: Record<string, Job>; concurren
 const testRequire = createRequire(import.meta.url);
 const swaggerRequire = createRequire(testRequire.resolve("@fastify/swagger"));
 const yaml = swaggerRequire("yaml") as { parse: (text: string) => Workflow };
-const workflow = yaml.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+const workflowText = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const workflow = yaml.parse(workflowText);
+const nightly = yaml.parse(readFileSync(new URL("../.github/workflows/nightly.yml", import.meta.url), "utf8"));
 
 function job(name: string): Job {
   const found = workflow.jobs[name];
@@ -51,59 +54,180 @@ function shell(stepToRun: Step): string {
   return stepToRun.run;
 }
 
-function publicationAllowed(event: string, ref: string, quality: string): boolean {
-  const context: Record<string, string> = {
+// ---------------------------------------------------------------------------
+// A deliberately small evaluator for the checked-in GitHub expressions. Every
+// context path an expression reads must be modelled in the context below — an
+// unknown one throws — so a new input to a gate condition cannot slip past
+// these tables. Operators (!, ==, !=, &&, ||, parentheses) map onto JS with the
+// same precedence and value-returning semantics; string literals are copied as
+// literals and never scanned for context paths.
+// ---------------------------------------------------------------------------
+type Value = string | number | boolean | null | Value[] | { [key: string]: Value };
+type Context = Record<string, Value>;
+
+function contains(haystack: Value, needle: Value): boolean {
+  if (Array.isArray(haystack)) return haystack.some(item => item === needle);
+  if (typeof haystack === "string" && typeof needle === "string") return haystack.includes(needle);
+  return false;
+}
+
+function fromJSON(text: Value): Value {
+  if (typeof text !== "string") throw new Error("fromJSON expects a string");
+  return JSON.parse(text) as Value;
+}
+
+function evaluate(expression: string, context: Context): Value {
+  const translated = expression.split(/('(?:[^']|'')*')/).map((segment, index) => {
+    if (index % 2 === 1) return JSON.stringify(segment.slice(1, -1).replaceAll("''", "'"));
+    if (/[`;{}[\]]|=>/.test(segment)) throw new Error(`Unsupported expression syntax: ${segment}`);
+    return segment.replace(/\b(?:github|needs|vars|env|runner|inputs|matrix|steps)(?:\.(?:[A-Za-z_][\w-]*|\*))+/g, path => {
+      if (!(path in context)) throw new Error(`Unmodelled context in expression: ${path}`);
+      return `ctx[${JSON.stringify(path)}]`;
+    });
+  }).join("");
+  // Only the checked-in workflow expressions reach this point.
+  const run = Function("ctx", "contains", "fromJSON", "always", `"use strict"; return (${translated});`) as
+    (ctx: Context, containsFn: typeof contains, fromJSONFn: typeof fromJSON, alwaysFn: () => boolean) => Value;
+  return run(context, contains, fromJSON, () => true);
+}
+
+function text(value: Value): string {
+  if (value === null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** Env, `with`, names and groups: GitHub interpolates every expression into a string. */
+function field(template: string, context: Context): string {
+  return template.replace(/\$\{\{(.*?)\}\}/g, (_match, expression: string) => text(evaluate(expression, context)));
+}
+
+/** `runs-on` that is one whole expression keeps its type: a label array or one label. */
+function runner(template: string | string[] | undefined, context: Context): Value {
+  if (typeof template !== "string") throw new Error("runs-on must be one label or one expression");
+  const whole = /^\$\{\{(.*)\}\}$/s.exec(template);
+  if (!whole || whole[1]?.includes("}}")) return template;
+  return evaluate(whole[1] ?? "", context);
+}
+
+function condition(expression: string | undefined, context: Context): boolean {
+  if (expression === undefined) throw new Error("Missing condition");
+  return Boolean(evaluate(expression, context));
+}
+
+type EventOptions = {
+  event?: "pull_request" | "push" | "workflow_dispatch";
+  action?: string | null;
+  titleChanged?: boolean;
+  baseChanged?: boolean;
+  /** The label a `labeled` event adds. */
+  label?: string | null;
+  /** The labels the PR carries after the event (GitHub's payload includes the added one). */
+  labels?: string[];
+  draft?: boolean;
+  /** vars.CI_POOL; an unset repository variable reads as ''. */
+  pool?: string;
+  attempt?: string;
+  provenBy?: string;
+  integrationProvenBy?: string;
+  runnerEnvironment?: "github-hosted" | "self-hosted";
+};
+
+function eventContext(options: EventOptions = {}): Context {
+  const event = options.event ?? "pull_request";
+  const pullRequest = event === "pull_request";
+  return {
     "github.event_name": event,
-    "github.ref": ref,
-    "needs.quality.result": quality,
+    "github.event.action": pullRequest ? options.action ?? "synchronize" : null,
+    "github.event.changes.title": options.titleChanged ? { from: "Old title" } : null,
+    "github.event.changes.base": options.baseChanged ? { ref: { from: "old-base" } } : null,
+    "github.event.label.name": options.label ?? null,
+    "github.event.pull_request.labels.*.name": pullRequest ? options.labels ?? [] : [],
+    "github.event.pull_request.draft": pullRequest ? options.draft ?? false : null,
+    "github.ref": "ref",
+    "github.run_id": "35518904235",
+    "github.run_attempt": options.attempt ?? "1",
+    "vars.CI_POOL": options.pool ?? "",
+    "needs.fingerprint.outputs.proven_by": options.provenBy ?? "",
+    "needs.fingerprint.outputs.integration_proven_by": options.integrationProvenBy ?? "",
+    "runner.environment": options.runnerEnvironment ?? "github-hosted",
+    "runner.temp": "/runner/_temp",
   };
-  // This gate deliberately uses only conjunctions of equality checks plus the
-  // one status function that overrides GitHub's skip propagation (a skipped
-  // job in the needs chain skips every dependant that has no status function,
-  // even when its direct dependencies succeeded). Reject unrecognised syntax
-  // instead of accidentally treating a new OR as safe.
-  const condition = job("publish").if;
-  if (!condition) throw new Error("Publishing has no explicit condition");
-  return condition.split("&&").every(clause => {
-    if (clause.trim() === "!cancelled()") return true;
-    const match = clause.trim().match(/^(github\.event_name|github\.ref|needs\.quality\.result) == '([^']+)'$/);
-    if (!match?.[1] || !match[2]) throw new Error(`Unsupported publication condition: ${clause}`);
-    return context[match[1]] === match[2];
+}
+
+function runGate(env: Record<string, string>) {
+  return spawnSync("bash", ["-euo", "pipefail", "-c", shell(step("quality", "Every gate job succeeded"))], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PROVEN_BY: "",
+      INTEGRATION_PROVEN_BY: "",
+      FINGERPRINT_RESULT: "success",
+      IS_DRAFT: "false",
+      ECONOMY: "false",
+      PR_NUMBER: "",
+      FINGERPRINT: "f".repeat(64),
+      GITHUB_STEP_SUMMARY: "/dev/null",
+      ...env,
+    },
   });
 }
 
-describe("CI production image publication policy", () => {
-  it.each([
-    ["pull_request", "refs/pull/1/merge", "success", false],
-    ["pull_request", "refs/heads/main", "success", false],
-    ["workflow_dispatch", "refs/heads/main", "success", false],
-    ["push", "refs/heads/feature", "success", false],
-    ["push", "refs/heads/main", "failure", false],
-    ["push", "refs/heads/main", "cancelled", false],
-    ["push", "refs/heads/main", "skipped", false],
-    ["push", "refs/heads/main", "success", true],
-  ] as const)("publication for %s %s with gate %s is %s", (event, ref, quality, allowed) => {
-    expect(publicationAllowed(event, ref, quality)).toBe(allowed);
-    expect(job("publish").needs).toEqual(expect.arrayContaining(["static", "quality"]));
+describe("CI no longer publishes production images", () => {
+  // Production images build on the server; the owner retired GHCR publishing.
+  // Nothing in CI may regain a registry credential or ship an image out.
+  it("has no publication job, artifact hand-off or registry write", () => {
+    expect(Object.keys(workflow.jobs).sort()).toEqual(["fingerprint", "integration", "quality", "static"]);
+    expect(job("static").outputs).toBeUndefined();
+    expect(job("static").steps.some(item => item.uses?.startsWith("actions/upload-artifact@"))).toBe(false);
+    const allShell = Object.values(workflow.jobs).flatMap(config => config.steps.map(item => item.run ?? "")).join("\n");
+    expect(allShell).not.toMatch(/docker (?:push|save|login|tag)\b/);
+    expect(workflowText).not.toContain("ghcr.io");
+    expect(workflowText).not.toContain("packages:");
+    expect(workflowText).not.toContain("REQUIRE_IMAGE");
   });
 
+  it("grants no write permissions anywhere", () => {
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    for (const [name, config] of Object.entries(workflow.jobs)) {
+      const permissions = config.permissions ?? workflow.permissions;
+      expect(typeof permissions, name).toBe("object");
+      expect(Object.values(permissions), name).not.toContain("write");
+    }
+  });
+});
+
+describe("CI Quality Gate policy", () => {
   // The gate's shell reads its inputs from step env (never inline expressions),
-  // so the policy is exercised by running that shell with the four variables
-  // the workflow binds. `proven_by` empty = no earlier proof for this tree.
+  // so the policy is exercised by running that shell with the variables the
+  // workflow binds. `proven_by` empty = no earlier proof for this tree.
   it("binds the gate shell's inputs from the fingerprint and gate jobs", () => {
-    expect(job("quality").needs).toEqual(expect.arrayContaining(["fingerprint", "static", "integration"]));
+    expect(job("quality").needs).toEqual(["fingerprint", "static", "integration"]);
     expect(job("quality").if).toBe("always()");
-    expect(step("quality", "Every gate job succeeded").if).toBe("env.BODY_EDIT != 'true'");
+    expect(step("quality", "Every gate job succeeded").if).toBe("env.METADATA_ONLY != 'true'");
     expect(step("quality", "Every gate job succeeded").env).toEqual({
       PROVEN_BY: "${{ needs.fingerprint.outputs.proven_by }}",
       INTEGRATION_PROVEN_BY: "${{ needs.fingerprint.outputs.integration_proven_by }}",
       FINGERPRINT_RESULT: "${{ needs.fingerprint.result }}",
       IS_DRAFT: "${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}",
-      REQUIRE_IMAGE: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
+      ECONOMY: "${{ github.event_name == 'pull_request' && vars.CI_POOL != 'pc' }}",
+      PR_NUMBER: "${{ github.event.pull_request.number }}",
       FINGERPRINT: "${{ needs.fingerprint.outputs.hash }}",
       STATIC: "${{ needs.static.result }}",
       INTEGRATION: "${{ needs.integration.result }}",
     });
+  });
+
+  it.each([
+    // pool, event, ECONOMY
+    ["", "pull_request", "true"],
+    ["hosted", "pull_request", "true"],
+    ["pc", "pull_request", "false"],
+    ["", "push", "false"],
+    ["", "workflow_dispatch", "false"],
+  ] as const)("economy explanation with CI_POOL=%s on %s is %s", (pool, event, expected) => {
+    const economy = step("quality", "Every gate job succeeded").env?.ECONOMY ?? "";
+    expect(field(economy, eventContext({ pool, event }))).toBe(expected);
   });
 
   it.each([
@@ -115,8 +239,8 @@ describe("CI production image publication policy", () => {
     ["", "success", "skipped", false],
     // A failed fingerprint job skips the tests WITHOUT a proof: fail closed.
     ["", "skipped", "skipped", false],
-    // Proof on record: tests skipped by design; static is skipped on a PR and
-    // must have succeeded on main (it still builds the image there).
+    // Proof on record: both jobs are skipped by their own conditions. A static
+    // run that passed is not evidence against the proof.
     ["35013876329", "skipped", "skipped", true],
     ["35013876329", "success", "skipped", true],
     ["35013876329", "failure", "skipped", false],
@@ -125,51 +249,177 @@ describe("CI production image publication policy", () => {
     ["35013876329", "success", "failure", false],
     ["35013876329", "skipped", "success", false],
   ] as const)("Quality Gate with proven_by=%s static=%s integration=%s passes: %s", (provenBy, staticResult, integrationResult, allowed) => {
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", shell(step("quality", "Every gate job succeeded"))], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PROVEN_BY: provenBy,
-        INTEGRATION_PROVEN_BY: "",
-        FINGERPRINT_RESULT: "success",
-        IS_DRAFT: "false",
-        REQUIRE_IMAGE: "false",
-        FINGERPRINT: "f".repeat(64),
-        STATIC: staticResult,
-        INTEGRATION: integrationResult,
-        GITHUB_STEP_SUMMARY: "/dev/null",
-      },
-    });
-    expect(result.status === 0, result.stderr).toBe(allowed);
-  });
-
-  // The integration matrix is skipped on a proven tree, and GitHub carries a
-  // skipped dependency's status down the whole `needs` chain: a dependant
-  // whose `if` has no status function is skipped too, whatever its direct
-  // dependencies did. Publishing sits behind that matrix through the gate, so
-  // it must override the propagation — `always()` would also publish after a
-  // cancellation, which is why it is `!cancelled()` and nothing weaker.
-  it("publishing overrides skip propagation from the proven-tree matrix", () => {
-    expect(job("publish").if?.startsWith("!cancelled() && ")).toBe(true);
-    expect(job("quality").if).toBe("always()");
-  });
-
-  it("reuses a proof only where the workflow says it does, and records one only when fresh", () => {
-    const unproven = "needs.fingerprint.outputs.proven_by == ''";
-    expect(job("integration").needs).toEqual(["fingerprint"]);
-    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == ''`);
-    expect(job("static").needs).toEqual(["fingerprint"]);
-    // Main must always enter the static job: the deploy pulls the image it builds.
-    expect(job("static").if).toBe(`github.event.pull_request.draft != true && (${unproven} || (github.event_name == 'push' && github.ref == 'refs/heads/main'))`);
-    for (const name of ["Typecheck", "Lint (family standard + architecture walls)", "Contracts are regenerated (routes.ts ↔ committed artifacts)", "Reliable unit tests"]) {
-      expect(step("static", name).if, name).toBe(unproven);
+    for (const economy of ["false", "true"]) {
+      const result = runGate({ PROVEN_BY: provenBy, STATIC: staticResult, INTEGRATION: integrationResult, ECONOMY: economy, PR_NUMBER: "7" });
+      expect(result.status === 0, `${economy}: ${result.stdout}${result.stderr}`).toBe(allowed);
     }
-    for (const name of ["Production Docker image build", "Chromium Headless Shell runtime smoke", "Startup capability manifest smoke"]) {
+  });
+
+  it.each([
+    // draft, fingerprint result, economy, full proof, DB proof, static, DB, allowed
+    [true, "success", false, "123", "", "skipped", "skipped", false],
+    [false, "failure", false, "123", "", "skipped", "skipped", false],
+    [false, "cancelled", false, "123", "", "success", "skipped", false],
+    // Main no longer re-runs static on a fully proven tree.
+    [false, "success", false, "123", "", "skipped", "skipped", true],
+    [false, "success", true, "123", "", "skipped", "skipped", true],
+    [false, "success", false, "123", "", "success", "skipped", true],
+    // An integration-only proof never excuses static checks.
+    [false, "success", false, "", "456", "success", "skipped", true],
+    [false, "success", true, "", "456", "success", "skipped", true],
+    [false, "success", false, "", "456", "failure", "skipped", false],
+    [false, "success", false, "", "456", "cancelled", "skipped", false],
+    [false, "success", false, "", "456", "skipped", "skipped", false],
+    [false, "success", false, "", "456", "success", "failure", false],
+    [false, "success", false, "", "456", "success", "cancelled", false],
+    // Integration skipped without any proof — economy mode or not — is red.
+    [false, "success", false, "", "", "success", "skipped", false],
+    [false, "success", true, "", "", "success", "skipped", false],
+    [false, "success", true, "", "", "failure", "skipped", false],
+    [false, "success", true, "", "", "success", "success", true],
+  ] as const)("gate admission draft=%s fingerprint=%s economy=%s full=%s DBproof=%s static=%s DB=%s allowed=%s",
+    (draft, fingerprintResult, economy, proven, integrationProven, staticResult, integrationResult, allowed) => {
+      const result = runGate({ IS_DRAFT: String(draft), FINGERPRINT_RESULT: fingerprintResult, ECONOMY: String(economy),
+        PR_NUMBER: "7", PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven, STATIC: staticResult, INTEGRATION: integrationResult });
+      expect(result.status === 0, result.stdout + result.stderr).toBe(allowed);
+    },
+  );
+
+  // Exhaustive: the gate passes exactly when the reference rule says so, the
+  // economy flag never changes a verdict, and no pass exists without the
+  // integration shards having run green or been proven for this tree.
+  it("never passes without integration evidence, whatever economy mode says", () => {
+    const results = ["success", "failure", "cancelled", "skipped"] as const;
+    const reference = (proven: string, integrationProven: string, staticResult: string, integrationResult: string) => {
+      if (proven) return integrationResult === "skipped" && (staticResult === "success" || staticResult === "skipped");
+      if (staticResult !== "success") return false;
+      return integrationProven ? integrationResult === "skipped" : integrationResult === "success";
+    };
+    for (const proven of ["", "123"]) {
+      for (const integrationProven of ["", "456"]) {
+        for (const staticResult of results) {
+          for (const integrationResult of results) {
+            const expected = reference(proven, integrationProven, staticResult, integrationResult);
+            if (expected) expect(integrationResult === "success" || proven !== "" || integrationProven !== "").toBe(true);
+            for (const economy of ["false", "true"]) {
+              const label = JSON.stringify({ proven, integrationProven, staticResult, integrationResult, economy });
+              const result = runGate({ PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven, STATIC: staticResult,
+                INTEGRATION: integrationResult, ECONOMY: economy, PR_NUMBER: "7" });
+              expect(result.status === 0, label).toBe(expected);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("tells the author how to run integration when economy mode skipped it", () => {
+    const hint = "::error title=Integration tests did not run::Economy mode (CI_POOL is not pc) runs only static checks on pushes to a ready PR. When this PR is final, run: gh pr edit 312 --add-label ci:full (or convert it to draft and mark it ready again).\n";
+    const economy = runGate({ ECONOMY: "true", PR_NUMBER: "312", STATIC: "success", INTEGRATION: "skipped" });
+    expect(economy.status).toBe(1);
+    expect(economy.stdout).toBe(hint);
+    // The hint also shows beside a static failure, so one push fixes both.
+    const withStaticFailure = runGate({ ECONOMY: "true", PR_NUMBER: "312", STATIC: "failure", INTEGRATION: "skipped" });
+    expect(withStaticFailure.status).toBe(1);
+    expect(withStaticFailure.stdout).toBe(hint);
+    // Outside economy mode the same skip is simply red, with no false advice.
+    const pcPool = runGate({ ECONOMY: "false", PR_NUMBER: "312", STATIC: "success", INTEGRATION: "skipped" });
+    expect(pcPool.status).toBe(1);
+    expect(pcPool.stdout).toBe("");
+    // A DB proof covers the skip: no hint, and the gate passes.
+    const proven = runGate({ ECONOMY: "true", PR_NUMBER: "312", STATIC: "success", INTEGRATION: "skipped", INTEGRATION_PROVEN_BY: "456" });
+    expect(proven.status).toBe(0);
+    expect(proven.stdout).toBe("");
+  });
+});
+
+describe("CI job admission", () => {
+  it.each([
+    // event, action, draft, full proof, DB proof, static runs
+    ["pull_request", "synchronize", false, "", "", true],
+    ["pull_request", "synchronize", true, "", "", false],
+    ["pull_request", "synchronize", false, "123", "", false],
+    ["pull_request", "synchronize", false, "", "456", true],
+    // Main skips static on a fully proven tree: CI publishes no image.
+    ["push", null, false, "123", "", false],
+    ["push", null, false, "", "456", true],
+    ["push", null, false, "", "", true],
+    ["workflow_dispatch", null, false, "", "", true],
+  ] as const)("static on %s/%s draft=%s full=%s DBproof=%s runs: %s", (event, action, draft, provenBy, integrationProvenBy, runs) => {
+    expect(job("static").needs).toEqual(["fingerprint"]);
+    expect(job("static").if).toBe("github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == ''");
+    for (const pool of ["", "pc"]) {
+      const context = eventContext({ event, action, draft, provenBy, integrationProvenBy, pool });
+      expect(condition(job("static").if, context), pool).toBe(runs);
+    }
+  });
+
+  // Every check in the static job runs whenever the job runs; only cleanup has
+  // its own condition. The Docker build and all three smoke tests included.
+  it("runs every static check, the image build and all three smoke tests whenever static runs", () => {
+    const steps = job("static").steps;
+    const conditional = steps.filter(item => item.if !== undefined);
+    expect(conditional.map(item => [item.name, item.if])).toEqual([["Remove this run's image", "always()"]]);
+    expect(steps.at(-1)?.name).toBe("Remove this run's image");
+    for (const name of [
+      "Typecheck",
+      "Lint (family standard + architecture walls)",
+      "Contracts are regenerated (routes.ts ↔ committed artifacts)",
+      "Exact checkout image metadata",
+      "Production Docker image build",
+      "Chromium Headless Shell runtime smoke",
+      "Native image library smoke",
+      "Startup capability manifest smoke",
+      "Reliable unit tests",
+    ]) {
       expect(step("static", name).if, name).toBeUndefined();
     }
-    // A description-only edit has no fingerprint at all, so it must not reach
+  });
+
+  it.each([
+    // pool, event, action, labels, draft, full proof, DB proof, integration runs
+    // Economy mode: a plain push to a ready PR runs static only.
+    ["", "pull_request", "synchronize", [], false, "", "", false],
+    ["hosted", "pull_request", "synchronize", [], false, "", "", false],
+    ["", "pull_request", "synchronize", ["needs-review"], false, "", "", false],
+    ["", "pull_request", "edited", [], false, "", "", false],
+    // ...and runs integration when the PR opens, reopens, turns ready, or is labelled.
+    ["", "pull_request", "opened", [], false, "", "", true],
+    ["", "pull_request", "reopened", [], false, "", "", true],
+    ["", "pull_request", "ready_for_review", [], false, "", "", true],
+    ["", "pull_request", "synchronize", ["ci:full"], false, "", "", true],
+    ["", "pull_request", "synchronize", ["needs-review", "ci:full"], false, "", "", true],
+    ["", "pull_request", "labeled", ["ci:full"], false, "", "", true],
+    // Main and manual runs are never economised.
+    ["", "push", null, [], false, "", "", true],
+    ["", "workflow_dispatch", null, [], false, "", "", true],
+    // PC pool: always, on every event that reaches the job.
+    ["pc", "pull_request", "synchronize", [], false, "", "", true],
+    ["pc", "pull_request", "edited", [], false, "", "", true],
+    ["pc", "pull_request", "opened", [], false, "", "", true],
+    ["pc", "push", null, [], false, "", "", true],
+    // Drafts and proofs skip it in every mode.
+    ["pc", "pull_request", "opened", [], true, "", "", false],
+    ["", "pull_request", "ready_for_review", ["ci:full"], true, "", "", false],
+    ["pc", "pull_request", "synchronize", [], false, "123", "", false],
+    ["", "pull_request", "opened", ["ci:full"], false, "123", "", false],
+    ["pc", "pull_request", "synchronize", [], false, "", "456", false],
+    ["", "push", null, [], false, "", "456", false],
+  ] as const)("integration with CI_POOL=%s on %s/%s labels=%j draft=%s full=%s DBproof=%s runs: %s",
+    (pool, event, action, labels, draft, provenBy, integrationProvenBy, runs) => {
+      const label = action === "labeled" ? "ci:full" : null;
+      const context = eventContext({ pool, event, action, labels: [...labels], label, draft, provenBy, integrationProvenBy });
+      expect(condition(job("integration").if, context)).toBe(runs);
+    },
+  );
+
+  it("pins the integration admission text and the proof recording steps", () => {
+    const unproven = "needs.fingerprint.outputs.proven_by == ''";
+    expect(job("integration").needs).toEqual(["fingerprint"]);
+    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))`);
+    // A metadata-only event has no fingerprint at all, so it must not reach
     // the proof steps: an empty hash would publish `quality-gate-` as a proof.
-    const freshProof = `env.BODY_EDIT != 'true' && ${unproven}`;
+    const freshProof = `env.METADATA_ONLY != 'true' && ${unproven}`;
     expect(step("quality", "Record this fingerprint as proven").if).toBe(freshProof);
     const upload = step("quality", "Publish the proof for later identical trees");
     expect(upload.if).toBe(freshProof);
@@ -181,76 +431,170 @@ describe("CI production image publication policy", () => {
     expect(shell(step("fingerprint", "Look up earlier passing checks"))).toBe("node scripts/ci-find-proof.mjs");
     expect(step("quality", "Publish fresh integration proof").if).toBe("needs.integration.result == 'success'");
   });
+});
+
+describe("CI runner pool", () => {
+  const selfHosted = ["self-hosted", "ci-pc"];
 
   it.each([
-    // draft, fingerprint result, main, full proof, DB proof, static, DB, allowed
-    [true, "success", false, "123", "", "skipped", "skipped", false],
-    [false, "failure", false, "123", "", "skipped", "skipped", false],
-    [false, "cancelled", false, "123", "", "success", "skipped", false],
-    [false, "success", true, "123", "", "skipped", "skipped", false],
-    [false, "success", true, "123", "", "success", "skipped", true],
-    [false, "success", false, "", "456", "success", "skipped", true],
-    [false, "success", true, "", "456", "success", "skipped", true],
-    [false, "success", false, "", "456", "failure", "skipped", false],
-    [false, "success", false, "", "456", "cancelled", "skipped", false],
-    [false, "success", false, "", "456", "skipped", "skipped", false],
-    [false, "success", false, "", "456", "success", "failure", false],
-    [false, "success", false, "", "456", "success", "cancelled", false],
-    [false, "success", false, "", "", "success", "skipped", false],
-  ] as const)("gate admission draft=%s fingerprint=%s main=%s full=%s DBproof=%s static=%s DB=%s allowed=%s",
-    (draft, fingerprintResult, main, proven, integrationProven, staticResult, integrationResult, allowed) => {
-      const result = spawnSync("bash", ["-euo", "pipefail", "-c", shell(step("quality", "Every gate job succeeded"))], {
-        encoding: "utf8",
-        env: { ...process.env, IS_DRAFT: String(draft), FINGERPRINT_RESULT: fingerprintResult,
-          REQUIRE_IMAGE: String(main), PROVEN_BY: proven, INTEGRATION_PROVEN_BY: integrationProven,
-          FINGERPRINT: "f".repeat(64), STATIC: staticResult, INTEGRATION: integrationResult,
-          GITHUB_STEP_SUMMARY: "/dev/null" },
-      });
-      expect(result.status === 0, result.stderr).toBe(allowed);
-    },
-  );
+    // CI_POOL, run attempt, static, integration
+    ["pc", "1", selfHosted, selfHosted],
+    // Re-runs always go hosted: the PC may have died mid-run.
+    ["pc", "2", "ubuntu-24.04", "ubuntu-24.04-arm"],
+    ["pc", "3", "ubuntu-24.04", "ubuntu-24.04-arm"],
+    ["", "1", "ubuntu-24.04", "ubuntu-24.04-arm"],
+    ["hosted", "1", "ubuntu-24.04", "ubuntu-24.04-arm"],
+  ] as const)("CI_POOL=%s attempt %s routes static to %j and integration to %j", (pool, attempt, staticRunner, integrationRunner) => {
+    const context = eventContext({ pool, attempt });
+    expect(runner(job("static")["runs-on"], context)).toEqual(staticRunner);
+    expect(runner(job("integration")["runs-on"], context)).toEqual(integrationRunner);
+  });
 
-  // A required check is resolved against the NEWEST check suite for the head
-  // SHA. A description-only edit starts a run on that same SHA, so a run that
-  // renames or skips this job strips "Quality Gate" off the head and the PR
-  // becomes unmergeable with every check green (Decision 377). The name is a
-  // literal and the job runs in every event; only the path inside it differs.
+  it("keeps the canonical pool expression and pins every hosted image", () => {
+    const pool = (fallback: string) =>
+      `\${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || '${fallback}' }}`;
+    expect(job("static")["runs-on"]).toBe(pool("ubuntu-24.04"));
+    expect(job("integration")["runs-on"]).toBe(pool("ubuntu-24.04-arm"));
+    // Seconds-long jobs without Docker take the cheapest runner.
+    expect(job("fingerprint")["runs-on"]).toBe("ubuntu-slim");
+    expect(job("quality")["runs-on"]).toBe("ubuntu-slim");
+    expect(job("fingerprint")).toHaveProperty("timeout-minutes", 5);
+    expect(job("quality")).toHaveProperty("timeout-minutes", 5);
+    // ubuntu-latest moves to a new release on GitHub's schedule, not ours.
+    expect(workflowText).not.toContain("ubuntu-latest");
+    for (const [name, config] of Object.entries(nightly.jobs)) {
+      expect(config["runs-on"], name).toBe("ubuntu-24.04");
+    }
+  });
+
+  // Self-hosted runners of this repo share ONE Docker daemon and one $HOME.
+  it("keeps concurrent self-hosted static jobs off each other's image, builder and pnpm install", () => {
+    const staticJob = job("static");
+    expect(staticJob.env?.IMAGE).toBe("agency_hub_core/runtime:ci-${{ github.run_id }}-${{ github.run_attempt }}");
+    expect(field(staticJob.env?.IMAGE ?? "", eventContext({ attempt: "2" }))).toBe("agency_hub_core/runtime:ci-35518904235-2");
+    const build = step("static", "Production Docker image build");
+    expect(build.with?.tags).toBe("${{ env.IMAGE }}");
+    expect(build.with?.builder).toBe("${{ steps.buildx.outputs.name }}");
+    expect(step("static", "Set up Docker Buildx").id).toBe("buildx");
+    const buildx = step("static", "Set up Docker Buildx").with ?? {};
+    const buildWith = build.with ?? {};
+    for (const [environment, driver, cacheFrom, cacheTo] of [
+      ["github-hosted", "docker-container", "type=gha,scope=hub-runtime-amd64", "type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true"],
+      ["self-hosted", "docker", "", ""],
+    ] as const) {
+      const context = eventContext({ runnerEnvironment: environment });
+      expect(field(String(buildx.driver), context), environment).toBe(driver);
+      expect(field(String(buildWith["cache-from"]), context), environment).toBe(cacheFrom);
+      expect(field(String(buildWith["cache-to"]), context), environment).toBe(cacheTo);
+    }
+
+    // Every docker invocation names this run's image, quoted; no fixed tag remains.
+    const dockerSteps = staticJob.steps.filter(item => item.run?.includes("docker "));
+    expect(dockerSteps.map(item => item.name)).toEqual([
+      "Chromium Headless Shell runtime smoke",
+      "Native image library smoke",
+      "Startup capability manifest smoke",
+      "Remove this run's image",
+    ]);
+    for (const item of dockerSteps) {
+      const body = shell(item);
+      expect(body, item.name).toContain('"$IMAGE"');
+      expect(body.replaceAll('"$IMAGE"', ""), item.name).not.toContain("$IMAGE");
+      expect(body, item.name).not.toContain("agency_hub_core/runtime");
+    }
+    expect(workflowText).not.toMatch(/agency_hub_core\/runtime:ci(?!-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\})/);
+
+    // Setup never shares mutable state through $HOME, and only hosted runners cache.
+    for (const name of ["static", "integration"]) {
+      const pnpm = job(name).steps.find(item => item.uses?.startsWith("pnpm/action-setup@"));
+      expect(pnpm?.with, name).toEqual({ dest: "${{ runner.temp }}/setup-pnpm" });
+      const node = job(name).steps.find(item => item.uses?.startsWith("actions/setup-node@"));
+      expect(node?.with?.["node-version"], name).toBe(22);
+      for (const [environment, cache] of [["github-hosted", "pnpm"], ["self-hosted", ""]] as const) {
+        expect(field(String(node?.with?.cache), eventContext({ runnerEnvironment: environment })), `${name} ${environment}`).toBe(cache);
+      }
+    }
+  });
+
   it.each([
-    // action, changes.title, changes.base, concurrency group, gate jobs run
-    ["edited", false, false, "ci-ref-metadata", false],
-    ["edited", true, false, "ci-ref", true],
-    ["edited", false, true, "ci-ref", true],
-    ["synchronize", false, false, "ci-ref", true],
-    ["opened", false, false, "ci-ref", true],
-    ["", false, false, "ci-ref", true],
-    ["edited", true, true, "ci-ref", true],
-    ["ready_for_review", false, false, "ci-ref", true],
-    ["converted_to_draft", false, false, "ci-ref", true],
-  ] as const)("edit %s title=%s base=%s keeps the required check reported", (action, title, base, expectedGroup, gateJobsRun) => {
-    const render = (value: string) => value.replace(/\$\{\{(.*?)\}\}/g, (_match, expression: string) => {
-      const resolved = expression.replaceAll("github.event.action", JSON.stringify(action))
-        .replaceAll("github.event.changes.title", String(title)).replaceAll("github.event.changes.base", String(base))
-        .replaceAll("github.ref", JSON.stringify("ref")).replaceAll("always()", "true");
-      // Only the checked-in boolean/string expression above is evaluated.
-      return String(Function(`"use strict"; return (${resolved})`)());
+    ["docker succeeds", 0],
+    ["docker fails", 1],
+  ] as const)("cleanup removes this run's image and ignores errors when %s", (_label, dockerStatus) => {
+    const cleanup = step("static", "Remove this run's image");
+    expect(cleanup.if).toBe("always()");
+    const script = `docker() { printf '%s\\n' "$*" >&2; return ${dockerStatus}; }\n${shell(cleanup)}`;
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+      encoding: "utf8",
+      env: { ...process.env, IMAGE: "agency_hub_core/runtime:ci-1-1" },
     });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("image rm agency_hub_core/runtime:ci-1-1\n");
+  });
+
+  it.each([
+    "Chromium Headless Shell runtime smoke",
+    "Native image library smoke",
+  ])("%s runs this run's image", name => {
+    const script = `docker() { for arg in "$@"; do [ "$arg" = "$IMAGE" ] && return 0; done; return 9; }\n${shell(step("static", name))}`;
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+      encoding: "utf8",
+      env: { ...process.env, IMAGE: "agency_hub_core/runtime:ci-1-1" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe("Decision 377: every event keeps the required check reported", () => {
+  // A required check is resolved against the NEWEST check suite for the head
+  // SHA. A description edit or a label starts a run on that same SHA, so a run
+  // that renames or skips this job strips "Quality Gate" off the head and the
+  // PR becomes unmergeable with every check green (Decision 377). The name is a
+  // literal and the job runs in every event; only the path inside it differs.
+  it("listens to exactly the events these tables cover", () => {
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review", "converted_to_draft", "edited", "labeled"]);
+  });
+
+  it.each([
+    // action, changes.title, changes.base, added label, concurrency group, gate jobs run
+    ["edited", false, false, null, "ci-ref-metadata", false],
+    ["edited", true, false, null, "ci-ref", true],
+    ["edited", false, true, null, "ci-ref", true],
+    ["edited", true, true, null, "ci-ref", true],
+    ["synchronize", false, false, null, "ci-ref", true],
+    ["opened", false, false, null, "ci-ref", true],
+    ["reopened", false, false, null, "ci-ref", true],
+    ["ready_for_review", false, false, null, "ci-ref", true],
+    ["converted_to_draft", false, false, null, "ci-ref", true],
+    // ci:full asks for the full gate: a real run that may cancel the static-only one.
+    ["labeled", false, false, "ci:full", "ci-ref", true],
+    // Any other label is metadata: mirror the head's verdict, cancel nothing.
+    ["labeled", false, false, "needs-review", "ci-ref-metadata", false],
+    ["labeled", false, false, "ci:fuller", "ci-ref-metadata", false],
+  ] as const)("%s title=%s base=%s label=%s keeps the required check reported", (action, title, base, label, expectedGroup, gateJobsRun) => {
+    const labels = label ? [label] : [];
+    const context = eventContext({ action, titleChanged: title, baseChanged: base, label, labels });
     // No expression may reach the check's name: GitHub reported the raw text.
     expect(job("quality").name).toBe("Quality Gate");
-    expect(render(job("quality").name ?? "")).toBe("Quality Gate");
-    expect(render("${{ " + job("quality").if + " }}")).toBe("true");
-    expect(render(workflow.concurrency.group)).toBe(expectedGroup);
-    expect(render("${{ " + job("fingerprint").if + " }}")).toBe(String(gateJobsRun));
+    expect(field(job("quality").name ?? "", context)).toBe("Quality Gate");
+    expect(condition(job("quality").if, context)).toBe(true);
+    expect(field(workflow.concurrency.group, context)).toBe(expectedGroup);
+    expect(condition(job("fingerprint").if, context)).toBe(gateJobsRun);
     // Exactly one path inside the job runs: aggregate this run's gate jobs, or
     // mirror an earlier run's verdict for the same head.
-    const bodyEdit = render(job("quality").env?.BODY_EDIT ?? "");
-    expect(bodyEdit).toBe(String(!gateJobsRun));
-    const runsStep = (condition: string) =>
-      render("${{ " + condition.replaceAll("env.BODY_EDIT", JSON.stringify(bodyEdit)) + " }}");
-    expect(runsStep(step("quality", "Every gate job succeeded").if ?? "")).toBe(String(gateJobsRun));
+    const metadataOnly = field(job("quality").env?.METADATA_ONLY ?? "", context);
+    expect(metadataOnly).toBe(String(!gateJobsRun));
+    const stepContext = { ...context, "env.METADATA_ONLY": metadataOnly };
+    expect(condition(step("quality", "Every gate job succeeded").if, stepContext)).toBe(gateJobsRun);
     for (const name of ["Checkout", "An earlier run already passed this head"]) {
-      expect(runsStep(step("quality", name).if ?? ""), name).toBe(String(!gateJobsRun));
+      expect(condition(step("quality", name).if, stepContext), name).toBe(!gateJobsRun);
     }
-    expect(workflow.on.pull_request.types).toEqual(expect.arrayContaining(["ready_for_review", "converted_to_draft", "edited"]));
+  });
+
+  it.each(["push", "workflow_dispatch"] as const)("a %s run is never metadata-only", event => {
+    const context = eventContext({ event });
+    expect(field(workflow.concurrency.group, context)).toBe("ci-ref");
+    expect(condition(job("fingerprint").if, context)).toBe(true);
+    expect(field(job("quality").env?.METADATA_ONLY ?? "", context)).toBe("false");
   });
 
   // The mirror confirms an earlier verdict for this exact head; it can never
@@ -308,46 +652,28 @@ describe("CI production image publication policy", () => {
     expect(paged.runId).toBe("35518903414");
     expect(pages).toHaveLength(2);
   });
+});
 
-  it("builds only once, loads the cached image and keeps both smoke tests", () => {
+describe("CI production image checks", () => {
+  it("builds only once, loads the image for the smoke tests and records its revision", () => {
     expect(job("static").steps.some(item => item.run?.includes("pnpm build:artifacts"))).toBe(false);
     const build = step("static", "Production Docker image build");
     expect(build.with).toMatchObject({ context: ".", load: true, pull: true, platforms: "linux/amd64", target: "runtime" });
-    expect(build.with?.["build-args"]).toContain("CI_TYPECHECK_ALREADY_PASSED=true");
-    expect(build.with?.["cache-from"]).toBe("type=gha,scope=hub-runtime-amd64");
-    expect(build.with?.["cache-to"]).toContain("ignore-error=true");
-    expect(step("static", "Record checked image identity").id).toBe("build-image");
-  });
-
-  it("grants no write permissions to builds, tests, or the root workflow", () => {
-    expect(workflow.permissions).toEqual({ contents: "read" });
-    for (const [name, config] of Object.entries(workflow.jobs)) {
-      if (name === "publish") continue;
-      const permissions = config.permissions ?? workflow.permissions;
-      expect(typeof permissions, name).toBe("object");
-      expect(Object.values(permissions), name).not.toContain("write");
-    }
-    expect(job("publish").permissions).toEqual({ packages: "write" });
-  });
-
-  it("passes this run's original checked image to publishing without rebuilding", () => {
-    expect(job("static").outputs?.image_id).toBe("${{ steps.build-image.outputs.image_id }}");
-    expect(job("static").outputs?.artifact_id).toBe("${{ steps.upload-image.outputs.artifact-id }}");
-    const download = step("publish", "Download this run's checked image");
-    expect(download.with?.["artifact-ids"]).toBe("${{ needs.static.outputs.artifact_id }}");
-    expect(download.with?.["digest-mismatch"]).toBe("error");
-    expect(download.with?.["run-id"]).toBeUndefined();
-    expect(download.with?.repository).toBeUndefined();
-
-    const verify = step("publish", "Verify checked image identity and labels");
-    expect(verify.env).toEqual({
-      EXPECTED_IMAGE_ID: "${{ needs.static.outputs.image_id }}",
-      EXPECTED_SOURCE_REVISION: "${{ needs.static.outputs.source_revision }}",
-      EXPECTED_DEPENDENCY_CHECKSUM: "${{ needs.static.outputs.dependency_checksum }}",
-    });
-    expect(job("publish").steps.map(item => item.run ?? "").join("\n")).not.toMatch(/docker (?:build|buildx)|pnpm |npm /);
-    expect(job("publish").steps.some(item => item.uses?.startsWith("actions/checkout@"))).toBe(false);
+    expect(build.with?.["build-args"]).toBe([
+      "APP_SOURCE_REVISION=${{ steps.metadata.outputs.source_revision }}",
+      "APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}",
+      "CI_TYPECHECK_ALREADY_PASSED=true",
+      "",
+    ].join("\n"));
+    expect(step("static", "Exact checkout image metadata").id).toBe("metadata");
     expect(shell(step("static", "Exact checkout image metadata"))).toContain("bash scripts/deploy-metadata.sh");
+    // The typecheck the image build skips must run earlier in the same job.
+    const names = job("static").steps.map(item => item.name);
+    expect(names.indexOf("Typecheck")).toBeGreaterThan(-1);
+    expect(names.indexOf("Typecheck")).toBeLessThan(names.indexOf("Production Docker image build"));
+    for (const smoke of ["Chromium Headless Shell runtime smoke", "Native image library smoke", "Startup capability manifest smoke"]) {
+      expect(names.indexOf(smoke), smoke).toBeGreaterThan(names.indexOf("Production Docker image build"));
+    }
   });
 
   it.each([
@@ -358,10 +684,10 @@ describe("CI production image publication policy", () => {
     ['{"capabilities":[]}', false],
     ["not JSON", false],
   ] as const)("capability smoke validates manifest %s without freezing its vocabulary", (manifest, allowed) => {
-    const script = `docker() { printf '%s\\n' "$TEST_CAPABILITIES"; }\n${shell(step("static", "Startup capability manifest smoke"))}`;
+    const script = `docker() { [ "$5" = "$IMAGE" ] || return 9; printf '%s\\n' "$TEST_CAPABILITIES"; }\n${shell(step("static", "Startup capability manifest smoke"))}`;
     const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
       encoding: "utf8",
-      env: { ...process.env, TEST_CAPABILITIES: manifest },
+      env: { ...process.env, TEST_CAPABILITIES: manifest, IMAGE: "agency_hub_core/runtime:ci-1-1" },
     });
     expect(result.status === 0, result.stderr).toBe(allowed);
     if (allowed) expect(result.stdout).toBe(`${manifest}\n`);

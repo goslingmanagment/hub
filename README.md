@@ -219,17 +219,17 @@ What the script does:
 - verifies `/api/v1/health`, worker health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
 - if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `scheduler`, and `worker` logs automatically
 
-### Deploy a checked CI image
+### Deploy a prebuilt image (pull mode)
 
-Every successful **push to main** CI run saves the exact image tested by the
-Chromium and startup smoke checks, then publishes it to
-`ghcr.io/goslingmanagment/hub/runtime:<full-commit-sha>` after Quality Gate.
-The publish job summary contains its immutable `@sha256:…` reference. PR and
-manual CI runs verify code but do not publish. A failed gate never publishes.
+CI builds the runtime image and runs its Chromium, native-library and startup
+smoke checks, but it no longer publishes images: production images are built
+on the server (`--mode full` or `dist-only`). Pull mode needs an image that
+someone published to GHCR manually, by immutable digest, from the exact commit
+being deployed.
 
 Check out that exact commit in a clean working copy (including no untracked
 release inputs), authenticate the VPS to GHCR with package-read access once,
-and use the digest from that successful run:
+and use the digest of that manually published image:
 
 ```bash
 scripts/deploy-production.sh --mode pull \

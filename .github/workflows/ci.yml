@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled]
   push:
     branches:
       - main
@@ -17,22 +17,32 @@ permissions:
   contents: read
 
 # Superseded PR heads stop burning runners; main always runs to completion so
-# every main commit keeps a finished gate record (and a published image).
+# every main commit keeps a finished Quality Gate record.
 concurrency:
-  # A body-only edit gets its own group so it never cancels the real run for
-  # the same head; it still reports "Quality Gate" itself (see the job), so the
-  # newest check suite for that head keeps the required check.
-  group: ci-${{ github.ref }}${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && '-metadata' || '' }}
+  # A metadata-only event — a description edit (no title or base change) or a
+  # label other than ci:full — gets its own group so it never cancels the real
+  # run for the same head; it still reports "Quality Gate" itself (see the
+  # job), so the newest check suite for that head keeps the required check.
+  group: ci-${{ github.ref }}${{ ((github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base) || (github.event.action == 'labeled' && github.event.label.name != 'ci:full')) && '-metadata' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Drafts run only admission/gate jobs. Ready PRs reuse matching gate or DB
-# proofs; a proof miss or lookup error executes the affected checks in full.
-# Main always builds, smoke-tests and publishes its own exact-revision image.
+# Drafts run only admission/gate jobs. Ready PRs and main reuse matching gate
+# or DB proofs; a proof miss or lookup error executes the affected checks in
+# full. CI never publishes an image: production images build on the server.
+#
+# Runner pool: the repository variable CI_POOL=pc sends the heavy jobs (static,
+# integration) to the owner's self-hosted runners; any other value, and every
+# re-run (the PC may have died mid-run), uses GitHub-hosted runners.
+#
+# Economy mode (CI_POOL is not pc): a PR runs the integration shards only when
+# it is opened, reopened or marked ready for review, or while it carries the
+# label ci:full. Other pushes to a ready PR run static checks only, and the
+# Quality Gate stays red until integration has run (or is proven) for the head.
 jobs:
   fingerprint:
     name: Gate fingerprint
-    if: github.event.action != 'edited' || github.event.changes.title || github.event.changes.base
-    runs-on: ubuntu-latest
+    if: (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base) && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -70,50 +80,51 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: node scripts/ci-find-proof.mjs
 
-  # On a PR a proven fingerprint skips this job entirely. On main it still
-  # runs — the deploy pulls the image this job builds and `publish` pushes —
-  # but the checks that the fingerprint already proved are skipped.
+  # A full-tree proof skips this job on a PR and on main alike: nothing
+  # downstream consumes the image any more, so a tree that already passed is
+  # not rebuilt. An integration-only proof never skips it.
   static:
     name: Static checks
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && (needs.fingerprint.outputs.proven_by == '' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == ''
     timeout-minutes: 25
-    # The full workspace type graph exceeds Node 22's default 2 GiB heap.
-    # Keep compilation bounded; test scripts retain their own explicit limits.
     env:
+      # The full workspace type graph exceeds Node 22's default 2 GiB heap.
+      # Keep compilation bounded; test scripts retain their own explicit limits.
       NODE_OPTIONS: --max-old-space-size=4096
-    outputs:
-      source_revision: ${{ steps.metadata.outputs.source_revision }}
-      dependency_checksum: ${{ steps.metadata.outputs.dependency_checksum }}
-      image_id: ${{ steps.build-image.outputs.image_id }}
-      artifact_id: ${{ steps.upload-image.outputs.artifact-id }}
+      # Self-hosted runners share one Docker daemon: a per-run tag keeps
+      # concurrent jobs from building over or smoke-testing each other's image.
+      IMAGE: agency_hub_core/runtime:ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       # pnpm version comes from package.json "packageManager" — one pin, no drift.
+      # The action wipes its install directory first, and self-hosted runners
+      # share $HOME: keep that directory per runner.
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
 
+      # Self-hosted runners keep the pnpm store in $HOME; only hosted ones cache.
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       # Check backend types once. Docker explicitly consumes this successful
-      # check or the matching full-tree proof; direct Docker builds still check.
+      # check; direct Docker builds still check.
       - name: Typecheck
-        if: needs.fingerprint.outputs.proven_by == ''
         run: pnpm typecheck
 
       - name: Lint (family standard + architecture walls)
-        if: needs.fingerprint.outputs.proven_by == ''
         run: pnpm lint
 
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
@@ -121,7 +132,6 @@ jobs:
       # kept the committed artifacts mutually consistent yet stale. The
       # generator boots the API server with a stub config — no DB needed.
       - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
-        if: needs.fingerprint.outputs.proven_by == ''
         run: |
           pnpm contracts:generate
           git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
@@ -133,42 +143,47 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=no)"
           bash scripts/deploy-metadata.sh >> "$GITHUB_OUTPUT"
 
+      # Hosted runners build in a throwaway BuildKit container backed by the
+      # GitHub Actions layer cache. Self-hosted runners build on the local
+      # daemon, whose layer cache persists on the PC; the docker driver cannot
+      # export to the gha cache, and naming the builder keeps a shared $HOME's
+      # "current builder" out of the picture.
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v4
+        with:
+          driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
 
       - name: Production Docker image build
         uses: docker/build-push-action@v7
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: .
           platforms: linux/amd64
           target: runtime
           load: true
           pull: true
-          tags: agency_hub_core/runtime:ci
+          tags: ${{ env.IMAGE }}
           build-args: |
             APP_SOURCE_REVISION=${{ steps.metadata.outputs.source_revision }}
             APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}
             CI_TYPECHECK_ALREADY_PASSED=true
-          cache-from: type=gha,scope=hub-runtime-amd64
-          cache-to: type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true
-
-      - name: Record checked image identity
-        id: build-image
-        run: docker image inspect --format 'image_id={{.Id}}' agency_hub_core/runtime:ci >> "$GITHUB_OUTPUT"
+          cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=hub-runtime-amd64' || '' }}
+          cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true' || '' }}
 
       - name: Chromium Headless Shell runtime smoke
-        run: docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs
+        run: docker run --rm --entrypoint node "$IMAGE" scripts/smoke-playwright-runtime.mjs
 
       - name: Native image library smoke
         # The AI media describer loads sharp lazily; prove the prebuilt libvips
         # binding for the target platform resolves from the runtime package.
         run: |
-          docker run --rm -w /app/apps/runtime --entrypoint node agency_hub_core/runtime:ci \
+          docker run --rm -w /app/apps/runtime --entrypoint node "$IMAGE" \
             --input-type=module -e "const { default: sharp } = await import('sharp'); const out = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#808080' } }).jpeg().toBuffer(); if (out.length < 100) throw new Error('sharp produced no JPEG'); console.log('sharp', sharp.versions.sharp, 'vips', sharp.versions.vips);"
 
       - name: Startup capability manifest smoke
         run: |
-          capabilities="$(docker run --rm --entrypoint node agency_hub_core/runtime:ci apps/runtime/dist/startup.js print-public-capabilities)"
+          capabilities="$(docker run --rm --entrypoint node "$IMAGE" apps/runtime/dist/startup.js print-public-capabilities)"
           node -e '
             const capabilities = JSON.parse(process.argv[1]);
             if (!Array.isArray(capabilities) || !capabilities.every(value => typeof value === "string")) {
@@ -181,33 +196,15 @@ jobs:
       # and tests/voice-notes-sweep are DB-backed despite not being named
       # *.integration.test.ts, so they are not in the --exclude list.
       - name: Reliable unit tests
-        if: needs.fingerprint.outputs.proven_by == ''
         # Vitest defaults to CPUs - 1: a 2-vCPU runner otherwise uses one
         # worker. Keep per-file isolation while using both available CPUs.
         run: pnpm test:unit --maxWorkers=2
 
-      # Only a trusted main push hands an image to the publishing job. The
-      # artifact comes from this exact run, after both final-image smoke tests;
-      # publishing still waits for every existing Quality Gate dependency.
-      - name: Save checked production image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          EXPECTED_IMAGE_ID: ${{ steps.build-image.outputs.image_id }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/checked-runtime"
-          test "$(docker image inspect --format '{{.Id}}' agency_hub_core/runtime:ci)" = "$EXPECTED_IMAGE_ID"
-          docker save --output "$RUNNER_TEMP/checked-runtime/runtime-image.tar" agency_hub_core/runtime:ci
-
-      - name: Upload checked production image
-        id: upload-image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v7
-        with:
-          name: checked-runtime-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/checked-runtime/runtime-image.tar
-          if-no-files-found: error
-          compression-level: 1
-          retention-days: 1
+      # A self-hosted daemon outlives the job: drop this run's tag (its layers
+      # stay in the builder cache). Cleanup never decides the job's result.
+      - name: Remove this run's image
+        if: always()
+        run: docker image rm "$IMAGE" || true
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
@@ -218,11 +215,17 @@ jobs:
   # Sharding is by resolved FILE, so it is applied to the
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
+  #
+  # The hosted fallback is arm64: the shards run only vitest against
+  # Testcontainers Postgres (multi-arch) and never build the amd64 image.
+  # In economy mode (see the top of `jobs`) a PR push that is not an open,
+  # reopen or ready-for-review, and carries no ci:full label, skips the shards;
+  # the Quality Gate then fails and says how to run them.
   integration:
     name: Integration ${{ matrix.shard }}/3
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == ''
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
     # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
     # not duration, and after a week that added four integration files one
     # shard drew a slow-heavy set and was cancelled at 30:18 with every test
@@ -244,12 +247,14 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -270,18 +275,19 @@ jobs:
   #
   # With a proven fingerprint the test jobs are skipped by design and the gate
   # passes on the earlier run's evidence; a fingerprint job that failed leaves
-  # `proven_by` empty, so every skip that is NOT backed by a proof still fails.
+  # `proven_by` empty, so every skip that is NOT backed by a proof still fails
+  # — including integration skipped by economy mode.
   #
   # The name is the literal "Quality Gate" in every event and the job runs in
   # every event. GitHub resolves a required check against the NEWEST check
   # suite for the head SHA, so a run that renames or skips this job takes the
   # gate off that head and the PR becomes unmergeable with every check green
-  # (Decision 377). A description-only edit therefore still runs this job and
+  # (Decision 377). A metadata-only event therefore still runs this job and
   # mirrors the verdict an earlier run recorded for the same SHA; it cannot
   # manufacture one, so a red, pending or missing gate stays that way.
   quality:
     name: Quality Gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     needs: [fingerprint, static, integration]
     if: always()
     timeout-minutes: 5
@@ -291,17 +297,18 @@ jobs:
       checks: read
       contents: read
     env:
-      # A description-only edit: no code, no title, no base — and, by their own
-      # conditions, no gate jobs to aggregate.
-      BODY_EDIT: ${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base }}
+      # A metadata-only event: a description edit (no code, no title, no base)
+      # or a label other than ci:full — and, by their own conditions, no gate
+      # jobs to aggregate.
+      METADATA_ONLY: ${{ (github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base) || (github.event.action == 'labeled' && github.event.label.name != 'ci:full') }}
 
     steps:
       - name: Checkout
-        if: env.BODY_EDIT == 'true'
+        if: env.METADATA_ONLY == 'true'
         uses: actions/checkout@v6
 
       - name: An earlier run already passed this head
-        if: env.BODY_EDIT == 'true'
+        if: env.METADATA_ONLY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
@@ -309,28 +316,31 @@ jobs:
         run: node scripts/ci-mirror-gate.mjs
 
       - name: Every gate job succeeded
-        if: env.BODY_EDIT != 'true'
+        if: env.METADATA_ONLY != 'true'
         env:
           PROVEN_BY: ${{ needs.fingerprint.outputs.proven_by }}
           INTEGRATION_PROVEN_BY: ${{ needs.fingerprint.outputs.integration_proven_by }}
           FINGERPRINT_RESULT: ${{ needs.fingerprint.result }}
           FINGERPRINT: ${{ needs.fingerprint.outputs.hash }}
           IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
-          REQUIRE_IMAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # Only explains a failure; it never decides one.
+          ECONOMY: ${{ github.event_name == 'pull_request' && vars.CI_POOL != 'pc' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           STATIC: ${{ needs.static.result }}
           INTEGRATION: ${{ needs.integration.result }}
         run: |
           [ "$IS_DRAFT" != "true" ] || { echo "Draft PR: mark ready for review to run checks."; exit 1; }
           [ "$FINGERPRINT_RESULT" = "success" ] || exit 1
           [[ "$FINGERPRINT" =~ ^[0-9a-f]{64}$ ]] || exit 1
-          if [ "$REQUIRE_IMAGE" = "true" ]; then
-            [ "$STATIC" = "success" ] || exit 1
-          fi
           if [ -n "$PROVEN_BY" ]; then
             [ "$INTEGRATION" = "skipped" ] || exit 1
             case "$STATIC" in success|skipped) ;; *) exit 1 ;; esac
             echo "Quality Gate reused run ${PROVEN_BY}." >> "$GITHUB_STEP_SUMMARY"
           else
+            if [ -z "$INTEGRATION_PROVEN_BY" ] && [ "$INTEGRATION" = "skipped" ] && [ "$ECONOMY" = "true" ]; then
+              echo "::error title=Integration tests did not run::Economy mode (CI_POOL is not pc) runs only static checks on pushes to a ready PR. When this PR is final, run: gh pr edit ${PR_NUMBER} --add-label ci:full (or convert it to draft and mark it ready again)."
+              exit 1
+            fi
             [ "$STATIC" = "success" ] || exit 1
             if [ -n "$INTEGRATION_PROVEN_BY" ]; then
               [ "$INTEGRATION" = "skipped" ] || exit 1
@@ -342,13 +352,13 @@ jobs:
           fi
 
       - name: Record this fingerprint as proven
-        if: env.BODY_EDIT != 'true' && needs.fingerprint.outputs.proven_by == ''
+        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == ''
         run: |
           mkdir -p "$RUNNER_TEMP/quality-gate"
           printf '%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/quality-gate/run-id"
 
       - name: Publish the proof for later identical trees
-        if: env.BODY_EDIT != 'true' && needs.fingerprint.outputs.proven_by == ''
+        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == ''
         uses: actions/upload-artifact@v7
         with:
           name: quality-gate-${{ needs.fingerprint.outputs.hash }}
@@ -366,64 +376,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
-
-  # `!cancelled()` is load-bearing: a skipped job (the integration matrix on a
-  # proven tree) propagates "skipped" down the whole needs chain, and a job
-  # without a status function inherits it even when its direct dependencies
-  # succeeded — the first fingerprint-gated main run published nothing.
-  publish:
-    name: Publish checked production image
-    runs-on: ubuntu-latest
-    needs: [static, quality]
-    if: "!cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.result == 'success'"
-    timeout-minutes: 15
-    # The only write token in this workflow. PRs and manual dispatches cannot
-    # enter this job; no checkout/build/test code runs with package permission.
-    permissions:
-      packages: write
-    outputs:
-      image: ${{ steps.publish.outputs.image }}
-      digest: ${{ steps.publish.outputs.digest }}
-
-    steps:
-      - name: Download this run's checked image
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ needs.static.outputs.artifact_id }}
-          path: ${{ runner.temp }}/checked-runtime
-          merge-multiple: true
-          digest-mismatch: error
-
-      - name: Verify checked image identity and labels
-        env:
-          EXPECTED_IMAGE_ID: ${{ needs.static.outputs.image_id }}
-          EXPECTED_SOURCE_REVISION: ${{ needs.static.outputs.source_revision }}
-          EXPECTED_DEPENDENCY_CHECKSUM: ${{ needs.static.outputs.dependency_checksum }}
-        run: |
-          docker load --input "$RUNNER_TEMP/checked-runtime/runtime-image.tar"
-          test "$(docker image inspect --format '{{.Id}}' agency_hub_core/runtime:ci)" = "$EXPECTED_IMAGE_ID"
-          test "$(docker image inspect --format '{{index .Config.Labels "agency-hub.source-revision"}}' agency_hub_core/runtime:ci)" = "$EXPECTED_SOURCE_REVISION"
-          test "$(docker image inspect --format '{{index .Config.Labels "agency-hub.dependency-checksum"}}' agency_hub_core/runtime:ci)" = "$EXPECTED_DEPENDENCY_CHECKSUM"
-          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' agency_hub_core/runtime:ci)" = 'linux/amd64'
-
-      - name: Sign in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-
-      - name: Publish exact commit and record immutable digest
-        id: publish
-        run: |
-          registry_image="ghcr.io/${GITHUB_REPOSITORY,,}/runtime"
-          commit_image="${registry_image}:${GITHUB_SHA}"
-          docker tag agency_hub_core/runtime:ci "$commit_image"
-          docker push "$commit_image"
-          image_ref="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$commit_image" | awk -v prefix="${registry_image}@" 'index($0, prefix) == 1 { print; exit }')"
-          digest="${image_ref##*@}"
-          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
-          printf 'image=%s\ndigest=%s\n' "$image_ref" "$digest" >> "$GITHUB_OUTPUT"
-          printf 'Checked production image for %s: %s\n' "$GITHUB_SHA" "$image_ref" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Sign out of GHCR
-        if: always()
-        run: docker logout ghcr.io
