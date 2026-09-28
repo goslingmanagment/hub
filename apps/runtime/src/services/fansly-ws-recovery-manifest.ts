@@ -16,6 +16,16 @@ const requestSchema = z.object({ pageLabel: z.string().min(1), targets: z.array(
 }).strict()).min(1).max(20) }).strict();
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 
+/** A WS frame's message createdAt is epoch seconds, usually fractional. Same
+ * unit rule as REST normalizeFanslyTimestamp (>= 1e12 is already ms), kept to
+ * a whole-ms instant; anything else is absent. */
+export function fanslyWsCreatedAtMs(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const ms = value >= 1_000_000_000_000 ? value : value * 1000;
+  const wholeMs = Math.round(ms);
+  return wholeMs <= 8.64e15 ? wholeMs : null;
+}
+
 /** A bounded dry run, never a projector. Absence, detached material and
  * ambiguous custody are explicit blockers, not permission to synthesize a thread. */
 export async function buildFanslyWsRecoveryManifest(app: Pick<AppContext, "db" | "logger">, request: unknown) {
@@ -81,8 +91,7 @@ export async function buildFanslyWsRecoveryManifest(app: Pick<AppContext, "db" |
       }
       const message = wsObject(wsObject(wsObject(wsObject(encoded)?.d)?.event)?.message);
       const senderRef = typeof message?.senderId === "string" && /^[0-9]{1,32}$/.test(message.senderId) ? message.senderId : null;
-      const createdAtMs = typeof message?.createdAt === "number" && Number.isSafeInteger(message.createdAt)
-        && message.createdAt > 0 && message.createdAt <= 8.64e15 ? message.createdAt : null;
+      const createdAtMs = fanslyWsCreatedAtMs(message?.createdAt);
       if (await isDmArchiveScopeFenced(db, { pageId, platform: "fansly", refs: [...refs, senderRef],
         materialAt: new Date(Math.min(receivedAt.getTime(), createdAtMs ?? Infinity)) })) {
         items.push({ ...target, reader, blockers: ["owner_erased"] }); continue;

@@ -83,6 +83,9 @@ export type FanslyWsHintWalk = {
   pagesRead?: number;
   groupDetailCaptured?: boolean;
   rawPageIds?: number[];
+  /** ISO dispatch time of the walk's head page (before = null); finalize
+   * stamps it as the thread's last_message_sync_at. */
+  headReadAt?: string;
 };
 
 export type FanslyWsHintClaim = {
@@ -131,7 +134,10 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
           and r.routed_revision <= subject_refresh_state.requested_revision
           and r.received_at >= ${new Date(policy.activationAt)} and r.generation = ${policy.generation}
           and r.hint_type in ${[...policy.enabledTypes]})
-      order by next_due_at, subject_ref limit 1 for update skip locked
+      -- A spent budget defers every refused subject to the same reopen time.
+      -- Among ties the earliest visit goes first (FIFO by deferral), not the
+      -- lowest group id, which would starve the newest conversations.
+      order by next_due_at, last_visited_at, subject_ref limit 1 for update skip locked
     )
     update subject_refresh_state s set claim_token = ${token}::uuid,
       claimed_revision = case when c.frozen_revision_enabled
@@ -265,4 +271,24 @@ export async function admitFanslyWsHintAttempt(db: Database, input: {
   if (Number(usage.rows[0]!.n) >= input.maxAttempts24h) throw new Error("fansly_ws_hint_budget_exhausted");
   await db.execute(sql`insert into fansly_ws_hint_attempts(page_id, generation, request_id, attempt_number, admitted_at, sync_run_id)
     values (${input.pageId}, ${input.generation}, ${input.requestId}, ${input.attemptNumber}, ${input.now}, ${input.syncRunId ?? null})`);
+}
+
+/** The same rolling count as admitFanslyWsHintAttempt, read before any
+ * request is prepared: null while the window has room, otherwise when enough
+ * counted attempts have aged out for admission to succeed. Admission at
+ * dispatch stays the authoritative check. */
+export async function nextFanslyWsHintBudgetAt(db: Database, input: {
+  pageId: number; maxAttempts24h: number; now: Date;
+}) {
+  const windowStart = new Date(input.now.getTime() - 86_400_000);
+  const usage = await db.execute<{ n: string }>(sql`select count(*)::text n from fansly_ws_hint_attempts
+    where page_id = ${input.pageId} and admitted_at > ${windowStart}`);
+  const used = Number(usage.rows[0]!.n);
+  if (used < input.maxAttempts24h) return null;
+  const expiring = await db.execute<{ admitted_at: Date | string }>(sql`select admitted_at from fansly_ws_hint_attempts
+    where page_id = ${input.pageId} and admitted_at > ${windowStart}
+    order by admitted_at offset ${Math.max(0, used - input.maxAttempts24h)} limit 1`);
+  const admittedAt = expiring.rows[0]?.admitted_at;
+  // A zero cap never reopens; look again after a full window.
+  return new Date((admittedAt === undefined ? input.now.getTime() : new Date(admittedAt).getTime()) + 86_400_000);
 }

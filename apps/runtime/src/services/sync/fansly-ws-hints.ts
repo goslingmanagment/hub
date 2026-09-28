@@ -1,8 +1,8 @@
 import {
   admitFanslyWsHintAttempt, advanceFanslyWsHint, assertOwnedPageSyncLease,
-  claimFanslyWsHint, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
+  claimFanslyWsHint, clearConversationSyncHealth, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
   listPageDmConversationsByPlatformConversationIds, lockFanslyWsGeneration,
-  listFanslyWsHintRawPages,
+  listFanslyWsHintRawPages, nextFanslyWsHintBudgetAt,
   getExistingPageDmMessageIds, hasUnconfirmedFanslyWsHintTargets,
   saveFanslyWsHintWalk, tryAcquireDmArchiveWriterFenceLock, upsertPageDmMessages, isFanslyWsHintClaimEnabled,
   withOwnedPageSyncTransaction, type Database,
@@ -130,13 +130,24 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
     rateLimitWaiter: createPageRateLimitWaiter(app, context),
   };
   const now = () => new Date();
-  const defer = (outcome: string) => owned((db) => advanceFanslyWsHint(db, claim, {
-    walk, complete: false, outcome, failed: true, now: now(),
+  const defer = (outcome: string, failed = true) => owned((db) => advanceFanslyWsHint(db, claim, {
+    walk, complete: false, outcome, failed, now: now(),
     retryAt: new Date(Date.now() + Math.min(3_600_000, 60_000 * 2 ** Math.min(claim.consecutiveFailures, 6))),
   }));
+  // Admission at `started` comes after the shared pacer has already reserved
+  // (and waited for) this page's request slot. Refuse a spent 24h cap before
+  // any adapter call instead: quota is not a target failure, so the subject
+  // keeps its failure count and waits until an attempt ages out.
+  const budgetSpent = () => owned(async (db) => {
+    const reopenAt = await nextFanslyWsHintBudgetAt(db, { pageId, maxAttempts24h: policy.maxAttempts24h, now: now() });
+    if (!reopenAt) return false;
+    await advanceFanslyWsHint(db, claim, { walk, complete: false, outcome: "budget_exhausted", now: now(), retryAt: reopenAt });
+    return true;
+  });
   try {
     if (!conversation) {
       if (!walk.groupDetailCaptured) {
+        if (await budgetSpent()) return;
         const detail = await app.adapter.getGroupDetail(requestContext, claim.groupRef);
         const contractAccepted = isFanslyGroupDetailIdentity(detail.parsed, claim.groupRef);
         await persistRawPayload(app.db, { platformAccountId: pageId, syncRunId: input.syncRunId,
@@ -163,6 +174,11 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       telemetry: input.telemetry, platformAccountId: pageId, platform: context.platform,
       pageAccountId: context.page.platformAccountId!, conversation,
     };
+    if (await budgetSpent()) return;
+    // A walk continued from an older `before` (possibly days later) has not
+    // read the current head; only this head fetch's time may certify it.
+    // Set before dispatch so the admission save carries it.
+    if ((walk.before ?? null) === null) walk.headReadAt = new Date().toISOString();
     const page = await fetchAndJournalFanslyDmMessagePage(app, {
       requestContext, telemetry: input.telemetry, syncRunId: input.syncRunId,
       platformAccountId: pageId, platform: context.platform, pageAccountId: context.page.platformAccountId!,
@@ -228,7 +244,12 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         currentIds.has(message.platformMessageId) || !existingIds.has(message.platformMessageId)));
       await finalizePageDmConversationMessageSync(db, {
         conversationId: conversation.id, messageCoverageStatus: conversation.messageCoverageStatus, enforceRetention: false,
+        headReadAt: walk.headReadAt !== undefined && Number.isFinite(Date.parse(walk.headReadAt))
+          ? new Date(walk.headReadAt) : null,
       });
+      // The group answered: end its per-thread breaker streak. With the head
+      // stored the ordinary lane may never walk it again to clear the row.
+      await clearConversationSyncHealth(db, conversation.id);
       const targetUnconfirmed = await hasUnconfirmedFanslyWsHintTargets(db, claim, conversation.id, policy);
       await advanceFanslyWsHint(db, claim, {
         // The contiguous material is safe for ordinary polling. A missing
@@ -243,12 +264,13 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
     // A rotation can revoke the deferral itself after a failed request. It
     // grants no write authority; the old claim expires or a new generation
     // replaces it. Lost leases and storage failures still propagate.
-    const deferIfCurrent = async (outcome: string) => {
-      try { await defer(outcome); } catch (deferralError) {
+    const deferIfCurrent = async (outcome: string, failed = true) => {
+      try { await defer(outcome, failed); } catch (deferralError) {
         if (!(deferralError instanceof HintDeferred)) throw deferralError;
       }
     };
-    if (error instanceof HintDeferred) { await deferIfCurrent(error.message); return; }
+    // A policy or budget refusal before dispatch says nothing about the target.
+    if (error instanceof HintDeferred) { await deferIfCurrent(error.message, false); return; }
     if (error instanceof FanslyApiError && error.retryAfterAt === null
       && (error.status === 404 || (error.status !== undefined && error.status >= 500))) {
       await deferIfCurrent("target_failed");

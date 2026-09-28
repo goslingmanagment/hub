@@ -631,7 +631,7 @@ async function seedConversationApiFixture(input: {
   await finalizePageDmConversationMessageSync(input.testDb.db, {
     conversationId: conversation.id,
     messageCoverageStatus: "complete",
-    lastMessageSyncAt: new Date("2026-03-17T11:45:00.000Z"),
+    headReadAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
   await upsertFanPage(input.testDb.db, {
@@ -943,7 +943,7 @@ async function seedSyncMonitorScenario(
   await finalizePageDmConversationMessageSync(testDb.db, {
     conversationId: completedConversation.id,
     messageCoverageStatus: "complete",
-    lastMessageSyncAt: completedSyncAt,
+    headReadAt: completedSyncAt,
   });
 
   await upsertPageDmConversation(testDb.db, {

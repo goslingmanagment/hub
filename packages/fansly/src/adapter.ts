@@ -335,6 +335,40 @@ function parseFanslyFollowersPage(value: unknown): FanslyFollowersPage | null {
   return value as unknown as FanslyFollowersPage;
 }
 
+function hasNullableIdentityRecords(value: unknown) {
+  return value === undefined || value === null ||
+    (Array.isArray(value) && value.every((item) => isRecord(item) &&
+      typeof item.id === "string" && item.id.length > 0));
+}
+
+/** The container and identity contract of `/messaging/groups`, mirroring
+ * parseFanslyFollowersPage: a row, group or account without its id cannot be
+ * applied, and the capture trim would silently drop it. Scalar fields (flags,
+ * counters, head ids, `total`) stay with the lane's own guards. */
+function parseFanslyMessagingGroupsPage(value: unknown): FanslyMessagingGroupsPage | null {
+  if (!isRecord(value) || !Array.isArray(value.data) ||
+    !value.data.every((item) => isRecord(item) &&
+      typeof item.groupId === "string" && item.groupId.length > 0)) {
+    return null;
+  }
+  if (value.aggregationData !== undefined && value.aggregationData !== null &&
+    (!isRecord(value.aggregationData) ||
+      !hasNullableIdentityRecords(value.aggregationData.groups) ||
+      !hasNullableIdentityRecords(value.aggregationData.accounts))) {
+    return null;
+  }
+  return value as unknown as FanslyMessagingGroupsPage;
+}
+
+/** Container contract only. Per-message drift (a missing id or createdAt) is
+ * the lane's to account for after capture; rejecting the page for one bad
+ * message would wedge the conversation sweep's limit-1 head repair. */
+function parseFanslyMessagesPage(value: unknown): FanslyMessagesPage | null {
+  return isRecord(value) && Array.isArray(value.messages)
+    ? value as unknown as FanslyMessagesPage
+    : null;
+}
+
 export class FanslyAdapter {
   private readonly requestTimestamps = new Map<string, number>();
   private readonly rateLimitChains = new Map<string, Promise<void>>();
@@ -1188,7 +1222,7 @@ export class FanslyAdapter {
       listIds?: string | null;
     },
   ): Promise<FanslyMessagingGroupsPageResponse> {
-    const response = await this.request<FanslyMessagingGroupsPage>(context, "/messaging/groups", {
+    const response = await this.request<unknown>(context, "/messaging/groups", {
       operation: "messaging_groups",
       endpointTemplate: "/messaging/groups",
       query: {
@@ -1214,23 +1248,31 @@ export class FanslyAdapter {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
       },
-      summarizeResponse: (parsed) => ({
-        total: parsed.aggregationData?.total ?? null,
-        returnedItems: parsed.data.length,
-        accountCount: parsed.aggregationData?.accounts?.length ?? 0,
-        groupCount: parsed.aggregationData?.groups?.length ?? 0,
-        done: parsed.data.length < (params.limit ?? 100),
-      }),
+      summarizeResponse: (value) => {
+        const parsed = parseFanslyMessagingGroupsPage(value);
+        return {
+          total: parsed?.aggregationData?.total ?? null,
+          returnedItems: parsed?.data.length ?? null,
+          accountCount: parsed ? parsed.aggregationData?.accounts?.length ?? 0 : null,
+          groupCount: parsed ? parsed.aggregationData?.groups?.length ?? 0 : null,
+          done: parsed ? parsed.data.length < (params.limit ?? 100) : null,
+          contractAccepted: parsed !== null,
+        };
+      },
     });
 
+    // A drifted body comes back as a refusable page with its raw bytes, never
+    // as a TypeError before the caller could journal it.
     const limit = params.limit ?? 100;
+    const parsed = parseFanslyMessagingGroupsPage(response.parsed);
     return {
-      total: response.parsed.aggregationData?.total,
-      items: response.parsed.data,
+      total: parsed?.aggregationData?.total,
+      items: parsed?.data ?? [],
       offset: params.offset ?? 0,
-      done: response.parsed.data.length < limit,
-      accounts: response.parsed.aggregationData?.accounts ?? [],
-      groups: response.parsed.aggregationData?.groups ?? [],
+      done: parsed ? parsed.data.length < limit : false,
+      accounts: parsed?.aggregationData?.accounts ?? [],
+      groups: parsed?.aggregationData?.groups ?? [],
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -1263,7 +1305,7 @@ export class FanslyAdapter {
       before?: string | null;
     },
   ): Promise<FanslyMessagesPageResponse> {
-    const response = await this.request<FanslyMessagesPage>(context, "/message", {
+    const response = await this.request<unknown>(context, "/message", {
       operation: "messages",
       endpointTemplate: "/message",
       query: {
@@ -1281,19 +1323,25 @@ export class FanslyAdapter {
         cursorPresent: Boolean(params.before),
         limit: params.limit ?? 25,
       },
-      summarizeResponse: (parsed) => ({
-        groupId: params.groupId,
-        returnedItems: parsed.messages.length,
-        done: parsed.messages.length < (params.limit ?? 25),
-      }),
+      summarizeResponse: (value) => {
+        const parsed = parseFanslyMessagesPage(value);
+        return {
+          groupId: params.groupId,
+          returnedItems: parsed?.messages.length ?? null,
+          done: parsed ? parsed.messages.length < (params.limit ?? 25) : null,
+          contractAccepted: parsed !== null,
+        };
+      },
     });
 
     const limit = params.limit ?? 25;
+    const parsed = parseFanslyMessagesPage(response.parsed);
     return {
-      items: response.parsed.messages,
+      items: parsed?.messages ?? [],
       groupId: params.groupId,
       before: params.before ?? null,
-      done: response.parsed.messages.length < limit,
+      done: parsed ? parsed.messages.length < limit : false,
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }

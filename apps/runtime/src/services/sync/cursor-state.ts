@@ -76,6 +76,13 @@ type DmMessagesCursorState = {
   currentMode: "backfill" | "deep_backfill" | "incremental" | null;
   liveMessageRequestsSinceDeepBackfill?: number;
   headCatchup?: { messageId: string; startedAt: string; pagesRead: number; overlapReached?: boolean };
+  /** An earlier page of this conversation's walk left a message unstored; the
+   * walk's final coverage verdict must not be 'complete'. */
+  normalizationDebt?: true;
+  /** ISO dispatch time of this walk's head page (before = null). Finalize
+   * stamps it as last_message_sync_at; a walk without it (from a stored
+   * cursor, or checkpointed before the field existed) leaves that alone. */
+  headReadAt?: string;
 };
 
 // OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
@@ -754,6 +761,11 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     currentMode,
     ...(liveMessageRequestsSinceDeepBackfill > 0
       ? { liveMessageRequestsSinceDeepBackfill: Math.floor(liveMessageRequestsSinceDeepBackfill) }
+      : {}),
+    ...(state.normalizationDebt === true ? { normalizationDebt: true } : {}),
+    // Unparseable means unknown: preserve last_message_sync_at, never "now".
+    ...(typeof state.headReadAt === "string" && Number.isFinite(Date.parse(state.headReadAt))
+      ? { headReadAt: state.headReadAt }
       : {}),
   };
 }

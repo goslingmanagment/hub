@@ -544,10 +544,17 @@ function redactFanslyMessageLike(raw: unknown) {
  * [A20] repairs it as the named allowlist above.
  *
  * `aggregationData.groups[].lastMessage` KEEPS its redaction deliberately: it
- * is 3.7 % of the payload delta and a duplicate of material the verbatim
- * `dm_messages` journal already holds (sync/fansly-dm-messages.ts persists
- * `page.raw` untrimmed) — so the agent-read scrub justification in
+ * is 3.7 % of the payload delta and, for every head the DM stream reads, a
+ * duplicate of material the verbatim `dm_messages` journal already holds
+ * (sync/fansly-dm-messages.ts persists `page.raw` untrimmed). A head that
+ * stream never fetches (a mass-DM copy, say) is held only by the WS frame
+ * journal. Either way the agent-read scrub justification in
  * modules/agent-read/observation-scrub.ts stays true.
+ *
+ * The trim drops a row, group or account without its id and nulls a mistyped
+ * scalar. The adapter refuses the first case (contractAccepted false) and
+ * captureFanslyMessagingGroupsPayload marks that capture; the second is
+ * accepted as-is, the same scope as the follower capture.
  */
 export function trimFanslyMessagingGroupsPayload(raw: unknown) {
   const payload = isRecord(raw) ? raw : {};
@@ -627,6 +634,37 @@ export function trimFanslyMessagingGroupsPayload(raw: unknown) {
       accounts,
       groups,
     },
+  };
+}
+
+/** The dm_conversations journal body. An accepted page is the trim, byte for
+ * byte. A page the adapter refused (and the lane then refuses) keeps the same
+ * allowlist and lastMessage redaction, nested so replay cannot mistake the
+ * trim's fallback arrays for a valid page; type names and raw lengths keep the
+ * drift evidence without any text. */
+export function captureFanslyMessagingGroupsPayload(raw: unknown, contractAccepted: boolean | undefined) {
+  const captured = trimFanslyMessagingGroupsPayload(raw);
+  if (contractAccepted !== false) {
+    return captured;
+  }
+  const payload = isRecord(raw) ? raw : {};
+  const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  const shape = (value: unknown) => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  const length = (value: unknown) => Array.isArray(value) ? value.length : null;
+  return {
+    contractAccepted: false as const,
+    responseShape: {
+      response: shape(raw),
+      data: shape(payload.data),
+      aggregationData: shape(payload.aggregationData),
+      total: shape(aggregationData.total),
+      groups: shape(aggregationData.groups),
+      accounts: shape(aggregationData.accounts),
+      dataLength: length(payload.data),
+      groupsLength: length(aggregationData.groups),
+      accountsLength: length(aggregationData.accounts),
+    },
+    captured,
   };
 }
 

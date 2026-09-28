@@ -5,11 +5,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
   PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
+  clearConversationSyncHealth,
+  countConversationSyncFailuresByAccount,
   countPageDmThreadsByGeneration,
   createFanslyPage,
   createModel,
   deletePageDmMessageByPlatformMessageId,
+  excludePageDmConversationMessageSync,
   finalizePageDmConversationMessageSync,
+  getConversationSyncHealth,
+  getPageDmMessageIdsAtOrBefore,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
@@ -17,6 +22,7 @@ import {
   listPageDmThreadIdsStampedWithGeneration,
   markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
+  recordConversationSyncFailure,
   refreshPageDmConversationWindow,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
@@ -773,7 +779,7 @@ describe("page DM repository integration", () => {
     await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "complete",
-      lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
+      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
     });
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -867,7 +873,7 @@ describe("page DM repository integration", () => {
     const finalized = await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "complete",
-      lastMessageSyncAt: new Date("2026-03-17T13:30:00.000Z"),
+      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
       enforceRetention: false,
     });
     expect(finalized.deletedCount).toBe(0);
@@ -1065,7 +1071,7 @@ describe("page DM repository integration", () => {
     await finalizePageDmConversationMessageSync(testDb.db, {
       conversationId: conversation.id,
       messageCoverageStatus: "partial_window",
-      lastMessageSyncAt: new Date("2026-03-18T09:00:00.000Z"),
+      headReadAt: new Date("2026-03-18T09:00:00.000Z"),
     });
 
     const storedMessages = await testDb.pool.query<{
@@ -1087,6 +1093,209 @@ describe("page DM repository integration", () => {
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
     expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
+  });
+
+  it("moves last_message_sync_at only for a head read, and never backwards", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-head-read");
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-head-read" }]);
+    if (!fan) throw new Error("test setup: fan creation failed");
+    const headReadAt = new Date("2026-09-22T00:11:00.000Z");
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "head-read", 1), fanId: fan.id, lastMessageSyncAt: headReadAt,
+    });
+    const fresh = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "head-read-fresh", 1), fanId: fan.id,
+    });
+    if (!thread || !fresh) throw new Error("test setup: thread creation failed");
+    const finalize = async (conversationId: number, at: Date | null) => (await finalizePageDmConversationMessageSync(
+      testDb!.db, { conversationId, messageCoverageStatus: "complete", headReadAt: at, enforceRetention: false },
+    )).conversation?.lastMessageSyncAt;
+
+    // A history walk or a summary repair leaves the watermark alone.
+    expect(await finalize(thread.id, null)).toEqual(headReadAt);
+    expect(await finalize(fresh.id, null)).toBeNull();
+    // An older head read cannot hide a head a newer read already certified.
+    expect(await finalize(thread.id, new Date("2026-09-20T00:00:00.000Z"))).toEqual(headReadAt);
+    const later = new Date("2026-09-28T02:07:00.000Z");
+    expect(await finalize(thread.id, later)).toEqual(later);
+    expect(await finalize(fresh.id, headReadAt)).toEqual(headReadAt);
+  });
+
+  it("counts only stored rows at or below the recorded boundary as known ground", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-known-ground");
+    const thread = await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "known-ground", 1));
+    if (!thread) throw new Error("test setup: thread creation failed");
+    const at = (second: number) => new Date(Date.UTC(2026, 8, 20, 0, 0, second));
+    await upsertPageDmMessages(testDb.db, [["m-1", 1], ["m-2", 2], ["m-3", 2], ["m-4", 3]].map(([id, second]) => ({
+      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id as string,
+      senderPlatformUserId: "fan", senderRole: "fan" as const, createdAt: at(second as number),
+      content: "body", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+    })));
+    const knownGround = async (boundaryMessageId: string) => [...await getPageDmMessageIdsAtOrBefore(testDb!.db, {
+      conversationId: thread.id, platformMessageIds: ["m-1", "m-2", "m-3", "m-4", "unstored"], boundaryMessageId,
+    })].sort();
+
+    // Same created_at breaks the tie on the id, as the window summary does.
+    expect(await knownGround("m-2")).toEqual(["m-1", "m-2"]);
+    expect(await knownGround("m-3")).toEqual(["m-1", "m-2", "m-3"]);
+    // An unstored boundary cannot place anything above it: every stored id counts.
+    expect(await knownGround("unstored")).toEqual(["m-1", "m-2", "m-3", "m-4"]);
+  });
+
+  it("backs a failing thread off 5/10/20 minutes up to 6h, quarantines it on the 4th failure, and clears it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker");
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-breaker" }]);
+    if (!fan) throw new Error("test setup: fan creation failed");
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker", 1), fanId: fan.id,
+    });
+    if (!thread) throw new Error("test setup: thread creation failed");
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const minutes = (value: number) => new Date(now.getTime() + value * 60_000);
+    const fail = () => recordConversationSyncFailure(testDb!.db, {
+      conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
+      errorMessage: "error getting group messages", now,
+    });
+
+    expect(await fail()).toEqual({ failureCount: 1, nextRetryAt: minutes(5), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 2, nextRetryAt: minutes(10), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 3, nextRetryAt: minutes(20), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 4, nextRetryAt: minutes(40), quarantineUntil: minutes(360) });
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+      failureCount: 4, errorClass: "fansly_500", lastError: "error getting group messages",
+    });
+    expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] }))
+      .toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+    // The backoff holds at the 6h cap; 5min * 2^35 once overflowed interval
+    // and rolled the 36th write back.
+    for (let failureCount = 5; failureCount < 40; failureCount += 1) await fail();
+    expect(await fail()).toEqual({ failureCount: 40, nextRetryAt: minutes(360), quarantineUntil: minutes(360) });
+
+    await clearConversationSyncHealth(testDb.db, thread.id);
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toBeNull();
+
+    // A learned page limit (0087) outlives the failure bookkeeping.
+    await fail();
+    await testDb.pool.query(
+      "update page_dm_message_sync_health set preferred_page_limit = 5 where conversation_id = $1", [thread.id],
+    );
+    await clearConversationSyncHealth(testDb.db, thread.id);
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+      failureCount: 0, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
+    });
+    expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] })).toEqual([]);
+  });
+
+  it("stops counting a breakered thread as coverage debt once the lane no longer selects it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker-retired");
+    const groups = ["live", "excluded", "hidden", "unbound"] as const;
+    const fans = await upsertFans(testDb.db, groups.map((group) => ({
+      platform: "fansly" as const, platformUserId: `fan-breaker-${group}`,
+    })));
+    const threads = new Map<string, number>();
+    for (const [index, group] of groups.entries()) {
+      const thread = await upsertPageDmConversation(testDb.db, {
+        ...generationThreadInput(page.id, `breaker-${group}`, 1), fanId: fans[index]!.id,
+      });
+      if (!thread) throw new Error("test setup: thread creation failed");
+      threads.set(group, thread.id);
+      await recordConversationSyncFailure(testDb.db, {
+        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
+        errorMessage: "error getting group messages",
+      });
+    }
+    const debt = () => countConversationSyncFailuresByAccount(testDb!.db, { platformAccountIds: [page.id] });
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 4 }]);
+
+    // The partner-unresolvable exclusion retires a thread after its 5xx
+    // streak; the list sweep hides a vanished group; a thread can lose its fan.
+    expect(await excludePageDmConversationMessageSync(testDb.db, {
+      conversationId: threads.get("excluded")!, platformAccountId: page.id,
+      partnerPlatformUserId: "partner-breaker-excluded",
+      reason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+    })).toBe(true);
+    await testDb.pool.query("update page_dm_threads set is_visible = false where id = $1", [threads.get("hidden")]);
+    await testDb.pool.query("update page_dm_threads set fan_id = null where id = $1", [threads.get("unbound")]);
+
+    // Before, every such row kept the page's /health/sync degraded for good.
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+    expect(await getConversationSyncHealth(testDb.db, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
+    await clearConversationSyncHealth(testDb.db, threads.get("live")!);
+    expect(await debt()).toEqual([]);
+    // A thread that returns to the lane carries its failures again.
+    await testDb.pool.query("update page_dm_threads set is_visible = true where id = $1", [threads.get("hidden")]);
+    expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+  });
+
+  it("offers a breakered thread to neither picker until its window lapses", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker-pickers");
+    const [pendingFan, partialFan] = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "fan-breaker-pending" },
+      { platform: "fansly", platformUserId: "fan-breaker-partial" },
+    ]);
+    if (!pendingFan || !partialFan) throw new Error("test setup: fan creation failed");
+    const pending = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker-pending", 1), fanId: pendingFan.id,
+      messageCoverageStatus: "pending_backfill",
+    });
+    const partial = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker-partial", 1), fanId: partialFan.id,
+      lastMessageId: "partial-5", lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      storedMessageCount: 5, newestStoredMessageId: "partial-5", oldestStoredMessageId: "partial-1",
+      messageCoverageStatus: "partial_window", lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
+    });
+    if (!pending || !partial) throw new Error("test setup: thread creation failed");
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const pick = (at: Date) => selectNextPageDmMessageSyncCandidate(testDb!.db, { platformAccountId: page.id, now: at });
+    const pickDeep = (at: Date) =>
+      selectNextPageDmMessageDeepBackfillCandidate(testDb!.db, { platformAccountId: page.id, now: at });
+    expect(await pick(now)).toMatchObject({ id: pending.id });
+    expect(await pickDeep(now)).toMatchObject({ id: partial.id });
+
+    for (const thread of [pending, partial]) {
+      await recordConversationSyncFailure(testDb.db, {
+        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_404",
+        errorMessage: "Fansly request failed (404)", now,
+      });
+    }
+    expect(await pick(now)).toBeNull();
+    expect(await pickDeep(now)).toBeNull();
+
+    const lapsed = new Date(now.getTime() + 5 * 60_000);
+    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
+    expect(await pickDeep(lapsed)).toMatchObject({ id: partial.id });
+
+    await testDb.pool.query(
+      "update page_dm_message_sync_health set next_retry_at = null, quarantine_until = $1", [lapsed],
+    );
+    expect(await pick(now)).toBeNull();
+    expect(await pickDeep(now)).toBeNull();
+    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
   });
 
   // G2: last_seen_generation is the sweep-membership set the destructive

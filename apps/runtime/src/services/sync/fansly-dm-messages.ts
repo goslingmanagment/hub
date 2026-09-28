@@ -10,6 +10,7 @@
 
 import {
   getExistingPageDmMessageIds,
+  getPageDmMessageIdsAtOrBefore,
   type MessageCoverageStatus,
   type PageDmConversationRow,
   type upsertPageDmMessages,
@@ -36,14 +37,53 @@ export function assertDmSharedRateLimitEnabled(app: AppContext) {
   }
 }
 
+/** The list head differs from the newest stored message and arrived after the
+ * last head read: a head read is due. Mirrors the time-based stale-head
+ * predicate in page-dm.ts selectNextPageDmMessageSyncCandidate; keep the two
+ * in step. */
+export function isDmHeadStaleByTime(conversation: {
+  lastMessageId: string | null;
+  newestStoredMessageId: string | null;
+  lastMessageAt: Date | null;
+  lastMessageSyncAt: Date | null;
+}) {
+  return conversation.lastMessageId !== conversation.newestStoredMessageId && (
+    conversation.lastMessageSyncAt === null ||
+    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt)
+  );
+}
+
 export function resolveDmConversationCoverageStatus(input: {
   currentMode: "backfill" | "deep_backfill" | "incremental";
   existingStatus: MessageCoverageStatus;
   overlapFound: boolean;
   providerHistoryExhausted: boolean;
   hitWindowCap: boolean;
+  /** The walk left at least one message unstored (no parseable createdAt). */
+  normalizationDebt?: boolean;
 }): MessageCoverageStatus {
+  const status = resolveDmWalkCoverageStatus(input);
+  // A walk that skipped a message never proves the thread complete, in any
+  // mode: an incremental walk would otherwise keep a prior 'complete' over the
+  // gap. partial_window, never pending_backfill: the ordinary picker treats it
+  // like complete, so the downgrade re-reads nothing. Only the deep backfill
+  // (off by default) walks partial_window threads, from the oldest stored id;
+  // it cannot revisit the gap and may certify the thread complete again, also
+  // over an unparseable tail of its own that no re-pick could store (the
+  // executor waives that debt), so the dm_message_timestamp_unparseable
+  // anomaly is the lasting signal.
+  return input.normalizationDebt === true && status === "complete" ? "partial_window" : status;
+}
+
+function resolveDmWalkCoverageStatus(
+  input: Parameters<typeof resolveDmConversationCoverageStatus>[0],
+): MessageCoverageStatus {
   if (input.currentMode === "incremental") {
+    // An incremental walk starts at the head and its pages are contiguous, so
+    // reaching the provider's end means the whole history is stored.
+    if (input.providerHistoryExhausted && input.existingStatus === "pending_backfill") {
+      return "complete";
+    }
     return input.existingStatus;
   }
 
@@ -181,11 +221,17 @@ export interface FanslyDmMessagePageOutcome {
   normalizedMessages: FanslyDmMessageUpsertInput;
   /** Rows this page adds that page_dm_messages does not already hold. */
   insertedMessageCount: number;
-  /** At least one returned message is already stored — the walk met known ground. */
+  /** At least one returned message is already stored — the walk met known
+   * ground. With overlapBoundaryMessageId, only a stored row at or before that
+   * boundary counts. */
   overlapFound: boolean;
   /** Oldest id on this page; the `before` cursor for the next request. */
   oldestMessageId: string | null;
   providerHistoryExhausted: boolean;
+  /** At least one returned message had no parseable createdAt and was left
+   * unstored; the walk that read it cannot certify the thread complete, save
+   * the executor's deep walk that reached the provider's end. */
+  normalizationDebt: boolean;
 }
 
 /**
@@ -214,6 +260,11 @@ export async function fetchAndJournalFanslyDmMessagePage(
     >;
     before: string | null;
     limit?: number;
+    /** An incremental head walk passes the thread's recorded newest stored
+     * message: rows stored above it (a dropped walk's pages) are not known
+     * ground, so the walk reads on through any gap below them. Omitted, any
+     * stored row overlaps. */
+    overlapBoundaryMessageId?: string | null;
   },
 ): Promise<FanslyDmMessagePageOutcome> {
   const limit = input.limit ?? FANSLY_DM_MESSAGE_PAGE_LIMIT;
@@ -235,7 +286,9 @@ export async function fetchAndJournalFanslyDmMessagePage(
     syncRunId: input.syncRunId,
     endpoint: "dm_messages",
     requestParams,
-    responsePayload: page.raw,
+    responsePayload: page.contractAccepted === false
+      ? { contractAccepted: false, raw: page.raw }
+      : page.raw,
     mapperVersion: FANSLY_MAPPER_VERSION,
     payloadKind: "dm_messages",
     retainUntil: dmRetentionDate(),
@@ -243,6 +296,12 @@ export async function fetchAndJournalFanslyDmMessagePage(
     action: "inserting dm_messages raw payload",
     platform: "fansly",
   });
+  // Refuse a drifted body only after it is journaled. Its empty item list
+  // must never reach normalization, where no oldest id reads as provider
+  // history exhausted and the thread would be finalized complete.
+  if (page.contractAccepted === false) {
+    throw new Error("Fansly messages response contract rejected; captured before refusal");
+  }
   await materializeFanslyDmTipContextsBestEffort(app, {
     accountId: input.platformAccountId,
     requestParams,
@@ -259,22 +318,37 @@ export async function fetchAndJournalFanslyDmMessagePage(
 export async function normalizeFanslyDmMessagePage(
   app: AppContext,
   input: Pick<Parameters<typeof fetchAndJournalFanslyDmMessagePage>[1],
-    "telemetry" | "platformAccountId" | "platform" | "pageAccountId" | "conversation">,
+    "telemetry" | "platformAccountId" | "platform" | "pageAccountId" | "conversation"
+    | "overlapBoundaryMessageId">,
   page: FanslyDmMessagePage,
 ): Promise<Omit<FanslyDmMessagePageOutcome, "rawPayloadId">> {
   const existingIds = await getExistingPageDmMessageIds(app.db, {
     conversationId: input.conversation.id,
     platformMessageIds: page.items.map((message) => message.id),
   });
-  const overlapFound = page.items.some((message) => existingIds.has(message.id));
+  const knownGroundIds = input.overlapBoundaryMessageId && existingIds.size > 0
+    ? await getPageDmMessageIdsAtOrBefore(app.db, {
+      conversationId: input.conversation.id,
+      platformMessageIds: [...existingIds],
+      boundaryMessageId: input.overlapBoundaryMessageId,
+    })
+    : existingIds;
+  const overlapFound = page.items.some((message) => knownGroundIds.has(message.id));
 
   const normalizedMessages: FanslyDmMessageUpsertInput = [];
+  const unparseable: Array<{ id: string; valueType: string }> = [];
   for (const message of page.items) {
     const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
       context: "dm_messages:message",
       value: message.createdAt,
     });
     if (!createdAt) {
+      // The row stays in the verbatim journal; the hot table cannot hold it
+      // without a date. Overlap, cursor and exhaustion still count it below.
+      unparseable.push({
+        id: message.id,
+        valueType: message.createdAt === null ? "null" : typeof message.createdAt,
+      });
       continue;
     }
 
@@ -301,6 +375,20 @@ export async function normalizeFanslyDmMessagePage(
   const insertedMessageCount = normalizedMessages
     .filter((message) => !existingIds.has(message.platformMessageId))
     .length;
+  if (unparseable.length > 0) {
+    await input.telemetry.addAnomaly({
+      code: "dm_message_timestamp_unparseable",
+      severity: "error",
+      message: "DM message without a parseable createdAt was left unstored",
+      details: {
+        conversationId: input.conversation.id,
+        groupId: input.conversation.platformConversationId,
+        count: unparseable.length,
+        messageIds: unparseable.slice(0, 25).map((item) => item.id),
+        valueTypes: [...new Set(unparseable.map((item) => item.valueType))],
+      },
+    });
+  }
 
   const oldestMessageId = page.items.at(-1)?.id ?? null;
 
@@ -311,5 +399,6 @@ export async function normalizeFanslyDmMessagePage(
     overlapFound,
     oldestMessageId,
     providerHistoryExhausted: page.done || !oldestMessageId,
+    normalizationDebt: unparseable.length > 0,
   };
 }

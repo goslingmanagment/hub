@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, routeFanslyWsHintEvent,
+  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent,
   saveFanslyWsHintWalk, isFanslyWsHintClaimEnabled, type Database, type FanslyWsHintEvent,
 } from "@agency_hub_core/db";
 import type { FanslyWsHintPolicy } from "@agency_hub_core/shared";
@@ -143,5 +143,50 @@ describe("B1 durable coalescing and claim settlement", () => {
     await expect(attempt(3)).rejects.toThrow("budget_exhausted");
     await attempt(3, later(86401));
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts where source='event'")).rows[0].n).toBe(3);
+  });
+  it("serves subjects deferred to one budget reopening in deferral order", async () => {
+    const f = await fixture();
+    const reopenAt = later(3600);
+    const deferToReopen = async (at: Date) => {
+      const claim = (await f.claim(at))!;
+      await f.tx(database => advanceFanslyWsHint(database, claim, {
+        walk: claim.walk, complete: false, outcome: "budget_exhausted", now: at, retryAt: reopenAt,
+      }));
+      return claim.groupRef;
+    };
+    // A newer conversation (higher snowflake) is refused first, an older one after it.
+    await f.route(f.event(1, "900"));
+    expect(await deferToReopen(later(1))).toBe("900");
+    await f.route({ ...f.event(2, "100"), receivedAt: later(2) });
+    expect(await deferToReopen(later(2))).toBe("100");
+    expect((await f.rows()).map(row => row.next_due_at)).toEqual([reopenAt, reopenAt]);
+
+    // Before, the tie fell to the lowest group id at every reopening.
+    expect((await f.claim(reopenAt))?.groupRef).toBe("900");
+    expect((await f.claim(reopenAt))?.groupRef).toBe("100");
+  });
+  it("names the moment admission reopens with the same rolling count", async () => {
+    const f = await fixture();
+    for (const [n, seconds] of [[1, -90_000], [2, 0], [3, 60], [4, 120], [5, 180]] as const) {
+      await f.tx(database => admitFanslyWsHintAttempt(database, {
+        pageId: f.pageId, generation: policy.generation, requestId: `r-${n}`, attemptNumber: 1,
+        maxAttempts24h: 10, now: later(seconds),
+      }));
+    }
+    const reopen = (maxAttempts24h: number) => nextFanslyWsHintBudgetAt(db.db, { pageId: f.pageId, maxAttempts24h, now: later(200) });
+    // Four attempts are inside the window; the one from 25 hours ago is not.
+    expect(await reopen(5)).toBeNull();
+    expect(await reopen(4)).toEqual(later(86_400));
+    // A cap lowered below usage waits for enough attempts to age out.
+    expect(await reopen(2)).toEqual(later(86_400 + 120));
+    expect(await reopen(0)).toEqual(later(200 + 86_400));
+    await expect(f.tx(database => admitFanslyWsHintAttempt(database, {
+      pageId: f.pageId, generation: policy.generation, requestId: "r-6", attemptNumber: 1, maxAttempts24h: 2,
+      now: new Date(later(86_400 + 120).getTime() - 1),
+    }))).rejects.toThrow("budget_exhausted");
+    await f.tx(database => admitFanslyWsHintAttempt(database, {
+      pageId: f.pageId, generation: policy.generation, requestId: "r-6", attemptNumber: 1, maxAttempts24h: 2,
+      now: later(86_400 + 120),
+    }));
   });
 });

@@ -5,9 +5,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  emptyDmMessagesCursorState,
   isUnresumableLegacyDmConversationCursorState,
   parseDmConversationCursorState,
   parseDmConversationSweepState,
+  parseDmMessagesCursorState,
   serializeDmConversationSweepState,
 } from "../apps/runtime/src/services/sync/cursor-state.ts";
 
@@ -507,5 +509,57 @@ describe("dm_conversations overlap verdict parity (array vs generation set)", ()
 
     expect(arrayModelVerdicts(pages)).toEqual(["applied", "restart"]);
     expect(generationSetModelVerdicts(pages)).toEqual(["applied", "applied"]);
+  });
+});
+
+describe("dm_messages cursor state: normalization debt", () => {
+  const walking = {
+    version: 1,
+    currentConversationId: 777,
+    currentPlatformConversationId: "group-1",
+    currentBeforeMessageId: "m-2",
+    currentMode: "backfill",
+  } as const;
+
+  it("round-trips the debt flag, so a multi-chunk walk remembers a skipped message", () => {
+    const state = { ...walking, normalizationDebt: true };
+    expect(parseDmMessagesCursorState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  });
+
+  it("keeps only an explicit true, and an older checkpoint parses without it", () => {
+    for (const normalizationDebt of [false, "true", 1, null]) {
+      expect(parseDmMessagesCursorState({ ...walking, normalizationDebt })).toEqual(walking);
+    }
+    expect(parseDmMessagesCursorState({ ...walking })).toEqual(walking);
+  });
+
+  it("is cleared by the empty state every completion and reset writes", () => {
+    expect(emptyDmMessagesCursorState()).not.toHaveProperty("normalizationDebt");
+  });
+});
+
+describe("dm_messages cursor head-read time", () => {
+  const walking = {
+    version: 1,
+    currentConversationId: 777,
+    currentPlatformConversationId: "group-1",
+    currentBeforeMessageId: "m-2",
+    currentMode: "incremental",
+  } as const;
+
+  it("round-trips the head-read time, so a multi-chunk walk certifies its head only as of that read", () => {
+    const state = { ...walking, headReadAt: "2026-09-22T00:11:00.000Z" };
+    expect(parseDmMessagesCursorState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  });
+
+  it("drops a missing or unparseable time, which preserves last_message_sync_at instead of stamping now", () => {
+    for (const headReadAt of ["not-a-date", "", 1_770_000_000_000, null, true]) {
+      expect(parseDmMessagesCursorState({ ...walking, headReadAt })).toEqual(walking);
+    }
+    expect(parseDmMessagesCursorState({ ...walking })).toEqual(walking);
+  });
+
+  it("is cleared by the empty state every completion and reset writes", () => {
+    expect(emptyDmMessagesCursorState()).not.toHaveProperty("headReadAt");
   });
 });

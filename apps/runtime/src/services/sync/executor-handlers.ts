@@ -3,6 +3,8 @@ import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import {
   aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
+  clearConversationSyncHealth,
+  countOtherDmMessageGroupsFailingSinceLastSuccess,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
   countPageFollowsByGeneration,
@@ -27,6 +29,7 @@ import {
   PAGE_DM_LIVE_BACKFILL_CAP,
   PageSyncLeaseLostError,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+  recordConversationSyncFailure,
   recordProjectionDebt,
   requestPageSync,
   readPageFollowReconcileActivity,
@@ -50,6 +53,7 @@ import {
   withOwnedPageSyncTransaction,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type PageDmConversationRow,
   type PageSyncLease,
   type SyncStream,
   type UpsertFanPageInput,
@@ -172,6 +176,7 @@ import {
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
+  isDmHeadStaleByTime,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
@@ -194,6 +199,13 @@ import { runAiMediaAcceleratorStep } from "./ai-media-accelerator.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
+// Per-thread breaker outage guard: a first-page failure while this many OTHER
+// groups of the page failed since its last successful /message read (3+
+// distinct threads) is a page-wide outage, not a poison thread.
+const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
+// Scan window for that guard; also lets a guarded pin fall to the breaker
+// once nothing else has failed for this long.
+const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
@@ -330,6 +342,20 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     typeof error.status === "number" &&
     error.status >= 500 &&
     error.status < 600;
+}
+
+/** A provider answer about this request (terminal 5xx after in-process
+ * retries, 404/4xx, or an envelope failure at HTTP 200) that may be the
+ * thread's own. Auth, rate limits, a provider Retry-After deadline and every
+ * status-less failure (transport, timeout, proxy, capture, contract drift)
+ * are page-level and never open a per-thread breaker. */
+function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
+  return error instanceof FanslyApiError &&
+    typeof error.status === "number" &&
+    error.status !== 401 &&
+    error.status !== 403 &&
+    error.status !== 429 &&
+    error.retryAfterAt === null;
 }
 
 async function triggerFollowersReconcileAnomaly(
@@ -2790,6 +2816,147 @@ export async function fanslyDmMessagesChunk(
     return emittedDmMessagesChunkSummary;
   };
 
+  /**
+   * Per-thread circuit breaker (0086). The pin is checkpointed before the
+   * fetch and the next chunk resumes it without reselecting, so one thread
+   * the provider refuses deterministically would otherwise stop the page's
+   * whole lane. When the walk's FIRST page fails with a thread-attributable
+   * answer, the failure is recorded (backoff, quarantine from the 4th) and the
+   * pin is cleared in one owned transaction; the original error is then
+   * rethrown, so stream classification and backoff are unchanged and the
+   * next chunk picks another thread. A walk with pages already written keeps
+   * its pin: a later head walk would stop on them and hide the gap below.
+   * Several groups failing since the page's last successful read is an
+   * outage, which never opens a breaker. Returns the error to rethrow.
+   */
+  const recordFirstPageThreadFailure = async (
+    error: unknown,
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ): Promise<unknown> => {
+    if (!isThreadAttributableFanslyFailure(error)) {
+      return error;
+    }
+    const walkStartBeforeMessageId = state.headCatchup || currentMode === "incremental"
+      ? null
+      : conversation.oldestStoredMessageId;
+    if (state.currentBeforeMessageId !== walkStartBeforeMessageId) {
+      return error;
+    }
+
+    const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
+      emptyDmMessagesCursorState(),
+      getDmMessagesLiveRequestsSinceDeepBackfill(state),
+    );
+    let otherFailingGroups: number;
+    let recorded: {
+      health: Awaited<ReturnType<typeof recordConversationSyncFailure>>;
+      progressCheckpoint: Awaited<ReturnType<typeof upsertCheckpointProgress>>;
+    };
+    try {
+      otherFailingGroups = await countOtherDmMessageGroupsFailingSinceLastSuccess(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        platformConversationId: conversation.platformConversationId,
+        since: new Date(Date.now() - DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS),
+      });
+      if (otherFailingGroups >= DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS) {
+        await input.telemetry.addNote(
+          "DM message failures span several conversations; treated as a page-wide outage, no breaker",
+          {
+            conversationId: conversation.id,
+            groupId: conversation.platformConversationId,
+            httpStatus: error.status,
+            otherFailingGroups,
+          },
+        );
+        return error;
+      }
+
+      recorded = await withOwnedPageSyncTransaction(app.db, async (dbTx) => ({
+        health: await recordConversationSyncFailure(dbTx, {
+          conversationId: conversation.id,
+          platformAccountId: input.pageContext.page.id,
+          errorClass: `fansly_${error.status}`,
+          errorMessage: error.message,
+        }),
+        progressCheckpoint: await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "dm_messages",
+          state: nextState,
+        }),
+      }));
+    } catch (breakerError) {
+      if (breakerError instanceof PageSyncLeaseLostError) {
+        // Fencing stays fatal: another owner may already be running.
+        return breakerError;
+      }
+      app.logger.warn({
+        err: breakerError,
+        conversationId: conversation.id,
+        platformAccountId: input.pageContext.page.id,
+      }, "DM conversation breaker write failed; the stream keeps its pin");
+      return error;
+    }
+
+    state = nextState;
+    await input.telemetry.recordCheckpointAdvanced(
+      "dm_messages",
+      summarizeCheckpoint(recorded.progressCheckpoint),
+    );
+    await input.telemetry.addNote(
+      recorded.health.quarantineUntil !== null
+        ? "DM conversation quarantined after repeated first-page failures"
+        : "DM conversation first-page failure recorded, backing off",
+      {
+        conversationId: conversation.id,
+        groupId: conversation.platformConversationId,
+        currentMode,
+        httpStatus: error.status,
+        failureCount: recorded.health.failureCount,
+        nextRetryAt: recorded.health.nextRetryAt?.toISOString() ?? null,
+        quarantineUntil: recorded.health.quarantineUntil?.toISOString() ?? null,
+        otherFailingGroups,
+      },
+    );
+    return error;
+  };
+
+  /**
+   * A pinned walk dropped after it wrote pages (the thread became excluded,
+   * invisible or unbound) leaves rows its thread summary does not cover yet.
+   * A later incremental walk reads through them (overlap counts only rows at
+   * or before the recorded newest message), unless a writer recomputes the
+   * summary first and moves that boundary onto them. A backfill or deep
+   * backfill walk re-picked from the stale oldest message meets its own pages
+   * as ordinary overlap and can certify the unread history below them
+   * complete. Record the dropped cursor so such a gap stays findable for the
+   * targeted backfill; this anomaly is its only record.
+   */
+  const recordDroppedWalk = async (conversation: PageDmConversationRow, reason: string) => {
+    if (!state.currentMode) {
+      return;
+    }
+    const walkStartBeforeMessageId = state.headCatchup || state.currentMode === "incremental"
+      ? null
+      : conversation.oldestStoredMessageId;
+    if (state.currentBeforeMessageId === walkStartBeforeMessageId) {
+      return;
+    }
+    await input.telemetry.addAnomaly({
+      code: "dm_messages_walk_dropped",
+      severity: "warn",
+      message: "DM walk dropped after writing pages; history below its cursor may be unread",
+      details: {
+        reason,
+        conversationId: state.currentConversationId,
+        groupId: state.currentPlatformConversationId,
+        currentMode: state.currentMode,
+        droppedBeforeMessageId: state.currentBeforeMessageId,
+        newestStoredMessageId: conversation.newestStoredMessageId,
+      },
+    });
+  };
+
   try {
     conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
       await assertOwnedPageSyncLease(app.db);
@@ -2820,6 +2987,7 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
+        await recordDroppedWalk(conversation, "excluded");
         state = emptyDmMessagesCursorState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
@@ -2834,6 +3002,9 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (!conversation || !conversation.isVisible || conversation.fanId === null) {
+        if (conversation) {
+          await recordDroppedWalk(conversation, conversation.isVisible ? "unbound" : "invisible");
+        }
         let currentMode: "backfill" | "deep_backfill" | "incremental" | null = null;
         const shouldTryQuotaDeepBackfill =
           deepBackfillRequests < deepBackfillMaxRequests &&
@@ -2915,10 +3086,14 @@ export async function fanslyDmMessagesChunk(
 
         const headTarget = headCatchupEnabled && currentMode !== "deep_backfill"
           ? await getFanslyDmHeadTarget(app.db, { conversationId: conversation.id }) : null;
-        if (headCatchupEnabled && headTarget === null && currentMode === "incremental" &&
-          conversation.messageCoverageStatus === "pending_backfill") {
-          // An exhausted head can still differ from the newest stored message.
-          // Resume ordinary history from its oldest cursor instead of rereading that head.
+        if (headTarget === null && currentMode === "incremental" &&
+          conversation.messageCoverageStatus === "pending_backfill" &&
+          (headCatchupEnabled || !isDmHeadStaleByTime(conversation))) {
+          // A head can keep differing from the newest stored message after it
+          // was read (list lag, or an id /message never returns). Pending
+          // history without a due head read resumes from its oldest cursor
+          // instead of rereading that head forever. Off the catch-up allowlist
+          // a time-stale head is still read once first.
           currentMode = "backfill";
         }
         const nextState: DmMessagesCursorState = {
@@ -2969,7 +3144,15 @@ export async function fanslyDmMessagesChunk(
         // the targeted thread backfill (slice C′). It stays inside this
         // try/catch exactly as the bare adapter call did: only a terminal
         // Fansly 5xx reaches the partner-unresolvable recovery below, every
-        // other failure (including a capture failure) rethrows as before.
+        // other failure (including a capture failure) rethrows as before,
+        // after the per-thread breaker has seen it.
+        if (state.currentBeforeMessageId === null) {
+          // This page reads the head (incremental, head catch-up, or a first
+          // backfill of an empty thread). Overwritten on every head fetch and
+          // carried by the in-walk checkpoint, so a walk finishing chunks
+          // later certifies the head only as of this read.
+          state.headReadAt = new Date().toISOString();
+        }
         let messagePage;
         try {
           messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
@@ -2982,6 +3165,12 @@ export async function fanslyDmMessagesChunk(
             conversation: currentConversation,
             before: state.currentBeforeMessageId,
             limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
+            // The summary moves only at finalize, so an incremental walk that
+            // was dropped mid-way and picked again must not stop on its own
+            // earlier pages above the recorded newest message.
+            overlapBoundaryMessageId: currentMode === "incremental"
+              ? currentConversation.newestStoredMessageId
+              : null,
           });
         } catch (error) {
           const partnerPlatformUserId = currentConversation.partnerPlatformUserId;
@@ -2989,7 +3178,7 @@ export async function fanslyDmMessagesChunk(
             !isTerminalFanslyServerError(error) ||
             !partnerPlatformUserId
           ) {
-            throw error;
+            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
           }
 
           const failureStreak = await countRecentTerminalDmMessageConversationFailureStreak(
@@ -3000,11 +3189,11 @@ export async function fanslyDmMessagesChunk(
             },
           );
           if (failureStreak < DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD) {
-            throw error;
+            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
           }
 
           if (!input.budget.hasRequestCapacity() || !input.budget.hasWallClockCapacity()) {
-            throw error;
+            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
           }
 
           const resolution = await probeFanslyAccountResolution(
@@ -3014,7 +3203,7 @@ export async function fanslyDmMessagesChunk(
             { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
           );
           if (resolution !== "unresolved") {
-            throw error;
+            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
           }
 
           const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
@@ -3051,6 +3240,7 @@ export async function fanslyDmMessagesChunk(
                 FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             },
           );
+          await recordDroppedWalk(currentConversation, "partner_unresolvable");
 
           state = emptyDmMessagesCursorState();
           await input.telemetry.recordCheckpointAdvanced(
@@ -3060,6 +3250,9 @@ export async function fanslyDmMessagesChunk(
           continue conversationLoop;
         }
         const { normalizedMessages, insertedMessageCount, overlapFound } = messagePage;
+        // Debt from an earlier page of this walk rides the checkpoint, so a
+        // multi-chunk walk cannot finish 'complete' over a skipped message.
+        const normalizationDebt = state.normalizationDebt === true || messagePage.normalizationDebt;
         collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
         const nextLiveRequestState = deepBackfillMaxRequests <= 0
@@ -3105,6 +3298,12 @@ export async function fanslyDmMessagesChunk(
             overlapFound,
             providerHistoryExhausted,
             hitWindowCap,
+            // A deep walk's one page below the oldest stored message reached
+            // the provider's end: its unparseable tail can never be stored, so
+            // partial_window would hand the unchanged thread straight back to
+            // the deep picker. The anomaly stays the record of the skip.
+            normalizationDebt: normalizationDebt &&
+              !(currentMode === "deep_backfill" && providerHistoryExhausted),
           });
           // #135 A2b: the message upsert commits on its own; the thread-summary
           // recompute + checkpoint advance ride a SECOND transaction. The
@@ -3121,6 +3320,10 @@ export async function fanslyDmMessagesChunk(
               conversationId: currentConversation.id, messageId: headCatchup.messageId,
               startedAt: headAttemptStartedAt,
             });
+            // A completed walk resets the thread's breaker (no-op when it never
+            // failed). Here, not in the finalize below: that one can be
+            // deferred into projection_debt although the thread synced.
+            await clearConversationSyncHealth(dbTx, currentConversation.id);
           });
           let finalized: {
             finalizedConversation: Awaited<ReturnType<typeof finalizePageDmConversationMessageSync>>;
@@ -3132,6 +3335,8 @@ export async function fanslyDmMessagesChunk(
               const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
                 conversationId: currentConversation.id,
                 messageCoverageStatus,
+                // A walk from a stored cursor never read the head.
+                headReadAt: state.headReadAt ? new Date(state.headReadAt) : null,
                 enforceRetention: await isPageDmPruneAllowed(app),
               });
               const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
@@ -3220,6 +3425,7 @@ export async function fanslyDmMessagesChunk(
             overlapReached: headCatchup.overlapReached === true || overlapFound,
           } } : {}),
           currentBeforeMessageId: oldestMessageId,
+          ...(normalizationDebt ? { normalizationDebt: true as const } : {}),
         };
         if (targetAttemptFinished) delete state.headCatchup;
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {

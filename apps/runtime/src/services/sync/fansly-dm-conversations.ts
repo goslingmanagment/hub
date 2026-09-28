@@ -68,10 +68,10 @@ import {
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import {
+  captureFanslyMessagingGroupsPayload,
   dmRetentionDate,
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
-  trimFanslyMessagingGroupsPayload,
   normalizeFanslyTimestamp,
 } from "./shared.ts";
 import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
@@ -81,6 +81,7 @@ import { persistDmShadowReport } from "./dm-shadow-report.ts";
 import { createDmShadowWitnessPointers, DM_SHADOW_WITNESS_LIMIT } from "./dm-shadow-witness.ts";
 import {
   assertDmSharedRateLimitEnabled,
+  isDmHeadStaleByTime,
   normalizeDmTimestampWithAnomaly,
   resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
@@ -221,12 +222,7 @@ export function shouldRequestDmMessagesFollowup(conversation: {
     return true;
   }
 
-  if (conversation.lastMessageId === conversation.newestStoredMessageId) {
-    return false;
-  }
-
-  return conversation.lastMessageSyncAt === null ||
-    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt);
+  return isDmHeadStaleByTime(conversation);
 }
 
 export async function fanslyDmConversationsChunk(
@@ -484,7 +480,7 @@ export async function fanslyDmConversationsChunk(
       : null;
     const nextPageCount = state.pageCount + 1;
 
-    const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw);
+    const capturedPayload = captureFanslyMessagingGroupsPayload(page.raw, page.contractAccepted);
     const listCapture = await persistRawPayload(app.db, {
       platformAccountId: input.pageContext.page.id,
       syncRunId: input.syncRunId,
@@ -498,6 +494,14 @@ export async function fanslyDmConversationsChunk(
       action: "inserting dm conversations raw payload",
       platform: "fansly",
     });
+
+    // A body the adapter refused is journaled above, then refused here, before
+    // the provider-total guards: its missing total must not read as drift and
+    // restart the sweep. The checkpoint is untouched, so the next dispatch
+    // re-reads this offset at the normal cadence.
+    if ("contractAccepted" in capturedPayload) {
+      throw new Error("Fansly messaging groups response contract rejected; captured before refusal");
+    }
 
     if (currentProviderTotalMode === "present" && currentProviderReportedTotal === null) {
       await restartSweepAfterCapturedContractDrift({
@@ -793,7 +797,9 @@ export async function fanslyDmConversationsChunk(
           syncRunId: input.syncRunId,
           endpoint: "dm_messages",
           requestParams: headRepairRequestParams,
-          responsePayload: headRepair.raw,
+          responsePayload: headRepair.contractAccepted === false
+            ? { contractAccepted: false, raw: headRepair.raw }
+            : headRepair.raw,
           mapperVersion: FANSLY_MAPPER_VERSION,
           payloadKind: "dm_messages",
           retainUntil: dmRetentionDate(),
@@ -801,6 +807,9 @@ export async function fanslyDmConversationsChunk(
           action: "inserting dm_messages head-repair raw payload",
           platform: "fansly",
         });
+        if (headRepair.contractAccepted === false) {
+          throw new Error("Fansly head-repair messages response contract rejected; captured before refusal");
+        }
         await materializeFanslyDmTipContextsBestEffort(app, {
           accountId: input.pageContext.page.id,
           requestParams: headRepairRequestParams,
@@ -1028,7 +1037,10 @@ export async function fanslyDmConversationsChunk(
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: [...hydratedAccountsById.values()],
-        fallbackIds: [...fallbackPartnerIds],
+        // No account lookup ran for these partners (the page carried no
+        // aggregation accounts, or detail resolved the partner): no snapshot
+        // is not deletion evidence.
+        unverifiedIds: [...fallbackPartnerIds],
       });
 
       for (const conversationWrite of conversationWrites) {

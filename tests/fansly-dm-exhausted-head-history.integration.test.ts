@@ -124,7 +124,7 @@ describe("Fansly exhausted head debt and ordinary history", () => {
       totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
     }]);
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId: thread.id, messageCoverageStatus: "pending_backfill", enforceRetention: false,
+      conversationId: thread.id, messageCoverageStatus: "pending_backfill", headReadAt: new Date(), enforceRetention: false,
     });
     const calls: Array<string | null> = [];
     const adapter = {
@@ -230,5 +230,133 @@ describe("Fansly exhausted head debt and ordinary history", () => {
       message_id: "msg-listed", state: debtState, attempts,
       captured_at: null, history_coverage: "pending_backfill",
     }]);
+  });
+});
+
+describe("Fansly pending history off the head catch-up allowlist", () => {
+  const storedIds = Array.from({ length: 30 }, (_, index) => `s${String(index).padStart(2, "0")}`);
+  const storedAt = (index: number) => Date.parse("2026-03-09T11:00:00.000Z") - index * 60_000;
+
+  /** A pending_backfill thread whose list head (msg-g) is not its newest
+   *  stored message, on a page with head catch-up off (the prod default). */
+  async function runPendingHistory(input: {
+    stored: string[];
+    headStaleByTime: boolean;
+    page: (before: string | null) => { ids: string[]; done: boolean };
+  }) {
+    const page = await seedPage();
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-g" }]);
+    if (!fan) throw new Error("Expected fan seed");
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...seedThreadInput(page.id, "g", 1), fanId: fan.id, messageCoverageStatus: "pending_backfill",
+    });
+    if (!thread) throw new Error("Expected conversation seed");
+    await upsertPageDmMessages(testDb.db, input.stored.map((id, index) => ({
+      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id,
+      senderPlatformUserId: "fan-g", senderRole: "fan" as const, createdAt: new Date(storedAt(index)),
+      content: id, totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+    })));
+    await finalizePageDmConversationMessageSync(testDb.db, {
+      conversationId: thread.id, messageCoverageStatus: "pending_backfill", headReadAt: new Date(), enforceRetention: false,
+    });
+    // Seeded after the list head (09.03 12:00) unless the head is due.
+    await testDb.pool.query("update page_dm_threads set last_message_sync_at = $2 where id = $1", [
+      thread.id, input.headStaleByTime ? "2026-03-09T00:00:00.000Z" : "2026-03-10T00:00:00.000Z",
+    ]);
+    const calls: Array<string | null> = [];
+    const adapter = {
+      async getMessagesPage(
+        context: { requestObserver?: { onRequestEvent(event: HttpRequestEvent): Promise<void> } | null },
+        params: { groupId: string; before?: string | null },
+      ) {
+        const before = params.before ?? null;
+        calls.push(before);
+        await context.requestObserver?.onRequestEvent({
+          state: "started", requestId: `pending-${calls.length}`, operation: "messages",
+          endpointTemplate: "/message", method: "GET", attemptNumber: 1, timestamp: new Date(),
+        });
+        const { ids, done } = input.page(before);
+        const messages = ids.map((id) => ({
+          id, content: id, senderId: "fan-g",
+          createdAt: id === "msg-g" ? Date.parse("2026-03-09T12:00:00.000Z")
+            : id === "older" ? Date.parse("2026-03-01T00:00:00.000Z")
+            : storedAt(storedIds.indexOf(id)),
+        }));
+        return { items: messages, groupId: params.groupId, before, done, raw: { response: { messages } } };
+      },
+    };
+    const app = createTestAppContext(testDb, { syncSharedRateLimitEnabled: true, adapter: adapter as never });
+    expect(app.config.fanslyDmHeadCatchupPageAllowlist ?? "none").toBe("none");
+    const run = await startSyncRun(testDb.db, {
+      platformAccountId: page.id, stream: "dm_messages", trigger: "manual",
+    });
+    if (!run) throw new Error("Expected message sync run seed");
+    const result = await fanslyDmMessagesChunk(app, {
+      pageContext: {
+        page: { ...page, platformAccountId: PAGE_ACCOUNT_ID }, platform: "fansly",
+        session: { authorization: "token" }, proxy: null, egressKey: "direct",
+      },
+      streamState: { stream: "dm_messages" }, syncRunId: run.id,
+      telemetry: { ...fakeTelemetry(), recordDmMessagesChunkSummary: vi.fn(async () => {}) },
+      budget: new SyncChunkBudget(5),
+    } as never);
+    return { calls, result, thread: await getPageDmConversationById(testDb.db, thread.id) };
+  }
+
+  // The head page overlaps without exhausting; only the older cursor progresses.
+  const headOverlap = (ids: string[]) => (before: string | null) => before === null
+    ? { ids, done: false }
+    : { ids: ["older"], done: true };
+
+  it("walks history from the oldest cursor instead of rereading an already-read head", async () => {
+    const { calls, result, thread } = await runPendingHistory({
+      stored: storedIds, headStaleByTime: false, page: headOverlap(storedIds.slice(0, 25)),
+    });
+
+    // Before the fix: five identical head reads and the thread stayed pending.
+    expect(calls).toEqual(["s29"]);
+    expect(result.satisfied).toBe(true);
+    expect(thread).toMatchObject({
+      lastMessageId: "msg-g", newestStoredMessageId: "s00", oldestStoredMessageId: "older",
+      storedMessageCount: 31, messageCoverageStatus: "complete",
+    });
+  });
+
+  it("reads a time-stale head once, then walks history even when /message never returns that id", async () => {
+    const { calls, result, thread } = await runPendingHistory({
+      stored: storedIds, headStaleByTime: true, page: headOverlap(storedIds.slice(0, 25)),
+    });
+
+    expect(calls).toEqual([null, "s29"]);
+    expect(result.satisfied).toBe(true);
+    expect(thread).toMatchObject({
+      lastMessageId: "msg-g", newestStoredMessageId: "s00", messageCoverageStatus: "complete",
+    });
+  });
+
+  it("still reads a genuinely new head before older history", async () => {
+    const { calls, thread } = await runPendingHistory({
+      stored: storedIds, headStaleByTime: true, page: headOverlap(["msg-g", ...storedIds.slice(0, 24)]),
+    });
+
+    expect(calls).toEqual([null, "s29"]);
+    expect(thread).toMatchObject({
+      lastMessageId: "msg-g", newestStoredMessageId: "msg-g", messageCoverageStatus: "complete",
+    });
+  });
+
+  it("completes pending history when the head walk itself exhausts the provider", async () => {
+    const { calls, result, thread } = await runPendingHistory({
+      stored: storedIds.slice(0, 2), headStaleByTime: true,
+      page: () => ({ ids: ["msg-g", "s00", "s01"], done: true }),
+    });
+
+    // An incremental walk is contiguous from the head: exhaustion is the whole history.
+    expect(calls).toEqual([null]);
+    expect(result.satisfied).toBe(true);
+    expect(thread).toMatchObject({
+      newestStoredMessageId: "msg-g", oldestStoredMessageId: "s01", storedMessageCount: 3,
+      messageCoverageStatus: "complete",
+    });
   });
 });

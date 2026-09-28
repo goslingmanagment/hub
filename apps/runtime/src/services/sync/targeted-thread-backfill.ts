@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import {
   acquireTargetedPageSyncLease,
   assertOwnedPageSyncLease,
+  clearConversationSyncHealth,
   ensurePageSyncStates,
   finalizePageDmConversationMessageSync,
   getCheckpoint,
@@ -142,7 +143,7 @@ export type TargetedThreadBackfillOutcome =
   | "retention_limit_reached"
   /** Another stream of the same page is mid-chunk (Stage 25 page serialization). */
   | "page_busy"
-  /** A chunk of another stream ran DURING this run — summary left to the sweeper. */
+  /** A dm_conversations chunk ran DURING this run — summary left to the sweeper. */
   | "concurrent_page_chunk"
   /** A yielded regular chunk is parked on this very thread — refuse, don't race. */
   | "thread_checkpoint_in_progress"
@@ -276,15 +277,20 @@ function isFanslyAuthError(error: unknown) {
   return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
 }
 
+/** The only other stream whose chunk writes thread summaries back (see
+ * findConcurrentPageChunk). */
+const THREAD_SUMMARY_WRITER_STREAMS: ReadonlySet<SyncStream> = new Set(["dm_conversations"]);
+
 /**
- * Identity of every OTHER stream's chunk activity on the page. Only fields a
- * RUNNING chunk moves are included — a planner cadence bump or a manual request
- * (request_seq/status/requested_at) must not read as a concurrent chunk.
+ * Identity of the thread-summary writers' chunk activity on the page. Only
+ * fields a RUNNING chunk moves are included — a planner cadence bump or a
+ * manual request (request_seq/status/requested_at) must not read as a
+ * concurrent chunk.
  */
-function fingerprintOtherStreams(states: readonly PageSyncState[]) {
+function fingerprintThreadSummaryWriters(states: readonly PageSyncState[]) {
   const fingerprints = new Map<SyncStream, string>();
   for (const state of states) {
-    if (state.stream === "dm_messages") {
+    if (!THREAD_SUMMARY_WRITER_STREAMS.has(state.stream)) {
       continue;
     }
     fingerprints.set(state.stream, [
@@ -301,23 +307,25 @@ function fingerprintOtherStreams(states: readonly PageSyncState[]) {
 }
 
 /**
- * Did another stream of this page run a chunk while the targeted walk was in
- * flight? The dm_conversations chunk snapshots `storedMessageCount` /
- * `oldestStoredMessageId` / `messageCoverageStatus` at read time
- * (`executor-handlers.ts:~2802`) and writes them back through the non
- * head-guarded half of the thread upsert (`page-dm.ts:~220`), so a chunk that
- * overlaps this run would REGRESS the cursor right after this run recomputed
- * it — and the next regular deep backfill would then meet a false overlap and
- * mark a half-backfilled thread `complete`. Before this slice the fixed page
+ * Did a dm_conversations chunk of this page run while the targeted walk was in
+ * flight? That chunk snapshots `storedMessageCount` / `oldestStoredMessageId` /
+ * `messageCoverageStatus` at read time (`fansly-dm-conversations.ts`) and
+ * writes them back through the non head-guarded half of the thread upsert
+ * (`page-dm.ts` upsertPageDmConversation), so a chunk that overlaps this run
+ * would REGRESS the cursor right after this run recomputed it — and the next
+ * regular deep backfill would then meet a false overlap and mark a
+ * half-backfilled thread `complete`. Before this slice the fixed page
  * singleton made those two chunks mutually exclusive; a job on a separate
- * queue removes that guarantee, so detection is fail-closed here.
+ * queue removes that guarantee, so detection is fail-closed here. No other
+ * page stream writes thread rows (the dm_messages lane is excluded by this
+ * run's own lease), so their chunks never withhold the verdict.
  */
 async function findConcurrentPageChunk(
   app: Pick<AppContext, "db">,
   platformAccountId: number,
   baseline: ReadonlyMap<SyncStream, string>,
 ) {
-  const current = fingerprintOtherStreams(
+  const current = fingerprintThreadSummaryWriters(
     await listPageSyncStates(app.db, { pageId: platformAccountId }),
   );
   for (const [stream, fingerprint] of current) {
@@ -411,14 +419,15 @@ export async function runTargetedThreadBackfill(
   // nobody to hand the lease back.
   let run: NonNullable<Awaited<ReturnType<typeof startSyncRun>>>;
   let telemetry: SyncRunTelemetry;
-  let otherStreamBaseline: ReadonlyMap<SyncStream, string>;
+  let summaryWriterBaseline: ReadonlyMap<SyncStream, string>;
   try {
     // Stage 25: a page runs ONE sync chunk at a time. The regular path gets
     // that from the fixed page singleton on `sync.page.execute`; this run lives
     // on its own queue, so it re-establishes the invariant here. Read UNDER the
     // lease and used twice: refuse outright when another stream is already
-    // mid-chunk, and keep the snapshot as the baseline that finalize time
-    // compares against (a chunk that starts AFTER this check is caught there).
+    // mid-chunk, and keep the thread-summary writers' part of the snapshot as
+    // the baseline that finalize time compares against (a dm_conversations
+    // chunk that starts AFTER this check is caught there).
     const now = Date.now();
     const pageStates = await listPageSyncStates(app.db, { pageId: platformAccountId });
     const busyStream = pageStates.find((state) =>
@@ -431,7 +440,7 @@ export async function runTargetedThreadBackfill(
       await releaseLease();
       return emptyResult(threadId, "page_busy", { ...base, retentionLimit });
     }
-    otherStreamBaseline = fingerprintOtherStreams(pageStates);
+    summaryWriterBaseline = fingerprintThreadSummaryWriters(pageStates);
 
     // A yielded regular chunk can be parked ON THIS THREAD with its own
     // `before` cursor in the checkpoint. Restarting the walk from the thread
@@ -525,6 +534,14 @@ export async function runTargetedThreadBackfill(
     oldestStoredMessageIdBefore: conversation.oldestStoredMessageId,
   });
   let walkFailure: unknown = null;
+  /** A page of this walk left a message unstored (no parseable createdAt). */
+  let normalizationDebt = false;
+  /** When this walk read the thread head; finalize never stamps it otherwise. */
+  let headReadAt: Date | null = null;
+  /** The walk begins at the stored oldest message (or at the head of an empty
+   * thread), not at an approved boundary elsewhere in or below the window. */
+  const walkStartsAtStoredOldest =
+    (input.startBeforeMessageRef ?? conversation.oldestStoredMessageId) === conversation.oldestStoredMessageId;
 
   /** The thread summary is the ONLY writer of stored_message_count / oldest id;
    * `upsertPageDmMessages` does not touch it. So a run that wrote messages and
@@ -567,6 +584,8 @@ export async function runTargetedThreadBackfill(
         // The approved boundary when there is one (slice C), otherwise the
         // deepest message we already hold — the walk goes backwards from here.
         let before = input.startBeforeMessageRef ?? conversation.oldestStoredMessageId;
+        // Only a walk of an empty thread starts at (and reads) the head.
+        headReadAt = before === null ? new Date() : null;
 
         while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
           if (leaseFenced) {
@@ -591,6 +610,11 @@ export async function runTargetedThreadBackfill(
 
           await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
             await upsertPageDmMessages(dbTx, messagePage.normalizedMessages);
+            // The group answered: end its per-thread breaker streak (the run
+            // refuses an open window, so only a lapsed one gets here). A
+            // thread whose history this run completes may never be walked by
+            // the regular crawl again to clear the row.
+            await clearConversationSyncHealth(dbTx, threadId);
           });
 
           result.requests += 1;
@@ -598,6 +622,7 @@ export async function runTargetedThreadBackfill(
           result.journaledMessages += messagePage.normalizedMessages.length;
           result.overlapFound = result.overlapFound || messagePage.overlapFound;
           result.providerHistoryExhausted = messagePage.providerHistoryExhausted;
+          normalizationDebt = normalizationDebt || messagePage.normalizationDebt;
 
           if (messagePage.providerHistoryExhausted || messagePage.overlapFound) {
             result.outcome = "completed";
@@ -684,14 +709,14 @@ export async function runTargetedThreadBackfill(
         return;
       }
 
-      // Fail closed on a chunk of ANOTHER stream that ran during this walk:
+      // Fail closed on a dm_conversations chunk that ran during this walk:
       // writing the verdict now would be overwritten by that chunk's stale
       // thread snapshot, and the regression re-arms the false-complete path.
       // The sweeper recomputes the summary once the page is quiet again.
       const concurrentStream = await findConcurrentPageChunk(
         app,
         platformAccountId,
-        otherStreamBaseline,
+        summaryWriterBaseline,
       );
       if (concurrentStream) {
         result.outcome = "concurrent_page_chunk";
@@ -702,20 +727,31 @@ export async function runTargetedThreadBackfill(
         );
         app.logger.warn(
           { threadId, platformAccountId, concurrentStream },
-          "Targeted thread backfill skipped finalization: another stream chunked this page mid-run",
+          "Targeted thread backfill skipped finalization: a thread-summary writer chunked this page mid-run",
         );
         return;
       }
 
-      // The coverage verdict uses the deep-backfill rule: a walk that ended on
-      // exhaustion or known ground is `complete`, an interrupted one stays
+      // The coverage verdict. Only exhaustion of a walk that started at the
+      // stored oldest message (or at the head of an empty thread) proves the
+      // whole history stored: `complete`, unless the walk left a message
+      // unstored. Overlap proves nothing here — from the stored oldest id a
+      // correct summary never overlaps, so it means an interior boundary or a
+      // stale summary — and exhaustion below any other boundary would certify
+      // the unread gap above it. Both keep the current status (the
+      // incremental rule, which still honours normalization debt) instead of
+      // claiming or downgrading coverage. An interrupted walk stays
       // `partial_window` so the regular crawl keeps offering the thread.
+      const provesHistoryStored = result.providerHistoryExhausted && walkStartsAtStoredOldest;
+      const endedWithoutVerdict = !provesHistoryStored &&
+        (result.overlapFound || result.providerHistoryExhausted);
       const messageCoverageStatus = resolveDmConversationCoverageStatus({
-        currentMode: "deep_backfill",
+        currentMode: endedWithoutVerdict ? "incremental" : "deep_backfill",
         existingStatus: conversation.messageCoverageStatus,
-        overlapFound: result.overlapFound,
-        providerHistoryExhausted: result.providerHistoryExhausted,
+        overlapFound: false,
+        providerHistoryExhausted: provesHistoryStored,
         hitWindowCap: false,
+        normalizationDebt,
       });
       // A run told to ignore the depth cap must not have its freshly captured
       // window pruned back by the global cache policy in the same breath.
@@ -725,6 +761,7 @@ export async function runTargetedThreadBackfill(
           finalizePageDmConversationMessageSync(dbTx, {
             conversationId: threadId,
             messageCoverageStatus,
+            headReadAt,
             enforceRetention,
           }));
         result.messageCoverageStatus = finalized.conversation?.messageCoverageStatus

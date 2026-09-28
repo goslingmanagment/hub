@@ -311,10 +311,14 @@ export async function getPublicSyncHealth(
       issues.push("projection_debt");
     }
 
-    // page_dm_message_sync_health belongs to the permanently retired legacy
-    // OnlyFans dm_messages crawler. Its historical breaker rows are not mirror
-    // coverage debt and must not keep /health/sync at 503 after the retirement
-    // fence. Fansly still uses this table, so its signal remains unchanged.
+    // page_dm_message_sync_health rows of OnlyFans pages are historical, left
+    // by the permanently retired legacy dm_messages crawler. They are not
+    // mirror coverage debt and must not keep /health/sync at 503 after the
+    // retirement fence. The Fansly dm_messages lane writes the table (its
+    // per-thread breaker), so a Fansly page stays coverage_degraded while a
+    // thread the lane still selects carries failures: until a successful read
+    // of that thread clears them, or the thread leaves the lane (excluded,
+    // hidden, unbound).
     if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }

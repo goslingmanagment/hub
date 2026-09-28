@@ -57,7 +57,7 @@ describe("Fansly exact head debt", () => {
     const { pageId, conversationId } = await seed();
     await store(conversationId, pageId, "old-head", "2025-12-31");
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId, messageCoverageStatus: "complete", enforceRetention: false,
+      conversationId, messageCoverageStatus: "complete", headReadAt: new Date(), enforceRetention: false,
     });
     expect(await selectNextPageDmMessageSyncCandidate(testDb.db, { platformAccountId: pageId })).toBeNull();
     expect((await selectNextPageDmMessageSyncCandidate(testDb.db, {
@@ -80,14 +80,14 @@ describe("Fansly exact head debt", () => {
     for (let n = 0; n < 5; n++) await attempt(conversationId);
     await observeFanslyDmHead(testDb.db, { conversationId, messageId: "expected-head", messageAt: new Date() });
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId, messageCoverageStatus: "complete", enforceRetention: false,
+      conversationId, messageCoverageStatus: "complete", headReadAt: new Date(), enforceRetention: false,
     });
     expect(await nextFanslyDmHeadRetryAt(testDb.db, { platformAccountId: pageId })).toBeNull();
     const { rows } = await testDb.pool.query("select state, attempts, history_coverage from fansly_dm_head_debt_report");
     expect(rows).toEqual([{ state: "exhausted", attempts: 5, history_coverage: "complete" }]);
     await store(conversationId, pageId, "expected-head");
     await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId, messageCoverageStatus: "complete", enforceRetention: false,
+      conversationId, messageCoverageStatus: "complete", headReadAt: new Date(), enforceRetention: false,
     });
     expect(await hasUnresolvedFanslyDmHead(testDb.db, conversationId)).toBe(false);
   });
