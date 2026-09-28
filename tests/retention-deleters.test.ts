@@ -147,7 +147,7 @@ const SANCTIONED_DELETER_FILES = [
   // owns, which the route can only ever fail. Every observation, event and
   // `creator_media` head stays, and the enqueue's owner check keeps the rows
   // from coming back.
-  "packages/db/src/repositories/fansly-engagement.ts",
+  "packages/db/src/repositories/fansly-media-stats-foreign-queue.ts",
   "packages/db/src/repositories/message-archive.ts",
   // observations.ts left this list when the insert protocol became atomic:
   // its only delete was the compensating release of a failed key claim, and
