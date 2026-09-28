@@ -35,9 +35,11 @@ concurrency:
 # re-run (the PC may have died mid-run), uses GitHub-hosted runners.
 #
 # Economy mode (CI_POOL is not pc): a PR runs the integration shards only when
-# it is opened, reopened or marked ready for review, or while it carries the
-# label ci:full. Other pushes to a ready PR run static checks only, and the
-# Quality Gate stays red until integration has run (or is proven) for the head.
+# it is opened, reopened or marked ready for review, while it carries the
+# label ci:full, or on any re-run (a stuck PC run re-run on GitHub must not
+# turn red for want of shards). Other pushes to a ready PR run static checks
+# only, and the Quality Gate stays red until integration has run (or is
+# proven) for the head.
 jobs:
   fingerprint:
     name: Gate fingerprint
@@ -53,10 +55,22 @@ jobs:
       proven_by: ${{ steps.lookup.outputs.proven_by }}
       integration_hash: ${{ steps.fingerprint.outputs.integration_hash }}
       integration_proven_by: ${{ steps.lookup.outputs.integration_proven_by }}
+      shards: ${{ steps.shards.outputs.shards }}
+      shard_total: ${{ steps.shards.outputs.shard_total }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # The integration matrix: three shards, or CI_PC_SHARDS (1..8) on a
+      # first attempt on the PC. See scripts/ci-shards.mjs.
+      - name: Plan integration shards
+        id: shards
+        env:
+          CI_POOL: ${{ vars.CI_POOL }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_PC_SHARDS: ${{ vars.CI_PC_SHARDS }}
+        run: node scripts/ci-shards.mjs
 
       - name: Fingerprint the gate-visible tree
         id: fingerprint
@@ -109,15 +123,24 @@ jobs:
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
-      # Self-hosted runners keep the pnpm store in $HOME; only hosted ones cache.
+      # Hosted runners restore the pnpm store from the Actions cache.
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
+      # pnpm keeps its store under PNPM_HOME, inside the per-job dest above, so
+      # a self-hosted job would download everything again. Point the PC at one
+      # store shared by its runners instead: pnpm's store is safe for
+      # concurrent installs, and $HOME is on the same filesystem as _work, so
+      # packages hard-link instead of copying.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        env:
+          PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+        run: |
+          if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
+          pnpm install --frozen-lockfile
 
       # Check backend types once. Docker explicitly consumes this successful
       # check; direct Docker builds still check.
@@ -196,9 +219,10 @@ jobs:
       # and tests/voice-notes-sweep are DB-backed despite not being named
       # *.integration.test.ts, so they are not in the --exclude list.
       - name: Reliable unit tests
-        # Vitest defaults to CPUs - 1: a 2-vCPU runner otherwise uses one
-        # worker. Keep per-file isolation while using both available CPUs.
-        run: pnpm test:unit --maxWorkers=2
+        # Vitest defaults to CPUs - 1: a 2-vCPU hosted runner otherwise uses
+        # one worker, so keep per-file isolation while using both CPUs. The PC
+        # (24 threads) shares its CPUs with the integration shards: 6 workers.
+        run: pnpm test:unit --maxWorkers=${{ runner.environment == 'self-hosted' && '6' || '2' }}
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
@@ -218,14 +242,20 @@ jobs:
   #
   # The hosted fallback is arm64: the shards run only vitest against
   # Testcontainers Postgres (multi-arch) and never build the amd64 image.
-  # In economy mode (see the top of `jobs`) a PR push that is not an open,
-  # reopen or ready-for-review, and carries no ci:full label, skips the shards;
-  # the Quality Gate then fails and says how to run them.
+  # In economy mode (see the top of `jobs`) a first-attempt PR push that is not
+  # an open, reopen or ready-for-review, and carries no ci:full label, skips
+  # the shards; the Quality Gate then fails and says how to run them.
+  #
+  # The fingerprint job plans the shard count: three, or the repository
+  # variable CI_PC_SHARDS (1..8) on a first attempt on the PC. "Re-run failed
+  # jobs" reuses the first attempt's plan, so a re-run leg keeps its shard
+  # total. The fallbacks below only keep fromJSON off an empty string; this
+  # job cannot run unless the fingerprint job succeeded and set both outputs.
   integration:
-    name: Integration ${{ matrix.shard }}/3
+    name: Integration ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
     runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
     # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
     # not duration, and after a week that added four integration files one
     # shard drew a slow-heavy set and was cancelled at 30:18 with every test
@@ -234,12 +264,12 @@ jobs:
     # spends nothing extra.
     timeout-minutes: 45
     strategy:
-      # A PR needs one red shard to send the author back; the other two would
+      # A PR needs one red shard to send the author back; the others would
       # bill ~10 minutes each to say the same thing. Main keeps the complete
       # record of every shard for its gate history.
       fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
-        shard: [1, 2, 3]
+        shard: ${{ fromJSON(needs.fingerprint.outputs.shards || '[1,2,3]') }}
 
     steps:
       - name: Checkout
@@ -256,11 +286,16 @@ jobs:
           node-version: 22
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
+      # Same shared PC store as in static checks.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        env:
+          PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+        run: |
+          if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
+          pnpm install --frozen-lockfile
 
-      - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/3)
-        run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/3
+      - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
+        run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
       # One file, ~36s — it resolves to a single spec so it cannot be sharded.
       - name: Sync-critical API tests

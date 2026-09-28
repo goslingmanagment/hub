@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 
 import { mirrorEarlierGate } from "../scripts/ci-mirror-gate.mjs";
+import { DEFAULT_SHARD_TOTAL, planShards } from "../scripts/ci-shards.mjs";
 
 type Step = {
   name: string;
@@ -24,6 +25,7 @@ type Job = {
   env?: Record<string, string>;
   permissions?: Permissions;
   outputs?: Record<string, string>;
+  strategy?: { "fail-fast"?: unknown; matrix?: Record<string, unknown> };
   steps: Step[];
 };
 type Workflow = { permissions: Permissions; jobs: Record<string, Job>; concurrency: { group: string }; on: { pull_request: { types: string[] } } };
@@ -128,8 +130,15 @@ type EventOptions = {
   /** vars.CI_POOL; an unset repository variable reads as ''. */
   pool?: string;
   attempt?: string;
+  /** vars.CI_PC_SHARDS; an unset repository variable reads as ''. */
+  pcShards?: string;
   provenBy?: string;
   integrationProvenBy?: string;
+  /** The fingerprint job's shard plan outputs; '' when it did not set them. */
+  shards?: string;
+  shardTotal?: string;
+  /** matrix.shard of one integration leg. */
+  shard?: number;
   runnerEnvironment?: "github-hosted" | "self-hosted";
 };
 
@@ -148,8 +157,12 @@ function eventContext(options: EventOptions = {}): Context {
     "github.run_id": "35518904235",
     "github.run_attempt": options.attempt ?? "1",
     "vars.CI_POOL": options.pool ?? "",
+    "vars.CI_PC_SHARDS": options.pcShards ?? "",
     "needs.fingerprint.outputs.proven_by": options.provenBy ?? "",
     "needs.fingerprint.outputs.integration_proven_by": options.integrationProvenBy ?? "",
+    "needs.fingerprint.outputs.shards": options.shards ?? "[1,2,3]",
+    "needs.fingerprint.outputs.shard_total": options.shardTotal ?? "3",
+    "matrix.shard": options.shard ?? 1,
     "runner.environment": options.runnerEnvironment ?? "github-hosted",
     "runner.temp": "/runner/_temp",
   };
@@ -377,38 +390,48 @@ describe("CI job admission", () => {
   });
 
   it.each([
-    // pool, event, action, labels, draft, full proof, DB proof, integration runs
+    // pool, run attempt, event, action, labels, draft, full proof, DB proof, integration runs
     // Economy mode: a plain push to a ready PR runs static only.
-    ["", "pull_request", "synchronize", [], false, "", "", false],
-    ["hosted", "pull_request", "synchronize", [], false, "", "", false],
-    ["", "pull_request", "synchronize", ["needs-review"], false, "", "", false],
-    ["", "pull_request", "edited", [], false, "", "", false],
+    ["", "1", "pull_request", "synchronize", [], false, "", "", false],
+    ["hosted", "1", "pull_request", "synchronize", [], false, "", "", false],
+    ["", "1", "pull_request", "synchronize", ["needs-review"], false, "", "", false],
+    ["", "1", "pull_request", "edited", [], false, "", "", false],
     // ...and runs integration when the PR opens, reopens, turns ready, or is labelled.
-    ["", "pull_request", "opened", [], false, "", "", true],
-    ["", "pull_request", "reopened", [], false, "", "", true],
-    ["", "pull_request", "ready_for_review", [], false, "", "", true],
-    ["", "pull_request", "synchronize", ["ci:full"], false, "", "", true],
-    ["", "pull_request", "synchronize", ["needs-review", "ci:full"], false, "", "", true],
-    ["", "pull_request", "labeled", ["ci:full"], false, "", "", true],
+    ["", "1", "pull_request", "opened", [], false, "", "", true],
+    ["", "1", "pull_request", "reopened", [], false, "", "", true],
+    ["", "1", "pull_request", "ready_for_review", [], false, "", "", true],
+    ["", "1", "pull_request", "synchronize", ["ci:full"], false, "", "", true],
+    ["", "1", "pull_request", "synchronize", ["needs-review", "ci:full"], false, "", "", true],
+    ["", "1", "pull_request", "labeled", ["ci:full"], false, "", "", true],
+    // Any re-run runs the shards: ci-pool re-runs a stuck PC run on GitHub
+    // after switching pools, and it must not turn the gate red for economy.
+    ["", "2", "pull_request", "synchronize", [], false, "", "", true],
+    ["hosted", "2", "pull_request", "synchronize", [], false, "", "", true],
+    ["", "3", "pull_request", "synchronize", ["needs-review"], false, "", "", true],
+    ["", "2", "pull_request", "edited", [], false, "", "", true],
+    ["pc", "2", "pull_request", "synchronize", [], false, "", "", true],
     // Main and manual runs are never economised.
-    ["", "push", null, [], false, "", "", true],
-    ["", "workflow_dispatch", null, [], false, "", "", true],
+    ["", "1", "push", null, [], false, "", "", true],
+    ["", "1", "workflow_dispatch", null, [], false, "", "", true],
     // PC pool: always, on every event that reaches the job.
-    ["pc", "pull_request", "synchronize", [], false, "", "", true],
-    ["pc", "pull_request", "edited", [], false, "", "", true],
-    ["pc", "pull_request", "opened", [], false, "", "", true],
-    ["pc", "push", null, [], false, "", "", true],
-    // Drafts and proofs skip it in every mode.
-    ["pc", "pull_request", "opened", [], true, "", "", false],
-    ["", "pull_request", "ready_for_review", ["ci:full"], true, "", "", false],
-    ["pc", "pull_request", "synchronize", [], false, "123", "", false],
-    ["", "pull_request", "opened", ["ci:full"], false, "123", "", false],
-    ["pc", "pull_request", "synchronize", [], false, "", "456", false],
-    ["", "push", null, [], false, "", "456", false],
-  ] as const)("integration with CI_POOL=%s on %s/%s labels=%j draft=%s full=%s DBproof=%s runs: %s",
-    (pool, event, action, labels, draft, provenBy, integrationProvenBy, runs) => {
+    ["pc", "1", "pull_request", "synchronize", [], false, "", "", true],
+    ["pc", "1", "pull_request", "edited", [], false, "", "", true],
+    ["pc", "1", "pull_request", "opened", [], false, "", "", true],
+    ["pc", "1", "push", null, [], false, "", "", true],
+    // Drafts and proofs skip it in every mode, re-runs included.
+    ["pc", "1", "pull_request", "opened", [], true, "", "", false],
+    ["", "1", "pull_request", "ready_for_review", ["ci:full"], true, "", "", false],
+    ["pc", "1", "pull_request", "synchronize", [], false, "123", "", false],
+    ["", "1", "pull_request", "opened", ["ci:full"], false, "123", "", false],
+    ["pc", "1", "pull_request", "synchronize", [], false, "", "456", false],
+    ["", "1", "push", null, [], false, "", "456", false],
+    ["", "2", "pull_request", "synchronize", [], true, "", "", false],
+    ["", "2", "pull_request", "synchronize", [], false, "123", "", false],
+    ["", "2", "pull_request", "synchronize", [], false, "", "456", false],
+  ] as const)("integration with CI_POOL=%s attempt %s on %s/%s labels=%j draft=%s full=%s DBproof=%s runs: %s",
+    (pool, attempt, event, action, labels, draft, provenBy, integrationProvenBy, runs) => {
       const label = action === "labeled" ? "ci:full" : null;
-      const context = eventContext({ pool, event, action, labels: [...labels], label, draft, provenBy, integrationProvenBy });
+      const context = eventContext({ pool, attempt, event, action, labels: [...labels], label, draft, provenBy, integrationProvenBy });
       expect(condition(job("integration").if, context)).toBe(runs);
     },
   );
@@ -416,7 +439,7 @@ describe("CI job admission", () => {
   it("pins the integration admission text and the proof recording steps", () => {
     const unproven = "needs.fingerprint.outputs.proven_by == ''";
     expect(job("integration").needs).toEqual(["fingerprint"]);
-    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))`);
+    expect(job("integration").if).toBe(`github.event.pull_request.draft != true && ${unproven} && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))`);
     // A metadata-only event has no fingerprint at all, so it must not reach
     // the proof steps: an empty hash would publish `quality-gate-` as a proof.
     const freshProof = `env.METADATA_ONLY != 'true' && ${unproven}`;
@@ -504,7 +527,8 @@ describe("CI runner pool", () => {
     }
     expect(workflowText).not.toMatch(/agency_hub_core\/runtime:ci(?!-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\})/);
 
-    // Setup never shares mutable state through $HOME, and only hosted runners cache.
+    // pnpm/action-setup wipes its dest, so each job installs pnpm under its own
+    // runner.temp; only hosted runners restore the store from the Actions cache.
     for (const name of ["static", "integration"]) {
       const pnpm = job(name).steps.find(item => item.uses?.startsWith("pnpm/action-setup@"));
       expect(pnpm?.with, name).toEqual({ dest: "${{ runner.temp }}/setup-pnpm" });
@@ -514,6 +538,48 @@ describe("CI runner pool", () => {
         expect(field(String(node?.with?.cache), eventContext({ runnerEnvironment: environment })), `${name} ${environment}`).toBe(cache);
       }
     }
+  });
+
+  // pnpm keeps its store under PNPM_HOME, inside that per-job dest: without an
+  // explicit store every PC job would download every package again. The PC
+  // shares one store in $HOME (safe for concurrent installs); hosted runners
+  // keep pnpm's default store, the one setup-node caches.
+  it.each(["static", "integration"])("%s installs from the shared PC store only on self-hosted runners", name => {
+    const install = step(name, "Install dependencies");
+    expect(install.if, name).toBeUndefined();
+    expect(install.env).toEqual({ PNPM_PC_STORE: "${{ runner.environment == 'self-hosted' && '1' || '' }}" });
+    expect(shell(install)).toBe([
+      'if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi',
+      "pnpm install --frozen-lockfile",
+      "",
+    ].join("\n"));
+    const names = job(name).steps.map(item => item.name);
+    expect(names.indexOf("Install dependencies"), name).toBeGreaterThan(names.indexOf("Setup Node.js"));
+    for (const [environment, store] of [
+      ["github-hosted", "<default>"],
+      ["self-hosted", "/home/runner/.local/share/pnpm/store"],
+    ] as const) {
+      const env = field(install.env?.PNPM_PC_STORE ?? "", eventContext({ runnerEnvironment: environment }));
+      const script = `pnpm() { printf '%s|%s\\n' "$*" "\${npm_config_store_dir:-<default>}"; }\n${shell(install)}`;
+      const { npm_config_store_dir: _inherited, ...inherited } = process.env;
+      const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+        encoding: "utf8",
+        env: { ...inherited, HOME: "/home/runner", PNPM_PC_STORE: env },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout, `${name} ${environment}`).toBe(`install --frozen-lockfile|${store}\n`);
+    }
+  });
+
+  // Hosted runners have 2 vCPUs; the PC's 24 threads are shared with the
+  // integration shards running beside static checks.
+  it.each([
+    ["github-hosted", "pnpm test:unit --maxWorkers=2"],
+    ["self-hosted", "pnpm test:unit --maxWorkers=6"],
+  ] as const)("runs reliable unit tests on %s as %s", (environment, command) => {
+    const unit = step("static", "Reliable unit tests");
+    expect(shell(unit)).toBe("pnpm test:unit --maxWorkers=${{ runner.environment == 'self-hosted' && '6' || '2' }}");
+    expect(field(shell(unit), eventContext({ runnerEnvironment: environment }))).toBe(command);
   });
 
   it.each([
@@ -541,6 +607,101 @@ describe("CI runner pool", () => {
       env: { ...process.env, IMAGE: "agency_hub_core/runtime:ci-1-1" },
     });
     expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe("CI integration shards", () => {
+  const shardTotal = "${{ needs.fingerprint.outputs.shard_total || 3 }}";
+  const dbStepName = `Sync-critical DB/schema/network tests (shard \${{ matrix.shard }}/${shardTotal})`;
+
+  // The fingerprint job runs first on every gate run, so it plans the matrix.
+  it("plans the matrix in the fingerprint job from the pool, the attempt and CI_PC_SHARDS", () => {
+    const fingerprint = job("fingerprint");
+    expect(fingerprint.outputs).toEqual({
+      hash: "${{ steps.fingerprint.outputs.hash }}",
+      proven_by: "${{ steps.lookup.outputs.proven_by }}",
+      integration_hash: "${{ steps.fingerprint.outputs.integration_hash }}",
+      integration_proven_by: "${{ steps.lookup.outputs.integration_proven_by }}",
+      shards: "${{ steps.shards.outputs.shards }}",
+      shard_total: "${{ steps.shards.outputs.shard_total }}",
+    });
+    const plan = step("fingerprint", "Plan integration shards");
+    expect(plan.id).toBe("shards");
+    expect(plan.if).toBeUndefined();
+    expect(shell(plan)).toBe("node scripts/ci-shards.mjs");
+    expect(plan.env).toEqual({
+      CI_POOL: "${{ vars.CI_POOL }}",
+      RUN_ATTEMPT: "${{ github.run_attempt }}",
+      CI_PC_SHARDS: "${{ vars.CI_PC_SHARDS }}",
+    });
+    const names = fingerprint.steps.map(item => item.name);
+    expect(names.indexOf("Plan integration shards")).toBeGreaterThan(names.indexOf("Checkout"));
+  });
+
+  it("keeps the matrix, names and shard command on the planned total", () => {
+    const integration = job("integration");
+    expect(integration.needs).toEqual(["fingerprint"]);
+    expect(integration.name).toBe(`Integration \${{ matrix.shard }}/${shardTotal}`);
+    expect(integration.strategy?.matrix).toEqual({ shard: "${{ fromJSON(needs.fingerprint.outputs.shards || '[1,2,3]') }}" });
+    expect(integration.strategy?.["fail-fast"]).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(shell(step("integration", dbStepName))).toBe(`pnpm test:sync-critical:db --shard=\${{ matrix.shard }}/${shardTotal}`);
+    // The API suite is one file: it runs on the first shard only.
+    const api = step("integration", "Sync-critical API tests");
+    expect(api.if).toBe("matrix.shard == 1");
+    expect(shell(api)).toBe("pnpm test:sync-critical:api");
+  });
+
+  it.each([
+    // fail-fast on a PR only: main keeps the record of every shard.
+    ["pull_request", "true"],
+    ["push", "false"],
+    ["workflow_dispatch", "false"],
+  ] as const)("fail-fast on %s is %s", (event, failFast) => {
+    expect(field(String(job("integration").strategy?.["fail-fast"]), eventContext({ event }))).toBe(failFast);
+  });
+
+  it.each([
+    // CI_POOL, run attempt, CI_PC_SHARDS, planned total
+    ["pc", "1", "6", 6],
+    ["pc", "1", "1", 1],
+    ["pc", "1", "8", 8],
+    ["pc", "1", "", 3],
+    ["pc", "1", "9", 3],
+    ["pc", "1", "lots", 3],
+    ["pc", "2", "6", 3],
+    ["", "1", "6", 3],
+    ["hosted", "1", "", 3],
+  ] as const)("CI_POOL=%s attempt %s CI_PC_SHARDS=%j runs %i shards that cover every file once", (pool, attempt, pcShards, total) => {
+    const context = eventContext({ pool, attempt, pcShards });
+    const plan = step("fingerprint", "Plan integration shards");
+    const env = Object.fromEntries(Object.entries(plan.env ?? {}).map(([key, value]) => [key, field(value, context)]));
+    const planned = planShards(env);
+    expect(planned.total).toBe(total);
+    const outputs = { shards: JSON.stringify(planned.shards), shardTotal: String(planned.total) };
+    const matrix = job("integration").strategy?.matrix?.shard;
+    if (typeof matrix !== "string") throw new Error("integration matrix must be one expression");
+    const legs = runner(matrix, eventContext({ pool, attempt, ...outputs }));
+    expect(legs).toEqual(Array.from({ length: total }, (_, index) => index + 1));
+    if (!Array.isArray(legs)) throw new Error("integration matrix must be a list");
+    const commands = legs.map(shard => field(shell(step("integration", dbStepName)), eventContext({ ...outputs, shard: Number(shard) })));
+    expect(commands).toEqual(legs.map(shard => `pnpm test:sync-critical:db --shard=${String(shard)}/${total}`));
+    const names = legs.map(shard => field(job("integration").name ?? "", eventContext({ ...outputs, shard: Number(shard) })));
+    expect(names).toEqual(legs.map(shard => `Integration ${String(shard)}/${total}`));
+    expect(legs.filter(shard => condition(step("integration", "Sync-critical API tests").if, eventContext({ ...outputs, shard: Number(shard) })))).toEqual([1]);
+  });
+
+  // The integration job needs a successful fingerprint job, which always sets
+  // both outputs; the fallback only keeps fromJSON off an empty string.
+  it("falls back to the default three shards consistently when the plan outputs are empty", () => {
+    const empty = eventContext({ shards: "", shardTotal: "" });
+    const matrix = String(job("integration").strategy?.matrix?.shard);
+    expect(runner(matrix, empty)).toEqual(planShards({}).shards);
+    expect(planShards({}).total).toBe(DEFAULT_SHARD_TOTAL);
+    for (const shard of [1, 2, 3]) {
+      const context = eventContext({ shards: "", shardTotal: "", shard });
+      expect(field(job("integration").name ?? "", context)).toBe(`Integration ${shard}/${DEFAULT_SHARD_TOTAL}`);
+      expect(field(shell(step("integration", dbStepName)), context)).toBe(`pnpm test:sync-critical:db --shard=${shard}/${DEFAULT_SHARD_TOTAL}`);
+    }
   });
 });
 
