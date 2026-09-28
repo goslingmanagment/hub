@@ -2758,6 +2758,9 @@ export async function retryPageSync(
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
   const retryAt = input.retryAt ?? new Date(now.getTime() + pageSyncRetryBackoffMs(nextFailures));
   // A newer request replaces queued work, but cannot bypass a provider cooldown.
+  // Replacing only drops this attempt's retry gate: the failure itself still
+  // counts, so an operator "Sync now" pressed during a failing chunk keeps the
+  // streak and last error that alerting and retry_wedged read.
   const discardRetry = sql`request_seq > ${input.requestSeq}
     and ${!hasProviderCooldown(input.retryKind, retryAt, now)}`;
   const result = await db.execute(sql<{ status: PageSyncStatus; retryKind: string | null }>`
@@ -2769,7 +2772,7 @@ export async function retryPageSync(
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at),
         finished_at = ${now},
-        failed_at = case when ${discardRetry} then failed_at else ${now} end,
+        failed_at = ${now},
         retry_kind = case when ${discardRetry} then null else ${input.retryKind} end,
         retry_at = case when ${discardRetry} then null::timestamptz else ${retryAt} end,
         dispatch_source = case
@@ -2783,9 +2786,9 @@ export async function retryPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        consecutive_failures = case when ${discardRetry} then 0 else ${nextFailures} end,
-        last_error_code = case when ${discardRetry} then null else ${input.errorCode} end,
-        last_error_summary = case when ${discardRetry} then null else ${input.errorSummary} end,
+        consecutive_failures = ${nextFailures},
+        last_error_code = ${input.errorCode},
+        last_error_summary = ${input.errorSummary},
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
@@ -2830,6 +2833,8 @@ export async function blockPageSync(
   const now = input.now ?? new Date();
   const row = await getPageSyncState(db, input.pageId, input.stream);
   const nextFailures = (row?.consecutiveFailures ?? 0) + 1;
+  // A newer request replaces the block with pending work, but the failure
+  // still counts (see retryPageSync): its streak and last error stay.
   const result = await db.execute(sql<{ status: PageSyncStatus; blockerKind: string | null }>`
     update ${pageSyncStates}
     set status = case
@@ -2839,7 +2844,7 @@ export async function blockPageSync(
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at),
         finished_at = ${now},
-        failed_at = case when request_seq > ${input.requestSeq} then failed_at else ${now} end,
+        failed_at = ${now},
         retry_kind = null,
         retry_at = null,
         dispatch_source = case
@@ -2853,9 +2858,9 @@ export async function blockPageSync(
         phase = ${input.phase ?? null},
         work_class = ${input.workClass ?? null},
         progress = ${input.progress ?? {}},
-        consecutive_failures = case when request_seq > ${input.requestSeq} then 0 else ${nextFailures} end,
-        last_error_code = case when request_seq > ${input.requestSeq} then null else ${input.errorCode} end,
-        last_error_summary = case when request_seq > ${input.requestSeq} then null else ${input.errorSummary} end,
+        consecutive_failures = ${nextFailures},
+        last_error_code = ${input.errorCode},
+        last_error_summary = ${input.errorSummary},
         lease_owner = null,
         lease_token = null,
         lease_heartbeat_at = null,
