@@ -135,8 +135,28 @@ const DM_SWEEP_EMPTY_SWEEP_GUARD_ANOMALY_CODE = "dm_conversations_empty_sweep_gu
  * by this sweep; it is newer than the sweep's start, so the next bounded walk
  * or full sweep lists it, and a total-less sweep hides nothing in the meantime.
  * With a total present the restart stays: that sweep may hide threads.
+ * A page made of nothing but repeats is bounded separately; see
+ * DM_CONVERSATIONS_REPEAT_ONLY_PAGE_ANOMALY_CODE.
  */
 const DM_CONVERSATIONS_CROSS_PAGE_REPEAT_NOTE_CODE = "dm_conversations_cross_page_repeat_counted_once";
+/**
+ * A full sweep met DM_CONVERSATIONS_REPEAT_ONLY_PAGE_LIMIT consecutive
+ * non-final pages whose every id an earlier page of the same sweep already
+ * applied, so it refuses the page and restarts.
+ *
+ * The ordinary shift the note above absorbs repeats a few ids at the top of a
+ * page. A page of nothing but repeats adds nothing, and a provider that
+ * ignores or clamps `offset` returns such a page for every offset: counting
+ * repeats once, the sweep would advance through list requests forever without
+ * completing, failing or saying so. One repeat-only page can still be a real
+ * shift (a resume after a long pause on a busy inbox), so the first is applied
+ * like any other and the second consecutive one restarts the sweep, which
+ * fails the run and lets the failure ladder raise the incident. The streak
+ * rides in the cursor, so the bound holds when every chunk reads only one list
+ * page.
+ */
+const DM_CONVERSATIONS_REPEAT_ONLY_PAGE_ANOMALY_CODE = "dm_conversations_repeat_only_page_guard";
+const DM_CONVERSATIONS_REPEAT_ONLY_PAGE_LIMIT = 2;
 const DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE = "dm_conversations_erasure_fence_deferred";
 /** An erasure's delete transaction is seconds-to-minutes work, not an hour's:
  *  park the stream long enough to let it finish, short enough that a page's
@@ -1056,10 +1076,20 @@ export async function fanslyDmConversationsChunk(
       if (overlappingConversationIds.length > 0 && state.providerTotalMode === "present") {
         return { kind: "overlap" as const, overlappingConversationIds };
       }
+      // A non-final page that adds no id this sweep had not already applied
+      // (see DM_CONVERSATIONS_REPEAT_ONLY_PAGE_ANOMALY_CODE). The final page
+      // ends the sweep on its own, so it never counts toward the streak.
+      const repeatOnlyPageStreak = state.kind !== "bounded" && !page.done &&
+          overlappingConversationIds.length === uniqueCurrentConversationIds.size
+        ? (state.repeatOnlyPageStreak ?? 0) + 1
+        : 0;
+      if (repeatOnlyPageStreak >= DM_CONVERSATIONS_REPEAT_ONLY_PAGE_LIMIT) {
+        return { kind: "repeat_only" as const, overlappingConversationIds, repeatOnlyPageStreak };
+      }
       const observedCount = finalObservedCount - overlappingConversationIds.length;
-      const pageState: DmRunningSweep = overlappingConversationIds.length === 0
+      const pageState: DmRunningSweep = nextState.kind === "bounded"
         ? nextState
-        : { ...nextState, observedCount };
+        : { ...nextState, observedCount, repeatOnlyPageStreak };
 
       let dmMessagesFollowupNeeded = false;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
@@ -1274,6 +1304,7 @@ export async function fanslyDmConversationsChunk(
         generationSetCount,
         observedCount,
         repeatedConversationIds: overlappingConversationIds,
+        pageState,
         // `generationSetCount` is telemetry, not cursor state: the parser
         // drops it on resume and every page recomputes it. It rides the
         // checkpoint purely so summarizeCheckpoint carries it into the
@@ -1331,6 +1362,24 @@ export async function fanslyDmConversationsChunk(
           observedCount: state.observedCount,
           pageCount: nextPageCount,
           offset: state.offset,
+        },
+      });
+      continue;
+    }
+
+    if (pageWrite.kind === "repeat_only") {
+      await restartSweepAfterCapturedContractDrift({
+        code: DM_CONVERSATIONS_REPEAT_ONLY_PAGE_ANOMALY_CODE,
+        message:
+          "DM conversation sync returned consecutive pages of conversations this sweep already applied; the provider may be ignoring the offset, refusing to advance",
+        details: {
+          repeatOnlyPageStreak: pageWrite.repeatOnlyPageStreak,
+          repeatedConversationIds: pageWrite.overlappingConversationIds.slice(0, 10),
+          repeatCount: pageWrite.overlappingConversationIds.length,
+          observedCount: state.observedCount,
+          pageCount: nextPageCount,
+          offset: state.offset,
+          providerTotalMode: state.providerTotalMode,
         },
       });
       continue;
@@ -1525,7 +1574,7 @@ export async function fanslyDmConversationsChunk(
       } satisfies StreamChunkResult;
     }
 
-    state = { ...nextState, observedCount };
+    state = pageWrite.pageState;
   }
 
   return {

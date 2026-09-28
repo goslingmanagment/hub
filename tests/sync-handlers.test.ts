@@ -3667,6 +3667,188 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     });
   });
 
+  describe("a page of nothing but repeats in a sweep without a provider total", () => {
+    const FULL_PAGE_IDS = Array.from({ length: 100 }, (_, index) => `group-${index}`);
+
+    function fullPageApp(input: { ids: readonly string[]; done: boolean }) {
+      const getMessagingGroupsPage = vi.fn(async (
+        requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+        _params: { offset?: number },
+      ) => {
+        await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+        return {
+          total: null,
+          items: input.ids.map((groupId, index) => ({
+            groupId, flags: 0, unreadCount: 0, partnerAccountId: `fan-${index}`,
+          })),
+          accounts: [],
+          groups: [],
+          offset: 0,
+          done: input.done,
+          raw: { data: [], aggregationData: { total: null, accounts: [], groups: [] } },
+        };
+      });
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      // The row-side stamps the sweep reads its repeats from, kept by the
+      // upserts themselves so every page sees what the earlier ones applied.
+      const stamped = new Set<string>();
+      dbMocks.upsertPageDmConversation.mockImplementation(async (_db, row: {
+        platformConversationId: string;
+        lastSeenGeneration: number | null;
+      }) => {
+        if (row.lastSeenGeneration !== null) stamped.add(row.platformConversationId);
+        return undefined;
+      });
+      dbMocks.listPageDmThreadIdsStampedWithGeneration.mockImplementation(async (_db, query: {
+        platformConversationIds: string[];
+      }) => query.platformConversationIds.filter((id) => stamped.has(id)));
+      dbMocks.countPageDmThreadsByGeneration.mockImplementation(async () => stamped.size);
+      // Known threads with no head on record, like the head-less items above:
+      // nothing to repair, so the list reads are the only requests spent.
+      dbMocks.listPageDmConversationsByPlatformConversationIds.mockImplementation(async (_db, query: {
+        platformConversationIds: string[];
+      }) => query.platformConversationIds.map((platformConversationId, index) => buildDmConversation({
+        id: 1_000 + index,
+        platformConversationId,
+        partnerPlatformUserId: `fan-${index}`,
+        lastMessageId: null,
+      })));
+      return { app, getMessagingGroupsPage, stamped };
+    }
+
+    function runChunk(app: never, telemetry: ReturnType<typeof createTelemetry>, maxRequests: number) {
+      return fanslyDmConversationsChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(maxRequests),
+      } as never);
+    }
+
+    it("restarts instead of advancing silently when the provider returns the same full page for every offset", async () => {
+      const telemetry = createTelemetry();
+      const { app, getMessagingGroupsPage } = fullPageApp({ ids: FULL_PAGE_IDS, done: false });
+      dbMocks.getCheckpoint.mockResolvedValue(null);
+
+      // Room for six list pages: without the bound the sweep spends all of
+      // them on the same hundred ids and yields as ordinary progress.
+      await expect(runChunk(app, telemetry, 6)).rejects.toThrow("restarted the DM conversation sweep");
+
+      // Offset 0 applies the page, offset 100 is one repeat-only page (a real
+      // shift can do that once), offset 200 is the second in a row.
+      expect(getMessagingGroupsPage.mock.calls.map((call) => call[1].offset)).toEqual([0, 100, 200]);
+      expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "dm_conversations_repeat_only_page_guard",
+        severity: "error",
+        details: expect.objectContaining({
+          repeatOnlyPageStreak: 2,
+          repeatCount: 100,
+          observedCount: 100,
+          pageCount: 3,
+          offset: 200,
+          providerTotalMode: "absent",
+          abandonedGeneration: 1,
+          restartGeneration: 2,
+        }),
+      }));
+      // The first repeat-only page was applied and its streak persisted; the
+      // second was refused before any write.
+      expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledTimes(200);
+      const progressStates = dbMocks.upsertCheckpointProgress.mock.calls.map((call) => call[1].state);
+      expect(progressStates).toContainEqual(expect.objectContaining({
+        generation: 1, offset: 200, observedCount: 100, pageCount: 2, repeatOnlyPageStreak: 1,
+      }));
+      expect(progressStates.at(-1)).toMatchObject({ generation: 2, offset: 0, observedCount: 0, pageCount: 0 });
+      expect(progressStates.at(-1)).not.toHaveProperty("repeatOnlyPageStreak");
+      expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+    });
+
+    it("carries the streak across chunks that read one list page each", async () => {
+      const telemetry = createTelemetry();
+      const { app, stamped } = fullPageApp({ ids: FULL_PAGE_IDS, done: false });
+      for (const id of FULL_PAGE_IDS) stamped.add(id);
+      dbMocks.getCheckpoint.mockResolvedValue({
+        state: {
+          version: 2,
+          mode: "full_scan",
+          generation: 7,
+          offset: 200,
+          observedCount: 100,
+          pageCount: 2,
+          providerTotalMode: "absent",
+          providerReportedTotal: null,
+          unchangedPageStreak: 1,
+          fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+          lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+          repeatOnlyPageStreak: 1,
+        },
+      });
+
+      await expect(runChunk(app, telemetry, 1)).rejects.toThrow("restarted the DM conversation sweep");
+
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "dm_conversations_repeat_only_page_guard",
+        details: expect.objectContaining({ repeatOnlyPageStreak: 2, offset: 200 }),
+      }));
+      expect(dbMocks.upsertPageDmConversation).not.toHaveBeenCalled();
+    });
+
+    it("resets the streak on a page that adds a new id and never counts the final page", async () => {
+      const telemetry = createTelemetry();
+      const { app, stamped } = fullPageApp({ ids: ["group-0", "group-new"], done: false });
+      stamped.add("group-0");
+      const resumed = {
+        version: 2,
+        mode: "full_scan",
+        generation: 7,
+        offset: 200,
+        observedCount: 100,
+        pageCount: 2,
+        providerTotalMode: "absent",
+        providerReportedTotal: null,
+        unchangedPageStreak: 1,
+        fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+        lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+        repeatOnlyPageStreak: 1,
+      };
+      dbMocks.getCheckpoint.mockResolvedValue({ state: resumed });
+
+      await expect(runChunk(app, telemetry, 1)).resolves.toMatchObject({
+        satisfied: false,
+        stats: { observedCount: 101, offset: 300, crossPageRepeats: 1 },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      const progress = dbMocks.upsertCheckpointProgress.mock.calls.at(-1)?.[1]?.state;
+      expect(progress).toMatchObject({ generation: 7, offset: 300, observedCount: 101 });
+      expect(progress).not.toHaveProperty("repeatOnlyPageStreak");
+
+      // A final page of nothing but repeats ends the sweep: the streak it
+      // would have reached is moot.
+      const finalTelemetry = createTelemetry();
+      const final = fullPageApp({ ids: ["group-0"], done: true });
+      final.stamped.add("group-0");
+      dbMocks.getCheckpoint.mockResolvedValue({ state: { ...resumed, observedCount: 1 } });
+
+      await expect(runChunk(final.app, finalTelemetry, 1)).resolves.toMatchObject({
+        stats: { observedCount: 1, fullSweepCompleted: true },
+      });
+      expect(finalTelemetry.addAnomaly).not.toHaveBeenCalled();
+    });
+  });
+
   it("captures and restarts dm_conversations when one page repeats an id against itself", async () => {
     const telemetry = createTelemetry();
     const getMessagingGroupsPage = vi.fn(async (

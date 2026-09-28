@@ -75,6 +75,10 @@ type DmConversationCursorState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  /** Consecutive non-final pages whose every id an earlier page of this sweep
+   *  already applied. Persisted only while positive, so a document without it
+   *  is byte-identical to the one every earlier writer produced. */
+  repeatOnlyPageStreak?: number;
   diagnostics?: DmShadowState;
   polling?: DmFullSweepSchedule;
 };
@@ -429,6 +433,9 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
 
   const diagnostics = parseDmShadowState(state.diagnostics);
   const polling = parseDmFullSweepSchedule(state.polling);
+  // A garbled streak reads as none: it can only let one more repeat-only page
+  // through before the guard counts again, never refuse a healthy cursor.
+  const repeatOnlyPageStreak = asNumber(state.repeatOnlyPageStreak);
   return {
     version: 2,
     mode: "full_scan",
@@ -441,6 +448,9 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     unchangedPageStreak,
     fullSweepStartedAt,
     lastFullSweepCompletedAt,
+    ...(repeatOnlyPageStreak !== null && Number.isSafeInteger(repeatOnlyPageStreak) && repeatOnlyPageStreak > 0
+      ? { repeatOnlyPageStreak }
+      : {}),
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(polling === undefined ? {} : { polling }),
   };
@@ -492,6 +502,7 @@ type DmConversationSweepInProgressState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  repeatOnlyPageStreak?: number;
   diagnostics?: DmShadowState;
   polling?: DmFullSweepSchedule;
 };
@@ -629,6 +640,7 @@ export function serializeDmConversationSweepState(
     unchangedPageStreak: state.unchangedPageStreak,
     fullSweepStartedAt: state.fullSweepStartedAt,
     lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+    ...(state.repeatOnlyPageStreak ? { repeatOnlyPageStreak: state.repeatOnlyPageStreak } : {}),
     ...(telemetry === undefined ? {} : { generationSetCount: telemetry.generationSetCount }),
     ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
     ...(state.polling === undefined ? {} : { polling: state.polling }),
