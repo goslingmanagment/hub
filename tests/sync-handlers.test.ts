@@ -2634,17 +2634,21 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         },
       });
     };
-    const runWalk = async (page: { total: number; items: unknown[]; done: boolean }) => {
+    type WalkPage = { total: number; items: unknown[]; done: boolean };
+    const runWalk = async (page: WalkPage | WalkPage[]) => {
       const telemetry = createTelemetry();
       const tx = {};
       const db = {
         transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
       };
-      // One page per chunk here: a walk that neither restarts nor closes asks again.
+      // Only the pages given are served: a walk that neither restarts nor
+      // closes after them asks again.
       const getSubscribersPage = vi.fn(async (): Promise<unknown> => {
         throw new Error("unexpected extra subscribers page");
       });
-      getSubscribersPage.mockResolvedValueOnce({ ...page, raw: {} });
+      for (const served of Array.isArray(page) ? page : [page]) {
+        getSubscribersPage.mockResolvedValueOnce({ ...served, raw: {} });
+      }
       dbMocks.upsertFans.mockImplementation(async (_db: unknown, rows: Array<{ platformUserId: string }>) => (
         rows.map((row, index) => ({ id: 100 + index, platformUserId: row.platformUserId }))
       ));
@@ -2769,6 +2773,104 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
         state: expect.objectContaining({ destructiveFinalization: false, restartCount: 2 }),
       }));
+    });
+
+    it("reads a shifted archive on to its end once restarts are exhausted, uncertified", async () => {
+      resumeWalk({
+        mode: "expired",
+        historyBackfilledAt: null,
+        providerReportedTotal: 201,
+        restartCount: 2,
+      });
+
+      const { result, telemetry, db, tx, getSubscribersPage } = await runWalk([
+        { total: 202, items: subscriberItems("expired", 100), done: false },
+        { total: 202, items: subscriberItems("expired", 2), done: true },
+      ]);
+
+      // The archive is walked once; stopping at the drift page would leave
+      // every row past it unread for good.
+      expect(getSubscribersPage).toHaveBeenCalledTimes(2);
+      expect(getSubscribersPage).toHaveBeenNthCalledWith(1, expect.any(Object), { limit: 100, offset: 100, status: "5" });
+      expect(getSubscribersPage).toHaveBeenNthCalledWith(2, expect.any(Object), { limit: 100, offset: 200, status: "5" });
+      expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "subscribers_total_changed",
+        details: expect.objectContaining({ mode: "expired", previousTotal: 201, currentTotal: 202, restartCount: 2 }),
+      }));
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({
+          mode: "expired",
+          offset: 200,
+          historyBackfilledAt: null,
+          providerReportedTotal: 202,
+          historyWithheldReason: "total_changed",
+        }),
+      }));
+      expect(dbMocks.upsertArchivedPageSubscriptions).toHaveBeenCalledTimes(2);
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledTimes(1);
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({
+          historyBackfilledAt: expect.any(String),
+          historyCertified: false,
+          historyWithheldReason: "total_changed",
+        }),
+      }));
+      expect(result).toMatchObject({
+        satisfied: true,
+        stats: { mode: "expired", historyCertified: false, historyWithheldReason: "total_changed" },
+      });
+      expect(result.stats).not.toHaveProperty("finalizationWithheld");
+      expect(db.transaction).toHaveBeenCalledTimes(2);
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
+    });
+
+    it("keeps a history walk uncertified across chunks", async () => {
+      resumeWalk({
+        mode: "expired",
+        historyBackfilledAt: null,
+        historyWithheldReason: "total_changed",
+        restartCount: 2,
+      });
+
+      const { result } = await runWalk({ total: 150, items: subscriberItems("expired", 50), done: true });
+
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        state: expect.objectContaining({ historyBackfilledAt: expect.any(String), historyCertified: false }),
+      }));
+      expect(result).toMatchObject({ satisfied: true, stats: { historyCertified: false } });
+    });
+
+    it("records a withheld active finalization through the page's first history walk", async () => {
+      resumeWalk({ historyBackfilledAt: null, restartCount: 2 });
+
+      const { result, tx } = await runWalk([
+        { total: 151, items: subscriberItems("active", 100), done: false },
+        { total: 1, items: subscriberItems("expired", 1), done: true },
+      ]);
+
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({ mode: "expired", offset: 0, activeWithheldReason: "total_changed" }),
+      }));
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({
+          mode: "expired",
+          historyBackfilledAt: expect.any(String),
+          destructiveFinalization: false,
+          activeWithheldReason: "total_changed",
+        }),
+      }));
+      expect(dbMocks.upsertCheckpoint.mock.calls[0]?.[1].state).not.toHaveProperty("historyCertified");
+      expect(result).toMatchObject({
+        satisfied: true,
+        stats: {
+          mode: "expired",
+          destructiveFinalization: false,
+          finalizationWithheld: true,
+          withheldReason: "total_changed",
+        },
+      });
+      expect(result.stats).not.toHaveProperty("historyCertified");
     });
 
     it("restarts a multi-page walk whose pages overlapped instead of retiring an unseen row", async () => {

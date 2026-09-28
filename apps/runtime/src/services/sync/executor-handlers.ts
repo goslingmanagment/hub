@@ -1435,6 +1435,23 @@ async function subscribersWalkRestartState(
   return { ...state, ...walk, generation: Math.max(state.generation, storedGeneration) + 1 };
 }
 
+/** The stats trail of a revision whose walks could not be certified past the restart bound. */
+function subscribersWithheldStats(
+  state: Pick<SubscribersCursorState, "activeWithheldReason" | "historyWithheldReason">,
+) {
+  return {
+    ...(state.activeWithheldReason === undefined ? {} : {
+      destructiveFinalization: false,
+      finalizationWithheld: true,
+      withheldReason: state.activeWithheldReason,
+    }),
+    ...(state.historyWithheldReason === undefined ? {} : {
+      historyCertified: false,
+      historyWithheldReason: state.historyWithheldReason,
+    }),
+  };
+}
+
 export async function fanslySubscribersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1626,7 +1643,15 @@ export async function fanslySubscribersChunk(
     const withheldReason: SubscribersWalkRestartReason | null = totalChanged
       ? "total_changed"
       : partialResult ? "partial_result" : null;
-    const lastPage = page.done || withheldReason !== null;
+    if (state.mode === "expired" && withheldReason !== null) {
+      // The archive is walked only once and its writes retire nothing, so
+      // stopping here would leave the rest of it unread for good. Adopt the
+      // new total and read on to the end; the completion stays uncertified.
+      state = { ...state, historyWithheldReason: state.historyWithheldReason ?? withheldReason };
+    }
+    // An active walk stops at the page it cannot certify; the next revision
+    // walks the current list again.
+    const lastPage = page.done || (state.mode === "active" && withheldReason !== null);
 
     const hydratedFans = await lookupHydratedFans(app, {
       requestContext,
@@ -1758,23 +1783,24 @@ export async function fanslySubscribersChunk(
         }
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        const withheldState = finalWithheldReason === null ? {} : { activeWithheldReason: finalWithheldReason };
         if (shouldBackfillHistory) {
+          const nextState: SubscribersCursorState = { ...historyState, ...withheldState };
           return {
             kind: "progress" as const,
-            nextState: historyState,
-            withheldReason: finalWithheldReason,
+            nextState,
             membership,
             checkpoint: await upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
               stream: "subscribers",
-              state: historyState,
+              state: nextState,
             }),
             processedThisPage: subscriptionInputs.length,
           };
         }
         return {
           kind: "complete" as const,
-          withheldReason: finalWithheldReason,
+          withheld: withheldState,
           membership,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
@@ -1782,6 +1808,7 @@ export async function fanslySubscribersChunk(
             state: {
               ...state,
               observedCount: finalObservedCount,
+              ...withheldState,
               ...(finalWithheldReason === null ? {} : { destructiveFinalization: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
@@ -1795,7 +1822,7 @@ export async function fanslySubscribersChunk(
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         return {
           kind: "complete" as const,
-          withheldReason,
+          withheld: state,
           membership: null,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
@@ -1804,9 +1831,11 @@ export async function fanslySubscribersChunk(
               ...state,
               observedCount: finalObservedCount,
               historyBackfilledAt,
+              // This revision's active walk retired nothing.
+              ...(state.activeWithheldReason === undefined ? {} : { destructiveFinalization: false }),
               // Archive writes are non-destructive, so an uncertified history
               // walk still closes instead of re-walking the archive every hour.
-              ...(withheldReason === null ? {} : { historyCertified: false }),
+              ...(state.historyWithheldReason === undefined ? {} : { historyCertified: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1817,7 +1846,6 @@ export async function fanslySubscribersChunk(
       return {
         kind: "progress" as const,
         nextState: nextPageState,
-        withheldReason: null,
         membership: null,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
@@ -1846,10 +1874,6 @@ export async function fanslySubscribersChunk(
     if (pageWrite.kind === "restart") {
       return restartWalk(state, "offset_duplicates", pageWrite.restartState, pageWrite.checkpoint);
     }
-    const withheldStats = pageWrite.withheldReason === null ? {} : state.mode === "active"
-      ? { destructiveFinalization: false, finalizationWithheld: true, withheldReason: pageWrite.withheldReason }
-      : { historyCertified: false, withheldReason: pageWrite.withheldReason };
-
     if (pageWrite.kind === "complete") {
       await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
       return {
@@ -1861,7 +1885,7 @@ export async function fanslySubscribersChunk(
           pageCount: state.pageCount,
           processedThisChunk,
           providerReportedTotal: state.providerReportedTotal,
-          ...withheldStats,
+          ...subscribersWithheldStats(pageWrite.withheld),
         },
       } satisfies StreamChunkResult;
     }
@@ -1879,6 +1903,7 @@ export async function fanslySubscribersChunk(
           offset: state.offset,
           pageCount: state.pageCount,
           processedThisChunk,
+          ...subscribersWithheldStats(state),
         },
       } satisfies StreamChunkResult;
     }
@@ -1893,6 +1918,7 @@ export async function fanslySubscribersChunk(
       offset: state.offset,
       pageCount: state.pageCount,
       processedThisChunk,
+      ...subscribersWithheldStats(state),
     },
   } satisfies StreamChunkResult;
 }
