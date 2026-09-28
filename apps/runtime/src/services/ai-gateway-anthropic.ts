@@ -26,7 +26,10 @@ export interface AnthropicGatewayStreamRequest {
     content: Array<AnthropicGatewayTextBlock | { type: "image"; source: { type: "url"; url: string } }>;
   }];
   temperature?: number;
-  thinking?: { type: "adaptive"; display: "summarized" } | { type: "disabled" };
+  thinking?:
+    | { type: "adaptive"; display: "summarized" }
+    | { type: "disabled" }
+    | { type: "between_tools" };
   output_config?: {
     effort?: Exclude<AiGatewayReasoningEffort, "off">;
     format?: AnthropicGatewayOutputFormat;
@@ -100,14 +103,20 @@ const ANTHROPIC_LEGACY_SAMPLING_MODELS = new Set([
 ]);
 
 // 4.6 family: adaptive thinking available, `temperature` still accepted while
-// thinking is off. Opus 4.7+, Opus 5 and Sonnet 5 return 400 on any sampling
-// parameter, so the default for an unlisted adaptive model is "omit".
+// thinking is off. Opus 4.7+, Opus 5, Sonnet 5 and Sonnet 5.5 return 400 on any
+// sampling parameter, so the default for an unlisted adaptive model is "omit".
 const ANTHROPIC_SAMPLING_TOLERANT_MODELS = new Set(["claude-sonnet-4-6", "claude-opus-4-6"]);
 
 // Omitting `thinking` means thinking ON here, so "off" needs an explicit
-// disable; otherwise thinking spends the non-adaptive max_tokens cap and the
-// answer truncates (stopReason 'max_tokens').
-const ANTHROPIC_THINKING_ON_BY_DEFAULT_MODELS = new Set(["claude-opus-5", "claude-sonnet-5"]);
+// switch; otherwise thinking spends the non-adaptive max_tokens cap and the
+// answer truncates (stopReason 'max_tokens'). Sonnet 5.5 rejects `disabled`
+// with a 400; `between_tools` is its lowest setting (no effort is sent on this
+// path, so the API default `high` stays within its effort limit).
+const ANTHROPIC_THINKING_OFF_SWITCHES: Record<string, NonNullable<AnthropicGatewayStreamRequest["thinking"]>> = {
+  "claude-opus-5": { type: "disabled" },
+  "claude-sonnet-5": { type: "disabled" },
+  "claude-sonnet-5-5": { type: "between_tools" },
+};
 
 const ANTHROPIC_ADAPTIVE_MAX_TOKENS: Record<GatewayOperationFeature, number> = {
   "fast-reply": 8000,
@@ -139,9 +148,8 @@ function hasRemovedSamplingParams(providerModelId: string) {
 }
 
 function thinkingOffSwitch(providerModelId: string) {
-  return ANTHROPIC_THINKING_ON_BY_DEFAULT_MODELS.has(providerModelId)
-    ? { thinking: { type: "disabled" as const } }
-    : {};
+  const thinking = ANTHROPIC_THINKING_OFF_SWITCHES[providerModelId];
+  return thinking ? { thinking } : {};
 }
 
 function nonnegativeInt(value: number | null | undefined) {
