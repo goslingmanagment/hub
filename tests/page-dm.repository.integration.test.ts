@@ -5,11 +5,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
   PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
+  clearConversationSyncHealth,
+  countConversationSyncFailuresByAccount,
   countPageDmThreadsByGeneration,
   createFanslyPage,
   createModel,
   deletePageDmMessageByPlatformMessageId,
   finalizePageDmConversationMessageSync,
+  getConversationSyncHealth,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
@@ -17,6 +20,7 @@ import {
   listPageDmThreadIdsStampedWithGeneration,
   markPageDmConversationsInvisibleByGeneration,
   maxPageDmThreadGeneration,
+  recordConversationSyncFailure,
   refreshPageDmConversationWindow,
   selectNextPageDmMessageDeepBackfillCandidate,
   selectNextPageDmMessageSyncCandidate,
@@ -1087,6 +1091,102 @@ describe("page DM repository integration", () => {
     expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
     expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
+  });
+
+  it("backs a failing thread off 5/10/20 minutes, quarantines it on the 4th failure, and clears it", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker");
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-breaker" }]);
+    if (!fan) throw new Error("test setup: fan creation failed");
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker", 1), fanId: fan.id,
+    });
+    if (!thread) throw new Error("test setup: thread creation failed");
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const minutes = (value: number) => new Date(now.getTime() + value * 60_000);
+    const fail = () => recordConversationSyncFailure(testDb!.db, {
+      conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
+      errorMessage: "error getting group messages", now,
+    });
+
+    expect(await fail()).toEqual({ failureCount: 1, nextRetryAt: minutes(5), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 2, nextRetryAt: minutes(10), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 3, nextRetryAt: minutes(20), quarantineUntil: null });
+    expect(await fail()).toEqual({ failureCount: 4, nextRetryAt: minutes(40), quarantineUntil: minutes(360) });
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+      failureCount: 4, errorClass: "fansly_500", lastError: "error getting group messages",
+    });
+    expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] }))
+      .toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
+
+    await clearConversationSyncHealth(testDb.db, thread.id);
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toBeNull();
+
+    // A learned page limit (0087) outlives the failure bookkeeping.
+    await fail();
+    await testDb.pool.query(
+      "update page_dm_message_sync_health set preferred_page_limit = 5 where conversation_id = $1", [thread.id],
+    );
+    await clearConversationSyncHealth(testDb.db, thread.id);
+    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+      failureCount: 0, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
+    });
+    expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] })).toEqual([]);
+  });
+
+  it("offers a breakered thread to neither picker until its window lapses", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-breaker-pickers");
+    const [pendingFan, partialFan] = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "fan-breaker-pending" },
+      { platform: "fansly", platformUserId: "fan-breaker-partial" },
+    ]);
+    if (!pendingFan || !partialFan) throw new Error("test setup: fan creation failed");
+    const pending = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker-pending", 1), fanId: pendingFan.id,
+      messageCoverageStatus: "pending_backfill",
+    });
+    const partial = await upsertPageDmConversation(testDb.db, {
+      ...generationThreadInput(page.id, "breaker-partial", 1), fanId: partialFan.id,
+      lastMessageId: "partial-5", lastMessageAt: new Date("2026-03-19T12:00:00.000Z"),
+      storedMessageCount: 5, newestStoredMessageId: "partial-5", oldestStoredMessageId: "partial-1",
+      messageCoverageStatus: "partial_window", lastMessageSyncAt: new Date("2026-03-19T12:05:00.000Z"),
+    });
+    if (!pending || !partial) throw new Error("test setup: thread creation failed");
+    const now = new Date("2026-03-20T12:00:00.000Z");
+    const pick = (at: Date) => selectNextPageDmMessageSyncCandidate(testDb!.db, { platformAccountId: page.id, now: at });
+    const pickDeep = (at: Date) =>
+      selectNextPageDmMessageDeepBackfillCandidate(testDb!.db, { platformAccountId: page.id, now: at });
+    expect(await pick(now)).toMatchObject({ id: pending.id });
+    expect(await pickDeep(now)).toMatchObject({ id: partial.id });
+
+    for (const thread of [pending, partial]) {
+      await recordConversationSyncFailure(testDb.db, {
+        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_404",
+        errorMessage: "Fansly request failed (404)", now,
+      });
+    }
+    expect(await pick(now)).toBeNull();
+    expect(await pickDeep(now)).toBeNull();
+
+    const lapsed = new Date(now.getTime() + 5 * 60_000);
+    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
+    expect(await pickDeep(lapsed)).toMatchObject({ id: partial.id });
+
+    await testDb.pool.query(
+      "update page_dm_message_sync_health set next_retry_at = null, quarantine_until = $1", [lapsed],
+    );
+    expect(await pick(now)).toBeNull();
+    expect(await pickDeep(now)).toBeNull();
+    expect(await pick(lapsed)).toMatchObject({ id: pending.id });
   });
 
   // G2: last_seen_generation is the sweep-membership set the destructive

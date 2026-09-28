@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  countOtherDmMessageGroupsFailingSinceLastSuccess,
   ensurePageSyncStates, excludePageDmConversationMessageSync, finishSyncRequestAttempt,
   getCheckpoint, getPageDmConversationById, insertSyncRequestAttempt, PageSyncLeaseLostError,
   runWithPageSyncExecutionContext, upsertCheckpointProgress, upsertFans,
@@ -149,5 +150,137 @@ describe("Fansly DM partner exclusion", () => {
       partnerPlatformUserId: "fan-group", reason,
     })).toBe(false);
     expect((await getPageDmConversationById(testDb.db, fixture.thread.id))?.metadata).toEqual({});
+  });
+});
+
+describe("Fansly DM per-thread breaker", () => {
+  async function seedBreakerPage() {
+    const { page, syncRunId } = await seedFanslyLanePage(testDb, {
+      slug: "breaker", name: "Breaker", label: "breaker", accountRef: "creator", stream: "dm_messages",
+    });
+    const threads: Record<string, NonNullable<Awaited<ReturnType<typeof upsertPageDmConversation>>>> = {};
+    for (const [group, unreadCount] of [["poison", 5], ["healthy", 1]] as const) {
+      const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: `fan-${group}` }]);
+      if (!fan) throw new Error("Expected a fixture fan");
+      const thread = await upsertPageDmConversation(testDb.db, {
+        ...seedThreadInput(page.id, group, 1), fanId: fan.id, unreadCount,
+      });
+      if (!thread) throw new Error("Expected a fixture conversation");
+      threads[group] = thread;
+    }
+    await ensurePageSyncStates(testDb.db, { pageId: page.id });
+    await testDb.pool.query(`update page_sync_states set status = 'running', leased_seq = 1,
+      lease_token = 'owner', lease_expires_at = now() + interval '1 hour'
+      where page_id = $1 and stream = 'dm_messages'`, [page.id]);
+    return { page, syncRunId, poison: threads.poison!, healthy: threads.healthy! };
+  }
+
+  async function journalAttempt(
+    fixture: Awaited<ReturnType<typeof seedBreakerPage>>,
+    group: string,
+    outcome: { state: "success" | "failed"; httpStatus?: number; failureKind?: "http" | "policy" },
+    startedAt = new Date(),
+  ) {
+    const attempt = await insertSyncRequestAttempt(testDb.db, {
+      syncRunId: fixture.syncRunId, platformAccountId: fixture.page.id, provider: "fansly", stream: "dm_messages",
+      operation: "messages", logicalRequestId: `${group}-${startedAt.getTime()}`, attemptNumber: 1,
+      requestShape: { groupId: group }, startedAt,
+    });
+    if (!attempt) throw new Error("Expected a fixture attempt");
+    await finishSyncRequestAttempt(testDb.db, attempt.id, { ...outcome, finishedAt: startedAt });
+  }
+
+  function breakerChunk(fixture: Awaited<ReturnType<typeof seedBreakerPage>>, failingGroups: Set<string>) {
+    const providerError = new FanslyApiError("error getting group messages", 500, 500);
+    const groups: string[] = [];
+    const getMessagesPage = vi.fn(async (_context: unknown, params: { groupId: string }) => {
+      groups.push(params.groupId);
+      if (failingGroups.has(params.groupId)) throw providerError;
+      const message = { id: `msg-${params.groupId}`, senderId: `fan-${params.groupId}`, content: "body",
+        createdAt: Date.parse("2026-03-09T12:00:00.000Z") };
+      return { items: [message], groupId: params.groupId, before: null, done: true, raw: { messages: [message] } };
+    });
+    const app = createTestAppContext(testDb, {
+      syncSharedRateLimitEnabled: true,
+      adapter: { getMessagesPage, getAccountsByIdsPage: vi.fn() } as never,
+    });
+    const run = () => runWithPageSyncExecutionContext({
+      pageId: fixture.page.id, stream: "dm_messages", requestSeq: 1, leaseToken: "owner",
+    }, () => fanslyDmMessagesChunk(app, fanslyLaneInput({
+      pageId: fixture.page.id, label: fixture.page.label, accountRef: "creator", egressKey: "fixture",
+      syncRunId: fixture.syncRunId, now: new Date(),
+      telemetry: { ...fanslyLaneTelemetryStub(), recordDmMessagesChunkSummary: vi.fn() } as never,
+    }) as never));
+    return { run, providerError, groups };
+  }
+
+  const breakerRow = async (conversationId: number) => (await testDb.pool.query(
+    "select failure_count, error_class, next_retry_at from page_dm_message_sync_health where conversation_id = $1",
+    [conversationId],
+  )).rows[0] as { failure_count: number; error_class: string; next_retry_at: Date } | undefined;
+
+  it("backs off a thread whose first page fails, so the next chunk reads another thread", async () => {
+    const fixture = await seedBreakerPage();
+    const failing = new Set(["poison"]);
+    const chunk = breakerChunk(fixture, failing);
+
+    await expect(chunk.run()).rejects.toBe(chunk.providerError);
+    const row = await breakerRow(fixture.poison.id);
+    expect(row).toMatchObject({ failure_count: 1, error_class: "fansly_500" });
+    expect(row!.next_retry_at.getTime() - Date.now()).toBeGreaterThan(4 * 60_000);
+    expect((await getCheckpoint(testDb.db, fixture.page.id, "dm_messages"))?.state).toEqual(emptyDmMessagesCursorState());
+
+    // Before the breaker, the checkpoint pinned the poison thread for good.
+    expect((await chunk.run()).satisfied).toBe(true);
+    expect(chunk.groups).toEqual(["poison", "healthy"]);
+    expect(await getPageDmConversationById(testDb.db, fixture.healthy.id))
+      .toMatchObject({ newestStoredMessageId: "msg-healthy", messageCoverageStatus: "complete" });
+
+    // Re-admitted once its window lapses; a completed walk clears the row.
+    failing.clear();
+    await testDb.pool.query("update page_dm_message_sync_health set next_retry_at = now() - interval '1 second'");
+    expect((await chunk.run()).satisfied).toBe(true);
+    expect(chunk.groups).toEqual(["poison", "healthy", "poison"]);
+    expect(await breakerRow(fixture.poison.id)).toBeUndefined();
+  });
+
+  it("treats failures across several threads since the last good read as an outage", async () => {
+    const fixture = await seedBreakerPage();
+    await journalAttempt(fixture, "other-1", { state: "success" }, new Date(Date.now() - 60_000));
+    await journalAttempt(fixture, "other-2", { state: "failed", httpStatus: 502, failureKind: "http" }, new Date(Date.now() - 30_000));
+    await journalAttempt(fixture, "other-3", { state: "failed", httpStatus: 502, failureKind: "http" }, new Date(Date.now() - 20_000));
+    const chunk = breakerChunk(fixture, new Set(["poison", "healthy"]));
+
+    await expect(chunk.run()).rejects.toBe(chunk.providerError);
+    expect(await breakerRow(fixture.poison.id)).toBeUndefined();
+    expect((await getCheckpoint(testDb.db, fixture.page.id, "dm_messages"))?.state)
+      .toMatchObject({ currentConversationId: fixture.poison.id });
+
+    // A later good read of any thread ends the outage verdict.
+    await journalAttempt(fixture, "other-1", { state: "success" }, new Date(Date.now() - 10_000));
+    await expect(chunk.run()).rejects.toBe(chunk.providerError);
+    expect(await breakerRow(fixture.poison.id)).toMatchObject({ failure_count: 1 });
+  });
+
+  it("counts only other groups' provider failures after the page's latest successful read", async () => {
+    const fixture = await seedBreakerPage();
+    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000);
+    const count = (since = at(3600)) => countOtherDmMessageGroupsFailingSinceLastSuccess(testDb.db, {
+      platformAccountId: fixture.page.id, platformConversationId: "poison", since,
+    });
+    expect(await count()).toBe(0);
+
+    await journalAttempt(fixture, "before-success", { state: "failed", httpStatus: 500, failureKind: "http" }, at(50));
+    await journalAttempt(fixture, "any", { state: "success" }, at(40));
+    await journalAttempt(fixture, "poison", { state: "failed", httpStatus: 500, failureKind: "http" }, at(30));
+    await journalAttempt(fixture, "policy", { state: "failed", failureKind: "policy" }, at(25));
+    await journalAttempt(fixture, "other-1", { state: "failed", httpStatus: 404, failureKind: "http" }, at(20));
+    await journalAttempt(fixture, "other-1", { state: "failed", httpStatus: 500, failureKind: "http" }, at(15));
+    expect(await count()).toBe(1);
+
+    await journalAttempt(fixture, "other-2", { state: "failed", httpStatus: 502, failureKind: "http" }, at(10));
+    expect(await count()).toBe(2);
+    // Outside the scan window nothing counts, not even the stale success.
+    expect(await count(at(5))).toBe(0);
   });
 });

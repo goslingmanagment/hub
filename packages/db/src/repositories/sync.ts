@@ -1662,6 +1662,49 @@ export async function countRecentTerminalDmMessageConversationFailureStreak(
   return streak;
 }
 
+/**
+ * Outage guard for the per-thread dm_messages breaker (the #138 vendor-outage
+ * rule): how many OTHER groups of the page have a failed /message read newer
+ * than the page's latest successful one. A failure is the thread's own only
+ * while the endpoint still works for the page; failures across several groups
+ * since the last success read as a page-wide outage (5xx, proxy, envelope),
+ * which must not quarantine one thread per stream retry. Local policy
+ * refusals are not provider failures. Reads journaled attempts only (no
+ * request); `since` bounds the scan through the started_at index.
+ */
+export async function countOtherDmMessageGroupsFailingSinceLastSuccess(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    platformConversationId: string;
+    since: Date;
+  },
+) {
+  const result = await db.execute<{ count: number | string }>(sql`
+    with recent as (
+      select a.state,
+             a.request_shape ->> 'groupId' as "groupId",
+             coalesce(a.finished_at, a.started_at) as "terminalAt"
+      from ${syncHttpAttempts} a
+      where a.started_at >= ${input.since}::timestamptz
+        and a.page_id = ${input.platformAccountId}
+        and a.operation = 'messages'
+        and (a.state = 'success' or (a.state = 'failed' and a.failure_kind is distinct from 'policy'))
+    )
+    select count(distinct r."groupId")::int as "count"
+    from recent r
+    where r.state = 'failed'
+      and r."groupId" is not null
+      and r."groupId" <> ${input.platformConversationId}
+      and r."terminalAt" > coalesce(
+        (select max(s."terminalAt") from recent s where s.state = 'success'),
+        '-infinity'::timestamptz
+      )
+  `);
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export async function hasRecentTerminalProxyFailure(
   db: Database,
   input: {
