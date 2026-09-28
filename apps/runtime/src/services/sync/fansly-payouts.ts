@@ -36,6 +36,25 @@
 // comes back short or the offset reaches `total`. After that the walk is done
 // and the daily cost is exactly two calls.
 //
+// WHY the walk stopped is kept (`walkStop`), because only one stop may claim
+// the floor. A short page always ends the walk — but when that response's own
+// `total` says rows remain past it, the provider contradicted itself, and the
+// claim is `short_before_total`: partial, with ONE anomaly, never
+// `provider_exhausted`. Every later head read restates the stop it has, and
+// nothing upgrades it.
+//
+// ── THE CATCH-UP ────────────────────────────────────────────────────────────
+//
+// New payouts land at the HEAD, and the head holds ten. When more than ten
+// land between two head reads — a lane down for weeks on a busy page — the rest
+// slide below offset 0, where no daily read reaches. So the head read keeps the
+// refs it saw, and a FULL head that shares none of them with the previous one
+// re-opens the walk at offset 10 as a CATCH-UP, which stops on the first page
+// that reaches a row the previous head held. A cursor saved before the refs
+// were kept falls back on `total`: grown by more than a page, the catch-up
+// walks exactly the rows it grew by. A catch-up reaches new rows, not the
+// floor, so it never changes why the history walk stopped.
+//
 // Whether `limit > 10` is honoured on THIS route has never been measured. So
 // the walk assumes 10 and carries a REPEAT-REQUEST GUARD instead of a belief.
 // It has TWO triggers and they answer the same question — "did this request
@@ -142,7 +161,7 @@ const REQUEST_WALK_PAGES_PER_CHUNK = 5;
  *
  * `total` was 83 on the walked page. At an unknown server page size this is a
  * safety net against a cursor that advances by one row a page, not a coverage
- * limit: hitting it stops the walk with an anomaly.
+ * limit: hitting it stops the walk with an anomaly. Catch-up pages count too.
  */
 const REQUEST_WALK_MAX_PAGES = 400;
 
@@ -173,11 +192,45 @@ export interface FanslyPayoutsCursorState {
   walkTotal: number | null;
   /** The oldest `createdAt` the walk has reached, in Unix ms — the FLOOR. */
   floorMs: number | null;
-  /** True once a page came back short or the offset reached `total`. */
+  /** True once a page came back short or the offset reached `total`, and again
+   *  once a catch-up reaches rows an earlier head read held. */
   walkDone: boolean;
+  /** Why the history walk stopped; null while the first walk is still open. A
+   *  catch-up leaves it as it found it. */
+  walkStop: FanslyPayoutsWalkStop | null;
+  /** The row refs of the last HEAD page — what the next head read has to share
+   *  a row with for the head alone to have caught every payout since. */
+  headRefs: string[];
+  /** An open catch-up walk, or null. */
+  catchUp: FanslyPayoutsCatchUp | null;
   /** Payout status codes this page has already reported unknown, so the anomaly
    *  fires ONCE per code rather than once per sweep forever. */
   unknownStatusCodes: number[];
+}
+
+/**
+ * Why the request walk stopped. Only `exhausted` reached the provider's floor;
+ * every other stop leaves the history partial and names itself in coverage.
+ */
+export type FanslyPayoutsWalkStop =
+  | "exhausted"
+  | "short_before_total"
+  | "repeat_request"
+  | "page_cap";
+
+const WALK_STOPS: ReadonlySet<string> = new Set<FanslyPayoutsWalkStop>([
+  "exhausted",
+  "short_before_total",
+  "repeat_request",
+  "page_cap",
+]);
+
+/** Where a catch-up walk ends: on a page holding one of `stopRefs` (the
+ *  previous head's rows), or — for a cursor saved before head refs were kept —
+ *  once the walk has passed `untilOffset`, the rows `total` grew by. */
+export interface FanslyPayoutsCatchUp {
+  stopRefs: string[] | null;
+  untilOffset: number | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -198,6 +251,23 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function asStrings(value: unknown): string[] | null {
+  return Array.isArray(value)
+    ? value.filter((member): member is string => asNullableString(member) !== null)
+    : null;
+}
+
+/** A catch-up with no stop condition left is no catch-up at all. */
+function parseCatchUp(value: unknown): FanslyPayoutsCatchUp | null {
+  const record = asRecord(value);
+  const stopRefs = asStrings(record?.stopRefs) ?? [];
+  const untilOffset = asNullableInt(record?.untilOffset);
+  if (stopRefs.length === 0 && untilOffset === null) {
+    return null;
+  }
+  return { stopRefs: stopRefs.length > 0 ? stopRefs : null, untilOffset };
+}
+
 export function parseFanslyPayoutsCursorState(
   value: unknown,
 ): FanslyPayoutsCursorState | null {
@@ -209,6 +279,7 @@ export function parseFanslyPayoutsCursorState(
   if (utcDay === null) {
     return null;
   }
+  const walkDone = state.walkDone === true;
   return {
     version: 1,
     utcDay,
@@ -221,7 +292,16 @@ export function parseFanslyPayoutsCursorState(
     walkPages: Math.max(0, asInt(state.walkPages, 0)),
     walkTotal: asNullableInt(state.walkTotal),
     floorMs: asNullableInt(state.floorMs),
-    walkDone: state.walkDone === true,
+    walkDone,
+    // A cursor saved before the stop was kept: every such walk in production
+    // ended on a short page with its count equal to `total`.
+    walkStop: typeof state.walkStop === "string" && WALK_STOPS.has(state.walkStop)
+      ? state.walkStop as FanslyPayoutsWalkStop
+      : walkDone
+      ? "exhausted"
+      : null,
+    headRefs: asStrings(state.headRefs) ?? [],
+    catchUp: parseCatchUp(state.catchUp),
     unknownStatusCodes: Array.isArray(state.unknownStatusCodes)
       ? state.unknownStatusCodes.filter(
         (code): code is number => typeof code === "number" && Number.isSafeInteger(code),
@@ -244,6 +324,9 @@ export function emptyFanslyPayoutsCursorState(now: Date): FanslyPayoutsCursorSta
     walkTotal: null,
     floorMs: null,
     walkDone: false,
+    walkStop: null,
+    headRefs: [],
+    catchUp: null,
     unknownStatusCodes: [],
   };
 }
@@ -312,6 +395,94 @@ export function oldestCreatedAtMs(rows: readonly Record<string, unknown>[]): num
     oldest = oldest === null ? createdAt : Math.min(oldest, createdAt);
   }
   return oldest;
+}
+
+/** Every row `id` on a page, in page order. */
+function payoutRefs(rows: readonly Record<string, unknown>[]): string[] {
+  return rows.map((row) => asNullableString(row.id)).filter((id): id is string => id !== null);
+}
+
+function sharesARef(rows: readonly Record<string, unknown>[], refs: readonly string[]): boolean {
+  const known = new Set(refs);
+  return payoutRefs(rows).some((id) => known.has(id));
+}
+
+/**
+ * Why a walk that just ended on a SHORT page, or at `total`, stopped.
+ *
+ * The short page is the end either way. But a response whose own `total`
+ * counts rows past the ones it served has contradicted itself, and a walk that
+ * stopped there has not shown it reached the floor.
+ */
+export function payoutWalkStopAt(input: {
+  offset: number;
+  rowCount: number;
+  total: number | null;
+}): "exhausted" | "short_before_total" {
+  return input.rowCount < PAYOUT_REQUESTS_PAGE_SIZE
+      && input.total !== null
+      && input.offset + input.rowCount < input.total
+    ? "short_before_total"
+    : "exhausted";
+}
+
+/** A walk that stops again never upgrades an earlier partial stop: a catch-up
+ *  that reaches the end cleanly has read new rows, not the history the first
+ *  walk left unread. It may only make an exhausted history partial. */
+export function settleWalkStop(
+  previous: FanslyPayoutsWalkStop | null,
+  next: FanslyPayoutsWalkStop,
+): FanslyPayoutsWalkStop {
+  return previous === null || previous === "exhausted" ? next : previous;
+}
+
+/** The claim a DONE request walk may make. Only an exhausted walk reached the
+ *  floor; every other stop is partial and names itself. */
+function settledPayoutRequestsCoverage(stop: FanslyPayoutsWalkStop | null) {
+  return stop === null || stop === "exhausted"
+    ? { status: "provider_exhausted", reasonCode: "walk_exhausted" } as const
+    : { status: "partial_provider_surface", reasonCode: stop } as const;
+}
+
+/**
+ * Did more payouts land since the previous head read than one head page holds?
+ * Returns the catch-up that reaches them, or null.
+ *
+ * Only a FULL head can hide rows below it. With the previous head's refs in
+ * hand the test is exact: a full head sharing none of them means the previous
+ * head slid past offset 9. Without them (a cursor saved before they were kept,
+ * or a page whose previous head was empty), `total` grown by more than a page
+ * is the signal, and the catch-up walks exactly the rows it grew by.
+ */
+export function payoutHeadGap(input: {
+  previousHeadRefs: readonly string[];
+  previousTotal: number | null;
+  headRows: readonly Record<string, unknown>[];
+  total: number | null;
+}): FanslyPayoutsCatchUp | null {
+  if (input.headRows.length < PAYOUT_REQUESTS_PAGE_SIZE) {
+    return null;
+  }
+  if (input.previousHeadRefs.length > 0) {
+    return payoutRefs(input.headRows).length === 0 || sharesARef(input.headRows, input.previousHeadRefs)
+      ? null
+      : { stopRefs: [...input.previousHeadRefs], untilOffset: null };
+  }
+  if (input.previousTotal === null || input.total === null) {
+    return null;
+  }
+  const landed = input.total - input.previousTotal;
+  return landed > PAYOUT_REQUESTS_PAGE_SIZE ? { stopRefs: null, untilOffset: landed } : null;
+}
+
+/** Has a catch-up walk reached the rows the previous head already held? */
+function catchUpReached(
+  catchUp: FanslyPayoutsCatchUp,
+  rows: readonly Record<string, unknown>[],
+  nextOffset: number,
+): boolean {
+  return (catchUp.stopRefs !== null && sharesARef(rows, catchUp.stopRefs))
+    || (catchUp.untilOffset !== null && nextOffset >= catchUp.untilOffset);
 }
 
 /** Backfill continuation spacing: the configured delay ± 30 % jitter, so a deep
@@ -497,6 +668,48 @@ export async function fanslyPayoutsChunk(
     return { persisted, rows, total };
   };
 
+  /** ONE anomaly when a page ends the walk short of its own `total`, as every
+   *  other stop that leaves the history partial raises one. */
+  const reportShortBeforeTotal = async (offset: number, rowCount: number, total: number | null) => {
+    await input.telemetry.addAnomaly({
+      code: "fansly_payouts_short_before_total",
+      severity: "warn",
+      message:
+        "A Fansly payout-request page came back short while its own `total` counts "
+        + "more rows; the walk stopped and claims a partial history",
+      details: { offset, rows: rowCount, total, pages: state.walkPages },
+    });
+  };
+
+  /**
+   * The request-history claim of a DONE walk, read off why it stopped.
+   *
+   * `proof` is the page this dispatch just read, if any. It proves an exhausted
+   * walk, and a partial one only when that page is what stopped it; a partial
+   * stop restated from anywhere else names no observation, so the upsert keeps
+   * the one that proved it.
+   */
+  const writeSettledCoverage = async (
+    proof: { observationId: number | null; stoppedHere: boolean } | null,
+  ) => {
+    const settled = settledPayoutRequestsCoverage(state.walkStop);
+    const proved = proof !== null
+      && (settled.status === "provider_exhausted" || proof.stoppedHere);
+    await coverage(
+      FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
+      settled.status,
+      proved ? "terminal_response" : "none",
+      {
+        proofObservationId: proved ? proof.observationId : null,
+        reasonCode: settled.reasonCode,
+        expectedCount: state.walkTotal,
+        // THE FLOOR: the oldest payout this page has ever reached.
+        oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
+        cursor: { offset: state.walkOffset, pages: state.walkPages },
+      },
+    );
+  };
+
   // ── THE TWO FIXED STEPS ────────────────────────────────────────────────────
   //
   // They run in order and the index is durable, so a chunk that defers between
@@ -538,14 +751,21 @@ export async function fanslyPayoutsChunk(
       }
 
       // STEP 2 — the HEAD page of the request history, `offset=0`.
+      const previousTotal = state.walkTotal;
+      const previousHeadRefs = state.headRefs;
       const head = await readRequestPage(0);
       const seedsWalk = !state.walkDone && state.walkOffset === 0;
+      let stoppedHere = false;
       if (seedsWalk) {
         // FIRST ENABLE. This page is also page one of the walk: record it as
         // taken, so the 83-row history costs nine calls, not ten.
         const short = head.rows.length < PAYOUT_REQUESTS_PAGE_SIZE;
         const reachedTotal = head.total !== null
           && PAYOUT_REQUESTS_PAGE_SIZE >= head.total;
+        const walkDone = short || reachedTotal;
+        const walkStop = walkDone
+          ? payoutWalkStopAt({ offset: 0, rowCount: head.rows.length, total: head.total })
+          : null;
         state = {
           ...state,
           lastRequestedOffset: 0,
@@ -554,22 +774,61 @@ export async function fanslyPayoutsChunk(
           lastPageFirstRef: firstPayoutRef(head.rows),
           walkPages: state.walkPages + 1,
           walkOffset: PAYOUT_REQUESTS_PAGE_SIZE,
-          walkDone: short || reachedTotal,
+          walkDone,
+          walkStop,
         };
+        stoppedHere = walkDone;
+        if (walkStop === "short_before_total") {
+          await reportShortBeforeTotal(0, head.rows.length, head.total);
+        }
+      } else if (state.walkDone) {
+        // THE CATCH-UP. A full head that shares no row with the previous one
+        // has pushed payouts below offset 9 that no daily read would reach.
+        const catchUp = payoutHeadGap({
+          previousHeadRefs,
+          previousTotal,
+          headRows: head.rows,
+          total: head.total,
+        });
+        if (catchUp !== null) {
+          await input.telemetry.addAnomaly({
+            code: "fansly_payouts_head_gap",
+            severity: "info",
+            message:
+              "More Fansly payouts landed since the last head read than one page holds; "
+              + "the walk re-opened at offset 10 to catch up",
+            details: { previousTotal, total: head.total, byRefs: catchUp.stopRefs !== null },
+          });
+          state = {
+            ...state,
+            walkDone: false,
+            walkOffset: PAYOUT_REQUESTS_PAGE_SIZE,
+            lastRequestedOffset: 0,
+            lastPageFirstRef: firstPayoutRef(head.rows),
+            catchUp,
+          };
+        }
       }
-      state = { ...state, fixedStepIndex: 2 };
-      await coverage(
-        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
-        state.walkDone ? "provider_exhausted" : "in_progress",
-        "terminal_response",
-        {
-          proofObservationId: head.persisted.observationId ?? null,
-          reasonCode: state.walkDone ? "walk_exhausted" : "head_captured",
-          expectedCount: state.walkTotal,
-          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
-          cursor: { offset: state.walkOffset, pages: state.walkPages },
-        },
-      );
+      state = { ...state, headRefs: payoutRefs(head.rows), fixedStepIndex: 2 };
+      if (state.walkDone) {
+        await writeSettledCoverage({
+          observationId: head.persisted.observationId ?? null,
+          stoppedHere,
+        });
+      } else {
+        await coverage(
+          FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
+          "in_progress",
+          "terminal_response",
+          {
+            proofObservationId: head.persisted.observationId ?? null,
+            reasonCode: state.catchUp === null ? "head_captured" : "catching_up",
+            expectedCount: state.walkTotal,
+            oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
+            cursor: { offset: state.walkOffset, pages: state.walkPages },
+          },
+        );
+      }
       await saveProgress();
     }
 
@@ -586,9 +845,9 @@ export async function fanslyPayoutsChunk(
   // ── THE REQUEST-HISTORY WALK ───────────────────────────────────────────────
   //
   // Offset 10, 20, 30 … until a page comes back short or the offset reaches
-  // `total`. It only runs on the first enable (and after a `total` that grows
-  // past what the walk reached, which cannot happen backwards — new payouts
-  // land at the HEAD, which the daily sweep already reads).
+  // `total`. It runs on the first enable, and as a CATCH-UP after a head read
+  // that found more new payouts than the head holds — until it reaches a row
+  // the previous head held.
   let walkPagesThisChunk = 0;
 
   while (!state.walkDone) {
@@ -612,18 +871,13 @@ export async function fanslyPayoutsChunk(
         message: "Fansly payout-request pagination did not advance; the walk stopped",
         details: { offset: state.walkOffset, pages: state.walkPages },
       });
-      state = { ...state, walkDone: true };
-      await coverage(
-        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
-        "partial_provider_surface",
-        "none",
-        {
-          reasonCode: "repeat_request",
-          expectedCount: state.walkTotal,
-          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
-          cursor: { offset: state.walkOffset, pages: state.walkPages },
-        },
-      );
+      state = {
+        ...state,
+        walkDone: true,
+        walkStop: settleWalkStop(state.walkStop, "repeat_request"),
+        catchUp: null,
+      };
+      await writeSettledCoverage(null);
       await saveProgress();
       break;
     }
@@ -635,18 +889,13 @@ export async function fanslyPayoutsChunk(
         message: "Fansly payout-request walk hit its page cap before reaching the floor",
         details: { pages: state.walkPages, total: state.walkTotal },
       });
-      state = { ...state, walkDone: true };
-      await coverage(
-        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
-        "partial_provider_surface",
-        "none",
-        {
-          reasonCode: "page_cap",
-          expectedCount: state.walkTotal,
-          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
-          cursor: { offset: state.walkOffset, pages: state.walkPages },
-        },
-      );
+      state = {
+        ...state,
+        walkDone: true,
+        walkStop: settleWalkStop(state.walkStop, "page_cap"),
+        catchUp: null,
+      };
+      await writeSettledCoverage(null);
       await saveProgress();
       break;
     }
@@ -669,19 +918,17 @@ export async function fanslyPayoutsChunk(
           + "the walk stopped rather than re-reading page one",
         details: { offset: requestedOffset, pages: state.walkPages, firstRef: pageFirstRef },
       });
-      state = { ...state, lastRequestedOffset: requestedOffset, walkDone: true };
-      await coverage(
-        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
-        "partial_provider_surface",
-        "terminal_response",
-        {
-          proofObservationId: page.persisted.observationId ?? null,
-          reasonCode: "repeat_request",
-          expectedCount: state.walkTotal,
-          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
-          cursor: { offset: requestedOffset, pages: state.walkPages },
-        },
-      );
+      state = {
+        ...state,
+        lastRequestedOffset: requestedOffset,
+        walkDone: true,
+        walkStop: settleWalkStop(state.walkStop, "repeat_request"),
+        catchUp: null,
+      };
+      await writeSettledCoverage({
+        observationId: page.persisted.observationId ?? null,
+        stoppedHere: state.walkStop === "repeat_request",
+      });
       await saveProgress();
       break;
     }
@@ -697,30 +944,47 @@ export async function fanslyPayoutsChunk(
     // that returned fewer rows than it was asked for IS the end.
     const short = offsetPage.done;
     const reachedTotal = page.total !== null && nextOffset >= page.total;
+    const reachedEnd = short || reachedTotal;
+    const endStop = reachedEnd
+      ? payoutWalkStopAt({ offset: requestedOffset, rowCount: page.rows.length, total: page.total })
+      : null;
+    // A catch-up also ends where it reaches rows the previous head held, and
+    // that stop says nothing about the floor: the walk's stop stays as it was.
+    const caughtUp = state.catchUp !== null
+      && catchUpReached(state.catchUp, page.rows, nextOffset);
     state = {
       ...state,
       lastRequestedOffset: requestedOffset,
       lastPageFirstRef: pageFirstRef,
       walkPages: state.walkPages + 1,
       walkOffset: nextOffset,
-      walkDone: short || reachedTotal,
+      walkDone: reachedEnd || caughtUp,
+      walkStop: endStop === null ? state.walkStop : settleWalkStop(state.walkStop, endStop),
+      catchUp: reachedEnd || caughtUp ? null : state.catchUp,
     };
+    if (endStop === "short_before_total") {
+      await reportShortBeforeTotal(requestedOffset, page.rows.length, page.total);
+    }
 
-    await coverage(
-      FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
-      state.walkDone ? "provider_exhausted" : "in_progress",
-      "terminal_response",
-      {
-        proofObservationId: page.persisted.observationId ?? null,
-        reasonCode: state.walkDone ? "walk_exhausted" : "walking",
-        expectedCount: state.walkTotal,
-        observedUniqueCount: state.walkDone ? state.walkPages : null,
-        // THE FLOOR: the oldest payout this page has ever reached, proved by
-        // the response journaled above.
-        oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
-        cursor: { offset: state.walkOffset, pages: state.walkPages },
-      },
-    );
+    if (state.walkDone) {
+      await writeSettledCoverage({
+        observationId: page.persisted.observationId ?? null,
+        stoppedHere: endStop !== null && state.walkStop === endStop,
+      });
+    } else {
+      await coverage(
+        FANSLY_PAYOUTS_COVERAGE_SCOPES.requests,
+        "in_progress",
+        "terminal_response",
+        {
+          proofObservationId: page.persisted.observationId ?? null,
+          reasonCode: state.catchUp === null ? "walking" : "catching_up",
+          expectedCount: state.walkTotal,
+          oldestCapturedAt: state.floorMs === null ? null : new Date(state.floorMs),
+          cursor: { offset: state.walkOffset, pages: state.walkPages },
+        },
+      );
+    }
     await saveProgress();
   }
 
@@ -751,6 +1015,7 @@ export async function fanslyPayoutsChunk(
       walkPages: state.walkPages,
       walkTotal: state.walkTotal,
       walkDone: state.walkDone,
+      walkStop: state.walkStop,
       ...(deferred === null ? {} : { deferred }),
     };
 
