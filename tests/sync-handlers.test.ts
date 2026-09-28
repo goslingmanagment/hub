@@ -5708,6 +5708,74 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: null });
   });
 
+  const walkMessage = (id: string, createdAt: unknown = 1_770_000_000) =>
+    ({ id, senderId: "fan-1", createdAt, content: "body" });
+
+  it.each([
+    ["an unparseable createdAt", "partial_window", null],
+    ["only parseable timestamps", "complete", 1_769_999_000],
+  ] as const)("backfill walk with %s finalizes %s", async (_name, verdict, secondCreatedAt) => {
+    const h = dmWalkHarness({ messageCoverageStatus: "pending_backfill" }, [{
+      items: [walkMessage("m-1"), walkMessage("m-2", secondCreatedAt)], done: true, raw: { messages: [] },
+    }]);
+
+    await h.run();
+
+    expect(dbMocks.upsertPageDmMessages).toHaveBeenCalledExactlyOnceWith({}, secondCreatedAt === null
+      ? [expect.objectContaining({ platformMessageId: "m-1" })]
+      : [expect.objectContaining({ platformMessageId: "m-1" }), expect.objectContaining({ platformMessageId: "m-2" })]);
+    expect(dbMocks.finalizePageDmConversationMessageSync)
+      .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: verdict }));
+    if (secondCreatedAt === null) {
+      expect(h.telemetry.addAnomaly).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        code: "dm_message_timestamp_unparseable",
+        severity: "error",
+        details: { conversationId: 777, groupId: "group-1", count: 1, messageIds: ["m-2"], valueTypes: ["null"] },
+      }));
+    } else {
+      expect(h.telemetry.addAnomaly).not.toHaveBeenCalled();
+    }
+  });
+
+  it("carries normalization debt across chunks, so a later exhausted page cannot certify the walk", async () => {
+    const h = dmWalkHarness({ messageCoverageStatus: "pending_backfill" }, [
+      { items: [walkMessage("m-1"), walkMessage("m-2", "1770000000")], done: false, raw: { messages: [] } },
+      { items: [walkMessage("m-3")], done: true, raw: { messages: [] } },
+    ]);
+
+    await h.run();
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: "m-2", normalizationDebt: true });
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+
+    await h.run();
+    expect(h.getMessagesPage.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      expect.objectContaining({ before: null }), expect.objectContaining({ before: "m-2" }),
+    ]);
+    expect(dbMocks.finalizePageDmConversationMessageSync)
+      .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+    expect(h.checkpoint()).not.toHaveProperty("normalizationDebt");
+  });
+
+  it("an incremental walk over an unparseable head downgrades a complete thread", async () => {
+    const headWithoutCreatedAt = { id: "msg-80", senderId: "fan-1", content: "body" };
+    const h = dmWalkHarness({
+      storedMessageCount: 10, newestStoredMessageId: "old-1", messageCoverageStatus: "complete",
+    }, [{ items: [headWithoutCreatedAt, walkMessage("old-1")], done: false, raw: { messages: [] } }]);
+    dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set(["old-1"]));
+
+    await h.run();
+
+    expect(h.getMessagesPage).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ before: null }));
+
+    expect(dbMocks.finalizePageDmConversationMessageSync)
+      .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "partial_window" }));
+    expect(h.telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "dm_message_timestamp_unparseable",
+      details: expect.objectContaining({ messageIds: ["msg-80"], valueTypes: ["undefined"] }),
+    }));
+  });
+
   it("counts 429 retries in dm_messages chunk summaries", async () => {
     const telemetry = createTelemetry();
     const getMessagesPage = vi.fn(async (context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null }) => {

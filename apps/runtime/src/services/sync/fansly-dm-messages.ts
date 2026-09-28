@@ -42,7 +42,23 @@ export function resolveDmConversationCoverageStatus(input: {
   overlapFound: boolean;
   providerHistoryExhausted: boolean;
   hitWindowCap: boolean;
+  /** The walk left at least one message unstored (no parseable createdAt). */
+  normalizationDebt?: boolean;
 }): MessageCoverageStatus {
+  const status = resolveDmWalkCoverageStatus(input);
+  // A walk that skipped a message never proves the thread complete, in any
+  // mode: an incremental walk would otherwise keep a prior 'complete' over the
+  // gap. partial_window, never pending_backfill: the ordinary picker treats it
+  // like complete, so the downgrade re-reads nothing. Only the deep backfill
+  // (off by default) walks partial_window threads, from the oldest stored id;
+  // it cannot revisit the gap and may certify the thread complete again, so
+  // the dm_message_timestamp_unparseable anomaly is the lasting signal.
+  return input.normalizationDebt === true && status === "complete" ? "partial_window" : status;
+}
+
+function resolveDmWalkCoverageStatus(
+  input: Parameters<typeof resolveDmConversationCoverageStatus>[0],
+): MessageCoverageStatus {
   if (input.currentMode === "incremental") {
     return input.existingStatus;
   }
@@ -186,6 +202,9 @@ export interface FanslyDmMessagePageOutcome {
   /** Oldest id on this page; the `before` cursor for the next request. */
   oldestMessageId: string | null;
   providerHistoryExhausted: boolean;
+  /** At least one returned message had no parseable createdAt and was left
+   * unstored; the walk that read it cannot certify the thread complete. */
+  normalizationDebt: boolean;
 }
 
 /**
@@ -277,12 +296,19 @@ export async function normalizeFanslyDmMessagePage(
   const overlapFound = page.items.some((message) => existingIds.has(message.id));
 
   const normalizedMessages: FanslyDmMessageUpsertInput = [];
+  const unparseable: Array<{ id: string; valueType: string }> = [];
   for (const message of page.items) {
     const createdAt = await normalizeDmTimestampWithAnomaly(input.telemetry, {
       context: "dm_messages:message",
       value: message.createdAt,
     });
     if (!createdAt) {
+      // The row stays in the verbatim journal; the hot table cannot hold it
+      // without a date. Overlap, cursor and exhaustion still count it below.
+      unparseable.push({
+        id: message.id,
+        valueType: message.createdAt === null ? "null" : typeof message.createdAt,
+      });
       continue;
     }
 
@@ -309,6 +335,20 @@ export async function normalizeFanslyDmMessagePage(
   const insertedMessageCount = normalizedMessages
     .filter((message) => !existingIds.has(message.platformMessageId))
     .length;
+  if (unparseable.length > 0) {
+    await input.telemetry.addAnomaly({
+      code: "dm_message_timestamp_unparseable",
+      severity: "error",
+      message: "DM message without a parseable createdAt was left unstored; the thread is not certified complete",
+      details: {
+        conversationId: input.conversation.id,
+        groupId: input.conversation.platformConversationId,
+        count: unparseable.length,
+        messageIds: unparseable.slice(0, 25).map((item) => item.id),
+        valueTypes: [...new Set(unparseable.map((item) => item.valueType))],
+      },
+    });
+  }
 
   const oldestMessageId = page.items.at(-1)?.id ?? null;
 
@@ -319,5 +359,6 @@ export async function normalizeFanslyDmMessagePage(
     overlapFound,
     oldestMessageId,
     providerHistoryExhausted: page.done || !oldestMessageId,
+    normalizationDebt: unparseable.length > 0,
   };
 }

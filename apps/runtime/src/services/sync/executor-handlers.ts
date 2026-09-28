@@ -3060,6 +3060,9 @@ export async function fanslyDmMessagesChunk(
           continue conversationLoop;
         }
         const { normalizedMessages, insertedMessageCount, overlapFound } = messagePage;
+        // Debt from an earlier page of this walk rides the checkpoint, so a
+        // multi-chunk walk cannot finish 'complete' over a skipped message.
+        const normalizationDebt = state.normalizationDebt === true || messagePage.normalizationDebt;
         collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
         const nextLiveRequestState = deepBackfillMaxRequests <= 0
@@ -3105,6 +3108,7 @@ export async function fanslyDmMessagesChunk(
             overlapFound,
             providerHistoryExhausted,
             hitWindowCap,
+            normalizationDebt,
           });
           // #135 A2b: the message upsert commits on its own; the thread-summary
           // recompute + checkpoint advance ride a SECOND transaction. The
@@ -3220,6 +3224,7 @@ export async function fanslyDmMessagesChunk(
             overlapReached: headCatchup.overlapReached === true || overlapFound,
           } } : {}),
           currentBeforeMessageId: oldestMessageId,
+          ...(normalizationDebt ? { normalizationDebt: true as const } : {}),
         };
         if (targetAttemptFinished) delete state.headCatchup;
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {

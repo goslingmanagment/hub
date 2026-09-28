@@ -525,6 +525,8 @@ export async function runTargetedThreadBackfill(
     oldestStoredMessageIdBefore: conversation.oldestStoredMessageId,
   });
   let walkFailure: unknown = null;
+  /** A page of this walk left a message unstored (no parseable createdAt). */
+  let normalizationDebt = false;
 
   /** The thread summary is the ONLY writer of stored_message_count / oldest id;
    * `upsertPageDmMessages` does not touch it. So a run that wrote messages and
@@ -598,6 +600,7 @@ export async function runTargetedThreadBackfill(
           result.journaledMessages += messagePage.normalizedMessages.length;
           result.overlapFound = result.overlapFound || messagePage.overlapFound;
           result.providerHistoryExhausted = messagePage.providerHistoryExhausted;
+          normalizationDebt = normalizationDebt || messagePage.normalizationDebt;
 
           if (messagePage.providerHistoryExhausted || messagePage.overlapFound) {
             result.outcome = "completed";
@@ -709,13 +712,15 @@ export async function runTargetedThreadBackfill(
 
       // The coverage verdict uses the deep-backfill rule: a walk that ended on
       // exhaustion or known ground is `complete`, an interrupted one stays
-      // `partial_window` so the regular crawl keeps offering the thread.
+      // `partial_window` so the regular crawl keeps offering the thread. So
+      // does a walk that left a message unstored.
       const messageCoverageStatus = resolveDmConversationCoverageStatus({
         currentMode: "deep_backfill",
         existingStatus: conversation.messageCoverageStatus,
         overlapFound: result.overlapFound,
         providerHistoryExhausted: result.providerHistoryExhausted,
         hitWindowCap: false,
+        normalizationDebt,
       });
       // A run told to ignore the depth cap must not have its freshly captured
       // window pruned back by the global cache policy in the same breath.

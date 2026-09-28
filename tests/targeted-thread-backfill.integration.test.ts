@@ -338,6 +338,48 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(thread.rows[0]).toMatchObject({ status: "complete", stored: 3 });
   }, 120_000);
 
+  it("keeps a walk that left a message without createdAt unstored out of complete", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const scripted = messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09", "a08"], done: true }] }, []);
+    appContext = {
+      ...appContext,
+      adapter: {
+        async getMessagesPage(...args: Parameters<typeof scripted.getMessagesPage>) {
+          const vendorPage = await scripted.getMessagesPage(...args);
+          return {
+            ...vendorPage,
+            items: vendorPage.items.map((item) => item.id === "a08" ? { ...item, createdAt: null } : item),
+          };
+        },
+      } as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    // Exhausted, yet not certified: the skipped message is a hole.
+    expect(result).toMatchObject({
+      outcome: "completed", providerHistoryExhausted: true, insertedMessages: 1,
+      messageCoverageStatus: "partial_window",
+    });
+    expect(await countMessages(targetThreadId)).toBe(1);
+    const thread = await testDb.pool.query<{ status: string }>(
+      'select message_coverage_status as "status" from page_dm_threads where id = $1',
+      [targetThreadId],
+    );
+    expect(thread.rows[0]).toEqual({ status: "partial_window" });
+    const anomalies = await testDb.pool.query<{ details: Record<string, unknown> }>(
+      "select details from sync_run_events where page_id = $1 and event_type = 'anomaly'",
+      [page.id],
+    );
+    expect(anomalies.rows).toEqual([{ details: expect.objectContaining({
+      code: "dm_message_timestamp_unparseable", count: 1, messageIds: ["a08"], valueTypes: ["null"],
+    }) }]);
+  }, 120_000);
+
   it("refuses the depth cap by default and applies the override to that run only", async (context) => {
     if (!testDb) {
       context.skip();

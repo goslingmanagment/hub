@@ -76,6 +76,9 @@ type DmMessagesCursorState = {
   currentMode: "backfill" | "deep_backfill" | "incremental" | null;
   liveMessageRequestsSinceDeepBackfill?: number;
   headCatchup?: { messageId: string; startedAt: string; pagesRead: number; overlapReached?: boolean };
+  /** An earlier page of this conversation's walk left a message unstored; the
+   * walk's final coverage verdict must not be 'complete'. */
+  normalizationDebt?: true;
 };
 
 // OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
@@ -755,6 +758,7 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     ...(liveMessageRequestsSinceDeepBackfill > 0
       ? { liveMessageRequestsSinceDeepBackfill: Math.floor(liveMessageRequestsSinceDeepBackfill) }
       : {}),
+    ...(state.normalizationDebt === true ? { normalizationDebt: true } : {}),
   };
 }
 
