@@ -2925,9 +2925,12 @@ export async function fanslyDmMessagesChunk(
    * A pinned walk dropped after it wrote pages (the thread became excluded,
    * invisible or unbound) leaves rows its thread summary does not cover yet.
    * A later incremental walk reads through them (overlap counts only rows at
-   * or before the recorded newest message), but a writer that recomputes the
-   * summary first moves that boundary onto them. Record the dropped cursor so
-   * such a gap stays findable for the targeted backfill.
+   * or before the recorded newest message), unless a writer recomputes the
+   * summary first and moves that boundary onto them. A backfill or deep
+   * backfill walk re-picked from the stale oldest message meets its own pages
+   * as ordinary overlap and can certify the unread history below them
+   * complete. Record the dropped cursor so such a gap stays findable for the
+   * targeted backfill; this anomaly is its only record.
    */
   const recordDroppedWalk = async (conversation: PageDmConversationRow, reason: string) => {
     if (!state.currentMode) {
