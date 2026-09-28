@@ -20,6 +20,10 @@ export const AI_MEDIA_DESCRIBE_LOOP_REFRESH_MS = 15_000;
 export const AI_MEDIA_DESCRIBE_LOOP_DRAIN_LIMIT = 10;
 /** A lane that cannot progress (stopped, breaker, no key) is not polled harder. */
 export const AI_MEDIA_DESCRIBE_LOOP_BACKOFF_MS = 60_000;
+/** The day's cap is spent: look again this much later (the owner may raise it). */
+export const AI_MEDIA_DESCRIBE_LOOP_BUDGET_BACKOFF_MS = 10 * 60_000;
+/** Shutdown waits at most this long for a drain in progress. */
+export const AI_MEDIA_DESCRIBE_LOOP_STOP_WAIT_MS = 15_000;
 
 export interface AiMediaDescribeLoopState {
   enabled: boolean;
@@ -37,6 +41,7 @@ export async function runAiMediaDescribeLoopTick(
   app: AppContext,
   state: AiMediaDescribeLoopState,
   overrides: Partial<AiMediaDescribeDeps> = {},
+  shouldContinue: () => boolean = () => true,
 ): Promise<number> {
   const clock = overrides.now ?? (() => new Date());
   const at = clock().getTime();
@@ -54,11 +59,18 @@ export async function runAiMediaDescribeLoopTick(
   if (!(await hasDueAiMediaDescriptions(app.db, { pageIds: state.pageIds, now: clock() }))) {
     return 0;
   }
-  const result = await runAiMediaDescribeSweepJob(app, overrides, { limit: AI_MEDIA_DESCRIBE_LOOP_DRAIN_LIMIT });
-  if (result.skipped || result.claimed === 0) {
-    // Due rows it cannot take now (a stop, a breaker, another worker's lease):
-    // look again after a pause instead of every second.
-    state.backoffUntil = at + AI_MEDIA_DESCRIBE_LOOP_BACKOFF_MS;
+  const result = await runAiMediaDescribeSweepJob(app, overrides, {
+    limit: AI_MEDIA_DESCRIBE_LOOP_DRAIN_LIMIT,
+    shouldContinue,
+  });
+  const after = clock().getTime();
+  if (result.skipped) {
+    // The lane cannot progress (a stop, a breaker, no key): look again after
+    // a pause instead of every second. Rows another worker took are not a
+    // reason to pause.
+    state.backoffUntil = after + AI_MEDIA_DESCRIBE_LOOP_BACKOFF_MS;
+  } else if ((result.outcomes.budget_deferred ?? 0) > 0) {
+    state.backoffUntil = after + AI_MEDIA_DESCRIBE_LOOP_BUDGET_BACKOFF_MS;
   }
   if (result.claimed > 0) {
     app.logger.info(result, "AI media describe loop drained");
@@ -74,7 +86,7 @@ export function startAiMediaDescribeLoop(app: AppContext) {
     if (stopped || running) {
       return;
     }
-    running = runAiMediaDescribeLoopTick(app, state)
+    running = runAiMediaDescribeLoopTick(app, state, {}, () => !stopped)
       .then(() => undefined)
       .catch((error: unknown) => {
         state.backoffUntil = Date.now() + AI_MEDIA_DESCRIBE_LOOP_BACKOFF_MS;
@@ -89,7 +101,12 @@ export function startAiMediaDescribeLoop(app: AppContext) {
     async stop() {
       stopped = true;
       clearInterval(timer);
-      await running;
+      // A drain claims nothing new once stopped; wait only a bounded time for
+      // the row in flight, never past the container's grace period.
+      await Promise.race([
+        running,
+        new Promise<void>((resolve) => setTimeout(resolve, AI_MEDIA_DESCRIBE_LOOP_STOP_WAIT_MS).unref?.()),
+      ]);
     },
   };
 }

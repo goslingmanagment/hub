@@ -60,7 +60,7 @@ function withDescribeSlot<T>(run: () => Promise<T>): Promise<T> {
 export async function runAiMediaDescribeSweepJob(
   app: AppContext,
   overrides: Partial<AiMediaDescribeDeps> = {},
-  options: { limit?: number } = {},
+  options: { limit?: number; shouldContinue?: () => boolean } = {},
 ) {
   return withDescribeSlot(() => runAiMediaDescribeSweep(app, {
     sources: AI_MEDIA_SOURCES,

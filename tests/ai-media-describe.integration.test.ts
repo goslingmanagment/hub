@@ -476,6 +476,15 @@ describe("AI media describer: seconds lane (claim order, real clock, ownership)"
     expect(Number(usage.rows[0].cost_micro_usd)).toBe(0);
   });
 
+  it("claims nothing once shutdown asked it to stop", async () => {
+    const id = await candidate({ mediaRef: "stop-1" });
+    const { calls, deps } = harness();
+    const result = await runAiMediaDescribeSweep(app, deps, { shouldContinue: () => false });
+    expect(result).toMatchObject({ claimed: 0, sent: 0 });
+    expect(calls.provider).toBe(0);
+    expect((await row(id)).status).toBe("pending");
+  });
+
   it("the loop tick drains due rows when switched on and idles otherwise", async () => {
     const id = await candidate({ mediaRef: "loop-1" });
     const { calls, deps } = harness();

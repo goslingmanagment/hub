@@ -128,8 +128,10 @@ function descriptionKey(mediaRef: string, variant: string) {
 export interface MediaNotesManifestEntry {
   mediaId: string;
   n: number;
-  note: "described" | "not_recognized" | "pending" | "over_limit";
+  note: "described" | "not_recognized" | "pending" | "over_limit" | "none";
 }
+
+const NEVER_DESCRIBED = new Set<string>(["failed", "unavailable", "outcome_unknown", "skipped_policy"]);
 
 /** At most this many entries are kept per generation (newest first). */
 export const MEDIA_NOTES_MANIFEST_ENTRY_LIMIT = 40;
@@ -216,7 +218,8 @@ export function renderFanslyMediaNotes(input: {
           : null;
       if (note === null) {
         manifest.pending += 1;
-        record(item, "pending");
+        // Not ready yet, or never will be (failed, unavailable, skipped).
+        record(item, row && NEVER_DESCRIBED.has(row.status) ? "none" : "pending");
         continue;
       }
       const pool = item.placement === "preview" ? teasersLeft : mediaLeft;

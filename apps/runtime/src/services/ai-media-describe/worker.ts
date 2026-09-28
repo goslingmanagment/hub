@@ -250,7 +250,7 @@ function sha256Hex(bytes: Uint8Array) {
 export async function runAiMediaDescribeSweep(
   app: AppContext,
   deps: AiMediaDescribeDeps,
-  options: { limit?: number } = {},
+  options: { limit?: number; shouldContinue?: () => boolean } = {},
 ): Promise<AiMediaDescribeSweepResult> {
   const clock = deps.now ?? (() => new Date());
   const startedAt = clock();
@@ -285,6 +285,10 @@ export async function runAiMediaDescribeSweep(
   };
   const limit = Math.max(0, options.limit ?? AI_MEDIA_DESCRIBE_SWEEP_LIMIT);
   for (let index = 0; index < limit; index += 1) {
+    if (options.shouldContinue && !options.shouldContinue()) {
+      // Shutting down: nothing new is claimed, nothing new is sent.
+      break;
+    }
     const claimAt = clock();
     const leaseToken = randomUUID();
     const row = await claimNextDueAiMediaDescription(app.db, {
