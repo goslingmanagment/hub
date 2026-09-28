@@ -293,4 +293,64 @@ describe("observations:rejournal-account-me (J4)", () => {
     expect(scoped.totals.missing).toBe(1);
     expect(scoped.unpairedRequests).toBe(0);
   });
+
+  // #223 at this site. In production every account_me raw row is pointer-only,
+  // so a dropped capture's body lives only in the catalog. When it cannot be
+  // read the capture must be SKIPPED, never journaled empty: its key
+  // `repair:account_me:raw:<id>` is deterministic, so an empty observation
+  // under it would pass for the repair and block the real one forever.
+  it("skips a dropped capture whose pointer-only body is unreadable, writes nothing under its key, and repairs it once the body is back", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("unavailable", "7003");
+    publishCaptureCasDualWritePages(String(page.id));
+    publishCaptureCasPointerOnlyPages(String(page.id));
+    await capture({ pageId: page.id, stream: "followers_reconcile", requestSeq: 8, body: accountMe("7003", 40) });
+    const closing = await capture({ pageId: page.id, stream: "followers_reconcile", requestSeq: 8, body: accountMe("7003", 41) });
+    const [closingRaw] = await query<{ inline_is_null: boolean; payload_object_id: string | null }>(
+      "select response_payload is null as inline_is_null, payload_object_id::text as payload_object_id from sync_raw_payloads where id = $1",
+      [closing.id],
+    );
+    expect(closingRaw!.inline_is_null).toBe(true);
+    expect(closingRaw!.payload_object_id).not.toBeNull();
+
+    // Unreadable the honest way: the catalog object survives and its body row
+    // is gone (`body_missing`), as a torn cold tier would leave it.
+    const hidden = await testDb.pool.query<{ bucket_month: string; object_id: string; body: string }>(`
+      delete from capture_json_hot_bodies
+      returning to_char(bucket_month, 'YYYY-MM-DD') as bucket_month, object_id::text as object_id, body::text as body
+    `);
+    expect(hidden.rowCount).toBeGreaterThan(0);
+
+    const repairRows = () => query<{ idempotency_key: string; payload: unknown; payload_object_id: string | null }>(
+      "select idempotency_key, payload, payload_object_id::text as payload_object_id from observations where producer = $1",
+      [ACCOUNT_ME_REPAIR_PRODUCER],
+    );
+    const skipped = { missing: 1, rejournaled: 0, alreadyRejournaled: 0, unavailableBody: 1, errored: 0 };
+
+    // The census does not promise a repair it cannot make ...
+    expect((await runAccountMeRejournal(appStub())).totals).toEqual(skipped);
+    // ... and the execute run skips the capture instead of journaling it empty.
+    const blocked = await runAccountMeRejournal(appStub(), { dryRun: false });
+    expect(blocked.totals).toEqual(skipped);
+    expect(await repairRows()).toEqual([]);
+
+    // Falsification: with the body back, the same run repairs it, so the skip
+    // was about the unreadable body and nothing else about this fixture.
+    for (const row of hidden.rows) {
+      await testDb.pool.query(
+        "insert into capture_json_hot_bodies (bucket_month, object_id, body) values ($1::date, $2, $3::jsonb)",
+        [row.bucket_month, row.object_id, row.body],
+      );
+    }
+    const repaired = await runAccountMeRejournal(appStub(), { dryRun: false });
+    expect(repaired.totals).toEqual({ missing: 1, rejournaled: 1, alreadyRejournaled: 0, unavailableBody: 0, errored: 0 });
+    expect(await repairRows()).toEqual([{
+      idempotency_key: accountMeRepairKey(closing.id),
+      payload: null,
+      payload_object_id: closingRaw!.payload_object_id,
+    }]);
+  });
 });
