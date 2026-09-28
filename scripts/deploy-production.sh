@@ -16,6 +16,8 @@ Options:
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
   --mode <mode>          Build mode: full, dist-only, auto, or pull. Default: full
   --pull-image <digest> GHCR image@sha256 digest required by --mode pull.
+                        CI no longer publishes images; pull mode needs an
+                        image published manually for this exact commit.
   --recreate-scope <scope>
                         apps (default) preserves unchanged Postgres; stack
                         explicitly includes PostgreSQL/infrastructure changes.
