@@ -1752,8 +1752,10 @@ export async function getPageConversationPreview(
 // failure when a walk's first page fails and moves on to other threads;
 // failures accrue exponential backoff (next_retry_at) and, from the 4th
 // failure, a quarantine window. Candidate selection skips excluded
-// conversations, re-admission is implicit once the windows lapse, and the
-// stream wakes when the earliest window ends (nextConversationSyncRetryAt).
+// conversations, re-admission is implicit once the windows lapse. The stream
+// wakes when the earliest short backoff window ends
+// (nextConversationSyncBackoffRetryAt); a quarantined thread waits for the
+// next ordinary request.
 // Rows are operational sync state — cleared by a successful read of the
 // conversation (an ordinary walk, a B1 hint walk or a targeted backfill),
 // cascaded away with their thread. The retired OnlyFans crawler's historical
@@ -1913,25 +1915,29 @@ export async function clearConversationSyncHealth(db: Database, conversationId: 
   `);
 }
 
-/** When the page's first breaker-deferred thread becomes selectable again: the
- * earliest future end of a backoff or quarantine window among rows still
- * carrying failures whose thread the lane selects (visible, bound to a fan,
- * not excluded). Null when no such window is open. The dm_messages stream
- * sleeps until then instead of completing while deferred threads remain. A
- * lapsed window is never returned, so a failing row whose thread has nothing
- * left to read cannot keep the stream awake. */
-export async function nextConversationSyncRetryAt(
+/** When the page's first thread inside a short backoff window (below the
+ * quarantine threshold) becomes selectable again: the earliest future
+ * next_retry_at among such rows whose thread the lane selects (visible, bound
+ * to a fan, not excluded), or null. The dm_messages stream sleeps until then
+ * instead of completing. A quarantined row (6 hours, re-armed by each later
+ * failure) never holds the stream: its thread waits for the next ordinary
+ * request, and B1 can wake the idle stream meanwhile. A lapsed window is never
+ * returned, so a failing row whose thread has nothing left to read cannot keep
+ * the stream awake. */
+export async function nextConversationSyncBackoffRetryAt(
   db: Database,
   input: { platformAccountId: number; now?: Date },
 ): Promise<Date | null> {
   const nowSql = sql`${input.now ?? new Date()}::timestamptz`;
+  const quarantineThresholdSql = sql.raw(String(PAGE_DM_SYNC_FAILURE_QUARANTINE_THRESHOLD));
   const result = await db.execute<{ retryAt: TimestampValue }>(sql`
-    select min(greatest(h.next_retry_at, h.quarantine_until)) as "retryAt"
+    select min(h.next_retry_at) as "retryAt"
     from page_dm_message_sync_health h
     join page_dm_threads c on c.id = h.conversation_id
     where h.platform_account_id = ${input.platformAccountId}
       and h.failure_count > 0
-      and greatest(h.next_retry_at, h.quarantine_until) > ${nowSql}
+      and h.failure_count < ${quarantineThresholdSql}
+      and h.next_retry_at > ${nowSql}
       and c.is_visible = true
       and c.fan_id is not null
       and ${dmMessageSyncEligibleSql("c")}

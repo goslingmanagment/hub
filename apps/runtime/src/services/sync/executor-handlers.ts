@@ -29,7 +29,7 @@ import {
   listFanslyMessagePurchaseTargetsAfterId,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
-  nextConversationSyncRetryAt,
+  nextConversationSyncBackoffRetryAt,
   PAGE_DM_LIVE_BACKFILL_CAP,
   PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES,
   PageSyncLeaseLostError,
@@ -3872,12 +3872,15 @@ export async function fanslyDmMessagesChunk(
     const headRetryAt = headCatchupEnabled
       ? await nextFanslyDmHeadRetryAt(app.db, { platformAccountId: input.pageContext.page.id })
       : null;
-    // Only threads waiting out a breaker window remain: sleep until the first
-    // window ends instead of completing, which would leave them to the next
+    // Only threads waiting out a short backoff window remain: sleep until the
+    // first one ends instead of completing, which would leave them to the next
     // request (dm_messages runs on a daily cadence). A chunk that read nothing
     // before going back to that wait made no progress either, so it cannot
-    // turn a deferral into recovery.
-    const deferredRetryAt = await nextConversationSyncRetryAt(app.db, {
+    // turn a deferral into recovery. A quarantine holds nothing open: the
+    // breaker re-arms it on every later failure, so waiting on it would keep
+    // the request outstanding for good, and B1 cannot wake a stream with
+    // ordinary work outstanding (requestPageSync).
+    const deferredRetryAt = await nextConversationSyncBackoffRetryAt(app.db, {
       platformAccountId: input.pageContext.page.id,
     });
     const wakeAt = headRetryAt === null ||
@@ -3897,8 +3900,10 @@ export async function fanslyDmMessagesChunk(
     } satisfies StreamChunkResult;
 
     if (deferredOnly) {
-      // The deferred threads left the lane meanwhile (hidden, unbound,
-      // excluded): nothing is left to wait for, and nothing was read.
+      // Its deferred threads went into quarantine or left the lane (hidden,
+      // unbound, excluded): nothing is left to wait for, and nothing was read.
+      // Settle the request without success; the next ordinary request retries
+      // a quarantined thread once its window ends.
       return {
         satisfied: true, yieldReason: null, qualityHold: FANSLY_DM_THREADS_DEFERRED,
         stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk },

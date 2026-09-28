@@ -65,13 +65,25 @@ restarting it would stop on its own pages and hide the gap below them.
 
 A chunk with accepted message reads settles as ordinary progress (failure
 streak reset, stream incident resolved). A chunk that read no message page,
-and only deferred threads or found nothing but threads waiting out a window,
-keeps the streak, last error and incident and claims no progress. When only
-such threads remain, the
-stream sleeps until the earliest `next_retry_at`/`quarantine_until` instead of
-completing, and wakes earlier on any new request. The sleeping stream stays
-queued, so while a thread sits out its quarantine `dm_messages` can read as
-delayed (`queue_delayed`) once its request is 45 minutes old.
+and only deferred threads or found nothing but threads inside a backoff
+window, keeps the streak, last error and incident and claims no progress.
+
+When only threads inside a short backoff window (their first three failures)
+remain, the stream sleeps until the earliest `next_retry_at` instead of
+completing. An ordinary request (a `dm_conversations` follow-up, the daily
+slot, Sync now) wakes it earlier. A B1 WS-hint or AI-accelerator wake (an
+`event` request) is not admitted while that request is outstanding, so hint
+subjects wait for the window to end, at most 20 minutes; every woken chunk
+runs the B1 step first. One thread's three windows keep the request
+outstanding about 35 minutes, under the 45-minute `queue_delayed` threshold;
+several threads failing in turn can push it past.
+
+A quarantine holds nothing open. Every later failure re-arms it for another
+6 hours, so waiting on it would keep the request outstanding for good and shut
+B1 out. The chunk completes instead; if it read nothing and only deferred the
+thread, it settles as a quality hold without success. The stream goes idle,
+B1 wakes reach it again, and the next ordinary request after the quarantine
+ends retries the thread.
 
 While a Fansly row carries failures and its thread is still selectable
 (visible, bound to a fan, not excluded), `/health/sync` reports

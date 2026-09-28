@@ -160,10 +160,21 @@ async function fixture(input: {
       });
     }
   };
-  return {
-    app, page, threads, attempts, health, incidentStatus, stream, journalFailures,
-    execute: () => executeNextSyncPageChunk(app, page.id),
+  const execute = () => executeNextSyncPageChunk(app, page.id);
+  /** The wake B1's projection sends for a due WS-hint subject (the AI
+   * accelerator sends the same): admitted only while no ordinary request is
+   * outstanding, it runs an event-only chunk. */
+  const wakeB1 = async () => {
+    const before = attempts.length;
+    const receipts = await requestPageSync(app.db, { pageId: page.id, streams: ["dm_messages"], source: "event" });
+    expect(receipts).toHaveLength(1);
+    const woken = await execute();
+    expect(woken).toMatchObject({ kind: "skipped", stream: "dm_messages" });
+    expect((await db.pool.query("select stats from sync_runs where id = $1", [woken.runId])).rows[0].stats)
+      .toMatchObject({ qualityHold: "fansly_ws_hint_only" });
+    expect(attempts).toHaveLength(before);
   };
+  return { app, page, threads, attempts, health, incidentStatus, stream, journalFailures, execute, wakeB1 };
 }
 
 const failOnly = (...groups: string[]) => (group: string) => groups.includes(group) ? poisonError() : null;
@@ -213,14 +224,9 @@ describe("Fansly DM thread isolation through the executor", () => {
     expect(f.attempts).toHaveLength(3);
   });
 
-  it.each([
-    ["a backoff", 1, 2, 10 * 60_000, null],
-    ["the fourth failure's quarantine", 3, 4, 6 * 60 * 60_000, 6 * 60 * 60_000],
-  ] as const)("keeps the streak and incident of a deferral-only chunk and wakes at %s", async (
-    _name, failures, failureCount, wakeInMs, quarantineInMs,
-  ) => {
+  it("keeps the streak and incident of a deferral-only chunk and wakes at the thread's backoff", async () => {
     const f = await fixture({
-      threads: [{ group: "poison", unread: 0, headMismatch: true, failures }],
+      threads: [{ group: "poison", unread: 0, headMismatch: true, failures: 1 }],
       fail: failOnly("poison"),
       streamFailures: 22,
     });
@@ -230,22 +236,87 @@ describe("Fansly DM thread isolation through the executor", () => {
 
     expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }]);
     const poison = await f.health("poison");
-    expect(poison?.failure_count).toBe(failureCount);
-    if (quarantineInMs === null) expect(poison?.quarantine_until).toBeNull();
-    else near(poison?.quarantine_until, Date.now() + quarantineInMs);
-    const wakeAt = poison?.quarantine_until ?? poison?.next_retry_at;
-    near(wakeAt, Date.now() + wakeInMs);
+    expect(poison).toMatchObject({ failure_count: 2, quarantine_until: null });
+    near(poison?.next_retry_at, Date.now() + 10 * 60_000);
     // Deferred, not failed and not recovered: only the wake-up moved.
-    expect(result).toMatchObject({ kind: "yielded", continuationRetryAt: wakeAt });
+    expect(result).toMatchObject({ kind: "yielded", continuationRetryAt: poison?.next_retry_at });
     const after = await f.stream();
     expect(after).toMatchObject({
-      status: "pending", retryAt: wakeAt, consecutiveFailures: 22, lastErrorCode: "http_500",
+      status: "pending", retryAt: poison?.next_retry_at, consecutiveFailures: 22, lastErrorCode: "http_500",
       lastErrorSummary: before?.lastErrorSummary, succeededAt: before?.succeededAt, progressedAt: before?.progressedAt,
     });
     expect(after?.appliedSeq).toBeLessThan(after?.requestSeq ?? 0);
     expect(await f.incidentStatus()).toBe("open");
     expect((await db.pool.query("select outcome, stats from sync_runs where id = $1", [result.runId])).rows[0])
       .toMatchObject({ outcome: "partial", stats: expect.objectContaining({ deferral: DEFERRED, deferredThreads: 1 }) });
+  });
+
+  it("settles a deferral-only chunk that quarantines its thread as a hold, and B1 still reaches the page", async () => {
+    // Prod lilly-2 at 21:49: the fourth failure quarantines the thread for
+    // 6 hours, and every later failure re-arms that quarantine.
+    const f = await fixture({
+      threads: [{ group: "poison", unread: 0, headMismatch: true, failures: 3 }],
+      fail: failOnly("poison"),
+      streamFailures: 22,
+    });
+    const before = await f.stream();
+
+    const result = await f.execute();
+
+    expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }]);
+    const poison = await f.health("poison");
+    expect(poison?.failure_count).toBe(4);
+    near(poison?.quarantine_until, Date.now() + 6 * 60 * 60_000);
+    // Nothing was read and no short window is open: the request settles
+    // without success, keeping the streak and incident, and does not wait out
+    // the quarantine.
+    expect(result).toMatchObject({ kind: "skipped", continuationRetryAt: null });
+    const after = await f.stream();
+    expect(after).toMatchObject({
+      status: "idle", retryAt: null, consecutiveFailures: 22, lastErrorCode: "http_500",
+      lastErrorSummary: before?.lastErrorSummary, succeededAt: before?.succeededAt, progressedAt: before?.progressedAt,
+    });
+    expect(after?.appliedSeq).toBe(after?.requestSeq);
+    expect(await f.incidentStatus()).toBe("open");
+    expect((await db.pool.query("select outcome, stats from sync_runs where id = $1", [result.runId])).rows[0])
+      .toMatchObject({ outcome: "skipped", stats: expect.objectContaining({ qualityHold: DEFERRED, deferredThreads: 1 }) });
+
+    await f.wakeB1();
+  });
+
+  it("completes around a quarantined thread, so B1 reaches the page for the whole quarantine", async () => {
+    const f = await fixture({
+      threads: [
+        { group: "poison", unread: 9, headMismatch: true, failures: 3 },
+        { group: "healthy", unread: 2 },
+      ],
+      fail: failOnly("poison"),
+      streamFailures: 22,
+    });
+
+    const result = await f.execute();
+
+    // The retry quarantines the thread; the healthy read completes the request.
+    expect(f.attempts).toEqual([{ group: "poison", attempts: 1 }, { group: "healthy", attempts: 1 }]);
+    const poison = await f.health("poison");
+    expect(poison?.failure_count).toBe(4);
+    near(poison?.quarantine_until, Date.now() + 6 * 60 * 60_000);
+    expect(result).toMatchObject({ kind: "success" });
+    const settled = await f.stream();
+    expect(settled).toMatchObject({ status: "idle", retryAt: null, consecutiveFailures: 0, lastErrorCode: null });
+    expect(settled?.appliedSeq).toBe(settled?.requestSeq);
+    expect(await f.incidentStatus()).toBe("resolved");
+
+    // The page's only open work is the quarantined thread: a B1 wake gets in.
+    await f.wakeB1();
+
+    // An ordinary request finds nothing it may read yet, completes without
+    // touching the thread, and leaves the stream open to the next wake.
+    await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["dm_messages"], source: "scheduled" });
+    expect(await f.execute()).toMatchObject({ kind: "success" });
+    expect(f.attempts).toHaveLength(2);
+    expect(await f.stream()).toMatchObject({ status: "idle", retryAt: null });
+    await f.wakeB1();
   });
 
   it("retries at most one failing thread per chunk and runs the next due one in the following chunk", async () => {

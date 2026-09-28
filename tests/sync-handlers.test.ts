@@ -26,7 +26,7 @@ const dbMocks = vi.hoisted(() => ({
   // No thread carries breaker failures, and none waits out a window, unless a
   // test says so.
   getConversationSyncHealth: vi.fn<typeof DbModule.getConversationSyncHealth>(async () => null),
-  nextConversationSyncRetryAt: vi.fn<typeof DbModule.nextConversationSyncRetryAt>(async () => null),
+  nextConversationSyncBackoffRetryAt: vi.fn<typeof DbModule.nextConversationSyncBackoffRetryAt>(async () => null),
   countActivePageFollows: vi.fn(),
   countCurrentPageSubscriptionsByGeneration: vi.fn(),
   countPageDmThreadsByGeneration: vi.fn(),
@@ -7128,7 +7128,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     }));
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValueOnce(3);
     const breakerRetryAt = new Date(Date.now() + 5 * 60_000);
-    dbMocks.nextConversationSyncRetryAt.mockResolvedValue(breakerRetryAt);
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(breakerRetryAt);
 
     // Deferred, not failed: nothing else is eligible, so the stream sleeps
     // until the thread's window ends, claiming no progress.
@@ -7190,7 +7190,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
   }) {
     // The window the breaker opens, as the page's earliest one.
     const breakerRetryAt = new Date(Date.now() + 5 * 60_000);
-    dbMocks.nextConversationSyncRetryAt.mockResolvedValue(breakerRetryAt);
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(breakerRetryAt);
     let checkpoint: Record<string, unknown> | null = input.checkpoint ?? null;
     dbMocks.getCheckpoint.mockImplementation(async () => checkpoint ? { state: checkpoint } : null);
     dbMocks.upsertCheckpointProgress.mockImplementation(async (_db, next) => {
@@ -7406,9 +7406,10 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       .toEqual([{ platformAccountId: 55 }, { platformAccountId: 55 }]);
   });
 
-  it("holds, not completes, a deferral-only chunk whose deferred thread left the lane meanwhile", async () => {
+  it("holds, not completes, a deferral-only chunk whose deferred thread went into quarantine or left the lane", async () => {
     const h = dmBreakerHarness({ error: new FanslyApiError("error getting group messages", 500, 500) });
-    dbMocks.nextConversationSyncRetryAt.mockResolvedValue(null);
+    // No short backoff window is open: a quarantine is not waited on.
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(null);
 
     await expect(h.run()).resolves.toMatchObject({
       satisfied: true, qualityHold: "fansly_dm_threads_deferred", stats: expect.objectContaining({ deferredThreads: 1 }),
