@@ -87,6 +87,7 @@ describe("projection tick wall-clock budget", () => {
     vi.setSystemTime(START);
     ran = [];
     costMs.clear();
+    dbMocks.listEventAccounts.mockReset();
     resetProjectionTickRotation();
     installStubs(["a", "b", "c"]);
   });
@@ -205,10 +206,12 @@ describe("projection tick wall-clock budget", () => {
       },
     };
     const app = appStub() as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
+    dbMocks.listEventAccounts.mockResolvedValue([7]);
 
     const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
 
-    expect(ran).toEqual(["a", "b", "c"]);
+    // B's per-account retry (account 7) fails too, then C still runs.
+    expect(ran).toEqual(["a", "b", "b", "c"]);
     expect(result.truncatedByBudget).toBe(false);
     expect(result.outcomes.map((outcome) => outcome.error !== null)).toEqual([
       false,
@@ -216,6 +219,98 @@ describe("projection tick wall-clock budget", () => {
       false,
     ]);
     expect(app.logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  describe("per-account isolation inside one projection (J8)", () => {
+    /** B's run: the whole run and the listed accounts throw; the rest pass. */
+    function poisonB(poisoned: (accountId: number | null | undefined) => boolean) {
+      const calls: (number | null | undefined)[] = [];
+      const index = registry.findIndex((projection) => projection.name === "b");
+      registry[index] = {
+        ...registry[index]!,
+        run: async (_app, input) => {
+          calls.push(input?.accountId);
+          if (poisoned(input?.accountId)) {
+            throw new Error(`poison fact on ${input?.accountId ?? "the whole run"}`);
+          }
+          return { projected: 1 };
+        },
+      };
+      return calls;
+    }
+
+    it("a poison account parks only itself: every other account still runs, and the tick goes on", async () => {
+      dbMocks.listEventAccounts.mockResolvedValue([1, 2, 3]);
+      // The whole run reaches account 2 (in id order) and throws there.
+      const calls = poisonB((accountId) => accountId === undefined || accountId === 2);
+      const app = appStub() as unknown as {
+        logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
+      };
+
+      const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
+
+      // No breaker at the first failure: account 3 runs after 2 fails with
+      // exactly the whole run's error. Account 1 runs a second time.
+      expect(calls).toEqual([undefined, 1, 2, 3]);
+      expect(ran).toEqual(["a", "c"]);
+      const outcomeB = result.outcomes.find((outcome) => outcome.name === "b")!;
+      expect(outcomeB.error).toBeInstanceOf(Error);
+      expect(outcomeB.failedAccounts).toEqual([2]);
+      // One aggregated line per projection per tick.
+      expect(app.logger.error).toHaveBeenCalledTimes(1);
+      const [fields, message] = app.logger.error.mock.calls[0]!;
+      expect(message).toBe("b projection sweep failed");
+      expect(fields).toMatchObject({
+        projection: "b",
+        failedAccounts: [2],
+        accountErrors: [{ accountId: 2, error: "poison fact on 2" }],
+      });
+    });
+
+    it("every failing account is attempted and reported on one line", async () => {
+      dbMocks.listEventAccounts.mockResolvedValue([1, 2, 3, 4]);
+      const calls = poisonB((accountId) => accountId !== 1 && accountId !== 4);
+      const app = appStub() as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
+
+      const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
+
+      expect(calls).toEqual([undefined, 1, 2, 3, 4]);
+      expect(result.outcomes.find((outcome) => outcome.name === "b")!.failedAccounts).toEqual([2, 3]);
+      expect(app.logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it("a whole-run error every account survives on its own is recovered, not a failure", async () => {
+      dbMocks.listEventAccounts.mockResolvedValue([1, 2]);
+      const calls = poisonB((accountId) => accountId === undefined);
+      const app = appStub() as unknown as {
+        logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
+      };
+
+      const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
+
+      expect(calls).toEqual([undefined, 1, 2]);
+      const outcomeB = result.outcomes.find((outcome) => outcome.name === "b")!;
+      expect(outcomeB.error).toBeNull();
+      expect(outcomeB.result).toEqual({ recoveredAfterError: true, accounts: 2 });
+      expect(outcomeB.failedAccounts).toBeUndefined();
+      expect(app.logger.error).not.toHaveBeenCalled();
+      expect(app.logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it("an unreadable account list reports the whole-run error alone", async () => {
+      dbMocks.listEventAccounts.mockRejectedValue(new Error("db down"));
+      const calls = poisonB(() => true);
+      const app = appStub() as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
+
+      const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
+
+      expect(calls).toEqual([undefined]);
+      const outcomeB = result.outcomes.find((outcome) => outcome.name === "b")!;
+      expect(outcomeB.error).toBeInstanceOf(Error);
+      expect(outcomeB.failedAccounts).toBeUndefined();
+      expect(ran).toEqual(["a", "c"]);
+      expect(app.logger.error).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("budgets ten minutes, under pg-boss's 900s handler expiration", () => {

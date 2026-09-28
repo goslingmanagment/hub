@@ -100,8 +100,8 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, key: string, payload: unknown) {
-  await insertObservation(testDb!.db, {
+async function seedObservation(pageId: number, key: string, payload: unknown, receivedAt?: Date) {
+  return insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:notifications",
     platform: "fansly",
@@ -110,6 +110,7 @@ async function seedObservation(pageId: number, key: string, payload: unknown) {
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `notifications:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
 }
 
@@ -363,6 +364,78 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     );
     // THE HEAD DID NOT MOVE.
     expect(after!.occurred_at.toISOString()).toBe("2026-08-19T00:40:00.000Z");
+  });
+
+  it("a LATER look at the same createdAt lands the read state; an older look replayed later does not revert it (J7)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The platform serves one notification unread, then read. Same createdAt,
+    // so the provider-instant guard alone froze the head at the first look
+    // and acknowledged_at stayed NULL although the ledger held the ack.
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const target = { ...(base.notifications as Record<string, unknown>[])[5]! };
+    const ref = target.idString as string;
+    const unread = { ...base, notifications: [{ ...target, acknowledgedAt: null }] };
+    const readAt = 1787050500;
+    const read = { ...base, notifications: [{ ...target, acknowledgedAt: readAt }] };
+    const head = async () => (await rows<{
+      acknowledged_at: Date | null;
+      source_observation_id: string;
+      content_hash: string;
+      last_observed_at: Date;
+    }>(
+      `select acknowledged_at, source_observation_id::text, content_hash, last_observed_at
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+
+    await seedObservation(page.id, "look-1", unread, new Date("2026-08-19T10:00:00.000Z"));
+    await project(page.id);
+    expect((await head()).acknowledged_at).toBeNull();
+
+    resetCanonicalizeSweepRuntime();
+    const second = await seedObservation(page.id, "look-2", read, new Date("2026-08-19T11:00:00.000Z"));
+    await project(page.id);
+    const acked = await head();
+    expect(acked.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    // One guard for every column: the ack and its lineage move together.
+    expect(acked.source_observation_id).toBe(String(second.observationId));
+    const [ackEvent] = await rows<{ hash: string }>(
+      `select data->>'contentHash' as hash from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, second.observationId],
+    );
+    expect(acked.content_hash).toBe(ackEvent!.hash);
+
+    // An OLDER unread look (earlier receipt) appended at a HIGHER seq — a
+    // late-journaled capture — must not reset the ack. Its body differs
+    // (metadata), or the dedup key would drop it before the projector.
+    resetCanonicalizeSweepRuntime();
+    const older = await seedObservation(page.id, "look-0", {
+      ...base,
+      notifications: [{ ...target, acknowledgedAt: null, metadata: "{\"older\":true}" }],
+    }, new Date("2026-08-19T09:00:00.000Z"));
+    await project(page.id);
+    const [olderEvent] = await rows<{ account_seq: string }>(
+      `select account_seq::text from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, older.observationId],
+    );
+    expect(olderEvent).toBeDefined(); // it reached the ledger, at a higher seq
+    const after = await head();
+    expect(after.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    expect(after.source_observation_id).toBe(String(second.observationId));
+    expect(after.last_observed_at.toISOString()).toBe("2026-08-19T11:00:00.000Z");
+
+    // Replaying the head's own event is idempotent, and a rebuild agrees.
+    const before = await checksum(page.id);
+    resetCanonicalizeSweepRuntime();
+    expect((await project(page.id)).applied).toBe(0);
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    expect(await checksum(page.id)).toEqual(before);
   });
 
   it("reproduces every row from a truncate-and-replay, leaving subject_refresh_state alone", async (context) => {

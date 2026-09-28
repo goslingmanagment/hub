@@ -422,9 +422,31 @@ describe("revisions and the roster", () => {
     const rosterA = ofType(a, "payout.method_list_observed")[0]!;
     const rosterB = ofType(b, "payout.method_list_observed")[0]!;
     expect(rosterA.dedupKey).not.toBe(rosterB.dedupKey);
-    // The row events still dedupe across looks — only the roster is per-look.
-    expect(ofType(a, "payout.method_observed").map((draft) => draft.dedupKey))
-      .toEqual(ofType(b, "payout.method_observed").map((draft) => draft.dedupKey));
+  });
+
+  it("keys METHOD rows per look too, so a method that goes A→B→A keeps its third look (J12)", () => {
+    const keys = (list: readonly CanonicalEventDraft[]) =>
+      ofType(list, "payout.method_observed").map((draft) => draft.dedupKey);
+    const a = drafts("payout_methods", methodRows("payout-methods"), undefined, { id: 11 });
+    // Replay of one observation stays a no-op.
+    expect(keys(drafts("payout_methods", methodRows("payout-methods"), undefined, { id: 11 })))
+      .toEqual(keys(a));
+    for (const key of keys(a)) {
+      expect(key).toMatch(/^payoutmethod:v2:.*:[0-9a-f]{64}:obs:11$/u);
+    }
+
+    // Status moves away and back. The method hash carries no updatedAt, so
+    // the third look hashes to the first look's content — and keyed on the
+    // hash alone it was dropped, leaving the head at B.
+    const rows = (methodRows("payout-methods") as Record<string, unknown>[]);
+    const moved = [{ ...rows[0], status: 9 }, ...rows.slice(1)];
+    const b = drafts("payout_methods", moved, undefined, { id: 12 });
+    const back = drafts("payout_methods", methodRows("payout-methods"), undefined, { id: 13 });
+    const first = (list: readonly CanonicalEventDraft[]) =>
+      byRef(list, "payout.method_observed", "methodRef", "000900000000009001");
+    expect(first(b).data.contentHash).not.toBe(first(a).data.contentHash);
+    expect(first(back).data.contentHash).toBe(first(a).data.contentHash);
+    expect(new Set([first(a).dedupKey, first(b).dedupKey, first(back).dedupKey]).size).toBe(3);
   });
 
   it("emits a roster for an EMPTY listing, which is the case it exists for", () => {

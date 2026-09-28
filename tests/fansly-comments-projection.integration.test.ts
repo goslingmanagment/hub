@@ -25,6 +25,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -109,7 +110,7 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, key: string, payload: unknown) {
+async function seedObservation(pageId: number, key: string, payload: unknown, receivedAt?: Date) {
   await insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:post_replies",
@@ -119,6 +120,7 @@ async function seedObservation(pageId: number, key: string, payload: unknown) {
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `post_replies:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
 }
 
@@ -158,6 +160,43 @@ async function checksums(pageId: number): Promise<Record<string, string>> {
     out[table] = `${record.rows}:${record.digest ?? "empty"}`;
   }
   return out;
+}
+
+/**
+ * A look that reached the ledger as a ROSTER and nothing else: the first
+ * roster again, at a later instant, with no row event before it. That is what
+ * an unchanged returning comment minted under the hash-only `comment:v1` row
+ * key (the row events deduped), and a truncate-and-replay of that history
+ * still feeds the projector exactly this.
+ */
+async function appendRosterOnlyLook(pageId: number) {
+  const [roster] = await rows<{
+    post_ref: string;
+    data: unknown;
+    schema_version: number;
+    observation_id: string;
+  }>(
+    `select post_ref, data, schema_version, observation_id::text
+       from domain_events
+      where account_id = $1 and type = 'post.comment_list_observed'
+      order by account_seq limit 1`,
+    [pageId],
+  );
+  const occurredAt = new Date();
+  const observationId = Number(roster!.observation_id);
+  await appendProjectionOnlyDomainEvents(testDb!.db, pageId, [{
+    type: "post.comment_list_observed",
+    occurredAt,
+    postRef: roster!.post_ref,
+    data: roster!.data,
+    schemaVersion: roster!.schema_version,
+    observationId,
+    dedupKey: `test:roster-only-look:${pageId}`,
+  }], {
+    occurredAt,
+    observationId,
+    dedupKey: `test:roster-only-look:checkpoint:${pageId}`,
+  });
 }
 
 /** A walk row, the way the handler and the creator-posts hook write them. */
@@ -364,13 +403,95 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     // marked it (see the test above).
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
 
-    // The comments return UNCHANGED, so their content hashes are the ones they
-    // had before: the row events dedupe and never reach the projector. Only the
-    // ROSTER can un-mark them, which is why the clear half exists.
+    // The comments return UNCHANGED. Their row events are keyed per LOOK, so
+    // each one reaches the projector and its own upsert clears the mark; the
+    // roster that follows finds nothing left to clear. (Under the old
+    // hash-only key those row events deduped, and only the roster's clear
+    // half un-marked them — it stays for events minted that way.)
     await seedObservation(page.id, "four-again", fixture("replies-four-with-accounts"));
     const result = await project(page.id);
+    expect(result.comments).toBe(4);
+    expect(result.clearedMissing).toBe(0);
+    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+  });
+
+  it("CLEARS the mark from the roster alone, as hash-keyed row events replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedObservation(page.id, "four", fixture("replies-four-with-accounts"));
+    await project(page.id);
+    await seedObservation(page.id, "empty", fixture("replies-empty"));
+    await project(page.id);
+    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
+
+    // The comments come back UNCHANGED in the ledger's older shape: a roster
+    // with no row event before it (see `appendRosterOnlyLook`). No upsert runs,
+    // so the roster's clear half is the only thing that can un-mark them — the
+    // case a rebuild over pre-`comment:v2` history depends on.
+    await appendRosterOnlyLook(page.id);
+    const result = await runFanslyCommentsProjection(appStub(), { accountId: page.id });
+    expect(result.comments).toBe(0);
     expect(result.clearedMissing).toBe(3);
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+  });
+
+  it("lands a comment that goes A→B→A; `changed_at` moves only on a hash change (J12)", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Pinned, then unpinned. Keyed on the hash alone, the third look collided
+    // with the first look's key and never reached the projector: the head
+    // stayed pinned.
+    const page = await seedPage();
+    const look = (pinned: boolean) => {
+      const body = fixture("replies-four-with-accounts") as {
+        response: { posts: Record<string, unknown>[] };
+      };
+      body.response.posts[0]!.pinned = pinned;
+      return body;
+    };
+    type Head = { pinned: boolean; changed_at: Date; last_observed_at: Date };
+    const head = async () => (await rows<Head>(
+      `select pinned, changed_at, last_observed_at from post_comments
+        where page_id = $1 and comment_ref = '000910000000000101'`,
+      [page.id],
+    ))[0]!;
+    const at = (day: number) => new Date(`2026-08-${day}T09:00:00.000Z`);
+
+    await seedObservation(page.id, "unpinned", look(false), at(20));
+    await project(page.id);
+    expect((await head()).changed_at.toISOString()).toBe(at(20).toISOString());
+
+    await seedObservation(page.id, "pinned", look(true), at(21));
+    await project(page.id);
+    const pinned = await head();
+    expect(pinned.pinned).toBe(true);
+    expect(pinned.changed_at.toISOString()).toBe(at(21).toISOString());
+
+    await seedObservation(page.id, "unpinned-again", look(false), at(22));
+    await project(page.id);
+    const reverted = await head();
+    expect(reverted.pinned).toBe(false);
+    expect(reverted.changed_at.toISOString()).toBe(at(22).toISOString());
+    expect(reverted.last_observed_at.toISOString()).toBe(at(22).toISOString());
+
+    // An UNCHANGED re-look advances last_observed_at and nothing else.
+    await seedObservation(page.id, "unpinned-still", look(false), at(23));
+    await project(page.id);
+    const still = await head();
+    expect(still.changed_at.toISOString()).toBe(at(22).toISOString());
+    expect(still.last_observed_at.toISOString()).toBe(at(23).toISOString());
+
+    // Replay of the same observations still appends nothing.
+    const before = await checksums(page.id);
+    expect((await project(page.id)).applied).toBe(0);
+    expect(await checksums(page.id)).toEqual(before);
   });
 
   it("REFUSES to mark anything missing from a page it could not prove complete", async (

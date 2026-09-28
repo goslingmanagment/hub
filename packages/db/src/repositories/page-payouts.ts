@@ -205,9 +205,10 @@ export async function upsertPagePayoutRequest(
  * method FIRST went missing is the interesting one, and a second listing
  * without it must not move the timestamp forward.
  *
- * The CLEAR half is not symmetry for its own sake — a method removed and
- * re-added UNCHANGED emits no row event at all (its content hash is the one it
- * had before), so only the roster can un-mark it.
+ * The CLEAR half is not symmetry for its own sake — under the older hash-only
+ * method key a method removed and re-added UNCHANGED emitted no row event at
+ * all, and those events still replay, so only the roster can un-mark it there.
+ * (Per-look `payoutmethod:v2` events clear their own mark in the upsert.)
  */
 export async function reconcilePagePayoutMethodPresence(
   db: Database,

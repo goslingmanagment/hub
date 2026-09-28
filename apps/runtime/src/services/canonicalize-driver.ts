@@ -784,7 +784,7 @@ async function runFamily(
         // not be counted as one — a parse error is a bug or a poison row, this
         // is a body that will be there again in a minute. It shares the
         // outcome (unstamped, retried next sweep) and nothing else. Before
-        // #223 the seam answered `null` here, four of the six families have no
+        // #223 the seam answered `null` here, four of the six families had no
         // `canParse` shape gate, and a null payload canonicalizes to zero
         // events — so the row fell straight through to markObservationParsed
         // and was consumed for good.

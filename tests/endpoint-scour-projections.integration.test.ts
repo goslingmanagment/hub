@@ -441,6 +441,67 @@ describe("[sync-critical] WP-F1 statistics projections", () => {
     expect(Number(head[0]!.revision_count)).toBe(1);
   });
 
+  it("counts a changed METRIC as a revision, never a re-capture of a shifted window (J7)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The daily poll asks for a trailing window whose bounds move every day.
+    // The bounds are in the content hash (and the dedup key), so each look at
+    // an UNCHANGED bucket mints an event and a new head hash — which is a
+    // re-capture, not a platform restatement.
+    const page = await seedPage();
+    const DAY_MS = 86_400_000;
+    const look = (shiftDays: number, views10001?: number) => {
+      const body = fixture("stats-account-daily.json");
+      const dataset = body.dataset as Record<string, unknown>;
+      dataset.dateBefore = (dataset.dateBefore as number) + shiftDays * DAY_MS;
+      const points = dataset.profileDatapoints as Array<Record<string, unknown>>;
+      if (views10001 !== undefined) {
+        (points[0]!.stats as Array<Record<string, unknown>>)[0]!.views = views10001;
+      }
+      return body;
+    };
+    const buckets = () => rows<{ source_code: string; views: string; revision_count: number; requested_end: Date }>(
+      `select source_code, views::text, revision_count, requested_end from stats_traffic_buckets
+        where page_id = $1 and subject_kind = 'account_profile' order by source_code`,
+      [page.id],
+    );
+
+    await seedObservation(page.id, "account_stats", "window:d0", look(0));
+    await project(page.id);
+    await seedObservation(page.id, "account_stats", "window:d1", look(1));
+    await project(page.id);
+
+    // The shifted window really did mint a new event per bucket…
+    expect(
+      (await rows(
+        `select count(*)::int as n from domain_events
+          where account_id = $1 and type = 'traffic.datapoint_observed'`,
+        [page.id],
+      ))[0]!.n,
+    ).toBe(16);
+    const shifted = await buckets();
+    expect(shifted).toHaveLength(8);
+    for (const bucket of shifted) {
+      // …and the head took the newer window, but no metric moved.
+      expect(bucket.requested_end.getTime()).toBe(1787011200000 + DAY_MS);
+      expect(bucket.revision_count).toBe(0);
+    }
+
+    // A genuine restatement of one metric, under yet another window, IS one.
+    await seedObservation(page.id, "account_stats", "window:d2", look(2, 117));
+    await project(page.id);
+    const restated = await buckets();
+    expect(restated.find((bucket) => bucket.source_code === "10001")).toMatchObject({
+      views: "117",
+      revision_count: 1,
+    });
+    for (const bucket of restated.filter((entry) => entry.source_code !== "10001")) {
+      expect(bucket.revision_count).toBe(0);
+    }
+  });
+
   it("reproduces every row from a truncate-and-replay, without reading a body", async (context) => {
     if (!testDb) {
       context.skip();

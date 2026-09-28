@@ -3,6 +3,7 @@ import type { PgBoss } from "pg-boss";
 
 import {
   insertOpsMetricSamples,
+  listNotificationIncidents,
   listRecentOpsMetricSamples,
   pruneOpsMetricSamples,
   type OpsMetricSampleInput,
@@ -296,7 +297,18 @@ export interface GoldenSignalRunResult {
   pruned: number;
   breaches: string[];
   resolved: string[];
+  /** Orphaned latches retired this run: metrics that left the threshold
+   *  registry (a health-floor version bump renames the series). */
+  retired: string[];
 }
+
+const METRIC_LATCH_PREFIX = "golden_signal_lag:global:";
+// A latch whose metric left the registry is retired only once nothing has
+// refreshed it for this long. Another process on a different build (a
+// rolling deploy or a scaled-out worker) still owns the other version's
+// series and refreshes last_seen_at every minute while its breach stands;
+// retiring on the first tick would flap that latch open/resolved each run.
+const ORPHAN_LATCH_RETIRE_GRACE_MS = 15 * 60_000;
 
 // W5.4 (A14): the retention prune is no longer on the minutely tick — every
 // N-th run is plenty for a 90-day window (first run of a fresh process still
@@ -317,7 +329,12 @@ export function resetGoldenSignalPruneTick() {
  * - sample under threshold → resolve that metric's incident;
  * - NO sample this run → leave the latch exactly as it is. Absence is never
  *   health: the old shared latch resolved on "no breaches", so a pipeline
- *   that died completely sent a false "✅ Resolved". */
+ *   that died completely sent a false "✅ Resolved".
+ * - metric NOT IN the registry any more (a health-floor version bump renames
+ *   `obs_backlog_*_v<N>`) → nothing can ever sample it again, so its latch is
+ *   retired once last_seen_at is older than ORPHAN_LATCH_RETIRE_GRACE_MS. The
+ *   successor series of the same family measures a superset of the old
+ *   backlog, so it carries the breach from here on. */
 export async function runGoldenSignalSample(
   app: Pick<AppContext, "db" | "config" | "logger">,
 ): Promise<GoldenSignalRunResult> {
@@ -377,7 +394,44 @@ export async function runGoldenSignalSample(
   // forever now that nothing ever resolves it. Idempotent no-op afterwards.
   await resolveOfapiGlobalIncident(app, { kind: "golden_signal_lag" });
 
-  return { sampled: samples.length, pruned, breaches, resolved: healthy };
+  const retired = await retireOrphanedMetricLatches(app, failed);
+
+  return { sampled: samples.length, pruned, breaches, resolved: healthy, retired };
+}
+
+/** Resolves open per-metric latches whose metric this build no longer
+ *  evaluates, after the grace period on last_seen_at. A failure here is
+ *  logged and skipped: the samples are already persisted and the next tick
+ *  retries. */
+async function retireOrphanedMetricLatches(
+  app: Pick<AppContext, "db" | "config" | "logger">,
+  failed: ReadonlySet<string>,
+): Promise<string[]> {
+  const retired: string[] = [];
+  try {
+    // Taken BEFORE the read and used as the recovery instant: a refresh by
+    // another process after this read carries a later last_seen_at, and the
+    // resolve (`last_seen_at <= recoveredAt`) then leaves that latch open.
+    const now = new Date();
+    const open = await listNotificationIncidents(app.db, { status: "open" });
+    for (const incident of open) {
+      if (incident.kind !== "golden_signal_lag" || !incident.incidentKey.startsWith(METRIC_LATCH_PREFIX)) {
+        continue;
+      }
+      const metric = incident.incidentKey.slice(METRIC_LATCH_PREFIX.length);
+      if (metric === "" || Object.hasOwn(GOLDEN_SIGNAL_THRESHOLDS_MS, metric) || failed.has(metric)) {
+        continue;
+      }
+      if (now.getTime() - incident.lastSeenAt.getTime() < ORPHAN_LATCH_RETIRE_GRACE_MS) {
+        continue; // version-skew guard: another build may still own it
+      }
+      await resolveOfapiGlobalIncident(app, { kind: "golden_signal_lag", subKey: metric, recoveredAt: now });
+      retired.push(metric);
+    }
+  } catch (error) {
+    app.logger.warn({ err: error }, "golden-signal orphaned-latch retirement failed; continuing");
+  }
+  return retired;
 }
 
 export interface GoldenSignalsReport {
@@ -424,6 +478,9 @@ export function startGoldenSignalWorker(
     const result = await runGoldenSignalSample(app);
     if (result.breaches.length > 0) {
       app.logger.warn({ breaches: result.breaches }, "golden-signal p95 over threshold");
+    }
+    if (result.retired.length > 0) {
+      app.logger.info({ retired: result.retired }, "golden-signal latches of retired metrics resolved");
     }
   });
 }

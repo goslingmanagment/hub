@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import { canonicalizeCommandResultObservation } from "../apps/runtime/src/services/canonicalize/command-result.ts";
 import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { canonicalizeFanslyEarningsObservation } from "../apps/runtime/src/services/canonicalize/fansly-earnings.ts";
-import { canonicalizeSyncPullObservation } from "../apps/runtime/src/services/canonicalize/sync-pull.ts";
+import {
+  canonicalizeSyncPullObservation,
+  canParseSyncPullObservation,
+  diagnoseSyncPullObservationRejection,
+} from "../apps/runtime/src/services/canonicalize/sync-pull.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
 
 const RECEIVED_AT = new Date("2026-07-01T00:00:00Z");
@@ -330,6 +334,96 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
   });
 });
 
+// J1: the driver stamps an accepted observation whether or not it produced
+// events, so without a shape gate a drifted Fansly body was consumed with zero
+// events and only a family-wide version bump could ever revisit it.
+describe("sync-pull shape gate (J1)", () => {
+  const orderRow = {
+    accountId: "fansly-fan-8",
+    accountMediaId: "media-7",
+    createdAt: Math.floor(Date.parse("2026-06-22T10:00:00Z") / 1000),
+    type: 1,
+  };
+
+  it("accepts every real and empty Fansly page shape", () => {
+    const accepted: Array<Partial<CanonicalizableObservation>> = [
+      // A record row without an id is skipped by the canonicalizer, not refused.
+      { payload: { total: 2, data: [{ transactionId: "ftx-1" }, { transactionId: null }] } },
+      { payload: { total: 0, data: [] } },
+      { kind: "dm_messages", payload: { messages: [{ id: "fm-1" }, { content: "no id" }] } },
+      { kind: "dm_messages", payload: { messages: [], accountMediaOrders: [] } },
+      { kind: "purchase_history", payload: { accountMediaOrderHistory: [orderRow] } },
+      { kind: "purchase_history", payload: { accountMediaOrders: [] } },
+      { kind: "purchase_history", payload: { aggregationData: { accountMediaOrders: [orderRow] } } },
+      { kind: "purchase_history_contract_probe", payload: { accountMediaOrderHistory: [] } },
+      // The lane's journaled terminal target rejection (rejectedFanslyPurchaseHistoryPayload).
+      {
+        kind: "purchase_history",
+        payload: { error: { status: 422, code: null, details: null, body: null } },
+      },
+      { kind: "purchase_history_contract_probe", payload: { error: { status: 404 } } },
+    ];
+    for (const input of accepted) {
+      expect(diagnoseSyncPullObservationRejection(observation(input))).toBeNull();
+      expect(canParseSyncPullObservation(observation(input))).toBe(true);
+    }
+  });
+
+  it("refuses a drifted Fansly body with a fixed code instead of consuming it", () => {
+    const refused: Array<[Partial<CanonicalizableObservation>, unknown]> = [
+      [{ payload: null }, { code: "payload_not_object" }],
+      [{ payload: "changed" }, { code: "payload_not_object" }],
+      [{ payload: [] }, { code: "payload_not_object" }],
+      [{ payload: {} }, { code: "transactions_data_not_array" }],
+      [{ payload: { total: 1, data: "changed" } }, { code: "transactions_data_not_array" }],
+      [{ payload: { total: 2, data: [{ transactionId: "ftx-1" }, null] } }, { code: "row_not_object", itemIndex: 1 }],
+      [{ kind: "dm_messages", payload: null }, { code: "payload_not_object" }],
+      [{ kind: "dm_messages", payload: { messages: {} } }, { code: "messages_not_array" }],
+      [{ kind: "dm_messages", payload: { items: [] } }, { code: "messages_not_array" }],
+      [{ kind: "dm_messages", payload: { messages: [null] } }, { code: "row_not_object", itemIndex: 0 }],
+      [{ kind: "purchase_history", payload: {} }, { code: "purchase_rows_missing" }],
+      [{ kind: "purchase_history", payload: { accountMediaOrderHistory: {} } }, { code: "purchase_rows_missing" }],
+      [{ kind: "purchase_history", payload: { error: "denied" } }, { code: "purchase_rows_missing" }],
+      [
+        { kind: "purchase_history", payload: { accountMediaOrderHistory: [orderRow, 7] } },
+        { code: "row_not_object", itemIndex: 1 },
+      ],
+      [{ kind: "purchase_history_contract_probe", payload: "oops" }, { code: "payload_not_object" }],
+    ];
+    for (const [input, rejection] of refused) {
+      expect(diagnoseSyncPullObservationRejection(observation(input))).toEqual(rejection);
+      expect(canParseSyncPullObservation(observation(input))).toBe(false);
+    }
+  });
+
+  it("does not gate other platforms or kinds", () => {
+    // OFAPI dm_messages carries `items`, not `messages`.
+    expect(canParseSyncPullObservation(observation({
+      platform: "onlyfans",
+      kind: "dm_messages",
+      payload: { items: [{ id: 1 }] },
+    }))).toBe(true);
+    expect(canParseSyncPullObservation(observation({ platform: "onlyfans", payload: null }))).toBe(true);
+    expect(canParseSyncPullObservation(observation({ platform: null, payload: "x" }))).toBe(true);
+    expect(canParseSyncPullObservation(observation({ kind: "subscribers", payload: null }))).toBe(true);
+  });
+
+  it("still reads the nested aggregation order rows the gate accepts", () => {
+    // The gate and the canonicalizer share one row locator; the nested key is
+    // the last one it tries.
+    const events = canonicalizeSyncPullObservation(observation({
+      kind: "purchase_history",
+      payload: { aggregationData: { accountMediaOrders: [orderRow] } },
+    }));
+    expect(events.filter((event) => event.type === "message.ppv_unlocked")).toEqual([
+      expect.objectContaining({
+        fanIdentityRef: "fansly-fan-8",
+        dedupKey: "ppv:fansly-fan-8:media-7:2026-06-22T10:00:00.000Z",
+      }),
+    ]);
+  });
+});
+
 describe("command-result canonicalizer (Stage 8)", () => {
   it("collapses terminal command states into command.settled", () => {
     const events = canonicalizeCommandResultObservation(observation({
@@ -364,6 +458,13 @@ describe("canonicalizer registry dispatch", () => {
     expect(familyForObservation({ source: "webhook", kind: "users.typing" })).toBeNull();
     expect(familyForObservation({ source: "pull", kind: "earnings_transactions" })?.source).toBe("pull");
     expect(familyForObservation({ source: "pull", kind: "subscribers" })).toBeNull();
+    // J1: the sync family carries Fansly bodies, so it declares a shape gate.
+    for (const kind of ["earnings_transactions", "dm_messages", "purchase_history", "purchase_history_contract_probe"]) {
+      const sync = familyForObservation({ source: "pull", kind });
+      expect(sync?.lane).toBe("sync");
+      expect(sync?.canParse).toBe(canParseSyncPullObservation);
+      expect(sync?.parseRejection).toBe(diagnoseSyncPullObservationRejection);
+    }
     expect(familyForObservation({ source: "command_result", kind: "command.failed" })?.source).toBe("command_result");
     // Stage 11: declared desktop kinds route to client_capture; unknown wait.
     expect(familyForObservation({ source: "client_capture", kind: "desktop.ai_acceptance" })?.source)

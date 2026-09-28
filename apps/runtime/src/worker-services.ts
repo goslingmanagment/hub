@@ -7,7 +7,6 @@ import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTy
 import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
-  deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -329,7 +328,10 @@ export async function startWorkerServices(
       }
     };
 
-    const rawPayloads = await timed("rawPayloads", () => deleteExpiredRawPayloads(app.db, now));
+    // Raw payloads are captured facts and are never deleted on a schedule: this
+    // job keeps its historical queue name but no longer touches
+    // sync_raw_payloads. Only the owner-initiated erasure removes them.
+
     // Pending device credentials are deliberately short-lived custody, not an
     // audit fact. Reuse the already-scheduled nightly retention job so crashed
     // Desktop reservations cannot accumulate forever.
@@ -345,7 +347,6 @@ export async function startWorkerServices(
     const summary = {
       ...timings,
       totalMs: Object.values(timings).reduce((sum, value) => sum + value, 0),
-      rawPayloadsDeleted: rawPayloads.rowCount ?? 0,
       syncObservability: {
         cutoff: observability.cutoff.toISOString(),
         deletedAttempts: observability.deletedAttempts,
@@ -453,7 +454,9 @@ export async function startWorkerServices(
     // neither this file nor the CLI is a table that silently stops filling.
     // Each entry stays isolated in its own try/catch inside runProjectionTick:
     // every projection owns its watermark, so a poison fact in one must stay
-    // retryable without starving the neighbours sharing this pg-boss tick.
+    // retryable without starving the neighbours sharing this pg-boss tick. A
+    // failed run is retried account by account, so one page's poison fact
+    // does not park the other pages of the same projection either.
     const startedAt = Date.now();
     const tick = await runProjectionTick(app, {
       // Defect 2026-08-22: isolation is not fairness. A full pass over the
