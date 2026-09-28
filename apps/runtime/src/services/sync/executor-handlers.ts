@@ -1475,6 +1475,23 @@ export async function fanslySubscribersChunk(
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
 
   const existingState = parseSubscribersCursorState(checkpoint?.state, input.streamState.requestSeq);
+  // Only a withheld active completion leaves an active state with a withheld
+  // reason, and it closes its revision. Re-reading its last page on a replay
+  // could certify the walk and retire the rows it never served.
+  if (existingState?.mode === "active" && existingState.activeWithheldReason !== undefined) {
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        generation: existingState.generation,
+        mode: existingState.mode,
+        pageCount: existingState.pageCount,
+        processedThisChunk: 0,
+        providerReportedTotal: existingState.providerReportedTotal,
+        ...subscribersWithheldStats(existingState),
+      },
+    } satisfies StreamChunkResult;
+  }
   const previousCheckpointState = asRecord(checkpoint?.state);
   const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
   const previousHistoryBackfilledAt = typeof previousCheckpointState?.historyBackfilledAt === "string"

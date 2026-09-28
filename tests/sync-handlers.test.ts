@@ -2775,6 +2775,48 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       }));
     });
 
+    it("replays a withheld active completion without re-reading its last page", async () => {
+      // One subscription lapsed between pages: the empty last page reports a
+      // total equal to the rows already read, so re-reading it would certify.
+      resumeWalk({
+        offset: 200,
+        observedCount: 200,
+        distinctObservedCount: 200,
+        pageCount: 2,
+        providerReportedTotal: 300,
+        restartCount: 2,
+      });
+      dbMocks.countCurrentPageSubscriptionsByGeneration.mockResolvedValue(200);
+      const emptyLastPage = { total: 200, items: [], done: true };
+
+      const first = await runWalk(emptyLastPage);
+      expect(first.result).toMatchObject({ satisfied: true, stats: { withheldReason: "total_changed" } });
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledTimes(1);
+      const completedState = dbMocks.upsertCheckpoint.mock.calls[0]?.[1].state;
+      expect(completedState).toMatchObject({ mode: "active", offset: 200, activeWithheldReason: "total_changed" });
+
+      // The run died before the page sync closed; the same revision dispatches again.
+      dbMocks.getCheckpoint.mockResolvedValue({ state: completedState });
+      const replay = await runWalk(emptyLastPage);
+
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).not.toHaveBeenCalled();
+      expect(replay.getSubscribersPage).not.toHaveBeenCalled();
+      expect(replay.db.transaction).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledTimes(1);
+      expect(replay.result).toMatchObject({
+        satisfied: true,
+        stats: {
+          generation: 7,
+          mode: "active",
+          processedThisChunk: 0,
+          providerReportedTotal: 200,
+          destructiveFinalization: false,
+          finalizationWithheld: true,
+          withheldReason: "total_changed",
+        },
+      });
+    });
+
     it("reads a shifted archive on to its end once restarts are exhausted, uncertified", async () => {
       resumeWalk({
         mode: "expired",
