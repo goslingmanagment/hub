@@ -30,10 +30,11 @@ import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-// Stage 1 retention stand-down: raw payloads are captured business facts. Rows
-// are stamped far-future so the existing `retain_until < now` purge
-// (packages/db repositories/sync.ts deleteExpiredRawPayloads) never matches;
-// the cleanup job stays in place as a no-op.
+// Stage 1 retention stand-down: raw payloads are captured business facts and
+// nothing deletes sync_raw_payloads on a schedule (the nightly purge was
+// removed; tests/retention-deleters.test.ts pins that). `retain_until` is an
+// inert envelope stamp kept far-future; the only deleter is the
+// owner-initiated erasure.
 const RAW_RETENTION_DAYS = 36500;
 const DM_RAW_RETENTION_DAYS = 36500;
 

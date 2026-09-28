@@ -7,7 +7,6 @@ import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTy
 import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
-  deleteExpiredRawPayloads,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -327,7 +326,10 @@ export async function startWorkerServices(
       }
     };
 
-    const rawPayloads = await timed("rawPayloads", () => deleteExpiredRawPayloads(app.db, now));
+    // Raw payloads are captured facts and are never deleted on a schedule: this
+    // job keeps its historical queue name but no longer touches
+    // sync_raw_payloads. Only the owner-initiated erasure removes them.
+
     // Pending device credentials are deliberately short-lived custody, not an
     // audit fact. Reuse the already-scheduled nightly retention job so crashed
     // Desktop reservations cannot accumulate forever.
@@ -343,7 +345,6 @@ export async function startWorkerServices(
     const summary = {
       ...timings,
       totalMs: Object.values(timings).reduce((sum, value) => sum + value, 0),
-      rawPayloadsDeleted: rawPayloads.rowCount ?? 0,
       syncObservability: {
         cutoff: observability.cutoff.toISOString(),
         deletedAttempts: observability.deletedAttempts,

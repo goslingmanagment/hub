@@ -1,4 +1,4 @@
-import { type SQL, and, eq, inArray, is, lt, sql } from "drizzle-orm";
+import { type SQL, and, eq, inArray, is, sql } from "drizzle-orm";
 import { PgTransaction } from "drizzle-orm/pg-core";
 
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agency_hub_core/shared";
@@ -1149,10 +1149,6 @@ export async function insertSyncRunEvent(
   }).returning();
 
   return event;
-}
-
-export async function deleteExpiredRawPayloads(db: Database, now = new Date()) {
-  return db.delete(syncRawPayloads).where(lt(syncRawPayloads.retainUntil, now));
 }
 
 /** Rows one retention DELETE statement may remove. */
