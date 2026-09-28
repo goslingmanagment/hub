@@ -101,6 +101,7 @@ import {
   createFanslyLaneRuntime,
   fanslyUtcDayKey,
   isRepeatedRequest,
+  isSubjectScopedFanslyFailure,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
@@ -341,10 +342,6 @@ export function walkContinuationAt(
   return spreadFanslyContinuation(now, delayMs, random);
 }
 
-function isAuthFailure(error: unknown): boolean {
-  return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
-}
-
 // ── the handler ──────────────────────────────────────────────────────────────
 
 function skip(reason: string): StreamChunkResult {
@@ -544,11 +541,12 @@ export async function fanslyPostRepliesChunk(
         });
         raw = response.raw;
       } catch (error) {
-        // A dead session is the executor's business, not this loop's: re-raise
-        // it untouched so the auth pause fires. Everything else is scoped to
-        // ONE post — a single unreachable post must not wedge an archive of
-        // thousands.
-        if (isAuthFailure(error)) {
+        // Only a failure ABOUT THIS POST is scoped to it — a single unreachable
+        // post must not wedge an archive of thousands. A dead session, the
+        // provider's pace, a dead proxy or a lost lease is about the PAGE:
+        // re-raised untouched so the executor's auth pause, `Retry-After` and
+        // backoff ladder fire, and the post is not pushed a day out for it.
+        if (!isSubjectScopedFanslyFailure(error)) {
           throw error;
         }
         await input.telemetry.addAnomaly({

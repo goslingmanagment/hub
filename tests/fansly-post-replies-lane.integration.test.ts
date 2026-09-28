@@ -675,6 +675,47 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     )).rejects.toMatchObject({ status: 401 });
   });
 
+  for (
+    const [label, failure] of [
+      ["a dead proxy", () => new TypeError("fetch failed", {
+        cause: new Error("Socks5 Authentication failed"),
+      })],
+      ["a 429 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (429)", 429, 429, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+    ] as const
+  ) {
+    it(`leaves ${label} to the executor instead of pushing the post out`, async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      const page = await seedPage();
+      await seedPost(page.id, ref(1), "2026-08-01T00:00:00.000Z");
+      await seedPost(page.id, ref(2), "2026-07-01T00:00:00.000Z");
+      const before = await walkRows(page.id);
+      const thrown = failure();
+      const adapter = adapterStub({ fail: (route) => route === "post_replies" ? thrown : null });
+      const telemetry = telemetryStub();
+
+      // The SAME throwable reaches the executor, `retryAfterAt` and all.
+      await expect(fanslyPostRepliesChunk(appStub(adapter), input(page.id, telemetry)))
+        .rejects.toBe(thrown);
+      // The walk stopped at the wall instead of carrying on into the next post.
+      expect(adapter.calls.map((call) => call.params.postId)).toEqual([ref(1)]);
+      // No post was charged for the page's outage: no failure, no day's push.
+      const after = await walkRows(page.id);
+      for (const row of after) {
+        const seeded = before.find((entry) => entry.subjectRef === row.subjectRef);
+        expect(row.consecutiveFailures).toBe(0);
+        expect(row.lastVisitedAt).toBeNull();
+        expect(row.nextDueAt?.toISOString()).toBe(seeded?.nextDueAt?.toISOString());
+      }
+      expect(telemetry.anomalies.map((anomaly) => anomaly.code))
+        .not.toContain("fansly_replies_post_failed");
+    });
+  }
+
   it("lets a healthy post run while failed posts wait for their retry due time", async (
     context,
   ) => {

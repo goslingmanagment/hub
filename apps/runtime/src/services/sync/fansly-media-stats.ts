@@ -161,6 +161,7 @@ import {
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
   fanslyUtcDayKey,
+  isSubjectScopedFanslyFailure,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
@@ -658,10 +659,6 @@ export function servedWindowCoversRequest(
   return served.afterMs - requested.afterMs <= DAY_MS;
 }
 
-function isAuthFailure(error: unknown): boolean {
-  return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
-}
-
 /** What a failed window was failed WITH: the provider's HTTP status when it
  *  answered at all, and whether it asked us to come back later. */
 interface WindowFailure {
@@ -841,11 +838,12 @@ export async function fanslyMediaStatsChunk(
       });
       raw = response.raw;
     } catch (error) {
-      // A dead session is the executor's business, not this loop's: re-raise it
-      // untouched so the auth pause fires. Everything else is scoped to ONE
-      // media item — a single unreachable item must not wedge a queue of
-      // thousands.
-      if (isAuthFailure(error)) {
+      // Only a failure ABOUT THIS ITEM is scoped to it — a single unreachable
+      // item must not wedge a queue of thousands. A dead session, the
+      // provider's pace, a dead proxy or a lost lease is about the PAGE:
+      // re-raised untouched so the executor's auth pause, `Retry-After` and
+      // backoff ladder fire, and the item is not charged for it.
+      if (!isSubjectScopedFanslyFailure(error)) {
         throw error;
       }
       lastWindowFailure = {
@@ -1086,7 +1084,10 @@ export async function fanslyMediaStatsChunk(
    * its first window: a split long tail that starts with two calls left in the
    * chunk would otherwise spend them on windows the next chunk asks for again.
    * A failed look still KEEPS the backfill windows it had journaled before it
-   * failed: those are in the cursor, not in the stamp.
+   * failed: those are in the cursor, not in the stamp. A PAGE-level failure (a
+   * dead proxy, a 429, a lost lease) is not a look at all: it leaves the visit
+   * for the executor and the item untouched, and the item's next turn resumes
+   * from its stored cursor.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,

@@ -1340,7 +1340,8 @@ describe("media_stats lane — the cap", () => {
     ], { queueCursor: BACKFILL_DONE });
 
     const adapter = adapterStub({
-      fail: (params) => params.mediaOfferId === ref(601) ? new Error("boom") : null,
+      fail: (params) =>
+        params.mediaOfferId === ref(601) ? providerRefusal("error getting media offer") : null,
     });
     const telemetry = telemetryStub();
     await drain(page.id, adapter, telemetry);
@@ -1362,6 +1363,68 @@ describe("media_stats lane — the cap", () => {
     expect(telemetry.anomalies.some((anomaly) =>
       anomaly.code === "fansly_media_stats_item_failed"
     )).toBe(true);
+  });
+
+  for (
+    const [label, failure] of [
+      ["a dead proxy", () => new TypeError("fetch failed", {
+        cause: new Error("Socks5 proxy rejected connection - NotAllowed"),
+      })],
+      ["a 429 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (429)", 429, 429, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+      ["a 503 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (503)", 503, 503, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+    ] as const
+  ) {
+    it(`leaves ${label} to the executor instead of charging it to the item`, async (ctx) => {
+      if (!testDb) return ctx.skip();
+      const page = await seedPage();
+      await seedMedia(page.id, [
+        { ref: ref(631), createdAtPlatform: new Date(NOW.getTime() - 1 * DAY_MS) },
+        { ref: ref(632), createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+      ], { queueCursor: BACKFILL_DONE });
+      const thrown = failure();
+      const adapter = adapterStub({ fail: () => thrown });
+      const telemetry = telemetryStub();
+
+      // The SAME throwable reaches the executor: its status and `retryAfterAt`
+      // are what `classifyTaskFailure` turns into the retry class and the wake-up.
+      await expect(fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry)))
+        .rejects.toBe(thrown);
+      // The walk stopped at the wall: it did not carry on into the next item.
+      expect(adapter.calls.map((call) => call.mediaOfferId)).toEqual([ref(631)]);
+      // And the item was not charged for the page's outage.
+      for (const subjectRef of [ref(631), ref(632)]) {
+        const row = await queueRow(page.id, subjectRef);
+        expect(row.consecutiveFailures).toBe(0);
+        expect(row.lastVisitedAt).toBeNull();
+        expect(row.nextDueAt?.toISOString()).toBe(NOW.toISOString());
+      }
+      expect(telemetry.anomalies.map((anomaly) => anomaly.code))
+        .not.toContain("fansly_media_stats_item_failed");
+    });
+  }
+
+  it("keeps a 4xx that carries Retry-After scoped to its item", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedMedia(page.id, [
+      { ref: ref(641), createdAtPlatform: new Date(NOW.getTime() - 1 * DAY_MS) },
+      { ref: ref(642), createdAtPlatform: new Date(NOW.getTime() - 2 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // Re-raised, the executor would read no deadline for a 400 and park the
+    // whole stream as provider_bad_data.
+    const adapter = adapterStub({
+      fail: (params) => params.mediaOfferId === ref(641)
+        ? new FanslyApiError("bad request", 400, 400, undefined, new Date(NOW.getTime() + 600_000))
+        : null,
+    });
+    await drain(page.id, adapter, telemetryStub());
+
+    expect(adapter.calls.map((call) => call.mediaOfferId)).toContain(ref(642));
+    expect((await queueRow(page.id, ref(641))).consecutiveFailures).toBe(1);
   });
 
   it("lets healthy items run while failed items wait out their backoff", async (ctx) => {
@@ -1429,7 +1492,9 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
         dayOne && params.beforeDate.getTime() === failingBeforeMs;
       const adapter = adapterStub({
         fail: (params) =>
-          failure === "thrown" && failsToday(params) ? new Error("socket hang up") : null,
+          failure === "thrown" && failsToday(params)
+            ? providerRefusal("error getting media offer")
+            : null,
         body: (params) =>
           failure === "unreadable" && failsToday(params) ? { aggregationData: {} } : undefined,
       });
@@ -1493,7 +1558,8 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
     let dayOne = true;
     const adapter = adapterStub({
       // The fresh tier's steady window is the hourly one.
-      fail: (params) => dayOne && params.periodMs === 3_600_000 ? new Error("socket hang up") : null,
+      fail: (params) =>
+        dayOne && params.periodMs === 3_600_000 ? providerRefusal("error getting media offer") : null,
     });
     await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
     expect(adapter.calls.map((call) => call.periodMs)).toEqual([86_400_000, 86_400_000, 3_600_000]);
@@ -1527,7 +1593,7 @@ describe("media_stats lane — a failed visit keeps its backfill progress", () =
       ref: mediaRef,
       createdAtPlatform: new Date(NOW.getTime() - 150 * DAY_MS),
     }], { queueCursor: {} });
-    const adapter = adapterStub({ fail: () => new Error("socket hang up") });
+    const adapter = adapterStub({ fail: () => providerRefusal("error getting media offer") });
     await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
 
     expect(adapter.calls).toHaveLength(1);
@@ -1773,10 +1839,10 @@ describe("media_stats lane — the 90-day window refused with an HTTP error", ()
   });
 
   for (
-    const [label, failure] of [
-      ["a transport error", () => new Error("Socks5 proxy rejected connection")],
-      ["a 429", () => new FanslyApiError("Fansly request failed (429)", 429, 429)],
-      ["a gateway 503", () => new FanslyApiError("Fansly request failed (503)", 503)],
+    const [label, failure, pageLevel] of [
+      ["a transport error", () => new Error("Socks5 proxy rejected connection"), true],
+      ["a 429", () => new FanslyApiError("Fansly request failed (429)", 429, 429), true],
+      ["a gateway 503", () => new FanslyApiError("Fansly request failed (503)", 503), false],
     ] as const
   ) {
     it(`does not probe after ${label} — that is the wire, not the route`, async (ctx) => {
@@ -1789,7 +1855,14 @@ describe("media_stats lane — the 90-day window refused with an HTTP error", ()
       }], { queueCursor: BACKFILL_DONE });
       const adapter = adapterStub({ fail: (params) => spanDays(params) > 31 ? failure() : null });
       const telemetry = telemetryStub();
-      await drain(page.id, adapter, telemetry);
+      // The wire and the provider's pace are the page's: they leave the chunk
+      // for the executor before any fallback could read them.
+      const chunk = fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+      if (pageLevel) {
+        await expect(chunk).rejects.toThrow();
+      } else {
+        await chunk;
+      }
 
       expect(adapter.calls.map(spanDays)).toEqual([90]);
       expect(await cursor(page.id)).toMatchObject({
