@@ -43,8 +43,17 @@ export async function lockFanslyWsGeneration(db: Database, pageId: number) {
   await db.execute(sql`select e.id from egress_endpoints e where e.platform_account_id=${pageId} for share`);
 }
 
+/** Precondition: `db` is the session holding this page's advisory lock. That
+ * lock is never unlocked explicitly, so any other open row of the page belongs
+ * to a session that has already ended and can no longer write. Close it as
+ * `abandoned` at its last proof of liveness, never at the current time. One
+ * statement: the gap boundary reads the pre-update snapshot, so gap_since is
+ * unchanged by the sweep. */
 export async function beginFanslyWsConnection(db: Database, input: { id: string; pageId: number; generation: string }) {
-  await db.execute(sql`insert into fansly_ws_connections(id,page_id,generation,gap_since)
+  await db.execute(sql`with abandoned as (update fansly_ws_connections
+      set closed_at=greatest(last_guard_at,last_capture_at),stop_reason='abandoned'
+      where page_id=${input.pageId} and closed_at is null)
+    insert into fansly_ws_connections(id,page_id,generation,gap_since)
     values (${input.id}::uuid,${input.pageId},${input.generation},coalesce(
       (select coalesce(c.closed_at,c.last_guard_at) from fansly_ws_connections c
         where c.page_id=${input.pageId} order by c.started_at desc limit 1),clock_timestamp()))`);

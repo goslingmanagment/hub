@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireFanslyWsOwnership, beginFanslyWsConnection, captureFanslyWsFrame,
+  acquireFanslyWsOwnership, beginFanslyWsConnection, captureFanslyWsFrame, createFanslyPage,
   finishFanslyWsConnection, isFanslyWsGenerationBlocked, replayFanslyWsDecode,
   settleFanslyWsDecode, upsertFans, upsertFanPages, type Database,
 } from "@agency_hub_core/db";
@@ -188,8 +188,13 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect((await testDb.pool.query("select stop_reason from fansly_ws_connections where id<>$1::uuid", [f.id])).rows)
       .toEqual([{ stop_reason: "disabled" }]);
   }, 30_000);
-  it("one owner per page, death notifies, restart owns a new connection and leaves a gap", async () => {
+  it("one owner per page, death notifies, the next owner abandons the dead row and leaves a gap", async () => {
     const f = await fixture();
+    const other = await createFanslyPage(f.app.db, { modelId: f.page.modelId, label: "b0-bystander" });
+    if (!other) throw new Error("seed failed");
+    const bystander = randomUUID();
+    await testDb.pool.query("insert into fansly_ws_connections(id,page_id,generation) values ($1,$2,$3)",
+      [bystander, other.id, f.generation]);
     expect(await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn())).toBeNull();
     await f.capture();
     const pid = (await testDb.pool.query("select pid from pg_stat_activity where application_name='fansly-b0' and datname=current_database()" )).rows[0].pid;
@@ -199,9 +204,99 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const next = await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn());
     expect(next).not.toBeNull(); owners.push(next!);
     await beginFanslyWsConnection(next!.db, { id: randomUUID(), pageId: f.page.id, generation: f.generation });
-    const rows = (await testDb.pool.query("select closed_at,gap_state,gap_since,started_at from fansly_ws_connections order by started_at")).rows;
-    expect(rows).toHaveLength(2); expect(rows[0].closed_at).toBeNull();
-    expect(rows[1].gap_state).toBe("unknown"); expect(rows[1].gap_since.getTime()).toBeLessThan(rows[1].started_at.getTime());
+    const rows = (await testDb.pool.query(`select closed_at,stop_reason,last_guard_at,gap_state,gap_since,started_at,
+      closed_at=greatest(last_guard_at,last_capture_at) as closed_at_last_proof
+      from fansly_ws_connections where page_id=$1 order by started_at`, [f.page.id])).rows;
+    expect(rows).toHaveLength(2);
+    // The dead owner's row closes at its last proof of liveness, not now; the
+    // new attempt's gap still starts at that row's last guard.
+    expect(rows[0]).toMatchObject({ stop_reason: "abandoned", closed_at_last_proof: true });
+    expect(rows[1]).toMatchObject({ closed_at: null, stop_reason: null, gap_state: "unknown" });
+    expect(rows[1].gap_since).toEqual(rows[0].last_guard_at);
+    expect(rows[1].gap_since.getTime()).toBeLessThan(rows[1].started_at.getTime());
+    expect((await testDb.pool.query("select closed_at,stop_reason from fansly_ws_connections where id=$1", [bystander])).rows)
+      .toEqual([{ closed_at: null, stop_reason: null }]);
+  });
+
+  describe("a close the owner cannot record", () => {
+    const failClose = `create function b0_fail_close() returns trigger language plpgsql as $$
+        begin raise exception 'injected close failure'; end $$;
+      create trigger b0_fail_close before update on fansly_ws_connections for each row
+        when (new.closed_at is not null and new.stop_reason <> 'abandoned') execute function b0_fail_close()`;
+    const allowClose = "drop trigger if exists b0_fail_close on fansly_ws_connections; drop function if exists b0_fail_close()";
+    async function workerFixture(firstFrame: (f: Awaited<ReturnType<typeof fixture>>) => string) {
+      const f = await fixture();
+      await finishFanslyWsConnection(f.owner.db, f.id, "disabled");
+      await f.owner.close();
+      await testDb.pool.query("update pages set external_page_id='999' where id=$1", [f.page.id]);
+      const generation = await readProbeGeneration(f.app.db, f.page.label);
+      await testDb.pool.query(failClose);
+      const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
+        const socket = Object.assign(new EventTarget(), { send: vi.fn() });
+        queueMicrotask(() => {
+          socket.dispatchEvent(new Event("open"));
+          socket.dispatchEvent(new MessageEvent("message", { data: firstFrame(f) }));
+          socket.dispatchEvent(new MessageEvent("message", { data: f.frame() }));
+        });
+        return { socket, stop: vi.fn() } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
+      });
+      f.app.config.fanslyWsCaptureEnabled = true;
+      f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
+      const rows = async () => (await testDb.pool.query(`select id,stop_reason,closed_at,last_guard_at,gap_since,
+        closed_at=greatest(last_guard_at,last_capture_at) as closed_at_last_proof
+        from fansly_ws_connections where id<>$1::uuid order by started_at`, [f.id])).rows;
+      return { ...f, generation, open, rows };
+    }
+    afterEach(async () => { vi.restoreAllMocks(); await testDb.pool.query(allowClose); });
+
+    it("is logged by fixed class only and abandoned by the next owner", async () => {
+      const f = await workerFixture(() => '{"t":1,"d":"{}"}');
+      const warn = vi.spyOn(f.app.logger, "warn");
+      let worker = startFanslyWsWorker(f.app);
+      try {
+        await vi.waitFor(async () => expect((await testDb.pool.query(
+          "select count(*)::int n from observations where source='fansly_ws'",
+        )).rows[0].n).toBe(1), { timeout: 10_000 });
+      } finally { await worker.stop(); }
+      const [lost] = await f.rows();
+      expect(lost).toMatchObject({ closed_at: null, stop_reason: null });
+      expect(warn).toHaveBeenCalledWith(
+        { pageLabel: f.page.label, connectionId: lost.id, stopReason: "disabled", closeError: "P0001" },
+        "Fansly B0 connection close not recorded; the next owner marks it abandoned",
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("injected");
+      await testDb.pool.query(allowClose);
+      worker = startFanslyWsWorker(f.app);
+      try { await vi.waitFor(() => expect(f.open).toHaveBeenCalledTimes(2), { timeout: 15_000 }); }
+      finally { await worker.stop(); }
+      const [abandoned, next] = await f.rows();
+      expect(abandoned).toMatchObject({ id: lost.id, stop_reason: "abandoned", closed_at_last_proof: true });
+      expect(next).toMatchObject({ stop_reason: "disabled" });
+      expect(next.gap_since).toEqual(abandoned.last_guard_at);
+    }, 30_000);
+
+    it("keeps an auth refusal in process, logs it as an error, and a restart retries the generation once", async () => {
+      const f = await workerFixture(() => '{"t":0,"d":"{\\"code\\":401}"}');
+      const error = vi.spyOn(f.app.logger, "error");
+      let worker = startFanslyWsWorker(f.app);
+      try {
+        await vi.waitFor(() => expect(error).toHaveBeenCalledWith(
+          { pageLabel: f.page.label, connectionId: expect.any(String), stopReason: "auth_refused", closeError: "P0001" },
+          "Fansly B0 auth refusal not persisted; a restart retries this generation once",
+        ), { timeout: 10_000 });
+        expect(await isFanslyWsGenerationBlocked(testDb.db, f.page.id, f.generation)).toBe(false);
+        expect(f.open).toHaveBeenCalledOnce();
+      } finally { await worker.stop(); }
+      await testDb.pool.query(allowClose);
+      worker = startFanslyWsWorker(f.app);
+      try {
+        await vi.waitFor(async () => expect(await isFanslyWsGenerationBlocked(testDb.db, f.page.id, f.generation))
+          .toBe(true), { timeout: 15_000 });
+      } finally { await worker.stop(); }
+      // The stated residual: one more refused auth attempt after the restart.
+      expect(f.open).toHaveBeenCalledTimes(2);
+      expect((await f.rows()).map((row) => row.stop_reason)).toEqual(["abandoned", "auth_refused"]);
+    }, 30_000);
   });
 
   it("raw + pending receipt commit atomically, replay recovers unknown child debt, connection ordinal deduplicates", async () => {
