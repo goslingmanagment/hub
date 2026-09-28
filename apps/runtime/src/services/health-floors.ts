@@ -47,7 +47,10 @@ export const HEALTH_FLOOR_THRESHOLD_MS = 600_000;
  *
  * Consequence, stated rather than discovered: every existing series ends at
  * the rename and a new one starts. Ops metric samples are plain strings —
- * nothing migrates, nothing breaks, and dashboards read the new names.
+ * nothing migrates, and dashboards read the new names. The old series'
+ * `golden_signal_lag` latch is the one thing a rename strands (nothing
+ * samples that name again): the golden-signal run retires it once its
+ * last_seen_at is older than a grace period (golden-signals.ts).
  */
 export function healthFloorName(source: string, lane: string, version: number): string {
   return `obs_backlog_${source}_${lane}_v${version}`;
