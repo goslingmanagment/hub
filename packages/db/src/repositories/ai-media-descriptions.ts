@@ -778,12 +778,12 @@ export async function peekAiMediaFastLaneRead(
 ): Promise<(AiMediaAcceleratorClaim & { generation: string | null; frameReceivedAt: Date | null }) | null> {
   await db.execute(sql`
     update ai_media_accelerator_reads set status = 'skipped', outcome = 'stale', finished_at = ${input.now}
-    where page_id = ${input.pageId} and status = 'pending'
+    where page_id = ${input.pageId} and status = 'pending' and lane = 'fast'
       and requested_at < ${new Date(input.now.getTime() - input.staleAfterMs)}
   `);
   const result = await db.execute<{ id: string; group_ref: string; message_ref: string; generation: string | null; frame_received_at: Date | string | null }>(sql`
     select id::text as id, group_ref, message_ref, generation, frame_received_at from ai_media_accelerator_reads
-    where page_id = ${input.pageId} and status = 'pending'
+    where page_id = ${input.pageId} and status = 'pending' and lane = 'fast'
     order by requested_at asc, id asc
     limit 1
   `);
@@ -797,6 +797,77 @@ export async function peekAiMediaFastLaneRead(
       frameReceivedAt: toDate(row.frame_received_at),
     }
     : null;
+}
+
+/** A request the fast lane declined stays pending for the ordinary in-chunk
+ * accelerator (which reads under the page lease with its own checks). */
+export async function handOffAiMediaFastLaneRead(db: Database, input: { id: number; reason: string }) {
+  await db.execute(sql`
+    update ai_media_accelerator_reads set lane = 'chunk', outcome = ${`handoff_${input.reason}`}
+    where id = ${input.id} and status = 'pending' and lane = 'fast'
+  `);
+}
+
+/** When the fast lane last dispatched a read of this conversation. */
+export async function lastAiMediaFastLaneDispatch(
+  db: Database,
+  input: { pageId: number; groupRef: string },
+): Promise<Date | null> {
+  const result = await db.execute<{ at: Date | string | null }>(sql`
+    select max(dispatched_at) as at from ai_media_accelerator_reads
+    where page_id = ${input.pageId} and group_ref = ${input.groupRef} and lane = 'fast'
+  `);
+  return toDate(result.rows[0]?.at ?? null);
+}
+
+/**
+ * The provider's recent answers to any Fansly request of these pages (sync
+ * attempts): a 429 within `rateLimitMs`, a 5xx within `serverErrorMs`, a
+ * 401/403 within `authMs`. The in-process retry of a 429 leaves no durable
+ * cooldown yet — this is what the fast lane checks right before dispatch.
+ */
+export async function recentFanslyProviderRefusal(
+  db: Database,
+  input: { pageIds: readonly number[]; now: Date; rateLimitMs: number; serverErrorMs: number; authMs: number },
+): Promise<"rate_limit" | "provider_5xx" | "auth" | null> {
+  if (input.pageIds.length === 0) {
+    return null;
+  }
+  const pageIds = sql.join(input.pageIds.map((id) => sql`${id}`), sql`, `);
+  const since = new Date(input.now.getTime() - Math.max(input.rateLimitMs, input.serverErrorMs, input.authMs));
+  const result = await db.execute<{ http_status: number; started_at: Date | string }>(sql`
+    select http_status, started_at from sync_http_attempts
+    where provider = 'fansly' and page_id in (${pageIds}) and started_at >= ${since}
+      and (http_status = 429 or http_status >= 500 or http_status in (401, 403))
+    order by started_at desc
+    limit 20
+  `);
+  for (const row of result.rows) {
+    const age = input.now.getTime() - (toDate(row.started_at)?.getTime() ?? 0);
+    const status = Number(row.http_status);
+    if (status === 429 && age <= input.rateLimitMs) return "rate_limit";
+    if (status >= 500 && age <= input.serverErrorMs) return "provider_5xx";
+    if ((status === 401 || status === 403) && age <= input.authMs) return "auth";
+  }
+  return null;
+}
+
+/** Whether any of these pages is in a lane cooldown (429/5xx/401/403 the lane itself met). */
+export async function hasAiMediaFastLaneCooldown(
+  db: Database,
+  input: { pageIds: readonly number[]; now: Date },
+): Promise<boolean> {
+  if (input.pageIds.length === 0) {
+    return false;
+  }
+  const pageIds = sql.join(input.pageIds.map((id) => sql`${id}`), sql`, `);
+  const result = await db.execute<{ cooling: boolean }>(sql`
+    select exists (
+      select 1 from ai_media_fast_lane_health
+      where page_id in (${pageIds}) and cooldown_until is not null and cooldown_until > ${input.now}
+    ) as cooling
+  `);
+  return result.rows[0]?.cooling === true;
 }
 
 /** The physical HTTP start of an admitted read (after the pacing wait). */
@@ -828,13 +899,15 @@ export async function hasUnfinishedFanslySyncAttempt(
  * down after a 429/5xx, or the DM stream paused or blocked. */
 export async function getFanslyFastLanePageSyncGate(
   db: Database,
-  input: { pageId: number; now: Date },
+  input: { pageId: number; now: Date; peerPageIds?: readonly number[] },
 ): Promise<{ cooldown: boolean; held: boolean }> {
+  const cooling = [...new Set([input.pageId, ...(input.peerPageIds ?? [])])];
+  const cooldownIds = sql.join(cooling.map((id) => sql`${id}`), sql`, `);
   const result = await db.execute<{ cooldown: boolean; held: boolean }>(sql`
     select
       exists (
         select 1 from page_sync_states
-        where page_id = ${input.pageId} and retry_kind in ('rate_limit', 'provider_5xx')
+        where page_id in (${cooldownIds}) and retry_kind in ('rate_limit', 'provider_5xx')
           and retry_at is not null and retry_at > ${input.now}
       ) as cooldown,
       exists (

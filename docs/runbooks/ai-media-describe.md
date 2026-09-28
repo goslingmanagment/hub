@@ -97,17 +97,20 @@ The fast lane (`services/ai-media-describe/fansly-fast-lane.ts`,
    frame is scanned for `message_created` from a fan with a media offer or a
    bundle (`contentType` 1/2; tips never). One row per message goes to
    `ai_media_accelerator_reads` (`lane = 'fast'`, the frame's generation).
-2. Per page, one at a time, after ~1 s of coalescing: gates without a request
-   — lane cooldown, any stream of the page cooling down after 429/5xx, the DM
-   stream paused or blocked, the frame's credential/proxy generation still
-   current, the shared rolling 24 h cap (`..._ACCELERATOR_DAILY_LIMIT`).
+2. Per page, one at a time, after ~1 s of coalescing (and at most one read
+   per conversation every 10 s), **before any pacing slot is reserved**: the
+   shared 24 h cap (`..._ACCELERATOR_DAILY_LIMIT`), a lane cooldown or any
+   stream cooling down on any page of the egress, the DM stream paused or
+   blocked, a 429 (15 min), 5xx (5 min) or 401/403 (30 min) in the egress's
+   `sync_http_attempts`, the frame's credential/proxy generation still
+   current, and no unfinished sync request of the egress (looked at again
+   twice, 2 s apart). The page must also be on `FANSLY_WS_CAPTURE_PAGE_ALLOWLIST`.
 3. The read `/message?groupId&limit=25` (new chats too — addressed by the
    frame's groupId, no roster row needed) reserves its slot in the egress's
-   shared pacing queue and **holds it for its whole 5 s timeout**, so no later
-   request of that egress starts beside it. Right before dispatch it checks
-   that no sync request of the egress is unfinished (`sync_http_attempts`),
-   retries that check twice 2 s apart, then admits itself (compare-and-set on
-   the request, one attempt). `dispatched_at` records the real start.
+   shared pacing queue and **holds it for its whole 5 s timeout**; right
+   before dispatch (after the wait) every check of step 2 is asked again,
+   then it admits itself (compare-and-set, one attempt) and extends the hold
+   from its real start. `dispatched_at` records it.
 4. The response is journaled (raw + observation only), the canonicalizer's
    own parser runs over it, and `applyAiMediaAttachmentsEvent` (the
    projector's code) makes the fan's files due. The describe loop takes them
@@ -118,12 +121,15 @@ The fast lane (`services/ai-media-describe/fansly-fast-lane.ts`,
    (`ai_media_fast_lane_health.cooldown_until`). The ordinary sync keeps its
    own handling.
 
-`shadow` routes and counts (`outcome = 'shadow_ready'` or `shadow_<gate>`)
-without a request. While the lane serves a page, the in-chunk accelerator only
-picks up requests older than 60 s. Health is checked every minute; one
-agency-wide incident (`ai_provider_failed` / `media_describe_fast_lane`)
-opens when a serving page was unavailable for over 10 minutes (socket down,
-cap spent, cooldown) and resolves itself.
+A request the lane declines goes back to the in-chunk accelerator
+(`lane = 'chunk'`, `outcome = 'handoff_<reason>'`, still pending), which reads
+under the page lease; while the lane serves a page that step only picks up
+requests older than 60 s. `shadow` files nothing and sends nothing — it logs
+`ai media fast lane: shadow` with what serve would have done (`ready` or the
+refusal). Health is checked every minute; one agency-wide incident
+(`ai_provider_failed` / `media_describe_fast_lane`) opens when a serving page
+was unavailable for over 10 minutes (socket down, a cooldown) and resolves
+itself; a spent cap or an owner-paused DM stream is not an outage.
 
 ```sql
 -- fast lane reads and their outcomes, last 24 h

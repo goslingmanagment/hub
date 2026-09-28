@@ -65,6 +65,9 @@ beforeEach(async (context) => {
     aiMediaDescribeFanslyFastLaneMode: "serve",
     aiMediaDescribeFanslyFastLanePages: "*",
     aiMediaDescribeFanslyAcceleratorDailyLimit: 150,
+    fanslyWsCaptureEnabled: true,
+    fanslyWsCapturePageAllowlist: "fs-fast",
+    syncSharedRateLimitEnabled: true,
   });
   const model = await createModel(app.db, { slug: "fsf", name: "Fsf" });
   page = await createFanslyPage(app.db, { modelId: model!.id, label: "fs-fast" });
@@ -161,7 +164,7 @@ describe("Fansly fast lane", () => {
     expect(roster.rows[0].n).toBe(0);
   });
 
-  it("shadow routes and counts without a request; tips never route", async () => {
+  it("shadow files nothing and sends nothing (the in-chunk accelerator keeps its requests); tips never route", async () => {
     app.config.aiMediaDescribeFanslyFastLaneMode = "shadow";
     const { fast, calls } = lane();
     fast.onCaptured(frameInput(mediaFrame("5002")));
@@ -169,7 +172,17 @@ describe("Fansly fast lane", () => {
     await fast.idle();
     await fast.stop();
     expect(calls).toHaveLength(0);
-    expect(await reads()).toEqual([{ lane: "fast", status: "skipped", outcome: "shadow_ready", http_status: null, dispatched: false, framed: true }]);
+    expect(await reads()).toEqual([]);
+  });
+
+  it("is off for a page the hub's socket does not capture", async () => {
+    app.config.fanslyWsCapturePageAllowlist = "other-page";
+    const { fast, calls } = lane();
+    fast.onCaptured(frameInput(mediaFrame("5010")));
+    await fast.idle();
+    await fast.stop();
+    expect(calls).toHaveLength(0);
+    expect(await reads()).toEqual([]);
   });
 
   it("stays off the wire while a sync request of the egress is unfinished", async () => {
@@ -182,10 +195,10 @@ describe("Fansly fast lane", () => {
     fast.onCaptured(frameInput(mediaFrame("5004")));
     await fast.idle();
     await fast.stop();
-    // Each try reached the admission hook (after the pacing wait) and was
-    // refused before dispatch: the first try and two retries 2 s apart.
-    expect(calls).toHaveLength(3);
-    expect(await reads()).toEqual([{ lane: "fast", status: "skipped", outcome: "egress_busy", http_status: null, dispatched: false, framed: true }]);
+    // Refused before a pacing slot is even reserved (first look and two
+    // retries), then handed to the in-chunk accelerator, still pending.
+    expect(calls).toHaveLength(0);
+    expect(await reads()).toEqual([{ lane: "chunk", status: "pending", outcome: "handoff_egress_busy", http_status: null, dispatched: false, framed: true }]);
     const admitted = await testDb!.pool.query(`select count(*)::int as n from ai_media_accelerator_reads where admitted_at is not null`);
     expect(admitted.rows[0].n).toBe(0);
   });
@@ -215,7 +228,11 @@ describe("Fansly fast lane", () => {
     await capped.fast.stop();
     expect(capped.calls).toHaveLength(0);
 
-    expect((await reads()).map((row) => row.outcome)).toEqual(["page_cooldown", "generation_changed", "budget_exhausted"]);
+    expect((await reads()).map((row) => [row.lane, row.status, row.outcome])).toEqual([
+      ["chunk", "pending", "handoff_page_cooldown"],
+      ["chunk", "pending", "handoff_generation_changed"],
+      ["chunk", "pending", "handoff_budget_exhausted"],
+    ]);
   });
 
   it("a 429 fails the read, records the status and pauses the lane for the egress", async () => {
@@ -237,20 +254,68 @@ describe("Fansly fast lane", () => {
     expect(second.calls).toHaveLength(0);
     expect((await reads()).map((row) => [row.status, row.outcome, row.http_status])).toEqual([
       ["failed", "fansly_429", 429],
-      ["skipped", "lane_cooldown", null],
+      ["pending", "handoff_lane_cooldown", null],
     ]);
   });
 
   it("covers only the requests whose messages the response carried", async () => {
     const now = new Date();
+    // 6002 is filed first; every head read carries 6001 only.
     await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "6002", now, lane: "fast", generation: GENERATION });
     const { fast } = lane({ respond: async () => headPage("6001") });
     fast.onCaptured(frameInput(mediaFrame("6001")));
     await fast.idle();
     await fast.stop();
     const rows = await testDb!.pool.query(`select message_ref, status, outcome from ai_media_accelerator_reads order by message_ref`);
-    // 6002 was not in the head page: the lane read it separately (not "covered").
-    expect(rows.rows.find((row) => row.message_ref === "6002")?.outcome).not.toBe("covered");
+    expect(rows.rows).toEqual([
+      { message_ref: "6001", status: "done", outcome: "covered" },
+      { message_ref: "6002", status: "done", outcome: "fast_lane_not_in_head" },
+    ]);
+  });
+
+  it("stays off the egress for 15 minutes after a sync request met a 429", async () => {
+    const run = await startSyncRun(app.db, { platformAccountId: pageId, stream: "followers", trigger: "worker" });
+    await insertSyncRequestAttempt(app.db, {
+      syncRunId: run!.id, platformAccountId: pageId, provider: "fansly", stream: "followers",
+      operation: "followers", logicalRequestId: "429-1", attemptNumber: 1,
+    });
+    // The in-process retry of that 429 leaves no page cooldown yet.
+    await testDb!.pool.query(`update sync_http_attempts set state = 'retry', http_status = 429, finished_at = now()`);
+    const { fast, calls } = lane({ respond: async () => headPage("6101") });
+    fast.onCaptured(frameInput(mediaFrame("6101")));
+    await fast.idle();
+    await fast.stop();
+    expect(calls).toHaveLength(0);
+    expect((await reads()).map((row) => [row.lane, row.status, row.outcome])).toEqual([["chunk", "pending", "handoff_recent_rate_limit"]]);
+  });
+
+  it("re-checks at dispatch: a cooldown that appeared during the pacing wait stops the read", async () => {
+    const staged = createFanslyFastLane(app, {
+      coalesceMs: 0,
+      sleep: async () => undefined,
+      readGeneration: async () => GENERATION,
+      resolveContext: async () => ({
+        page: page!, platform: "fansly", session: {} as never, proxy: null, egressKey: "socks5://proxy.example.internal:1080",
+      }) as unknown as ResolvedFanslyPageContext,
+      fetchHead: async (context) => {
+        // While this read waited for its slot, a sync stream of the page hit a 5xx.
+        await testDb!.pool.query(
+          `insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds, retry_kind, retry_at)
+           values ($1, 'dm_conversations', 'retrying', 3600, 0, 'provider_5xx', now() + interval '5 minutes')`, [pageId],
+        );
+        await context.requestObserver?.onRequestEvent({
+          state: "started", requestId: "messages:late", operation: "messages",
+          endpointTemplate: "/message", method: "GET", attemptNumber: 1, timestamp: new Date(),
+        });
+        throw new Error("must not dispatch");
+      },
+    });
+    staged.onCaptured(frameInput(mediaFrame("6201")));
+    await staged.idle();
+    await staged.stop();
+    expect((await reads()).map((row) => [row.lane, row.status, row.outcome, row.dispatched])).toEqual([["chunk", "pending", "handoff_page_cooldown", false]]);
+    const admitted = await testDb!.pool.query(`select count(*)::int as n from ai_media_accelerator_reads where admitted_at is not null`);
+    expect(admitted.rows[0].n).toBe(0);
   });
 });
 

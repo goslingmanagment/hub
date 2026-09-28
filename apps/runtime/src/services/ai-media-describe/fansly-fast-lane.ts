@@ -1,19 +1,22 @@
-import { randomUUID } from "node:crypto";
-
 import { sql } from "drizzle-orm";
 
 import {
   admitAiMediaAcceleratorReadOutcome,
   countAiMediaAcceleratorAdmissions24h,
+  extendSyncProviderRateLimitHold,
   findPageById,
   finishAiMediaAcceleratorRead,
   getFanslyFastLanePageSyncGate,
   getNotificationIncidentByKey,
+  handOffAiMediaFastLaneRead,
+  hasAiMediaFastLaneCooldown,
   hasUnfinishedFanslySyncAttempt,
   isDmArchiveScopeFenced,
+  lastAiMediaFastLaneDispatch,
   listAiMediaFastLaneHealth,
   markAiMediaAcceleratorReadDispatched,
   peekAiMediaFastLaneRead,
+  recentFanslyProviderRefusal,
   requestAiMediaAcceleratorRead,
   setAiMediaFastLaneCooldown,
   setAiMediaFastLaneHealth,
@@ -65,19 +68,20 @@ import {
 // takes them within a second. New chats need no roster row: the read is
 // addressed by the frame's groupId.
 //
-// Outside the page's sync lease, but never beside it on the wire:
-//   - the read reserves its slot in the egress's shared pacing queue and
-//     holds the queue for its whole timeout, so no later request of the
-//     egress (any page, any stream) starts while it runs;
-//   - right before dispatch it refuses while a sync request of the egress is
-//     still unfinished, while any stream of the page cools down after a
-//     429/5xx, or while the DM stream is paused or blocked;
-//   - the frame's credential/proxy generation must still be the page's;
-//   - one physical attempt, a 5 s timeout, the agency-wide rolling 24 h cap
-//     shared with the in-chunk accelerator (compare-and-set admission);
+// Outside the page's sync lease, but never beside another request of the
+// egress on the wire, and never into a cooldown:
+//   - before reserving a pacing slot and again right before dispatch (after
+//     the wait): no stream of any page of the egress cooling down, the DM
+//     stream not paused/blocked, no 429 (15 min), 5xx (5 min) or 401/403
+//     (30 min) seen on the egress, no unfinished sync request of the egress,
+//     the frame's credential/proxy generation still current, the shared
+//     rolling 24 h cap not spent;
+//   - the slot holds the egress's pacing queue for the whole timeout, and the
+//     hold is extended from the real dispatch;
+//   - one physical attempt, a 5 s timeout, compare-and-set admission;
 //   - a 429/5xx/401/403 pauses the lane on every page of the egress.
-// Anything refused stays for the ordinary paths (the chunk step, the
-// projector, the minutely sweep).
+// A request the lane declines goes back to the in-chunk accelerator (which
+// reads under the page lease); the projector and the minutely paths remain.
 //
 // Logging rule: ids, statuses and outcomes only — never a URL or a message.
 
@@ -87,13 +91,15 @@ export const FAST_LANE_EGRESS_HOLD_MS = FAST_LANE_REQUEST_TIMEOUT_MS + 500;
 /** Frames of one burst share one read. */
 export const FAST_LANE_COALESCE_MS = 1_000;
 export const FAST_LANE_STALE_AFTER_MS = 10 * 60 * 1000;
+/** One conversation is not read by the lane more often than this. */
+export const FAST_LANE_CONVERSATION_GAP_MS = 10_000;
 /** A sync request that started this long ago and never finished is not "in flight". */
 const IN_FLIGHT_WINDOW_MS = 60 * 1000;
-const IN_FLIGHT_RECHECKS = 3;
-const IN_FLIGHT_RECHECK_MS = 500;
-const COOLDOWN_429_MIN_MS = 15 * 60 * 1000;
-const COOLDOWN_5XX_MS = 5 * 60 * 1000;
-const COOLDOWN_AUTH_MS = 30 * 60 * 1000;
+const EGRESS_BUSY_RETRIES = 2;
+const EGRESS_BUSY_RETRY_MS = 2_000;
+const REFUSAL_429_MS = 15 * 60 * 1000;
+const REFUSAL_5XX_MS = 5 * 60 * 1000;
+const REFUSAL_AUTH_MS = 30 * 60 * 1000;
 const COOLDOWN_TRANSPORT_MS = 60 * 1000;
 const CONFIG_TTL_MS = 5_000;
 const PEERS_TTL_MS = 60_000;
@@ -102,9 +108,7 @@ const HEALTH_INTERVAL_MS = 60_000;
 export const FAST_LANE_INCIDENT_AFTER_MS = 10 * 60 * 1000;
 const SOCKET_FRESH_MS = 30_000;
 const DRAIN_LIMIT = 5;
-/** An egress busy with a sync request: the read is tried again this much later. */
-const EGRESS_BUSY_RETRY_MS = 2_000;
-const EGRESS_BUSY_RETRIES = 2;
+const HOLD_SCOPES = ["global", "dm_messages"] as const;
 
 export interface FanslyFastLaneFrame {
   pageId: number;
@@ -130,14 +134,11 @@ export interface FanslyFastLaneDeps {
   readGeneration?: (label: string) => Promise<string | null>;
 }
 
-type ReadOutcome =
-  | "read"
-  | "skipped"
-  | "failed"
-  | "left"
-  | "retry";
+type ReadOutcome = "read" | "declined" | "failed" | "stop";
 
 class FastLaneRefused extends Error {}
+
+type PeekedRead = NonNullable<Awaited<ReturnType<typeof peekAiMediaFastLaneRead>>>;
 
 export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps = {}) {
   const clock = deps.now ?? (() => new Date());
@@ -155,7 +156,7 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
 
   let stopped = false;
   let config: { at: number; value: Awaited<ReturnType<typeof loadEffectiveConfig>> } | null = null;
-  let peers: { at: number; byEgress: Map<string, number[]> } | null = null;
+  let peers: { at: number; byEgress: Map<string, number[]>; egressOf: Map<number, string> } | null = null;
   const pages = new Map<number, { label: string; ownRef: string; scheduled: boolean; running: Promise<void> | null; again: boolean }>();
   let inflight: Array<Promise<unknown>> = [];
 
@@ -175,12 +176,13 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
     return config.value;
   }
 
-  /** Every Fansly page that shares an egress key (pages on one proxy share
-   * one pacing queue, so "in flight" is asked of all of them). */
-  async function egressPeers(egressKey: string, pageId: number): Promise<number[]> {
+  /** Every Fansly page on the page's egress (pages on one proxy share one
+   * pacing queue, so cooldowns and "in flight" are asked of all of them). */
+  async function egressPeers(pageId: number): Promise<{ egressKey: string | null; pageIds: number[] }> {
     const at = Date.now();
     if (!peers || at - peers.at > PEERS_TTL_MS) {
       const byEgress = new Map<string, number[]>();
+      const egressOf = new Map<number, string>();
       const ids = await app.db.execute<{ id: string }>(sql`
         select id::text as id from pages where platform = 'fansly' and deleted_at is null
       `);
@@ -189,11 +191,13 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         if (!stored) continue;
         const key = resolveStoredProxyEgressKey(stored.proxy);
         byEgress.set(key, [...(byEgress.get(key) ?? []), stored.page.id]);
+        egressOf.set(stored.page.id, key);
       }
-      peers = { at, byEgress };
+      peers = { at, byEgress, egressOf };
     }
-    const found = peers.byEgress.get(egressKey) ?? [];
-    return found.includes(pageId) ? found : [...found, pageId];
+    const egressKey = peers.egressOf.get(pageId) ?? null;
+    const found = egressKey === null ? [] : peers.byEgress.get(egressKey) ?? [];
+    return { egressKey, pageIds: found.includes(pageId) ? found : [...found, pageId] };
   }
 
   /** Called after the B0 capture committed; never awaited by the socket. */
@@ -213,14 +217,28 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
 
   async function route(input: FanslyFastLaneFrame, signals: ReturnType<typeof extractFanslyWsFanMediaMessages>) {
     const effective = await effectiveConfig();
-    if (fanslyFastLaneModeForPage(effective, input.label) === "off") return;
+    const mode = fanslyFastLaneModeForPage(effective, input.label);
+    if (mode === "off") return;
     const policy = aiMediaNotesPolicyForPage(effective, input.label);
     const now = clock();
     if (!policy || !isAiMediaDescribeWindowOpen(policy, now)) return;
+    const fresh = signals.filter((signal) => isAfterAiMediaDescribeBoundary(
+      policy, signal.createdAtMs !== null ? new Date(signal.createdAtMs) : input.receivedAt,
+    ));
+    if (fresh.length === 0) return;
+    if (mode === "shadow") {
+      // Shadow files nothing (the in-chunk accelerator keeps its requests):
+      // it only says what serve would have done, in the log.
+      const limit24h = Math.max(0, effective.aiMediaDescribeFanslyAcceleratorDailyLimit ?? 60);
+      const refusal = await gate({ pageId: input.pageId, label: input.label, generation: input.generation, limit24h });
+      app.logger.info({
+        pageId: input.pageId, messages: fresh.length, outcome: refusal ?? "ready",
+        frameAgeMs: now.getTime() - input.receivedAt.getTime(),
+      }, "ai media fast lane: shadow");
+      return;
+    }
     let queued = false;
-    for (const signal of signals) {
-      const messageAt = signal.createdAtMs !== null ? new Date(signal.createdAtMs) : input.receivedAt;
-      if (!isAfterAiMediaDescribeBoundary(policy, messageAt)) continue;
+    for (const signal of fresh) {
       if (await requestAiMediaAcceleratorRead(app.db, {
         pageId: input.pageId,
         groupRef: signal.groupRef,
@@ -265,29 +283,53 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
   }
 
   async function drainPage(pageId: number, label: string, ownRef: string) {
-    const busyRetries = new Map<number, number>();
-    for (let index = 0; index < DRAIN_LIMIT + EGRESS_BUSY_RETRIES && !stopped; index += 1) {
+    for (let index = 0; index < DRAIN_LIMIT && !stopped; index += 1) {
       const row = await peekAiMediaFastLaneRead(app.db, { pageId, now: clock(), staleAfterMs: FAST_LANE_STALE_AFTER_MS });
       if (!row) return;
-      const retries = busyRetries.get(row.id) ?? 0;
-      const outcome = await readOne({ pageId, label, ownRef, row, lastTry: retries >= EGRESS_BUSY_RETRIES });
-      if (outcome === "retry") {
-        busyRetries.set(row.id, retries + 1);
-        await sleep(EGRESS_BUSY_RETRY_MS);
-        continue;
-      }
-      if (outcome === "left") return;
+      // One conversation is read at most every FAST_LANE_CONVERSATION_GAP_MS.
+      const last = await lastAiMediaFastLaneDispatch(app.db, { pageId, groupRef: row.groupRef });
+      const wait = last === null ? 0 : last.getTime() + FAST_LANE_CONVERSATION_GAP_MS - clock().getTime();
+      if (wait > 0) await sleep(wait);
+      if (stopped) return;
+      const outcome = await readOne({ pageId, label, ownRef, row });
+      if (outcome === "stop") return;
     }
   }
 
-  async function readOne(input: {
-    pageId: number;
-    label: string;
-    ownRef: string;
-    row: NonNullable<Awaited<ReturnType<typeof peekAiMediaFastLaneRead>>>;
-    /** An egress still busy on this try closes the request. */
-    lastTry: boolean;
-  }): Promise<ReadOutcome> {
+  /** Every check that needs no provider request; null = clear to try. */
+  async function gate(input: { pageId: number; label: string; generation: string | null; limit24h: number }): Promise<string | null> {
+    const now = clock();
+    if (!app.config.syncSharedRateLimitEnabled) return "no_shared_pacing";
+    if (input.limit24h === 0 || await countAiMediaAcceleratorAdmissions24h(app.db, now) >= input.limit24h) {
+      return "budget_exhausted";
+    }
+    const { egressKey, pageIds } = await egressPeers(input.pageId);
+    if (egressKey === null) return "no_egress";
+    return (await wireGate({ pageId: input.pageId, pageIds, label: input.label, generation: input.generation }))
+      ?? (await hasUnfinishedFanslySyncAttempt(app.db, {
+        pageIds, since: new Date(now.getTime() - IN_FLIGHT_WINDOW_MS),
+      }) ? "egress_busy" : null);
+  }
+
+  /** What can change while the read waits for its slot; re-asked right
+   * before dispatch. */
+  async function wireGate(input: { pageId: number; pageIds: readonly number[]; label: string; generation: string | null }): Promise<string | null> {
+    const now = clock();
+    if (await hasAiMediaFastLaneCooldown(app.db, { pageIds: input.pageIds, now })) return "lane_cooldown";
+    const sync = await getFanslyFastLanePageSyncGate(app.db, { pageId: input.pageId, peerPageIds: input.pageIds, now });
+    if (sync.cooldown) return "page_cooldown";
+    if (sync.held) return "page_held";
+    const refusal = await recentFanslyProviderRefusal(app.db, {
+      pageIds: input.pageIds, now, rateLimitMs: REFUSAL_429_MS, serverErrorMs: REFUSAL_5XX_MS, authMs: REFUSAL_AUTH_MS,
+    });
+    if (refusal) return `recent_${refusal}`;
+    if (input.generation === null || await readGeneration(input.label) !== input.generation) {
+      return "generation_changed";
+    }
+    return null;
+  }
+
+  async function readOne(input: { pageId: number; label: string; ownRef: string; row: PeekedRead }): Promise<ReadOutcome> {
     const { pageId, label, ownRef, row } = input;
     const startedAt = clock();
     const finish = async (
@@ -297,35 +339,36 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
     ) => finishAiMediaAcceleratorRead(app.db, {
       id: row.id, pageId, groupRef: row.groupRef, status, outcome, now: clock(), startedAt, ...extra,
     });
+    const handOff = async (reason: string): Promise<ReadOutcome> => {
+      await handOffAiMediaFastLaneRead(app.db, { id: row.id, reason });
+      return "declined";
+    };
 
     const effective = await effectiveConfig();
-    const mode = fanslyFastLaneModeForPage(effective, label);
     const policy = aiMediaNotesPolicyForPage(effective, label);
-    if (mode === "off" || !policy) {
-      // Switched off meanwhile: the ordinary paths take it.
-      return "left";
+    if (fanslyFastLaneModeForPage(effective, label) !== "serve" || !policy) {
+      // Switched off meanwhile: the in-chunk accelerator takes it.
+      return handOff("lane_off");
     }
     const limit24h = Math.max(0, effective.aiMediaDescribeFanslyAcceleratorDailyLimit ?? 60);
 
-    // Gates that need no provider request.
-    const refusal = await gate({ pageId, label, row, limit24h });
-    if (mode === "shadow") {
-      await finish("skipped", refusal ? `shadow_${refusal}` : "shadow_ready");
-      return "skipped";
+    // Checks before a pacing slot is reserved: a refused read never holds
+    // the egress. A busy egress is looked at again twice, 2 s apart.
+    let refusal = await gate({ pageId, label, generation: row.generation, limit24h });
+    for (let attempt = 0; refusal === "egress_busy" && attempt < EGRESS_BUSY_RETRIES && !stopped; attempt += 1) {
+      await sleep(EGRESS_BUSY_RETRY_MS);
+      refusal = await gate({ pageId, label, generation: row.generation, limit24h });
     }
-    if (refusal) {
-      await finish("skipped", refusal);
-      return "skipped";
-    }
+    if (refusal) return handOff(refusal);
+    if (stopped) return "stop";
 
     let context: ResolvedFanslyPageContext;
     try {
       context = await resolveContext(label);
     } catch {
-      await finish("skipped", "context_unavailable");
-      return "skipped";
+      return handOff("context_unavailable");
     }
-    const peerIds = await egressPeers(context.egressKey, pageId);
+    const { pageIds } = await egressPeers(pageId);
 
     let admitted = 0;
     let dispatchedHttp = false;
@@ -334,17 +377,14 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
       async onRequestEvent(event) {
         if (event.state === "started") {
           if (admitted >= 1) throw new FastLaneRefused("one_attempt");
-          // Right before dispatch, after the pacing wait (our hold is in
-          // place): never beside an unfinished sync request of the egress.
-          for (let check = 0; ; check += 1) {
-            const busy = await hasUnfinishedFanslySyncAttempt(app.db, {
-              pageIds: peerIds, since: new Date(clock().getTime() - IN_FLIGHT_WINDOW_MS),
-            });
-            if (!busy) break;
-            if (check + 1 >= IN_FLIGHT_RECHECKS) throw new FastLaneRefused("egress_busy");
-            await sleep(IN_FLIGHT_RECHECK_MS);
-          }
-          if (await readGeneration(label) !== row.generation) throw new FastLaneRefused("generation_changed");
+          if (stopped) throw new FastLaneRefused("stopping");
+          // Right before dispatch, after the pacing wait: everything that can
+          // change while waiting, then the admission.
+          const late = await wireGate({ pageId, pageIds, label, generation: row.generation })
+            ?? (await hasUnfinishedFanslySyncAttempt(app.db, {
+              pageIds, since: new Date(clock().getTime() - IN_FLIGHT_WINDOW_MS),
+            }) ? "egress_busy" : null);
+          if (late) throw new FastLaneRefused(late);
           const admission = await admitAiMediaAcceleratorReadOutcome(app.db, {
             id: row.id, requestId: event.requestId, limit24h, now: clock(),
           });
@@ -352,7 +392,13 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
           if (admission === "cap") throw new FastLaneRefused("budget_exhausted");
           admitted += 1;
           dispatchedHttp = true;
-          await markAiMediaAcceleratorReadDispatched(app.db, { id: row.id, now: clock() });
+          const dispatchAt = clock();
+          // The hold counts from the real start, not from the slot.
+          await extendSyncProviderRateLimitHold(app.db, {
+            provider: "fansly", egressKey: context.egressKey, scopes: HOLD_SCOPES,
+            until: new Date(dispatchAt.getTime() + FAST_LANE_EGRESS_HOLD_MS),
+          });
+          await markAiMediaAcceleratorReadDispatched(app.db, { id: row.id, now: dispatchAt });
         }
         if (event.state === "failed" && (event.failureKind === "transport" || event.failureKind === "timeout")) {
           transportFailure = event.failureKind;
@@ -373,27 +419,26 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
       }, { groupId: row.groupRef, limit: 25, before: null });
     } catch (error) {
       if (error instanceof FastLaneRefused) {
-        if (error.message === "taken") return "skipped";
-        if (error.message === "egress_busy" && !input.lastTry) return "retry";
-        await finish("skipped", error.message);
-        return error.message === "egress_busy" ? "left" : "skipped";
+        if (error.message === "taken") return "declined";
+        if (error.message === "stopping") return "stop";
+        return handOff(error.message);
       }
       if (error instanceof FanslyApiError) {
         const status = error.status ?? null;
         const cooldownMs = status === 429
-          ? Math.max(COOLDOWN_429_MIN_MS, (error.retryAfterAt?.getTime() ?? 0) - clock().getTime())
-          : status === 401 || status === 403 ? COOLDOWN_AUTH_MS
-          : status !== null && status >= 500 ? COOLDOWN_5XX_MS
+          ? Math.max(REFUSAL_429_MS, (error.retryAfterAt?.getTime() ?? 0) - clock().getTime())
+          : status === 401 || status === 403 ? REFUSAL_AUTH_MS
+          : status !== null && status >= 500 ? REFUSAL_5XX_MS
           : 0;
-        if (cooldownMs > 0) await pauseEgress(peerIds, cooldownMs, `fansly_${status}`);
+        if (cooldownMs > 0) await pauseEgress(pageIds, cooldownMs, `fansly_${status}`);
         await finish("failed", `fansly_${status ?? "error"}`, { httpStatus: status });
         app.logger.warn({ pageId, readId: row.id, httpStatus: status }, "ai media fast lane: provider refused the read");
-        return "left";
+        return "stop";
       }
       if (transportFailure || dispatchedHttp) {
-        await pauseEgress(peerIds, COOLDOWN_TRANSPORT_MS, `fansly_${transportFailure ?? "error"}`);
+        await pauseEgress(pageIds, COOLDOWN_TRANSPORT_MS, `fansly_${transportFailure ?? "error"}`);
         await finish("failed", `fansly_${transportFailure ?? "error"}`);
-        return "left";
+        return "stop";
       }
       throw error;
     }
@@ -411,7 +456,7 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
     });
     if (fenced) {
       await finish("skipped", fenced, { httpStatus: 200 });
-      return "skipped";
+      return "declined";
     }
     const requestParams = { groupId: row.groupRef, limit: 25, before: null };
     const raw = await persistRawPayload(app.db, {
@@ -458,31 +503,13 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         candidates += applied.candidates;
       }
     }
-    await finish("done", "fast_lane", {
+    const carried = page.items.map((message) => message.id);
+    await finish("done", carried.includes(row.messageRef) ? "fast_lane" : "fast_lane_not_in_head", {
       httpStatus: 200,
-      coveredMessageRefs: page.items.map((message) => message.id),
+      coveredMessageRefs: carried,
     });
     app.logger.info({ pageId, readId: row.id, candidates }, "ai media fast lane: head read");
     return "read";
-  }
-
-  async function gate(input: {
-    pageId: number;
-    label: string;
-    row: NonNullable<Awaited<ReturnType<typeof peekAiMediaFastLaneRead>>>;
-    limit24h: number;
-  }): Promise<string | null> {
-    const now = clock();
-    if (input.limit24h === 0) return "budget_exhausted";
-    const health = (await listAiMediaFastLaneHealth(app.db)).find((row) => row.pageId === input.pageId);
-    if (health?.cooldownUntil && health.cooldownUntil > now) return "lane_cooldown";
-    const sync = await getFanslyFastLanePageSyncGate(app.db, { pageId: input.pageId, now });
-    if (sync.cooldown) return "page_cooldown";
-    if (sync.held) return "page_held";
-    if (input.row.generation === null || await readGeneration(input.label) !== input.row.generation) {
-      return "generation_changed";
-    }
-    return null;
   }
 
   async function pauseEgress(pageIds: readonly number[], ms: number, reason: string) {
@@ -493,6 +520,7 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
   }
 
   // ── Health: "unavailable > 10 min" is the only thing the owner hears ──────
+  // A spent daily cap or an owner-paused DM stream are choices, not faults.
 
   async function checkHealth() {
     const effective = await effectiveConfig();
@@ -500,8 +528,6 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
     const served = await app.db.execute<{ id: string; label: string }>(sql`
       select id::text as id, label from pages where platform = 'fansly' and deleted_at is null
     `);
-    const limit24h = Math.max(0, effective.aiMediaDescribeFanslyAcceleratorDailyLimit ?? 60);
-    const used = await countAiMediaAcceleratorAdmissions24h(app.db, now);
     const health = new Map((await listAiMediaFastLaneHealth(app.db)).map((row) => [row.pageId, row]));
     const unavailable: string[] = [];
     for (const row of served.rows) {
@@ -516,13 +542,8 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         ) as open
       `);
       if (socket.rows[0]?.open !== true) reason = "socket_down";
-      else if (used >= limit24h) reason = "budget_exhausted";
       else if ((health.get(pageId)?.cooldownUntil ?? new Date(0)) > now) reason = health.get(pageId)?.reason ?? "lane_cooldown";
-      else {
-        const sync = await getFanslyFastLanePageSyncGate(app.db, { pageId, now });
-        if (sync.cooldown) reason = "page_cooldown";
-        else if (sync.held) reason = "page_held";
-      }
+      else if ((await getFanslyFastLanePageSyncGate(app.db, { pageId, now })).cooldown) reason = "page_cooldown";
       await setAiMediaFastLaneHealth(app.db, { pageId, available: reason === null, reason, now });
       const since = reason === null ? null : health.get(pageId)?.unavailableSince ?? now;
       if (since && now.getTime() - since.getTime() > FAST_LANE_INCIDENT_AFTER_MS) {
@@ -581,8 +602,6 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
       clearInterval(healthTimer);
       await Promise.allSettled([...inflight]);
     },
-    /** For tests and diagnostics only. */
-    requestId: () => randomUUID(),
   };
 }
 
