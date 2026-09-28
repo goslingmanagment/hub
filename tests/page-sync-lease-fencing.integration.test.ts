@@ -840,7 +840,7 @@ describe("page sync lease fencing", () => {
     }
   }, 30_000);
 
-  it("keeps newer manual requests pending when an older lease retries", async () => {
+  it("keeps newer manual requests pending and the failure streak when an older lease retries", async () => {
     const testDb = await startIntegrationTestDatabase();
     if (!testDb) {
       return;
@@ -853,10 +853,16 @@ describe("page sync lease fencing", () => {
         slug: "retry-request-model",
         name: "Retry Request Model",
       });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
       const page = await createFanslyPage(testDb.db, {
         modelId: model.id,
         label: "retry-request-page",
       });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
 
       await ensurePageSyncStates(testDb.db, {
         pageId: page.id,
@@ -868,6 +874,13 @@ describe("page sync lease fencing", () => {
         source: "manual",
         now,
       });
+      // The stream was already failing before this chunk.
+      await testDb.pool.query(
+        `update page_sync_states
+         set consecutive_failures = 9, last_error_code = 'http_502', last_error_summary = 'Earlier failure'
+         where page_id = $1 and stream = 'followers'`,
+        [page.id],
+      );
 
       const lease = await acquirePageSyncLease(testDb.db, {
         pageId: page.id,
@@ -882,6 +895,7 @@ describe("page sync lease fencing", () => {
       const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
       const nextRequestSeq = lease.requestSeq + 1;
 
+      // "Sync now" while the chunk is failing.
       await requestPageSync(testDb.db, {
         pageId: page.id,
         streams: ["followers"],
@@ -912,15 +926,17 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
         retryKind: null,
         retryAt: null,
-        consecutiveFailures: 0,
-        lastErrorCode: null,
+        failedAt: new Date(now.getTime() + 2_000),
+        consecutiveFailures: 10,
+        lastErrorCode: "http_500",
+        lastErrorSummary: "Upstream failed",
       });
     } finally {
       await testDb.stop();
     }
   }, 30_000);
 
-  it("keeps newer manual requests pending when an older lease blocks", async () => {
+  it("keeps newer manual requests pending and the failure streak when an older lease blocks", async () => {
     const testDb = await startIntegrationTestDatabase();
     if (!testDb) {
       return;
@@ -933,10 +949,16 @@ describe("page sync lease fencing", () => {
         slug: "block-request-model",
         name: "Block Request Model",
       });
+      if (!model) {
+        throw new Error("Expected to create a model");
+      }
       const page = await createFanslyPage(testDb.db, {
         modelId: model.id,
         label: "block-request-page",
       });
+      if (!page) {
+        throw new Error("Expected to create a page");
+      }
 
       await ensurePageSyncStates(testDb.db, {
         pageId: page.id,
@@ -948,6 +970,13 @@ describe("page sync lease fencing", () => {
         source: "manual",
         now,
       });
+      // The stream was already failing before this chunk.
+      await testDb.pool.query(
+        `update page_sync_states
+         set consecutive_failures = 2, last_error_code = 'http_502', last_error_summary = 'Earlier failure'
+         where page_id = $1 and stream = 'followers'`,
+        [page.id],
+      );
 
       const lease = await acquirePageSyncLease(testDb.db, {
         pageId: page.id,
@@ -962,6 +991,7 @@ describe("page sync lease fencing", () => {
       const leasedSeq = lease.leasedSeq ?? lease.requestSeq;
       const nextRequestSeq = lease.requestSeq + 1;
 
+      // "Sync now" while the chunk is failing.
       await requestPageSync(testDb.db, {
         pageId: page.id,
         streams: ["followers"],
@@ -994,8 +1024,10 @@ describe("page sync lease fencing", () => {
         leaseToken: null,
         blockerKind: null,
         blockerCode: null,
-        consecutiveFailures: 0,
-        lastErrorCode: null,
+        failedAt: new Date(now.getTime() + 2_000),
+        consecutiveFailures: 3,
+        lastErrorCode: "http_403",
+        lastErrorSummary: "Upstream blocked",
       });
     } finally {
       await testDb.stop();
