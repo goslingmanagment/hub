@@ -30,7 +30,7 @@
     "test:unit": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude tests/**/*.integration.test.ts --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts",
     "test:prerequisites": "pnpm test:sync-critical",
     "test:sync-critical": "pnpm test:sync-critical:db && pnpm test:sync-critical:api",
-    "test:sync-critical:db": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts",
+    "test:sync-critical:db": "NODE_OPTIONS=--max-old-space-size=8192 vitest run ${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism} tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts",
     "test:sync-critical:api": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts --testNamePattern \"\\\\[sync-critical\\\\]\"",
     "test:api:full": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/api.integration.test.ts",
     "typecheck": "node scripts/check-strictness-ratchet.mjs",

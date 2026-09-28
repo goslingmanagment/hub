@@ -19,6 +19,7 @@ import { runMediaPlaneProjection, rebuildMediaPlaneProjection } from "../apps/ru
 import { runCreatorPostsProjection, rebuildCreatorPostsProjection } from "../apps/runtime/src/services/projections/creator-posts.ts";
 import { runFanslyCatalogProjection, rebuildFanslyCatalogProjection } from "../apps/runtime/src/services/projections/fansly-catalog.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { READ_ONLY_ROLE_PASSWORD } from "./helpers/db-context.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 let db: StartedTestDatabase;
@@ -206,17 +207,10 @@ describe("[sync-critical] content media raw to agent API", () => {
   it("audits retained bodies through a read-only role without disclosing their content", async () => {
     await capture("vault_media", fixture);
     // This is the disposable Testcontainers database, never a production grant.
-    // Roles are cluster-wide: another suite may already have created read_only.
-    await db.pool.query(`do $$ begin
-      if exists (select 1 from pg_roles where rolname = 'read_only') then
-        alter role read_only login password 'content-media-test';
-      else
-        create role read_only login password 'content-media-test';
-      end if;
-    end $$`);
+    // The cluster-wide read_only login role comes from global setup.
     await db.pool.query("grant usage on schema public to read_only; grant select on all tables in schema public to read_only");
     const connection = new URL(db.connectionString);
-    connection.username = "read_only"; connection.password = "content-media-test";
+    connection.username = "read_only"; connection.password = READ_ONLY_ROLE_PASSWORD;
     const { stdout } = await promisify(execFile)(process.execPath,
       ["--import", "tsx/esm", "scripts/audit-content-media.ts", "--all-bodies"],
       { env: { ...process.env, CONTENT_MEDIA_DATABASE_URL: connection.toString() } });

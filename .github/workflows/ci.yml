@@ -232,10 +232,12 @@ jobs:
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
-  # is the cheap win: separate machines, each keeping --no-file-parallelism.
+  # is the cheap win: separate machines, each keeping --no-file-parallelism
+  # (the PC runs two files at a time per shard; see the DB step).
   # Since #240 a shard runs ONE cluster and clones a database per acquisition,
   # so "no shared cluster" no longer holds: queries against cluster-global views
-  # (pg_locks, pg_stat_activity) must scope themselves to current_database().
+  # (pg_locks, pg_stat_activity) must scope themselves to current_database(),
+  # and a test must not create, alter or drop a role another file may use.
   # Sharding is by resolved FILE, so it is applied to the
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
@@ -294,7 +296,14 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
+      # A shard runs its files one at a time (the script's default,
+      # --no-file-parallelism). On the PC it runs two at a time: each file
+      # still clones its own database from the shard's one cluster, and
+      # anything cluster-wide in those files is scoped or created once in
+      # tests/helpers/global-setup.ts. Hosted runners keep the default.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
+        env:
+          SYNC_CRITICAL_DB_PARALLELISM: ${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
       # One file, ~36s — it resolves to a single spec so it cannot be sharded.

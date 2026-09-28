@@ -413,7 +413,8 @@ describe("B1 REST execution and rollback", () => {
     const pending = f.step();
     try {
       await vi.waitFor(async () => {
-        const locks = await db.pool.query("select count(*)::int n from pg_locks where locktype='advisory' and objid=36410 and not granted");
+        // pg_locks spans the whole cluster; sibling test databases share it.
+        const locks = await db.pool.query("select count(*)::int n from pg_locks where locktype='advisory' and objid=36410 and not granted and database=(select oid from pg_database where datname=current_database())");
         expect(locks.rows[0].n).toBe(1);
       });
       vi.setSystemTime(deadline);
