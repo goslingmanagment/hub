@@ -34,10 +34,11 @@ proxy). The incident resolves on the next successful chunk or verification.
 ## proxy_failed / auth_blocked recovery needs a provider answer
 
 A sync chunk resolves these page-wide incidents only when it got at least one
-successful provider response, at the time of the newest one, or when it settles
-an earlier chunk's certified result, at that read time. A chunk that made no
-request, or whose every attempt failed, leaves them open and writes no recovery
-tombstone. It still resolves `proxy_missing` and its own stream's
+successful provider response, at the time of the newest one. A chunk that made
+no request, or whose every attempt failed, leaves them open and writes no
+recovery tombstone. So does a settlement retry that reuses an earlier chunk's
+completed result: it makes no request, and the original completion time can
+itself come from a walk that made none. It still resolves `proxy_missing` and its own stream's
 `stream_failed_threshold`. So during an outage the incident stays open instead of
 flapping open/resolved; it closes at the first real success on any stream of the
 page, or on page verification.

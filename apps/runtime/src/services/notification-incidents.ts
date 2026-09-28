@@ -572,9 +572,10 @@ export async function resolveSyncChunkRecoveryIncidents(
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
     /** When the provider last answered successfully: the chunk's newest
-     * successful response, or a reused result's original read time. Null when
-     * the chunk has no such evidence (zero requests, or every attempt failed):
-     * page-wide auth/proxy incidents then stay open and get no tombstone. */
+     * successful response. Null when the chunk has no such evidence (zero
+     * requests, every attempt failed, or a settlement retry reusing an earlier
+     * result): page-wide auth/proxy incidents then stay open and get no
+     * tombstone. */
     providerRecoveredAt: Date | null;
     stream: SyncStream;
   },

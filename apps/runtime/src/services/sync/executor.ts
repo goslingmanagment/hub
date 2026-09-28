@@ -310,20 +310,14 @@ async function resolveOfapiCreditsIncidentIfRecovered(
  * 91 such chunks "recovered" a 38-hour proxy outage on one page). The chunk's
  * newest successful response is the recovery instant, not the chunk end, so a
  * chunk cannot close or tombstone past another stream's later failure. A
- * result settled from an earlier chunk's certified read keeps that read time;
- * a `succeededAt` stamped during this chunk is its completion time, not
- * evidence of a provider answer.
+ * `succeededAt` is never evidence: a walk completion stamps it with the wall
+ * clock even when the walk made no request, and a settlement retry reuses
+ * that stamp without making one either.
  */
 function resolveProviderRecoveredAt(
   telemetry: Pick<SyncRunTelemetry, "getRequestTotalsSnapshot">,
-  succeededAt: Date | undefined,
-  chunkStartedAt: Date,
 ): Date | null {
-  const lastSuccessAt = telemetry.getRequestTotalsSnapshot().lastSuccessfulAttemptAt;
-  if (lastSuccessAt !== null) {
-    return lastSuccessAt;
-  }
-  return succeededAt !== undefined && succeededAt.getTime() < chunkStartedAt.getTime() ? succeededAt : null;
+  return telemetry.getRequestTotalsSnapshot().lastSuccessfulAttemptAt;
 }
 
 /** A provider that named its own deadline outranks the local ladder, but only
@@ -651,7 +645,6 @@ export async function executeNextSyncPageChunk(
 
   const { run, telemetry } = await createChunkTelemetry(app, taskLease, storedPage);
   const budget = new SyncChunkBudget();
-  const chunkStartedAt = new Date();
   let leaseFenced = false;
   const requestController = new AbortController();
   const fenceLease = () => {
@@ -781,7 +774,7 @@ export async function executeNextSyncPageChunk(
           pageLabel: pageContext.page.label,
           platform: pageContext.platform,
           recoveredAt,
-          providerRecoveredAt: resolveProviderRecoveredAt(telemetry, result.succeededAt, chunkStartedAt),
+          providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
           stream: taskLease.stream,
         });
         await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
@@ -836,7 +829,7 @@ export async function executeNextSyncPageChunk(
       pageLabel: pageContext.page.label,
       platform: pageContext.platform,
       recoveredAt,
-      providerRecoveredAt: resolveProviderRecoveredAt(telemetry, result.succeededAt, chunkStartedAt),
+      providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
       stream: taskLease.stream,
     });
     await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);

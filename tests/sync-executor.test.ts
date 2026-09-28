@@ -254,18 +254,21 @@ describe("sync executor", () => {
     });
   });
 
-  it("settles a reused result with its original freshness and provider recovery cutoff", async () => {
-    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
-    const succeededAt = new Date("2026-03-14T12:00:00.000Z");
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "followers_reconcile" });
-    handlerMocks.executeStreamChunk.mockResolvedValue({
-      satisfied: true, yieldReason: null, succeededAt, stats: { reusedCompletedWalk: true },
+  it.each(["followers_reconcile", "fan_earnings"] as const)(
+    "settles a reused %s result with its original freshness and no provider recovery", async (stream) => {
+      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+      const succeededAt = new Date("2026-03-14T12:00:00.000Z");
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream });
+      // The reuse makes no request, and the original completion time may come
+      // from a walk that made none either (a fan_earnings walk over fresh fans).
+      handlerMocks.executeStreamChunk.mockResolvedValue({
+        satisfied: true, yieldReason: null, succeededAt, stats: { reusedCompletedWalk: true },
+      });
+      expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "success" });
+      expect(dbMocks.completePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ succeededAt }));
+      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app,
+        expect.objectContaining({ providerRecoveredAt: null, recoveredAt: expect.any(Date), stream }));
     });
-    expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "success" });
-    expect(dbMocks.completePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ succeededAt }));
-    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app,
-      expect.objectContaining({ providerRecoveredAt: succeededAt, recoveredAt: expect.any(Date) }));
-  });
 
   it.each([
     ["a partial with no successful response", false, null],
