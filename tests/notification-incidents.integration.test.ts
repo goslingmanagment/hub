@@ -96,6 +96,54 @@ describe("notification incidents integration", () => {
       `stream_failed_threshold:${page.id}:followers_reconcile`))?.status).toBe("resolved");
   });
 
+  it("keeps page-wide auth/proxy incidents open and untombstoned when a chunk has no provider evidence", async () => {
+    if (!testDb) throw new Error("Database required");
+    const model = await createModel(testDb.db, { slug: "no-evidence", name: "No Evidence" });
+    if (!model) throw new Error("Missing model");
+    const page = await createFanslyPage(testDb.db, { modelId: model.id, label: "no-evidence" });
+    if (!page) throw new Error("Missing page");
+    const app = createTestAppContext(testDb);
+    const failureAt = new Date("2026-09-19T07:16:00Z");
+    const keys = {
+      auth_blocked: `auth_blocked:${page.id}`,
+      proxy_failed: `proxy_failed:${page.id}`,
+      proxy_missing: `proxy_missing:${page.id}`,
+      stream_failed_threshold: `stream_failed_threshold:${page.id}:media_stats`,
+    } as const;
+    for (const [kind, incidentKey] of Object.entries(keys) as [keyof typeof keys, string][]) {
+      await openNotificationIncident(testDb.db, {
+        incidentKey, kind, platformAccountId: page.id,
+        stream: kind === "stream_failed_threshold" ? "media_stats" : null,
+        now: failureAt, errorSummary: "proxy outage",
+      });
+    }
+    const chunk = {
+      platformAccountId: page.id, pageLabel: page.label, platform: "fansly", stream: "media_stats",
+    } as const;
+    // A zero-request or all-failed chunk: no provider evidence.
+    await resolveSyncChunkRecoveryIncidents(app, {
+      ...chunk, recoveredAt: new Date("2026-09-19T07:20:00Z"), providerRecoveredAt: null,
+    });
+    expect((await getNotificationIncidentByKey(testDb.db, keys.auth_blocked))?.status).toBe("open");
+    expect((await getNotificationIncidentByKey(testDb.db, keys.proxy_failed))?.status).toBe("open");
+    expect((await getNotificationIncidentByKey(testDb.db, keys.proxy_missing))?.status).toBe("resolved");
+    expect((await getNotificationIncidentByKey(testDb.db, keys.stream_failed_threshold))?.status).toBe("resolved");
+    expect((await testDb.pool.query(
+      "select incident_key from notification_incident_recoveries where incident_key = any($1::text[])",
+      [[keys.auth_blocked, keys.proxy_failed]],
+    )).rows).toEqual([]);
+
+    // A chunk whose newest provider success follows the failure closes both at
+    // that success, not at the chunk end.
+    const successAt = new Date("2026-09-19T07:30:00Z");
+    await resolveSyncChunkRecoveryIncidents(app, {
+      ...chunk, recoveredAt: new Date("2026-09-19T07:31:00Z"), providerRecoveredAt: successAt,
+    });
+    for (const key of [keys.auth_blocked, keys.proxy_failed]) {
+      expect(await getNotificationIncidentByKey(testDb.db, key)).toMatchObject({ status: "resolved", resolvedAt: successAt });
+    }
+  });
+
   it("opens auth incidents once, resolves them on recovery, and reopens after a later recurrence", async (context) => {
     if (!testDb) {
       context.skip();
@@ -138,6 +186,7 @@ describe("notification incidents integration", () => {
       pageLabel: page.label,
       platform: "fansly",
       stream: "light",
+      providerRecoveredAt: new Date(),
     });
 
     incident = await getNotificationIncidentByKey(testDb.db, `auth_blocked:${page.id}`);
@@ -234,6 +283,7 @@ describe("notification incidents integration", () => {
       pageLabel: proxiedPage.label,
       platform: "fansly",
       stream: "followers",
+      providerRecoveredAt: new Date(),
     });
 
     proxyIncident = await getNotificationIncidentByKey(testDb.db, `proxy_failed:${proxiedPage.id}`);
@@ -298,6 +348,7 @@ describe("notification incidents integration", () => {
       pageLabel: thresholdPage.label,
       platform: "fansly",
       stream: "subscribers",
+      providerRecoveredAt: new Date(),
     });
 
     expect(await getNotificationIncidentByKey(

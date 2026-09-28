@@ -52,6 +52,7 @@ const notificationMocks = vi.hoisted(() => ({
 }));
 
 const telemetryMocks = vi.hoisted(() => ({
+  lastSuccessfulAttemptAt: null as Date | null,
   instances: [] as Array<{
     metadata: Record<string, unknown>;
     recordRunStarted: ReturnType<typeof vi.fn>;
@@ -95,6 +96,11 @@ vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
 
     getRequestObserver() {
       return null;
+    }
+
+    getRequestTotalsSnapshot() {
+      const at = telemetryMocks.lastSuccessfulAttemptAt;
+      return { successfulAttempts: at ? 1 : 0, lastSuccessfulAttemptAt: at };
     }
   },
 }));
@@ -209,6 +215,7 @@ describe("sync executor", () => {
       mock.mockResolvedValue(undefined);
     }
     telemetryMocks.instances.length = 0;
+    telemetryMocks.lastSuccessfulAttemptAt = null;
 
     dbMocks.startSyncRun.mockResolvedValue({
       id: 777,
@@ -258,6 +265,29 @@ describe("sync executor", () => {
     expect(dbMocks.completePageSync).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ succeededAt }));
     expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app,
       expect.objectContaining({ providerRecoveredAt: succeededAt, recoveredAt: expect.any(Date) }));
+  });
+
+  it.each([
+    ["a partial with no successful response", false, null],
+    ["a partial with a successful response", false, "last_success"],
+    ["a completion stamped this chunk with no successful response", true, null],
+    ["a completion with a successful response", true, "last_success"],
+  ] as const)("recovers page-wide incidents only from provider evidence: %s", async (_name, satisfied, expected) => {
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    const lastSuccessAt = new Date(Date.now() - 1_000);
+    telemetryMocks.lastSuccessfulAttemptAt = expected === "last_success" ? lastSuccessAt : null;
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "fan_earnings" });
+    // A fan_earnings walk finishing on an exhausted cursor stamps succeededAt
+    // now; that is a completion time, not a provider answer.
+    handlerMocks.executeStreamChunk.mockImplementation(async () => (satisfied
+      ? { satisfied: true, yieldReason: null, succeededAt: new Date(), stats: { walkCompleted: true } }
+      : { satisfied: false, yieldReason: "request_budget", stats: { fansFetched: 0 } }));
+    await executeNextSyncPageChunk(app, 55);
+    expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledWith(app, expect.objectContaining({
+      providerRecoveredAt: expected === "last_success" ? lastSuccessAt : null,
+      recoveredAt: expect.any(Date),
+      stream: "fan_earnings",
+    }));
   });
 
   it("settles an unverified audience sweep without success or incident recovery", async () => {

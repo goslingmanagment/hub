@@ -90,8 +90,9 @@ function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined)
   return block.connectionStatus !== "error" && block.statusReason?.code !== "ofapi_auth";
 }
 
-/** Streams whose failure streak crossed the wedge threshold. The streak only
- * resets on a real success (completePageSync), so it must degrade health in
+/** Streams whose failure streak crossed the wedge threshold. The streak resets
+ * only on a success (completePageSync) or a partial yield (yieldPageSync; see
+ * the #138 addendum below), so it must degrade health in
  * EVERY active state — a wedged stream that flips retrying → pending/
  * backfilling/syncing between failures is still wedged (prod 2026-07-11:
  * 425-streak dm_messages read as ok the moment its state left retrying).

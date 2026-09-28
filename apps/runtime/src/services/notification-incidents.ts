@@ -571,23 +571,27 @@ export async function resolveSyncChunkRecoveryIncidents(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
-    /** A reused result proves provider health only at its original read time. */
-    providerRecoveredAt?: Date;
+    /** When the provider last answered successfully: the chunk's newest
+     * successful response, or a reused result's original read time. Null when
+     * the chunk has no such evidence (zero requests, or every attempt failed):
+     * page-wide auth/proxy incidents then stay open and get no tombstone. */
+    providerRecoveredAt: Date | null;
     stream: SyncStream;
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
-  const providerRecoveredAt = input.providerRecoveredAt ?? recoveredAt;
-  await resolveIncidentAndNotify(app, {
-    ...input,
-    kind: "auth_blocked",
-    recoveredAt: providerRecoveredAt,
-  });
-  await resolveIncidentAndNotify(app, {
-    ...input,
-    kind: "proxy_failed",
-    recoveredAt: providerRecoveredAt,
-  });
+  if (input.providerRecoveredAt !== null) {
+    await resolveIncidentAndNotify(app, {
+      ...input,
+      kind: "auth_blocked",
+      recoveredAt: input.providerRecoveredAt,
+    });
+    await resolveIncidentAndNotify(app, {
+      ...input,
+      kind: "proxy_failed",
+      recoveredAt: input.providerRecoveredAt,
+    });
+  }
   // W3.1: a successful chunk implies the page context resolved, which the
   // fail-closed guard only allows with a proxy present.
   await resolveIncidentAndNotify(app, {
@@ -595,6 +599,8 @@ export async function resolveSyncChunkRecoveryIncidents(
     kind: "proxy_missing",
     recoveredAt,
   });
+  // The stream's own alert follows its failure streak, which this chunk's
+  // completion or yield has just reset.
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "stream_failed_threshold",

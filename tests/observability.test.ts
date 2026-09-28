@@ -127,6 +127,34 @@ describe("sync observability", () => {
     expect(stdoutLines).toEqual([]);
   });
 
+  it("counts only successful provider responses as recovery evidence, keeping the newest", async () => {
+    mockStdoutWrite([]);
+    vi.spyOn(dbRepo, "insertSyncRequestAttempt").mockResolvedValue({ id: 23 } as never);
+    vi.spyOn(dbRepo, "finishSyncRequestAttempt").mockResolvedValue({ id: 23 } as never);
+    vi.spyOn(dbRepo, "insertSyncRunEvent").mockResolvedValue({ id: 1 } as never);
+
+    const telemetry = buildTelemetry();
+    const requestObserver = telemetry.getRequestObserver();
+    await requestObserver.onRequestEvent(STARTED_EVENT);
+    await requestObserver.onRequestEvent(RETRY_EVENT);
+    await requestObserver.onRequestEvent({ ...STARTED_EVENT, attemptNumber: 2 });
+    await requestObserver.onRequestEvent(FAILED_EVENT);
+    // A terminal event without its own "started" is not counted anywhere.
+    await requestObserver.onRequestEvent({ ...SUCCESS_EVENT, operation: "unstarted" });
+    expect(telemetry.getRequestTotalsSnapshot()).toMatchObject({
+      totalAttempts: 2, successfulAttempts: 0, lastSuccessfulAttemptAt: null,
+    });
+
+    const later = new Date("2026-03-10T12:00:05.000Z");
+    await requestObserver.onRequestEvent({ ...STARTED_EVENT, requestId: "b", timestamp: new Date("2026-03-10T12:00:04.000Z") });
+    await requestObserver.onRequestEvent({ ...STARTED_EVENT, requestId: "a" });
+    await requestObserver.onRequestEvent({ ...SUCCESS_EVENT, requestId: "b", timestamp: later });
+    await requestObserver.onRequestEvent({ ...SUCCESS_EVENT, requestId: "a" });
+    expect(telemetry.getRequestTotalsSnapshot()).toMatchObject({
+      successfulAttempts: 2, lastSuccessfulAttemptAt: later,
+    });
+  });
+
   it("still traces retried and failed attempts on stdout, with their started line", async () => {
     const stdoutLines: string[] = [];
     mockStdoutWrite(stdoutLines);
