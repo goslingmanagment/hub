@@ -78,6 +78,7 @@ import {
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { fanslyStatsDatasetHasDatapointArrays } from "../canonicalize/fansly-stats.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
@@ -628,11 +629,12 @@ function pointCarriesTraffic(point: unknown): boolean {
  * reads this.
  */
 export function isEmptyStatsMonth(payload: unknown): boolean {
-  if (isEmptyStatsWindow(payload)) {
+  const classification = classifyStatsWindow(payload);
+  if (classification === "empty") {
     return true;
   }
   const dataset = statsDataset(payload);
-  if (dataset === null) {
+  if (classification === "invalid" || dataset === null) {
     return false;
   }
   for (const key of ["datapoints", "profileDatapoints"] as const) {
@@ -696,14 +698,23 @@ export function isEmptyStatsWindow(payload: unknown): boolean {
   return classifyStatsWindow(payload) === "empty";
 }
 
+/**
+ * Valid only with the datapoints as ARRAYS — the canonicalizer's own gate
+ * predicate. A dataset whose `datapoints` is missing or drifted used to read
+ * as "no datapoints", i.e. EMPTY, and two of those are a floor claim: false
+ * completeness from a body nothing can parse. Now it is invalid, which every
+ * caller already handles loudly, after journaling.
+ */
 export function classifyStatsWindow(payload: unknown) {
   return classifyFanslyResponse(payload, {
-    isValid: (value) => statsDataset(value) !== null,
+    isValid: (value) => {
+      const dataset = statsDataset(value);
+      return dataset !== null && fanslyStatsDatasetHasDatapointArrays(dataset);
+    },
     isEmpty: (value) => {
       const dataset = statsDataset(value)!;
-      const datapoints = Array.isArray(dataset.datapoints) ? dataset.datapoints : [];
       const profile = Array.isArray(dataset.profileDatapoints) ? dataset.profileDatapoints : [];
-      return datapoints.length === 0 && profile.length === 0;
+      return (dataset.datapoints as unknown[]).length === 0 && profile.length === 0;
     },
   });
 }

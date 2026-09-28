@@ -18,6 +18,7 @@ import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.
 import {
   backfillAttemptCeiling,
   backfillContinuationAt,
+  classifyNotificationResponse,
   compareNotificationRefs,
   fanslyNotificationsChunk,
   FORWARD_HEAD_RESERVED_ATTEMPTS,
@@ -313,6 +314,42 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect((archive.cursor as Record<string, unknown>).notificationFloorAt)
       .toBe("2026-08-17T08:53:20.000Z");
     expect(archive.oldest_captured_at).not.toBeNull();
+  });
+
+  it("never calls a history page with rows but no ids the floor", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // The rows came back, and none of them carries an id the walk can step
+    // by. That page used to read as EMPTY, and an empty backfill page is the
+    // archive's floor: `provider_exhausted`, durable, from a drifted body.
+    const idless = {
+      ...envelope([]),
+      notifications: [{ type: 3003, createdAt: 1786000000 }, null],
+    };
+    const bodies = [historyPage1(), idless];
+    let served = 0;
+    const adapter = adapterStub({
+      pages: () => bodies[Math.min(served++, bodies.length - 1)],
+    });
+    const telemetry = telemetryStub();
+
+    await expect(drain(seeded.id, adapter, telemetry)).rejects.toThrow(/response is invalid/);
+
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(4)]);
+    // Journaled FIRST, and only then refused.
+    expect(await observations(seeded.id)).toHaveLength(2);
+    const archive = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications");
+    expect(archive?.status).not.toBe("provider_exhausted");
+    // The walk is exactly where it was: the next run asks the same page again.
+    const state = await cursor(seeded.id);
+    expect(state!.backfill).not.toBeNull();
+    expect(state!.backfill!.done).toBe(false);
+    expect(state!.backfill!.nextBeforeRef).toBe(ref(4));
+    expect(state!.backfill!.lastRequestedBefore).not.toBe(ref(4));
   });
 
   it("[A20] allowlists accounts[] BEFORE journaling, and narrows nothing else", async (context) => {
@@ -918,6 +955,18 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
 });
 
 describe("WP-F2 walk helpers", () => {
+  it("refuses a non-empty page with no usable id, and tolerates one odd row", () => {
+    expect(classifyNotificationResponse(envelope([]))).toBe("empty");
+    expect(classifyNotificationResponse({ notifications: [null] })).toBe("invalid");
+    expect(classifyNotificationResponse({ notifications: [{}] })).toBe("invalid");
+    expect(classifyNotificationResponse({ notifications: [{ id: 7 }] })).toBe("invalid");
+    expect(classifyNotificationResponse({})).toBe("invalid");
+    // Per-row tolerance stays: one good id makes the page walkable.
+    expect(classifyNotificationResponse({ notifications: [row(1), null, {}] })).toBe("nonempty");
+    expect(classifyNotificationResponse({ notifications: [{ idString: ref(1) }] }))
+      .toBe("nonempty");
+  });
+
   it("orders snowflake refs by length first, then lexicographically", () => {
     expect(compareNotificationRefs("100", "99")).toBeGreaterThan(0);
     expect(compareNotificationRefs("100", "101")).toBeLessThan(0);

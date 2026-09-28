@@ -597,7 +597,7 @@ const MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL = 7;
  * `dataset.datasetMediaOfferId` is the key the route actually serves (HAR
  * 2026-08-19, 6/6). The other two spellings are accepted because a payload that
  * cannot be attributed is a payload whose buckets are unusable, and tolerating a
- * rename costs nothing.
+ * rename costs nothing. Every window checks it against the item it asked for.
  */
 export function servedMediaOfferRef(payload: unknown): string | null {
   const record = asRecord(payload);
@@ -885,6 +885,29 @@ export async function fanslyMediaStatsChunk(
         severity: "warn",
         message: "Fansly per-media statistics response was journaled but did not match the parser contract",
         details: { mediaOfferRef: subjectRef },
+      });
+      await recordMediaStatsFailure(app.db, {
+        pageId,
+        subjectRef,
+        nextDueAt: new Date(now.getTime() + DAY_MS),
+      });
+      return "failed";
+    }
+    // A BODY ABOUT ANOTHER ITEM. The canonicalizer attributes buckets by the
+    // SERVED id, so no data is misfiled — but this item's walk and coverage
+    // must not advance on it. A body that names no subject is tolerated, as
+    // the canonicalizer tolerates it: a later version can attribute it from
+    // request_params.
+    const servedRef = servedMediaOfferRef(raw);
+    if (servedRef !== null && servedRef !== subjectRef) {
+      invalidResponses += 1;
+      lastWindowFailure = { httpStatus: null, retryAfter: false };
+      await input.telemetry.addAnomaly({
+        code: "fansly_media_stats_subject_mismatch",
+        severity: "warn",
+        message:
+          "Fansly per-media statistics response was journaled but describes a different media item",
+        details: { mediaOfferRef: subjectRef, servedMediaOfferRef: servedRef },
       });
       await recordMediaStatsFailure(app.db, {
         pageId,

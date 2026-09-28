@@ -386,11 +386,27 @@ export function notificationRows(payload: unknown): Record<string, unknown>[] {
     : [];
 }
 
+/** The id a notification row is walked by — the one `pageRefBounds` reads. */
+function notificationRef(row: Record<string, unknown>): string | null {
+  return asNullableString(row.id) ?? asNullableString(row.idString);
+}
+
+/**
+ * Valid when `notifications` is an array that is either empty or carries at
+ * least ONE row with a usable id. A non-empty page with none — `[null]`, rows
+ * whose id key drifted — used to read as empty, and in the backfill an empty
+ * page is the archive's FLOOR: a durable `provider_exhausted` claim from a body
+ * nothing can walk. One odd row among good ones stays tolerated per row.
+ */
 export function classifyNotificationResponse(payload: unknown) {
   return classifyFanslyResponse(payload, {
     isValid: (value) => {
       const record = asRecord(value);
-      return record !== null && Array.isArray(record.notifications);
+      if (record === null || !Array.isArray(record.notifications)) {
+        return false;
+      }
+      return record.notifications.length === 0
+        || notificationRows(value).some((row) => notificationRef(row) !== null);
     },
     isEmpty: (value) => notificationRows(value).length === 0,
   });
@@ -417,7 +433,7 @@ function pageRefBounds(
   let newest: string | null = null;
   let oldest: string | null = null;
   for (const row of rows) {
-    const id = asNullableString(row.id) ?? asNullableString(row.idString);
+    const id = notificationRef(row);
     if (id === null) {
       continue;
     }
@@ -1118,13 +1134,20 @@ export async function fanslyNotificationsChunk(
       state = { ...state, backfill };
       continue;
     }
+    const rows = notificationRows(page.payload);
+    const bounds = pageRefBounds(rows);
+    if (rows.length > 0 && bounds.oldest === null) {
+      // Rows, and not one id to walk by. NOT a floor — nothing proves the
+      // archive ends here. `classifyNotificationResponse` already refuses such
+      // a page, so this is unreachable; it stays loud rather than trusted, and
+      // like any invalid page it leaves the cursor exactly where it was.
+      throw new FanslyLaneInvalidResponseError(OBSERVATION_KIND);
+    }
     // ARMED ONLY BY A SERVED PAGE (see the forward walk): a rethrown 429, 5xx
     // or dead session must leave the walk resumable at exactly this cursor,
     // not looking like a provider that ignored `before`.
     backfill.lastRequestedBefore = before;
     backfill.lastObservationId = page.observationId ?? backfill.lastObservationId;
-    const rows = notificationRows(page.payload);
-    const bounds = pageRefBounds(rows);
     const oldestIso = oldestCreatedAtIso(rows);
     if (oldestIso !== null) {
       backfill.floorAt = backfill.floorAt === null || oldestIso < backfill.floorAt
@@ -1132,9 +1155,10 @@ export async function fanslyNotificationsChunk(
         : backfill.floorAt;
     }
 
-    if (rows.length === 0 || bounds.oldest === null) {
-      // THE FLOOR. The empty response IS the evidence and it is journaled, so
-      // the coverage row points at the observation rather than restating it.
+    if (bounds.oldest === null) {
+      // THE FLOOR: an EMPTY page — one with rows and no id was refused above.
+      // The empty response IS the evidence and it is journaled, so the
+      // coverage row points at the observation rather than restating it.
       backfill.done = true;
       await coverage(
         CAPTURE_COVERAGE_PLANES.notifications,

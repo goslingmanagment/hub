@@ -6,6 +6,7 @@ import {
 } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import {
   backfillContinuationAt,
+  classifyStatsWindow,
   emptyFanslyStatsCursorState,
   isEmptyStatsMonth,
   monthFromIndex,
@@ -454,6 +455,27 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     // must not be mistaken for evidence that the provider has no older data.
     expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
     expect(isEmptyStatsMonth(null)).toBe(false);
+    // A dataset whose datapoints drifted is not an empty month either.
+    expect(isEmptyStatsMonth({ dataset: {} })).toBe(false);
+  });
+
+  it("reads a dataset without datapoint ARRAYS as invalid, never as an empty window", () => {
+    // Two "empty" windows are a floor claim. A missing or drifted `datapoints`
+    // used to read as empty — false completeness from a body nothing can parse.
+    expect(classifyStatsWindow({ dataset: {} })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: "x" } })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: 3 } }))
+      .toBe("invalid");
+    expect(classifyStatsWindow({ dataset: null })).toBe("invalid");
+    // The served shapes: the per-media route carries no profileDatapoints.
+    expect(classifyStatsWindow({ dataset: { datapoints: [] } })).toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: null } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [{ timestamp: 1 }] } })).toBe("nonempty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [{}] } }))
+      .toBe("nonempty");
   });
 });
 

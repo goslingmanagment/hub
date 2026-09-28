@@ -644,6 +644,64 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(queue[0]?.lastVisitedAt).toBeNull();
   });
 
+  it("fails a window whose body names ANOTHER item, and tolerates one naming none", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // An open walk, so the body would otherwise count: all-zero, it is the
+    // "empty window" half of a floor claim — about a different media item.
+    await seedMedia(page.id, [{
+      ref: ref(405),
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }]);
+    await seedMedia(page.id, [{
+      ref: ref(406),
+      createdAtPlatform: new Date(NOW.getTime() - 5 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    const adapter = adapterStub({
+      body: (params) => {
+        const window = {
+          afterMs: params.afterDate.getTime(),
+          beforeMs: params.beforeDate.getTime(),
+          periodMs: params.periodMs,
+        };
+        if (params.mediaOfferId === ref(405)) {
+          return allZeroBody({ ...window, mediaOfferRef: ref(999) });
+        }
+        // The canonicalizer's documented tolerance: no subject in the body, to
+        // be attributed from request_params later. Not a mismatch.
+        const unnamed = statsBody({ ...window, mediaOfferRef: params.mediaOfferId });
+        delete (unnamed.dataset as Record<string, unknown>).datasetMediaOfferId;
+        return unnamed;
+      },
+    });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // Journaled FIRST, both of them.
+    expect(await journaled(page.id)).toHaveLength(2);
+    const mismatches = telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_subject_mismatch"
+    );
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]?.details).toMatchObject({
+      mediaOfferRef: ref(405),
+      servedMediaOfferRef: ref(999),
+    });
+    // A failed look: backoff, no stamp, and the walk did NOT count the window.
+    const mismatched = await queueRow(page.id, ref(405));
+    expect(mismatched.lastVisitedAt).toBeNull();
+    expect(mismatched.consecutiveFailures).toBe(1);
+    expect(parseMediaBackfillCursor(mismatched.backfillCursor, NOW)).toMatchObject({
+      emptyStreak: 0,
+      done: false,
+      guard: { lastBeforeMs: null },
+    });
+    // The unnamed body is processed as ever.
+    const unnamed = await queueRow(page.id, ref(406));
+    expect(unnamed.lastVisitedAt).not.toBeNull();
+    expect(unnamed.consecutiveFailures).toBe(0);
+  });
+
   it("asks the tier's window: 24 h hourly, 30 d daily, 90 d daily", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
@@ -1179,6 +1237,9 @@ describe("media_stats lane — the windows and their guards", () => {
     expect(mediaStatsWindowIsEmpty(typed)).toBe(true);
     // No datapoints at all is empty, as it always was.
     expect(mediaStatsWindowIsEmpty({ dataset: { datapoints: [] } })).toBe(true);
+    // …but a dataset whose datapoints drifted away is not: that body is
+    // unreadable, and reading it as empty is how a floor gets claimed.
+    expect(mediaStatsWindowIsEmpty({ dataset: { datasetMediaOfferId: ref(470) } })).toBe(false);
     // A window with real numbers is not.
     expect(mediaStatsWindowIsEmpty(statsBody({
       mediaOfferRef: ref(470),

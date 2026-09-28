@@ -145,6 +145,65 @@ describe("fansly-stats family registration", () => {
   });
 });
 
+describe("fansly-stats shape gate — drift stays unstamped", () => {
+  const reject = (kind: string, payload: unknown) =>
+    diagnoseFanslyStatsObservationRejection(observation(kind, payload));
+
+  it("refuses a dataset whose datapoints are not arrays — an 'empty window' nothing read", () => {
+    // Every parser here reads a missing `datapoints` as "no datapoints", and
+    // the lanes turn two empty windows into a floor claim. So the gate and the
+    // lane classifier share ONE predicate.
+    const notArray = { code: "datapoints_not_array" };
+    expect(reject("account_stats", { dataset: {} })).toEqual(notArray);
+    expect(reject("account_stats", { dataset: { datapoints: "x", profileDatapoints: [] } }))
+      .toEqual(notArray);
+    expect(reject("account_stats", { dataset: { datapoints: [], profileDatapoints: {} } }))
+      .toEqual(notArray);
+    expect(reject("media_offer_stats", { dataset: { datasetMediaOfferId: "1" } }))
+      .toEqual(notArray);
+    // The served shapes, empty ones included, still pass: the per-media route
+    // carries no profileDatapoints at all.
+    expect(reject("account_stats", accountStats())).toBeNull();
+    expect(reject("account_stats", { dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBeNull();
+    expect(reject("account_stats", { dataset: { datapoints: [], profileDatapoints: null } }))
+      .toBeNull();
+    expect(reject("media_offer_stats", fixture("media-offer-stats.json"))).toBeNull();
+    expect(reject("media_offer_stats", { dataset: { datapoints: [] } })).toBeNull();
+  });
+
+  it("gates each auxiliary kind on the container its parser actually reads", () => {
+    // The served shapes (prod: all 1 321 aux observations), full and empty.
+    expect(reject("tracking_links", fixture("tracking-links.json").rows)).toBeNull();
+    expect(reject("tracking_links", [])).toBeNull();
+    expect(reject("polls", fixture("polls.json").rows)).toBeNull();
+    expect(reject("recapstats", fixture("recapstats.json").rows)).toBeNull();
+    expect(reject("earnings_monthlystats_snapshot", fixture("earnings-monthlystats.json").rows))
+      .toBeNull();
+    expect(reject("broadcast_stats", fixture("broadcast-stats.json"))).toBeNull();
+    expect(reject("broadcast_stats_deleted", { messages: [] })).toBeNull();
+    expect(reject("broadcast_scheduled", fixture("broadcast-scheduled.json"))).toBeNull();
+    expect(reject("broadcast_scheduled", { scheduledBroadcastMessages: [] })).toBeNull();
+    // A wrapped list stays tolerated where `envelopeArray` reads one.
+    expect(reject("polls", { polls: [] })).toBeNull();
+
+    // Drift: each of these used to be stamped with zero events.
+    expect(reject("tracking_links", {})).toEqual({ code: "payload_not_array" });
+    expect(reject("tracking_links", { links: [] })).toEqual({ code: "payload_not_array" });
+    for (const kind of ["polls", "recapstats", "earnings_monthlystats_snapshot"]) {
+      expect(reject(kind, {})).toEqual({ code: "payload_not_collection" });
+      expect(reject(kind, { error: "x" })).toEqual({ code: "payload_not_collection" });
+    }
+    // An array body is parsed as `{}` by the broadcast parsers.
+    expect(reject("broadcast_stats", [])).toEqual({ code: "broadcast_messages_missing" });
+    expect(reject("broadcast_stats_deleted", {})).toEqual({ code: "broadcast_messages_missing" });
+    expect(reject("broadcast_scheduled", { messages: [] }))
+      .toEqual({ code: "broadcast_scheduled_missing" });
+    // Unchanged.
+    expect(reject("earnings_stats_snapshot", {})).toBeNull();
+  });
+});
+
 describe("profile stat labels", () => {
   it("pins the 8-code census against §2.1", () => {
     expect(FANSLY_STAT_LABEL_VERSION).toBe(2);
