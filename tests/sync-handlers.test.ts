@@ -23,6 +23,12 @@ const dbMocks = vi.hoisted(() => ({
   countOtherDmMessageGroupsFailingSinceLastSuccess: vi.fn(),
   recordConversationSyncFailure: vi.fn(),
   clearConversationSyncHealth: vi.fn(),
+  // No thread carries breaker failures, and none waits out a window, unless a
+  // test says so.
+  getConversationSyncHealth: vi.fn<typeof DbModule.getConversationSyncHealth>(async () => null),
+  nextConversationSyncBackoffRetryAt: vi.fn<typeof DbModule.nextConversationSyncBackoffRetryAt>(async () => null),
+  countConversationSyncFailuresByAccount:
+    vi.fn<typeof DbModule.countConversationSyncFailuresByAccount>(async () => []),
   countActivePageFollows: vi.fn(),
   countCurrentPageSubscriptionsByGeneration: vi.fn(),
   countPageDmThreadsByGeneration: vi.fn(),
@@ -7213,7 +7219,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       lastMessageSenderRole: "fan",
     }));
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValueOnce(3);
+    const breakerRetryAt = new Date(Date.now() + 5 * 60_000);
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(breakerRetryAt);
 
+    // Deferred, not failed: nothing else is eligible, so the stream sleeps
+    // until the thread's window ends, claiming no progress.
     await expect(fanslyDmMessagesChunk(app, {
       pageContext: {
         platform: "fansly",
@@ -7232,7 +7242,10 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       syncRunId: 908,
       telemetry: telemetry as never,
       budget: new SyncChunkBudget(5),
-    } as never)).rejects.toThrow("provider failure");
+    } as never)).resolves.toMatchObject({
+      satisfied: false, deferral: "fansly_dm_threads_deferred", continuationRetryAt: breakerRetryAt,
+      stats: expect.objectContaining({ deferredThreads: 1 }),
+    });
 
     expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-live"]);
     expect(dbMocks.upsertPageDmConversation).not.toHaveBeenCalled();
@@ -7267,16 +7280,27 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     /** Physical attempts the failing fetch reports (in-process retries). */
     startedRequests?: number;
   }) {
+    // The window the breaker opens, as the page's earliest one.
+    const breakerRetryAt = new Date(Date.now() + 5 * 60_000);
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(breakerRetryAt);
     let checkpoint: Record<string, unknown> | null = input.checkpoint ?? null;
     dbMocks.getCheckpoint.mockImplementation(async () => checkpoint ? { state: checkpoint } : null);
     dbMocks.upsertCheckpointProgress.mockImplementation(async (_db, next) => {
       checkpoint = next.state;
       return {};
     });
-    dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate());
+    // A restored pin needs no pick; a thread inside its window is never offered.
+    if (!input.checkpoint) {
+      dbMocks.selectNextPageDmMessageSyncCandidate.mockResolvedValueOnce(buildDmMessageSyncCandidate());
+    }
     dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation(input.conversation ?? {}));
-    const getMessagesPage = vi.fn(async (context: { requestObserver: { onRequestEvent(event: unknown): Promise<void> } }) => {
-      for (let attempt = 1; attempt <= (input.startedRequests ?? 1); attempt++) {
+    const getMessagesPage = vi.fn(async (context: {
+      requestObserver: { onRequestEvent(event: unknown): Promise<void> };
+      remainingAttempts?: (() => number) | null;
+    }) => {
+      // The adapter clamps its retries to the allowance, as here.
+      const attempts = Math.min(input.startedRequests ?? 1, context.remainingAttempts?.() ?? Number.MAX_SAFE_INTEGER);
+      for (let attempt = 1; attempt <= attempts; attempt++) {
         await context.requestObserver.onRequestEvent({
           requestId: "failing", operation: "messages", endpointTemplate: "/message",
           method: "GET", attemptNumber: attempt, timestamp: new Date(), state: "started",
@@ -7295,8 +7319,15 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
         session: {}, proxy: null }, streamState: { requestSeq: 1 }, syncRunId: 909,
       telemetry, budget: new SyncChunkBudget(5),
     } as never);
-    return { run, getMessagesPage, getAccountsByIdsPage, telemetry, logger, checkpoint: () => checkpoint };
+    return {
+      run, getMessagesPage, getAccountsByIdsPage, telemetry, logger, breakerRetryAt, checkpoint: () => checkpoint,
+    };
   }
+
+  const deferredChunk = (continuationRetryAt: Date) => ({
+    satisfied: false, deferral: "fansly_dm_threads_deferred", continuationRetryAt,
+    stats: expect.objectContaining({ deferredThreads: 1 }),
+  });
 
   const pinnedIncremental = {
     version: 1, currentConversationId: 777, currentPlatformConversationId: "group-1",
@@ -7310,7 +7341,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     const h = dmBreakerHarness({ error, conversation: syncedThread, checkpoint: pinnedIncremental, startedRequests: 5 });
     dbMocks.countRecentTerminalDmMessageConversationFailureStreak.mockResolvedValue(8);
 
-    await expect(h.run()).rejects.toBe(error);
+    // The thread is deferred, not the stream failed; the spent budget yields.
+    await expect(h.run()).resolves.toMatchObject({
+      satisfied: false, deferral: "fansly_dm_threads_deferred", yieldReason: "request_budget",
+      stats: expect.objectContaining({ deferredThreads: 1 }),
+    });
 
     expect(h.getAccountsByIdsPage).not.toHaveBeenCalled();
     expect(dbMocks.countOtherDmMessageGroupsFailingSinceLastSuccess).toHaveBeenCalledExactlyOnceWith({}, {
@@ -7333,11 +7368,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
 
   it.each([
     ["a 404", new FanslyApiError("Fansly request failed (404)", 404), "fansly_404"],
-    ["an envelope failure at HTTP 200", new FanslyApiError("Fansly response envelope was unsuccessful", 200), "fansly_200"],
+    ["an enveloped 500", new FanslyApiError("error getting group messages", 500, 500), "fansly_500"],
   ])("breakers a thread when its first page gets %s", async (_name, error, errorClass) => {
     const h = dmBreakerHarness({ error });
 
-    await expect(h.run()).rejects.toBe(error);
+    await expect(h.run()).resolves.toMatchObject(deferredChunk(h.breakerRetryAt));
 
     expect(dbMocks.recordConversationSyncFailure).toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({
       conversationId: 777, errorClass,
@@ -7350,8 +7385,14 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     ["a status-less provider error", new FanslyApiError("no status")],
     ["a 401", new FanslyApiError("Fansly authorization failed (401)", 401)],
     ["a 403", new FanslyApiError("Fansly authorization failed (403)", 403)],
+    ["a 408", new FanslyApiError("Fansly request failed (408)", 408)],
     ["a 429", new FanslyApiError("Fansly request failed (429)", 429)],
     ["a 503 with a Retry-After deadline", new FanslyApiError("Fansly request failed (503)", 503, undefined, undefined, new Date(Date.now() + 600_000))],
+    ["a gateway 502", new FanslyApiError("Fansly request failed (502)", 502)],
+    ["a gateway 503", new FanslyApiError("Fansly request failed (503)", 503)],
+    ["a gateway 504", new FanslyApiError("Fansly request failed (504)", 504)],
+    ["an edge 522", new FanslyApiError("Fansly request failed (522)", 522)],
+    ["an envelope failure at HTTP 200", new FanslyApiError("Fansly response envelope was unsuccessful", 200, 500)],
   ])("keeps the pin and opens no breaker on %s", async (_name, error) => {
     const h = dmBreakerHarness({ error, conversation: syncedThread, checkpoint: pinnedIncremental });
 
@@ -7373,9 +7414,11 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       error, checkpoint, conversation: { ...syncedThread, messageCoverageStatus: "pending_backfill" },
     });
 
-    await expect(h.run()).rejects.toBe(error);
+    // Unpinning after pages were written would let a later walk stop on them,
+    // so a later page's failure still fails the stream.
+    if (breakered) await expect(h.run()).resolves.toMatchObject(deferredChunk(h.breakerRetryAt));
+    else await expect(h.run()).rejects.toBe(error);
 
-    // Unpinning after pages were written would let a later walk stop on them.
     expect(dbMocks.recordConversationSyncFailure).toHaveBeenCalledTimes(breakered ? 1 : 0);
     expect(h.checkpoint()).toMatchObject(breakered
       ? { currentConversationId: null }
@@ -7383,7 +7426,7 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
   });
 
   it("treats failures across several threads since the last good read as an outage and keeps the pin", async () => {
-    const error = new FanslyApiError("Fansly request failed (502)", 502);
+    const error = new FanslyApiError("error getting group messages", 500, 500);
     const h = dmBreakerHarness({ error, conversation: syncedThread, checkpoint: pinnedIncremental });
     dbMocks.countOtherDmMessageGroupsFailingSinceLastSuccess.mockResolvedValue(2);
 
@@ -7420,6 +7463,51 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       expect.objectContaining({ conversationId: 777 }),
       "DM conversation breaker write failed; the stream keeps its pin",
     );
+  });
+
+  it("retries a thread still carrying failures once per chunk, on one physical attempt", async () => {
+    const error = new FanslyApiError("error getting group messages", 500, 500);
+    const h = dmBreakerHarness({ error, startedRequests: 4 });
+    dbMocks.getConversationSyncHealth.mockResolvedValue({
+      conversationId: 777, platformAccountId: 55, failureCount: 1, errorClass: "fansly_500",
+      lastError: "error getting group messages", lastAttemptAt: new Date(Date.now() - 6 * 60_000),
+      nextRetryAt: new Date(Date.now() - 60_000), quarantineUntil: null, preferredPageLimit: null,
+    });
+
+    await expect(h.run()).resolves.toMatchObject(deferredChunk(h.breakerRetryAt));
+
+    // The adapter clamps its in-process retries to this allowance.
+    expect(h.getMessagesPage).toHaveBeenCalledOnce();
+    expect(h.getMessagesPage.mock.calls[0]?.[0].remainingAttempts?.()).toBe(1);
+    // With the retry spent the pickers skip failing threads; the last call
+    // asks whether another failing thread is due regardless.
+    expect(dbMocks.selectNextPageDmMessageSyncCandidate.mock.calls.map(([, selection]) => selection)).toEqual([
+      { platformAccountId: 55 },
+      { platformAccountId: 55, excludeFailingThreads: true },
+      { platformAccountId: 55 },
+    ]);
+  });
+
+  it("walks a thread without failures on the adapter's ordinary retries", async () => {
+    const h = dmBreakerHarness({ error: new FanslyApiError("error getting group messages", 500, 500), startedRequests: 4 });
+
+    await h.run();
+
+    expect(h.getMessagesPage.mock.calls[0]?.[0].remainingAttempts).toBeUndefined();
+    expect(dbMocks.selectNextPageDmMessageSyncCandidate.mock.calls.map(([, selection]) => selection))
+      .toEqual([{ platformAccountId: 55 }, { platformAccountId: 55 }]);
+  });
+
+  it("holds, not completes, a deferral-only chunk whose deferred thread went into quarantine or left the lane", async () => {
+    const h = dmBreakerHarness({ error: new FanslyApiError("error getting group messages", 500, 500) });
+    // No short backoff window is open: a quarantine is not waited on.
+    dbMocks.nextConversationSyncBackoffRetryAt.mockResolvedValue(null);
+
+    await expect(h.run()).resolves.toMatchObject({
+      satisfied: true, qualityHold: "fansly_dm_threads_deferred", stats: expect.objectContaining({ deferredThreads: 1 }),
+    });
+
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
   });
 
   it("clears the thread's breaker when its walk completes, and only then", async () => {

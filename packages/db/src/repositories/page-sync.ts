@@ -2660,12 +2660,16 @@ export async function yieldPageSync(
     progress?: Record<string, unknown>;
     retryAt?: Date | null;
     dispatchSource?: SyncRequestSource | null;
+    /** A deferral-only chunk (StreamChunkResult.deferral) read nothing: it
+     *  keeps the failure streak and last error, which only progress clears. */
+    keepFailureStreak?: boolean;
     now?: Date;
   },
 ): Promise<PageSyncYieldResult> {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
   const dispatchSource = input.dispatchSource ?? null;
+  const keepFailureStreak = input.keepFailureStreak === true;
   const result = await db.execute(sql<{ requestSeq: number }>`
     update ${pageSyncStates}
     set status = 'pending',
@@ -2679,9 +2683,9 @@ export async function yieldPageSync(
                             when request_seq > ${input.requestSeq} then dispatch_source
                             else coalesce(${dispatchSource}::sync_request_source, dispatch_source)
                           end,
-        consecutive_failures = 0,
-        last_error_code = null,
-        last_error_summary = null,
+        consecutive_failures = case when ${keepFailureStreak} then consecutive_failures else 0 end,
+        last_error_code = case when ${keepFailureStreak} then last_error_code else null end,
+        last_error_summary = case when ${keepFailureStreak} then last_error_summary else null end,
         retry_kind = null,
         retry_at = case
                      when request_seq > ${input.requestSeq} then null::timestamptz

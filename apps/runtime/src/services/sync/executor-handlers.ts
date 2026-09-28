@@ -19,6 +19,8 @@ import {
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
+  getConversationSyncHealth,
+  countConversationSyncFailuresByAccount,
   getPageSyncExecutionContext,
   getPageDmOnboardedAt,
   getCurrentSubscribers,
@@ -29,6 +31,7 @@ import {
   listFanslyMessagePurchaseTargetsAfterId,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
+  nextConversationSyncBackoffRetryAt,
   PAGE_DM_LIVE_BACKFILL_CAP,
   PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES,
   PageSyncLeaseLostError,
@@ -211,6 +214,9 @@ const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
 // Scan window for that guard; also lets a guarded pin fall to the breaker
 // once nothing else has failed for this long.
 const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+// The deferral (or, with nothing left to wait for, quality hold) of a
+// dm_messages chunk whose only work was threads the breaker deferred.
+const FANSLY_DM_THREADS_DEFERRED = "fansly_dm_threads_deferred";
 const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
@@ -356,18 +362,33 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     error.status < 600;
 }
 
-/** A provider answer about this request (terminal 5xx after in-process
- * retries, 404/4xx, or an envelope failure at HTTP 200) that may be the
- * thread's own. Auth, rate limits, a provider Retry-After deadline and every
- * status-less failure (transport, timeout, proxy, capture, contract drift)
- * are page-level and never open a per-thread breaker. */
+/** An application answer about this request that may be the thread's own: a
+ * terminal HTTP 500 after in-process retries, or a 404/4xx. Everything else
+ * is page-level and never opens a per-thread breaker: auth (401/403), a
+ * timeout (408), rate limits (429), a provider Retry-After deadline, gateway
+ * and edge answers (502/503/504 and every 5xx but 500 describe the path to
+ * Fansly, not the thread), an envelope failure at HTTP 200 (as likely a
+ * proxy's page as Fansly's verdict), and every status-less failure
+ * (transport, proxy, capture, contract drift). */
 function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
+  if (!(error instanceof FanslyApiError) || typeof error.status !== "number" || error.retryAfterAt !== null) {
+    return false;
+  }
+  const status = error.status;
+  if (status >= 500) {
+    return status === 500;
+  }
+  return status >= 400 && status !== 401 && status !== 403 && status !== 408 && status !== 429;
+}
+
+/** A partner-account probe failure that speaks for the page, not the partner:
+ * auth (401/403), a rate limit (429) or a provider Retry-After deadline. It
+ * fails the stream with its own classification and deadline before the
+ * thread is deferred; carrying on to other threads would walk straight into
+ * the same refusal. */
+function isPageLevelFanslyProbeFailure(error: unknown): error is FanslyApiError {
   return error instanceof FanslyApiError &&
-    typeof error.status === "number" &&
-    error.status !== 401 &&
-    error.status !== 403 &&
-    error.status !== 429 &&
-    error.retryAfterAt === null;
+    (error.status === 401 || error.status === 403 || error.status === 429 || error.retryAfterAt !== null);
 }
 
 async function triggerFollowersReconcileAnomaly(
@@ -3117,6 +3138,9 @@ export async function fanslyDmMessagesChunk(
     ),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
+  // For a failing thread's retry: the adapter clamps its in-process retries
+  // to this allowance, so the page costs one physical attempt.
+  const singleAttemptRequestContext = { ...requestContext, remainingAttempts: () => 1 };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
 
@@ -3163,6 +3187,15 @@ export async function fanslyDmMessagesChunk(
   // Read at most once per chunk, and only when a first read fills its start
   // window: the one question the new-thread history walk asks the database.
   let dmOnboardedAt: Date | null | undefined;
+  // Settlement evidence. A message page the provider answered and the contract
+  // accepted is progress; a thread failure the breaker deferred is not.
+  let acceptedMessagePages = 0;
+  let deferredThreads = 0;
+  // A thread still carrying breaker failures whose window has lapsed is a
+  // retry, not ordinary work: at most one per chunk, its first page on a
+  // single physical attempt, so a poison thread costs the chunk one request.
+  // Once the retry is spent, the pickers skip failing threads.
+  let failingThreadRetrySpent = false;
 
   const emitDmMessagesChunkSummary = async () => {
     if (emittedDmMessagesChunkSummary) {
@@ -3174,32 +3207,39 @@ export async function fanslyDmMessagesChunk(
     return emittedDmMessagesChunkSummary;
   };
 
+  /** The pinned walk has not written a page yet. */
+  const isAtWalkStart = (
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ) => state.currentBeforeMessageId === (state.headCatchup || currentMode === "incremental"
+    ? null
+    : conversation.oldestStoredMessageId);
+
   /**
    * Per-thread circuit breaker (0086). The pin is checkpointed before the
    * fetch and the next chunk resumes it without reselecting, so one thread
    * the provider refuses deterministically would otherwise stop the page's
    * whole lane. When the walk's FIRST page fails with a thread-attributable
    * answer, the failure is recorded (backoff, quarantine from the 4th) and the
-   * pin is cleared in one owned transaction; the original error is then
-   * rethrown, so stream classification and backoff are unchanged and the
-   * next chunk picks another thread. A walk with pages already written keeps
-   * its pin: a later head walk would stop on them and hide the gap below.
-   * Several groups failing since the page's last successful read is an
-   * outage, which never opens a breaker. Returns the error to rethrow.
+   * pin is cleared in one owned transaction: the thread is deferred, and the
+   * chunk goes on with other threads under its normal budgets. Everything
+   * else fails the stream with its ordinary classification and backoff: a
+   * failure that is not the thread's, several groups failing since the page's
+   * last successful read (an outage, which never opens a breaker), a failed
+   * breaker write, and lease loss. A walk with pages already written keeps
+   * its pin and fails the stream too: a later head walk would stop on those
+   * pages and hide the gap below them.
    */
   const recordFirstPageThreadFailure = async (
     error: unknown,
     conversation: PageDmConversationRow,
     currentMode: "backfill" | "deep_backfill" | "incremental",
-  ): Promise<unknown> => {
+  ): Promise<{ deferred: true } | { deferred: false; streamError: unknown }> => {
     if (!isThreadAttributableFanslyFailure(error)) {
-      return error;
+      return { deferred: false, streamError: error };
     }
-    const walkStartBeforeMessageId = state.headCatchup || currentMode === "incremental"
-      ? null
-      : conversation.oldestStoredMessageId;
-    if (state.currentBeforeMessageId !== walkStartBeforeMessageId) {
-      return error;
+    if (!isAtWalkStart(conversation, currentMode)) {
+      return { deferred: false, streamError: error };
     }
 
     const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
@@ -3227,7 +3267,7 @@ export async function fanslyDmMessagesChunk(
             otherFailingGroups,
           },
         );
-        return error;
+        return { deferred: false, streamError: error };
       }
 
       recorded = await withOwnedPageSyncTransaction(app.db, async (dbTx) => ({
@@ -3246,14 +3286,14 @@ export async function fanslyDmMessagesChunk(
     } catch (breakerError) {
       if (breakerError instanceof PageSyncLeaseLostError) {
         // Fencing stays fatal: another owner may already be running.
-        return breakerError;
+        return { deferred: false, streamError: breakerError };
       }
       app.logger.warn({
         err: breakerError,
         conversationId: conversation.id,
         platformAccountId: input.pageContext.page.id,
       }, "DM conversation breaker write failed; the stream keeps its pin");
-      return error;
+      return { deferred: false, streamError: error };
     }
 
     state = nextState;
@@ -3276,7 +3316,38 @@ export async function fanslyDmMessagesChunk(
         otherFailingGroups,
       },
     );
-    return error;
+    return { deferred: true };
+  };
+
+  /** Defers a thread's failed first page, or throws what fails the stream.
+   * On return the chunk continues with another thread. */
+  const deferThreadOrFailStream = async (
+    error: unknown,
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ) => {
+    const outcome = await recordFirstPageThreadFailure(error, conversation, currentMode);
+    if (!outcome.deferred) {
+      throw outcome.streamError;
+    }
+    deferredThreads += 1;
+  };
+
+  /** A failing thread whose window has lapsed, which the pickers would offer
+   * now had the chunk not spent its retry. */
+  const hasDueFailingThread = async () => {
+    const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
+      ...(headCatchupEnabled ? { includeHeadDebt: true } : {}),
+      platformAccountId: input.pageContext.page.id,
+    });
+    if (candidate !== null || deepBackfillRequests >= deepBackfillMaxRequests) {
+      return candidate !== null;
+    }
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    return await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      ignoreRetentionLimit: effective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+    }) !== null;
   };
 
   /**
@@ -3375,6 +3446,7 @@ export async function fanslyDmMessagesChunk(
             // Stage 17: the exhaustion crawl lifts the per-conversation depth
             // cap; archive coverage (not hot-table size) is the goal.
             ignoreRetentionLimit: deepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+            ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
           });
           if (deepBackfillCandidate) {
             conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
@@ -3394,6 +3466,7 @@ export async function fanslyDmMessagesChunk(
           const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
             ...(headCatchupEnabled ? { includeHeadDebt: true } : {}),
             platformAccountId: input.pageContext.page.id,
+            ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
           });
           if (candidate) {
             conversation = await getPageDmConversationById(app.db, candidate.id);
@@ -3417,6 +3490,7 @@ export async function fanslyDmMessagesChunk(
               // both selection paths must honor the lifted depth cap.
               ignoreRetentionLimit:
                 idleDeepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+              ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
             });
             if (!deepBackfillCandidate) {
               exhaustedEligibleConversations = true;
@@ -3493,6 +3567,15 @@ export async function fanslyDmMessagesChunk(
       const currentMode = state.currentMode;
       const headAttemptStartedAt = new Date(state.headCatchup?.startedAt ?? Date.now());
       let collectedThisConversation = 0;
+      // The chunk's one failing-thread retry (see failingThreadRetrySpent).
+      // Only the chunk's first walk can come from a restored pin; every later
+      // walk is a pick, and the pickers skip failing threads once it is spent.
+      let pageRequestContext = requestContext;
+      if (isAtWalkStart(conversation, currentMode) &&
+        ((await getConversationSyncHealth(app.db, conversation.id))?.failureCount ?? 0) > 0) {
+        failingThreadRetrySpent = true;
+        pageRequestContext = singleAttemptRequestContext;
+      }
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
         const currentConversation = conversation;
         await assertOwnedPageSyncLease(app.db);
@@ -3501,9 +3584,9 @@ export async function fanslyDmMessagesChunk(
         // The fetch + verbatim journal + normalization is the unit shared with
         // the targeted thread backfill (slice C′). It stays inside this
         // try/catch exactly as the bare adapter call did: only a terminal
-        // Fansly 5xx reaches the partner-unresolvable recovery below, every
-        // other failure (including a capture failure) rethrows as before,
-        // after the per-thread breaker has seen it.
+        // Fansly 5xx reaches the partner-unresolvable recovery below; every
+        // other failure (including a capture failure) goes to the per-thread
+        // breaker, which defers the thread or fails the stream.
         if (state.currentBeforeMessageId === null) {
           // This page reads the head (incremental, head catch-up, or a first
           // backfill of an empty thread). Overwritten on every head fetch and
@@ -3514,7 +3597,7 @@ export async function fanslyDmMessagesChunk(
         let messagePage;
         try {
           messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
-            requestContext,
+            requestContext: pageRequestContext,
             telemetry: input.telemetry,
             syncRunId: input.syncRunId,
             platformAccountId: input.pageContext.page.id,
@@ -3536,7 +3619,8 @@ export async function fanslyDmMessagesChunk(
             !isTerminalFanslyServerError(error) ||
             !partnerPlatformUserId
           ) {
-            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const failureStreak = await countRecentTerminalDmMessageConversationFailureStreak(
@@ -3547,11 +3631,13 @@ export async function fanslyDmMessagesChunk(
             },
           );
           if (failureStreak < DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD) {
-            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           if (!input.budget.hasRequestCapacity() || !input.budget.hasWallClockCapacity()) {
-            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const resolution = await probeFanslyAccountResolution(
@@ -3559,9 +3645,12 @@ export async function fanslyDmMessagesChunk(
             requestContext,
             partnerPlatformUserId,
             { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
+            // Thrown from here, it fails the stream with the pin kept.
+            { rethrow: isPageLevelFanslyProbeFailure },
           );
           if (resolution !== "unresolved") {
-            throw await recordFirstPageThreadFailure(error, currentConversation, currentMode);
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
@@ -3607,6 +3696,9 @@ export async function fanslyDmMessagesChunk(
           );
           continue conversationLoop;
         }
+        acceptedMessagePages += 1;
+        // A thread that answered is walked on with the ordinary retries.
+        pageRequestContext = requestContext;
         const { normalizedMessages, insertedMessageCount, overlapFound } = messagePage;
         // Debt from an earlier page of this walk rides the checkpoint, so a
         // multi-chunk walk cannot finish 'complete' over a skipped message.
@@ -3831,11 +3923,28 @@ export async function fanslyDmMessagesChunk(
     }
 
     const dmMessagesChunk = await emitDmMessagesChunkSummary();
+    // Threads deferred behind their breaker windows are scheduling, not
+    // progress. A chunk that got no message page accepted must not reset the
+    // stream's failure streak, resolve its incidents or claim completion
+    // (StreamChunkResult.deferral) while breaker failures are outstanding:
+    // threads it deferred itself, or ones an earlier chunk deferred that now
+    // back off or sit out a quarantine. Otherwise the continuation after a
+    // deferral, or any request during a quarantine, would find nothing to
+    // read and certify recovery.
+    const deferredOnly = acceptedMessagePages === 0 && (
+      deferredThreads > 0 ||
+      (await countConversationSyncFailuresByAccount(app.db, {
+        platformAccountIds: [input.pageContext.page.id],
+      })).length > 0
+    );
+    const deferral = deferredOnly ? { deferral: FANSLY_DM_THREADS_DEFERRED } : {};
+    const deferredStats = deferredThreads > 0 ? { deferredThreads } : {};
 
     if (!exhaustedEligibleConversations && !deepBackfillPaused) {
       return {
         satisfied: false,
         yieldReason: input.budget.resolveYieldReason(),
+        ...deferral,
         stats: {
           currentConversationId: state.currentConversationId,
           currentBeforeMessageId: state.currentBeforeMessageId,
@@ -3845,6 +3954,7 @@ export async function fanslyDmMessagesChunk(
           overlapHits,
           projectionDebtRecorded,
           deepBackfillRequests,
+          ...deferredStats,
           dmMessagesChunk,
         },
       } satisfies StreamChunkResult;
@@ -3904,15 +4014,60 @@ export async function fanslyDmMessagesChunk(
       } satisfies StreamChunkResult;
     }
 
-    if (headCatchupEnabled) {
-      const retryAt = await nextFanslyDmHeadRetryAt(app.db, {
+    // The pickers skipped failing threads once this chunk spent its retry;
+    // another one may be due now. It runs in the next chunk, not after the
+    // next window or the daily cadence.
+    if (failingThreadRetrySpent && await hasDueFailingThread()) {
+      return {
+        satisfied: false, yieldReason: null, continuationRetryAt: null, ...deferral,
+        stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk, failingThreadRetryDue: true },
+      } satisfies StreamChunkResult;
+    }
+
+    // Only threads waiting out a short backoff window remain: sleep until the
+    // first one ends instead of completing, which would leave them to the next
+    // request (dm_messages runs on a daily cadence). A chunk that read nothing
+    // before going back to that wait made no progress either, so it cannot
+    // turn a deferral into recovery. A quarantine holds nothing open, not even
+    // through a quarantined thread's head debt: the breaker re-arms it on
+    // every later failure, so waiting on it would keep the request outstanding
+    // for good, and B1 cannot wake a stream with ordinary work outstanding
+    // (requestPageSync).
+    const headRetryAt = headCatchupEnabled
+      ? await nextFanslyDmHeadRetryAt(app.db, {
         platformAccountId: input.pageContext.page.id,
-      });
-      if (retryAt) return {
-        satisfied: false, yieldReason: null,
-        continuationRetryAt: new Date(Math.max(retryAt.getTime(), Date.now() + 60_000)),
-        stats: { processedMessages, completedConversations, dmMessagesChunk, headDebtPending: true },
-      };
+        excludeQuarantined: true,
+      })
+      : null;
+    const deferredRetryAt = await nextConversationSyncBackoffRetryAt(app.db, {
+      platformAccountId: input.pageContext.page.id,
+    });
+    const wakeAt = headRetryAt === null ||
+      (deferredRetryAt !== null && deferredRetryAt.getTime() < headRetryAt.getTime())
+      ? deferredRetryAt
+      : headRetryAt;
+    if (wakeAt) return {
+      satisfied: false, yieldReason: null,
+      continuationRetryAt: new Date(Math.max(wakeAt.getTime(), Date.now() + 60_000)),
+      ...(deferredOnly || (acceptedMessagePages === 0 && deferredRetryAt !== null)
+        ? { deferral: FANSLY_DM_THREADS_DEFERRED } : {}),
+      stats: {
+        processedMessages, completedConversations, ...deferredStats, dmMessagesChunk,
+        ...(headRetryAt ? { headDebtPending: true } : {}),
+        ...(deferredRetryAt ? { deferredThreadsRetryAt: deferredRetryAt.toISOString() } : {}),
+      },
+    } satisfies StreamChunkResult;
+
+    if (deferredOnly) {
+      // Nothing was read, and nothing is left to wait for: the failing
+      // threads sit out a quarantine, left the lane (hidden, unbound,
+      // excluded) or have nothing to read. Settle the request without
+      // success, the stream going idle; the next ordinary request retries a
+      // quarantined thread once its window ends.
+      return {
+        satisfied: true, yieldReason: null, qualityHold: FANSLY_DM_THREADS_DEFERRED,
+        stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk },
+      } satisfies StreamChunkResult;
     }
 
     const completedCheckpoint = await upsertCheckpoint(app.db, {

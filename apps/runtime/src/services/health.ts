@@ -208,8 +208,9 @@ export async function getPublicSyncHealth(
       input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
     ),
     // #138 addendum: conversation-level coverage debt. The page-level failure
-    // streak is reset to 0 by every partial yield, so once the breaker keeps
-    // a stream moving the streak can no longer carry the wedge signal — the
+    // streak is reset to 0 by every partial yield that read something, and a
+    // deferred thread no longer fails the stream, so once the breaker keeps a
+    // stream moving the streak can no longer carry the wedge signal — the
     // breaker rows themselves can: they clear only when their conversation
     // actually syncs.
     countConversationSyncFailuresByAccount(

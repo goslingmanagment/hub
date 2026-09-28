@@ -675,6 +675,41 @@ describe("sync executor", () => {
     }));
   });
 
+  it.each([
+    ["a deferral-only chunk keeps", "fansly_dm_threads_deferred"],
+    ["an ordinary partial chunk resets", null],
+  ] as const)("%s the failure streak, freshness and incidents", async (_name, deferral) => {
+    const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+    const retryAt = new Date(Date.now() + 10 * 60_000);
+    const progressedAt = new Date("2026-03-13T12:00:00.000Z");
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease, stream: "dm_messages" as const, consecutiveFailures: 22, progressedAt,
+    });
+    handlerMocks.executeStreamChunk.mockResolvedValue({
+      satisfied: false, yieldReason: null, continuationRetryAt: retryAt,
+      ...(deferral ? { deferral } : {}), stats: { deferredThreads: 1 },
+    });
+
+    expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({
+      kind: "yielded", stream: "dm_messages", continuationRetryAt: retryAt,
+    });
+
+    const settled = dbMocks.yieldPageSync.mock.calls[0]?.[1];
+    expect(settled).toMatchObject({ retryAt });
+    if (deferral) {
+      // Only the wake-up moves: no progress stamp, streak or incident change.
+      expect(settled).toMatchObject({ keepFailureStreak: true, progressedAt });
+      expect(telemetryMocks.instances[0]?.finish).toHaveBeenCalledWith("partial", null,
+        expect.objectContaining({ deferral, deferredThreads: 1 }));
+      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).not.toHaveBeenCalled();
+    } else {
+      expect(settled).not.toHaveProperty("keepFailureStreak");
+      expect(settled?.progressedAt).not.toEqual(progressedAt);
+      expect(notificationMocks.resolveSyncChunkRecoveryIncidents).toHaveBeenCalledOnce();
+    }
+    expect(dbMocks.completePageSync).not.toHaveBeenCalled();
+  });
+
   it("keeps a newer manual generation immediately runnable when an old chunk yields", async () => {
     const app = {
       db: {},

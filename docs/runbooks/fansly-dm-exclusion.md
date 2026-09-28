@@ -41,24 +41,63 @@ write risk. Do not clear exclusions or rewind checkpoints merely to test this fi
 
 ## Per-thread breaker
 
-A first-page failure that does not end in exclusion no longer pins the stream.
-A thread-attributable provider answer (terminal 5xx, 404/4xx, or an envelope
-failure at HTTP 200; never 401/403/429, a Retry-After deadline, or a
-transport/proxy/contract failure) records a row in
+A first-page failure that does not end in exclusion no longer pins or fails
+the stream. A thread-attributable provider answer (a terminal HTTP 500 or a
+404/4xx; never 401/403/408/429, a Retry-After deadline, a gateway 502/503/504
+or any other 5xx, an envelope failure at HTTP 200, or a
+transport/proxy/contract/capture failure) records a row in
 `page_dm_message_sync_health` and clears the `dm_messages` pin in one
-lease-owned transaction; the chunk then fails with the original error, so the
-stream's classification and backoff are unchanged. The thread backs off 5, 10
-and 20 minutes, then is quarantined for 6 hours from its fourth failure. A
-successful read of the thread clears the row: a completed ordinary walk, a
-finished B1 hint walk, or any page of a targeted backfill. A walk that already
-wrote pages keeps its pin. When two or more other groups of the page have
-failed since its last successful message read, the failure is treated as a
-page-wide outage and opens no breaker. While a Fansly row carries failures and
-its thread is still selectable (visible, bound to a fan, not excluded),
-`/health/sync` reports `dm_messages:coverage_degraded` for the page; a thread
-retired by exclusion, hiding or unbinding stops counting, and its row applies
-again only if the thread returns. A targeted backfill of a thread inside its
-window refuses with `breaker_open`. Inspect rows read-only:
+lease-owned transaction. The chunk then continues with other threads under its
+normal budgets. The thread backs off 5, 10 and 20 minutes, then is quarantined
+for 6 hours from its fourth failure. Once its window lapses it is retried at
+most once per chunk, on a single physical attempt; further failing threads
+wait for the next chunk. A successful read of the thread clears the row: a
+completed ordinary walk, a finished B1 hint walk, or any page of a targeted
+backfill.
+
+The stream fails with its ordinary classification and backoff only for
+stream-level failures: every failure listed above as not thread-attributable,
+a failed breaker write, lease loss, and an outage. An auth (401/403), rate-limit
+(429) or Retry-After answer to the partner-account lookup is stream-level too:
+the stream fails with that answer and its deadline, before the thread is
+deferred and with the pin kept, instead of reading other threads into the same
+limit. When two or more other groups of the page have failed since its last
+successful message read, the failure is treated as a page-wide outage and
+opens no breaker. A walk that already wrote pages keeps its pin and still
+fails the stream on a later page: restarting it would stop on its own pages
+and hide the gap below them.
+
+A chunk with accepted message reads settles as ordinary progress (failure
+streak reset, stream incident resolved). A chunk that read no message page
+while a selectable thread still carries breaker failures (deferred by this
+chunk or an earlier one, backing off or quarantined) keeps the streak, last
+error and incident and claims no progress.
+
+When only threads inside a short backoff window (their first three failures)
+remain, the stream sleeps until the earliest `next_retry_at` instead of
+completing. An ordinary request (a `dm_conversations` follow-up, the daily
+slot, Sync now) wakes it earlier. A B1 WS-hint or AI-accelerator wake (an
+`event` request) is not admitted while that request is outstanding, so hint
+subjects wait for the window to end, at most 20 minutes; every woken chunk
+runs the B1 step first. One thread's three windows keep the request
+outstanding about 35 minutes, under the 45-minute `queue_delayed` threshold;
+several threads failing in turn can push it past.
+
+A quarantine holds nothing open. Every later failure re-arms it for another
+6 hours, so waiting on it would keep the request outstanding for good and shut
+B1 out; with head catch-up on, the thread's uncaptured head debt does not
+hold the stream either. The chunk completes instead; if it read nothing, it
+settles as a quality hold without success, as does any later request that
+finds nothing else to read during the quarantine. The stream goes idle, B1
+wakes reach it again, and the next ordinary request after the quarantine ends
+retries the thread.
+
+While a Fansly row carries failures and its thread is still selectable
+(visible, bound to a fan, not excluded), `/health/sync` reports
+`dm_messages:coverage_degraded` for the page; a thread retired by exclusion,
+hiding or unbinding stops counting, and its row applies again only if the
+thread returns. A targeted backfill of a thread inside its window refuses with
+`breaker_open`. Inspect rows read-only:
 
 ```sql
 select conversation_id, failure_count, error_class, last_attempt_at,
