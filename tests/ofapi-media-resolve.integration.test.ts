@@ -260,6 +260,12 @@ describe("media resolve decision table", () => {
     expect(await budgetUsed()).toBe(0);
     const ledger = await testDb!.pool.query("select 1 from ofapi_credit_ledger where operation like 'ofapi_media_%'");
     expect(ledger.rows).toHaveLength(0);
+    // AI media describer (0216): the free hand-out is kept as a locator the
+    // describer can reuse without ever calling OFAPI itself.
+    const persisted = await testDb!.pool.query(
+      "select source, sig_kind, variant from ofapi_media_locators where media_id = '3000011' and source = 'resolve'",
+    );
+    expect(persisted.rows).toEqual([{ source: "resolve", sig_kind: "fansapi", variant: "thumb" }]);
   });
 
   it("prices a dl.fansapi.com hand-out by Content-Length, charges the budget and links the ledger row", async () => {
@@ -516,6 +522,8 @@ describe("media locators from the read gateway and the journal", () => {
       "select variant, source, sig_kind, fan_platform_user_id as fan, page_id::text from ofapi_media_locators where media_id = '3000030' order by variant");
     expect(locators.rows).toEqual([
       { variant: "full", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
+      // `preview` (0216): the AI describer's variant (unused while its URL is policy-bound).
+      { variant: "preview", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
       { variant: "thumb", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
     ]);
     const links = await testDb!.pool.query<{ link_key: string; fan: string }>(
@@ -534,7 +542,7 @@ describe("media locators from the read gateway and the journal", () => {
       await server.close();
     }
     const locators = await testDb!.pool.query("select 1 from ofapi_media_locators where media_id = '3000031'");
-    expect(locators.rows).toHaveLength(2);
+    expect(locators.rows).toHaveLength(3); // thumb, full and the 0214 preview
   });
 
   it("marks a media-context re-read on the capture path attempt", async () => {
@@ -574,7 +582,7 @@ describe("media locators from the read gateway and the journal", () => {
       payload: envelope as unknown as Record<string, unknown>,
     });
     const result = await recoverOfapiMediaLocators(app, { hours: 1 });
-    expect(result).toMatchObject({ webhookEvents: 1, locators: 2 });
+    expect(result).toMatchObject({ webhookEvents: 1, locators: 3 }); // + the 0214 preview
     expect(upstreamRequests).toHaveLength(0);
     await expect(resolveOfapiMedia(app, principal, request("3000033"))).resolves.toMatchObject({ outcome: "free_url" });
   });
@@ -797,7 +805,7 @@ describe("media resolve — review round 1", () => {
     app.config.lakeDir = await mkdtemp(path.join(tmpdir(), "ofapi-media-erasure-"));
     const scope = { scopeType: "fan", platform: "onlyfans", fanRef: String(MEDIA_FAN_ID) } as const;
     const plan = await planErasure(app, scope);
-    expect(plan.targets.find((target) => target.target === "ofapi_media_locators")).toMatchObject({ plane: "hot", action: "delete", rows: 2 });
+    expect(plan.targets.find((target) => target.target === "ofapi_media_locators")).toMatchObject({ plane: "hot", action: "delete", rows: 3 });
     expect(plan.targets.find((target) => target.target === "ofapi_media_links")).toMatchObject({ plane: "hot", action: "delete", rows: 1 });
     await executeErasure(app, scope, { initiatedBy: Number(owner.rows[0]!.id) });
     const left = await testDb!.pool.query<{ media_id: string }>(
@@ -959,10 +967,12 @@ describe("media locators — recovery and routes", () => {
     await testDb!.pool.query("delete from ofapi_media_locators");
     await testDb!.pool.query("delete from ofapi_media_links");
     const result = await recoverOfapiMediaLocators(app, { hours: 1 });
-    expect(result).toMatchObject({ webhookEvents: 0, observations: 1, locators: 2, unavailable: 0 });
+    expect(result).toMatchObject({ webhookEvents: 0, observations: 1, locators: 3, unavailable: 0 });
     const rows = await testDb!.pool.query<{ variant: string; source: string }>(
       "select variant, source from ofapi_media_locators where media_id = '3000110' order by variant");
-    expect(rows.rows).toEqual([{ variant: "full", source: "gateway" }, { variant: "thumb", source: "gateway" }]);
+    expect(rows.rows).toEqual([
+      { variant: "full", source: "gateway" }, { variant: "preview", source: "gateway" }, { variant: "thumb", source: "gateway" },
+    ]);
     const links = await testDb!.pool.query("select 1 from ofapi_media_links where media_id = '3000110'");
     expect(links.rows).toHaveLength(1);
     expect(upstreamRequests).toHaveLength(1);

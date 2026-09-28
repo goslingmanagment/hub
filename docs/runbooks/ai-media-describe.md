@@ -146,6 +146,32 @@ select count(*) from ai_media_accelerator_reads r join sync_http_attempts a
 where r.lane = 'fast' and r.dispatched_at > now() - interval '24 hours';
 ```
 
+## Sources
+
+- **Fansly**: the URL is read at download time from the DM page the hub
+  itself captured (`accountMedia[].media.variants[]`, CloudFront policy for the
+  page proxy's /24, ~7 days) — newest capture of the message or offer. The
+  smallest image variant covering 1024 px (the 720p one), a video's poster.
+  The download is a CDN request through the page proxy, not an API call.
+  Candidates: a projector over `message.attachments_observed` (fan media after
+  `since`; `pending` in a chat with an AI generation in 7 days, else
+  `dormant`); teasers and free creator media when a generation shows them.
+  Accelerator (off): a WS frame with a fan's attachments → one journal-only
+  head read of that conversation (own budget, 60 per rolling 24 h agency-wide,
+  one per conversation per 2 minutes).
+- **OnlyFans** (0216): locators of the desktop images layer, **free sources
+  only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
+  desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`
+  URLs are ignored. The AI path makes **zero OFAPI calls**. Variant: `preview`
+  (~960–1700 px) first, then `full` (photo) / `thumb` (video poster).
+  Candidates: `messages.received` fan media (live/dormant as above) and
+  `messages.sent` PPV teasers (`previews[]`, due at once — the free link lives
+  ~23 h). No free URL → `awaiting_source`, looked at again after 1, 5 and 30
+  minutes, then every 6 hours, `unavailable` after 7 days — and at once when a
+  free locator (webhook Expires, OFAPI cache hand-out) is recorded for the
+  file. A photo falls back to the desktop's own `thumb` (~300 px) when no
+  larger free rendition exists.
+
 ## Switches (console → Settings, all live)
 
 | Key | Default | Meaning |

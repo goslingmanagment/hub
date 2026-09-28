@@ -183,6 +183,13 @@ export async function upsertAiMediaDescriptionCandidate(
             then excluded.next_attempt_at
           else ai_media_descriptions.next_attempt_at
         end,
+        -- Checks while waiting for a source were not failures: a row that
+        -- finally has one starts its retry budget afresh.
+        attempts = case
+          when ai_media_descriptions.status = 'awaiting_source'
+            and excluded.source_observation_id is not null then 0
+          else ai_media_descriptions.attempts
+        end,
         updated_at = excluded.updated_at
       returning id, status
     `);
@@ -230,7 +237,9 @@ export async function claimNextDueAiMediaDescription(
       updated_at = ${input.now}
     where d.id = (
       select id from ai_media_descriptions
-      where status in ('pending', 'budget_deferred')
+      -- awaiting_source rows come back on their retry time (OnlyFans: 1, 5,
+      -- 30 min, then 6 h); a row with no retry waits for its 7-day expiry.
+      where status in ('pending', 'budget_deferred', 'awaiting_source')
         and next_attempt_at <= ${input.now}
         and (lease_until is null or lease_until < ${input.now})
         and page_id in (${pageIds})
@@ -258,7 +267,7 @@ export async function hasDueAiMediaDescriptions(
   const result = await db.execute<{ due: boolean }>(sql`
     select exists (
       select 1 from ai_media_descriptions
-      where status in ('pending', 'budget_deferred')
+      where status in ('pending', 'budget_deferred', 'awaiting_source')
         and next_attempt_at <= ${input.now}
         and (lease_until is null or lease_until < ${input.now})
         and page_id in (${pageIds})

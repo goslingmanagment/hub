@@ -11,6 +11,7 @@ import {
 } from "./worker.ts";
 import type { AiMediaPlatform } from "@agency_hub_core/db";
 import { fanslyAiMediaSource } from "./fansly-source.ts";
+import { onlyfansAiMediaSource } from "./onlyfans-source.ts";
 
 // Minutely AI media describer sweep (docs/runbooks/ai-media-describe.md).
 // The worker consumes; the scheduler role owns the cron. A disabled lane is a
@@ -37,6 +38,7 @@ export async function ensureAiMediaDescribeSweepSchedule(boss: QueueCreationClie
 /** Platform source adapters (Fansly capture; OnlyFans free locators in H4). */
 export const AI_MEDIA_SOURCES = new Map<AiMediaPlatform, AiMediaSource>([
   ["fansly", fanslyAiMediaSource],
+  ["onlyfans", onlyfansAiMediaSource],
 ]);
 
 /** The separate describer key when set, else the main Anthropic key. */
