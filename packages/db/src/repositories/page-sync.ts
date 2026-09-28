@@ -146,6 +146,9 @@ export interface SyncStreamPolicy {
   basePriority: number;
   streamIndex: number;
   defaultWorkClass: SyncWorkClass;
+  /** How long runnable work may wait before status reports it delayed. For
+   * the lanes in SYNC_STREAM_STARVED_PRIORITY it is also the scheduling
+   * limit: past it a starved lane is served ahead of a DM drain. */
   queueDelayThresholdMs: number;
   progressStallThresholdMs: number;
   freshnessSlaSeconds: number | null;
@@ -273,8 +276,9 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 15 * 60_000,
     freshnessSlaSeconds: null,
   },
-  // Stage 16: Fansly-only bulk streams — lowest priority, never ahead of
-  // transactions/DMs, and deliberately ABSENT from SYNC_DOMAIN_POLICY
+  // Stage 16: Fansly-only bulk streams — lowest priority, behind
+  // transactions/DMs except one chunk per starvation window
+  // (SYNC_STREAM_STARVED_PRIORITY), and deliberately ABSENT from SYNC_DOMAIN_POLICY
   // supporting lists: a flag-gated bulk stream must not degrade the page's
   // block-health UX to "catching up" while its ramp gate is off.
   fan_earnings: {
@@ -339,8 +343,10 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
   // block-health UX to "catching up" while its gate is shut.
   //
   // basePriority 12 puts it BELOW transactions and the DM lanes on purpose:
-  // the notification poll is 1–2 calls and can always wait for money and
-  // messages, and the plan's own pacing rule is "priority yield to DM/tx".
+  // the notification poll is 1–2 calls and can wait for money and messages,
+  // and the plan's own pacing rule is "priority yield to DM/tx". The wait is
+  // bounded: after 30 min starved it gets one chunk ahead of them
+  // (SYNC_STREAM_STARVED_PRIORITY).
   notifications: {
     stream: "notifications",
     domain: "audience",
@@ -645,6 +651,50 @@ const SYNC_STREAM_PRIORITY_BY_SOURCE: Record<SyncRequestSource, Record<SyncStrea
   },
 };
 
+/**
+ * Bounded anti-starvation aging for one page's stream selection (owner
+ * decision, 2026-09-28). Strict priority alone let a long dm_messages drain
+ * (a mass-DM head walk yields back runnable after every chunk) hold every
+ * lower lane at zero chunks for 18-29 h. A runnable BACKGROUND Fansly row
+ * of a stream listed here that has waited longer than its own
+ * SYNC_STREAM_POLICY queueDelayThresholdMs is ranked at this priority for ONE
+ * chunk. Taking the lease stamps started_at, which restarts the wait, so the
+ * row falls back to its table priority until it has starved for another full
+ * threshold. Accepted cost: DM drains finish roughly 5-10% later.
+ *
+ * - 51 sits above every scheduled/event priority except light (60) and below
+ *   every manual/onboarding/reset priority (>= 52), so operator work always
+ *   wins.
+ * - The bulk lanes (catalog, post_replies, payouts, media_stats) get 26:
+ *   just above a scheduled dm_messages chain (25), but never ahead of
+ *   transactions or dm_conversations (>= 30 from any source).
+ * - Only streams ranked below scheduled dm_messages are listed. None belongs
+ *   to the DM lanes or followers reconciliation, so aging never lifts those.
+ */
+const STARVED_BACKGROUND_PRIORITY = 51;
+const STARVED_BULK_LANE_PRIORITY = 26;
+
+export const SYNC_STREAM_STARVED_PRIORITY: Partial<Record<SyncStream, number>> = {
+  fan_earnings: STARVED_BACKGROUND_PRIORITY,
+  purchase_history: STARVED_BACKGROUND_PRIORITY,
+  posts: STARVED_BACKGROUND_PRIORITY,
+  stats_snapshot: STARVED_BACKGROUND_PRIORITY,
+  notifications: STARVED_BACKGROUND_PRIORITY,
+  catalog: STARVED_BULK_LANE_PRIORITY,
+  post_replies: STARVED_BULK_LANE_PRIORITY,
+  payouts: STARVED_BULK_LANE_PRIORITY,
+  media_stats: STARVED_BULK_LANE_PRIORITY,
+};
+
+/** Dispatch sources that aging may promote. Manual, onboarding and reset
+ * already rank above every promoted row. */
+export const SYNC_STARVATION_AGING_SOURCES: readonly SyncRequestSource[] = [
+  "scheduled",
+  "event",
+  "recovery",
+  "anomaly",
+];
+
 export interface PageSyncState {
   pageId: number;
   stream: SyncStream;
@@ -836,6 +886,39 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
       else ${priorityCase("scheduled")}
     end
   `);
+}
+
+/** The time a runnable row last became eligible or was last served: its
+ * request, its last lease, or the retry/pacing deadline it waited out. */
+function pageSyncRunnableSinceSql(tableAlias: string) {
+  return sql.raw(
+    `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
+  );
+}
+
+/** SYNC_STREAM_STARVED_PRIORITY for a row that has starved past its stream's
+ * queueDelayThresholdMs, else null. */
+function starvedPageSyncPrioritySql(tableAlias: string, platformColumn: string, now: Date) {
+  const agedStreams = SYNC_STREAMS.filter((stream) => SYNC_STREAM_STARVED_PRIORITY[stream] !== undefined);
+  const thresholdCase = agedStreams
+    .map((stream) =>
+      `when '${stream}' then ${SYNC_STREAM_POLICY[stream].queueDelayThresholdMs} * interval '1 millisecond'`)
+    .join("\n        ");
+  const priorityCase = agedStreams
+    .map((stream) => `when '${stream}' then ${SYNC_STREAM_STARVED_PRIORITY[stream]}`)
+    .join("\n        ");
+  const sources = SYNC_STARVATION_AGING_SOURCES.map((source) => `'${source}'`).join(", ");
+
+  return sql`case
+    when ${sql.raw(platformColumn)} = 'fansly'
+      and coalesce(${sql.raw(`${tableAlias}.dispatch_source`)}, 'scheduled') in (${sql.raw(sources)})
+      and ${now}::timestamptz - ${pageSyncRunnableSinceSql(tableAlias)} > case ${sql.raw(`${tableAlias}.stream`)}
+        ${sql.raw(thresholdCase)}
+      end
+    then case ${sql.raw(`${tableAlias}.stream`)}
+        ${sql.raw(priorityCase)}
+      end
+  end`;
 }
 
 function normalizePageSyncState(row: Record<string, unknown>): PageSyncState {
@@ -2079,12 +2162,20 @@ export async function acquirePageSyncLease(
   },
 ) {
   const now = input.now ?? new Date();
+  // Strict table priority, except that a starved background lane is ranked at
+  // its SYNC_STREAM_STARVED_PRIORITY for one chunk (see there); starved rows
+  // at the same rank go oldest wait first. Other rows keep the plain order.
   const result = await db.execute<Record<string, unknown>>(sql`
-    with candidate as (
+    with runnable as (
       select st.page_id as "pageId",
              st.stream as "stream",
-             st.request_seq as "requestSeq"
+             st.request_seq as "requestSeq",
+             st.requested_at,
+             ${pageSyncRunnableSinceSql("st")} as runnable_since,
+             ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} as priority,
+             ${starvedPageSyncPrioritySql("st", "p.platform", now)} as starved_priority
       from ${pageSyncStates} st
+      inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       where st.page_id = ${input.pageId}
         and st.request_seq > st.applied_seq
         and st.status <> 'paused'
@@ -2098,13 +2189,14 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and exists (
-          select 1 from ${pages} p
-          where p.id = st.page_id and p.status = 'active'
-        )
-      order by ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} desc,
-               st.requested_at asc nulls last,
-               ${streamOrderSql("st.stream")} asc
+    ), candidate as (
+      select r."pageId", r."stream", r."requestSeq"
+      from runnable r
+      order by greatest(r.priority, r.starved_priority) desc,
+               case when r.starved_priority is not null then r.runnable_since end asc nulls last,
+               r.priority desc,
+               r.requested_at asc nulls last,
+               ${streamOrderSql('r."stream"')} asc
       limit 1
     ),
     acquired as (
