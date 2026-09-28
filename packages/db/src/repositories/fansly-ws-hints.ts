@@ -269,3 +269,23 @@ export async function admitFanslyWsHintAttempt(db: Database, input: {
   await db.execute(sql`insert into fansly_ws_hint_attempts(page_id, generation, request_id, attempt_number, admitted_at, sync_run_id)
     values (${input.pageId}, ${input.generation}, ${input.requestId}, ${input.attemptNumber}, ${input.now}, ${input.syncRunId ?? null})`);
 }
+
+/** The same rolling count as admitFanslyWsHintAttempt, read before any
+ * request is prepared: null while the window has room, otherwise when enough
+ * counted attempts have aged out for admission to succeed. Admission at
+ * dispatch stays the authoritative check. */
+export async function nextFanslyWsHintBudgetAt(db: Database, input: {
+  pageId: number; maxAttempts24h: number; now: Date;
+}) {
+  const windowStart = new Date(input.now.getTime() - 86_400_000);
+  const usage = await db.execute<{ n: string }>(sql`select count(*)::text n from fansly_ws_hint_attempts
+    where page_id = ${input.pageId} and admitted_at > ${windowStart}`);
+  const used = Number(usage.rows[0]!.n);
+  if (used < input.maxAttempts24h) return null;
+  const expiring = await db.execute<{ admitted_at: Date | string }>(sql`select admitted_at from fansly_ws_hint_attempts
+    where page_id = ${input.pageId} and admitted_at > ${windowStart}
+    order by admitted_at offset ${Math.max(0, used - input.maxAttempts24h)} limit 1`);
+  const admittedAt = expiring.rows[0]?.admitted_at;
+  // A zero cap never reopens; look again after a full window.
+  return new Date((admittedAt === undefined ? input.now.getTime() : new Date(admittedAt).getTime()) + 86_400_000);
+}

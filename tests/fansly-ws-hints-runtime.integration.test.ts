@@ -438,6 +438,58 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(2);
     expect((await db.pool.query("select applied_revision from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].applied_revision).toBe(0n);
   });
+  const spendBudget = (f: Awaited<ReturnType<typeof fixture>>) => db.pool.query(`insert into fansly_ws_hint_attempts
+    (page_id,request_id,attempt_number,generation,admitted_at)
+    select $1, 'spent-'||n, 1, $2, now() - interval '23 hours' + n * interval '1 minute' from generate_series(1,50) n`,
+  [f.page.id, f.policy.generation]);
+  it("refuses a spent budget before any adapter call and waits for the window, not a failure backoff", async () => {
+    const f = await fixture();
+    await spendBudget(f);
+    await f.step();
+    expect(f.app.adapter.getMessagesPage).not.toHaveBeenCalled();
+    const subject = (await db.pool.query(`select s.*, extract(epoch from s.retry_after_at
+        - (select min(admitted_at) + interval '24 hours' from fansly_ws_hint_attempts)) as reopen_delta
+      from subject_refresh_state s where plane='fansly_ws_dm'`)).rows[0];
+    expect(subject).toMatchObject({ last_refresh_outcome: "budget_exhausted", consecutive_failures: 0,
+      applied_revision: 0n, claim_token: null, backfill_cursor: { conversationId: f.thread.id } });
+    expect(subject.next_due_at).toEqual(subject.retry_after_at);
+    expect(Math.abs(Number(subject.reopen_delta))).toBeLessThan(0.001);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+    // Unknown groups are refused before their detail read the same way.
+    await db.pool.query("update subject_refresh_state set next_due_at=now()+interval '2 hours'");
+    await f.route(2, "99");
+    await f.step();
+    expect(f.app.adapter.getGroupDetail).not.toHaveBeenCalled();
+    expect((await db.pool.query("select last_refresh_outcome,consecutive_failures from subject_refresh_state where subject_ref='99'")).rows[0])
+      .toEqual({ last_refresh_outcome: "budget_exhausted", consecutive_failures: 0 });
+  });
+  it("does not count a budget refused at dispatch as a target failure", async () => {
+    const f = await fixture();
+    const original = f.app.adapter.getMessagesPage;
+    f.app.adapter.getMessagesPage = vi.fn(async (context, params) => {
+      // Spent between the pre-check and admission.
+      await spendBudget(f);
+      return original(context, params);
+    });
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect((await db.pool.query("select last_refresh_outcome,consecutive_failures from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toEqual({ last_refresh_outcome: "budget_exhausted", consecutive_failures: 0 });
+  });
+  it("wakes an idle DM stream for a due subject only while the budget has room", async () => {
+    const f = await fixture();
+    await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null where page_id=$1 and stream='dm_messages'`, [f.page.id]);
+    const before = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    await spendBudget(f);
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toEqual(before);
+    await db.pool.query("update fansly_ws_hint_attempts set admitted_at = admitted_at - interval '2 hours'");
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toMatchObject({
+      requestSeq: before!.requestSeq + 1, dispatchSource: "event", requestPayload: { fanslyWsHintOnly: true },
+    });
+  });
   it.each([
     null, { id: "99" }, { id: "99", users: null },
     { id: "99", users: [{}] }, { id: "wrong-group", users: [] },

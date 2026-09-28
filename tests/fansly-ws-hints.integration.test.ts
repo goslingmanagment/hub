@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, routeFanslyWsHintEvent,
+  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent,
   saveFanslyWsHintWalk, isFanslyWsHintClaimEnabled, type Database, type FanslyWsHintEvent,
 } from "@agency_hub_core/db";
 import type { FanslyWsHintPolicy } from "@agency_hub_core/shared";
@@ -143,5 +143,29 @@ describe("B1 durable coalescing and claim settlement", () => {
     await expect(attempt(3)).rejects.toThrow("budget_exhausted");
     await attempt(3, later(86401));
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts where source='event'")).rows[0].n).toBe(3);
+  });
+  it("names the moment admission reopens with the same rolling count", async () => {
+    const f = await fixture();
+    for (const [n, seconds] of [[1, -90_000], [2, 0], [3, 60], [4, 120], [5, 180]] as const) {
+      await f.tx(database => admitFanslyWsHintAttempt(database, {
+        pageId: f.pageId, generation: policy.generation, requestId: `r-${n}`, attemptNumber: 1,
+        maxAttempts24h: 10, now: later(seconds),
+      }));
+    }
+    const reopen = (maxAttempts24h: number) => nextFanslyWsHintBudgetAt(db.db, { pageId: f.pageId, maxAttempts24h, now: later(200) });
+    // Four attempts are inside the window; the one from 25 hours ago is not.
+    expect(await reopen(5)).toBeNull();
+    expect(await reopen(4)).toEqual(later(86_400));
+    // A cap lowered below usage waits for enough attempts to age out.
+    expect(await reopen(2)).toEqual(later(86_400 + 120));
+    expect(await reopen(0)).toEqual(later(200 + 86_400));
+    await expect(f.tx(database => admitFanslyWsHintAttempt(database, {
+      pageId: f.pageId, generation: policy.generation, requestId: "r-6", attemptNumber: 1, maxAttempts24h: 2,
+      now: new Date(later(86_400 + 120).getTime() - 1),
+    }))).rejects.toThrow("budget_exhausted");
+    await f.tx(database => admitFanslyWsHintAttempt(database, {
+      pageId: f.pageId, generation: policy.generation, requestId: "r-6", attemptNumber: 1, maxAttempts24h: 2,
+      now: later(86_400 + 120),
+    }));
   });
 });
