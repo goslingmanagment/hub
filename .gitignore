@@ -28,6 +28,7 @@ docs/*
 docs/runbooks/*
 !docs/error-handling.md
 !docs/runbooks/desktop-lifecycle-v2-cutover.md
+!docs/runbooks/production-deploy.md
 # Tracked because a test executes its command lines against the real contract:
 # an enablement runbook whose smoke test has drifted is worse than none.
 !docs/runbooks/agent-read-plane-enablement.md

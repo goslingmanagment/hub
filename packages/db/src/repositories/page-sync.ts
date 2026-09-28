@@ -2162,18 +2162,30 @@ export async function acquirePageSyncLease(
   },
 ) {
   const now = input.now ?? new Date();
-  // Strict table priority, except that a starved background lane is ranked at
-  // its SYNC_STREAM_STARVED_PRIORITY for one chunk (see there); starved rows
-  // at the same rank go oldest wait first. Other rows keep the plain order.
+  // One page job runs one bounded chunk. Reconciliation must yield turns to
+  // both DM lanes: dm_messages runs WS-addressed reads before its history walk.
+  // Background peers share their highest priority and rotate by durable DB
+  // start time; explicit operator dispatches keep their existing boost. Only
+  // eligible peers participate, so a blocked/retrying peer cannot stall work.
+  // Unrelated work wins equal-priority ties with already-started peers; a lone
+  // peer keeps its original priority. Mixed sources may lend recovery priority.
+  // A starved background lane is ranked at its SYNC_STREAM_STARVED_PRIORITY
+  // for one chunk (see there), oldest wait first; no aged lane is a fairness
+  // peer, so aging never lifts a group.
   const result = await db.execute<Record<string, unknown>>(sql`
     with runnable as (
       select st.page_id as "pageId",
              st.stream as "stream",
              st.request_seq as "requestSeq",
              st.requested_at,
+             st.started_at,
              ${pageSyncRunnableSinceSql("st")} as runnable_since,
              ${streamPriorityBySourceSql("st.stream", "st.dispatch_source")} as priority,
-             ${starvedPageSyncPrioritySql("st", "p.platform", now)} as starved_priority
+             ${starvedPageSyncPrioritySql("st", "p.platform", now)} as starved_priority,
+             case when p.platform = 'fansly'
+                         and st.stream in ('followers_reconcile', 'dm_conversations', 'dm_messages')
+                         and coalesce(st.dispatch_source, 'scheduled') in ('scheduled', 'event', 'recovery', 'anomaly')
+                  then 'fansly_dm_fairness' else st.stream::text end as fairness_group
       from ${pageSyncStates} st
       inner join ${pages} p on p.id = st.page_id and p.status = 'active'
       where st.page_id = ${input.pageId}
@@ -2189,11 +2201,17 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
+    ), ranked as (
+      select r.*,
+             count(*) over (partition by r.fairness_group) as peer_count,
+             max(greatest(r.priority, r.starved_priority)) over (partition by r.fairness_group) as effective_priority
+      from runnable r
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
-      from runnable r
-      order by greatest(r.priority, r.starved_priority) desc,
+      from ranked r
+      order by r.effective_priority desc,
                case when r.starved_priority is not null then r.runnable_since end asc nulls last,
+               case when r.peer_count > 1 then r.started_at end asc nulls first,
                r.priority desc,
                r.requested_at asc nulls last,
                ${streamOrderSql('r."stream"')} asc
@@ -2207,7 +2225,7 @@ export async function acquirePageSyncLease(
           lease_token = ${input.leaseToken},
           lease_heartbeat_at = clock_timestamp(),
           lease_expires_at = clock_timestamp() + (${input.leaseTtlMs} * interval '1 millisecond'),
-          started_at = ${now},
+          started_at = clock_timestamp(),
           updated_at = ${now}
       from candidate
       where st.page_id = candidate."pageId"
