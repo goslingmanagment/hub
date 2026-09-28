@@ -153,8 +153,8 @@ describe("OnlyFans source arrival", () => {
       { ...syntheticMessagesReceived({ media: [photoMedia(4000009, expiresSignedUrl, FRESH)] }) },
       { pageId, observedAt: new Date(Date.now() + 1000) },
     ));
-    const after = await testDb!.pool.query(`select status, next_attempt_at <= now() as due from ai_media_descriptions where media_ref = '4000009'`);
-    expect(after.rows[0]).toEqual({ status: "pending", due: true });
+    const after = await testDb!.pool.query(`select status, attempts, next_attempt_at <= now() as due from ai_media_descriptions where media_ref = '4000009'`);
+    expect(after.rows[0]).toEqual({ status: "pending", attempts: 0, due: true });
   });
 });
 
@@ -186,6 +186,13 @@ describe("OnlyFans candidates from webhooks", () => {
     await recordOnlyFansMediaCandidates(app, { envelope, pageId, observedAt: new Date(), eventId: 79 });
     const rows = await testDb!.pool.query(`select media_ref, variant, sender_role, fan_platform_user_id from ai_media_descriptions`);
     expect(rows.rows).toEqual([{ media_ref: "4000020", variant: "preview", sender_role: "model", fan_platform_user_id: null }]);
+  });
+
+  it("never takes a locked item or a priced message from a fan as fan media", async () => {
+    await expect(recordWebhook([photoMedia(4000040, expiresSignedUrl, FRESH, { canView: false })])).resolves.toBe(0);
+    await expect(recordWebhook([photoMedia(4000041, expiresSignedUrl, FRESH)], { price: 12, isFree: false })).resolves.toBe(0);
+    const rows = await testDb!.pool.query(`select count(*)::int as n from ai_media_descriptions`);
+    expect(rows.rows[0].n).toBe(0);
   });
 
   it("writes nothing while the page has no policy", async () => {

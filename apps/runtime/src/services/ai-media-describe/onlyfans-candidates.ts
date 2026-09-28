@@ -61,13 +61,18 @@ export async function recordOnlyFansMediaCandidates(
     if (event === "messages.received") {
       const fanId = idText(asRecord(payload.fromUser)?.id);
       if (!fanId) return 0;
+      // A priced message (a PPV from another creator) is never "fan media":
+      // only its free previews could be, and those are not described here.
+      const price = typeof payload.price === "number" ? payload.price : Number(payload.price ?? 0);
+      if (payload.isFree === false || (Number.isFinite(price) && price > 0)) return 0;
       const live = effective.aiMediaDescribeLiveChatOnly === false || await hasRecentAiGenerationInConversation(app.db, {
         pageId: input.pageId, conversationRefs: [fanId], since: new Date(Date.now() - LIVE_CHAT_WINDOW_MS),
       });
       for (const item of media) {
         const mediaId = idText(item.id);
         const kind = kindOf(item.type);
-        if (!mediaId || !kind) continue;
+        // Media the page cannot view is a locked body, never described.
+        if (!mediaId || !kind || item.canView === false) continue;
         const result = await upsertAiMediaDescriptionCandidate(app.db, {
           pageId: input.pageId, platform: "onlyfans", mediaRef: mediaId,
           variant: kind === "photo" ? "full" : "poster", mediaKind: kind, senderRole: "fan",

@@ -183,6 +183,13 @@ export async function upsertAiMediaDescriptionCandidate(
             then excluded.next_attempt_at
           else ai_media_descriptions.next_attempt_at
         end,
+        -- Checks while waiting for a source were not failures: a row that
+        -- finally has one starts its retry budget afresh.
+        attempts = case
+          when ai_media_descriptions.status = 'awaiting_source'
+            and excluded.source_observation_id is not null then 0
+          else ai_media_descriptions.attempts
+        end,
         updated_at = excluded.updated_at
       returning id, status
     `);
