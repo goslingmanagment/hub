@@ -367,7 +367,9 @@ export async function countPageDmThreadsByGeneration(
  * G3 per-page overlap check: which of THESE conversation ids are already
  * stamped with the running sweep's generation. A non-empty result means the
  * provider handed the sweep an id it already applied on an earlier offset page
- * — the condition the retired cumulative array used to detect in memory.
+ * — the condition the retired cumulative array used to detect in memory. A
+ * sweep with a provider total restarts on it; one without counts those ids
+ * once and continues.
  *
  * Called inside the page's write transaction and BEFORE its upserts: after
  * them every id would trivially carry the generation. Bounded by the provider

@@ -3544,6 +3544,125 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
   });
 
+  describe("a cross-page repeat in a sweep without a provider total", () => {
+    // Offset paging over the recency-sorted list: a thread below the cursor
+    // got a message, jumped to the top, and pushed group-overlap from the
+    // previous page onto this one.
+    function runRepeatPage(done: boolean) {
+      const telemetry = createTelemetry();
+      const getMessagingGroupsPage = vi.fn(async (
+        requestContext: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      ) => {
+        await recordStartedRequest(requestContext.requestObserver, "dm_conversations");
+        return {
+          total: null,
+          items: [
+            { groupId: "group-overlap", flags: 0, unreadCount: 0, partnerAccountId: "fan-1" },
+            { groupId: "group-new", flags: 0, unreadCount: 0, partnerAccountId: "fan-2" },
+          ],
+          accounts: [],
+          groups: [],
+          offset: 100,
+          done,
+          raw: { data: [], aggregationData: { total: null, accounts: [], groups: [] } },
+        };
+      });
+      const db = {};
+      const app = {
+        db,
+        config: { syncSharedRateLimitEnabled: true },
+        adapter: { getMessagingGroupsPage },
+      } as never;
+      dbMocks.getCheckpoint.mockResolvedValue({
+        state: {
+          version: 2,
+          mode: "full_scan",
+          generation: 7,
+          offset: 100,
+          observedCount: 2,
+          pageCount: 1,
+          providerTotalMode: "absent",
+          providerReportedTotal: null,
+          unchangedPageStreak: 0,
+          fullSweepStartedAt: "2026-03-10T00:00:00.000Z",
+          lastFullSweepCompletedAt: "2026-03-09T00:00:00.000Z",
+        },
+      });
+      dbMocks.listPageDmThreadIdsStampedWithGeneration.mockResolvedValue(["group-overlap"]);
+      // Page one stamped group-a and group-overlap; this page adds group-new.
+      stubGenerationSetCount(3);
+
+      const result = fanslyDmConversationsChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 55, label: "dm-page", platformAccountId: "acct-dm", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 42 },
+        syncRunId: 900,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(1),
+      } as never);
+      return { result, telemetry, db };
+    }
+
+    it("counts the repeated id once and certifies the completed sweep instead of restarting it", async () => {
+      const { result, telemetry, db } = runRepeatPage(true);
+
+      await expect(result).resolves.toMatchObject({
+        satisfied: true,
+        stats: {
+          observedCount: 3,
+          generationSetCount: 3,
+          membershipCertified: true,
+          destructiveFinalization: false,
+          fullSweepCompleted: true,
+          crossPageRepeats: 1,
+        },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      // Applied whole: the repeated row is refreshed with the later observation.
+      expect(dbMocks.upsertPageDmConversation.mock.calls.map((call) => call[1].platformConversationId))
+        .toEqual(["group-overlap", "group-new"]);
+      expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+        platformConversationId: "group-overlap", lastSeenGeneration: 7,
+      }));
+      expect(dbMocks.markPageDmConversationsInvisibleByGeneration).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(db, expect.objectContaining({
+        lastSuccessfulRunId: 900,
+        state: expect.objectContaining({ generation: 7, observedCount: 3, membershipCertified: true }),
+      }));
+      expect(telemetry.addNote).toHaveBeenCalledWith(
+        expect.stringContaining("counted them once and continued"),
+        expect.objectContaining({
+          code: "dm_conversations_cross_page_repeat_counted_once",
+          repeatedConversationIds: ["group-overlap"],
+          repeatCount: 1,
+          providerTotalMode: "absent",
+        }),
+      );
+    });
+
+    it("carries the deduplicated count in the mid-sweep checkpoint", async () => {
+      const { result, telemetry, db } = runRepeatPage(false);
+
+      await expect(result).resolves.toMatchObject({
+        satisfied: false,
+        stats: { observedCount: 3, offset: 200, crossPageRepeats: 1, fullSweepCompleted: false },
+      });
+      expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenLastCalledWith(db, expect.objectContaining({
+        state: expect.objectContaining({ generation: 7, offset: 200, observedCount: 3, pageCount: 2 }),
+      }));
+      // The count agrees with the rows, so no divergence is reported.
+      expect(telemetry.addNote).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: "dm_conversations_dual_proof_page_divergence" }),
+      );
+    });
+  });
+
   it("captures and restarts dm_conversations when one page repeats an id against itself", async () => {
     const telemetry = createTelemetry();
     const getMessagingGroupsPage = vi.fn(async (

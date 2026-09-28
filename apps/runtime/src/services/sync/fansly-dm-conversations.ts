@@ -122,6 +122,21 @@ const DM_SWEEP_GENERATION_MEMBERSHIP_ANOMALY_CODE = "dm_conversations_generation
  * trade: a stale visible thread is recoverable, a blanked inbox is not.
  */
 const DM_SWEEP_EMPTY_SWEEP_GUARD_ANOMALY_CODE = "dm_conversations_empty_sweep_guard";
+/**
+ * A full sweep without a provider total met ids an earlier offset page of the
+ * SAME sweep already applied, and counted them once instead of restarting.
+ *
+ * Offset paging over the recency-sorted list does this whenever a thread below
+ * the cursor gets a message mid-sweep: it jumps to the top, and the rows above
+ * its old slot shift one page down. Fansly has never sent a total for this
+ * list, so the restart the overlap guard used to force only protected a
+ * certification nothing destructive rides on, and it re-walked the page's
+ * whole list and failed the run each time. The thread that jumped is not seen
+ * by this sweep; it is newer than the sweep's start, so the next bounded walk
+ * or full sweep lists it, and a total-less sweep hides nothing in the meantime.
+ * With a total present the restart stays: that sweep may hide threads.
+ */
+const DM_CONVERSATIONS_CROSS_PAGE_REPEAT_NOTE_CODE = "dm_conversations_cross_page_repeat_counted_once";
 const DM_CONVERSATIONS_ERASURE_FENCE_DEFERRED_NOTE_CODE = "dm_conversations_erasure_fence_deferred";
 /** An erasure's delete transaction is seconds-to-minutes work, not an hour's:
  *  park the stream long enough to let it finish, short enough that a page's
@@ -459,6 +474,9 @@ export async function fanslyDmConversationsChunk(
   // bounding. Since G3 this is an early warning for the completion check that
   // now gates the destructive finalization, not a shadow reading.
   let generationSetDivergenceNoted = false;
+  // Latched like the divergence note: one note per run, the count in stats.
+  let crossPageRepeatNoted = false;
+  let crossPageRepeats = 0;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
@@ -579,10 +597,11 @@ export async function fanslyDmConversationsChunk(
       });
     }
 
-    // No overlap is tolerated, so a page that survives the guards here and in
-    // the transaction contributes exactly its unique ids — the same arithmetic
-    // the cumulative array performed by concatenating them and taking its
-    // length.
+    // What the page contributes if none of its ids repeats an earlier page of
+    // this sweep — the same arithmetic the cumulative array performed by
+    // concatenating them and taking its length. The transaction below learns
+    // which ids did repeat: with a provider total the page is refused, without
+    // one it subtracts them, so the sweep still counts every id once.
     const finalObservedCount = state.observedCount + uniqueCurrentConversationIds.size;
     if (currentProviderReportedTotal !== null && (
       finalObservedCount > currentProviderReportedTotal ||
@@ -1029,9 +1048,18 @@ export async function fanslyDmConversationsChunk(
         generation: state.generation,
         platformConversationIds: [...uniqueCurrentConversationIds],
       });
-      if (overlappingConversationIds.length > 0) {
+      // Only a sweep with a provider total can hide threads, so only it
+      // refuses the page and restarts. Without one the repeated ids are
+      // counted once (see DM_CONVERSATIONS_CROSS_PAGE_REPEAT_NOTE_CODE) and
+      // the page is applied whole: re-upserting a row this sweep already
+      // stamped only refreshes it with the later observation.
+      if (overlappingConversationIds.length > 0 && state.providerTotalMode === "present") {
         return { kind: "overlap" as const, overlappingConversationIds };
       }
+      const observedCount = finalObservedCount - overlappingConversationIds.length;
+      const pageState: DmRunningSweep = overlappingConversationIds.length === 0
+        ? nextState
+        : { ...nextState, observedCount };
 
       let dmMessagesFollowupNeeded = false;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
@@ -1125,7 +1153,7 @@ export async function fanslyDmConversationsChunk(
         let erasureDelta: number | null = null;
         if (
           isDmSweepErasureShapedCountShortfall({
-            observedCount: finalObservedCount,
+            observedCount,
             generationSetCount,
           })
         ) {
@@ -1137,7 +1165,7 @@ export async function fanslyDmConversationsChunk(
               since: sweepStartedAt,
             });
           if (erasure) {
-            erasureDelta = finalObservedCount - generationSetCount;
+            erasureDelta = observedCount - generationSetCount;
           }
         }
 
@@ -1148,7 +1176,7 @@ export async function fanslyDmConversationsChunk(
         // predicate, inside the same transaction, so it measures exactly the
         // rows that pass would hide — and only on an empty sweep, which is the
         // one shape where a single provider answer can cost a whole inbox.
-        const emptySweepVisibleThreadCount = finalObservedCount === 0
+        const emptySweepVisibleThreadCount = observedCount === 0
           ? await countPageDmVisibleThreadsBelowGeneration(dbTx, {
             platformAccountId: input.pageContext.page.id,
             generation: state.generation,
@@ -1165,7 +1193,7 @@ export async function fanslyDmConversationsChunk(
         // Decision #208 prefers stale visibility to that, and the re-sweep
         // under a fresh generation converges on its own.
         const membershipCertified = !emptySweepGuardHeld &&
-          generationSetCount === finalObservedCount;
+          generationSetCount === observedCount;
         const destructiveFinalization = state.providerTotalMode === "present" &&
           membershipCertified;
         // Independent of the total mode: a total-less sweep runs no destructive
@@ -1182,7 +1210,7 @@ export async function fanslyDmConversationsChunk(
         const completedState: DmConversationSweepCompletedState = {
           kind: "completed",
           generation: state.generation,
-          observedCount: finalObservedCount,
+          observedCount,
           generationSetCount,
           providerTotalMode: state.providerTotalMode,
           providerReportedTotal: state.providerReportedTotal,
@@ -1221,6 +1249,8 @@ export async function fanslyDmConversationsChunk(
           dmMessagesFollowupNeeded,
           generationSetCount,
           erasureDelta,
+          observedCount,
+          repeatedConversationIds: overlappingConversationIds,
           checkpoint: finalizationWithheld
             // Progress write: a run that refused to finalize must not stamp
             // itself as the stream's last successful run.
@@ -1242,6 +1272,8 @@ export async function fanslyDmConversationsChunk(
         kind: "progress" as const,
         dmMessagesFollowupNeeded,
         generationSetCount,
+        observedCount,
+        repeatedConversationIds: overlappingConversationIds,
         // `generationSetCount` is telemetry, not cursor state: the parser
         // drops it on resume and every page recomputes it. It rides the
         // checkpoint purely so summarizeCheckpoint carries it into the
@@ -1250,7 +1282,7 @@ export async function fanslyDmConversationsChunk(
         checkpoint: await writeSweepCheckpoint(dbTx, {
           platformAccountId: input.pageContext.page.id,
           outcome: "progress",
-          state: nextState,
+          state: pageState,
           generationSetCount,
         }),
       };
@@ -1346,13 +1378,34 @@ export async function fanslyDmConversationsChunk(
       continue;
     }
 
+    // Every id counted once, even when the page repeated earlier ones.
+    const { observedCount } = pageWrite;
+    if (pageWrite.repeatedConversationIds.length > 0) {
+      crossPageRepeats += pageWrite.repeatedConversationIds.length;
+      if (!crossPageRepeatNoted) {
+        crossPageRepeatNoted = true;
+        await input.telemetry.addNote(
+          "DM conversation sweep met conversations an earlier page of the same sweep already applied; counted them once and continued",
+          {
+            code: DM_CONVERSATIONS_CROSS_PAGE_REPEAT_NOTE_CODE,
+            generation: state.generation,
+            pageCount: nextPageCount,
+            offset: state.offset,
+            repeatedConversationIds: pageWrite.repeatedConversationIds.slice(0, 10),
+            repeatCount: pageWrite.repeatedConversationIds.length,
+            providerTotalMode: state.providerTotalMode,
+          },
+        );
+      }
+    }
+
     // Early warning: a mid-sweep divergence is what the completion check will
     // fail on, several pages before it does. It changes nothing on its own —
     // the last page decides — but it dates the divergence to a page.
     if (
       pageWrite.kind === "progress" &&
       !generationSetDivergenceNoted &&
-      pageWrite.generationSetCount !== finalObservedCount
+      pageWrite.generationSetCount !== observedCount
     ) {
       generationSetDivergenceNoted = true;
       await input.telemetry.addNote(
@@ -1361,7 +1414,7 @@ export async function fanslyDmConversationsChunk(
           code: DM_SWEEP_DUAL_PROOF_PAGE_NOTE_CODE,
           generation: state.generation,
           pageCount: nextPageCount,
-          observedCount: finalObservedCount,
+          observedCount,
           generationSetCount: pageWrite.generationSetCount,
         },
       );
@@ -1384,7 +1437,7 @@ export async function fanslyDmConversationsChunk(
           details: {
             generation: state.generation,
             pageCount: nextPageCount,
-            observedCount: finalObservedCount,
+            observedCount,
             generationSetCount: pageWrite.generationSetCount,
             visibleThreadCount: pageWrite.emptySweepVisibleThreadCount,
             providerTotalMode: state.providerTotalMode,
@@ -1402,7 +1455,7 @@ export async function fanslyDmConversationsChunk(
           {
             code: DM_SWEEP_DUAL_PROOF_ERASURE_NOTE_CODE,
             generation: state.generation,
-            observedCount: finalObservedCount,
+            observedCount,
             generationSetCount: pageWrite.generationSetCount,
             erasureDelta: pageWrite.erasureDelta,
             finalizationWithheld: pageWrite.finalizationWithheld,
@@ -1420,7 +1473,7 @@ export async function fanslyDmConversationsChunk(
           details: {
             generation: state.generation,
             pageCount: nextPageCount,
-            observedCount: finalObservedCount,
+            observedCount,
             generationSetCount: pageWrite.generationSetCount,
             providerTotalMode: state.providerTotalMode,
             providerReportedTotal: state.providerReportedTotal,
@@ -1434,7 +1487,7 @@ export async function fanslyDmConversationsChunk(
           "DM conversation sweep completed without a provider total; unseen conversations remain visible",
           {
             code: "dm_conversations_provider_total_absent_nondestructive",
-            observedCount: finalObservedCount,
+            observedCount,
             pageCount: state.pageCount,
             providerTotalMode: state.providerTotalMode,
           },
@@ -1456,7 +1509,7 @@ export async function fanslyDmConversationsChunk(
           generation: state.generation,
           offset: state.offset,
           pageCount: state.pageCount,
-          observedCount: finalObservedCount,
+          observedCount,
           generationSetCount: pageWrite.generationSetCount,
           processedConversations,
           repairedHeads,
@@ -1467,11 +1520,12 @@ export async function fanslyDmConversationsChunk(
           finalizationWithheld: pageWrite.finalizationWithheld,
           emptySweepGuard: pageWrite.emptySweepGuardHeld,
           fullSweepCompleted: !pageWrite.finalizationWithheld,
+          ...(crossPageRepeats > 0 ? { crossPageRepeats } : {}),
         },
       } satisfies StreamChunkResult;
     }
 
-    state = nextState;
+    state = { ...nextState, observedCount };
   }
 
   return {
@@ -1487,6 +1541,7 @@ export async function fanslyDmConversationsChunk(
       providerTotalMode: state.providerTotalMode,
       providerReportedTotal: state.providerReportedTotal,
       fullSweepCompleted: false,
+      ...(crossPageRepeats > 0 ? { crossPageRepeats } : {}),
     },
   } satisfies StreamChunkResult;
 }
