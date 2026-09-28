@@ -16,10 +16,11 @@
 // ledger, in ledger order, which is what makes it survive truncate-and-replay
 // identically.
 //
-// The CLEAR half is not symmetry for its own sake: a comment whose text changed
-// clears its own mark through the ordinary upsert, but a comment deleted and
-// restored UNCHANGED emits no row event at all (its content hash is the one it
-// had before), so only the roster can un-mark it.
+// The CLEAR half is not symmetry for its own sake: a comment that comes back
+// clears its own mark through the ordinary upsert (row events are per LOOK
+// since `comment:v2`), but under the older hash-only key a comment deleted and
+// restored UNCHANGED emitted no row event at all, and those events still
+// replay — only the roster un-marks it there.
 //
 // ORDER MATTERS, and the canonicalizer guarantees it: the roster is the LAST
 // draft of its observation, so every comment it names has already been upserted

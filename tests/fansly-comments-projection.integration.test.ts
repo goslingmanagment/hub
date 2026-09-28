@@ -109,7 +109,7 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, key: string, payload: unknown) {
+async function seedObservation(pageId: number, key: string, payload: unknown, receivedAt?: Date) {
   await insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:post_replies",
@@ -119,6 +119,7 @@ async function seedObservation(pageId: number, key: string, payload: unknown) {
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `post_replies:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
 }
 
@@ -364,13 +365,72 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     // marked it (see the test above).
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
 
-    // The comments return UNCHANGED, so their content hashes are the ones they
-    // had before: the row events dedupe and never reach the projector. Only the
-    // ROSTER can un-mark them, which is why the clear half exists.
+    // The comments return UNCHANGED. Their row events are keyed per LOOK, so
+    // each one reaches the projector and its own upsert clears the mark; the
+    // roster that follows finds nothing left to clear. (Under the old
+    // hash-only key those row events deduped, and only the roster's clear
+    // half un-marked them — it stays for events minted that way.)
     await seedObservation(page.id, "four-again", fixture("replies-four-with-accounts"));
     const result = await project(page.id);
-    expect(result.clearedMissing).toBe(3);
+    expect(result.comments).toBe(4);
+    expect(result.clearedMissing).toBe(0);
     expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+  });
+
+  it("lands a comment that goes A→B→A; `changed_at` moves only on a hash change (J12)", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Pinned, then unpinned. Keyed on the hash alone, the third look collided
+    // with the first look's key and never reached the projector: the head
+    // stayed pinned.
+    const page = await seedPage();
+    const look = (pinned: boolean) => {
+      const body = fixture("replies-four-with-accounts") as {
+        response: { posts: Record<string, unknown>[] };
+      };
+      body.response.posts[0]!.pinned = pinned;
+      return body;
+    };
+    type Head = { pinned: boolean; changed_at: Date; last_observed_at: Date };
+    const head = async () => (await rows<Head>(
+      `select pinned, changed_at, last_observed_at from post_comments
+        where page_id = $1 and comment_ref = '000910000000000101'`,
+      [page.id],
+    ))[0]!;
+    const at = (day: number) => new Date(`2026-08-${day}T09:00:00.000Z`);
+
+    await seedObservation(page.id, "unpinned", look(false), at(20));
+    await project(page.id);
+    expect((await head()).changed_at.toISOString()).toBe(at(20).toISOString());
+
+    await seedObservation(page.id, "pinned", look(true), at(21));
+    await project(page.id);
+    const pinned = await head();
+    expect(pinned.pinned).toBe(true);
+    expect(pinned.changed_at.toISOString()).toBe(at(21).toISOString());
+
+    await seedObservation(page.id, "unpinned-again", look(false), at(22));
+    await project(page.id);
+    const reverted = await head();
+    expect(reverted.pinned).toBe(false);
+    expect(reverted.changed_at.toISOString()).toBe(at(22).toISOString());
+    expect(reverted.last_observed_at.toISOString()).toBe(at(22).toISOString());
+
+    // An UNCHANGED re-look advances last_observed_at and nothing else.
+    await seedObservation(page.id, "unpinned-still", look(false), at(23));
+    await project(page.id);
+    const still = await head();
+    expect(still.changed_at.toISOString()).toBe(at(22).toISOString());
+    expect(still.last_observed_at.toISOString()).toBe(at(23).toISOString());
+
+    // Replay of the same observations still appends nothing.
+    const before = await checksums(page.id);
+    expect((await project(page.id)).applied).toBe(0);
+    expect(await checksums(page.id)).toEqual(before);
   });
 
   it("REFUSES to mark anything missing from a page it could not prove complete", async (

@@ -117,7 +117,13 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, kind: string, key: string, payload: unknown) {
+async function seedObservation(
+  pageId: number,
+  kind: string,
+  key: string,
+  payload: unknown,
+  receivedAt?: Date,
+) {
   await insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:catalog",
@@ -127,6 +133,7 @@ async function seedObservation(pageId: number, kind: string, key: string, payloa
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `${kind}:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
 }
 
@@ -294,6 +301,58 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     // Promo money is kept as the platform served it, inside the jsonb, and is
     // never summed with the plan price it discounts.
     expect(plan?.promos[0]?.price).toBe(7770);
+  });
+
+  it("lands a plan that goes A→B→A, and every look advances the head (J12)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A promo added to a plan and removed again. Keyed on the hash alone, the
+    // third look collided with the first look's key and never reached the
+    // projector: the head kept advertising a promo that was gone.
+    const page = await seedPage();
+    const withoutPromo = fixture("subscription-tiers") as {
+      rows: { plans: { promos: unknown[] }[] }[];
+    };
+    withoutPromo.rows[0]!.plans[0]!.promos = [];
+    const withPromo = fixture("subscription-tiers");
+    const at = (day: number) => new Date(`2026-08-${day}T09:00:00.000Z`);
+    const plan = async () => (await rows<{ promos: unknown[]; last_observed_at: Date }>(
+      `select promos, last_observed_at from page_subscription_tier_plans
+        where page_id = $1 and plan_ref = $2`,
+      [page.id, "000900000000000401"],
+    ))[0]!;
+
+    await seedObservation(page.id, "subscription_tiers", "t1", withoutPromo, at(20));
+    await project(page.id);
+    expect((await plan()).promos).toEqual([]);
+
+    await seedObservation(page.id, "subscription_tiers", "t2", withPromo, at(21));
+    await project(page.id);
+    expect((await plan()).promos).toHaveLength(1);
+
+    await seedObservation(page.id, "subscription_tiers", "t3", withoutPromo, at(22));
+    await project(page.id);
+    const reverted = await plan();
+    expect(reverted.promos).toEqual([]);
+    expect(reverted.last_observed_at.toISOString()).toBe(at(22).toISOString());
+
+    // An UNCHANGED later look still reaches the head: last_observed_at is when
+    // the platform last served it, not when it last changed.
+    await seedObservation(page.id, "subscription_tiers", "t4", withoutPromo, at(23));
+    await project(page.id);
+    expect((await plan()).last_observed_at.toISOString()).toBe(at(23).toISOString());
+    const [tier] = await rows<{ last_observed_at: Date }>(
+      `select last_observed_at from page_subscription_tiers where page_id = $1 and tier_ref = $2`,
+      [page.id, "000900000000000301"],
+    );
+    expect(tier!.last_observed_at.toISOString()).toBe(at(23).toISOString());
+
+    // …and replaying the same observations still appends nothing.
+    const before = await checksums(page.id);
+    expect((await project(page.id)).catalog.applied).toBe(0);
+    expect(await checksums(page.id)).toEqual(before);
   });
 
   it("writes gift codes into page_promo_links without touching the tracking half", async (context) => {

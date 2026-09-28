@@ -24,12 +24,25 @@
 // of it that survives truncate-and-replay. (Keying the roster on the ref set's
 // hash instead is the version that looked right and was wrong: a gift code that
 // disappears and comes back UNCHANGED hashes to the roster it had before it
-// vanished, so the event dedupes and the row stays marked forever.)
+// vanished, so the event dedupes and — while row events were keyed on their
+// hash alone, see below — the row stayed marked forever.)
 //
 // ALBUM MEMBERSHIP GETS NO ROSTER, deliberately. Membership arrives from a
 // PAGED walk, and a roster built from one page would claim the album contains
 // only what that page showed — every walk would mark most of the album missing
 // and the next page would un-mark it. A partial listing is not a listing.
+//
+// ── ROW EVENTS ARE PER LOOK, TOO ─────────────────────────────────────────────
+//
+// Every row event (album, tier, tier plan, gift code, automation, wall) is
+// keyed on its content hash AND the observation (the `…:v2:…:obs:<id>` keys),
+// for the roster's reason. A key on the hash alone dropped a row that went
+// A→B→A — a promo added then removed, an automation text reverted, a wall made
+// private and back — because the third look hashed to A's old key: the
+// projector never saw it and the head stayed at B. It also froze the head's
+// `last_observed_at` at the first look of unchanged content. So: one row event
+// per look, replaying the same observation mints the same key (a no-op), and
+// the head upserts pick by `last_observed_at`, so every look is safe to apply.
 //
 // ── THE OTHER FOUR RULES ─────────────────────────────────────────────────────
 //
@@ -197,6 +210,11 @@ function envelopeArray(payload: unknown): Record<string, unknown>[] {
  * cost is one small event per listing per sweep — seven a day on a page whose
  * production ledger already appends ~1 971 a day.
  *
+ * The row events are keyed per look as well since their `:v2:` keys (see the
+ * header), so a row that comes back now clears its own mark through its
+ * upsert; the roster's clear half stays as the ledger-derived statement of the
+ * same fact.
+ *
  * Refs are SORTED so a provider that reorders its rows produces the same
  * `contentHash`, which stays in `data` as the cheap "did the set change?" read.
  */
@@ -271,7 +289,7 @@ function albumDrafts(
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `album:v1:${pageRef}:${vaultKind}:${albumRef}:${hash}`,
+      dedupKey: `album:v2:${pageRef}:${vaultKind}:${albumRef}:${hash}:obs:${observation.id}`,
     });
   }
 
@@ -453,7 +471,7 @@ function tierDrafts(observation: CanonicalizableObservation): CanonicalEventDraf
       occurredAt: observation.receivedAt,
       data: { ...tierMaterial, contentHash: tierHash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `tier:v1:${pageRef}:${tierRef}:${tierHash}`,
+      dedupKey: `tier:v2:${pageRef}:${tierRef}:${tierHash}:obs:${observation.id}`,
     });
 
     for (const plan of plans) {
@@ -480,7 +498,7 @@ function tierDrafts(observation: CanonicalizableObservation): CanonicalEventDraf
         occurredAt: observation.receivedAt,
         data: { ...planMaterial, contentHash: planHash },
         schemaVersion: SCHEMA_VERSION,
-        dedupKey: `tierplan:v1:${pageRef}:${tierRef}:${planRef}:${planHash}`,
+        dedupKey: `tierplan:v2:${pageRef}:${tierRef}:${planRef}:${planHash}:obs:${observation.id}`,
       });
     }
   }
@@ -544,7 +562,7 @@ function giftCodeDrafts(observation: CanonicalizableObservation): CanonicalEvent
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `giftcode:v1:${pageRef}:${codeRef}:${hash}`,
+      dedupKey: `giftcode:v2:${pageRef}:${codeRef}:${hash}:obs:${observation.id}`,
     });
   }
 
@@ -675,7 +693,7 @@ function automationDrafts(
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `automation:v1:${pageRef}:${automationRef}:${hash}`,
+      dedupKey: `automation:v2:${pageRef}:${automationRef}:${hash}:obs:${observation.id}`,
     });
   }
 
@@ -719,7 +737,7 @@ function wallDrafts(observation: CanonicalizableObservation): CanonicalEventDraf
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `wall:v1:${pageRef}:${wallRef}:${hash}`,
+      dedupKey: `wall:v2:${pageRef}:${wallRef}:${hash}:obs:${observation.id}`,
     });
   }
 

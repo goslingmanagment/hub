@@ -19,11 +19,13 @@
 // survive truncate-and-replay identically. A sweep that computed the same thing
 // at capture time would produce a projection a rebuild could not reproduce.
 //
-// The CLEAR half is not symmetry for its own sake. A row whose content changed
-// clears its own mark through the ordinary upsert — but a gift code that is
-// revoked and reinstated UNCHANGED emits no row event at all, because its
-// content hash is the one it had before. Only the roster can un-mark it, which
-// is also why the roster is keyed per LOOK rather than per ref-set.
+// The CLEAR half is not symmetry for its own sake. A row that comes back
+// clears its own mark through the ordinary upsert, because row events are
+// keyed per LOOK (their `:v2:` keys) — but under the `:v1:` hash-only keys a
+// gift code revoked and reinstated UNCHANGED emitted no row event at all (its
+// content hash was the one it had before), and only the roster could un-mark
+// it. The roster keeps doing so,
+// which is also why it is keyed per LOOK rather than per ref-set.
 //
 // ORDER MATTERS, and it is guaranteed by the canonicalizer: the roster is the
 // LAST draft of its observation, so every row it describes has already been
