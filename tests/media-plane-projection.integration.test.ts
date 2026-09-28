@@ -427,6 +427,44 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(new Date(archive[0]!.occurred_at).toISOString()).toBe(ancient.toISOString());
   });
 
+  it("queues per-media stats only for the page's OWN media, and keeps a fan's", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const payload = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    const own = payload.accountMedia[0]!;
+    // A DM sidecar carries every media in the thread — the ones the FAN sent
+    // included — and a row that names no owner at all.
+    payload.accountMedia.push(
+      { ...own, id: "offer-fan-sent", accountId: FAN_REF, mediaId: "raw-fan-sent" },
+      { ...own, id: "offer-no-owner", accountId: undefined as never, mediaId: "raw-no-owner" },
+    );
+    await seedObservation(page.id, "dm_messages", "owners", payload);
+    await project(page.id);
+
+    // Every head is kept: the fan's media is still a fact other readers want.
+    const media = await rows<{ media_offer_ref: string }>(
+      `select media_offer_ref from creator_media where page_id = $1 order by media_offer_ref`,
+      [page.id],
+    );
+    expect(media.map((row) => row.media_offer_ref))
+      .toEqual(["offer-fan-sent", "offer-message-1", "offer-no-owner"]);
+    // But the route cannot serve another account's media offer, so the fan's
+    // gets no queue row. An unknown owner fails OPEN.
+    const queued = await rows<{ subject_ref: string }>(
+      `select subject_ref from subject_refresh_state
+        where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+      [page.id],
+    );
+    expect(queued.map((row) => row.subject_ref)).toEqual(["offer-message-1", "offer-no-owner"]);
+  });
+
   it("is idempotent: a second sweep + projection changes nothing", async (context) => {
     if (!testDb) {
       context.skip();

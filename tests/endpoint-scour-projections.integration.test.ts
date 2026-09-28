@@ -807,12 +807,63 @@ describe("[sync-critical] WP-F4 rebuild isolation — the queue is not a project
     ).toHaveLength(1);
   });
 
+  it("queues only what the PAGE OWNS, and fails open when either ref is unknown", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const pageRef = "acct-queue-owner";
+    await testDb.pool.query("update pages set external_page_id = $1 where id = $2", [
+      pageRef,
+      page.id,
+    ]);
+    const observedAt = new Date("2026-08-20T00:00:00.000Z");
+    const cases = [
+      ["000900000000004061", pageRef],
+      ["000900000000004062", "acct-a-fan"],
+      ["000900000000004063", null],
+    ] as const;
+    for (const [mediaOfferRef, ownerAccountRef] of cases) {
+      await upsertCreatorMedia(testDb.db, {
+        ...mediaInput(page.id, observedAt),
+        mediaOfferRef,
+        ownerAccountRef,
+      });
+    }
+    const queued = async () =>
+      (await listSubjectRefreshState(testDb!.db, { pageId: page.id, plane: "media_stats" }))
+        .map((row) => row.subjectRef)
+        .sort();
+    // The fan's media head is written; its queue row is not.
+    expect(
+      (await rows(`select count(*)::int as n from creator_media where page_id = $1`, [page.id]))[0]!
+        .n,
+    ).toBe(3);
+    expect(await queued()).toEqual(["000900000000004061", "000900000000004063"]);
+
+    // A page whose own ref is unknown cannot tell own from foreign: queue it.
+    await testDb.pool.query("update pages set external_page_id = null where id = $1", [page.id]);
+    await upsertCreatorMedia(testDb.db, {
+      ...mediaInput(page.id, observedAt),
+      mediaOfferRef: "000900000000004064",
+      ownerAccountRef: "acct-a-fan",
+    });
+    expect(await queued()).toContain("000900000000004064");
+  });
+
   it("survives a creator_media truncate-and-replay and does NOT re-mark first sight", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const page = await seedPage();
+    // The fixture's media belong to account 000900000000000003, and only the
+    // page's OWN media are queued: this page IS that account.
+    await testDb.pool.query("update pages set external_page_id = $1 where id = $2", [
+      "000900000000000003",
+      page.id,
+    ]);
     // Build `creator_media` the way production does — from journaled bodies,
     // through the event ledger — so the rebuild below is the REAL rebuild and
     // not a hand-made row.

@@ -85,6 +85,10 @@ export interface UpsertCreatorMediaInput {
   sourceEventId: number;
   sourceObservationId: number;
   sourceAccountSeq: number;
+  /** The account the media belongs to (`accountMedia.accountId`). It gates the
+   *  per-media statistics queue row only; the head is written whoever owns it.
+   *  Unknown (null/absent) fails open: the item is queued. */
+  ownerAccountRef?: string | null;
 }
 
 /**
@@ -93,7 +97,7 @@ export interface UpsertCreatorMediaInput {
  *
  * Why the two writes are one transaction. The queue is capture-plane
  * operational state (§3.4) keyed on the media offer ref, and its whole contract
- * is "every media this system knows about has a refresh row". A media row
+ * is "every media the PAGE OWNS has a refresh row". A media row
  * committed without its queue row is a media item the per-media lane will never
  * look at, and nothing downstream would notice: its traffic history would simply
  * be missing forever, with a healthy lane and a clean coverage row. Seeding on a
@@ -114,6 +118,16 @@ export interface UpsertCreatorMediaInput {
  * The predicate lives in the statement so the platform seam stays where the
  * Stage 18 ratchet expects it: no new strict platform equality outside the
  * adapter packages.
+ *
+ * AND ONLY WHAT THE PAGE OWNS. A DM sidecar carries every media in the thread,
+ * the ones fans SENT included, and the route cannot serve another account's
+ * media offer: every such row was a guaranteed `error getting media offer`
+ * (prod: ~3.6k queued, none ever answered). The media head is still written —
+ * other readers want it — but the queue row is skipped when the media's owner
+ * and the page's own account ref are both known and differ; either one unknown
+ * fails open. Rows queued before this check stay queued: `creator_media` keeps
+ * no owner, so neither the chunk query nor `seedMediaStatsQueue` (first enable
+ * only) can tell them apart.
  */
 export async function upsertCreatorMedia(
   db: Database,
@@ -129,6 +143,12 @@ export async function upsertCreatorMedia(
       select ${input.pageId}, 'media_stats', ${input.mediaOfferRef}, 'fresh',
              ${input.observedAt}
        where ${input.platform} = 'fansly'
+         and coalesce(
+           ${input.ownerAccountRef ?? null}::text = (
+             select p.external_page_id from pages p where p.id = ${input.pageId}
+           ),
+           true
+         )
       on conflict (page_id, plane, subject_ref) do nothing
     `);
     return head;
