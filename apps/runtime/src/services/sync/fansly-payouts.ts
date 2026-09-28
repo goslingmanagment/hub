@@ -52,8 +52,10 @@
 // re-opens the walk at offset 10 as a CATCH-UP, which stops on the first page
 // that reaches a row the previous head held. A cursor saved before the refs
 // were kept falls back on `total`: grown by more than a page, the catch-up
-// walks exactly the rows it grew by. A catch-up reaches new rows, not the
-// floor, so it never changes why the history walk stopped.
+// walks exactly the rows it grew by. A catch-up that reaches the previous
+// head's rows read new rows, not the floor, so it keeps the stop as it was; one
+// that ends on a repeat, the page cap or a short page before `total` turns an
+// exhausted history partial — and never the reverse.
 //
 // Whether `limit > 10` is honoured on THIS route has never been measured. So
 // the walk assumes 10 and carries a REPEAT-REQUEST GUARD instead of a belief.
@@ -196,7 +198,9 @@ export interface FanslyPayoutsCursorState {
    *  once a catch-up reaches rows an earlier head read held. */
   walkDone: boolean;
   /** Why the history walk stopped; null while the first walk is still open. A
-   *  catch-up leaves it as it found it. */
+   *  catch-up that reaches the previous head keeps it; one that ends on a
+   *  repeat, the page cap or a short page before `total` turns `exhausted`
+   *  partial, never the reverse (`settleWalkStop`). */
   walkStop: FanslyPayoutsWalkStop | null;
   /** The row refs of the last HEAD page — what the next head read has to share
    *  a row with for the head alone to have caught every payout since. */

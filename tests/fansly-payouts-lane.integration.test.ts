@@ -260,7 +260,7 @@ async function requestParams(pageId: number, endpoint: string) {
 async function coverageRows(pageId: number) {
   const result = await testDb!.pool.query(
     `select plane, scope_ref, status, proof, reason_code, expected_count,
-            oldest_captured_at, cursor
+            oldest_captured_at, cursor, proof_observation_id
        from capture_coverage where page_id = $1 order by plane, scope_ref`,
     [pageId],
   );
@@ -496,6 +496,16 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
     expect((await requests()).reason_code).toBe("short_before_total");
     expect((await requests()).proof).toBe("terminal_response");
     expect(Number((await requests()).expected_count)).toBe(900);
+    // The proof is the SHORT page that stopped the walk, not the head before it.
+    const requestObservationIds = async () => (await testDb!.pool.query(
+      `select id from observations where account_id = $1 and kind = 'payout_requests'
+        order by id`,
+      [page.id],
+    )).rows.map((row) => String((row as { id: unknown }).id));
+    const [headObservationId, shortObservationId] = await requestObservationIds();
+    const stopProof = String((await requests()).proof_observation_id);
+    expect(stopProof).toBe(shortObservationId);
+    expect(stopProof).not.toBe(headObservationId);
 
     // The NEXT day's head read restates the stop rather than upgrading it, and
     // the stop alone never re-opens the walk: two calls, as on any steady day.
@@ -505,6 +515,10 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
       .toEqual([["payout_methods", undefined], ["payout_requests", 0]]);
     expect((await requests()).status).toBe("partial_provider_surface");
     expect((await requests()).reason_code).toBe("short_before_total");
+    // A head read proves nothing about where the walk stopped: it restates the
+    // claim with proof 'none', and the stored proof still names the short page.
+    expect((await requests()).proof).toBe("none");
+    expect(String((await requests()).proof_observation_id)).toBe(stopProof);
     expect((await cursor(page.id))?.walkDone).toBe(true);
     expect(telemetry.anomalies
       .filter((a) => a.code === "fansly_payouts_short_before_total")).toHaveLength(1);

@@ -1594,6 +1594,63 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     ]);
   });
 
+  it("STOPS a deleted-list walk that ignores `before` with one anomaly, and finishes the sweep", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.mode = "steady";
+    seeded.backfill = null;
+    seeded.sweepDay = utcDayKey(NOW);
+    seeded.stepIndex = 6;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    // The live list is already at its floor; the deleted list serves its head
+    // page whatever `before` asks for.
+    const adapter = adapterStub({
+      broadcastFor: (params) =>
+        params.deleted ? { messages: [{ id: "90" }, { id: "80" }] } : { messages: [] },
+    });
+    const telemetry = telemetryStub();
+
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget()),
+      );
+      if (result.satisfied) break;
+    }
+
+    // The head, then ONE page whose cursor did not move — and no third.
+    expect(adapter.broadcastRequests.filter((request) => request.deleted)).toEqual([
+      { deleted: true, before: null },
+      { deleted: true, before: "80" },
+    ]);
+    const stopped = telemetry.anomalies
+      .filter((a) => a.code === "fansly_stats_broadcast_walk_stopped");
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]!.severity).toBe("warn");
+    expect(stopped[0]!.details).toMatchObject({
+      kind: "broadcast_stats_deleted",
+      stop: "cursor_not_advancing",
+      before: "80",
+    });
+    // The walk is over rather than repeated tomorrow, and the sweep behind it
+    // still ran: step 8 onward, and the day is stamped.
+    const walked = (await cursor(page.id))!;
+    expect(walked.deletedBroadcastFloorReached).toBe(true);
+    expect(walked.deletedBroadcastWalkStop).toBe("cursor_not_advancing");
+    expect(walked.broadcastWalkStop).toBe("empty_page");
+    expect(adapter.calls).toContain("broadcast_scheduled");
+    expect(walked.lastSweepDay).toBe(utcDayKey(NOW));
+  });
+
   // THE NEGATIVE PINS. Each names a mechanism that was DELETED by decision, and
   // a key reappearing is how a deleted mechanism comes back without one.
   it("holds the A19/A20/A28-4 removals", async () => {
