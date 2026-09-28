@@ -17,6 +17,7 @@ import {
   rebuildCreatorPostsProjection,
   runCreatorPostsProjection,
 } from "../apps/runtime/src/services/projections/creator-posts.ts";
+import { runProjectionTick } from "../apps/runtime/src/services/projections/registry.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -1196,6 +1197,75 @@ describe("creator posts domain projection", () => {
       "select 1 from creator_post_tips where account_id = $1",
       [page.id],
     ).then((result) => result.rowCount)).toBe(1);
+  });
+
+  it("a poison event on one page parks only that page: a higher page still projects in the tick (J8)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const model = await createModel(testDb.db, { slug: "posts-poison", name: "Posts Poison" });
+    if (!model) throw new Error("model seed failed");
+    const poisoned = await createFanslyPage(testDb.db, { modelId: model.id, label: "posts-poisoned" });
+    const healthy = await createFanslyPage(testDb.db, { modelId: model.id, label: "posts-healthy" });
+    if (!poisoned || !healthy) throw new Error("page seed failed");
+    // Accounts are walked in id order: the poison sits on the LOWER id.
+    expect(poisoned.id).toBeLessThan(healthy.id);
+
+    // A post-tip event whose fan identity contradicts its own data: the
+    // projector's strict validation throws on it, every tick.
+    const occurredAt = new Date("2026-07-31T20:59:00Z");
+    await appendProjectionOnlyDomainEvents(testDb.db, poisoned.id, [{
+      type: "post.tip_observed",
+      occurredAt,
+      fanIdentityRef: "some-other-fan",
+      transactionRef: "poison-receiver-tx",
+      postRef: "poison-post",
+      data: {
+        platform: "fansly",
+        tipId: "poison-tip",
+        senderPlatformUserId: "poison-fan",
+        amountMills: 250_000,
+        occurredAt: occurredAt.toISOString(),
+        observedAt: occurredAt.toISOString(),
+        receiverTransactionRef: "poison-receiver-tx",
+        senderTransactionRef: "poison-sender-tx",
+        contentHash: "b".repeat(64),
+      },
+      schemaVersion: 1,
+      observationId: 601,
+      dedupKey: "post-tip:v1:fansly:poison-tip:poison-post:fixture:obs:601",
+    }], {
+      occurredAt,
+      observationId: 601,
+      dedupKey: "projection-checkpoint:post-tip-poison:601",
+    });
+    await seedPostsObservation({
+      accountId: healthy.id,
+      key: "posts-healthy-1",
+      receivedAt: new Date("2026-08-01T10:00:00Z"),
+      posts: [{
+        id: "healthy-post",
+        content: "<p>healthy</p>",
+        createdAt: Math.floor(new Date("2026-07-20T10:00:00Z").getTime() / 1000),
+        attachments: [],
+      }],
+    });
+    await runCanonicalization(appStub());
+
+    const tick = await runProjectionTick(appStub());
+
+    // The healthy page advanced in the same tick…
+    expect((await testDb.pool.query(
+      "select platform_post_id from creator_posts where account_id = $1",
+      [healthy.id],
+    )).rows).toEqual([{ platform_post_id: "healthy-post" }]);
+    expect(await getProjectionWatermark(testDb.db, "creator_posts", healthy.id)).toBeGreaterThan(0);
+    // …while the poisoned page stays parked BEFORE the poison, retryable.
+    expect(await getProjectionWatermark(testDb.db, "creator_posts", poisoned.id)).toBe(0);
+    const outcome = tick.outcomes.find((entry) => entry.name === "creator_posts");
+    expect(outcome?.error).toBeInstanceOf(Error);
+    expect(outcome?.failedAccounts).toEqual([poisoned.id]);
   });
 
   it("migration registers both collection lanes", async (context) => {

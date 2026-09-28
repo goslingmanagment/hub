@@ -452,7 +452,9 @@ export async function startWorkerServices(
     // neither this file nor the CLI is a table that silently stops filling.
     // Each entry stays isolated in its own try/catch inside runProjectionTick:
     // every projection owns its watermark, so a poison fact in one must stay
-    // retryable without starving the neighbours sharing this pg-boss tick.
+    // retryable without starving the neighbours sharing this pg-boss tick. A
+    // failed run is retried account by account, so one page's poison fact
+    // does not park the other pages of the same projection either.
     const startedAt = Date.now();
     const tick = await runProjectionTick(app, {
       // Defect 2026-08-22: isolation is not fairness. A full pass over the

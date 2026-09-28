@@ -556,6 +556,11 @@ export interface ProjectionTickOutcome {
   result: Record<string, unknown> | null;
   error: unknown;
   durationMs: number;
+  /**
+   * Set when the whole run threw and the per-account pass still failed for
+   * these accounts: their watermarks stay parked, every other account advanced.
+   */
+  failedAccounts?: number[];
 }
 
 export interface ProjectionTickResult {
@@ -652,12 +657,59 @@ function rotateProjections(
 }
 
 /**
+ * The fallback after a projection's whole run threw: run it once per account,
+ * each in its own try/catch. Every registered `run` scopes itself to
+ * `input.accountId` through the same code path, so this is the same work.
+ *
+ * - Every account is attempted. No breaker stops at the first failure: the
+ *   poison account fails with exactly the whole run's error, and stopping
+ *   there would park every later account again.
+ * - Accounts the whole run already finished run a second time. That is safe:
+ *   a projection resumes from its own watermark (usually an empty read), and
+ *   its writes are idempotent. `fansly_ws_hints`, which takes one ledger page
+ *   per tick, routes its next page early; the refreshes it asks for stay
+ *   coalesced and under their own caps.
+ * - Nothing is skipped or quarantined: a failing account's watermark stays
+ *   where it is, and the next tick retries it.
+ *
+ * Returns null when even the account list cannot be read (the database is
+ * down, typically); the caller then reports the whole-run error alone.
+ */
+async function runAccountsInIsolation(
+  app: Pick<AppContext, "db" | "logger">,
+  projection: ProjectionDefinition,
+): Promise<{ accounts: number; failed: { accountId: number; error: unknown }[] } | null> {
+  let accountIds: number[];
+  try {
+    accountIds = await listEventAccounts(app.db);
+  } catch {
+    return null;
+  }
+  const failed: { accountId: number; error: unknown }[] = [];
+  for (const accountId of accountIds) {
+    try {
+      await projection.run(app, { accountId });
+    } catch (error) {
+      failed.push({ accountId, error });
+    }
+  }
+  return { accounts: accountIds.length, failed };
+}
+
+/**
  * The minutely tick, table-driven.
  *
  * Each projection owns its watermark, so a poison fact in one must stay
  * retryable without starving the neighbours that share this pg-boss handler —
  * which is why every entry is isolated in its own try/catch, exactly as the six
  * hand-written blocks this replaced were.
+ *
+ * The watermark is per (projection, account), so the same isolation is owed
+ * one level down: a projection walks its accounts in id order with no
+ * try/catch between them, and one account's poison fact used to park every
+ * account after it, tick after tick. A failed whole run is therefore retried account by account
+ * (`runAccountsInIsolation`): the failing accounts stay parked and retryable,
+ * the others advance in the same tick.
  *
  * Defect 2026-08-22: isolation was never the same thing as fairness. This loop
  * awaited every projection to completion in registry order and had no clock, so
@@ -704,15 +756,45 @@ export async function runProjectionTick(
       }
       outcomes.push({ name: projection.name, result, error: null, durationMs });
     } catch (error) {
+      const label = projection.label.replace(" complete", "");
+      const isolated = await runAccountsInIsolation(app, projection);
+      if (isolated !== null && isolated.accounts > 0 && isolated.failed.length === 0) {
+        // Transient: every account went through on its own (a serialization
+        // failure, a busy erasure lock), so nothing is parked.
+        app.logger.warn(
+          { error, projection: projection.name, accounts: isolated.accounts },
+          `${label}: whole-run error recovered by the per-account pass`,
+        );
+        outcomes.push({
+          name: projection.name,
+          result: { recoveredAfterError: true, accounts: isolated.accounts },
+          error: null,
+          durationMs: Date.now() - startedAt,
+        });
+        continue;
+      }
+      // One line per projection per tick, however many accounts failed.
+      const failedAccounts = isolated?.failed.map((failure) => failure.accountId);
       app.logger.error(
-        { error, projection: projection.name },
-        `${projection.label.replace(" complete", "")} failed`,
+        {
+          error,
+          projection: projection.name,
+          ...(isolated === null ? {} : {
+            failedAccounts,
+            accountErrors: isolated.failed.map((failure) => ({
+              accountId: failure.accountId,
+              error: failure.error instanceof Error ? failure.error.message : String(failure.error),
+            })),
+          }),
+        },
+        `${label} failed`,
       );
       outcomes.push({
         name: projection.name,
         result: null,
         error,
         durationMs: Date.now() - startedAt,
+        ...(failedAccounts === undefined ? {} : { failedAccounts }),
       });
     }
   }
