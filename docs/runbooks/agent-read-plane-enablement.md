@@ -254,8 +254,8 @@ SDK в двух клиентах — проверено загрузкой их 
 | `fansly-ext` `vendor/kernel-sdk` | отвергает |
 | дашборд (workspace SDK) | принимает |
 
-Порядок: `node scripts/vendor-sdk.mjs ../of-desktop/packages/kernel-sdk` и
-`node scripts/vendor-sdk.mjs ../fansly-ext/vendor/kernel-sdk` → релиз обоих
+Порядок: `node scripts/vendor-sdk.mjs ../onlyfans-chat/packages/kernel-sdk` и
+`node scripts/vendor-sdk.mjs ../fansly-chat/vendor/kernel-sdk` → релиз обоих
 клиентов → только потом флип значения. Сейчас отдаётся старое значение, всё
 работает.
 

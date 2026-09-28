@@ -81,7 +81,7 @@ Windows is strict: no aliases.
 Edit `src/scheme.ts`, bump `HOTKEY_SCHEME_VERSION`, run `pnpm vitest run
 tests/chatgoose-hotkeys.test.ts`, commit, then from the clean hub tree:
 
-    node scripts/vendor-hotkeys.mjs ../fansly-ext/vendor/chatgoose-hotkeys
-    node scripts/vendor-hotkeys.mjs ../of-desktop/packages/chatgoose-hotkeys
+    node scripts/vendor-hotkeys.mjs ../fansly-chat/vendor/chatgoose-hotkeys
+    node scripts/vendor-hotkeys.mjs ../onlyfans-chat/packages/chatgoose-hotkeys
 
 and commit both clients with their labels, cheatsheets and docs.
