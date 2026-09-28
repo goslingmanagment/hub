@@ -17,8 +17,14 @@ described; caps $1 and 150 images per UTC day for the agency.
 1. A **candidate row** appears in `ai_media_descriptions` (status `pending`,
    or `awaiting_source` when the hub has no free source yet) with a link row
    in `ai_media_description_links` (message, canonical conversation, fan).
-2. The minutely sweep (`ai.media.describe.sweep`, worker role) claims due rows
-   under a lease (`lease_until`, single flight), checks the page policy and the
+2. The worker claims due rows **one at a time** — every second when
+   `AI_MEDIA_DESCRIBE_LOOP_ENABLED` is on (`services/ai-media-describe/loop.ts`:
+   one select on the due index, then the sweep), and in the minutely sweep
+   (`ai.media.describe.sweep`) as the fallback; both share one slot per
+   process. Files whose first message is under 15 minutes old are claimed
+   before the backlog. A claim takes a lease (`lease_until`, single flight)
+   and a fresh `lease_token`; every settle presents the token, so a worker
+   whose lease was taken over writes nothing and never sends. It checks the page policy and the
    enable boundary, the refusal memory (by media id, any variant), asks the
    platform **source adapter** for a free URL, and checks the day's caps.
 3. The file is downloaded into memory through the page's egress
@@ -91,6 +97,7 @@ candidate, or a `dormant` one promoted), and only for messages after the page's
 | `AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT` | 1000000 | $ per UTC day ($1.00), agency-wide |
 | `AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY` | on | fan media described on arrival only in chats with an AI generation in 7 days |
 | `AI_MEDIA_DESCRIBE_MODEL_MEDIA` | `teasers` | creator media: `teasers` or `teasers+free` |
+| `AI_MEDIA_DESCRIBE_LOOP_ENABLED` | off | describe due rows within seconds (1 s loop) instead of per minute; re-read every 15 s |
 | `ANTHROPIC_MEDIA_API_KEY` | unset | optional separate key/workspace (env, restart) |
 
 `since` is the enable boundary: only messages strictly newer are described; a
@@ -132,4 +139,19 @@ where updated_at > now() - interval '1 day' group by 1, 2 order by 3 desc;
 
 select count(*), sum(cost_micro_usd) from ai_usage_events
 where feature = 'media-describe' and completed_at > now() - interval '1 day';
+
+-- fan photo → ready description (described_at is the real settle time since 0214)
+with x as (
+  select d.id, d.described_at, min(l.message_at) msg_at
+  from ai_media_descriptions d join ai_media_description_links l on l.description_id = d.id
+  where d.sender_role = 'fan' and d.status = 'described' and d.described_at > now() - interval '1 day'
+  group by 1, 2)
+select count(*) n,
+  percentile_cont(0.5) within group (order by extract(epoch from described_at - msg_at)) p50_s,
+  percentile_cont(0.9) within group (order by extract(epoch from described_at - msg_at)) p90_s
+from x;
 ```
+
+Each generation's `params.contextManifest.mediaNotes.entries` lists, per
+file (newest first, ≤40), whether its note reached the prompt: `described`,
+`not_recognized`, `pending` or `over_limit` — ids only.

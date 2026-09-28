@@ -82,6 +82,11 @@ describe("Fansly image notes rendering", () => {
       "[10:03] Fan: [Video #5: A dog running on a beach.] and this",
     ].join("\n") + MEDIA_NOTES_GUIDE);
     expect(rendered.manifest).toMatchObject({ described: 3, notRecognized: 1, pending: 1 });
+    // Per file, newest first: what reached this prompt (ids and outcomes only).
+    expect(rendered.manifest.entries?.map((entry) => [entry.n, entry.note])).toEqual([
+      [5, "described"], [4, "described"], [3, "pending"], [2, "not_recognized"], [1, "described"],
+    ]);
+    expect(JSON.stringify(rendered.manifest.entries)).not.toContain("selfie");
   });
 
   it("never describes the body of a paid PPV, even with a stored description", () => {

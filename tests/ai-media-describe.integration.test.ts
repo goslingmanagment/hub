@@ -26,6 +26,10 @@ import {
   type AiMediaSource,
   type AiMediaSourceResolution,
 } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
+import {
+  createAiMediaDescribeLoopState,
+  runAiMediaDescribeLoopTick,
+} from "../apps/runtime/src/services/ai-media-describe/loop.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   resetIntegrationDatabase,
@@ -413,5 +417,78 @@ describe("AI media describer sweep", () => {
     } finally {
       await rm(lakeDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("AI media describer: seconds lane (claim order, real clock, ownership)", () => {
+  it("claims a fresh file before the backlog, one row per claim", async () => {
+    const backlog = await candidate({ mediaRef: "old-1", messageRef: "msg-old", messageAt: new Date("2026-09-28T11:00:00Z") });
+    const fresh = await candidate({ mediaRef: "new-1", messageRef: "msg-new", messageAt: new Date("2026-09-28T11:58:00Z") });
+    const images = await Promise.all(["#101010", "#202020"].map(jpeg));
+    const { calls, deps } = harness({ bytesByRef: { "old-1": images[0]!, "new-1": images[1]! } });
+    const first = await runAiMediaDescribeSweep(app, deps, { limit: 1 });
+    expect(first).toMatchObject({ claimed: 1, sent: 1 });
+    expect((await row(fresh)).status).toBe("described");
+    expect((await row(backlog)).status).toBe("pending");
+    await runAiMediaDescribeSweep(app, deps, { limit: 1 });
+    expect((await row(backlog)).status).toBe("described");
+    expect(calls.provider).toBe(2);
+  });
+
+  it("stamps described_at with the settle time, not the sweep start", async () => {
+    const id = await candidate({ mediaRef: "clock-1" });
+    const { deps } = harness();
+    let tick = 0;
+    // Every clock read is one second later than the previous one.
+    deps.now = () => new Date(NOW.getTime() + 1000 * tick++);
+    await runAiMediaDescribeSweep(app, deps);
+    const described = await row(id);
+    expect(described.status).toBe("described");
+    expect((described.described_at as Date).getTime()).toBeGreaterThan(NOW.getTime() + 3000);
+    const usage = await testDb!.pool.query(`select completed_at from ai_usage_events`);
+    expect((described.described_at as Date).getTime()).toBeGreaterThanOrEqual((usage.rows[0].completed_at as Date).getTime());
+  });
+
+  it("never sends for a claim taken over by another worker, and returns the reservation", async () => {
+    const id = await candidate({ mediaRef: "stolen-1" });
+    const { calls, deps } = harness();
+    const thief = "00000000-0000-4000-8000-000000000001";
+    const source = deps.sources.get("fansly")!;
+    deps.sources = new Map([["fansly", {
+      platform: "fansly",
+      async resolve(appArg, claimed, context) {
+        // The lease "expires" and another worker claims the row mid-flight.
+        await testDb!.pool.query(`update ai_media_descriptions set lease_token = $2 where id = $1`, [claimed.id, thief]);
+        return source.resolve(appArg, claimed, context);
+      },
+    } satisfies AiMediaSource]]);
+    const result = await runAiMediaDescribeSweep(app, deps);
+    expect(result).toMatchObject({ claimed: 1, sent: 0, leaseLost: 1 });
+    expect(calls.provider).toBe(0);
+    const after = await row(id);
+    expect(after.lease_token).toBe(thief);
+    expect(after.status).toBe("pending");
+    const day = await testDb!.pool.query(`select images_reserved, micro_usd_reserved from ai_media_describe_days`);
+    expect(day.rows[0]).toMatchObject({ images_reserved: 0 });
+    expect(Number(day.rows[0].micro_usd_reserved)).toBe(0);
+    const usage = await testDb!.pool.query(`select gateway_outcome, error_code, cost_micro_usd from ai_usage_events`);
+    expect(usage.rows[0]).toMatchObject({ gateway_outcome: "failed", error_code: "lease_lost" });
+    expect(Number(usage.rows[0].cost_micro_usd)).toBe(0);
+  });
+
+  it("the loop tick drains due rows when switched on and idles otherwise", async () => {
+    const id = await candidate({ mediaRef: "loop-1" });
+    const { calls, deps } = harness();
+    const state = createAiMediaDescribeLoopState();
+    expect(await runAiMediaDescribeLoopTick(app, state, deps)).toBe(0);
+    expect(calls.provider).toBe(0);
+
+    app.config.aiMediaDescribeLoopEnabled = true;
+    const fresh = createAiMediaDescribeLoopState();
+    expect(await runAiMediaDescribeLoopTick(app, fresh, deps)).toBe(1);
+    expect((await row(id)).status).toBe("described");
+    // Nothing due: one probe, no sweep.
+    expect(await runAiMediaDescribeLoopTick(app, fresh, deps)).toBe(0);
+    expect(calls.provider).toBe(1);
   });
 });

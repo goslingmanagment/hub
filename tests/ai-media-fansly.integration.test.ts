@@ -296,7 +296,7 @@ describe("event → candidate → description → prompt", () => {
     const row = {
       id: 0, pageId, platform: "fansly" as const, mediaRef: "9001", variant: "full" as const, mediaKind: "photo" as const,
       senderRole: "model" as const, fanPlatformUserId: null, status: "pending" as const, description: null,
-      sourceObservationId: observationId, contentSha256: null, attempts: 1, firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(),
+      sourceObservationId: observationId, contentSha256: null, attempts: 1, firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(), leaseToken: null,
     };
     await expect(fanslyAiMediaSource.resolve(app, row, { now: new Date(), modelMedia: "teasers" }))
       .resolves.toMatchObject({ kind: "skip", reason: "creator_media_off" });
@@ -318,7 +318,7 @@ describe("event → candidate → description → prompt", () => {
     const base = {
       id: 0, pageId, platform: "fansly" as const, variant: "full" as const, senderRole: "fan" as const,
       fanPlatformUserId: FAN, status: "pending" as const, description: null, contentSha256: null, attempts: 1,
-      firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(),
+      firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(), leaseToken: null,
     };
     await expect(fanslyAiMediaSource.resolve(app, { ...base, mediaRef: "8101", mediaKind: "photo", sourceObservationId: expired }, { now: new Date(), modelMedia: "teasers" }))
       .resolves.toMatchObject({ kind: "unavailable", reason: "source_expired" });

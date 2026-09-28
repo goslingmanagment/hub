@@ -42,6 +42,8 @@ export interface AiMediaDescriptionRow {
   attempts: number;
   firstMessageAt: Date | null;
   nextAttemptAt: Date;
+  /** The claim's ownership token (0214); every settle must present it. */
+  leaseToken: string | null;
 }
 
 export interface AiMediaDescriptionLinkInput {
@@ -103,6 +105,7 @@ function mapRow(row: Record<string, unknown>): AiMediaDescriptionRow {
     attempts: Number(row.attempts ?? 0),
     firstMessageAt: toDate(row.first_message_at),
     nextAttemptAt: toDate(row.next_attempt_at) ?? new Date(0),
+    leaseToken: (row.lease_token as string | null) ?? null,
   };
 }
 
@@ -204,42 +207,72 @@ export async function upsertAiMediaDescriptionCandidate(
 }
 
 /**
- * Claims up to `limit` due rows for one sweep: sets lease_until (the
- * single-flight guard) and counts the attempt. A row whose lease is live is
- * never claimed twice, so two workers cannot double-send one file.
+ * Claims the next due row: sets lease_until (the single-flight guard), a fresh
+ * ownership token and counts the attempt. A row whose lease is live is never
+ * claimed twice, so two workers cannot double-send one file. One row per call,
+ * so a fresh file never waits behind a batch: rows whose first message is
+ * newer than `freshSince` come first, then the oldest due.
  */
-export async function claimDueAiMediaDescriptions(
+export async function claimNextDueAiMediaDescription(
   db: Database,
-  input: { pageIds: readonly number[]; now: Date; limit: number; leaseMs: number },
-): Promise<AiMediaDescriptionRow[]> {
-  if (input.pageIds.length === 0 || input.limit <= 0) {
-    return [];
+  input: { pageIds: readonly number[]; now: Date; leaseMs: number; leaseToken: string; freshSince: Date },
+): Promise<AiMediaDescriptionRow | null> {
+  if (input.pageIds.length === 0) {
+    return null;
   }
   const leaseUntil = new Date(input.now.getTime() + input.leaseMs);
   const pageIds = sql.join(input.pageIds.map((id) => sql`${id}`), sql`, `);
   const claimed = await db.execute(sql`
     update ai_media_descriptions d set
       lease_until = ${leaseUntil},
+      lease_token = ${input.leaseToken}::uuid,
       attempts = d.attempts + 1,
       updated_at = ${input.now}
-    where d.id in (
+    where d.id = (
       select id from ai_media_descriptions
       where status in ('pending', 'budget_deferred')
         and next_attempt_at <= ${input.now}
         and (lease_until is null or lease_until < ${input.now})
         and page_id in (${pageIds})
-      order by next_attempt_at asc, id asc
-      limit ${input.limit}
+      order by (first_message_at is not null and first_message_at >= ${input.freshSince}) desc,
+        next_attempt_at asc, id asc
+      limit 1
       for update skip locked
     )
     returning d.*
   `);
-  return claimed.rows.map((row) => mapRow(row as Record<string, unknown>));
+  const row = claimed.rows[0] as Record<string, unknown> | undefined;
+  return row ? mapRow(row) : null;
+}
+
+/** Whether any row of these pages is due now (the describe loop's idle probe:
+ * one select on the partial due index). */
+export async function hasDueAiMediaDescriptions(
+  db: Database,
+  input: { pageIds: readonly number[]; now: Date },
+): Promise<boolean> {
+  if (input.pageIds.length === 0) {
+    return false;
+  }
+  const pageIds = sql.join(input.pageIds.map((id) => sql`${id}`), sql`, `);
+  const result = await db.execute<{ due: boolean }>(sql`
+    select exists (
+      select 1 from ai_media_descriptions
+      where status in ('pending', 'budget_deferred')
+        and next_attempt_at <= ${input.now}
+        and (lease_until is null or lease_until < ${input.now})
+        and page_id in (${pageIds})
+    ) as due
+  `);
+  return result.rows[0]?.due === true;
 }
 
 export interface FinishAiMediaDescriptionInput {
   id: number;
+  /** The token of the claim being settled (compare-and-set). */
+  leaseToken: string;
   status: AiMediaDescriptionStatus;
+  /** The real settle time: a terminal status stamps it as `described_at`. */
   now: Date;
   description?: string | null;
   model?: string | null;
@@ -254,13 +287,17 @@ export interface FinishAiMediaDescriptionInput {
 
 const TERMINAL = new Set<string>(AI_MEDIA_TERMINAL_STATUSES);
 
-/** Settles a claimed row and releases its lease. */
+/**
+ * Settles a claimed row and releases its lease. Only the holder of the
+ * claim's token can settle it: false means the row was claimed again after
+ * this lease expired, and nothing was written. The token itself is kept.
+ */
 export async function finishAiMediaDescription(
   db: Database,
   input: FinishAiMediaDescriptionInput,
-): Promise<void> {
+): Promise<boolean> {
   const terminal = TERMINAL.has(input.status);
-  await db.execute(sql`
+  const updated = await db.execute(sql`
     update ai_media_descriptions set
       status = ${input.status},
       description = ${input.description ?? null},
@@ -274,8 +311,9 @@ export async function finishAiMediaDescription(
       lease_until = null,
       described_at = ${terminal ? input.now : null},
       updated_at = ${input.now}
-    where id = ${input.id}
+    where id = ${input.id} and lease_token = ${input.leaseToken}::uuid
   `);
+  return Number((updated as { rowCount?: number | null }).rowCount ?? 0) === 1;
 }
 
 /** Refusal memory by file, across every variant of it. */
