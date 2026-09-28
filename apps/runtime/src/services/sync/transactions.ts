@@ -1,5 +1,6 @@
 import {
   assertOwnedPageSyncLease,
+  countTransactionsBySource,
   getCheckpoint,
   getOldestPendingTransactionAt,
   PageSyncLeaseLostError,
@@ -635,9 +636,22 @@ async function syncTransactionsIncremental(
       ? (oldestPendingAt < lookbackStart ? oldestPendingAt : lookbackStart)
       : (lookbackStart ?? oldestPendingAt);
     const rescanCapStart = new Date(Date.now() - transactionRescanCapDays * DAY_MS);
-    const after = earliestRescanStart && earliestRescanStart < rescanCapStart
+    let after = earliestRescanStart && earliestRescanStart < rescanCapStart
       ? rescanCapStart
       : earliestRescanStart;
+
+    // The cap limits how far a rescan reaches back; it must never lift the
+    // bound above the cursor. After an outage longer than the cap, rows between
+    // the cursor and the cap start are unseen, and the early stop would count
+    // them as older and skip them for good. cursor+1ms keeps the cursor row
+    // itself older, so a dormant page still stops after two pages.
+    if (after && checkpoint?.cursorTimestamp && after > checkpoint.cursorTimestamp) {
+      after = new Date(checkpoint.cursorTimestamp.getTime() + 1);
+      await input.telemetry.addNote("Transaction lower bound floored at the checkpoint cursor", {
+        cursorTimestamp: checkpoint.cursorTimestamp.toISOString(),
+        rescanCapStart: rescanCapStart.toISOString(),
+      });
+    }
 
     if (oldestPendingAt && oldestPendingAt < rescanCapStart) {
       app.logger.warn(
@@ -924,7 +938,7 @@ async function syncTransactionsIncremental(
       // bound, all subsequent pages will only contain even older data. Stop
       // early to avoid exhaustively scanning the full transaction history.
       if (earlyStoppedBeyondBoundary) {
-        app.logger.warn(
+        app.logger.info(
           {
             pageLabel: input.pageLabel,
             platformAccountId: input.platformAccountId,
@@ -1088,67 +1102,55 @@ async function syncTransactionsIncremental(
     });
   }
 
+  // A quiet page is normal: the local bound always walks past the cursor and
+  // stops two all-older pages later (the boundary summary carries the counts).
   if (
     checkpoint?.cursorTimestamp &&
     newestSeenAt &&
     newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime() &&
     state.processedTransactions > 0
   ) {
-    await input.telemetry.addAnomaly({
+    await input.telemetry.addNote("Local transaction rescan completed without a newer checkpoint row", {
       code: "checkpoint_stalled",
-      severity: "warn",
-      message: "Local transaction rescan completed without a newer checkpoint row",
-      details: {
-        checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
-        newestSeenAt: newestSeenAt.toISOString(),
-        processed: state.processedTransactions,
-        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
-      },
+      checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
+      newestSeenAt: newestSeenAt.toISOString(),
+      processed: state.processedTransactions,
+      earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
     });
   }
 
-  if (
-    after &&
-    (
-      (state.firstPageOlderThanBoundaryItems > 0 && state.olderThanBoundaryItems > 100) ||
-      state.olderThanBoundaryPages > 1 ||
-      (
-        oldestSeenAt &&
-        oldestSeenAt.getTime() < after.getTime() &&
-        checkpoint?.cursorTimestamp &&
-        newestSeenAt &&
-        newestSeenAt.getTime() <= checkpoint.cursorTimestamp.getTime()
-      )
-    )
-  ) {
-    await input.telemetry.addAnomaly({
-      code: "after_ineffective",
-      severity: "warn",
-      message: "Transaction scan walked materially past the local lower bound before stopping",
-      details: {
-        after: after.toISOString(),
-        boundarySentToProvider: false,
-        firstPageOlderThanBoundaryItems: state.firstPageOlderThanBoundaryItems,
-        olderThanBoundaryItems: state.olderThanBoundaryItems,
-        olderThanBoundaryPages: state.olderThanBoundaryPages,
-        oldestSeenAt: oldestSeenAt?.toISOString() ?? null,
-        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
-      },
+  // Whole-ledger completeness. An early-stopped scan reads only the head of
+  // the listing, so its fetched rows never match the lifetime total; the
+  // ledger must, because every listed row is upserted under fansly:rest and
+  // captured rows are never deleted.
+  if (state.providerReportedTotal !== null) {
+    const ledgerRows = await countTransactionsBySource(app.db, {
+      platformAccountId: input.platformAccountId,
+      source: "fansly:rest",
     });
-  }
-
-  if (state.providerReportedTotal !== null && state.providerReportedTotal !== state.processedTransactions) {
-    await input.telemetry.addAnomaly({
-      code: "transactions_total_mismatch",
-      severity: "warn",
-      message: "Provider-reported transaction total differed from the fetched transaction rows",
-      details: {
-        providerReportedTotal: state.providerReportedTotal,
-        fetchedRows: state.processedTransactions,
-        pageCount: state.transactionPages,
-        earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
-      },
-    });
+    const ledgerDetails = {
+      providerReportedTotal: state.providerReportedTotal,
+      ledgerRows,
+      fetchedRows: state.processedTransactions,
+      earlyStoppedBeyondBoundary: state.earlyStoppedBeyondBoundary,
+    };
+    if (ledgerRows < state.providerReportedTotal) {
+      // The hole lies outside this scan's window, so re-reading the window
+      // cannot fill it: neither throw nor withhold the checkpoint. It stays
+      // an error on every run until a financials re-backfill repairs it.
+      await input.telemetry.addAnomaly({
+        code: "transactions_ledger_incomplete",
+        severity: "error",
+        message: "Local Fansly transaction ledger holds fewer rows than the provider-reported total",
+        details: ledgerDetails,
+      });
+    } else if (ledgerRows > state.providerReportedTotal) {
+      // Rows the provider stopped listing stay captured, so this never clears.
+      await input.telemetry.addNote(
+        "Local Fansly transaction ledger holds more rows than the provider-reported total",
+        { code: "transactions_ledger_surplus", ...ledgerDetails },
+      );
+    }
   }
 
   return {
