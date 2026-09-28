@@ -4828,7 +4828,9 @@ export const mediaOrders = pgTable(
     /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
     buyerPlatformUserId: text("buyer_platform_user_id").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    /** Null until a response is observed carrying an order id (§2.3). */
+    /** Fansly `orderId` when the first sighting was an order-history row.
+     * DM sidecar rows carry no id and the first sighting wins, so DM-first
+     * orders (most) stay null — the column is not complete (§2.3). */
     orderRef: text("order_ref"),
     bundleRef: text("bundle_ref"),
     orderType: integer("order_type"),
