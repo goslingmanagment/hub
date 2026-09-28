@@ -304,6 +304,22 @@ async function resolveOfapiCreditsIncidentIfRecovered(
   await resolveOfapiGlobalIncident(app, { ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT, recoveredAt });
 }
 
+/**
+ * Page-wide auth/proxy recovery needs provider evidence: a chunk that made no
+ * request, or whose every attempt failed, proves nothing (prod 2026-09-19/20:
+ * 91 such chunks "recovered" a 38-hour proxy outage on one page). The chunk's
+ * newest successful response is the recovery instant, not the chunk end, so a
+ * chunk cannot close or tombstone past another stream's later failure. A
+ * `succeededAt` is never evidence: a walk completion stamps it with the wall
+ * clock even when the walk made no request, and a settlement retry reuses
+ * that stamp without making one either.
+ */
+function resolveProviderRecoveredAt(
+  telemetry: Pick<SyncRunTelemetry, "getRequestTotalsSnapshot">,
+): Date | null {
+  return telemetry.getRequestTotalsSnapshot().lastSuccessfulAttemptAt;
+}
+
 /** A provider that named its own deadline outranks the local ladder, but only
  * upward: `retry_at` becomes the LATER of the two. Fansly answers a 429 with a
  * `Retry-After` far beyond anything the in-process loop may sleep (600s against
@@ -758,7 +774,7 @@ export async function executeNextSyncPageChunk(
           pageLabel: pageContext.page.label,
           platform: pageContext.platform,
           recoveredAt,
-          ...(result.succeededAt ? { providerRecoveredAt: result.succeededAt } : {}),
+          providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
           stream: taskLease.stream,
         });
         await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
@@ -813,6 +829,7 @@ export async function executeNextSyncPageChunk(
       pageLabel: pageContext.page.label,
       platform: pageContext.platform,
       recoveredAt,
+      providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
       stream: taskLease.stream,
     });
     await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);

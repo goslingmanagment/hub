@@ -153,7 +153,25 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal, onCa
     } finally {
       controller.abort("disabled");
       if (owner) {
-        if (connectionId) await serial(() => finishFanslyWsConnection(owner!.db, connectionId!, reason)).catch(() => undefined);
+        const closing = owner;
+        const id = connectionId;
+        // No retry through app.db: only the lock-owning session writes. The
+        // next owner of this page closes the row as `abandoned`. A client-side
+        // timeout or lost session may still have committed the close.
+        if (id) await serial(() => finishFanslyWsConnection(closing.db, id, reason)).catch((error: unknown) => {
+          const fields = { pageLabel: label, connectionId: id, stopReason: reason,
+            closeError: closeErrorClass(error, closing.alive) };
+          // Residual: `abandoned` does not block the generation. The wait loop
+          // below blocks only this runner; the next start of this page (worker
+          // restart, disable/re-enable, live-config stop) gets one more WS auth.
+          if (reason === "auth_refused") {
+            app.logger.error(fields,
+              "Fansly B0 auth refusal not confirmed; if it did not commit, the next page start retries this generation once");
+          } else {
+            app.logger.warn(fields,
+              "Fansly B0 connection close not confirmed; if it did not commit, the next owner marks it abandoned");
+          }
+        });
         await owner.close();
       }
       if (context) await context.egress.dispatcher?.destroy().catch(() => undefined);
@@ -174,6 +192,19 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal, onCa
       await pause(signal, backoff * (0.8 + Math.random() * 0.4));
     }
   }
+}
+
+/** A fixed class only: driver errors embed SQL and bound parameters. */
+function closeErrorClass(error: unknown, alive: boolean) {
+  if (!alive) return "ownership_lost";
+  let current = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    if (current.message === "Query read timeout") return "timeout";
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+    current = current.cause;
+  }
+  return "unknown";
 }
 
 async function pause(signal: AbortSignal, ms: number) {

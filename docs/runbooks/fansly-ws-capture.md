@@ -62,6 +62,13 @@ attempt and leave coverage unknown. Retry backs off to 60 seconds; ten consecuti
 unstable attempts pause about 30 minutes with jitter. A durable business capture
 or 60 verified seconds resets that sequence. An explicit 401 blocks the same
 generation across restarts; disabling/re-enabling cannot erase that evidence.
+The block is the `auth_refused` close of the attempt row. If that close is not
+confirmed, the worker logs `Fansly B0 auth refusal not confirmed` at error level.
+Check the row's `stop_reason`: a `timeout` close may still have committed. If it
+did not, only the running page loop keeps the generation blocked. Any restart of
+that page's runner (worker restart, disable/re-enable, or a live-config outage
+that stops pages) gets one more WS auth attempt with the refused token, so in
+this state disabling/re-enabling does not preserve the block.
 No automatic credential revocation or proxy mutation occurs.
 
 ## Journal and debt
@@ -94,8 +101,15 @@ decoder change; B0 does not reinterpret them automatically.
 
 Every connection starts with `gap_state=unknown`, carrying the previous attempt's
 last known boundary. Neither reconnect nor REST replay proves transient fact
-recovery. Closed-at NULL with stale guard is a failed/unconfirmed attempt, not a
-healthy connection. Never sum resumed phases into an uninterrupted duration.
+recovery. Only the owning session closes its row. When that close is lost (the
+session died, or the close was not confirmed and was logged as `Fansly B0
+connection close not confirmed` with a fixed `closeError` class), the next owner
+of the page closes the row with `stop_reason=abandoned` as it starts. A `timeout`
+close may still have committed; the row then keeps its real `stop_reason` and is
+never abandoned. An abandoned `closed_at` is the row's last guard or capture, not
+an observed close. Closed-at NULL with a stale guard means the owner died and no
+later owner has started on that page yet; it is not a healthy connection. Never
+sum resumed phases into an uninterrupted duration.
 
 Read diagnostics via the `read_only` role in a READ ONLY transaction, without raw:
 
