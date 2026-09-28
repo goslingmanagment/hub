@@ -2810,6 +2810,34 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       expect(fence.getTime()).toBeGreaterThanOrEqual(startedAfter);
     });
 
+    it("takes a fresh start before retrying a first read that never wrote a page", async () => {
+      // A failed or yielded first read leaves the walk's stored start behind,
+      // and its retry keeps the same revision, so it resumes this cursor.
+      resumeWalk({
+        offset: 0,
+        observedCount: 0,
+        distinctObservedCount: 0,
+        pageCount: 0,
+        providerReportedTotal: null,
+      });
+      const startedAfter = Date.now();
+
+      const { result, tx } = await runWalk({ total: 50, items: subscriberItems("active", 50), done: true });
+
+      expect(result).toMatchObject({ satisfied: true, stats: { generation: 7, pageCount: 1 } });
+      expect(dbMocks.maxPageSubscriptionGeneration).not.toHaveBeenCalled();
+      const fence = dbMocks.deactivatePageSubscriptionsByGeneration.mock.calls[0]?.[1].lastSeenBefore as Date;
+      expect(fence.getTime()).toBeGreaterThanOrEqual(startedAfter);
+      expect(dbMocks.deactivatePageSubscriptionsByGeneration).toHaveBeenCalledWith(tx, {
+        platformAccountId: 14,
+        generation: 7,
+        lastSeenBefore: fence,
+      });
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(tx, expect.objectContaining({
+        state: expect.objectContaining({ generation: 7, restartCount: 0, walkStartedAt: fence.toISOString() }),
+      }));
+    });
+
     it("restarts only the archive-only history walk when the expired total shifts", async () => {
       resumeWalk({ mode: "expired", historyBackfilledAt: null, providerReportedTotal: 1001 });
 

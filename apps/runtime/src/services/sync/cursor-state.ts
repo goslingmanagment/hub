@@ -15,9 +15,11 @@ type SubscribersCursorState = {
   providerReportedTotal: number | null;
   /** Restarts of this walk after its provider total shifted or its pages overlapped. */
   restartCount: number;
-  /** When this active walk began, before its first read. Finalization spares
-   * every row touched since (Audit P-25), and an empty snapshot vouches only
-   * for subscriptions that had lapsed by then. Null on a cursor written before
+  /** When this active walk began: taken again right before each read until
+   * the walk has written a page, so a retried or yielded first read is judged
+   * by its own start, not a failed attempt's. Finalization spares every row
+   * touched since (Audit P-25), and an empty snapshot vouches only for
+   * subscriptions that had lapsed by then. Null on a cursor written before
    * the fence existed; execution never finalizes an active walk without one. */
   walkStartedAt: string | null;
   /** Why this revision's active walk retired nothing past the restart bound;

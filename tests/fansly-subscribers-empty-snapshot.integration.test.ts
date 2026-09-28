@@ -181,6 +181,55 @@ describe("Fansly subscribers stated-empty snapshot", () => {
     expect(note.rows).toEqual([{ details: expect.objectContaining({ retiredCount: 1, generation: 4122 }) }]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("judges a retried first read by its own start, not the failed attempt's", async () => {
+    // The revision's walk began at 15:40, before the last subscription lapsed
+    // at 15:47:35, and its first read failed. The retry keeps the revision and
+    // so the cursor, and meets a stated zero long after the expiry.
+    const failedAttemptStartedAt = "2026-09-28T15:40:00.000Z";
+    let reads = 0;
+    const f = await fixture({
+      subscriptions: [lapsed("889566")],
+      cursor: {
+        ...LEGACY_CURSOR, distinctObservedCount: 0, restartCount: 0, walkStartedAt: failedAttemptStartedAt,
+      },
+      serve: () => {
+        reads += 1;
+        if (reads === 1) throw new Error("Fansly proxy request timeout");
+        return statedEmpty();
+      },
+    });
+
+    const failed = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(failed.kind).not.toBe("success");
+    expect(await currentIds(f.page.id)).toEqual(["889566"]);
+    expect((await getCheckpoint(f.app.db, f.page.id, "subscribers"))?.state)
+      .toMatchObject({ revision: REQUEST_SEQ, pageCount: 0, walkStartedAt: failedAttemptStartedAt });
+    const retrying = await getPageSyncState(f.app.db, f.page.id, "subscribers");
+    expect(retrying).toMatchObject({ status: "retrying", requestSeq: REQUEST_SEQ, consecutiveFailures: 16 });
+    // Wait out the retry ladder; the retry stays on the same revision.
+    await db.pool.query(
+      "update page_sync_states set retry_at=now() - interval '1 second' where page_id=$1 and stream='subscribers'",
+      [f.page.id],
+    );
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result).toMatchObject({ kind: "success", stream: "subscribers" });
+    expect(f.getSubscribersPage).toHaveBeenCalledTimes(2);
+    expect(await currentIds(f.page.id)).toEqual([]);
+    const checkpoint = await getCheckpoint(f.app.db, f.page.id, "subscribers");
+    expect(checkpoint?.cursorLastSucceededRunId).toBe(result.runId);
+    expect(checkpoint?.state).toMatchObject({ revision: REQUEST_SEQ, generation: 4122, pageCount: 1 });
+    const walkStartedAt = (checkpoint?.state as { walkStartedAt?: string } | null)?.walkStartedAt;
+    expect(Date.parse(walkStartedAt ?? "")).toBeGreaterThan(Date.parse(LILLY_ENDS_AT));
+    const state = await getPageSyncState(f.app.db, f.page.id, "subscribers");
+    expect(state).toMatchObject({ consecutiveFailures: 0, lastErrorSummary: null, retryAt: null });
+    expect(state?.appliedSeq).toBe(REQUEST_SEQ);
+    expect(await incidentStatus(f.key)).toBe("resolved");
+    expect(await anomalies(result.runId!)).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps an already-empty page successfully empty", async () => {
     const f = await fixture({ subscriptions: [], serve: statedEmpty });
 

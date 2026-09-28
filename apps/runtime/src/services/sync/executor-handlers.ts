@@ -1506,6 +1506,23 @@ async function fenceLegacySubscribersWalk(
   };
 }
 
+/**
+ * Until an active walk has written a page, nothing carries its generation, so
+ * its start can move up to each read: every row touched before that read is
+ * one the read could observe (Audit P-25). Retries of a failed or yielded
+ * first read keep the same revision and cursor; judged against the first
+ * attempt's start, a subscription that lapsed in between would never count as
+ * lapsed and a stated zero would be refused for good. The moved start
+ * persists with the walk's first page write.
+ */
+function refreshUnreadSubscribersWalkStart(state: SubscribersCursorState): SubscribersCursorState {
+  const unread = state.mode === "active" &&
+    state.offset === 0 &&
+    state.pageCount === 0 &&
+    state.observedCount === 0;
+  return unread ? { ...state, walkStartedAt: new Date().toISOString() } : state;
+}
+
 /** Rows touched at or after this instant survive the walk's finalization. */
 function subscribersWalkFence(state: SubscribersCursorState) {
   if (state.walkStartedAt === null) {
@@ -1657,6 +1674,7 @@ export async function fanslySubscribersChunk(
   // Reserve both calls so a chunk never starts a page it cannot hydrate.
   while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
+    state = refreshUnreadSubscribersWalkStart(state);
     const status = state.mode === "active" ? "3,4" : "5";
     const page = await app.adapter.getSubscribersPage(
       requestContext,
