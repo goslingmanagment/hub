@@ -211,6 +211,8 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
           accountId: "fansly-fan-8",
           accountMediaBundleId: "bundle-44",
           createdAt: Math.floor(Date.parse("2026-06-22T10:00:00Z") / 1000),
+          // Live order-history rows carry `orderId` (the lane's cursor), no `id`.
+          orderId: "order-77",
           type: 2,
         }],
       },
@@ -226,13 +228,15 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
       // v5: purchase_history shares the DM sidecar shapes, so it feeds the
       // media plane through the SAME composite key an inline DM order row
       // would mint — which is what collapses both lanes to one media_orders
-      // row (see the coexistence test).
+      // row (see the coexistence test). The row's orderId is recorded as
+      // orderRef, but the key stays the composite.
       expect.objectContaining({
         type: "media.order_observed",
         fanIdentityRef: "fansly-fan-8",
         dedupKey: `mediaorder:v1:3:bundle-44:fansly-fan-8:${
           Math.floor(Date.parse("2026-06-22T10:00:00Z") / 1000)
         }`,
+        data: expect.objectContaining({ orderRef: "order-77" }),
       }),
     ]);
   });

@@ -689,7 +689,8 @@ function orderObservedDrafts(
     }
     // Order rows carry epoch SECONDS; the key rounds to the second because
     // that is the resolution the platform serves — the composite IS the
-    // identity, since the live shape carries no order id (§2.3).
+    // identity, since DM sidecar rows carry no order id (§2.3) and both lanes
+    // must collapse to one media_orders row.
     const occurredAt = asFanslyTimestamp(order.createdAt, observation.receivedAt);
     const occurredAtSeconds = Math.floor(occurredAt.getTime() / 1000);
     const dedupKey = `mediaorder:v1:${pageRef}:${subjectRef}:${buyerRef}:${occurredAtSeconds}`;
@@ -707,9 +708,12 @@ function orderObservedDrafts(
       bundleRef,
       buyerRef,
       orderType: asNumber(order.type),
-      // No order id exists in the live shape. It stays null until a response
-      // is observed carrying one, and only then — versioned — becomes a key.
-      orderRef: asString(order.id),
+      // Order-history (and contract-probe) rows carry `orderId`; DM
+      // sidecar rows carry none. The first lane to mint the composite key
+      // decides media_orders.order_ref (a later sighting dedupes), so orders
+      // first seen in a DM — most of them — keep order_ref NULL: the column
+      // is NOT complete. Making it the key would need a versioned change.
+      orderRef: asString(order.orderId) ?? asString(order.id),
       orderedAt: occurredAt.toISOString(),
       priceMills: subjectRow === null ? null : permissionSummary(subjectRow).priceMills,
       conversationRef: carrier?.conversationRef ?? null,
@@ -723,7 +727,7 @@ function orderObservedDrafts(
       fanIdentityRef: buyerRef,
       ...(carrier?.conversationRef ? { conversationRef: carrier.conversationRef } : {}),
       ...(carrier ? { messageRef: carrier.messageRef } : {}),
-      // The DEDUP key is the composite natural key (no order id exists), but
+      // The DEDUP key is the composite natural key (DM rows have no order id), but
       // the projector still needs a content hash for its lineage column — the
       // same one every other media-plane type carries. Without it the order
       // events are silently skipped by the projector's lineage guard and
