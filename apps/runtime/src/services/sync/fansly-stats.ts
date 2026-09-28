@@ -78,7 +78,10 @@ import {
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { fanslyStatsDatasetHasDatapointArrays } from "../canonicalize/fansly-stats.ts";
+import {
+  fanslyStatsDatasetHasDatapointArrays,
+  isExactTerminalNullAccountStatsPayload,
+} from "../canonicalize/fansly-stats.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { parseFanslyMetadataAccountCreatedAt } from "../fansly.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
@@ -90,6 +93,7 @@ import {
   createFanslyLaneRuntime,
   fanslyUtcDayKey,
   FanslyLaneInvalidResponseError,
+  type FanslyResponseClass,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
@@ -634,35 +638,52 @@ function pointCarriesTraffic(point: unknown): boolean {
 }
 
 /**
- * Is this MONTH empty — the floor signal the month walk reads?
+ * What did the provider say about this MONTH — the one reading the month walk
+ * decides on?
  *
- * Wider than `isEmptyStatsWindow` on purpose: a month can come back with rows
- * that are all zeros, and a walk that treated a zero-valued bucket as evidence
- * of traffic would never find a floor (which is exactly what WP-F4's per-media
- * walk did on production — 240 windows back to 2006 on one zero-valued row).
- * ANY non-zero counter anywhere in the body is traffic; nothing else is.
+ * "empty" is wider than `classifyStatsWindow`'s on purpose: a month can come
+ * back with rows that are all zeros, and a walk that treated a zero-valued
+ * bucket as evidence of traffic would never find a floor (which is exactly what
+ * WP-F4's per-media walk did on production — 240 windows back to 2006 on one
+ * zero-valued row). ANY non-zero counter anywhere in the body is traffic;
+ * nothing else is.
  *
- * The response is journaled either way — capture first; only the floor decision
- * reads this.
+ * It also covers the provider's TERMINAL-NULL month, `{"dataset": null,
+ * "aggregationData": null}` exactly — the canonicalizer's own predicate, so the
+ * body it stamps as a window without facts is the body read here as an empty
+ * month. On production it answers months with no statistics at all: pre-creation
+ * probes (lora-2, lora-3, lilly-2), ari-1's creation month 2026-03, AND lilly-1's
+ * 2025-05, a year after creation, with 2024-05 traffic below it. So it is an
+ * empty month, never a floor by itself: the ordinary rules end the walk — the
+ * creation floor, or [E10]'s streak and probe. Any other body without a dataset
+ * object stays invalid.
+ *
+ * The response is journaled either way — capture first; only the walk's
+ * decision reads this.
  */
-export function isEmptyStatsMonth(payload: unknown): boolean {
-  const classification = classifyStatsWindow(payload);
-  if (classification === "empty") {
-    return true;
+export function classifyStatsMonth(payload: unknown): FanslyResponseClass {
+  if (isExactTerminalNullAccountStatsPayload(payload)) {
+    return "empty";
   }
+  const classification = classifyStatsWindow(payload);
   const dataset = statsDataset(payload);
-  if (classification === "invalid" || dataset === null) {
-    return false;
+  if (classification !== "nonempty" || dataset === null) {
+    return classification;
   }
   for (const key of ["datapoints", "profileDatapoints"] as const) {
     const points = Array.isArray(dataset[key]) ? dataset[key] as unknown[] : [];
     for (const point of points) {
       if (pointCarriesTraffic(point)) {
-        return false;
+        return "nonempty";
       }
     }
   }
-  return true;
+  return "empty";
+}
+
+/** Is this MONTH empty — the floor signal the month walk reads? */
+export function isEmptyStatsMonth(payload: unknown): boolean {
+  return classifyStatsMonth(payload) === "empty";
 }
 
 export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
@@ -1446,7 +1467,8 @@ export async function fanslyStatsSnapshotChunk(
           afterDate: monthAfter.toISOString(),
         }, response.raw);
         guard.lastObservationId = persisted.observationId ?? guard.lastObservationId;
-        if (classifyStatsWindow(response.raw) === "invalid") {
+        const monthClass = classifyStatsMonth(response.raw);
+        if (monthClass === "invalid") {
           if (backfill.daily.probeResumeMonthIndex !== null) {
             // A malformed answer to the one-off deep probe is evidence only
             // about that probe surface. Retrying it tomorrow cannot advance
@@ -1493,6 +1515,8 @@ export async function fanslyStatsSnapshotChunk(
           throw new FanslyLaneInvalidResponseError("account_stats");
         }
 
+        // A terminal-null month serves no bounds, and no bounds are no
+        // contradiction: it reaches the empty-month rules below.
         const served = servedWindow(response.raw);
         if (!monthWasHonoured(monthIndex, served)) {
           await stopMonthWalk({
@@ -1505,7 +1529,7 @@ export async function fanslyStatsSnapshotChunk(
           await saveProgress();
           continue;
         }
-        if (isEmptyStatsMonth(response.raw)) {
+        if (monthClass === "empty") {
           const streak = backfill.daily.emptyStreak + 1;
           backfill.daily.emptyStreak = streak;
           if (accountCreatedAt !== null || backfill.daily.probeHitMonthIndex !== null) {
