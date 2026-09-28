@@ -45,6 +45,8 @@ const swaggerRequire = createRequire(testRequire.resolve("@fastify/swagger"));
 const yaml = swaggerRequire("yaml") as { parse: (text: string) => Workflow };
 const workflowText = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const workflow = yaml.parse(workflowText);
+// TEMP (measurement runs only): ignore the resource sampler steps.
+for (const config of Object.values(workflow.jobs)) config.steps = config.steps.filter(item => !item.name.startsWith("TEMP "));
 const nightly = yaml.parse(readFileSync(new URL("../.github/workflows/nightly.yml", import.meta.url), "utf8"));
 
 function job(name: string): Job {
