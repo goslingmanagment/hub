@@ -66,6 +66,7 @@ import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
+import { runNotificationReadStateReplay } from "./services/fansly-notification-read-state-replay.ts";
 import {
   countHarvestObservations,
   listFanslyBackscrollManifest,
@@ -2140,6 +2141,46 @@ export function buildProgram() {
           `${result.dryRun ? "[dry-run] would delete" : "deleted"} ${result.rows} `
             + `foreign media_stats rows (failing ${result.failing}) on ${result.pages.length} page(s)`,
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // J7. Owner-run one-off like M11 above: dry-run default (READ ONLY),
+  // `--execute` opts in, a re-run reports zeros, no platform call.
+  program
+    .command("fansly:notifications-replay-read-state")
+    .description(
+      "J7: replay the notification.observed looks the pre-J7 head guard discarded on a "
+        + "createdAt tie (below the fansly_engagement watermark) through the fixed "
+        + "platform_notifications upsert, so rows first seen unread get their read state. "
+        + "Touches nothing else — NOT a projection rebuild. Dry-run default; idempotent",
+    )
+    .option("--execute", "actually replay (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runNotificationReadStateReplay(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+        for (const page of result.pages) {
+          console.log(
+            `page ${page.pageId}: ${page.events} look(s), heads ${page.heads}, `
+              + `acknowledged ${page.acknowledged}, unacknowledged ${page.unacknowledged}`,
+          );
+        }
+        console.log(
+          `${result.dryRun ? "[dry-run] would move" : "moved"} ${result.heads} notification head(s) `
+            + `(acknowledged ${result.acknowledged}, unacknowledged ${result.unacknowledged}; `
+            + `${result.events} look(s) replayed, erasure-fenced ${result.erasureFenced}, `
+            + `deferred ${result.deferred})`,
+        );
+        if (result.deferred > 0) {
+          process.exitCode = 1;
+        }
       } finally {
         await app.close();
       }

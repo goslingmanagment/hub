@@ -114,23 +114,37 @@ export async function upsertPlatformNotification(
     if (!(await tryAcquireDmArchiveWriterFenceLock(database, input.pageId))) {
       return { status: "deferred", applied: false } as const;
     }
-    const materialAt = input.occurredAt < input.observedAt
-      ? input.occurredAt
-      : input.observedAt;
-    const actorRef = input.typeCode === 3002
-      ? input.correlationRef
-      : input.correlationGroupRef;
-    if (
-      await isDmArchiveScopeFenced(database, {
-        pageId: input.pageId,
-        platform: input.platform,
-        refs: [actorRef],
-        materialAt,
-      })
-    ) {
+    if (await isPlatformNotificationErasureFenced(database, input)) {
       return { status: "erasure_fenced", applied: false } as const;
     }
     return upsertPlatformNotificationUnfenced(database, input);
+  });
+}
+
+/**
+ * The erasure scope fence `upsertPlatformNotification` applies: an erasure of
+ * the notification's actor (or its page) that started after the notification
+ * was material refuses the row. A read; exported so a dry-run can count what
+ * the upsert would refuse.
+ */
+export async function isPlatformNotificationErasureFenced(
+  db: Database,
+  input: Pick<
+    UpsertPlatformNotificationInput,
+    "pageId" | "platform" | "typeCode" | "correlationRef" | "correlationGroupRef" | "occurredAt" | "observedAt"
+  >,
+): Promise<boolean> {
+  const materialAt = input.occurredAt < input.observedAt
+    ? input.occurredAt
+    : input.observedAt;
+  const actorRef = input.typeCode === 3002
+    ? input.correlationRef
+    : input.correlationGroupRef;
+  return isDmArchiveScopeFenced(db, {
+    pageId: input.pageId,
+    platform: input.platform,
+    refs: [actorRef],
+    materialAt,
   });
 }
 
