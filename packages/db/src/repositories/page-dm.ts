@@ -1099,6 +1099,44 @@ export async function getExistingPageDmMessageIds(
   return new Set(rows.map((row) => row.platformMessageId));
 }
 
+/**
+ * The subset of `platformMessageIds` stored in this conversation at or before
+ * `boundaryMessageId`, in the stored-window order that picks
+ * newest_stored_message_id (created_at, then platform_message_id). A head
+ * walk meets known ground only there: a stored row above the recorded newest
+ * message was written since the summary was last recomputed (a walk dropped
+ * before its finalize, or a finalize deferred into projection debt), and the
+ * gap below it may be unread. When the boundary row is not stored, every
+ * stored id qualifies, as in getExistingPageDmMessageIds. Soft-deleted rows
+ * count, as there.
+ */
+export async function getPageDmMessageIdsAtOrBefore(
+  db: Database,
+  input: {
+    conversationId: number;
+    platformMessageIds: string[];
+    boundaryMessageId: string;
+  },
+) {
+  if (input.platformMessageIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const result = await db.execute<{ platform_message_id: string }>(sql`
+    select m.platform_message_id
+    from page_dm_messages m
+    left join page_dm_messages b
+      on b.conversation_id = m.conversation_id
+     and b.platform_message_id = ${input.boundaryMessageId}
+    where m.conversation_id = ${input.conversationId}
+      and m.platform_message_id in ${input.platformMessageIds}
+      and (b.id is null
+        or (m.created_at, m.platform_message_id) <= (b.created_at, b.platform_message_id))
+  `);
+
+  return new Set(result.rows.map((row) => row.platform_message_id));
+}
+
 export interface PageDmMessageSyncCandidate {
   id: number;
   platformConversationId: string;

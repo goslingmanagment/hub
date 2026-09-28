@@ -13,6 +13,7 @@ import {
   deletePageDmMessageByPlatformMessageId,
   finalizePageDmConversationMessageSync,
   getConversationSyncHealth,
+  getPageDmMessageIdsAtOrBefore,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
@@ -1122,6 +1123,32 @@ describe("page DM repository integration", () => {
     const later = new Date("2026-09-28T02:07:00.000Z");
     expect(await finalize(thread.id, later)).toEqual(later);
     expect(await finalize(fresh.id, headReadAt)).toEqual(headReadAt);
+  });
+
+  it("counts only stored rows at or below the recorded boundary as known ground", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await createGenerationPage(testDb, "page-dm-known-ground");
+    const thread = await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "known-ground", 1));
+    if (!thread) throw new Error("test setup: thread creation failed");
+    const at = (second: number) => new Date(Date.UTC(2026, 8, 20, 0, 0, second));
+    await upsertPageDmMessages(testDb.db, [["m-1", 1], ["m-2", 2], ["m-3", 2], ["m-4", 3]].map(([id, second]) => ({
+      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id as string,
+      senderPlatformUserId: "fan", senderRole: "fan" as const, createdAt: at(second as number),
+      content: "body", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+    })));
+    const knownGround = async (boundaryMessageId: string) => [...await getPageDmMessageIdsAtOrBefore(testDb!.db, {
+      conversationId: thread.id, platformMessageIds: ["m-1", "m-2", "m-3", "m-4", "unstored"], boundaryMessageId,
+    })].sort();
+
+    // Same created_at breaks the tie on the id, as the window summary does.
+    expect(await knownGround("m-2")).toEqual(["m-1", "m-2"]);
+    expect(await knownGround("m-3")).toEqual(["m-1", "m-2", "m-3"]);
+    // An unstored boundary cannot place anything above it: every stored id counts.
+    expect(await knownGround("unstored")).toEqual(["m-1", "m-2", "m-3", "m-4"]);
   });
 
   it("backs a failing thread off 5/10/20 minutes, quarantines it on the 4th failure, and clears it", async (context) => {

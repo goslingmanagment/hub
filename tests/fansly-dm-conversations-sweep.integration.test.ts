@@ -1165,4 +1165,41 @@ describe("Fansly dm_conversations sweep — request-level characterization", () 
     expect(await readDmMessagesRequest(stored.page.id))
       .toMatchObject({ requestSeq: DM_MESSAGES_SEED_REQUEST_SEQ + 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("binds partners seen without aggregation accounts but never marks them deleted", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Fansly omitted aggregationData.accounts: no account snapshot, and no
+    // account lookup ran either, so nothing says these accounts are gone.
+    const response = groupsPage({ conversations: ["grp-1", "grp-2", "grp-3"], total: 3, offset: 0, done: true });
+    response.accounts = [];
+    response.raw.aggregationData.accounts = [];
+    const { stored } = await seedPage("sweep-no-accounts", { pages: [response] });
+    await upsertFans(appContext.db, [{
+      platform: "fansly", platformUserId: "fan-grp-1", username: "fan_grp_1", metadata: { kept: true },
+    }]);
+    const markedAt = new Date("2026-09-01T00:00:00.000Z");
+    await upsertFans(appContext.db, [{ platform: "fansly", platformUserId: "fan-grp-3", deletedDetectedAt: markedAt }]);
+
+    await runChunk(stored, fakeTelemetry(), 5);
+
+    const { rows } = await testDb.pool.query<{
+      platform_user_id: string; username: string | null; metadata: unknown; deleted_detected_at: Date | null;
+      linked: boolean;
+    }>(
+      `select f.platform_user_id, f.username, f.metadata, f.deleted_detected_at,
+              exists (select 1 from page_dm_threads t where t.fan_id = f.id and t.platform_account_id = $1) as linked
+       from fans f order by f.platform_user_id`,
+      [stored.page.id],
+    );
+    expect(rows).toEqual([
+      { platform_user_id: "fan-grp-1", username: "fan_grp_1", metadata: { kept: true }, deleted_detected_at: null, linked: true },
+      { platform_user_id: "fan-grp-2", username: null, metadata: {}, deleted_detected_at: null, linked: true },
+      // An earlier mark is neither confirmed nor cleared by an absent snapshot.
+      { platform_user_id: "fan-grp-3", username: null, metadata: {}, deleted_detected_at: markedAt, linked: true },
+    ]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

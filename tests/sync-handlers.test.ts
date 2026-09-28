@@ -34,6 +34,7 @@ const dbMocks = vi.hoisted(() => ({
   getCheckpoint: vi.fn(),
   getCurrentSubscribers: vi.fn(),
   getExistingPageDmMessageIds: vi.fn(),
+  getPageDmMessageIdsAtOrBefore: vi.fn(),
   getPageDmConversationById: vi.fn(),
   listPageDmConversationsByPlatformConversationIds: vi.fn(),
   listPageDmThreadIdsStampedWithGeneration: vi.fn(),
@@ -263,6 +264,9 @@ describe("sync executor handlers", () => {
       },
     });
     dbMocks.getExistingPageDmMessageIds.mockResolvedValue(new Set());
+    // Stored rows sit at or below the recorded newest message unless a test
+    // models an abandoned walk's pages above it.
+    dbMocks.getPageDmMessageIdsAtOrBefore.mockImplementation(async (_db, input) => new Set(input.platformMessageIds));
     dbMocks.getPageDmConversationById.mockResolvedValue(null);
     dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([]);
     // G3: tests that reach a checkpoint write declare the row-side generation
@@ -386,6 +390,7 @@ describe("sync executor handlers", () => {
           createdAt?: number | null;
         }>;
         fallbackIds?: string[];
+        unverifiedIds?: string[];
       },
     ) => {
       const fans: Array<{ id: number; platformUserId: string }> = await dbMocks.upsertFans(db, [
@@ -406,6 +411,10 @@ describe("sync executor handlers", () => {
           platform: "fansly" as const,
           platformUserId,
           metadata: {},
+        })),
+        ...(input.unverifiedIds ?? []).map((platformUserId: string) => ({
+          platform: "fansly" as const,
+          platformUserId,
         })),
       ]);
 
@@ -5782,6 +5791,67 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       code: "dm_message_timestamp_unparseable",
       details: expect.objectContaining({ messageIds: ["msg-80"], valueTypes: ["undefined"] }),
     }));
+  });
+
+  it("an incremental walk reads on through stored pages above the recorded newest message", async () => {
+    // A walk dropped mid-way (thread excluded, then eligible again) left
+    // msg-80 and m-79 stored; the summary still ends at old-1, with m-78
+    // never read in between.
+    const h = dmWalkHarness({
+      storedMessageCount: 10, newestStoredMessageId: "old-1", messageCoverageStatus: "complete",
+    }, [
+      { items: [walkMessage("msg-80"), walkMessage("m-79")], done: false, raw: { messages: [] } },
+      { items: [walkMessage("m-78"), walkMessage("old-1")], done: false, raw: { messages: [] } },
+    ]);
+    dbMocks.getExistingPageDmMessageIds.mockImplementation(async (_db, input) =>
+      new Set(input.platformMessageIds.filter((id: string) => id !== "m-78")));
+    dbMocks.getPageDmMessageIdsAtOrBefore.mockImplementation(async (_db, input) =>
+      new Set(input.platformMessageIds.filter((id: string) => id === "old-1")));
+
+    await h.run();
+    expect(dbMocks.getPageDmMessageIdsAtOrBefore).toHaveBeenCalledWith({}, {
+      conversationId: 777, platformMessageIds: ["msg-80", "m-79"], boundaryMessageId: "old-1",
+    });
+    expect(dbMocks.finalizePageDmConversationMessageSync).not.toHaveBeenCalled();
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: "m-79" });
+
+    await h.run();
+    expect(h.getMessagesPage.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+      expect.objectContaining({ before: null }), expect.objectContaining({ before: "m-79" }),
+    ]);
+    expect(dbMocks.upsertPageDmMessages).toHaveBeenCalledWith({}, expect.arrayContaining([
+      expect.objectContaining({ platformMessageId: "m-78" }),
+    ]));
+    expect(dbMocks.finalizePageDmConversationMessageSync)
+      .toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ messageCoverageStatus: "complete" }));
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
+  });
+
+  it("records an incremental walk dropped after it wrote pages", async () => {
+    const conversation = { storedMessageCount: 10, newestStoredMessageId: "old-1", messageCoverageStatus: "complete" };
+    const h = dmWalkHarness(conversation, [
+      { items: [walkMessage("msg-80"), walkMessage("m-79")], done: false, raw: { messages: [] } },
+    ]);
+
+    await h.run();
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: 777, currentBeforeMessageId: "m-79" });
+    dbMocks.getPageDmConversationById.mockResolvedValue(buildDmConversation({
+      ...conversation,
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
+      },
+    }));
+    await h.run();
+
+    expect(h.telemetry.addAnomaly).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      code: "dm_messages_walk_dropped",
+      details: {
+        reason: "excluded", conversationId: 777, groupId: "group-1", currentMode: "incremental",
+        droppedBeforeMessageId: "m-79", newestStoredMessageId: "old-1",
+      },
+    }));
+    expect(h.checkpoint()).toMatchObject({ currentConversationId: null });
   });
 
   it("a multi-chunk head walk certifies the head only as of its head page", async () => {

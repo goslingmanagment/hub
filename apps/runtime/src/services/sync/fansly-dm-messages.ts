@@ -10,6 +10,7 @@
 
 import {
   getExistingPageDmMessageIds,
+  getPageDmMessageIdsAtOrBefore,
   type MessageCoverageStatus,
   type PageDmConversationRow,
   type upsertPageDmMessages,
@@ -218,7 +219,9 @@ export interface FanslyDmMessagePageOutcome {
   normalizedMessages: FanslyDmMessageUpsertInput;
   /** Rows this page adds that page_dm_messages does not already hold. */
   insertedMessageCount: number;
-  /** At least one returned message is already stored — the walk met known ground. */
+  /** At least one returned message is already stored — the walk met known
+   * ground. With overlapBoundaryMessageId, only a stored row at or before that
+   * boundary counts. */
   overlapFound: boolean;
   /** Oldest id on this page; the `before` cursor for the next request. */
   oldestMessageId: string | null;
@@ -254,6 +257,11 @@ export async function fetchAndJournalFanslyDmMessagePage(
     >;
     before: string | null;
     limit?: number;
+    /** An incremental head walk passes the thread's recorded newest stored
+     * message: rows stored above it (a dropped walk's pages) are not known
+     * ground, so the walk reads on through any gap below them. Omitted, any
+     * stored row overlaps. */
+    overlapBoundaryMessageId?: string | null;
   },
 ): Promise<FanslyDmMessagePageOutcome> {
   const limit = input.limit ?? FANSLY_DM_MESSAGE_PAGE_LIMIT;
@@ -307,14 +315,22 @@ export async function fetchAndJournalFanslyDmMessagePage(
 export async function normalizeFanslyDmMessagePage(
   app: AppContext,
   input: Pick<Parameters<typeof fetchAndJournalFanslyDmMessagePage>[1],
-    "telemetry" | "platformAccountId" | "platform" | "pageAccountId" | "conversation">,
+    "telemetry" | "platformAccountId" | "platform" | "pageAccountId" | "conversation"
+    | "overlapBoundaryMessageId">,
   page: FanslyDmMessagePage,
 ): Promise<Omit<FanslyDmMessagePageOutcome, "rawPayloadId">> {
   const existingIds = await getExistingPageDmMessageIds(app.db, {
     conversationId: input.conversation.id,
     platformMessageIds: page.items.map((message) => message.id),
   });
-  const overlapFound = page.items.some((message) => existingIds.has(message.id));
+  const knownGroundIds = input.overlapBoundaryMessageId && existingIds.size > 0
+    ? await getPageDmMessageIdsAtOrBefore(app.db, {
+      conversationId: input.conversation.id,
+      platformMessageIds: [...existingIds],
+      boundaryMessageId: input.overlapBoundaryMessageId,
+    })
+    : existingIds;
+  const overlapFound = page.items.some((message) => knownGroundIds.has(message.id));
 
   const normalizedMessages: FanslyDmMessageUpsertInput = [];
   const unparseable: Array<{ id: string; valueType: string }> = [];

@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countOtherDmMessageGroupsFailingSinceLastSuccess,
-  ensurePageSyncStates, excludePageDmConversationMessageSync, finishSyncRequestAttempt,
-  getCheckpoint, getPageDmConversationById, insertSyncRequestAttempt, PageSyncLeaseLostError,
-  runWithPageSyncExecutionContext, upsertCheckpointProgress, upsertFans,
+  ensurePageSyncStates, excludePageDmConversationMessageSync, finalizePageDmConversationMessageSync,
+  finishSyncRequestAttempt, getCheckpoint, getPageDmConversationById, insertSyncRequestAttempt,
+  PageSyncLeaseLostError, runWithPageSyncExecutionContext, upsertCheckpointProgress, upsertFans,
   upsertPageDmConversation, upsertPageDmMessages,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
@@ -11,6 +11,7 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY as exclusionKey,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP as reason,
 } from "@agency_hub_core/shared";
+import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { emptyDmMessagesCursorState } from "../apps/runtime/src/services/sync/cursor-state.ts";
 import { fanslyDmMessagesChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -282,5 +283,92 @@ describe("Fansly DM per-thread breaker", () => {
     expect(await count()).toBe(2);
     // Outside the scan window nothing counts, not even the stale success.
     expect(await count(at(5))).toBe(0);
+  });
+});
+
+describe("Fansly DM incremental walk dropped mid-way", () => {
+  const at = (n: number) => Date.parse("2026-09-20T00:00:00.000Z") + n * 60_000;
+  const id = (n: number) => `m${String(n).padStart(2, "0")}`;
+
+  it("reads the gap below its own earlier pages when the thread is picked again", async () => {
+    const { page, syncRunId } = await seedFanslyLanePage(testDb, {
+      slug: "dropped", name: "Dropped", label: "dropped", accountRef: "creator", stream: "dm_messages",
+    });
+    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-group" }]);
+    if (!fan) throw new Error("Expected a fixture fan");
+    // m01..m10 are stored and summarized; the provider head is m30.
+    const thread = await upsertPageDmConversation(testDb.db, {
+      ...seedThreadInput(page.id, "group", 1), fanId: fan.id, lastMessageId: id(30), lastMessageAt: new Date(at(30)),
+    });
+    if (!thread) throw new Error("Expected a fixture conversation");
+    const message = (n: number) => ({ id: id(n), senderId: "fan-group", content: `body ${n}`, createdAt: at(n) });
+    await upsertPageDmMessages(testDb.db, Array.from({ length: 10 }, (_, index) => ({
+      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id(index + 1),
+      senderPlatformUserId: "fan-group", senderRole: "fan" as const, createdAt: new Date(at(index + 1)),
+      content: `body ${index + 1}`, totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+    })));
+    await finalizePageDmConversationMessageSync(testDb.db, {
+      conversationId: thread.id, messageCoverageStatus: "complete", headReadAt: new Date(at(10)), enforceRetention: false,
+    });
+    await ensurePageSyncStates(testDb.db, { pageId: page.id });
+    await testDb.pool.query(`update page_sync_states set status = 'running', leased_seq = 1,
+      lease_token = 'owner', lease_expires_at = now() + interval '1 hour'
+      where page_id = $1 and stream = 'dm_messages'`, [page.id]);
+
+    // Five messages a page, newest first, one request per chunk.
+    const history = Array.from({ length: 30 }, (_, index) => message(30 - index));
+    const befores: Array<string | null> = [];
+    const getMessagesPage = vi.fn(async (
+      context: { requestObserver?: { onRequestEvent(event: unknown): Promise<void> } | null },
+      params: { groupId: string; before?: string | null },
+    ) => {
+      befores.push(params.before ?? null);
+      await context.requestObserver?.onRequestEvent({
+        state: "started", requestId: `walk-${befores.length}`, operation: "messages",
+        endpointTemplate: "/message", method: "GET", attemptNumber: 1, timestamp: new Date(),
+      });
+      const start = params.before ? history.findIndex((item) => item.id === params.before) + 1 : 0;
+      const items = history.slice(start, start + 5);
+      return { items, groupId: params.groupId, before: params.before ?? null,
+        done: start + 5 >= history.length, raw: { messages: items } };
+    });
+    const app = createTestAppContext(testDb, {
+      syncSharedRateLimitEnabled: true, adapter: { getMessagesPage, getAccountsByIdsPage: vi.fn() } as never,
+    });
+    const telemetry = { ...fanslyLaneTelemetryStub(), recordDmMessagesChunkSummary: vi.fn() };
+    const runChunk = () => runWithPageSyncExecutionContext({
+      pageId: page.id, stream: "dm_messages", requestSeq: 1, leaseToken: "owner",
+    }, () => fanslyDmMessagesChunk(app, fanslyLaneInput({
+      pageId: page.id, label: page.label, accountRef: "creator", egressKey: "fixture",
+      syncRunId, now: new Date(), telemetry, budget: new SyncChunkBudget(1),
+    }) as never));
+
+    // Two pages of the head walk land (m30..m21), then the thread drops out.
+    await runChunk();
+    await runChunk();
+    expect((await getCheckpoint(testDb.db, page.id, "dm_messages"))?.state)
+      .toMatchObject({ currentConversationId: thread.id, currentMode: "incremental", currentBeforeMessageId: id(21) });
+    await excludePageDmConversationMessageSync(testDb.db, {
+      conversationId: thread.id, platformAccountId: page.id, partnerPlatformUserId: "fan-group", reason,
+    });
+    expect((await runChunk()).satisfied).toBe(true);
+    expect(telemetry.anomalies).toEqual([expect.objectContaining({
+      code: "dm_messages_walk_dropped",
+      details: expect.objectContaining({ reason: "excluded", droppedBeforeMessageId: id(21), newestStoredMessageId: id(10) }),
+    })]);
+
+    // Eligible again, the thread is picked from its head. Its own pages above
+    // m10 are not known ground, so the walk continues down to m10.
+    await testDb.pool.query("update page_dm_threads set metadata = metadata - $2 where id = $1", [thread.id, exclusionKey]);
+    for (let chunk = 0; chunk < 10 && !(await runChunk()).satisfied; chunk++);
+
+    expect(befores).toEqual([null, id(26), null, id(26), id(21), id(16), id(11)]);
+    const stored = await testDb.pool.query(
+      "select platform_message_id from page_dm_messages where conversation_id = $1 order by created_at", [thread.id],
+    );
+    expect(stored.rows.map((row) => row.platform_message_id)).toEqual(Array.from({ length: 30 }, (_, index) => id(index + 1)));
+    expect(await getPageDmConversationById(testDb.db, thread.id)).toMatchObject({
+      newestStoredMessageId: id(30), oldestStoredMessageId: id(1), storedMessageCount: 30, messageCoverageStatus: "complete",
+    });
   });
 });

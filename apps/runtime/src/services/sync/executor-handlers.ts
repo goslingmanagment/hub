@@ -2921,6 +2921,39 @@ export async function fanslyDmMessagesChunk(
     return error;
   };
 
+  /**
+   * A pinned walk dropped after it wrote pages (the thread became excluded,
+   * invisible or unbound) leaves rows its thread summary does not cover yet.
+   * A later incremental walk reads through them (overlap counts only rows at
+   * or before the recorded newest message), but a writer that recomputes the
+   * summary first moves that boundary onto them. Record the dropped cursor so
+   * such a gap stays findable for the targeted backfill.
+   */
+  const recordDroppedWalk = async (conversation: PageDmConversationRow, reason: string) => {
+    if (!state.currentMode) {
+      return;
+    }
+    const walkStartBeforeMessageId = state.headCatchup || state.currentMode === "incremental"
+      ? null
+      : conversation.oldestStoredMessageId;
+    if (state.currentBeforeMessageId === walkStartBeforeMessageId) {
+      return;
+    }
+    await input.telemetry.addAnomaly({
+      code: "dm_messages_walk_dropped",
+      severity: "warn",
+      message: "DM walk dropped after writing pages; history below its cursor may be unread",
+      details: {
+        reason,
+        conversationId: state.currentConversationId,
+        groupId: state.currentPlatformConversationId,
+        currentMode: state.currentMode,
+        droppedBeforeMessageId: state.currentBeforeMessageId,
+        newestStoredMessageId: conversation.newestStoredMessageId,
+      },
+    });
+  };
+
   try {
     conversationLoop: while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
       await assertOwnedPageSyncLease(app.db);
@@ -2951,6 +2984,7 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
+        await recordDroppedWalk(conversation, "excluded");
         state = emptyDmMessagesCursorState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
@@ -2965,6 +2999,9 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (!conversation || !conversation.isVisible || conversation.fanId === null) {
+        if (conversation) {
+          await recordDroppedWalk(conversation, conversation.isVisible ? "unbound" : "invisible");
+        }
         let currentMode: "backfill" | "deep_backfill" | "incremental" | null = null;
         const shouldTryQuotaDeepBackfill =
           deepBackfillRequests < deepBackfillMaxRequests &&
@@ -3125,6 +3162,12 @@ export async function fanslyDmMessagesChunk(
             conversation: currentConversation,
             before: state.currentBeforeMessageId,
             limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
+            // The summary moves only at finalize, so an incremental walk that
+            // was dropped mid-way and picked again must not stop on its own
+            // earlier pages above the recorded newest message.
+            overlapBoundaryMessageId: currentMode === "incremental"
+              ? currentConversation.newestStoredMessageId
+              : null,
           });
         } catch (error) {
           const partnerPlatformUserId = currentConversation.partnerPlatformUserId;
@@ -3194,6 +3237,7 @@ export async function fanslyDmMessagesChunk(
                 FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             },
           );
+          await recordDroppedWalk(currentConversation, "partner_unresolvable");
 
           state = emptyDmMessagesCursorState();
           await input.telemetry.recordCheckpointAdvanced(

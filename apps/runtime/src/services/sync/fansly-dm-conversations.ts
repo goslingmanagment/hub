@@ -1037,7 +1037,10 @@ export async function fanslyDmConversationsChunk(
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: [...hydratedAccountsById.values()],
-        fallbackIds: [...fallbackPartnerIds],
+        // No account lookup ran for these partners (the page carried no
+        // aggregation accounts, or detail resolved the partner): no snapshot
+        // is not deletion evidence.
+        unverifiedIds: [...fallbackPartnerIds],
       });
 
       for (const conversationWrite of conversationWrites) {
