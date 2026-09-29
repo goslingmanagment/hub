@@ -1094,9 +1094,11 @@ export function mediaStatsIntervalDays(
  * item's age (see the chunk query): a class stored at seed time would freeze
  * every item in the tier it happened to be in on the day the lane was enabled.
  *
- * Known gap: `creator_media` keeps no owner, so this sweep cannot skip the
- * media fans sent in DMs the way `upsertCreatorMedia` does — a page's first
- * enable queues them too, and `fansly:media-stats-prune-foreign` removes them.
+ * Known gap: `creator_media` keeps no owner and no DM-only mark, so this sweep
+ * cannot skip what `upsertCreatorMedia` does — the media fans sent in DMs, and
+ * the page's own media seen only in DMs. A page's first enable queues them too;
+ * `fansly:media-stats-prune-foreign` and `fansly:media-stats-prune-dm-only`
+ * remove them.
  */
 export async function seedMediaStatsQueue(
   db: Database,
@@ -1215,11 +1217,17 @@ export const MEDIA_STATS_PURCHASE_SIGNAL_HORIZON_DAYS = 90;
  *   is also what keeps a truncate-and-replay of the engagement projection from
  *   re-dirtying every answered item.
  * - A ref the page already knows as a BUNDLE is not a media subject — the route
- *   reads media offers — so it gets no row. Its members are not marked either.
+ *   reads media offers — so it is not marked. Its members are not marked either.
  *
- * Any other unknown ref still gets a row, as before: the purchase may simply be
- * projected ahead of its media head, and the chunk query only admits rows with
- * a `creator_media` head. `next_due_at` moves EARLIER only, and
+ * AND IT ONLY EVER MARKS A ROW THAT IS ALREADY QUEUED. Deciding what is queued
+ * is `upsertCreatorMedia`'s job, and a purchase of a ref it has not queued
+ * cannot tell a post's media from a DM PPV — whose per-media views are not
+ * wanted (owner decision 2026-09-29), and which is most of what is bought: in
+ * production 181 of 194 media purchases in 30 days were not on a post. So such
+ * a purchase marks nothing. The one case that costs something is a post's
+ * media bought before its head is projected: the post's head queues it later
+ * WITHOUT the mark, and it is visited as a never-visited fresh item — the first
+ * thing after the dirty rows anyway. `next_due_at` moves EARLIER only, and
  * `consecutive_failures` is left to the lane that fetches.
  */
 export async function markMediaStatsPurchaseDirty(
@@ -1240,27 +1248,23 @@ export async function markMediaStatsPurchaseDirty(
     return { applied: false };
   }
   const result = await db.execute(sql`
-    insert into subject_refresh_state (
-      page_id, plane, subject_ref, refresh_class, next_due_at, dirty_reason
-    )
-    select ${input.pageId}, 'media_stats', ${input.subjectRef}, 'dirty',
-           ${input.purchasedAt}, 'purchase_notification'
-     where not exists (
-       select 1 from creator_media_bundles b
-        where b.page_id = ${input.pageId}
-          and b.bundle_ref = ${input.subjectRef}
-     )
-    on conflict (page_id, plane, subject_ref) do update set
-      refresh_class = 'dirty',
-      next_due_at = least(
-        coalesce(subject_refresh_state.next_due_at, excluded.next_due_at),
-        excluded.next_due_at
-      ),
-      dirty_reason = excluded.dirty_reason,
-      updated_at = now()
-     where subject_refresh_state.last_visited_at is null
-        or subject_refresh_state.last_visited_at < excluded.next_due_at
-    returning page_id
+    update subject_refresh_state s
+       set refresh_class = 'dirty',
+           next_due_at = least(
+             coalesce(s.next_due_at, ${input.purchasedAt}),
+             ${input.purchasedAt}
+           ),
+           dirty_reason = 'purchase_notification',
+           updated_at = now()
+     where s.page_id = ${input.pageId}
+       and s.plane = 'media_stats'
+       and s.subject_ref = ${input.subjectRef}
+       and (s.last_visited_at is null or s.last_visited_at < ${input.purchasedAt})
+       and not exists (
+         select 1 from creator_media_bundles b
+          where b.page_id = ${input.pageId}
+            and b.bundle_ref = ${input.subjectRef}
+       )
   `);
   return { applied: (result.rowCount ?? 0) > 0 };
 }
@@ -1278,20 +1282,31 @@ export interface MediaStatsRefreshCandidate {
   consecutiveFailures: number;
   knownCount: number | null;
   backfillCursor: Record<string, unknown>;
-  /** 0 dirty, 1 never visited, 2 due by its tier's decay. */
+  /** 0 dirty, 1 never visited, 2 due by its tier's decay. A label for the
+   *  journal: outside the dirty rows the TIER orders the chunk, not this. */
   priorityBand: number;
 }
 
 /**
- * The chunk's work list, in the priority order WP-F4 declares:
+ * The chunk's work list, in this order:
  *
  *   (1) DIRTY — WP-F2's purchase signals and the current top-50. A purchase is
  *       the strongest evidence this system gets that an item's numbers moved,
  *       and it is the one signal that is worth a call TODAY.
- *   (2) NEVER VISITED, NEWEST FIRST. A per-media archive that starts with the
- *       back catalogue would have nothing to say about this week's content for
- *       a month.
- *   (3) DUE BY CLASS, oldest visit first — the round-robin.
+ *   (2) BY TIER — fresh, then mid, then the long tail. What the creator asks
+ *       about is this month's content, and a fresh item's daily read is the
+ *       one a late visit turns into a hole.
+ *   (3) WITHIN A TIER, NEVER VISITED FIRST, then the OLDEST VISIT — the
+ *       round-robin — and among first looks the NEWEST publication first.
+ *
+ * Tier used to rank BELOW first sight: every never-visited item came before
+ * every overdue one, whatever their ages. Production 2026-09-29 is what that
+ * cost: 16 288 never-visited rows (86 % of the queue) sat in front of 247
+ * overdue fresh post items, waiting a median 4.8 days for a DAILY read, and 411
+ * overdue mid ones, a median 23.8 days for a WEEKLY one — 419 mid items were
+ * already past the 30-day window their next read covers. The eligibility is
+ * unchanged: only a dirty, never-visited or due row is admitted, which is what
+ * `dueNow` counts.
  *
  * SUCCESS DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`,
  * not read from `next_due_at`. Same reasoning as the two post planes: the tier an
@@ -1394,10 +1409,10 @@ export async function listMediaStatsRefreshChunk(
          or s.last_visited_at is null
          or s.last_visited_at < ${dueCutoff}
        )
-     order by ${band} asc,
+     order by case when s.dirty_reason is not null then 0 else 1 end asc,
               case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
-              ${publicationAt} desc nulls last,
               s.last_visited_at asc nulls first,
+              ${publicationAt} desc nulls last,
               s.subject_ref desc
      limit ${input.limit}
   `);
@@ -1575,7 +1590,8 @@ export interface MediaStatsRefreshProgress {
   /** `creator_media` rows for this page. Ahead of `queueSize` while a first
    *  seeding is still running, which is what makes an unfinished seed read as
    *  incomplete rather than as complete-and-small — and ahead for good by the
-   *  media fans sent in DMs, which are kept but never queued. */
+   *  media seen only in DMs (a fan's, or the page's own DM PPV), which are
+   *  kept but never queued. */
   mediaKnown: number;
   fresh: number;
   mid: number;

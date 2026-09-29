@@ -536,6 +536,113 @@ describe("media_stats lane — the queue", () => {
     await backOff();
     expect(await refsAt(NOW)).toEqual([healthy]);
   });
+
+  it("orders by TIER after the dirty rows: an overdue fresh item before a never-visited long tail", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
+    const freshOverdue = ref(401);
+    const longNever = ref(402);
+    const midNever = ref(403);
+    const midOverdue = ref(404);
+    const freshNever = ref(405);
+    const freshAnswered = ref(406);
+    const longOverdue = ref(407);
+    const dirtyLong = ref(408);
+    await seedMedia(page.id, [
+      { ref: freshOverdue, createdAtPlatform: daysAgo(5) },
+      { ref: longNever, createdAtPlatform: daysAgo(400) },
+      { ref: midNever, createdAtPlatform: daysAgo(90) },
+      { ref: midOverdue, createdAtPlatform: daysAgo(60) },
+      { ref: freshNever, createdAtPlatform: daysAgo(10) },
+      { ref: freshAnswered, createdAtPlatform: daysAgo(3) },
+      { ref: longOverdue, createdAtPlatform: daysAgo(300) },
+      { ref: dirtyLong, createdAtPlatform: daysAgo(500) },
+    ], { queueCursor: BACKFILL_DONE });
+    for (
+      const [subjectRef, visitedAt] of [
+        [freshOverdue, daysAgo(3)],
+        [midOverdue, daysAgo(10)],
+        [freshAnswered, new Date(NOW.getTime() - 60 * 60 * 1000)],
+        [longOverdue, daysAgo(40)],
+      ] as const
+    ) {
+      await testDb.pool.query(
+        `update subject_refresh_state set last_visited_at = $3
+          where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+        [page.id, subjectRef, visitedAt],
+      );
+    }
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: dirtyLong,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 10,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    // Dirty first, whatever its age. Then fresh → mid → long tail, and never
+    // visited ahead of overdue only WITHIN a tier: a fresh item four days late
+    // is a hole in this week's numbers; a first look at a year-old item is not.
+    expect(chunk.map((row) => row.subjectRef)).toEqual([
+      dirtyLong,
+      freshNever,
+      freshOverdue,
+      midNever,
+      midOverdue,
+      longNever,
+      longOverdue,
+    ]);
+    // The band stays on the candidate as a LABEL; it is no longer the sort's
+    // first key outside the dirty rows.
+    expect(chunk.map((row) => row.priorityBand)).toEqual([0, 1, 2, 1, 2, 1, 2]);
+    // The item answered an hour ago is not due, and the backlog the progress
+    // block reports is exactly what the selector admits.
+    const progress = await countMediaStatsRefreshProgress(testDb.db, {
+      pageId: page.id,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(progress.dueNow).toBe(chunk.length);
+  });
+
+  it("reaches an overdue fresh item even when a full chunk of never-visited long tail is waiting", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const freshOverdue = ref(420);
+    // Production 2026-09-29: 16 288 never-visited rows sat in front of 247
+    // overdue fresh items, which waited a median 4.8 days for a daily read.
+    await seedMedia(page.id, [
+      ...Array.from({ length: 12 }, (_unused, index) => ({
+        ref: ref(430 + index),
+        createdAtPlatform: new Date(NOW.getTime() - (200 + index) * DAY_MS),
+      })),
+      { ref: freshOverdue, createdAtPlatform: new Date(NOW.getTime() - 7 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = $3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, freshOverdue, new Date(NOW.getTime() - 2 * DAY_MS)],
+    );
+
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 5,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(chunk[0]?.subjectRef).toBe(freshOverdue);
+    expect(chunk[0]?.tier).toBe("fresh");
+    // The rest of the chunk is the long tail's first looks, newest first.
+    expect(chunk.slice(1).map((row) => row.subjectRef))
+      .toEqual([ref(430), ref(431), ref(432), ref(433)]);
+  });
 });
 
 describe("media_stats lane — the windows and their guards", () => {

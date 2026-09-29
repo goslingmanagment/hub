@@ -92,6 +92,23 @@ export interface UpsertCreatorMediaInput {
 }
 
 /**
+ * The observation origins that queue a media item for per-media statistics:
+ * the ones that show it OUTSIDE a DM. `post` is a post's own media and the
+ * members of a bundle on a post (the timeline serves both as `accountMedia`);
+ * `stats_agg` is the account statistics' top-media ranking, which is what names
+ * an item in `stats_top_media`.
+ *
+ * Everything else is left out, and on purpose. `dm_sidecar` is a DM thread, and
+ * the per-media views of media the model sent only in DMs are not wanted (owner
+ * decision 2026-09-29: ~10 k of a 19 k queue, 3 % of the views).
+ * `order_history` shares the DM sidecar shapes and names what fans bought,
+ * mostly DM PPV. `vault` and `account_media_batch` list the whole vault, DM-only
+ * media included. A post's media seen first through any of them is queued the
+ * day a post observation carries it.
+ */
+export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "stats_agg"]);
+
+/**
  * The media head, AND — in the SAME TRANSACTION — the WP-F4 per-media
  * statistics queue row for it.
  *
@@ -129,6 +146,12 @@ export interface UpsertCreatorMediaInput {
  * `seedMediaStatsQueue` (first enable only) can tell such rows apart; the ones
  * queued before this check are removed by the owner-run one-off
  * `fansly:media-stats-prune-foreign`, which reads the owner from the events.
+ *
+ * AND ONLY FROM AN ORIGIN THAT SHOWS IT OUTSIDE A DM (`MEDIA_STATS_QUEUE_ORIGINS`).
+ * The origin is the observation's, not the head's `first_origin`: a media first
+ * seen in a DM keeps that first origin for good, and is queued by the first
+ * post observation that carries it. The rows queued before this check are
+ * removed by the owner-run one-off `fansly:media-stats-prune-dm-only`.
  */
 export async function upsertCreatorMedia(
   db: Database,
@@ -137,6 +160,9 @@ export async function upsertCreatorMedia(
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     const head = await upsertCreatorMediaHead(database, input);
+    if (!MEDIA_STATS_QUEUE_ORIGINS.has(input.firstOrigin)) {
+      return head;
+    }
     await database.execute(sql`
       insert into subject_refresh_state (
         page_id, plane, subject_ref, refresh_class, next_due_at

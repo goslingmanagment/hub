@@ -29,7 +29,9 @@ import {
   createModel,
   ensureDomainEventPartitions,
   insertObservation,
+  listMediaStatsRefreshChunk,
   markSubjectRefreshDirty,
+  upsertCreatorMedia,
 } from "@agency_hub_core/db";
 
 import {
@@ -157,6 +159,77 @@ async function seedVisitedRow(pageId: number, subjectRef: string, visitedAt: Dat
   );
 }
 
+/** A never-visited media_stats row — the queue as the enqueue leaves it. */
+async function seedQueuedRow(pageId: number, subjectRef: string) {
+  await testDb!.pool.query(
+    `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+     values ($1, 'media_stats', $2, 'fresh', $3)`,
+    [pageId, subjectRef, CENSUS_RECEIVED_AT],
+  );
+}
+
+/** Queue every media the census's 2007 purchases bought, never visited — the
+ *  queue the purchase mark updates (it never adds to it). */
+async function queueCensusPurchases(pageId: number, census: Record<string, unknown>) {
+  const bought = new Set(
+    (census.notifications as Record<string, unknown>[])
+      .filter((row) => row.type === 2007)
+      .map((row) => String(row.correlationId)),
+  );
+  for (const subjectRef of bought) {
+    await seedQueuedRow(pageId, subjectRef);
+  }
+  return bought;
+}
+
+async function dirtyMediaStatsRows(pageId: number): Promise<number> {
+  const [found] = await rows<{ n: string }>(
+    `select count(*)::text as n from subject_refresh_state
+      where page_id = $1 and plane = 'media_stats' and dirty_reason is not null`,
+    [pageId],
+  );
+  return Number(found!.n);
+}
+
+/** A `creator_media` head written the way the media-plane projector writes it,
+ *  queue hook included, from an observation of `firstOrigin`. */
+async function seedMediaHead(
+  pageId: number,
+  mediaOfferRef: string,
+  firstOrigin: "dm_sidecar" | "post",
+  createdAtPlatform: Date,
+) {
+  await upsertCreatorMedia(testDb!.db, {
+    pageId,
+    platform: "fansly",
+    mediaOfferRef,
+    mediaRef: null,
+    previewRef: null,
+    bundleRefs: [],
+    mediaType: null,
+    mimeType: null,
+    width: null,
+    height: null,
+    durationMs: null,
+    priceMills: null,
+    permissionEntries: [],
+    permissionFlags: null,
+    likeCount: null,
+    salesCount: null,
+    salesNetMills: null,
+    salesPendingMills: null,
+    createdAtPlatform,
+    deletedAtPlatform: null,
+    firstOrigin,
+    observedAt: createdAtPlatform,
+    contentHash: "c".repeat(64),
+    sourceEventId: 1,
+    sourceObservationId: 1,
+    sourceAccountSeq: 1,
+    ownerAccountRef: "acct-engagement",
+  });
+}
+
 async function project(pageId: number) {
   await runCanonicalization(appStub(), { kinds: ["notifications"] });
   return runFanslyEngagementProjection(appStub(), { accountId: pageId });
@@ -269,12 +342,11 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       return;
     }
     const page = await seedPage();
-    await seedObservation(
-      page.id,
-      "census",
-      fixture("notifications-census.json"),
-      CENSUS_RECEIVED_AT,
-    );
+    const census = fixture("notifications-census.json");
+    // The mark updates the queue; it never adds to it. The bought media are
+    // queued already, the way the media plane queues a post's media.
+    const bought = await queueCensusPurchases(page.id, census);
+    await seedObservation(page.id, "census", census, CENSUS_RECEIVED_AT);
     const result = await project(page.id);
 
     // The verbatim row is there…
@@ -298,7 +370,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
          from subject_refresh_state where page_id = $1 order by subject_ref`,
       [page.id],
     );
-    expect(dirty.length).toBeGreaterThan(0);
+    expect(dirty.map((row) => row.subject_ref).sort()).toEqual([...bought].sort());
     expect(result.purchaseSignals).toBeGreaterThan(0);
     for (const row of dirty) {
       expect(row.plane).toBe("media_stats");
@@ -321,6 +393,8 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       return;
     }
     const page = await seedPage();
+    await seedQueuedRow(page.id, "000920000000009001");
+    await seedQueuedRow(page.id, "000920000000009002");
     // The deep backfill delivers year-old purchases every week. No refresh the
     // mark triggers reaches back that far, so it would buy a call for nothing.
     await seedObservation(page.id, "stale", purchasePage({
@@ -338,7 +412,10 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     // The notification row is stored either way: only the SIGNAL is dropped.
     expect(await count("platform_notifications", page.id)).toBe(2);
     expect(result.purchaseSignals).toBe(1);
-    expect(await mediaStatsRow(page.id, "000920000000009001")).toBeNull();
+    expect(await mediaStatsRow(page.id, "000920000000009001")).toMatchObject({
+      dirty_reason: null,
+      refresh_class: "fresh",
+    });
     expect(await mediaStatsRow(page.id, "000920000000009002")).toMatchObject({
       dirty_reason: "purchase_notification",
       refresh_class: "dirty",
@@ -420,6 +497,93 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(await count("platform_notifications", page.id)).toBe(1);
     expect(await mediaStatsRow(page.id, bundleRef)).toBeNull();
     expect(await mediaStatsRow(page.id, "000920000000009022")).toBeNull();
+  });
+
+  it("queues and marks nothing for a purchase of media the page showed only in a DM", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // A DM PPV: its head comes from the DM sidecar and nothing else. Owner
+    // decision 2026-09-29 — its per-media views are not wanted.
+    const dmOnly = "000920000000009031";
+    await seedMediaHead(page.id, dmOnly, "dm_sidecar", new Date("2026-08-15T00:00:00.000Z"));
+    await seedObservation(page.id, "dm-only", purchasePage({
+      id: "000989999999990031",
+      correlationId: dmOnly,
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    const result = await project(page.id);
+
+    expect(await count("platform_notifications", page.id)).toBe(1);
+    expect(result.purchaseSignals).toBe(0);
+    expect(await mediaStatsRow(page.id, dmOnly)).toBeNull();
+  });
+
+  it("still marks the queued row of a post's media", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const posted = "000920000000009041";
+    await seedMediaHead(page.id, posted, "post", new Date("2026-08-15T00:00:00.000Z"));
+    expect(await mediaStatsRow(page.id, posted)).toMatchObject({ dirty_reason: null });
+    const purchasedAt = new Date("2026-08-20T00:00:00.000Z");
+    await seedObservation(page.id, "posted", purchasePage({
+      id: "000989999999990041",
+      correlationId: posted,
+      createdAt: purchasedAt,
+    }), CENSUS_RECEIVED_AT);
+    const result = await project(page.id);
+
+    expect(result.purchaseSignals).toBe(1);
+    const row = await mediaStatsRow(page.id, posted);
+    expect(row).toMatchObject({ dirty_reason: "purchase_notification", refresh_class: "dirty" });
+    // Due no later than the purchase: the mark only ever moves it earlier.
+    expect(row!.next_due_at!.getTime()).toBeLessThanOrEqual(purchasedAt.getTime());
+  });
+
+  it("queues nothing for a purchase projected AHEAD of its media head; the post then queues it unmarked", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const posted = "000920000000009051";
+    await seedObservation(page.id, "ahead", purchasePage({
+      id: "000989999999990051",
+      correlationId: posted,
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    const result = await project(page.id);
+
+    // The ref is unknown to the queue, so the mark has nothing to update. It
+    // no longer inserts one: it cannot tell a post's media from a DM PPV.
+    expect(result.purchaseSignals).toBe(0);
+    expect(await mediaStatsRow(page.id, posted)).toBeNull();
+
+    // The post's media head arrives and queues it the ordinary way. The
+    // purchase mark is lost — it is picked as a NEVER-VISITED FRESH item,
+    // which is the first thing after the dirty rows anyway.
+    await seedMediaHead(page.id, posted, "post", new Date("2026-08-19T00:00:00.000Z"));
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 10,
+      now: CENSUS_RECEIVED_AT,
+      longTailCycleDays: 30,
+    });
+    expect(chunk).toHaveLength(1);
+    expect(chunk[0]).toMatchObject({
+      subjectRef: posted,
+      tier: "fresh",
+      dirtyReason: null,
+      lastVisitedAt: null,
+      priorityBand: 1,
+    });
   });
 
   it("dedupes by id across OVERLAPPING pages", async (context) => {
@@ -648,8 +812,11 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       [FANSLY_ENGAGEMENT_PROJECTION, page.id],
     ))[0]!.high_seq;
 
-    // Purchases in the ledger — what a projection rebuild would re-apply.
-    await seedObservation(page.id, "census", fixture("notifications-census.json"), CENSUS_RECEIVED_AT);
+    // Purchases in the ledger — what a projection rebuild would re-apply — and
+    // the queued media they mark.
+    const census = fixture("notifications-census.json");
+    await queueCensusPurchases(page.id, census);
+    await seedObservation(page.id, "census", census, CENSUS_RECEIVED_AT);
     // First looks: both notifications unread.
     await seedObservation(page.id, "look-1", look([
       { ...stale, acknowledgedAt: null },
@@ -686,7 +853,12 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
 
     // The purchase signals were applied once; clear them so any re-application
     // is visible.
-    await testDb.pool.query("delete from subject_refresh_state where page_id = $1", [page.id]);
+    expect(await dirtyMediaStatsRows(page.id)).toBeGreaterThan(0);
+    await testDb.pool.query(
+      `update subject_refresh_state set dirty_reason = null, refresh_class = 'fresh'
+        where page_id = $1`,
+      [page.id],
+    );
     const before = await table();
     const watermarkBefore = await watermark();
 
@@ -716,7 +888,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     const others = (list: Record<string, unknown>[]) =>
       list.filter((row) => row.notification_ref !== staleRef);
     expect(others(await table())).toEqual(others(before));
-    expect(await count("subject_refresh_state", page.id)).toBe(0);
+    expect(await dirtyMediaStatsRows(page.id)).toBe(0);
 
     // ── a re-run finds nothing ──────────────────────────────────────────────
     const zero = {
@@ -734,7 +906,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     const repaired = await checksum(page.id);
     await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
     expect(await checksum(page.id)).toEqual(repaired);
-    expect(await count("subject_refresh_state", page.id)).toBeGreaterThan(0);
+    expect(await dirtyMediaStatsRows(page.id)).toBeGreaterThan(0);
   });
 
   it("a replayed look that ties the head at the same instant settles in one run (J7 repair)", async (context) => {

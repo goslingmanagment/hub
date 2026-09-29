@@ -66,6 +66,7 @@ import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import { runFanslyWsDeletionBackfill } from "./services/fansly-ws-deletions.ts";
+import { runFanslyMediaStatsDmOnlyPrune } from "./services/fansly-media-stats-dm-only-prune.ts";
 import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
 import { runNotificationReadStateReplay } from "./services/fansly-notification-read-state-replay.ts";
 import { runAccountMeRejournal } from "./services/observations-account-me-rejournal.ts";
@@ -2142,6 +2143,43 @@ export function buildProgram() {
         console.log(
           `${result.dryRun ? "[dry-run] would delete" : "deleted"} ${result.rows} `
             + `foreign media_stats rows (failing ${result.failing}) on ${result.pages.length} page(s)`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Owner decision 2026-09-29, an owner-run one-off like M11 above: dry-run
+  // default (READ ONLY), `--execute` opts in, a re-run reports zeros. It deletes
+  // queue state only and makes no Fansly call.
+  program
+    .command("fansly:media-stats-prune-dm-only")
+    .description(
+      "Delete the media_stats queue rows of media the page showed only in DMs: not attached "
+        + "to a post, not in a bundle on a post, not named by stats_top_media, and not first "
+        + "seen on a post or in the account statistics. Heads, buckets and journal stay. "
+        + "Dry-run default; idempotent",
+    )
+    .option("--execute", "actually delete (default is a read-only dry-run count)")
+    .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const result = await runFanslyMediaStatsDmOnlyPrune(app, {
+          dryRun: !options.execute,
+          ...(options.account !== undefined ? { accountId: options.account } : {}),
+        });
+        console.log(JSON.stringify(result));
+        for (const page of result.pages) {
+          console.log(
+            `page ${page.pageId} (${page.pageLabel}): ${page.rows} `
+              + `(visited ${page.visited}, dirty ${page.dirty}, headless ${page.headless})`,
+          );
+        }
+        console.log(
+          `${result.dryRun ? "[dry-run] would delete" : "deleted"} ${result.rows} `
+            + `DM-only media_stats rows (visited ${result.visited}, dirty ${result.dirty}, `
+            + `headless ${result.headless}) on ${result.pages.length} page(s)`,
         );
       } finally {
         await app.close();

@@ -33,6 +33,7 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runFanslyMediaStatsDmOnlyPrune } from "../apps/runtime/src/services/fansly-media-stats-dm-only-prune.ts";
 import { runFanslyMediaStatsForeignPrune } from "../apps/runtime/src/services/fansly-media-stats-foreign-prune.ts";
 import {
   rebuildMediaPlaneProjection,
@@ -222,6 +223,49 @@ async function seedObservation(
     payloadHash: sha256(key),
     idempotencyKey: `plane:${key}`,
   });
+}
+
+/** One `/timeline` page: a single post attaching every media it carries, with
+ *  their cards in `accountMedia` exactly as the DM sidecar serves them. */
+async function seedPostsObservation(
+  pageId: number,
+  key: string,
+  media: ReadonlyArray<Record<string, unknown>>,
+) {
+  const payload = {
+    posts: [{
+      id: `post-${key}`,
+      content: "",
+      createdAt: Math.floor(new Date("2026-08-20T12:00:00Z").getTime() / 1000),
+      attachments: media.map((row, pos) => ({ contentType: 1, contentId: row.id, pos })),
+    }],
+    accountMedia: media,
+    accountMediaBundles: [],
+    account: { id: OWN_REF },
+  };
+  await insertObservation(testDb!.db, {
+    source: "pull",
+    producer: "sync:fansly:posts",
+    platform: "fansly",
+    accountId: pageId,
+    kind: "posts",
+    payload,
+    payloadHash: sha256(`posts:${key}`),
+    idempotencyKey: `plane:posts:${key}`,
+  });
+}
+
+async function projectPosts(pageId: number) {
+  await runCanonicalization(appStub(), { kinds: ["posts"] });
+  return runMediaPlaneProjection(appStub(), { accountId: pageId });
+}
+
+async function mediaStatsQueue(pageId: number) {
+  return (await testDb!.pool.query<{ subject_ref: string }>(
+    `select subject_ref from subject_refresh_state
+      where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+    [pageId],
+  )).rows.map((row) => row.subject_ref);
 }
 
 async function project(pageId: number) {
@@ -468,7 +512,7 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(new Date(archive[0]!.occurred_at).toISOString()).toBe(ancient.toISOString());
   });
 
-  it("queues per-media stats only for the page's OWN media, and keeps a fan's", async (context) => {
+  it("queues no per-media stats for media seen only in a DM, and keeps every head", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -489,21 +533,57 @@ describe("media plane — one paid DM page, end to end", () => {
     await seedObservation(page.id, "dm_messages", "owners", payload);
     await project(page.id);
 
-    // Every head is kept: the fan's media is still a fact other readers want.
+    // Every head is kept: DM media are still facts other readers want.
     const media = await rows<{ media_offer_ref: string }>(
       `select media_offer_ref from creator_media where page_id = $1 order by media_offer_ref`,
       [page.id],
     );
     expect(media.map((row) => row.media_offer_ref))
       .toEqual(["offer-fan-sent", "offer-message-1", "offer-no-owner"]);
-    // But the route cannot serve another account's media offer, so the fan's
-    // gets no queue row. An unknown owner fails OPEN.
-    const queued = await rows<{ subject_ref: string }>(
-      `select subject_ref from subject_refresh_state
-        where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+    // None is queued. A fan's media the route cannot serve; the page's own DM
+    // PPV it can, but its per-media views are not wanted (owner, 2026-09-29).
+    expect(await mediaStatsQueue(page.id)).toEqual([]);
+  });
+
+  it("queues a DM-first media once a post shows it — and still only the page's own", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const payload = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    await seedObservation(page.id, "dm_messages", "dm-first", payload);
+    await project(page.id);
+    expect(await mediaStatsQueue(page.id)).toEqual([]);
+
+    // The same media on a post, next to one another account owns and one that
+    // names no owner: the owner check applies to every origin.
+    const own = payload.accountMedia[0]!;
+    await seedPostsObservation(page.id, "later", [
+      own,
+      { ...own, id: "offer-fan-sent", accountId: FAN_REF, mediaId: "raw-fan-sent" },
+      { ...own, id: "offer-no-owner", accountId: undefined as never, mediaId: "raw-no-owner" },
+    ]);
+    await projectPosts(page.id);
+
+    expect(await mediaStatsQueue(page.id)).toEqual(["offer-message-1", "offer-no-owner"]);
+    // The head keeps its first origin; the queue row is new and never visited.
+    const [head] = await rows<{ first_origin: string }>(
+      `select first_origin from creator_media
+        where page_id = $1 and media_offer_ref = 'offer-message-1'`,
       [page.id],
     );
-    expect(queued.map((row) => row.subject_ref)).toEqual(["offer-message-1", "offer-no-owner"]);
+    expect(head!.first_origin).toBe("dm_sidecar");
+    const [queued] = await rows<{ last_visited_at: Date | null; dirty_reason: string | null }>(
+      `select last_visited_at, dirty_reason from subject_refresh_state
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-message-1'`,
+      [page.id],
+    );
+    expect(queued).toEqual({ last_visited_at: null, dirty_reason: null });
   });
 
   it("prunes the fan's rows queued before the owner check, on an owner's --execute only", async (context) => {
@@ -536,13 +616,21 @@ describe("media plane — one paid DM page, end to end", () => {
     await project(page.id);
 
     // The queue as it stood before the owner check: every head had a row, and
-    // a purchase can queue a ref no media event names.
+    // a purchase could queue a ref no media event names.
     await testDb.pool.query(
       `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
        select $1, 'media_stats', ref, 'fresh', now()
          from unnest($2::text[]) as ref
        on conflict (page_id, plane, subject_ref) do nothing`,
-      [page.id, ["offer-fan-sent", "offer-fan-visited", "offer-mixed", "offer-orphan"]],
+      [page.id, [
+        "offer-fan-sent",
+        "offer-fan-visited",
+        "offer-message-1",
+        "offer-message-2",
+        "offer-mixed",
+        "offer-no-owner",
+        "offer-orphan",
+      ]],
     );
     await testDb.pool.query(
       `update subject_refresh_state set consecutive_failures = 3
@@ -595,6 +683,144 @@ describe("media plane — one paid DM page, end to end", () => {
     // And a second run finds nothing to do.
     expect(await runFanslyMediaStatsForeignPrune(appStub(), { dryRun: false }))
       .toEqual({ dryRun: false, pages: [], rows: 0, failing: 0 });
+  });
+
+  it("prunes the queue rows of media seen only in DMs, on an owner's --execute only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const payload = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    const own = payload.accountMedia[0]!;
+    for (const id of ["offer-dm-visited", "offer-dm-posted", "offer-dm-bundled", "offer-dm-top"]) {
+      payload.accountMedia.push({ ...own, id, mediaId: `raw-${id}` });
+    }
+    await seedObservation(page.id, "dm_messages", "dm-only", payload);
+    await project(page.id);
+    // A head first seen on a post whose post head is not projected yet.
+    await seedPostsObservation(page.id, "post-first", [
+      { ...own, id: "offer-post-first", mediaId: "raw-post-first" },
+    ]);
+    await projectPosts(page.id);
+    expect(await mediaStatsQueue(page.id)).toEqual(["offer-post-first"]);
+
+    // Where each DM-first media ALSO appears outside DMs.
+    await testDb.pool.query(
+      `insert into creator_posts (account_id, platform, platform_post_id, published_at,
+         first_observed_at, last_observed_at, content_hash, attachment_count,
+         attachment_refs, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'post-kept', '2026-08-20T00:00:00Z', '2026-08-20T00:00:00Z',
+               '2026-08-20T00:00:00Z', repeat('d', 64), 3, $2::jsonb, 1, 1, 1)`,
+      [page.id, JSON.stringify([
+        { pos: 0, contentType: 1, contentId: "offer-dm-posted" },
+        { pos: 1, contentType: 2, contentId: "bundle-on-post" },
+        { pos: 2, contentType: 1, contentId: "offer-orphan-posted" },
+      ])],
+    );
+    await testDb.pool.query(
+      `insert into creator_media_bundles (
+         page_id, platform, bundle_ref, member_refs, first_observed_at, last_observed_at,
+         content_hash, source_event_id, source_observation_id, source_account_seq
+       ) values ($1, 'fansly', 'bundle-on-post', $2::text[], now(), now(), repeat('e', 64), 1, 1, 1)`,
+      [page.id, ["offer-dm-bundled"]],
+    );
+    await testDb.pool.query(
+      `insert into stats_top_media (
+         page_id, platform, plane, period_ms, requested_start, requested_end,
+         media_offer_ref, rank, content_hash, observed_at, source_event_id,
+         source_observation_id, source_account_seq
+       ) values ($1, 'fansly', 'top_media', 86400000, '2026-07-21T00:00:00Z',
+                 '2026-08-20T00:00:00Z', 'offer-dm-top', 0, repeat('f', 64), now(), 1, 1, 1)`,
+      [page.id],
+    );
+    // The queue as it stood before this policy: every DM head had a row, and a
+    // purchase could queue a ref no head names — here one no post names either,
+    // and one a post does.
+    await testDb.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+       select $1, 'media_stats', ref, 'fresh', now()
+         from unnest($2::text[]) as ref
+       on conflict (page_id, plane, subject_ref) do nothing`,
+      [page.id, [
+        "offer-message-1",
+        "offer-dm-visited",
+        "offer-dm-posted",
+        "offer-dm-bundled",
+        "offer-dm-top",
+        "offer-orphan",
+        "offer-orphan-posted",
+      ]],
+    );
+    // A row the lane has visited, and a purchase has marked since: its
+    // collected buckets stay whatever happens to the row.
+    await testDb.pool.query(
+      `update subject_refresh_state
+          set last_visited_at = now(), dirty_reason = 'purchase_notification'
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-dm-visited'`,
+      [page.id],
+    );
+    const everything = [
+      "offer-dm-bundled",
+      "offer-dm-posted",
+      "offer-dm-top",
+      "offer-dm-visited",
+      "offer-message-1",
+      "offer-orphan",
+      "offer-orphan-posted",
+      "offer-post-first",
+    ];
+    expect(await mediaStatsQueue(page.id)).toEqual(everything);
+    const pruned = ["offer-dm-visited", "offer-message-1", "offer-orphan"];
+    const expected = [{
+      pageId: page.id,
+      pageLabel: "plane-page",
+      rows: 3,
+      visited: 1,
+      dirty: 1,
+      headless: 1,
+    }];
+
+    // Dry-run is the default: it counts, per page, and writes nothing.
+    const dry = await runFanslyMediaStatsDmOnlyPrune(appStub());
+    expect(dry).toEqual({ dryRun: true, pages: expected, rows: 3, visited: 1, dirty: 1, headless: 1 });
+    expect(await mediaStatsQueue(page.id)).toEqual(everything);
+    // Another page's scope finds nothing here.
+    expect((await runFanslyMediaStatsDmOnlyPrune(appStub(), { accountId: page.id + 1 })).pages)
+      .toEqual([]);
+
+    const executed = await runFanslyMediaStatsDmOnlyPrune(appStub(), {
+      dryRun: false,
+      accountId: page.id,
+    });
+    expect(executed).toEqual({
+      dryRun: false,
+      pages: expected,
+      rows: 3,
+      visited: 1,
+      dirty: 1,
+      headless: 1,
+    });
+    expect(await mediaStatsQueue(page.id)).toEqual(everything.filter((ref) => !pruned.includes(ref)));
+    // Queue state only: every media head stays.
+    expect((await rows(
+      `select media_offer_ref from creator_media where page_id = $1 order by media_offer_ref`,
+      [page.id],
+    )).map((row) => row.media_offer_ref)).toEqual([
+      "offer-dm-bundled",
+      "offer-dm-posted",
+      "offer-dm-top",
+      "offer-dm-visited",
+      "offer-message-1",
+      "offer-post-first",
+    ]);
+    // And a second run finds nothing to do.
+    expect(await runFanslyMediaStatsDmOnlyPrune(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, pages: [], rows: 0, visited: 0, dirty: 0, headless: 0 });
   });
 
   it("is idempotent: a second sweep + projection changes nothing", async (context) => {

@@ -152,6 +152,14 @@ const SANCTIONED_DELETER_FILES = [
   // `creator_media` head stays, and the enqueue's owner check keeps the rows
   // from coming back.
   "packages/db/src/repositories/fansly-media-stats-foreign-queue.ts",
+  // Owner decision 2026-09-29: an owner-run queue repair, never scheduled,
+  // dry-run by default (a READ ONLY transaction). deleteDmOnlyMediaStatsQueueRows
+  // removes only `media_stats` rows of `subject_refresh_state` — capture-plane
+  // operational state (§3.4), no captured fact — for media the page showed only
+  // in DMs, whose per-media views the owner does not want. Every observation,
+  // event, `creator_media` head and collected bucket stays, and the enqueue's
+  // origin check keeps the rows from coming back.
+  "packages/db/src/repositories/fansly-media-stats-dm-only-queue.ts",
   "packages/db/src/repositories/message-archive.ts",
   // observations.ts left this list when the insert protocol became atomic:
   // its only delete was the compensating release of a failed key claim, and

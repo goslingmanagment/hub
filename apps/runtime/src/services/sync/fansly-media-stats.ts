@@ -107,8 +107,9 @@
 //       the consumer. The current top-50 of `stats_top_media` is marked the same
 //       way, once a day, for zero platform calls — an item that just entered the
 //       top-50 is the one whose series is worth having today.
-//   (2) NEVER VISITED, NEWEST FIRST.
-//   (3) DUE BY CLASS, oldest visit first.
+//   (2) BY TIER: fresh, then mid, then the long tail.
+//   (3) WITHIN A TIER, never visited first (newest first), then the oldest
+//       visit. `listMediaStatsRefreshChunk` says why tier outranks first sight.
 //
 // ── 5. BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume ────────────────
 //
