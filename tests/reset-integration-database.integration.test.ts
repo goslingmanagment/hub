@@ -133,4 +133,40 @@ describe("resetIntegrationDatabase", () => {
     const left = await db.pool.query<{ n: number }>("select count(*)::int as n from models");
     expect(left.rows[0]!.n).toBe(0);
   });
+
+  // A claimer (SELECT ... FOR UPDATE, then UPDATE) must not deadlock the reset:
+  // under a SHARE lock the reset's DELETE waits for the claimed row while the
+  // claimer's UPDATE waits for the reset (40P01). TRUNCATE's lock queues the
+  // reset behind the claimer instead, and the reset must do the same.
+  it("waits for a claimer that locked a row before updating it", async () => {
+    await resetIntegrationDatabase(db.pool);
+    await db.pool.query("insert into models (slug, name) values ('claimed', 'Claimed')");
+    const claimer = await db.pool.connect();
+    try {
+      await claimer.query("begin");
+      await claimer.query("select id from models where slug = 'claimed' for update");
+      const claimerPid = (await claimer.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0]!.pid;
+
+      const reset = resetIntegrationDatabase(db.pool);
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        const waiting = await db.pool.query<{ n: number }>(`
+          select count(*)::int as n from pg_stat_activity
+          where datname = current_database()
+            and wait_event_type = 'Lock'
+            and $1 = any(pg_blocking_pids(pid))
+        `, [claimerPid]);
+        if (waiting.rows[0]!.n > 0) break;
+        if (Date.now() > deadline) throw new Error("the reset never waited for the claimer");
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await claimer.query("update models set name = 'Claimed late' where slug = 'claimed'");
+      await claimer.query("commit");
+      await reset;
+    } finally {
+      claimer.release();
+    }
+    const left = await db.pool.query<{ n: number }>("select count(*)::int as n from models");
+    expect(left.rows[0]!.n).toBe(0);
+  });
 });

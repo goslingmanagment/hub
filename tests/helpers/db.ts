@@ -178,9 +178,11 @@ export async function startIntegrationTestDatabase(input?: {
  * `truncate ... restart identity cascade` does, without giving each of the
  * ~280 tables and ~850 indexes a new file on every call (~0.1-0.25 s a reset):
  *
- * - Every table is first locked in SHARE mode. Like TRUNCATE's lock, it waits
- *   for a write still in flight from the previous test and then empties its
- *   rows, instead of letting them commit into the next test.
+ * - Every table is first locked in ACCESS EXCLUSIVE mode, the lock TRUNCATE
+ *   takes: a transaction still in flight from the previous test (a writer, a
+ *   reader that writes later, a SELECT ... FOR UPDATE claimer) finishes first
+ *   and its rows are then emptied, instead of committing into the next test or
+ *   deadlocking the reset. Measured cost is the same as SHARE.
  * - `delete` runs only on tables with pages. A table no row has reached
  *   since the clone was made has none, so it costs no scan.
  * - `session_replication_role = replica` (local to this transaction) skips
@@ -202,7 +204,7 @@ declare
   target regclass;
 begin
   perform set_config('session_replication_role', 'replica', true);
-  select 'lock table ' || string_agg(c.oid::regclass::text, ', ' order by c.relname) || ' in share mode'
+  select 'lock table ' || string_agg(c.oid::regclass::text, ', ' order by c.relname) || ' in access exclusive mode'
     into locks
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
