@@ -12,6 +12,10 @@ import { runOfapiCollectionJob } from "../apps/runtime/src/services/ofapi-collec
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 let db: StartedTestDatabase;
 let app: ReturnType<typeof createTestAppContext>;
 let server: Awaited<ReturnType<typeof buildApiServer>>;

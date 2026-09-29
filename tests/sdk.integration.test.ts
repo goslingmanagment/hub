@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -34,6 +34,10 @@ import { kernelOperations } from "../packages/sdk/src/operations.ts";
 import { KERNEL_CONTRACT_HASH } from "../packages/sdk/src/meta.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 // Kernel Stage 20: the generated SDK against a REAL listening server — typed
 // operations round-trip with runtime validation, both auth modes, the live

@@ -18,6 +18,10 @@ import {
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 // H2 (amends #265): automatic redelivery of undelivered business webhooks and
 // the delivery-history collector's catch-up/coverage signal. Every vendor
 // request is a mock; nothing here reaches the network.

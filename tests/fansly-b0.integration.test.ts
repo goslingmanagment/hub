@@ -17,7 +17,16 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 import { TIERED_TABLES, ndjsonToParquet, readParquetIds } from "../apps/runtime/src/services/tiering/index.ts";
 import * as socketTransport from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
 import * as liveConfig from "../apps/runtime/src/services/effective-config.ts";
-import { startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
+import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
+
+// The worker-level tests below run the real worker on production timing scaled
+// down 10x, not further: on a loaded runner a guard or config round trip must
+// stay well inside the staleness margins. tests/fansly-b0-connection.test.ts
+// pins the production defaults, including the 60 s live-off bound.
+const scaled: FanslyWsWorkerTiming = {
+  configPollMs: 1_000, configStaleMs: 2_000, pagePauseMs: 1_000, backoffBaseMs: 150,
+  authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
+};
 
 let testDb: StartedTestDatabase;
 let lakeDir: string;
@@ -77,14 +86,14 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const load = vi.spyOn(liveConfig, "loadEffectiveConfig");
     f.app.config.fanslyWsCaptureEnabled = true;
     f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
-    const worker = startFanslyWsWorker(f.app);
+    const worker = startFanslyWsWorker(f.app, { timing: scaled });
     try {
       await vi.waitFor(async () => expect((await testDb.pool.query(
         "select count(*)::int n from observations where source='fansly_ws'",
       )).rows[0].n).toBe(1));
       if (failure === "rejected") load.mockRejectedValue(new Error("config_read_failed"));
       else load.mockImplementation(() => new Promise(() => {}));
-      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 35_000 });
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 10_000 });
       await vi.waitFor(async () => expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
         where id<>$1::uuid`, [f.id])).rows).toEqual([{ stop_reason: "guard_unavailable" }]));
       expect(open).toHaveBeenCalledOnce();
@@ -94,7 +103,7 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const replacement = await acquireFanslyWsOwnership(testDb.connectionString, f.page.id, vi.fn());
     expect(replacement).not.toBeNull();
     if (replacement) { owners.push(replacement); await replacement.close(); }
-  }, 45_000);
+  });
 
   it("reconnects after a missing pong, preserves the gap and captures with the same generation", async () => {
     const f = await fixture();
@@ -122,9 +131,9 @@ describe("B0 PostgreSQL ownership and journal", () => {
     });
     f.app.config.fanslyWsCaptureEnabled = true;
     f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
-    const worker = startFanslyWsWorker(f.app);
+    const worker = startFanslyWsWorker(f.app, { timing: scaled });
     try {
-      await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2), { timeout: 45_000 });
+      await vi.waitFor(() => expect(open).toHaveBeenCalledTimes(2), { timeout: 15_000 });
       await vi.waitFor(async () => expect((await testDb.pool.query(
         "select count(*)::int n from observations where source='fansly_ws'",
       )).rows[0].n).toBe(3));
@@ -147,7 +156,7 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
       where id<>$1::uuid order by started_at`, [f.id])).rows)
       .toEqual([{ stop_reason: "pong_timeout" }, { stop_reason: "disabled" }]);
-  }, 60_000);
+  });
 
   it("the actual worker retains capture through replay failure and observes live off within 60 seconds", async () => {
     const f = await fixture(); await f.owner.close();
@@ -169,25 +178,26 @@ describe("B0 PostgreSQL ownership and journal", () => {
     });
     f.app.config.fanslyWsCaptureEnabled = true;
     f.app.config.fanslyWsCapturePageAllowlist = f.page.label;
-    const worker = startFanslyWsWorker(f.app);
+    const worker = startFanslyWsWorker(f.app, { timing: scaled });
     try {
       await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
       await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(1));
-      await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from fansly_ws_connections where verified_at is not null")).rows[0].n).toBe(1), { timeout: 8000 });
+      await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from fansly_ws_connections where verified_at is not null")).rows[0].n).toBe(1), { timeout: 5_000 });
       activeSocket!.dispatchEvent(new MessageEvent("message", { data: f.frame("456") }));
       await vi.waitFor(async () => expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(2));
       expect(stop).not.toHaveBeenCalled();
       expect((await testDb.pool.query("select distinct state from fansly_ws_decode_receipts")).rows).toEqual([{ state: "pending" }]);
       const changedAt = Date.now(); f.app.config.fanslyWsCaptureEnabled = false;
-      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 15_000 });
-      expect(Date.now() - changedAt).toBeLessThan(60_000);
+      await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce(), { timeout: 10_000 });
+      // The same bound the unit test pins at production scale (<= 60 s).
+      expect(Date.now() - changedAt).toBeLessThan(scaled.configPollMs + scaled.configStaleMs + scaled.checkMs);
     } finally {
       await worker.stop(); open.mockRestore();
       await testDb.pool.query("drop trigger b0_fail_settle on fansly_ws_decode_receipts; drop function b0_fail_settle()");
     }
     expect((await testDb.pool.query("select stop_reason from fansly_ws_connections where id<>$1::uuid", [f.id])).rows)
       .toEqual([{ stop_reason: "disabled" }]);
-  }, 30_000);
+  });
   it("one owner per page, death notifies, the next owner abandons the dead row and leaves a gap", async () => {
     const f = await fixture();
     const other = await createFanslyPage(f.app.db, { modelId: f.page.modelId, label: "b0-bystander" });

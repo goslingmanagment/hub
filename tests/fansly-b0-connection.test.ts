@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { businessFanslyWsFrame, decodeFanslyWsCapture, fanslyWsCaptureContainsSubject, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
-import { receiveFanslyConnection } from "../apps/runtime/src/services/fansly-ws/connection.ts";
-import { fanslyWsPages, startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
+import { FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection } from "../apps/runtime/src/services/fansly-ws/connection.ts";
+import { FANSLY_WS_WORKER_TIMING, fanslyWsPages, startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import * as liveConfig from "../apps/runtime/src/services/effective-config.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 
@@ -39,6 +39,31 @@ describe("Fansly B0 durable receiver", () => {
     const worker = startFanslyWsWorker({} as AppContext);
     await Promise.resolve(); await worker.stop();
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("pins production timing: config every 10 s, stale after 20 s, live off within 60 s", () => {
+    // Integration tests run the real worker on scaled timing; these defaults are
+    // what production runs (docs/runbooks/fansly-ws-capture.md).
+    expect(FANSLY_WS_WORKER_TIMING).toEqual({
+      configPollMs: 10_000, configStaleMs: 20_000, pagePauseMs: 10_000, backoffBaseMs: 1_500,
+      authTimeoutMs: 10_000, checkMs: 5_000, guardStaleMs: 15_000, pingMs: 20_000, pongTimeoutMs: 30_000,
+    });
+    expect(FANSLY_WS_WORKER_TIMING).toMatchObject(FANSLY_WS_CONNECTION_TIMING);
+    // A flag flip is seen by the next poll; a stalled read is caught at the first
+    // poll tick past staleness; one connection check covers the close.
+    const { configPollMs, configStaleMs, checkMs } = FANSLY_WS_WORKER_TIMING;
+    expect(configPollMs + configStaleMs + checkMs).toBeLessThanOrEqual(60_000);
+  });
+
+  it("polls live configuration every 10 seconds by default", async () => {
+    vi.useFakeTimers();
+    const load = vi.spyOn(liveConfig, "loadEffectiveConfig").mockResolvedValue({} as AppContext["config"]);
+    const worker = startFanslyWsWorker({} as AppContext);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(load).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(load).toHaveBeenCalledTimes(2);
+    await worker.stop();
   });
 
   it("commits raw before decode; keeps unknown children and excludes controls", async () => {

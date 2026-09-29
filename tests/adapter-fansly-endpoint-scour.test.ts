@@ -20,6 +20,17 @@ let harness: Awaited<ReturnType<typeof loadAdapters>>;
 
 beforeAll(async () => {
   harness = await loadAdapters();
+  // No wall clock in a unit test: a 5xx without Retry-After would otherwise
+  // sleep the real 2.5-5s exponential backoff before its retry. No case here
+  // asserts the delay (the ladder is pinned in tests/http-client.test.ts), so
+  // only the fallback is zeroed; an explicit Retry-After keeps its meaning.
+  // Spied on the module from the same registry `loadAdapters` just built;
+  // `cleanupAdapterHarness` restores it.
+  const httpClient = await import("../packages/shared/src/http-client.ts");
+  vi.spyOn(httpClient, "resolveRetryDelayMs").mockImplementation(
+    (retryAfterHeader, _attemptNumber, now) =>
+      httpClient.parseRetryAfterDelayMs(retryAfterHeader, now) ?? 0,
+  );
 });
 
 beforeEach(() => {

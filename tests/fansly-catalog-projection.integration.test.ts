@@ -237,7 +237,7 @@ async function seedAll(pageId: number) {
 }
 
 describe("[sync-critical] WP-F3 catalog projection", () => {
-  it("projects every catalog surface, and replaying appends nothing", async (context) => {
+  it("projects every catalog surface with NO delivery URL in any serving table, and replaying appends nothing", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -245,6 +245,29 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     const page = await seedPage();
     await seedAll(page.id);
     const first = await project(page.id);
+
+    // Puts NO delivery URL, location or variant into any serving table. These
+    // checks only read the state this first projection left, so they share
+    // its setup.
+    for (const table of [...FANSLY_CATALOG_PROJECTION_TABLES, "creator_media"]) {
+      const columns = await rows<{ column_name: string }>(
+        `select column_name from information_schema.columns where table_name = $1`,
+        [table],
+      );
+      for (const column of columns) {
+        expect(
+          /^(location|locations|variants|variant_hash|url|filename)$/.test(column.column_name),
+          `${table}.${column.column_name}`,
+        ).toBe(false);
+      }
+      // …and no VALUE smuggled one in through a jsonb column either. The
+      // fixtures carry a "SIGNED-…" placeholder exactly so this can fail.
+      const smuggled = await rows(
+        `select 1 from ${table} t where t.page_id = $1 and t::text like '%SIGNED-%'`,
+        [page.id],
+      );
+      expect(smuggled, `${table} leaked a signed location`).toHaveLength(0);
+    }
 
     expect(first.catalog.albums).toBe(8);
     expect(first.catalog.tiers).toBe(2);
@@ -605,36 +628,6 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     }
     // The price came from permissions.permissionFlags[], not the top-level 0.
     expect(media[0]?.price_mills).toBe(79000n);
-  });
-
-  it("puts NO delivery URL, location or variant into any serving table", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedAll(page.id);
-    await project(page.id);
-
-    for (const table of [...FANSLY_CATALOG_PROJECTION_TABLES, "creator_media"]) {
-      const columns = await rows<{ column_name: string }>(
-        `select column_name from information_schema.columns where table_name = $1`,
-        [table],
-      );
-      for (const column of columns) {
-        expect(
-          /^(location|locations|variants|variant_hash|url|filename)$/.test(column.column_name),
-          `${table}.${column.column_name}`,
-        ).toBe(false);
-      }
-      // …and no VALUE smuggled one in through a jsonb column either. The
-      // fixtures carry a "SIGNED-…" placeholder exactly so this can fail.
-      const smuggled = await rows(
-        `select 1 from ${table} t where t.page_id = $1 and t::text like '%SIGNED-%'`,
-        [page.id],
-      );
-      expect(smuggled, `${table} leaked a signed location`).toHaveLength(0);
-    }
   });
 
   it("reproduces every row and every missing_since from a truncate-and-replay", async (context) => {
