@@ -497,34 +497,121 @@ describe("CI job admission", () => {
 describe("CI runner pool", () => {
   const selfHosted = ["self-hosted", "ci-pc"];
 
+  // Every job of both workflows follows CI_POOL, the gate's own fingerprint
+  // and Quality Gate included: with CI_POOL=pc nothing runs on a billed runner
+  // on a first attempt.
   it.each([
-    // CI_POOL, run attempt, static, integration
-    ["pc", "1", selfHosted, selfHosted],
+    // CI_POOL, run attempt, fingerprint + Quality Gate, static, integration, nightly jobs
+    ["pc", "1", selfHosted, selfHosted, selfHosted, selfHosted],
     // Re-runs always go hosted: the PC may have died mid-run.
-    ["pc", "2", "ubuntu-24.04", "ubuntu-24.04-arm"],
-    ["pc", "3", "ubuntu-24.04", "ubuntu-24.04-arm"],
-    ["", "1", "ubuntu-24.04", "ubuntu-24.04-arm"],
-    ["hosted", "1", "ubuntu-24.04", "ubuntu-24.04-arm"],
-  ] as const)("CI_POOL=%s attempt %s routes static to %j and integration to %j", (pool, attempt, staticRunner, integrationRunner) => {
-    const context = eventContext({ pool, attempt });
-    expect(runner(job("static")["runs-on"], context)).toEqual(staticRunner);
-    expect(runner(job("integration")["runs-on"], context)).toEqual(integrationRunner);
-  });
+    ["pc", "2", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
+    ["pc", "3", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
+    ["", "1", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
+    ["hosted", "1", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
+  ] as const)("CI_POOL=%s attempt %s routes the gate jobs to %j, static to %j, integration to %j and nightly to %j",
+    (pool, attempt, gateRunner, staticRunner, integrationRunner, nightlyRunner) => {
+      const context = eventContext({ pool, attempt });
+      expect(runner(job("fingerprint")["runs-on"], context)).toEqual(gateRunner);
+      expect(runner(job("quality")["runs-on"], context)).toEqual(gateRunner);
+      expect(runner(job("static")["runs-on"], context)).toEqual(staticRunner);
+      expect(runner(job("integration")["runs-on"], context)).toEqual(integrationRunner);
+      expect(Object.keys(nightly.jobs).sort()).toEqual(["api-remainder", "full-suite"]);
+      for (const [name, config] of Object.entries(nightly.jobs)) {
+        expect(runner(config["runs-on"], context), name).toEqual(nightlyRunner);
+      }
+    },
+  );
 
   it("keeps the canonical pool expression and pins every hosted image", () => {
     const pool = (fallback: string) =>
       `\${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || '${fallback}' }}`;
     expect(job("static")["runs-on"]).toBe(pool("ubuntu-24.04"));
     expect(job("integration")["runs-on"]).toBe(pool("ubuntu-24.04-arm"));
-    // Seconds-long jobs without Docker take the cheapest runner.
-    expect(job("fingerprint")["runs-on"]).toBe("ubuntu-slim");
-    expect(job("quality")["runs-on"]).toBe("ubuntu-slim");
+    // Seconds-long jobs without Docker fall back to the cheapest runner.
+    expect(job("fingerprint")["runs-on"]).toBe(pool("ubuntu-slim"));
+    expect(job("quality")["runs-on"]).toBe(pool("ubuntu-slim"));
     expect(job("fingerprint")).toHaveProperty("timeout-minutes", 5);
     expect(job("quality")).toHaveProperty("timeout-minutes", 5);
     // ubuntu-latest moves to a new release on GitHub's schedule, not ours.
     expect(workflowText).not.toContain("ubuntu-latest");
     for (const [name, config] of Object.entries(nightly.jobs)) {
-      expect(config["runs-on"], name).toBe("ubuntu-24.04");
+      expect(config["runs-on"], name).toBe(pool("ubuntu-24.04"));
+    }
+  });
+
+  // The PC image has no Node.js on PATH and no GitHub CLI (its WSL distro
+  // `ci`, checked 2026-09-29). A step on a self-hosted runner may run node,
+  // pnpm or corepack only after a setup-node step ran in that job, whichever
+  // path the job takes; and no step anywhere calls the GitHub CLI — the gate
+  // scripts read the API through Node's fetch (tests/ci-github-api.test.ts).
+  it("sets Node up before any PC step runs it, and calls no GitHub CLI", () => {
+    const runsNode = /(?:^|[\s;&|(])(?:node|pnpm|corepack)\s/m;
+    const jobs: [string, Job][] = [
+      ...Object.entries(workflow.jobs).map(([name, config]): [string, Job] => [`ci ${name}`, config]),
+      ...Object.entries(nightly.jobs).map(([name, config]): [string, Job] => [`nightly ${name}`, config]),
+    ];
+    let checked = 0;
+    for (const [name, config] of jobs) {
+      for (const metadataOnly of ["true", "false"]) {
+        const context = {
+          ...eventContext({ runnerEnvironment: "self-hosted" }),
+          "env.METADATA_ONLY": metadataOnly,
+          "steps.unit-tests.outputs.started": "true",
+          "needs.integration.result": "success",
+        };
+        let nodeReady = false;
+        for (const item of config.steps) {
+          if (!stepRuns(item, context, PASSING)) continue;
+          if (item.uses?.startsWith("actions/setup-node@")) nodeReady = true;
+          if (item.run && runsNode.test(item.run)) {
+            expect(nodeReady, `${name} (metadata-only ${metadataOnly}): ${item.name}`).toBe(true);
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(10);
+    // A command position: a line start, or after ;, &, | or $( — not advice
+    // inside a message, such as the economy hint's "run: gh pr edit".
+    const ghCommand = /(?:^|[;&|]|\$\()\s*gh\s/m;
+    expect(ghCommand.test("run: gh pr edit 7")).toBe(false);
+    expect(ghCommand.test("x=$(gh api repos)")).toBe(true);
+    for (const [name, config] of jobs) {
+      for (const item of config.steps) expect(item.run ?? "", `${name}: ${item.name}`).not.toMatch(ghCommand);
+    }
+  });
+
+  // The gate jobs need Node only for their scripts: the fingerprint job always,
+  // the Quality Gate only on the metadata-only path (the mirror). Hosted
+  // ubuntu-slim ships Node, so only the PC sets it up — from the runner's tool
+  // cache, without a pnpm install or a dependency cache.
+  it.each([
+    // job, METADATA_ONLY, runner, steps that run up to and including the first Node script
+    ["fingerprint", "false", "github-hosted", ["Checkout", "Plan integration shards"]],
+    ["fingerprint", "false", "self-hosted", ["Checkout", "Setup Node.js", "Plan integration shards"]],
+    ["quality", "true", "github-hosted", ["Checkout", "An earlier run already passed this head"]],
+    ["quality", "true", "self-hosted", ["Checkout", "Setup Node.js", "An earlier run already passed this head"]],
+  ] as const)("%s (metadata-only %s) on %s runs %j", (name, metadataOnly, runnerEnvironment, expected) => {
+    const context = { ...eventContext({ runnerEnvironment }), "env.METADATA_ONLY": metadataOnly, "needs.integration.result": "success" };
+    const ran = job(name).steps.filter(item => stepRuns(item, context, PASSING)).map(item => item.name);
+    expect(ran.slice(0, expected.length)).toEqual(expected);
+    const setup = step(name, "Setup Node.js");
+    expect(setup.uses).toBe("actions/setup-node@v6");
+    expect(setup.with).toEqual({ "node-version": 22 });
+    expect(setup.if).toBe(name === "fingerprint"
+      ? "runner.environment == 'self-hosted'"
+      : "env.METADATA_ONLY == 'true' && runner.environment == 'self-hosted'");
+  });
+
+  it("the Quality Gate's aggregating path runs no Node and sets none up", () => {
+    for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+      const context = { ...eventContext({ runnerEnvironment }), "env.METADATA_ONLY": "false", "needs.integration.result": "success" };
+      expect(job("quality").steps.filter(item => stepRuns(item, context, PASSING)).map(item => item.name), runnerEnvironment).toEqual([
+        "Every gate job succeeded",
+        "Record this fingerprint as proven",
+        "Publish the proof for later identical trees",
+        "Publish fresh integration proof",
+      ]);
     }
   });
 
@@ -639,20 +726,24 @@ describe("CI runner pool", () => {
 });
 
 describe("CI self-hosted setup: pnpm from Node's corepack", () => {
-  const setupSteps = (name: string) => {
-    const steps = job(name).steps;
-    return steps.slice(0, steps.findIndex(item => item.name === "Install dependencies") + 1);
-  };
+  const setupSteps = (config: Job) => config.steps.slice(0, config.steps.findIndex(item => item.name === "Install dependencies") + 1);
+  // Every job that installs the workspace, in either workflow.
+  const installing: [string, Job][] = [
+    ["static", job("static")],
+    ["integration", job("integration")],
+    ...Object.entries(nightly.jobs).map(([name, config]): [string, Job] => [`nightly ${name}`, config]),
+  ];
 
-  it("gives both jobs the same checkout, pnpm setup and install", () => {
-    expect(setupSteps("static").map(item => item.name)).toEqual([
+  it("gives every installing job the same checkout, pnpm setup and install", () => {
+    expect(setupSteps(job("static")).map(item => item.name)).toEqual([
       "Checkout",
       "Setup pnpm",
       "Setup Node.js",
       "Setup pnpm (corepack)",
       "Install dependencies",
     ]);
-    expect(setupSteps("integration")).toEqual(setupSteps("static"));
+    expect(installing.map(([name]) => name)).toEqual(["static", "integration", "nightly api-remainder", "nightly full-suite"]);
+    for (const [name, config] of installing) expect(setupSteps(config), name).toEqual(setupSteps(job("static")));
   });
 
   // Hosted runners keep exactly the previous setup; the PC swaps
@@ -672,8 +763,8 @@ describe("CI self-hosted setup: pnpm from Node's corepack", () => {
     ]],
   ] as const)("on %s runs exactly one pnpm setup", (runnerEnvironment, expected) => {
     const context = eventContext({ runnerEnvironment });
-    for (const name of ["static", "integration"]) {
-      const ran = setupSteps(name).filter(item => stepRuns(item, context, PASSING)).map(item => [
+    for (const [name, config] of installing) {
+      const ran = setupSteps(config).filter(item => stepRuns(item, context, PASSING)).map(item => [
         item.name,
         item.uses ?? "run",
         Object.fromEntries(Object.entries(item.with ?? {}).map(([key, value]) => [key, field(String(value), context)])),
@@ -758,6 +849,54 @@ describe("CI self-hosted setup: pnpm from Node's corepack", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Nightly on the runner pool", () => {
+  function nightlyJob(name: string): Job {
+    const found = nightly.jobs[name];
+    if (!found) throw new Error(`Missing nightly job: ${name}`);
+    return found;
+  }
+  const afterInstall = (config: Job) => config.steps.slice(config.steps.findIndex(item => item.name === "Install dependencies") + 1);
+  const suite = "Full test suite (unit + integration + rebuild proofs + ratchets)";
+
+  // The daily/weekly split is unchanged by the pool: the api remainder six
+  // days a week, the whole suite on Mondays and on manual dispatch.
+  it("keeps the schedule split, timeouts and the daily command", () => {
+    expect(nightlyJob("api-remainder").if).toBe("github.event_name == 'schedule' && github.event.schedule == '20 2 * * 0,2-6'");
+    expect(nightlyJob("full-suite").if).toBe("github.event_name != 'schedule' || github.event.schedule == '20 2 * * 1'");
+    expect(nightlyJob("api-remainder")).toHaveProperty("timeout-minutes", 20);
+    expect(nightlyJob("full-suite")).toHaveProperty("timeout-minutes", 90);
+    const daily = afterInstall(nightlyJob("api-remainder"));
+    expect(daily.map(item => [item.name, item.run, item.if, item.env])).toEqual([
+      ["Whole api.integration file (the part PRs do not run)", "pnpm test:api:full", undefined, undefined],
+    ]);
+    expect(afterInstall(nightlyJob("full-suite")).map(item => item.name)).toEqual([suite]);
+  });
+
+  // Vitest's default is CPUs - 1 workers: one on a 2-vCPU hosted runner, 23 on
+  // the PC's 24 threads, all against the run's ONE Postgres cluster and inside
+  // the 20 GB cap daytime CI shares. The PC runs four; hosted keeps the
+  // default and the exact previous command.
+  it.each([
+    ["github-hosted", "", "test"],
+    ["self-hosted", "4", "test --maxWorkers=4"],
+  ] as const)("the full suite on %s runs `pnpm %s`", (runnerEnvironment, workers, argv) => {
+    const run = afterInstall(nightlyJob("full-suite"))[0];
+    if (!run) throw new Error("Missing full-suite step");
+    expect(run.if).toBeUndefined();
+    expect(run.env).toEqual({ PC_MAX_WORKERS: "${{ runner.environment == 'self-hosted' && '4' || '' }}" });
+    const env = field(run.env?.PC_MAX_WORKERS ?? "", eventContext({ runnerEnvironment }));
+    expect(env).toBe(workers);
+    const script = `pnpm() { printf '%s|' "$@"; printf '\\n'; }\n${shell(run)}`;
+    const { PC_MAX_WORKERS: _inherited, ...inherited } = process.env;
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", script], { encoding: "utf8", env: { ...inherited, PC_MAX_WORKERS: env } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${argv.split(" ").join("|")}|\n`);
+    // `pnpm test` is one vitest command, so the flag reaches `vitest run`.
+    const scripts = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> }).scripts;
+    expect(scripts.test).toBe("NODE_OPTIONS=--max-old-space-size=8192 vitest run");
   });
 });
 
@@ -1269,7 +1408,7 @@ describe("Decision 377: every event keeps the required check reported", () => {
 
   // The mirror confirms an earlier verdict for this exact head; it can never
   // manufacture one, so a red, pending, foreign or missing gate stays red.
-  it("mirrors only an earlier successful Quality Gate for the same head SHA", () => {
+  it("mirrors only an earlier successful Quality Gate for the same head SHA", async () => {
     const mirror = step("quality", "An earlier run already passed this head");
     expect(shell(mirror)).toBe("node scripts/ci-mirror-gate.mjs");
     expect(mirror.env).toEqual({
@@ -1286,7 +1425,7 @@ describe("Decision 377: every event keeps the required check reported", () => {
     const mirrorEnv = { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "35518904235", HEAD_SHA: headSha, IS_DRAFT: "false" };
     const earlier = { name: "Quality Gate", app: { slug: "github-actions" }, status: "completed", conclusion: "success",
       html_url: "https://github.com/owner/repo/actions/runs/35518903414/job/99" };
-    expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [earlier] }))).toEqual({
+    expect(await mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [earlier] }))).toEqual({
       runId: "35518903414", url: earlier.html_url,
     });
     // Everything that is not an EARLIER success from this workflow's app fails.
@@ -1299,23 +1438,24 @@ describe("Decision 377: every event keeps the required check reported", () => {
       { ...earlier, html_url: "https://example.invalid/not-a-run" },
     ];
     for (const checkRun of rejected) {
-      expect(() => mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [checkRun] })), JSON.stringify(checkRun)).toThrow("No earlier successful");
+      await expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [checkRun] })), JSON.stringify(checkRun)).rejects.toThrow("No earlier successful");
     }
-    expect(() => mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [] }))).toThrow("No earlier successful");
-    expect(() => mirrorEarlierGate(mirrorEnv, () => { throw new Error("API unavailable"); })).toThrow("API unavailable");
+    await expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [] }))).rejects.toThrow("No earlier successful");
+    await expect(mirrorEarlierGate(mirrorEnv, () => { throw new Error("API unavailable"); })).rejects.toThrow("API unavailable");
+    await expect(mirrorEarlierGate(mirrorEnv, () => Promise.reject(new Error("API unavailable")))).rejects.toThrow("API unavailable");
     // The head must be a real SHA, and a draft fails exactly like the gate does.
-    expect(() => mirrorEarlierGate({ ...mirrorEnv, HEAD_SHA: "" }, () => ({ check_runs: [earlier] }))).toThrow("head SHA");
+    await expect(mirrorEarlierGate({ ...mirrorEnv, HEAD_SHA: "" }, () => ({ check_runs: [earlier] }))).rejects.toThrow("head SHA");
     const draftApi = vi.fn(() => ({ check_runs: [earlier] }));
-    expect(() => mirrorEarlierGate({ ...mirrorEnv, IS_DRAFT: "true" }, draftApi)).toThrow("Draft PR");
+    await expect(mirrorEarlierGate({ ...mirrorEnv, IS_DRAFT: "true" }, draftApi)).rejects.toThrow("Draft PR");
     expect(draftApi).not.toHaveBeenCalled();
     // The query asks GitHub for this head's check runs by the required name.
     const endpoints: string[] = [];
-    expect(() => mirrorEarlierGate(mirrorEnv, endpoint => { endpoints.push(endpoint); return { check_runs: [] }; })).toThrow();
+    await expect(mirrorEarlierGate(mirrorEnv, endpoint => { endpoints.push(endpoint); return { check_runs: [] }; })).rejects.toThrow();
     expect(endpoints).toEqual([`repos/owner/repo/commits/${headSha}/check-runs?check_name=Quality%20Gate&filter=all&per_page=100&page=1`]);
     // A full page is not the end of the list.
     const pages: string[] = [];
     const other = { ...earlier, conclusion: "failure" };
-    const paged = mirrorEarlierGate(mirrorEnv, endpoint => {
+    const paged = await mirrorEarlierGate(mirrorEnv, endpoint => {
       pages.push(endpoint);
       return { check_runs: pages.length === 1 ? Array.from({ length: 100 }, () => other) : [earlier] };
     });
