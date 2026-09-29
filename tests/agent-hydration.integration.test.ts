@@ -1023,6 +1023,84 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(dispatched.request?.state).toBe("dispatching");
   });
 
+  it("approvals waiting on a busy page do not hold back an approval on a free page", async () => {
+    // The batch used to be the five OLDEST approvals, taken before the page
+    // check. Five older approvals on a page whose slot stays taken were then the
+    // whole batch on every cycle, and an approval on a free page behind them
+    // expired without ever being considered.
+    const { rows: modelRows } = await testDb!.pool.query<{ model_id: string }>(
+      "select model_id from pages where id = $1",
+      [fanslyPageId],
+    );
+    const freePage = await createFanslyPage(testDb!.db, {
+      modelId: Number(modelRows[0]!.model_id),
+      label: "lora-3",
+    });
+    await testDb!.pool.query(
+      "update agent_keys set page_ids = array_append(page_ids, $1::bigint) where key_prefix = $2",
+      [freePage!.id, TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6)],
+    );
+    await seedFanslyThread("free-page-thread-ref", freePage!.id);
+    const cliThreadId = await seedFanslyThread("cli-thread-ref");
+
+    const waiting = [(await fileRequest()).request];
+    for (const ref of ["busy-2", "busy-3", "busy-4", "busy-5"]) {
+      await seedFanslyThread(ref);
+      waiting.push((await fileRequest("lora-2", ref)).request);
+    }
+    for (const request of waiting) {
+      expect((await approve(request)).statusCode).toBe(200);
+    }
+    const free = (await fileRequest("lora-3", "free-page-thread-ref")).request;
+    expect((await approve(free)).statusCode).toBe(200);
+    await setFlag("agentHydrationMode", "dispatch");
+
+    const boss = await startRealBoss();
+    try {
+      // The owner's CLI holds lora-2's slot for the whole test.
+      const cliJob = await sendTargetedThreadBackfillJob(boss, {
+        threadId: cliThreadId,
+        platformAccountId: fanslyPageId,
+      });
+      expect(cliJob).not.toBeNull();
+
+      const cycle = await runAgentHydrationCycle(appContext, boss);
+      expect(cycle.dispatched).toBe(1);
+      expect(cycle.pageBusy).toBe(5);
+      const dispatched = await findAgentHydrationRequestByRef(testDb!.db, free.requestRef);
+      expect(dispatched.request?.state).toBe("dispatching");
+      for (const request of waiting) {
+        const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+        expect(stored.request?.state).toBe("approved");
+        expect(stored.request?.dispatchCount).toBe(0);
+      }
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("the scan past waiting approvals still claims at most five runs per cycle", async () => {
+    // The OnlyFans lane has no page slot, so nothing here waits: six approvals,
+    // five claims, and the sixth is the next cycle's.
+    const requests = [];
+    for (let index = 0; index < 6; index += 1) {
+      requests.push((await fileRequest("lora-of", OF_CONVERSATION_REF)).request);
+    }
+    for (const request of requests) {
+      expect((await approve(request, { allowMarkReadSideEffect: true })).statusCode).toBe(200);
+    }
+    await setFlag("agentHydrationMode", "dispatch");
+
+    const first = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(first.dispatched + first.refused).toBe(5);
+    const last = await findAgentHydrationRequestByRef(testDb!.db, requests[5]!.requestRef);
+    expect(last.request?.state).toBe("approved");
+    expect(last.request?.dispatchCount).toBe(0);
+
+    const second = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(second.dispatched + second.refused).toBe(1);
+  });
+
   it("a send that loses the page's slot after the probe re-arms the approval, never fails it", async () => {
     // The probe saw the slot free; another sender took it before this send, so
     // the `exclusive` queue returned null. No job exists and no vendor was asked.

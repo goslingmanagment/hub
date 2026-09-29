@@ -151,6 +151,7 @@ export function evaluateHydrationLanes(platform: Platform): HydrationAdmissibili
   };
 }
 
+/** Claims one cycle may make, and the page size of the scan that finds them. */
 const DISPATCH_BATCH_LIMIT = 5;
 const SWEEP_BATCH_LIMIT = 20;
 
@@ -255,41 +256,70 @@ export async function runAgentHydrationCycle(
     result.autoApprove = await runAgentHydrationAutoApprove(app, config);
   }
 
-  const candidates = await listDispatchableAgentHydrationRequests(app.db, {
-    limit: DISPATCH_BATCH_LIMIT,
-  });
+  // THE BATCH IS CLAIMS, NOT ROWS. The scan walks the approved queue oldest
+  // first, a page of rows at a time, until DISPATCH_BATCH_LIMIT approvals were
+  // claimed or the queue ran out. An approval that waits — its page busy or
+  // already served this cycle, parked by the policy, refused before its claim —
+  // starts nothing, so it does not fill the batch: five older approvals behind
+  // one busy page used to be the whole batch on every cycle, and an approval on
+  // a free page behind them expired without being considered.
   const pagesThisCycle = new Set<number>();
-  for (const request of candidates) {
-    // Kill-switch middle rung: leaving `enforce` also PARKS not-yet-started
-    // auto-approvals. They stay `approved` until their short TTL expires them,
-    // so re-entering `enforce` within the window resumes exactly where it stopped.
-    if (request.decisionSource === "auto_policy" && autoMode !== "enforce") {
-      result.autoHeld += 1;
-      continue;
+  const scanned: number[] = [];
+  let claims = 0;
+  while (claims < DISPATCH_BATCH_LIMIT) {
+    const candidates = await listDispatchableAgentHydrationRequests(app.db, {
+      limit: DISPATCH_BATCH_LIMIT,
+      excludeIds: scanned,
+    });
+    if (candidates.length === 0) {
+      break;
     }
-    // One run per page, checked BEFORE the claim: an approval whose page slot
-    // is taken stays `approved` with its attempt unspent, and its TTL bounds the
-    // wait. At most one claim per page per cycle, too. The page is marked only
-    // when a claim was made: an approval refused before its claim leaves the
-    // page as free as it found it, so it cannot take the page's turn from the
-    // approvals behind it on every cycle.
-    const slotTaken = LANE_PAGE_SLOTS[request.platform as Platform] as
-      | LanePageSlotProbe
-      | null
-      | undefined;
-    if (slotTaken
-      && (pagesThisCycle.has(request.pageId) || await slotTaken({ app, boss, pageId: request.pageId }))) {
-      result.pageBusy += 1;
-      continue;
-    }
-    const outcome = await dispatchAgentHydrationRequest(app, boss, request);
-    if (slotTaken && outcome !== "not_claimed") {
-      pagesThisCycle.add(request.pageId);
-    }
-    if (outcome === "dispatched") {
-      result.dispatched += 1;
-    } else {
-      result.refused += 1;
+    for (const request of candidates) {
+      if (claims >= DISPATCH_BATCH_LIMIT) {
+        break;
+      }
+      scanned.push(request.id);
+      // Kill-switch middle rung: leaving `enforce` also PARKS not-yet-started
+      // auto-approvals. They stay `approved` until their short TTL expires them,
+      // so re-entering `enforce` within the window resumes exactly where it stopped.
+      if (request.decisionSource === "auto_policy" && autoMode !== "enforce") {
+        result.autoHeld += 1;
+        continue;
+      }
+      // One run per page, checked BEFORE the claim: an approval whose page slot
+      // is taken stays `approved` with its attempt unspent, and its TTL bounds
+      // the wait. At most one claim per page per cycle, too. The page's turn is
+      // spent by a claim, or by finding its slot taken (probed once per cycle).
+      // An approval refused before its claim leaves the page as free as it
+      // found it, so it cannot take the page's turn from the approvals behind
+      // it on every cycle.
+      const slotTaken = LANE_PAGE_SLOTS[request.platform as Platform] as
+        | LanePageSlotProbe
+        | null
+        | undefined;
+      if (slotTaken) {
+        if (pagesThisCycle.has(request.pageId)) {
+          result.pageBusy += 1;
+          continue;
+        }
+        if (await slotTaken({ app, boss, pageId: request.pageId })) {
+          pagesThisCycle.add(request.pageId);
+          result.pageBusy += 1;
+          continue;
+        }
+      }
+      const outcome = await dispatchAgentHydrationRequest(app, boss, request);
+      if (outcome !== "not_claimed") {
+        claims += 1;
+        if (slotTaken) {
+          pagesThisCycle.add(request.pageId);
+        }
+      }
+      if (outcome === "dispatched") {
+        result.dispatched += 1;
+      } else {
+        result.refused += 1;
+      }
     }
   }
   return result;

@@ -761,10 +761,19 @@ export async function sumAutoApprovedCallsSince(
   return raw == null ? 0 : Number(raw);
 }
 
-/** Approved requests the executor may dispatch: in date, admissible, not expired. */
+/**
+ * Approved requests the executor may dispatch: in date, admissible, not
+ * expired, oldest decision first.
+ *
+ * `excludeIds` is the executor's scan cursor: the rows it already walked this
+ * cycle. It pages PAST the approvals that wait (busy page, parked, refused
+ * before the claim) instead of being handed the same head of the queue again.
+ * Ids, not a `decided_at` keyset: a JS Date cursor is milliseconds, the column
+ * is microseconds, and a truncated cursor would return its own row again.
+ */
 export async function listDispatchableAgentHydrationRequests(
   db: Database,
-  input: { limit: number; now?: Date },
+  input: { limit: number; excludeIds?: readonly number[]; now?: Date },
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -772,6 +781,7 @@ export async function listDispatchableAgentHydrationRequests(
     where r.state = 'approved'
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
+      and r.id <> all(${sql.param([...(input.excludeIds ?? [])])}::bigint[])
     order by r.decided_at asc, r.id asc
     limit ${input.limit}
   `);
