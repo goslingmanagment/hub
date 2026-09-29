@@ -5,7 +5,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { createPool } from "@agency_hub_core/db";
 
 import { runMigrations } from "../../packages/db/src/migrate-runner.ts";
-import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
+import { READ_ONLY_ROLE_PASSWORD, TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./timeouts.ts";
 
 async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
@@ -105,6 +105,13 @@ export default async function setup({ provide }: {
       templateClient.release();
       await templatePool.end();
     }
+
+    // The production `read_only` role, created once for the whole run: two
+    // test files may share this cluster at the same time, and a suite that
+    // created, re-passworded or dropped a cluster-wide role would pull it out
+    // from under the other. Created AFTER the template is migrated, so clones
+    // start with no grants to it, exactly as before.
+    await adminPool.query(`create role read_only login password '${READ_ONLY_ROLE_PASSWORD}'`);
   } catch (error) {
     await adminPool.end().catch(() => undefined);
     await container.stop().catch(() => undefined);

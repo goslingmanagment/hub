@@ -19,11 +19,15 @@ permissions:
 # Superseded PR heads stop burning runners; main always runs to completion so
 # every main commit keeps a finished Quality Gate record.
 concurrency:
+  # A PR shares one group per head ref, so a new push cancels the old run. A
+  # push or manual run gets a group of its own: GitHub keeps only ONE pending
+  # run per group, and a shared ref group let a newer main push evict an
+  # older pending one before it ever ran.
   # A metadata-only event — a description edit (no title or base change) or a
   # label other than ci:full — gets its own group so it never cancels the real
   # run for the same head; it still reports "Quality Gate" itself (see the
   # job), so the newest check suite for that head keeps the required check.
-  group: ci-${{ github.ref }}${{ ((github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base) || (github.event.action == 'labeled' && github.event.label.name != 'ci:full')) && '-metadata' || '' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}${{ ((github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base) || (github.event.action == 'labeled' && github.event.label.name != 'ci:full')) && '-metadata' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Drafts run only admission/gate jobs. Ready PRs and main reuse matching gate
@@ -142,14 +146,8 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
-      # Check backend types once. Docker explicitly consumes this successful
-      # check; direct Docker builds still check.
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint (family standard + architecture walls)
-        run: pnpm lint
-
+      # Contracts come first: the generator rewrites tracked sources in place
+      # (contract hash, SDK), and the unit tests started next import them.
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
       # consistency, but editing routes.ts without `pnpm contracts:generate`
       # kept the committed artifacts mutually consistent yet stale. The
@@ -158,6 +156,30 @@ jobs:
         run: |
           pnpm contracts:generate
           git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
+
+      # Self-hosted: the unit tests run in a process group of their own beside
+      # typecheck → lint → image build → smokes, and "Reliable unit tests"
+      # joins them. The PC's 24 threads are shared with the integration shards
+      # running at the same time; typecheck (single-threaded tsc) is the long
+      # pole of the other branch, and five workers finish the unit tests about
+      # when that branch ends (measured on the PC: 6 workers ~70 s, 4 ~97 s,
+      # against ~90 s for the checks) without adding load that buys nothing.
+      # Hosted runners (2 vCPUs) skip this and run the unit tests in that step
+      # instead, after the smokes, as before.
+      - name: Start reliable unit tests in the background
+        id: unit-tests
+        if: runner.environment == 'self-hosted'
+        run: |
+          bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5
+          echo "started=true" >> "$GITHUB_OUTPUT"
+
+      # Check backend types once. Docker explicitly consumes this successful
+      # check; direct Docker builds still check.
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint (family standard + architecture walls)
+        run: pnpm lint
 
       - name: Exact checkout image metadata
         id: metadata
@@ -218,11 +240,28 @@ jobs:
       # NOTE: this step still starts Postgres containers — tests/voice-profiles
       # and tests/voice-notes-sweep are DB-backed despite not being named
       # *.integration.test.ts, so they are not in the --exclude list.
+      #
+      # Self-hosted: wait for the background run, print its whole log and take
+      # its exit status. It is joined even when a check above failed, so one
+      # push reports both; only a cancelled job skips it. Hosted: vitest
+      # defaults to CPUs - 1, so a 2-vCPU runner would use one worker — keep
+      # per-file isolation while using both CPUs.
       - name: Reliable unit tests
-        # Vitest defaults to CPUs - 1: a 2-vCPU hosted runner otherwise uses
-        # one worker, so keep per-file isolation while using both CPUs. The PC
-        # (24 threads) shares its CPUs with the integration shards: 6 workers.
-        run: pnpm test:unit --maxWorkers=${{ runner.environment == 'self-hosted' && '6' || '2' }}
+        if: "!cancelled() && (success() || steps.unit-tests.outputs.started == 'true')"
+        env:
+          IN_BACKGROUND: ${{ steps.unit-tests.outputs.started }}
+        run: |
+          if [ "$IN_BACKGROUND" = "true" ]; then
+            bash scripts/ci-background.sh join unit-tests
+          else
+            pnpm test:unit --maxWorkers=2
+          fi
+
+      # A cancelled or timed-out job never joins: print what the unit tests
+      # logged and kill their whole process group. Never decides the result.
+      - name: Stop background unit tests
+        if: always()
+        run: bash scripts/ci-background.sh stop unit-tests
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
@@ -232,10 +271,12 @@ jobs:
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
-  # is the cheap win: separate machines, each keeping --no-file-parallelism.
+  # is the cheap win: separate machines, each keeping --no-file-parallelism
+  # (the PC runs two files at a time per shard; see the DB step).
   # Since #240 a shard runs ONE cluster and clones a database per acquisition,
   # so "no shared cluster" no longer holds: queries against cluster-global views
-  # (pg_locks, pg_stat_activity) must scope themselves to current_database().
+  # (pg_locks, pg_stat_activity) must scope themselves to current_database(),
+  # and a test must not create, alter or drop a role another file may use.
   # Sharding is by resolved FILE, so it is applied to the
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
@@ -300,7 +341,14 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
+      # A shard runs its files one at a time (the script's default,
+      # --no-file-parallelism). On the PC it runs two at a time: each file
+      # still clones its own database from the shard's one cluster, and
+      # anything cluster-wide in those files is scoped or created once in
+      # tests/helpers/global-setup.ts. Hosted runners keep the default.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
+        env:
+          SYNC_CRITICAL_DB_PARALLELISM: ${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
       # One file, ~20s on the PC — it resolves to a single spec so it cannot

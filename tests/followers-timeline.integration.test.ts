@@ -170,17 +170,22 @@ describe("C1 restricted followers run timeline", () => {
     expect((await read()).records[0]).toMatchObject({ decision_valid: true, queue_valid: false });
   });
 
-  it.each([
-    { name: "unbounded interval", args: [null, TO, 0, null, 1] },
-    { name: "reversed interval", args: [TO, FROM, 0, null, 1] },
-    { name: "interval longer than eight days", args: [FROM, TOO_LONG_END, 0, null, 1] },
-    { name: "negative cursor", args: [FROM, TO, -1, null, 1] },
-    { name: "cursor beyond the pinned cohort", args: [FROM, TO, 2, 1, 1] },
-    { name: "oversized page", args: [FROM, TO, 0, null, 501] },
-    { name: "empty page", args: [FROM, TO, 0, null, 0] },
-  ])("rejects $name", async ({ args }) => {
-    await expect(db.pool.query("select fansly_followers_diagnostic_timeline($1,$2,$3,$4,$5)",
-      args))
-      .rejects.toThrow(/required/);
+  // The function checks its arguments before it reads any table, so the cases
+  // need no data and share one reset. Soft, labelled checks keep one failing
+  // case from hiding the others.
+  it("rejects invalid windows, cursors and page sizes", async () => {
+    for (const { name, args } of [
+      { name: "unbounded interval", args: [null, TO, 0, null, 1] },
+      { name: "reversed interval", args: [TO, FROM, 0, null, 1] },
+      { name: "interval longer than eight days", args: [FROM, TOO_LONG_END, 0, null, 1] },
+      { name: "negative cursor", args: [FROM, TO, -1, null, 1] },
+      { name: "cursor beyond the pinned cohort", args: [FROM, TO, 2, 1, 1] },
+      { name: "oversized page", args: [FROM, TO, 0, null, 501] },
+      { name: "empty page", args: [FROM, TO, 0, null, 0] },
+    ]) {
+      await expect.soft(db.pool.query("select fansly_followers_diagnostic_timeline($1,$2,$3,$4,$5)",
+        args), name)
+        .rejects.toThrow(/required/);
+    }
   });
 });

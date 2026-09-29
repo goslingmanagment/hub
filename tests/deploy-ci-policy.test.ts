@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,7 +35,12 @@ type Job = {
   strategy?: { "fail-fast"?: unknown; matrix?: Record<string, unknown> };
   steps: Step[];
 };
-type Workflow = { permissions: Permissions; jobs: Record<string, Job>; concurrency: { group: string }; on: { pull_request: { types: string[] } } };
+type Workflow = {
+  permissions: Permissions;
+  jobs: Record<string, Job>;
+  concurrency: { group: string; "cancel-in-progress": string };
+  on: { pull_request: { types: string[] } };
+};
 
 // Reuse the installed YAML parser through its declaring dependency; do not add
 // a production dependency merely to parse the workflow in this policy test.
@@ -84,7 +90,11 @@ function fromJSON(text: Value): Value {
   return JSON.parse(text) as Value;
 }
 
-function evaluate(expression: string, context: Context): Value {
+/** What the status functions report for the step being decided. */
+type JobStatus = { success: boolean; failure: boolean; cancelled: boolean };
+const PASSING: JobStatus = { success: true, failure: false, cancelled: false };
+
+function evaluate(expression: string, context: Context, status: JobStatus = PASSING): Value {
   const translated = expression.split(/('(?:[^']|'')*')/).map((segment, index) => {
     if (index % 2 === 1) return JSON.stringify(segment.slice(1, -1).replaceAll("''", "'"));
     if (/[`;{}[\]]|=>/.test(segment)) throw new Error(`Unsupported expression syntax: ${segment}`);
@@ -94,9 +104,10 @@ function evaluate(expression: string, context: Context): Value {
     });
   }).join("");
   // Only the checked-in workflow expressions reach this point.
-  const run = Function("ctx", "contains", "fromJSON", "always", `"use strict"; return (${translated});`) as
-    (ctx: Context, containsFn: typeof contains, fromJSONFn: typeof fromJSON, alwaysFn: () => boolean) => Value;
-  return run(context, contains, fromJSON, () => true);
+  const run = Function("ctx", "contains", "fromJSON", "always", "success", "failure", "cancelled",
+    `"use strict"; return (${translated});`) as (ctx: Context, containsFn: typeof contains, fromJSONFn: typeof fromJSON,
+    ...statusFns: (() => boolean)[]) => Value;
+  return run(context, contains, fromJSON, () => true, () => status.success, () => status.failure, () => status.cancelled);
 }
 
 function text(value: Value): string {
@@ -121,6 +132,13 @@ function runner(template: string | string[] | undefined, context: Context): Valu
 function condition(expression: string | undefined, context: Context): boolean {
   if (expression === undefined) throw new Error("Missing condition");
   return Boolean(evaluate(expression, context));
+}
+
+/** GitHub runs a step whose `if` names no status function only while the job is passing. */
+function stepRuns(item: Step, context: Context, status: JobStatus): boolean {
+  if (item.if === undefined) return status.success;
+  const explicit = /\b(?:success|failure|cancelled|always)\(\)/.test(item.if);
+  return (explicit || status.success) && Boolean(evaluate(item.if, context, status));
 }
 
 type EventOptions = {
@@ -373,12 +391,18 @@ describe("CI job admission", () => {
     }
   });
 
-  // Every check in the static job runs whenever the job runs; only cleanup has
-  // its own condition. The Docker build and all three smoke tests included.
+  // Every check in the static job runs whenever the job runs. Only the unit
+  // tests' background start, their join and the cleanup have conditions of
+  // their own; see "CI static job" below for how those behave.
   it("runs every static check, the image build and all three smoke tests whenever static runs", () => {
     const steps = job("static").steps;
     const conditional = steps.filter(item => item.if !== undefined);
-    expect(conditional.map(item => [item.name, item.if])).toEqual([["Remove this run's image", "always()"]]);
+    expect(conditional.map(item => [item.name, item.if])).toEqual([
+      ["Start reliable unit tests in the background", "runner.environment == 'self-hosted'"],
+      ["Reliable unit tests", "!cancelled() && (success() || steps.unit-tests.outputs.started == 'true')"],
+      ["Stop background unit tests", "always()"],
+      ["Remove this run's image", "always()"],
+    ]);
     expect(steps.at(-1)?.name).toBe("Remove this run's image");
     for (const name of [
       "Typecheck",
@@ -389,9 +413,14 @@ describe("CI job admission", () => {
       "Chromium Headless Shell runtime smoke",
       "Native image library smoke",
       "Startup capability manifest smoke",
-      "Reliable unit tests",
     ]) {
       expect(step("static", name).if, name).toBeUndefined();
+    }
+    // Hosted, or self-hosted with nothing failed so far: the unit tests' step
+    // runs exactly as an unconditional step would.
+    for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+      const context = { ...eventContext({ runnerEnvironment }), "steps.unit-tests.outputs.started": runnerEnvironment === "self-hosted" ? "true" : "" };
+      expect(stepRuns(step("static", "Reliable unit tests"), context, PASSING), runnerEnvironment).toBe(true);
     }
   });
 
@@ -577,17 +606,6 @@ describe("CI runner pool", () => {
     }
   });
 
-  // Hosted runners have 2 vCPUs; the PC's 24 threads are shared with the
-  // integration shards running beside static checks.
-  it.each([
-    ["github-hosted", "pnpm test:unit --maxWorkers=2"],
-    ["self-hosted", "pnpm test:unit --maxWorkers=6"],
-  ] as const)("runs reliable unit tests on %s as %s", (environment, command) => {
-    const unit = step("static", "Reliable unit tests");
-    expect(shell(unit)).toBe("pnpm test:unit --maxWorkers=${{ runner.environment == 'self-hosted' && '6' || '2' }}");
-    expect(field(shell(unit), eventContext({ runnerEnvironment: environment }))).toBe(command);
-  });
-
   it.each([
     ["docker succeeds", 0],
     ["docker fails", 1],
@@ -613,6 +631,250 @@ describe("CI runner pool", () => {
       env: { ...process.env, IMAGE: "agency_hub_core/runtime:ci-1-1" },
     });
     expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe("CI static job: unit tests beside the image checks", () => {
+  const start = "Start reliable unit tests in the background";
+  const unit = "Reliable unit tests";
+  const stop = "Stop background unit tests";
+  const contracts = "Contracts are regenerated (routes.ts ↔ committed artifacts)";
+  const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+
+  // Self-hosted: the unit tests start as soon as the tree is final and run in
+  // a process group of their own beside typecheck → smokes; a later step
+  // joins them. The contracts generator rewrites tracked sources the unit
+  // tests import, so it runs before they start. Hosted runners (2 vCPUs) keep
+  // running the unit tests in the joining step, after the smokes.
+  it("starts the unit tests after the contracts check and joins them after the smokes", () => {
+    expect(job("static").steps.map(item => item.name)).toEqual([
+      "Checkout",
+      "Setup pnpm",
+      "Setup Node.js",
+      "Install dependencies",
+      contracts,
+      start,
+      "Typecheck",
+      "Lint (family standard + architecture walls)",
+      "Exact checkout image metadata",
+      "Set up Docker Buildx",
+      "Production Docker image build",
+      "Chromium Headless Shell runtime smoke",
+      "Native image library smoke",
+      "Startup capability manifest smoke",
+      unit,
+      stop,
+      "Remove this run's image",
+    ]);
+    expect(step("static", start).id).toBe("unit-tests");
+    expect(shell(step("static", start))).toBe([
+      "bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5",
+      'echo "started=true" >> "$GITHUB_OUTPUT"',
+      "",
+    ].join("\n"));
+    expect(step("static", unit).env).toEqual({ IN_BACKGROUND: "${{ steps.unit-tests.outputs.started }}" });
+    expect(shell(step("static", unit))).toBe([
+      'if [ "$IN_BACKGROUND" = "true" ]; then',
+      "  bash scripts/ci-background.sh join unit-tests",
+      "else",
+      "  pnpm test:unit --maxWorkers=2",
+      "fi",
+      "",
+    ].join("\n"));
+    expect(shell(step("static", stop))).toBe("bash scripts/ci-background.sh stop unit-tests");
+  });
+
+  type Scenario = {
+    environment: "github-hosted" | "self-hosted";
+    /** A check other than the unit tests' own steps that fails. */
+    failAt?: string;
+    /** A check during which the job is cancelled. */
+    cancelAt?: string;
+    /** The unit tests' exit status, or "killed": they die without recording one. */
+    unitExit: number | "killed";
+    /** How long the unit tests keep running, in seconds. */
+    unitSeconds?: number;
+  };
+  type Outcome = "success" | "failure" | "cancelled" | "skipped";
+
+  function groupAlive(group: number): boolean {
+    try {
+      process.kill(-group, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Walks the static job the way the runner does: each step's `if` (with the
+  // implicit success() when it names no status function), step env and
+  // outputs. The unit tests' three steps run their real shells against a stub
+  // pnpm; every other step only passes, fails or is cancelled as told.
+  function simulateStatic(scenario: Scenario) {
+    const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-static-"));
+    const pnpm = path.join(dir, "pnpm");
+    writeFileSync(pnpm, [
+      "#!/usr/bin/env bash",
+      'echo "pnpm $*"',
+      '[ "$1" = test:unit ] || exit 0',
+      // A child of its own, so the whole process group has to be reaped.
+      'sleep "$UNIT_SECONDS" & wait "$!"',
+      'if [ "$UNIT_EXIT" = killed ]; then kill -KILL "$PPID"; exit 0; fi',
+      'echo "unit tests finished"',
+      'exit "$UNIT_EXIT"',
+      "",
+    ].join("\n"));
+    chmodSync(pnpm, 0o755);
+    const runnerTemp = path.join(dir, "temp");
+    const pidFile = path.join(runnerTemp, "ci-background", "unit-tests.pid");
+    const outputs: Record<string, string> = {};
+    const context = (): Context => ({
+      ...eventContext({ runnerEnvironment: scenario.environment }),
+      "steps.unit-tests.outputs.started": outputs.started ?? "",
+    });
+    const status: JobStatus = { ...PASSING };
+    const outcomes: Record<string, Outcome> = {};
+    const logs: Record<string, string> = {};
+    let group: number | null = null;
+    try {
+      for (const item of job("static").steps) {
+        if (!stepRuns(item, context(), status)) {
+          outcomes[item.name] = "skipped";
+          continue;
+        }
+        if (item.name === scenario.cancelAt) {
+          // Cancelled once the unit tests have logged something, as a real
+          // cancel lands well after they started.
+          const log = path.join(runnerTemp, "ci-background", "unit-tests.log");
+          const waited = spawnSync("bash", ["-c", 'for _ in $(seq 100); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1', "wait", log]);
+          expect(waited.status, "the unit tests never logged").toBe(0);
+          outcomes[item.name] = "cancelled";
+          status.success = false;
+          status.cancelled = true;
+          continue;
+        }
+        let passed = item.name !== scenario.failAt;
+        if ([start, unit, stop].includes(item.name)) {
+          const githubOutput = path.join(dir, "github-output");
+          writeFileSync(githubOutput, "");
+          const env = Object.fromEntries(Object.entries(item.env ?? {}).map(([key, value]) => [key, field(value, context())]));
+          const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", field(shell(item), context())], {
+            cwd: repoRoot,
+            encoding: "utf8",
+            timeout: 20_000,
+            env: {
+              ...process.env, ...env, PATH: `${dir}:${process.env.PATH ?? ""}`, RUNNER_TEMP: runnerTemp,
+              GITHUB_OUTPUT: githubOutput, UNIT_EXIT: String(scenario.unitExit), UNIT_SECONDS: String(scenario.unitSeconds ?? 0.1),
+            },
+          });
+          logs[item.name] = result.stdout + result.stderr;
+          for (const line of readFileSync(githubOutput, "utf8").split("\n").filter(Boolean)) {
+            const [key = "", ...value] = line.split("=");
+            outputs[key] = value.join("=");
+          }
+          passed = result.status === 0;
+        }
+        outcomes[item.name] = passed ? "success" : "failure";
+        if (!passed) {
+          status.success = false;
+          status.failure = true;
+        }
+      }
+      group = readGroup(pidFile);
+      const conclusion: Outcome = status.cancelled ? "cancelled" : status.failure ? "failure" : "success";
+      return { conclusion, outcomes, logs, group, leftovers: group !== null && groupAlive(group) };
+    } finally {
+      group ??= readGroup(pidFile);
+      if (group !== null && groupAlive(group)) process.kill(-group, "SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  function readGroup(pidFile: string): number | null {
+    try {
+      return Number(readFileSync(pidFile, "utf8").trim());
+    } catch {
+      return null;
+    }
+  }
+
+  const checks = [
+    "Typecheck",
+    "Lint (family standard + architecture walls)",
+    "Production Docker image build",
+    "Startup capability manifest smoke",
+  ];
+
+  it("passes on the PC only when both branches pass, and reaps the unit tests' process group", () => {
+    const run = simulateStatic({ environment: "self-hosted", unitExit: 0 });
+    expect(run.conclusion).toBe("success");
+    expect(run.outcomes).toMatchObject({ [start]: "success", Typecheck: "success", [unit]: "success", [stop]: "success" });
+    expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
+    expect(run.group).not.toBeNull();
+    expect(run.leftovers).toBe(false);
+  });
+
+  it.each(checks)("on the PC, a failed %s fails the job and the unit tests still report", failAt => {
+    for (const unitExit of [0, 1]) {
+      const run = simulateStatic({ environment: "self-hosted", failAt, unitExit });
+      expect(run.conclusion, `${failAt} unit=${unitExit}`).toBe("failure");
+      expect(run.outcomes[failAt]).toBe("failure");
+      expect(run.outcomes[unit]).toBe(unitExit === 0 ? "success" : "failure");
+      expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
+      expect(run.outcomes[stop]).toBe("success");
+      expect(run.outcomes["Remove this run's image"]).toBe("success");
+      expect(run.leftovers).toBe(false);
+    }
+  });
+
+  it("on the PC, failed unit tests fail the job with their log in the joining step", () => {
+    const run = simulateStatic({ environment: "self-hosted", unitExit: 3 });
+    expect(run.conclusion).toBe("failure");
+    expect(run.outcomes).toMatchObject({ Typecheck: "success", "Startup capability manifest smoke": "success", [unit]: "failure" });
+    expect(run.logs[unit]).toContain("unit tests finished\n");
+    expect(run.leftovers).toBe(false);
+  });
+
+  it("on the PC, unit tests that die without an exit status fail the job", () => {
+    const run = simulateStatic({ environment: "self-hosted", unitExit: "killed" });
+    expect(run.conclusion).toBe("failure");
+    expect(run.outcomes[unit]).toBe("failure");
+    expect(run.logs[unit]).toContain("::error::unit-tests ended without recording an exit status");
+    expect(run.leftovers).toBe(false);
+  });
+
+  it("a stale contract fails the job before the unit tests start", () => {
+    const run = simulateStatic({ environment: "self-hosted", failAt: contracts, unitExit: 0 });
+    expect(run.conclusion).toBe("failure");
+    expect(run.outcomes).toMatchObject({ [start]: "skipped", Typecheck: "skipped", [unit]: "skipped", [stop]: "success" });
+    expect(run.group).toBeNull();
+  });
+
+  it("a cancelled job skips the join, prints what the unit tests logged and kills their process group", () => {
+    const run = simulateStatic({ environment: "self-hosted", cancelAt: "Production Docker image build", unitExit: 0, unitSeconds: 60 });
+    expect(run.conclusion).toBe("cancelled");
+    expect(run.outcomes).toMatchObject({ "Chromium Headless Shell runtime smoke": "skipped", [unit]: "skipped", [stop]: "success",
+      "Remove this run's image": "success" });
+    expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=5\n");
+    expect(run.group).not.toBeNull();
+    expect(run.leftovers).toBe(false);
+  });
+
+  it.each([
+    // failAt, unit tests' exit, conclusion, unit tests' step
+    [undefined, 0, "success", "success"],
+    [undefined, 1, "failure", "failure"],
+    // Hosted keeps the old order: a failed check skips the unit tests.
+    ["Typecheck", 0, "failure", "skipped"],
+    ["Startup capability manifest smoke", 0, "failure", "skipped"],
+  ] as const)("hosted: failed check %s, unit tests exit %s → %s, unit tests %s", (failAt, unitExit, conclusion, unitOutcome) => {
+    const run = simulateStatic({ environment: "github-hosted", ...(failAt ? { failAt } : {}), unitExit });
+    expect(run.conclusion).toBe(conclusion);
+    expect(run.outcomes[start]).toBe("skipped");
+    expect(run.outcomes[unit]).toBe(unitOutcome);
+    if (unitOutcome !== "skipped") expect(run.logs[unit]).toBe("pnpm test:unit --maxWorkers=2\nunit tests finished\n");
+    expect(run.outcomes[stop]).toBe("success");
+    expect(run.group).toBeNull();
   });
 });
 
@@ -643,8 +905,10 @@ describe("CI integration shards", () => {
   it("splits the sync-critical DB suite by measured duration through the root Vitest config", () => {
     expect(vitestConfig.test?.sequence?.sequencer).toBe(WeightedShardSequencer);
     const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> };
-    const flags = (manifest.scripts["test:sync-critical:db"] ?? "").split(/\s+/).filter(token => token.startsWith("-"));
-    expect(new Set(flags)).toEqual(new Set(["--no-file-parallelism", "--exclude"]));
+    const tokens = (manifest.scripts["test:sync-critical:db"] ?? "").split(/\s+/);
+    // No flag may override the config; the PC switch expands only to file-parallelism flags (pinned below).
+    expect(new Set(tokens.filter(token => token.startsWith("-")))).toEqual(new Set(["--exclude"]));
+    expect(tokens.filter(token => token.startsWith("${"))).toEqual(["${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"]);
     expect(syncCritical.length).toBeGreaterThan(8);
   });
 
@@ -682,7 +946,46 @@ describe("CI integration shards", () => {
     // The API suite is one file: it runs on the first shard only.
     const api = step("integration", "Sync-critical API tests");
     expect(api.if).toBe("matrix.shard == 1");
+    expect(api.env).toBeUndefined();
     expect(shell(api)).toBe("pnpm test:sync-critical:api");
+  });
+
+  // Hosted runners run a shard's DB files one at a time, exactly as before;
+  // the PC runs two at a time. The switch is one step env var that the package
+  // script expands, so the hosted vitest command stays byte-identical.
+  const hostedDbCommand = "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts";
+  const packageScripts = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> }).scripts;
+
+  /** The argv the package script hands vitest, as pnpm runs it: `sh -c` with the extra args appended. */
+  function vitestArgv(script: string, env: Record<string, string>): string[] {
+    const { SYNC_CRITICAL_DB_PARALLELISM: _inherited, ...inherited } = process.env;
+    const result = spawnSync("sh", ["-c", `vitest() { printf '%s\\n' "NODE_OPTIONS=$NODE_OPTIONS" "$@"; }\n${script} --shard=2/6`], {
+      encoding: "utf8",
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { ...inherited, ...env },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trimEnd().split("\n");
+  }
+
+  it.each([
+    ["github-hosted", "", ["--no-file-parallelism"]],
+    ["self-hosted", "--fileParallelism --maxWorkers=2", ["--fileParallelism", "--maxWorkers=2"]],
+  ] as const)("runs the DB files on %s with %j", (environment, value, flags) => {
+    const db = step("integration", dbStepName);
+    expect(db.if).toBeUndefined();
+    expect(db.env).toEqual({ SYNC_CRITICAL_DB_PARALLELISM: "${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}" });
+    expect(packageScripts["test:sync-critical:db"]).toBe(hostedDbCommand.replace("--no-file-parallelism", "${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"));
+    const env = field(db.env?.SYNC_CRITICAL_DB_PARALLELISM ?? "", eventContext({ runnerEnvironment: environment }));
+    expect(env).toBe(value);
+
+    const baseline = vitestArgv(hostedDbCommand, {});
+    expect(baseline.slice(0, 3)).toEqual(["NODE_OPTIONS=--max-old-space-size=8192", "run", "--no-file-parallelism"]);
+    expect(baseline.filter(arg => arg.endsWith(".integration.test.ts")).length).toBeGreaterThan(100);
+    expect(baseline).not.toContain("tests/*.integration.test.ts");
+    expect(baseline.at(-1)).toBe("--shard=2/6");
+    expect(vitestArgv(packageScripts["test:sync-critical:db"] ?? "", { SYNC_CRITICAL_DB_PARALLELISM: env }))
+      .toEqual([...baseline.slice(0, 2), ...flags, ...baseline.slice(3)]);
   });
 
   it.each([
@@ -789,9 +1092,35 @@ describe("Decision 377: every event keeps the required check reported", () => {
 
   it.each(["push", "workflow_dispatch"] as const)("a %s run is never metadata-only", event => {
     const context = eventContext({ event });
-    expect(field(workflow.concurrency.group, context)).toBe("ci-ref");
+    expect(field(workflow.concurrency.group, context)).toBe("ci-35518904235");
     expect(condition(job("fingerprint").if, context)).toBe(true);
     expect(field(job("quality").env?.METADATA_ONLY ?? "", context)).toBe("false");
+  });
+
+  // GitHub keeps ONE pending run per concurrency group and cancels the older
+  // pending one when another arrives, whatever cancel-in-progress says. A
+  // shared ref group therefore let a burst of main pushes evict the queued
+  // ones before they ran. Every push and manual run gets a group of its own;
+  // runs of one PR still share theirs, and only there does a newer run cancel.
+  it("gives every push and manual run its own group and cancels superseded PR runs only", () => {
+    expect(workflow.concurrency.group.startsWith("ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")).toBe(true);
+    const group = (options: EventOptions, runId: string) =>
+      field(workflow.concurrency.group, { ...eventContext(options), "github.run_id": runId });
+    for (const event of ["push", "workflow_dispatch"] as const) {
+      expect(group({ event }, "101"), event).toBe("ci-101");
+      expect(group({ event }, "102"), event).not.toBe(group({ event }, "101"));
+    }
+    expect(group({ event: "push" }, "101")).not.toBe(group({ event: "workflow_dispatch" }, "102"));
+    // Two pushes to one PR share its group, so the newer run cancels the older;
+    // a metadata-only event keeps its own group and cancels nothing.
+    for (const action of ["synchronize", "opened", "ready_for_review"]) {
+      expect(group({ action }, "101"), action).toBe("ci-ref");
+      expect(group({ action }, "102"), action).toBe("ci-ref");
+    }
+    expect(group({ action: "edited" }, "102")).toBe("ci-ref-metadata");
+    for (const [event, cancel] of [["pull_request", "true"], ["push", "false"], ["workflow_dispatch", "false"]] as const) {
+      expect(field(workflow.concurrency["cancel-in-progress"], eventContext({ event })), event).toBe(cancel);
+    }
   });
 
   // The mirror confirms an earlier verdict for this exact head; it can never

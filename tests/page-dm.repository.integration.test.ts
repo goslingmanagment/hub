@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -41,6 +39,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { hasSettled, waitForRowLockWait } from "./helpers/lock-waits.ts";
 
 async function createTestPage(testDb: StartedTestDatabase, label: string) {
   const model = await createModel(testDb.db, {
@@ -1396,11 +1395,13 @@ describe("page DM repository integration", () => {
             testDb.db,
             generationThreadInput(page.id, race.conversationId, race.contender),
           );
-          const racedBeforeCommit = await Promise.race([
-            contender.then(() => "written" as const),
-            sleep(300).then(() => "blocked" as const),
-          ]);
-          expect(racedBeforeCommit).toBe("blocked");
+          // Observed, not assumed: the contender's upsert is parked on the
+          // holder's row lock, and it has not written before the holder commits.
+          await waitForRowLockWait(testDb.pool, ["%page_dm_threads%"], {
+            blocked: contender,
+            timeoutMs: 5_000,
+          });
+          expect(await hasSettled(contender)).toBe(false);
         } finally {
           // Release the gate no matter what, or a failed assertion leaves the
           // holder transaction (and the pool) waiting until the suite timeout.

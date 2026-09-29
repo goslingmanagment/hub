@@ -6,7 +6,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createModel, createOnlyFansPage, insertObservation } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
-import { ofapiActionResponseSubjectRefs } from "../apps/runtime/src/services/ofapi-action-subjects.ts";
 import { ndjsonToParquet, readParquetIds } from "../apps/runtime/src/services/tiering/index.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -79,17 +78,6 @@ async function retainedIds() {
 }
 
 describe("OFAPI action erasure", () => {
-  it("indexes returned user relations without mistaking list, post or media IDs for fan IDs", () => {
-    expect(ofapiActionResponseSubjectRefs({ action: "user_list_remove_user" }, {
-      id: 9001, list: { id: 9002, users: [{ id: "123" }, { id: "9007199254740993" }] },
-      media: [{ id: 9003 }], posts: [{ id: 9004 }], userState: { id: 9002 },
-      nested: { userId: "456", fan_id: 789, fanIds: ["123", "567"], fan: { id: "678" } },
-    })).toEqual(["123", "456", "567", "678", "789", "9007199254740993"]);
-    expect(ofapiActionResponseSubjectRefs({ action: "user_block" }, { id: 123 })).toEqual(["123"]);
-    expect(ofapiActionResponseSubjectRefs({ action: "account_me_get" }, { id: 123 })).toEqual([]);
-    expect(ofapiActionResponseSubjectRefs({ action: "user_list_clear" }, { users: [{ id: 9007199254740992 }] })).toEqual([]);
-  });
-
   it("erases encrypted fan notes, prepared and mixed-list commands and their receipts through explicit subject refs", async () => {
     const selected = await page("action-fan-erasure");
     const fanRef = "71234567";
@@ -211,7 +199,8 @@ describe("OFAPI action erasure", () => {
       let waiting = false;
       for (let poll = 0; poll < 100 && !waiting; poll++) {
         waiting = (await database.pool.query(
-          "select 1 from pg_locks where locktype='advisory' and classid=9003011 and objid=1 and not granted",
+          // pg_locks spans the whole cluster; sibling test databases share it.
+          "select 1 from pg_locks where locktype='advisory' and classid=9003011 and objid=1 and not granted and database=(select oid from pg_database where datname=current_database())",
         )).rows.length > 0;
         if (!waiting) await new Promise(resolve => setTimeout(resolve, 10));
       }

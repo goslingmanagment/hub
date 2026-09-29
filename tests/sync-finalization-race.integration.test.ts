@@ -139,7 +139,11 @@ describe("sync cleanup versus finalization", () => {
   }
 
   describe.each(cleanups)("$name", ({ run: cleanup }) => {
-    it.each(["success", "partial", "failed", "skipped"] as const)(
+    // Both cleanups guard on `outcome = 'running'`, whatever terminal status
+    // was written. Kept: 'skipped' (the newest terminal status) and 'failed'
+    // (the cleanup's own outcome, where an overwrite shows only in the error
+    // summary, finish time and counts).
+    it.each(["failed", "skipped"] as const)(
       "preserves a concurrent %s finalization after waiting for its lock",
       async (status) => {
         if (!testDb) throw new Error("Test database is unavailable");
@@ -147,7 +151,7 @@ describe("sync cleanup versus finalization", () => {
         const sessions = await createContenders(testDb);
         let pending: ReturnType<typeof settle<Awaited<ReturnType<typeof cleanup>>>> | undefined;
         const stats = { captured: 7, terminalSource: "worker" };
-        const errorSummary = status === "success" ? null : `Worker result: ${status}`;
+        const errorSummary = `Worker result: ${status}`;
         try {
           await sessions.finalizer.query("begin");
           await finishSyncRun(sessions.finalizerDb, runId, {

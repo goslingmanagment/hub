@@ -1,5 +1,5 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { archiveAiPersona, upsertAiPersona } from "@agency_hub_core/db";
 
@@ -19,6 +19,10 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;

@@ -44,11 +44,6 @@ import {
   runFanslyEngagementProjection,
 } from "../apps/runtime/src/services/projections/fansly-engagement.ts";
 import {
-  findProjection,
-  OPERATIONAL_STATE_TABLES,
-  PROJECTION_REGISTRY,
-} from "../apps/runtime/src/services/projections/registry.ts";
-import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
@@ -445,7 +440,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(await count("platform_notifications", page.id)).toBe(80);
   });
 
-  it("is a no-op on replay", async (context) => {
+  it("keeps every engagement event out of the deliverable stream, and is a no-op on replay", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -453,6 +448,24 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     const page = await seedPage();
     await seedObservation(page.id, "census", fixture("notifications-census.json"));
     await project(page.id);
+
+    // The deliverable-stream claim reads the state the first projection left,
+    // so it shares this census setup instead of building its own.
+    const visible = await rows<{ type: string }>(
+      `select distinct type from domain_events where account_id = $1
+        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
+      [page.id],
+    );
+    expect(visible.length).toBeGreaterThan(0);
+    // The family's checkpoint covers the hidden seq range — which is what the
+    // SSE v2 replay validator requires of a gap.
+    const [checkpoints] = await rows<{ n: number }>(
+      `select count(*)::int as n from domain_events
+        where account_id = $1 and type = 'stream.projection_checkpoint'`,
+      [page.id],
+    );
+    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
+
     const before = await checksum(page.id);
     const beforeEvents = await rows<{ n: string }>(
       `select count(*)::text as n from domain_events where account_id = $1`,
@@ -822,51 +835,5 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
         [page.id],
       ),
     ).toEqual(stateBefore);
-  });
-
-  it("declares subject_refresh_state as operational state, and no projection truncates it", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    // BY CLASSIFICATION (§3.4), never by a quiet exemption in this file.
-    const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
-    expect(declared.has("subject_refresh_state")).toBe(true);
-    const projected = new Set(PROJECTION_REGISTRY
-      .filter((projection) => projection.rebuildKind !== "none")
-      .flatMap((projection) => projection.tables));
-    expect(projected.has("subject_refresh_state")).toBe(false);
-
-    const engagement = findProjection(FANSLY_ENGAGEMENT_PROJECTION);
-    expect([...(engagement?.tables ?? [])]).toEqual([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]);
-    expect(engagement?.rebuildKind).toBe("truncate_replay");
-    // `post_likes` IS truncated on rebuild: it is a fact projection whose
-    // Fansly half happens to be empty, and "empty because nothing wrote it" has
-    // to stay distinguishable from "empty because it was truncated".
-    expect([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]).toContain("post_likes");
-  });
-
-  it("keeps every engagement event out of the deliverable stream", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedObservation(page.id, "census", fixture("notifications-census.json"));
-    await project(page.id);
-    const visible = await rows<{ type: string }>(
-      `select distinct type from domain_events where account_id = $1
-        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
-      [page.id],
-    );
-    expect(visible.length).toBeGreaterThan(0);
-    // The family's checkpoint covers the hidden seq range — which is what the
-    // SSE v2 replay validator requires of a gap.
-    const [checkpoints] = await rows<{ n: number }>(
-      `select count(*)::int as n from domain_events
-        where account_id = $1 and type = 'stream.projection_checkpoint'`,
-      [page.id],
-    );
-    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
   });
 });

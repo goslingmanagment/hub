@@ -29,6 +29,9 @@ export async function earningsAuditFixture(db: StartedTestDatabase) {
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'earnings_audit_test_reader') THEN
         CREATE ROLE earnings_audit_test_reader;
       END IF;
+    -- Roles are cluster-wide: a suite running beside this one may create it
+    -- between the check and the CREATE.
+    EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
     END $$;
     GRANT EXECUTE ON FUNCTION fansly_earnings_audit_scope(text, timestamptz, timestamptz)
       TO earnings_audit_test_reader;

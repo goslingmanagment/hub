@@ -24,18 +24,24 @@ setGlobalDispatcher(new class extends Dispatcher {
 const dispatcher = createProxyRequestDispatcher({ url: process.env.BINDING_TEST_PROXY,
   username: "fixture-user", password: "fixture-password" });
 const deadline = setTimeout(() => process.exit(3), 18000);
+const signal = process.env.BINDING_TEST_STOP === "cancel" ? { signal: AbortSignal.timeout(150) } : {};
+// Deadline leg: record the deadline the preflight asks for, then honour it at
+// 200ms so the leg does not sleep the real 15s. The parent pins the request.
+const timeout = AbortSignal.timeout;
+const deadlineRequestedMs = process.env.BINDING_TEST_STOP === "deadline" ? [] : null;
+if (deadlineRequestedMs) AbortSignal.timeout = (ms) => { deadlineRequestedMs.push(ms); return timeout.call(AbortSignal, 200); };
 try {
   const result = await inspectFanslyBinding({
     session: { authorization: "SYNTHETIC_AUTH_NEVER_EXPORT", fanslyClientId: "fixture-client" },
     expectedAccountId: "123",
     egress: { dispatcher, egressKey: "fixture-page", pace: async () => { paceCalls++; throw new Error("pacing_forbidden"); }, close: () => dispatcher.close() },
-    ...(process.env.BINDING_TEST_CANCEL === "1" ? { signal: AbortSignal.timeout(150) } : {}),
+    ...signal,
   });
-  process.stdout.write(JSON.stringify({ result, fallbackCalls, paceCalls }));
-} finally { clearTimeout(deadline); await dispatcher.destroy(); }
+  process.stdout.write(JSON.stringify({ result, fallbackCalls, paceCalls, ...(deadlineRequestedMs ? { deadlineRequestedMs } : {}) }));
+} finally { AbortSignal.timeout = timeout; clearTimeout(deadline); await dispatcher.destroy(); }
 `;
-async function run(proxy: string, cancel = false, trust = true) {
-  const env: NodeJS.ProcessEnv = { ...process.env, BINDING_TEST_PROXY: proxy, BINDING_TEST_CANCEL: cancel ? "1" : "0" };
+async function run(proxy: string, stop: "cancel" | "deadline" | null = null, trust = true) {
+  const env: NodeJS.ProcessEnv = { ...process.env, BINDING_TEST_PROXY: proxy, BINDING_TEST_STOP: stop ?? "" };
   delete env.NODE_TLS_REJECT_UNAUTHORIZED;
   delete env.NODE_EXTRA_CA_CERTS;
   if (trust) env.NODE_EXTRA_CA_CERTS = ca;
@@ -45,7 +51,7 @@ async function run(proxy: string, cancel = false, trust = true) {
   expect(output.stdout + output.stderr).not.toContain(secret);
   expect(output.stdout + output.stderr).not.toContain("private@example.invalid");
   return JSON.parse(output.stdout) as { result: Awaited<ReturnType<typeof inspectFanslyBinding>>;
-    fallbackCalls: number; paceCalls: number };
+    fallbackCalls: number; paceCalls: number; deadlineRequestedMs?: number[] };
 }
 
 describe("bounded Fansly REST binding transport", () => {
@@ -82,12 +88,15 @@ describe("bounded Fansly REST binding transport", () => {
     } finally { await network.stop(); }
   });
 
-  it.for(["cancel", "deadline"])("bounds a hanging response with %s", { timeout: 25_000 }, async (stop, t) => {
+  it.for(["cancel", "deadline"] as const)("bounds a hanging response with %s", async (stop, t) => {
     const network = await startFanslyProbeNetwork("socks5", false, { status: 200, hang: true });
     if (!network) { t.skip(); return; }
     try {
-      expect(await run(network.url, stop === "cancel")).toMatchObject({
+      expect(await run(network.url, stop)).toMatchObject({
         result: { identityMatched: false, reason: "request_failed", restRequests: 1 }, fallbackCalls: 0, paceCalls: 0,
+        // With no caller signal, the one deadline bounding the hang is the
+        // preflight's own 15s: the child shortens only the wait, not the ask.
+        ...(stop === "deadline" ? { deadlineRequestedMs: [15_000] } : {}),
       });
       expect(network.requests).toHaveLength(1);
     } finally { await network.stop(); }
@@ -97,7 +106,7 @@ describe("bounded Fansly REST binding transport", () => {
     const network = await startFanslyProbeNetwork("http", failure === "proxy", { status: 200, body });
     if (!network) { t.skip(); return; }
     try {
-      expect(await run(network.url, false, failure !== "tls")).toMatchObject({
+      expect(await run(network.url, null, failure !== "tls")).toMatchObject({
         result: { reason: "request_failed", restRequests: 1 }, fallbackCalls: 0, paceCalls: 0,
       });
       expect(network.requests).toEqual([]);

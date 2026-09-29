@@ -143,11 +143,19 @@ describe("stats_snapshot stream wiring", () => {
 
   // A28-4's negative pins. These mechanisms were DELETED, and a key reappearing
   // is how a deleted mechanism comes back without a decision.
-  it("adds no global per-page request cap and no byte ceiling", () => {
+  it("adds no global per-page request cap, no byte ceiling and no per-egress-key day counter", () => {
     const keys = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
+    // [A19]: no global per-page daily request cap.
     expect(keys.has("fanslyPageDailyRequestCap")).toBe(false);
+    // [A20]: no byte ceiling, and therefore no byte-budget deferral anywhere.
     expect(keys.has("fanslyUntrimmedCaptureByteCeilingPerDay")).toBe(false);
     expect(keys.has("syncRateLimitDays")).toBe(false);
+    // A28-4: the §3.5 per-egress-key DAY counter and the 2×-of-norm ops signal
+    // were deleted. `syncSharedRateLimitEnabled` is a PRE-EXISTING key and is
+    // deliberately not pinned away — what A28-4 removed is the day-counter key
+    // and the boot/PATCH invariants that would have been added beside it.
+    expect(keys.has("fanslyEgressKeyDailyRequestCap")).toBe(false);
+    expect(keys.has("syncRateLimitDaysRetentionDays")).toBe(false);
   });
 });
 

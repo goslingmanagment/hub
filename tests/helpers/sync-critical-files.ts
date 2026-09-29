@@ -28,6 +28,8 @@ export function syncCriticalDbFiles(): string[] {
   for (let index = start + 1; index < tokens.length; index += 1) {
     const token = tokens[index] ?? "";
     if (token === "--exclude") exclude.push(globToRegExp(tokens[++index] ?? ""));
+    // The PC's file-parallelism switch expands to flags only (see ci.yml), never to files.
+    else if (token === "${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}") continue;
     else if (!token.startsWith("-")) include.push(globToRegExp(token));
   }
   const candidates = readdirSync(path.join(repoRoot, "tests")).map(name => `tests/${name}`);
