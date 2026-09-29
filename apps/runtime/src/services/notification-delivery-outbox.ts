@@ -123,6 +123,8 @@ export async function runNotificationDeliveryOutbox(
     maxRows?: number;
     /** Wall-clock ceiling; defaults to SWEEP_BUDGET_MS. */
     budgetMs?: number;
+    /** Aborted on shutdown: the row in flight settles, no further row is leased. */
+    signal?: AbortSignal;
     leaseMs?: number;
     retryDelayMs?: number;
     sender?: NotificationOutboxSender;
@@ -150,6 +152,11 @@ export async function runNotificationDeliveryOutbox(
   };
 
   for (let index = 0; index < maxRows; index += 1) {
+    if (input?.signal?.aborted) {
+      // A process on its way out must not lease a row it may not live to
+      // settle: that row would sit leased until the lease expired.
+      break;
+    }
     if (Date.now() - sweepStartedAt >= budgetMs) {
       // Never a silent truncation: the remainder is still due and the next
       // minutely tick takes it.

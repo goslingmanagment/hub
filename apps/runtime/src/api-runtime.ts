@@ -27,7 +27,7 @@ export async function runApiRuntime() {
     watchdog = startOpsWatchdog(appContext);
   } catch (error) {
     clearInterval(keepAlive);
-    watchdog?.stop();
+    await watchdog?.stop();
     await heartbeat?.stop().catch(() => undefined);
     await server.close().catch(() => undefined);
     await appContext.close().catch(() => undefined);
@@ -36,8 +36,13 @@ export async function runApiRuntime() {
 
   const shutdown = async () => {
     clearInterval(keepAlive);
-    watchdog?.stop();
-    await heartbeat?.stop().catch(() => undefined);
+    // The watchdog lets a fallback Telegram send settle its outbox row before
+    // the pool ends. Both stops are bounded at 5 s and run side by side, inside
+    // Docker's 10 s stop grace.
+    await Promise.all([
+      watchdog?.stop(),
+      heartbeat?.stop().catch(() => undefined),
+    ]);
     await server.close();
     await appContext.close();
     process.exit(0);

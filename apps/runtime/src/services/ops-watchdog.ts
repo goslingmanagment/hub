@@ -47,6 +47,9 @@ export const OPS_WATCHDOG_SYNC_LOOKBACK_MS = 60 * 60_000;
  * beside the watchdog every minute, and the worker takes over once it is back. */
 export const OPS_WATCHDOG_FALLBACK_MAX_ROWS = 5;
 export const OPS_WATCHDOG_FALLBACK_BUDGET_MS = 60_000;
+/** stop() waits this long for an in-flight check or fallback: inside Docker's
+ * 10 s stop grace for the api, beside the heartbeat's own 5 s stop. */
+export const OPS_WATCHDOG_STOP_TIMEOUT_MS = 5_000;
 
 export interface OpsWatchdogCheckResult {
   /** Inside OPS_WATCHDOG_BOOT_GRACE_MS: fresh signals resolve, stale ones open nothing. */
@@ -164,7 +167,7 @@ export interface OpsWatchdogDeliveryFallbackResult {
  * api hands over its whole context, not a Pick. */
 export async function runOpsWatchdogDeliveryFallback(
   app: AppContext,
-  input?: { now?: Date; sender?: NotificationOutboxSender },
+  input?: { now?: Date; sender?: NotificationOutboxSender; signal?: AbortSignal },
 ): Promise<OpsWatchdogDeliveryFallbackResult> {
   const sweep = await runNotificationPagingSweepExclusive(
     app,
@@ -173,6 +176,7 @@ export async function runOpsWatchdogDeliveryFallback(
   const delivery = await runNotificationDeliveryOutbox(app, {
     ...(input?.now ? { now: input.now } : {}),
     ...(input?.sender ? { sender: input.sender } : {}),
+    ...(input?.signal ? { signal: input.signal } : {}),
     maxRows: OPS_WATCHDOG_FALLBACK_MAX_ROWS,
     budgetMs: OPS_WATCHDOG_FALLBACK_BUDGET_MS,
   });
@@ -180,24 +184,35 @@ export async function runOpsWatchdogDeliveryFallback(
 }
 
 export interface OpsWatchdog {
-  stop(): void;
+  /** Stops the ticks and waits, bounded by OPS_WATCHDOG_STOP_TIMEOUT_MS, for
+   * the check and fallback in flight. A fallback send cut off by the exit
+   * would leave its outbox row leased, and the worker would resend it once
+   * the lease expired. */
+  stop(): Promise<void>;
 }
 
 /** Started from the api runtime. Unref'd so it never holds shutdown open;
  * in-flight serialized so a slow DB can't stack checks. The delivery fallback
  * is its own serialized task, so a slow Telegram send never holds a deadman
  * check back. */
-export function startOpsWatchdog(app: AppContext): OpsWatchdog {
-  const startedAtMs = Date.now();
-  let checkInFlight = false;
-  let fallbackInFlight = false;
+export function startOpsWatchdog(
+  app: AppContext,
+  /** Test seams; production passes none. */
+  options: { startedAtMs?: number; intervalMs?: number; sender?: NotificationOutboxSender } = {},
+): OpsWatchdog {
+  const startedAtMs = options.startedAtMs ?? Date.now();
+  const stopping = new AbortController();
+  let checkInFlight: Promise<void> | null = null;
+  let fallbackInFlight: Promise<void> | null = null;
 
   const runFallback = () => {
-    if (fallbackInFlight) {
+    if (fallbackInFlight || stopping.signal.aborted) {
       return;
     }
-    fallbackInFlight = true;
-    void runOpsWatchdogDeliveryFallback(app)
+    fallbackInFlight = runOpsWatchdogDeliveryFallback(app, {
+      signal: stopping.signal,
+      ...(options.sender ? { sender: options.sender } : {}),
+    })
       .then(({ sweep, delivery }) => {
         if ((sweep && (sweep.paged > 0 || sweep.resolved > 0 || sweep.failed > 0)) || delivery.leased > 0) {
           app.logger.info({ sweep, delivery }, "Ops watchdog fallback swept and delivered alerts");
@@ -207,16 +222,15 @@ export function startOpsWatchdog(app: AppContext): OpsWatchdog {
         app.logger.warn({ err: error }, "Ops watchdog delivery fallback failed; retrying next tick");
       })
       .finally(() => {
-        fallbackInFlight = false;
+        fallbackInFlight = null;
       });
   };
 
   const timer = setInterval(() => {
-    if (checkInFlight) {
+    if (checkInFlight || stopping.signal.aborted) {
       return;
     }
-    checkInFlight = true;
-    void runOpsWatchdogCheck(app, { startedAtMs })
+    checkInFlight = runOpsWatchdogCheck(app, { startedAtMs })
       .then((result) => {
         if (opsWatchdogNeedsDeliveryFallback(result)) {
           runFallback();
@@ -226,13 +240,34 @@ export function startOpsWatchdog(app: AppContext): OpsWatchdog {
         app.logger.warn({ err: error }, "Ops watchdog check failed; retrying next tick");
       })
       .finally(() => {
-        checkInFlight = false;
+        checkInFlight = null;
       });
-  }, OPS_WATCHDOG_INTERVAL_MS);
+  }, options.intervalMs ?? OPS_WATCHDOG_INTERVAL_MS);
   timer.unref();
   return {
-    stop() {
+    async stop() {
       clearInterval(timer);
+      stopping.abort();
+      // Both chains catch their own errors, so neither rejects.
+      const inFlight = [checkInFlight, fallbackInFlight].filter((task) => task !== null);
+      if (inFlight.length === 0) {
+        return;
+      }
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = await Promise.race([
+        Promise.all(inFlight).then(() => false),
+        new Promise<boolean>((resolve) => {
+          deadline = setTimeout(() => resolve(true), OPS_WATCHDOG_STOP_TIMEOUT_MS);
+          deadline.unref();
+        }),
+      ]);
+      clearTimeout(deadline);
+      if (timedOut) {
+        app.logger.warn(
+          { timeoutMs: OPS_WATCHDOG_STOP_TIMEOUT_MS },
+          "Ops watchdog stop timed out on in-flight work; a row it leased is retried once the lease expires",
+        );
+      }
     },
   };
 }

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -15,12 +15,16 @@ import {
   runNotificationDeliveryOutbox,
   type NotificationOutboxDelivery,
 } from "../apps/runtime/src/services/notification-delivery-outbox.ts";
-import { runNotificationPagingSweepExclusive } from "../apps/runtime/src/services/notification-paging-sweep.ts";
+import {
+  runNotificationPagingSweep,
+  runNotificationPagingSweepExclusive,
+} from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import {
   OPS_WATCHDOG_SILENCE_MS,
   opsWatchdogNeedsDeliveryFallback,
   runOpsWatchdogCheck,
   runOpsWatchdogDeliveryFallback,
+  startOpsWatchdog,
 } from "../apps/runtime/src/services/ops-watchdog.ts";
 import {
   resetIntegrationDatabase,
@@ -246,6 +250,47 @@ describe("api-side delivery fallback (pages while the scheduler or worker is dow
     const rows = await getNotificationDeliveryOutboxByIncident(harness.db, incident!.id);
     expect(rows.map((row) => [row.transition, row.state])).toEqual([["opened", "delivered"]]);
   });
+
+  it("shutdown lets an in-flight fallback send settle and leases no further row", async () => {
+    // Both deadmen tripped 11 min ago and already paged: two rows are due and
+    // only the api is up to deliver them.
+    const app = createTestAppContext(harness);
+    await schedulerHeartbeat(15 * MINUTE);
+    const t0 = new Date(Date.now() - 11 * MINUTE);
+    await runOpsWatchdogCheck(app, { startedAtMs: t0.getTime() - 10 * MINUTE, now: t0 });
+    expect(await openIncidents()).toEqual(["ops_sampler_silent", "scheduler_silent"]);
+    expect(await runNotificationPagingSweep(app, { now: new Date() })).toMatchObject({ paged: 2 });
+
+    // Telegram is slow: the first send is still in flight when SIGTERM lands.
+    let releaseSend: () => void = () => {};
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sent: NotificationOutboxDelivery[] = [];
+    const sender = async (delivery: NotificationOutboxDelivery) => {
+      sent.push(delivery);
+      await sendGate;
+      return { status: "sent" as const, chatId: "1", messageId: sent.length };
+    };
+    const watchdog = startOpsWatchdog(app, { startedAtMs: PAST_BOOT_GRACE(), intervalMs: 20, sender });
+    try {
+      await vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 10_000 });
+      const stopped = watchdog.stop();
+      releaseSend();
+      await stopped;
+
+      // Settled, not left leased for the worker to resend after the lease;
+      // the other row stays pending for the next process, never half-sent.
+      const states = await harness.pool.query<{ state: string }>(
+        "select state from notification_delivery_outbox order by state",
+      );
+      expect(states.rows.map((row) => row.state)).toEqual(["delivered", "pending"]);
+      expect(sent).toHaveLength(1);
+    } finally {
+      releaseSend();
+      await watchdog.stop();
+    }
+  });
 });
 
 describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
@@ -280,13 +325,15 @@ describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
     );
   }
 
+  /** Start times come from the host clock the watchdog measures with, not
+   * the database's: a Postgres VM clock a few ms ahead of the host would read
+   * "16 min ago" as 15 min 59.99 s. */
   async function syncRunStarted(pageId: number, agoMs: number) {
+    const startedAt = new Date(Date.now() - agoMs);
     await harness.pool.query(
       `insert into sync_runs (page_id, stream, outcome, started_at, finished_at)
-       values ($1, 'transactions', 'succeeded',
-               now() - ($2::bigint || ' milliseconds')::interval,
-               now() - ($2::bigint || ' milliseconds')::interval)`,
-      [pageId, agoMs],
+       values ($1, 'transactions', 'succeeded', $2, $2)`,
+      [pageId, startedAt],
     );
   }
 
@@ -300,7 +347,7 @@ describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
     expect(quiet.syncStalled).toBe(false);
     expect(await syncSilent()).toBeNull();
 
-    await harness.pool.query("update sync_runs set started_at = now() - interval '16 minutes'");
+    await harness.pool.query("update sync_runs set started_at = $1", [new Date(Date.now() - 16 * MINUTE)]);
     const stalled = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
     expect(stalled.syncStalled).toBe(true);
     expect(opsWatchdogNeedsDeliveryFallback(stalled)).toBe(true);

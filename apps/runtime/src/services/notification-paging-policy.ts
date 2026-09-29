@@ -92,8 +92,11 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   ops_sampler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, DEPLOY_TOLERANT_FLAP),
   // Opens only after 15 min without a Fansly chunk (the widest production
   // gap between chunk starts over 21 days was 5 min 10 s), so a deploy never
-  // opens it and the default flap rule stays.
-  sync_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS),
+  // opens it. No flap rule: a single Fansly page runs 15-16.6 min between
+  // chunks up to nine times in six hours (2026-09-22..29), so with the rest of
+  // the fleet blocked the latch flickers while chunks keep starting. A real
+  // stall outlasts the hold and pages as sustained.
+  sync_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, null),
   golden_signal_lag: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_burn_rate: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_webhook_silence: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),

@@ -118,6 +118,26 @@ async function outboxFor(key: string) {
   return { incident, rows };
 }
 
+/** Waits until `count` sessions of this database are parked on a lock, or
+ * until `done` says the awaited pass finished without parking. */
+async function waitForLockWaiters(count: number, done: () => boolean = () => false) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (done()) {
+      return;
+    }
+    const waiting = await testDb!.pool.query<{ count: number }>(
+      `select count(*)::int as count from pg_stat_activity
+       where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    if ((waiting.rows[0]?.count ?? 0) >= count) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${count} lock waiter(s)`);
+}
+
 describe("notification paging sweep (Decision 381)", () => {
   it("a proxy blip that heals inside the hold pages nothing and is kept as a quiet episode", async () => {
     const page = await makePage();
@@ -202,6 +222,54 @@ describe("notification paging sweep (Decision 381)", () => {
       [NOTIFICATION_PAGING_SWEEP_LOCK_NS, NOTIFICATION_PAGING_SWEEP_LOCK_KEY],
     );
     expect(held.rows[0]?.count).toBe(0);
+  });
+
+  it("two sweeps racing over a flapping latch page it once: the second skips while the first holds the lock", async () => {
+    // A flapping page is keyed by its decision instant, so two unserialised
+    // sweeps a few seconds apart would enqueue two different pages.
+    const page = await makePage("lora-2");
+    let key = "";
+    for (let episode = 0; episode < 4; episode += 1) {
+      const start = episode * 30 * MINUTE;
+      key = await openLatch({ kind: "proxy_failed", platformAccountId: page.id, stream: "posts", at: at(start) });
+      await runNotificationPagingSweep(app(), { now: at(start + 30_000) });
+      await resolveLatch(key, at(start + MINUTE));
+      await runNotificationPagingSweep(app(), { now: at(start + 2 * MINUTE) });
+    }
+    await openLatch({ kind: "proxy_failed", platformAccountId: page.id, stream: "posts", at: at(2 * HOUR) });
+    const exclusiveApp = { ...app(), pool: testDb!.pool };
+
+    // Park the first sweep mid-pass: it holds the sweep lock and waits on the
+    // paging table, which a third session keeps locked.
+    const blocker = await testDb!.pool.connect();
+    let committed = false;
+    try {
+      await blocker.query("begin");
+      await blocker.query("lock table notification_incident_paging in access exclusive mode");
+      const first = runNotificationPagingSweepExclusive(exclusiveApp, { now: at(2 * HOUR + 30_000) });
+      await waitForLockWaiters(1);
+      let secondSettled = false;
+      const second = runNotificationPagingSweepExclusive(exclusiveApp, { now: at(2 * HOUR + 40_000) })
+        .finally(() => {
+          secondSettled = true;
+        });
+      // Without the lock the second pass would park on the table beside the first.
+      await waitForLockWaiters(2, () => secondSettled);
+      await blocker.query("commit");
+      committed = true;
+
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(secondResult).toBeNull();
+      expect(firstResult).toMatchObject({ paged: 1 });
+    } finally {
+      if (!committed) {
+        await blocker.query("rollback").catch(() => undefined);
+      }
+      blocker.release();
+    }
+    const { rows } = await outboxFor(key);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.messageText).toContain("Flapping: 5 episodes in the last 6 h");
   });
 
   it("a failure that outlasts the hold pages once and its recovery waits for the quiet hold", async () => {

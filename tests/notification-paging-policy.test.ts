@@ -95,6 +95,23 @@ describe("notification paging policy table", () => {
     });
   });
 
+  it("never pages a thin Fansly fleet's 16-minute chunk gaps as a flapping sync stall", () => {
+    // Production 2026-09-22..29: one Fansly page on its own goes 15-16.6 min
+    // between chunk starts up to nine times in six hours (lora-2). With every
+    // other page blocked, each gap is a one-minute sync_silent episode while
+    // chunks keep starting; a real stall outlasts the 10 min hold instead.
+    const policy = notificationPagingPolicyFor("sync_silent", null);
+    const thinFleet = observation({
+      status: "resolved",
+      openedAt: at(5 * HOUR),
+      resolvedAt: at(5 * HOUR + MINUTE),
+      episodesInWindow: 9,
+      earliestEpisodeInWindowAt: T0,
+    });
+    expect(decideNotificationPaging(thinFleet, policy, at(5 * HOUR + 2 * MINUTE))).toEqual({ action: "none" });
+    expect(policy.flap).toBeNull();
+  });
+
   it("gives the disk runway warning its own long holds without touching the critical latch", () => {
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_warning").openHoldMs).toBe(6 * HOUR);
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_critical").openHoldMs).toBe(0);
