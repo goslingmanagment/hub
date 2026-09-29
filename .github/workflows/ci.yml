@@ -240,6 +240,12 @@ jobs:
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
   #
+  # The files are packed by measured duration, not split by count: the root
+  # Vitest config's sequencer reads tests/ci/shard-weights.json and gives
+  # shard 1 less file work for the API run it adds. Regenerate the weights
+  # from green full runs with scripts/ci-shard-weights.mjs (see its header);
+  # a file without a weight takes the median and still runs.
+  #
   # The hosted fallback is arm64: the shards run only vitest against
   # Testcontainers Postgres (multi-arch) and never build the amd64 image.
   # In economy mode (see the top of `jobs`) a first-attempt PR push that is not
@@ -256,11 +262,11 @@ jobs:
     runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
     if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
-    # 30 stopped fitting on 2026-08-17: vitest --shard splits by FILE COUNT,
-    # not duration, and after a week that added four integration files one
-    # shard drew a slow-heavy set and was cancelled at 30:18 with every test
-    # green (the #80 merge push on main was cancelled the same way). 45 lets
-    # the existing gate FINISH — it does not weaken it, and a healthy run
+    # 30 stopped fitting on 2026-08-17: vitest --shard then split by FILE
+    # COUNT, not duration, and after a week that added four integration files
+    # one shard drew a slow-heavy set and was cancelled at 30:18 with every
+    # test green (the #80 merge push on main was cancelled the same way). 45
+    # lets the existing gate FINISH — it does not weaken it, and a healthy run
     # spends nothing extra.
     timeout-minutes: 45
     strategy:
@@ -297,7 +303,8 @@ jobs:
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
-      # One file, ~36s — it resolves to a single spec so it cannot be sharded.
+      # One file, ~20s on the PC — it resolves to a single spec so it cannot
+      # be sharded; the weights' firstShardExtraSeconds accounts for it.
       - name: Sync-critical API tests
         if: matrix.shard == 1
         run: pnpm test:sync-critical:api
