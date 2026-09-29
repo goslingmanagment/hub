@@ -12,6 +12,8 @@ import {
   classifyStatsMonth,
   classifyStatsWindow,
   emptyFanslyStatsCursorState,
+  hourlyCaptureDue,
+  hourlyCaptureGap,
   isEmptyStatsMonth,
   monthFromIndex,
   monthIndexOf,
@@ -152,6 +154,48 @@ describe("stats backfill cursor state", () => {
     const parsedCompleted = parseFanslyStatsCursorState(completed, NOW)!;
     expect(parsedCompleted.lastSweepDay).toBeNull();
     expect(parsedCompleted.sweepDay).toBeNull();
+  });
+});
+
+describe("the hourly plane's clock", () => {
+  // The route serves hourly buckets only inside its trailing 25 h: two captures
+  // further apart than that lose the hours between them for good.
+  const HOUR = 3_600_000;
+  const CAPTURED = Date.parse("2026-08-19T05:01:00.000Z");
+
+  it("is due on the last slot before the window runs out, and not before", () => {
+    // Asked on a slot, the next dispatch is six hours on. Eighteen hours after
+    // a capture that next slot is still in time; twenty-four hours after, not.
+    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 18 * HOUR + 6 * HOUR)).toBe(false);
+    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 24 * HOUR + 6 * HOUR)).toBe(true);
+    // Exactly 25 h still touches; a millisecond more is a hole.
+    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 25 * HOUR)).toBe(false);
+    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 25 * HOUR + 1)).toBe(true);
+    expect(hourlyCaptureDue(null, CAPTURED)).toBe(true);
+  });
+
+  it("names the hours between two windows that do not touch", () => {
+    expect(hourlyCaptureGap(null, CAPTURED)).toBeNull();
+    expect(hourlyCaptureGap(CAPTURED, CAPTURED + 25 * HOUR)).toBeNull();
+    expect(hourlyCaptureGap(CAPTURED, CAPTURED + 28 * HOUR + 54 * 60_000)).toEqual({
+      fromMs: CAPTURED,
+      toMs: CAPTURED + 3 * HOUR + 54 * 60_000,
+    });
+  });
+
+  it("round-trips the last capture and drops a value that is not an instant", () => {
+    const state = {
+      ...emptyFanslyStatsCursorState(NOW),
+      lastHourlyCapturedAt: "2026-08-19T05:01:00.000Z",
+    };
+    expect(parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW)!
+      .lastHourlyCapturedAt).toBe("2026-08-19T05:01:00.000Z");
+    expect(parseFanslyStatsCursorState({ ...state, lastHourlyCapturedAt: "yesterday" }, NOW)!
+      .lastHourlyCapturedAt).toBeNull();
+    // A cursor from before the field: the handler derives it once.
+    const legacy: Record<string, unknown> = { ...state };
+    delete legacy.lastHourlyCapturedAt;
+    expect(parseFanslyStatsCursorState(legacy, NOW)!.lastHourlyCapturedAt).toBeNull();
   });
 });
 

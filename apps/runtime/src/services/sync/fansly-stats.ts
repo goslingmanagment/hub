@@ -7,7 +7,9 @@
 // SEVEN STEPS, each ONE journaled call with its own observation kind:
 //
 //   1  account_stats            trailing 30 d, period 86 400 000
-//   2  account_stats            trailing 25 h, period 3 600 000 (gated)
+//   2  account_stats            trailing 25 h, period 3 600 000 (gated) — NOT
+//                               bound to the daily sweep: it runs on its own
+//                               clock ("THE HOURLY PLANE" in the handler)
 //   3  earnings_stats_snapshot  trailing 30 d, bounded UTC-day window walk
 //   4  earnings_monthlystats_snapshot
 //   5  tracking_links
@@ -74,6 +76,7 @@ import {
   assertOwnedPageSyncLease,
   getCheckpoint,
   listCaptureCoverage,
+  SYNC_STREAM_POLICY,
 } from "@agency_hub_core/db";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
@@ -127,6 +130,11 @@ const HOURLY_PERIOD_MS = 3_600_000;
  *  zero events, which is exactly the granularity D-1 was chosen for. */
 const DAILY_TRAILING_DAYS = 30;
 const HOURLY_TRAILING_HOURS = 25;
+/** The route serves hourly buckets only inside this window, so two hourly
+ *  captures further apart than it leave hours that no window will reach again. */
+const HOURLY_WINDOW_MS = HOURLY_TRAILING_HOURS * HOUR_MS;
+/** The furthest a scheduled dispatch of this lane can be from the one before. */
+const STATS_CADENCE_MS = SYNC_STREAM_POLICY.stats_snapshot.cadenceSeconds * 1000;
 const EARNINGS_TRAILING_DAYS = 30;
 const EARNINGS_PAGE_LIMIT = FANSLY_EARNINGS_ROW_LIMIT;
 const DISCOVERY_PAGE_LIMIT = 10;
@@ -325,6 +333,11 @@ export interface FanslyStatsCursorState {
   deletedBroadcastFloorReached: boolean;
   deletedBroadcastPagesInSweep: number;
   deletedBroadcastWalkStop: BroadcastWalkStop | null;
+  /** When the hourly plane's trailing window was last captured — that
+   *  request's window end, ISO. The hourly capture keeps its own clock, not
+   *  the daily sweep's. Null until the first capture; a cursor from before
+   *  this field derives it once from the steady coverage row. */
+  lastHourlyCapturedAt: string | null;
   backfill: {
     daily: DailyBackfillState;
     hourly: HourlyBackfillState;
@@ -348,6 +361,12 @@ function asNullableString(value: unknown): string | null {
 
 function asNullableInt(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+function asNullableInstant(value: unknown): string | null {
+  const text = asNullableString(value);
+  const ms = text === null ? Number.NaN : Date.parse(text);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 
 function previousUtcDayKey(day: string, fallbackNow: Date): string {
@@ -487,6 +506,7 @@ export function parseFanslyStatsCursorState(
     deletedBroadcastFloorReached: state.deletedBroadcastFloorReached === true,
     deletedBroadcastPagesInSweep: Math.max(0, asInt(state.deletedBroadcastPagesInSweep, 0)),
     deletedBroadcastWalkStop: parseBroadcastWalkStop(state.deletedBroadcastWalkStop),
+    lastHourlyCapturedAt: asNullableInstant(state.lastHourlyCapturedAt),
     backfill: backfillRecord === null ? null : {
       daily: parseDailyBackfill(backfillRecord.daily, now),
       hourly: parseHourlyBackfill(backfillRecord.hourly, now),
@@ -707,6 +727,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     deletedBroadcastFloorReached: false,
     deletedBroadcastPagesInSweep: 0,
     deletedBroadcastWalkStop: null,
+    lastHourlyCapturedAt: null,
     backfill: {
       daily: emptyDailyBackfill(now),
       hourly: {
@@ -726,6 +747,36 @@ export const utcDayKey = fanslyUtcDayKey;
  *  changes: a sweep that deferred mid-step resumes at exactly that step and
  *  keeps the day on which it started. */
 export const rollUtcDay = rollFanslyUtcDay;
+
+// ── the hourly plane's clock ─────────────────────────────────────────────────
+
+/**
+ * Is the hourly window due NOW — would the next dispatch this lane can count
+ * on already be too late?
+ *
+ * Asked against the NEXT dispatch, not this one: `nextDispatchBy − lastCaptured
+ * > 25 h`. Asked on every 6-hourly slot, that is once a day on the same slot,
+ * and a capture that ran early drifts to the last slot before its window runs
+ * out. A lane that has never captured is due.
+ */
+export function hourlyCaptureDue(lastCapturedMs: number | null, nextDispatchByMs: number): boolean {
+  return lastCapturedMs === null || nextDispatchByMs - lastCapturedMs > HOURLY_WINDOW_MS;
+}
+
+/** The span between two hourly captures that neither window reached — the
+ *  newer window starts after the older one ended — or null when they touch. */
+export function hourlyCaptureGap(
+  previousCapturedMs: number | null,
+  capturedMs: number,
+): { fromMs: number; toMs: number } | null {
+  if (previousCapturedMs === null) {
+    return null;
+  }
+  const windowStartMs = capturedMs - HOURLY_WINDOW_MS;
+  return windowStartMs > previousCapturedMs
+    ? { fromMs: previousCapturedMs, toMs: windowStartMs }
+    : null;
+}
 
 // ── shape helpers over the journaled bodies ──────────────────────────────────
 
@@ -942,6 +993,8 @@ export async function fanslyStatsSnapshotChunk(
 
   let journaled = 0;
   let deferred: string | null = null;
+  /** What this chunk did about the hourly window (see "THE HOURLY PLANE"). */
+  let hourly: "disabled" | "not_due" | "deferred" | "captured" = "disabled";
 
   const persist = createFanslyLaneJournal({
     db: app.db,
@@ -1817,6 +1870,7 @@ export async function fanslyStatsSnapshotChunk(
             : monthLabel(backfill.daily.nextMonthIndex),
           hourlyDone: backfill.hourly.done,
           earningsDone: backfill.earnings.done,
+          hourly,
         },
       };
     }
@@ -1856,16 +1910,157 @@ export async function fanslyStatsSnapshotChunk(
     return next;
   };
 
+  // ── THE HOURLY PLANE, ON ITS OWN CLOCK ────────────────────────────────────
+  //
+  // The route serves hourly buckets ONLY inside its trailing 25 h, so an hour
+  // no capture's window reached is gone for good. Bound to the once-per-UTC-day
+  // sweep, the capture lost hours whenever a sweep ran EARLY — a 00:05
+  // continuation after a cap deferral, a deploy, a manual run — and the next
+  // day's ran on its slot: 28.9 h apart, 3.9 h lost. Production, 31 days to
+  // 2026-09-29: lilly-2 123.9 h, lora-2 22.0 h, lora-3 4.5 h, lilly-1 1.7 h.
+  //
+  // So every dispatch asks whether the NEXT dispatch this lane can count on
+  // would already be too late, and captures only then: on slots, once a day on
+  // the same slot — no call the sweep did not already make; after an early
+  // capture, the last slot before the window runs out — one extra call, that
+  // day. It runs FIRST because it is the one call here whose delay loses data;
+  // it spends the same daily cap as everything else.
+  if (hourlyEnabled) {
+    if (state.lastHourlyCapturedAt === null) {
+      // A cursor from before this field. The steady row is written by the
+      // capture itself, so its write time IS the last capture's; with no row
+      // there is nothing to wait for.
+      const steadyRow = (await listCaptureCoverage(app.db, {
+        pageId,
+        plane: CAPTURE_COVERAGE_PLANES.statsAccountHourly,
+      })).find((row) => row.scopeRef === "steady");
+      if (steadyRow !== undefined) {
+        state = { ...state, lastHourlyCapturedAt: steadyRow.updatedAt.toISOString() };
+      }
+    }
+    const lastCapturedMs = state.lastHourlyCapturedAt === null
+      ? null
+      : Date.parse(state.lastHourlyCapturedAt);
+    // A slot is at most one cadence away — unless a history walk is open. That
+    // walk spends whatever cap the day has left and defers the lane to the next
+    // UTC day, and no slot dispatches a lane while its deferral is pending
+    // (production 2026-09-28: walks deferred at 23:02, next dispatch 00:05).
+    const nextDispatchByMs = Math.max(
+      now.getTime() + STATS_CADENCE_MS,
+      state.mode === "backfill" && state.backfill !== null
+        ? nextFanslyUtcDayStart(now).getTime()
+        : 0,
+    );
+    if (!hourlyCaptureDue(lastCapturedMs, nextDispatchByMs)) {
+      hourly = "not_due";
+    } else if (
+      !hasDayCapacity()
+      || !input.budget.hasRequestCapacity(1)
+      || !input.budget.hasWallClockCapacity()
+    ) {
+      hourly = "deferred";
+    } else {
+      await assertOwnedPageSyncLease(app.db);
+      const beforeDate = now;
+      const afterDate = new Date(now.getTime() - HOURLY_WINDOW_MS);
+      const response = await app.adapter.getAccountStats(requestContext, {
+        beforeDate,
+        afterDate,
+        periodMs: HOURLY_PERIOD_MS,
+      });
+      const persisted = await persist("account_stats", {
+        mode: "steady_hourly",
+        periodMs: HOURLY_PERIOD_MS,
+        beforeDate: beforeDate.toISOString(),
+        afterDate: afterDate.toISOString(),
+      }, response.raw);
+      if (classifyStatsWindow(response.raw) === "invalid") {
+        throw new FanslyLaneInvalidResponseError("account_stats");
+      }
+      await coverage(
+        CAPTURE_COVERAGE_PLANES.statsAccountHourly,
+        "window_captured",
+        "none",
+        {
+          scopeRef: "steady", replaceWindowBounds: true,
+          oldestCapturedAt: new Date(servedWindow(response.raw).afterMs ?? afterDate.getTime()),
+          newestCapturedAt: new Date(servedWindow(response.raw).beforeMs ?? now.getTime()),
+          proofObservationId: persisted.observationId,
+        },
+      );
+      // The steady row describes the latest window and nothing before it, so a
+      // hole between two windows is written down where it stays: its own row,
+      // never overwritten, plus one anomaly on the run that found it.
+      const hole = hourlyCaptureGap(lastCapturedMs, now.getTime());
+      if (hole !== null) {
+        const missingFrom = new Date(hole.fromMs).toISOString();
+        const missingTo = new Date(hole.toMs).toISOString();
+        const missingHours = Math.round((hole.toMs - hole.fromMs) / HOUR_MS * 10) / 10;
+        const holeDetails = {
+          missingFrom,
+          missingTo,
+          missingHours,
+          previousCapturedAt: missingFrom,
+          capturedAt: now.toISOString(),
+        };
+        await coverage(
+          CAPTURE_COVERAGE_PLANES.statsAccountHourly,
+          // Bounded by the PROVIDER's surface, like the plane's history row:
+          // these buckets now lie outside every window the route serves. The
+          // bounds stay null — a hole is not a captured window.
+          "partial_provider_surface",
+          "none",
+          {
+            scopeRef: `gap:${missingFrom}/${missingTo}`,
+            reasonCode: "hourly_capture_gap",
+            proofObservationId: persisted.observationId,
+            cursor: holeDetails,
+          },
+        );
+        await input.telemetry.addAnomaly({
+          code: "fansly_stats_hourly_capture_gap",
+          severity: "warn",
+          message:
+            "Fansly hourly statistics were captured more than 25 h apart; the hours between "
+            + "the two windows are not recoverable",
+          details: holeDetails,
+        });
+      }
+      state = { ...state, lastHourlyCapturedAt: now.toISOString() };
+      await saveProgress();
+      hourly = "captured";
+    }
+  }
+
   // ── STEADY DAILY SWEEP ────────────────────────────────────────────────────
   const today = utcDayKey(now);
   if (state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null) {
     const pendingHistory = await runBackfill();
     if (pendingHistory !== null) return pendingHistory;
+    if (hourly === "deferred" && !hasDayCapacity()) {
+      // The hourly window is due and the day's cap is spent: DEFER, as the
+      // sweep does, so it is captured at the UTC roll rather than at whichever
+      // slot comes after it.
+      await saveProgress();
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: nextFanslyUtcDayStart(now),
+        stats: {
+          mode: "steady",
+          journaled,
+          callsToday: state.callsToday,
+          dailyCap,
+          deferred: "daily_call_budget",
+          hourly,
+        },
+      };
+    }
     await completeLane(input.syncRunId);
     return {
       satisfied: true,
       yieldReason: null,
-      stats: { skipped: "sweep_not_due", lastSweepDay: state.lastSweepDay },
+      stats: { skipped: "sweep_not_due", lastSweepDay: state.lastSweepDay, hourly },
     };
   }
 
@@ -1917,38 +2112,8 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === 1) {
-      if (!hourlyEnabled) {
-        state = { ...state, stepIndex: 2 };
-        await saveProgress();
-        continue;
-      }
-      const beforeDate = now;
-      const afterDate = new Date(now.getTime() - HOURLY_TRAILING_HOURS * HOUR_MS);
-      const response = await app.adapter.getAccountStats(requestContext, {
-        beforeDate,
-        afterDate,
-        periodMs: HOURLY_PERIOD_MS,
-      });
-      const persisted = await persist("account_stats", {
-        mode: "steady_hourly",
-        periodMs: HOURLY_PERIOD_MS,
-        beforeDate: beforeDate.toISOString(),
-        afterDate: afterDate.toISOString(),
-      }, response.raw);
-      if (classifyStatsWindow(response.raw) === "invalid") {
-        throw new FanslyLaneInvalidResponseError("account_stats");
-      }
-      await coverage(
-        CAPTURE_COVERAGE_PLANES.statsAccountHourly,
-        "window_captured",
-        "none",
-        {
-          scopeRef: "steady", replaceWindowBounds: true,
-          oldestCapturedAt: new Date(servedWindow(response.raw).afterMs ?? afterDate.getTime()),
-          newestCapturedAt: new Date(servedWindow(response.raw).beforeMs ?? now.getTime()),
-          proofObservationId: persisted.observationId,
-        },
-      );
+      // The hourly capture left the sweep for its own clock (above). The step
+      // stays, empty, so a cursor saved here by an older image still resumes.
       state = { ...state, stepIndex: 2 };
       await saveProgress();
       continue;
@@ -2110,7 +2275,7 @@ export async function fanslyStatsSnapshotChunk(
         return {
           satisfied: true,
           yieldReason: null,
-          stats: { mode: "steady", journaled, callsToday: state.callsToday, dailyCap },
+          stats: { mode: "steady", journaled, callsToday: state.callsToday, dailyCap, hourly },
         };
       }
       // Yesterday's tail is complete, but today's sweep is still due. Keep the
@@ -2138,6 +2303,7 @@ export async function fanslyStatsSnapshotChunk(
       callsToday: state.callsToday,
       dailyCap,
       deferred,
+      hourly,
     },
   };
 }
