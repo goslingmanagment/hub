@@ -107,10 +107,8 @@ describe("Fansly pending-to-posted earnings rechecks", () => {
   it("exposes only the selected fan's endpoint metadata through read_only", async () => {
     await observe(await claim());
     await posted();
-    await db.pool.query(`do $$ begin
-      if not exists (select 1 from pg_roles where rolname = 'read_only') then create role read_only; end if;
-      end $$;
-      grant usage on schema public to read_only;
+    // read_only is created once per run by tests/helpers/global-setup.ts.
+    await db.pool.query(`grant usage on schema public to read_only;
       grant execute on function fansly_earnings_refresh_status(text, text) to read_only`);
     const client = await db.pool.connect();
     try {
