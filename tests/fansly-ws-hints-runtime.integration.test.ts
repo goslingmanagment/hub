@@ -71,9 +71,9 @@ async function fixture(routeInitial = true) {
     senderPlatformUserId: "111", senderRole: "fan", createdAt: new Date("2026-09-15T00:00:00Z"),
     content: "original boundary", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
   }]);
-  const route = (id = 1, groupRef = "100") => app.db.transaction(tx => routeFanslyWsHintEvent(tx as unknown as Database, {
+  const route = (id = 1, groupRef = "100", messageRef = "150") => app.db.transaction(tx => routeFanslyWsHintEvent(tx as unknown as Database, {
     id, pageId: page.id, observationId: id, receivedAt: new Date(), generation,
-    node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef: "150" } },
+    node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef } },
   }, policy));
   if (routeInitial) await route();
   await ensurePageSyncStates(app.db, { pageId: page.id });
@@ -497,6 +497,92 @@ describe("B1 REST execution and rollback", () => {
     expect((await db.pool.query("select last_refresh_outcome,consecutive_failures from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
       .toEqual({ last_refresh_outcome: "budget_exhausted", consecutive_failures: 0 });
   });
+  const storeMessage = (f: Awaited<ReturnType<typeof fixture>>, conversationId: number, id: string) => upsertPageDmMessages(db.db, [{
+    conversationId, platformAccountId: f.page.id, platformMessageId: id,
+    senderPlatformUserId: "999", senderRole: "model", createdAt: new Date("2026-09-27T19:32:00Z"),
+    content: "mass message", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
+  }]);
+  // Another visible thread whose announced message ordinary polling already stored.
+  async function storedTarget(f: Awaited<ReturnType<typeof fixture>>, groupRef: string, eventId: number) {
+    const [fan] = await upsertFans(db.db, [{ platform: "fansly", platformUserId: `7${groupRef}` }]);
+    const thread = await upsertPageDmConversation(db.db, {
+      platformAccountId: f.page.id, fanId: fan!.id, platformConversationId: groupRef,
+      partnerPlatformUserId: `7${groupRef}`, partnerUsername: null, partnerDisplayName: null,
+      conversationFlags: 0, unreadCount: 0, subscriptionTierId: null,
+      lastMessageId: `${groupRef}1`, lastUnreadMessageId: null, lastMessageAt: new Date("2026-09-27T19:32:00Z"),
+      lastMessageSenderId: "999", lastMessageSenderRole: "model", lastMessagePreview: "mass message",
+      messageCoverageStatus: "complete", newestStoredMessageId: `${groupRef}1`, oldestStoredMessageId: `${groupRef}1`,
+      storedMessageCount: 1, lastMessageSyncAt: new Date("2026-09-27T20:00:00Z"), isVisible: true, lastSeenGeneration: 1, metadata: {},
+    });
+    await storeMessage(f, thread!.id, `${groupRef}1`);
+    await routeFanslyWsHintEvent(db.db, {
+      id: eventId, pageId: f.page.id, observationId: eventId, receivedAt: new Date(), generation: f.policy.generation,
+      node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef: `${groupRef}1` } },
+    }, f.policy);
+    return thread!;
+  }
+  // Prod 27.09: lilly-1/2 spent ~800 hint GETs a day on threads whose target the
+  // scheduled lane had already stored; ari-1's spent budget settled none.
+  it.each([false, true])("settles an already stored target without a request or hint budget (budget spent=%s)", async spent => {
+    const f = await fixture();
+    if (spent) await spendBudget(f);
+    await storeMessage(f, f.thread.id, "150");
+    const thread = await getPageDmConversationById(db.db, f.thread.id);
+    await f.step();
+    expect(f.app.adapter.getMessagesPage).not.toHaveBeenCalled();
+    expect(f.calls).toEqual([]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(spent ? 50 : 0);
+    expect((await db.pool.query("select * from subject_refresh_state where plane='fansly_ws_dm'")).rows[0]).toMatchObject({
+      requested_revision: 1n, applied_revision: 1n, last_refresh_outcome: "already_materialized",
+      claim_token: null, next_due_at: null, consecutive_failures: 0, refresh_checks: 0n, last_checked_at: null,
+      backfill_cursor: { generation: f.policy.generation },
+    });
+    const receipt = (await db.pool.query("select * from fansly_ws_hint_receipts where event_id=1")).rows[0];
+    expect(receipt).toMatchObject({ settlement_kind: "rest_materialized", settlement_observation_id: null, rest_raw_page_ids: [] });
+    expect(receipt.settled_at).toBeInstanceOf(Date);
+    expect(receipt.hot_applied_at).toBeInstanceOf(Date);
+    // No head was read: the thread keeps its freshness stamp and breaker state.
+    expect(await getPageDmConversationById(db.db, f.thread.id)).toEqual(thread);
+  });
+  it("settles stored targets first, then reads the head once for a missing one", async () => {
+    const f = await fixture();
+    await storedTarget(f, "200", 2);
+    await db.pool.query("update subject_refresh_state set next_due_at=now()-interval '1 hour' where subject_ref='200'");
+    await f.step();
+    expect(f.calls).toEqual(["messages"]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
+    expect((await db.pool.query(`select subject_ref,applied_revision,last_refresh_outcome from subject_refresh_state
+      where plane='fansly_ws_dm' order by subject_ref`)).rows).toEqual([
+      { subject_ref: "100", applied_revision: 0n, last_refresh_outcome: "walk_pending" },
+      { subject_ref: "200", applied_revision: 1n, last_refresh_outcome: "already_materialized" },
+    ]);
+  });
+  it("bounds the zero-request settles of one step", async () => {
+    const f = await fixture(false);
+    for (let n = 0; n < 51; n++) await storedTarget(f, String(300 + n), 10 + n);
+    const dirty = async () => (await db.pool.query(`select count(*)::int n from subject_refresh_state
+      where plane='fansly_ws_dm' and requested_revision > applied_revision`)).rows[0].n;
+    await f.step();
+    expect(await dirty()).toBe(1);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts where settled_at is not null")).rows[0].n).toBe(50);
+    await f.step();
+    expect(await dirty()).toBe(0);
+    expect(f.calls).toEqual([]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+  });
+  it.each(["group_created", "mid_walk"])("still reads the head for a stored target with %s", async kind => {
+    const f = await fixture();
+    if (kind === "mid_walk") { await f.step(); await f.due(); }
+    await storeMessage(f, f.thread.id, "150");
+    if (kind === "group_created") await routeFanslyWsHintEvent(db.db, {
+      id: 2, pageId: f.page.id, observationId: 2, receivedAt: new Date(), generation: f.policy.generation,
+      node: { path: [], outcome: "hint", hint: { type: "group_created", groupRef: "100", messageRef: null } },
+    }, f.policy);
+    await f.step();
+    expect(f.calls).toHaveLength(kind === "mid_walk" ? 2 : 1);
+    expect((await db.pool.query("select applied_revision,last_refresh_outcome from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toEqual({ applied_revision: 0n, last_refresh_outcome: "walk_pending" });
+  });
   it("wakes an idle DM stream for a due subject only while the budget has room", async () => {
     const f = await fixture();
     await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
@@ -619,13 +705,18 @@ describe("B1 REST execution and rollback", () => {
     const subject = (await db.pool.query("select * from subject_refresh_state where plane='fansly_ws_dm'")).rows[0];
     expect(subject).toMatchObject({ last_refresh_outcome: "target_transport", consecutive_failures: 1, applied_revision: 0n });
     expect(subject.retry_after_at.getTime() - Date.now()).toBeGreaterThan(50_000);
-    await f.route(2);
+    await f.route(2, "100", "151");
     expect((await db.pool.query("select retry_after_at from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].retry_after_at)
       .toEqual(subject.retry_after_at);
     expect((await getPageSyncState(db.db, f.page.id, "dm_messages"))?.consecutiveFailures).toBe(0);
     await f.due();
     f.app.adapter.getMessagesPage = context => failRequest(context, new TypeError("fetch failed"));
+    // Ordinary polling stored 150, so R settles without a request; R+1's
+    // unstored target keeps failing and backs off from its own streak.
     await f.step();
+    expect((await db.pool.query("select applied_revision,consecutive_failures from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
+      .toEqual({ applied_revision: 1n, consecutive_failures: 1 });
+    await f.due(); await f.step();
     expect((await db.pool.query("select consecutive_failures,extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0])
       .toMatchObject({ consecutive_failures: 2 });
     const seconds = (await db.pool.query("select extract(epoch from retry_after_at-clock_timestamp()) seconds from subject_refresh_state where plane='fansly_ws_dm'")).rows[0].seconds;

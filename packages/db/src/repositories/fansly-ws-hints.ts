@@ -203,6 +203,26 @@ export async function hasUnconfirmedFanslyWsHintTargets(
   return result.rows.length > 0;
 }
 
+/** True when every enabled receipt of the claimed revision names a message
+ * already live in the REST-backed hot table: a head read could not change the
+ * completion gate, and settlement records each as `rest_materialized`.
+ * Deletion evidence and group receipts still take the REST path. */
+export async function areFanslyWsHintTargetsMaterialized(
+  db: Database, claim: FanslyWsHintClaim, conversationId: number, policy: FanslyWsHintPolicy,
+) {
+  if (!policy.enabledTypes.has("message_created")) return false;
+  const result = await db.execute<{ materialized: boolean | null }>(sql`select
+      bool_and(r.hint_type = 'message_created' and ${liveTarget(conversationId)}) as materialized
+    from fansly_ws_hint_receipts r
+    join subject_refresh_state s on s.page_id = r.page_id
+      and s.plane = ${FANSLY_WS_DM_PLANE} and s.subject_ref = r.group_ref
+    where r.page_id = ${claim.pageId} and r.group_ref = ${claim.groupRef}
+      and r.generation = ${claim.walk.generation} and r.outcome = 'routed'
+      and r.hint_type in ${[...policy.enabledTypes]} and r.received_at >= ${new Date(policy.activationAt)}
+      and r.routed_revision > s.applied_revision and r.routed_revision <= ${claim.revision}`);
+  return result.rows[0]?.materialized === true;
+}
+
 /** Called in the SAME owned transaction as the REST-derived message writes.
  * Progress keeps the original boundary; success settles only claimed R.
  * A newer R+1 immediately becomes due, with a fresh head walk. */

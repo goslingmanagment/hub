@@ -1,11 +1,11 @@
 import {
-  admitFanslyWsHintAttempt, advanceFanslyWsHint, assertOwnedPageSyncLease,
+  admitFanslyWsHintAttempt, advanceFanslyWsHint, areFanslyWsHintTargetsMaterialized, assertOwnedPageSyncLease,
   claimFanslyWsHint, clearConversationSyncHealth, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
   listPageDmConversationsByPlatformConversationIds, lockFanslyWsGeneration,
   listFanslyWsHintRawPages, nextFanslyWsHintBudgetAt,
   getExistingPageDmMessageIds, hasUnconfirmedFanslyWsHintTargets,
   saveFanslyWsHintWalk, tryAcquireDmArchiveWriterFenceLock, upsertPageDmMessages, isFanslyWsHintClaimEnabled,
-  withOwnedPageSyncTransaction, type Database,
+  withOwnedPageSyncTransaction, type Database, type PageDmConversationRow,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION, FanslyApiError, isFanslyGroupDetailIdentity, type FanslyMessage } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded, resolveFanslyWsHintPolicy, type HttpRequestObserver } from "@agency_hub_core/shared";
@@ -23,6 +23,12 @@ class HintDeferred extends Error {}
 
 const hintPolicyExpired = (expiresAt: string | undefined) =>
   expiresAt !== undefined && Date.now() >= Date.parse(expiresAt);
+
+const hintEligible = (conversation: Pick<PageDmConversationRow, "isVisible" | "fanId" | "metadata">) =>
+  conversation.isVisible && conversation.fanId !== null && !isFanslyDmMessageSyncExcluded(conversation.metadata);
+
+/** Zero-request settles of already stored targets per step. */
+const MATERIALIZED_SETTLES_PER_STEP = 50;
 
 /** One additional physical request per ordinary DM chunk leaves at least
  * four request slots for the existing live/history policy. No separate job,
@@ -62,10 +68,26 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       walk.pagesRead = 0;
       await saveFanslyWsHintWalk(db, claim, walk);
     }
+    // Ordinary polling often stores the announced message first (a model's
+    // own mass message reaches every thread). Settle that claim without a
+    // head read or budget; nothing was read, so no freshness is stamped.
+    if (conversation && walk.conversationId === conversation.id && (walk.before ?? null) === null
+      && hintEligible(conversation)
+      && await areFanslyWsHintTargetsMaterialized(db, claim, conversation.id, policy)) {
+      await advanceFanslyWsHint(db, claim, { walk, complete: true, outcome: "already_materialized", now: new Date(),
+        settlement: { conversationId: conversation.id, policy } });
+      return "settled" as const;
+    }
     return { claim, context, conversation, walk };
   });
-  let selected: Awaited<ReturnType<typeof select>>;
-  try { selected = await select(); } catch (error) {
+  let selected: Awaited<ReturnType<typeof select>> = "settled";
+  try {
+    // Bounded, so a backlog drains across chunks without holding the lease.
+    for (let settled = 0; selected === "settled"; settled++) {
+      if (settled >= MATERIALIZED_SETTLES_PER_STEP || !input.budget.hasWallClockCapacity()) return;
+      selected = await select();
+    }
+  } catch (error) {
     if (error instanceof HintDeferred) return;
     throw error;
   }
@@ -165,7 +187,7 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       await defer("membership_pending");
       return;
     }
-    if (!conversation.isVisible || conversation.fanId === null || isFanslyDmMessageSyncExcluded(conversation.metadata)) {
+    if (!hintEligible(conversation)) {
       await defer("conversation_ineligible");
       return;
     }
