@@ -333,13 +333,42 @@ export async function readTargetedThreadBackfillJobStatus(
 }
 
 /**
+ * Slack past the job's expiry for pg-boss to record it: the worker fails an
+ * overrunning handler at the expiry itself, and a dead worker's job is failed
+ * by the next supervise pass (every 60 s by default).
+ */
+const TARGETED_BACKFILL_WAIT_GRACE_SECONDS = 90;
+
+/**
+ * The CLI's `--wait` budget. A bare `--wait` follows the job to its end: up to
+ * the expiry while it sits queued (the worker runs this queue one job at a
+ * time across all pages), then the expiry again, plus the grace, from the
+ * moment it is seen running — pg-boss counts expire_seconds from started_on,
+ * not from enqueue. An explicit number of seconds is a hard cap from enqueue.
+ */
+export function targetedThreadBackfillWaitBudget(
+  seconds: number | true,
+): { timeoutMs: number; activeBudgetMs?: number } {
+  if (seconds !== true) {
+    return { timeoutMs: seconds * 1000 };
+  }
+  return {
+    timeoutMs: TARGETED_BACKFILL_EXPIRE_SECONDS * 1000,
+    activeBudgetMs: (TARGETED_BACKFILL_EXPIRE_SECONDS + TARGETED_BACKFILL_WAIT_GRACE_SECONDS) * 1000,
+  };
+}
+
+/**
  * Poll one job until it is completed, failed or cancelled, reporting each state
  * change once. A missing row returns at once (`status: null`); running out of
- * time returns the last row seen with `timedOut`. Read-only.
+ * time returns the last row seen with `timedOut`. `activeBudgetMs` pushes the
+ * deadline to at least that long after the job is first seen `active`, so a
+ * job that waited in the queue still gets its whole run. Read-only.
  */
 export async function waitForTargetedThreadBackfillJob(input: {
   read: () => Promise<TargetedThreadBackfillJobStatus | null>;
   timeoutMs: number;
+  activeBudgetMs?: number;
   pollMs: number;
   onState?: (status: TargetedThreadBackfillJobStatus) => void;
   sleep?: (ms: number) => Promise<unknown>;
@@ -347,7 +376,7 @@ export async function waitForTargetedThreadBackfillJob(input: {
 }): Promise<{ status: TargetedThreadBackfillJobStatus | null; timedOut: boolean }> {
   const now = input.now ?? Date.now;
   const sleep = input.sleep ?? ((ms: number) => delay(ms));
-  const deadline = now() + input.timeoutMs;
+  let deadline = now() + input.timeoutMs;
   let lastState: string | null = null;
   for (;;) {
     const status = await input.read();
@@ -357,6 +386,11 @@ export async function waitForTargetedThreadBackfillJob(input: {
     if (status.state !== lastState) {
       lastState = status.state;
       input.onState?.(status);
+      if (status.state === "active" && input.activeBudgetMs !== undefined) {
+        // Local clock, not started_on: no skew against the database's clock,
+        // and the job started no later than this read.
+        deadline = Math.max(deadline, now() + input.activeBudgetMs);
+      }
     }
     if (TERMINAL_JOB_STATES.has(status.state)) {
       return { status, timedOut: false };
@@ -448,8 +482,11 @@ async function findConcurrentPageChunk(
  * the run starts (no sync run, no vendor request, the lease handed back), and
  * each attempt re-reads the thread, so one the regular crawl walked meanwhile
  * is judged on its current summary rather than the one read before the wait.
- * A paused or blocked dm_messages stream does not clear on its own within
- * minutes and refuses at once, like every other refusal.
+ * A dm_messages lease that cannot free up inside the wait refuses at once,
+ * like every other refusal: a paused or blocked stream, or a retry backoff
+ * (`retry_at`, up to 30 min after a failure streak) that ends after the wait
+ * would. A page that is not active never gets here: resolving its context
+ * throws before the lease is tried.
  */
 export async function runTargetedThreadBackfill(
   app: AppContext,
@@ -465,7 +502,12 @@ export async function runTargetedThreadBackfill(
     }
     if (result.outcome === "lease_unavailable" && result.platformAccountId !== null) {
       const own = await getPageSyncState(app.db, result.platformAccountId, "dm_messages");
-      if (!own || own.status === "paused" || own.blockerKind !== null) {
+      if (
+        !own ||
+        own.status === "paused" ||
+        own.blockerKind !== null ||
+        (own.retryAt !== null && own.retryAt.getTime() >= deadline)
+      ) {
         return result;
       }
     }

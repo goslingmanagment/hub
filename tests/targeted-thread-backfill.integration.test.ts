@@ -930,6 +930,67 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(calls).toHaveLength(0);
   }, 120_000);
 
+  it("refuses at once when the dm_messages retry backoff outlasts the wait", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    // Prod, 28.09 11:01-20:31: lilly-2's dm_messages failed 22 times in a row
+    // and its backoff reached the 30-minute cap. The lease cannot be taken
+    // before retry_at, so waiting the budget out only holds the worker.
+    await testDb.pool.query(
+      `update page_sync_states
+       set status = 'retrying', retry_kind = 'provider_5xx', retry_at = $2, consecutive_failures = 22
+       where page_id = $1 and stream = 'dm_messages'`,
+      [page.id, new Date(Date.now() + 60 * 60 * 1000)],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const startedAt = Date.now();
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 60_000, contentionPollMs: 100 },
+    );
+
+    expect(result.outcome).toBe("lease_unavailable");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(calls).toHaveLength(0);
+  }, 120_000);
+
+  it("waits out a retry backoff that ends inside the wait and runs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await testDb.pool.query(
+      `update page_sync_states
+       set status = 'retrying', retry_kind = 'provider_5xx', retry_at = $2, consecutive_failures = 1
+       where page_id = $1 and stream = 'dm_messages'`,
+      [page.id, new Date(Date.now() + 400)],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 10_000, contentionPollMs: 100 },
+    );
+
+    expect(result).toMatchObject({ outcome: "completed", requests: 1 });
+    expect(calls).toHaveLength(1);
+  }, 120_000);
+
   it("keeps the worker's result as the pg-boss job output the CLI waits on", async (context) => {
     if (!testDb) {
       context.skip();

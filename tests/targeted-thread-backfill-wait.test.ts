@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  TARGETED_BACKFILL_EXPIRE_SECONDS,
+  targetedThreadBackfillWaitBudget,
   waitForTargetedThreadBackfillJob,
   type TargetedThreadBackfillJobStatus,
 } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
@@ -95,5 +97,66 @@ describe("waitForTargetedThreadBackfillJob", () => {
     expect(waited).toEqual({ status: status("active"), timedOut: true });
     // One read at t=0 and one after every 2 s poll up to the 10 s deadline.
     expect(job.reads()).toBe(6);
+  });
+
+  it("gives a job that starts late its full run budget from the moment it goes active", async () => {
+    // pg-boss counts expire_seconds from started_on, not from enqueue: a job
+    // queued 15 min behind other pages' jobs may still run for its full 20.
+    let now = 0;
+    const minute = 60_000;
+    const read = async () => {
+      if (now < 15 * minute) {
+        return status("created");
+      }
+      if (now < 30 * minute) {
+        return status("active");
+      }
+      return status("completed", { outcome: "completed" });
+    };
+
+    const waited = await waitForTargetedThreadBackfillJob({
+      read,
+      timeoutMs: 20 * minute,
+      activeBudgetMs: 21 * minute,
+      pollMs: 2_000,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      now: () => now,
+    });
+
+    expect(waited).toEqual({ status: status("completed", { outcome: "completed" }), timedOut: false });
+  });
+
+  it("still times out a job that stays queued past the queue budget", async () => {
+    let now = 0;
+    const job = scriptedRead([status("created")]);
+
+    const waited = await waitForTargetedThreadBackfillJob({
+      read: job.read,
+      timeoutMs: 10_000,
+      activeBudgetMs: 60_000,
+      pollMs: 2_000,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      now: () => now,
+    });
+
+    expect(waited).toEqual({ status: status("created"), timedOut: true });
+    expect(job.reads()).toBe(6);
+  });
+});
+
+describe("targetedThreadBackfillWaitBudget", () => {
+  it("follows a bare --wait to the job's end: queue time, then the full expiry once running", () => {
+    expect(targetedThreadBackfillWaitBudget(true)).toEqual({
+      timeoutMs: TARGETED_BACKFILL_EXPIRE_SECONDS * 1000,
+      activeBudgetMs: (TARGETED_BACKFILL_EXPIRE_SECONDS + 90) * 1000,
+    });
+  });
+
+  it("treats an explicit number of seconds as a hard cap from enqueue", () => {
+    expect(targetedThreadBackfillWaitBudget(30)).toEqual({ timeoutMs: 30_000 });
   });
 });

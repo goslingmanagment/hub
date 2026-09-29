@@ -129,6 +129,7 @@ import {
   readTargetedThreadBackfillJobStatus,
   sendTargetedThreadBackfillJob,
   TARGETED_BACKFILL_EXPIRE_SECONDS,
+  targetedThreadBackfillWaitBudget,
   waitForTargetedThreadBackfillJob,
   type TargetedThreadBackfillResult,
 } from "./services/sync/targeted-thread-backfill.ts";
@@ -560,16 +561,17 @@ const TARGETED_BACKFILL_WAIT_POLL_MS = 2_000;
  */
 async function waitForTargetedThreadBackfill(
   app: Awaited<ReturnType<typeof createAppContext>>,
-  input: { jobId: string; threadId: number; timeoutSeconds: number },
+  input: { jobId: string; threadId: number; wait: number | true },
 ) {
   const { jobId, threadId } = input;
   const startedAt = Date.now();
+  const elapsedSeconds = () => Math.floor((Date.now() - startedAt) / 1000);
   const { status, timedOut } = await waitForTargetedThreadBackfillJob({
     read: () => readTargetedThreadBackfillJobStatus(app.db, jobId),
-    timeoutMs: input.timeoutSeconds * 1000,
+    ...targetedThreadBackfillWaitBudget(input.wait),
     pollMs: TARGETED_BACKFILL_WAIT_POLL_MS,
     onState: (row) => {
-      console.log(`job ${jobId}: ${row.state} (${Math.floor((Date.now() - startedAt) / 1000)} s)`);
+      console.log(`job ${jobId}: ${row.state} (${elapsedSeconds()} s)`);
     },
   });
   if (status === null) {
@@ -579,7 +581,7 @@ async function waitForTargetedThreadBackfill(
   }
   if (timedOut) {
     console.error(
-      `Targeted backfill job ${jobId} is still ${status.state} after ${input.timeoutSeconds} s; `
+      `Targeted backfill job ${jobId} is still ${status.state} after ${elapsedSeconds()} s; `
         + "it keeps running — its outcome will be in pgboss.job.output",
     );
     process.exitCode = 1;
@@ -969,8 +971,10 @@ export function buildProgram() {
     )
     .option(
       "--wait [seconds]",
-      `follow the job and print the run's outcome; non-zero exit unless completed/partial `
-        + `(default ${TARGETED_BACKFILL_EXPIRE_SECONDS} s, the job's expiry)`,
+      "follow the job and print the run's outcome; non-zero exit unless completed/partial. "
+        + `Bare: until the job ends (up to ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60} min queued, `
+        + `then its ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60}-min expiry once running); `
+        + "with seconds: at most that long",
       parsePositiveInt,
     )
     .action(async (options) => {
@@ -1018,9 +1022,7 @@ export function buildProgram() {
           await waitForTargetedThreadBackfill(app, {
             jobId,
             threadId,
-            timeoutSeconds: options.wait === true
-              ? TARGETED_BACKFILL_EXPIRE_SECONDS
-              : options.wait as number,
+            wait: options.wait as number | true,
           });
         }
       } finally {
