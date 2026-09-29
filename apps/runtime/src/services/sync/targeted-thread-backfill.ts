@@ -218,6 +218,24 @@ export async function sendTargetedThreadBackfillJob(
   );
 }
 
+/** Job states that hold the page's `exclusive` slot (pg-boss: state <= active). */
+const TARGETED_BACKFILL_SLOT_STATES: ReadonlySet<string> = new Set(["created", "retry", "active"]);
+
+/**
+ * Whether `sendTargetedThreadBackfillJob` would be refused for this page right
+ * now: a job under the same page singletonKey is queued or running. Whoever
+ * sent it — a hydration dispatch or the owner's CLI — the slot is the page's.
+ */
+export async function isTargetedThreadBackfillSlotTaken(
+  boss: Pick<PgBoss, "findJobs">,
+  platformAccountId: number,
+): Promise<boolean> {
+  const jobs = await boss.findJobs(TARGETED_THREAD_BACKFILL_QUEUE, {
+    key: String(platformAccountId),
+  });
+  return jobs.some((job) => TARGETED_BACKFILL_SLOT_STATES.has(job.state));
+}
+
 export function parseTargetedThreadBackfillJob(data: unknown): TargetedThreadBackfillJob | null {
   if (typeof data !== "object" || data === null) {
     return null;

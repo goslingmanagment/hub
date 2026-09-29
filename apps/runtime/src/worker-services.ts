@@ -136,7 +136,7 @@ const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
 
 type WorkerBoss = Pick<
   PgBoss,
-  "complete" | "createQueue" | "fail" | "fetch" | "getQueue" | "schedule" | "send" | "start" | "stop" | "touch" | "updateQueue" | "work"
+  "complete" | "createQueue" | "fail" | "fetch" | "findJobs" | "getQueue" | "schedule" | "send" | "start" | "stop" | "touch" | "updateQueue" | "work"
 >;
 
 function resolveDueTelegramReportDate(
@@ -304,7 +304,7 @@ export async function startWorkerServices(
       && (cycle.autoApprove.considered > 0 || cycle.autoApprove.approved > 0);
     if (
       cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
-      || autoActed || cycle.autoHeld > 0
+      || autoActed || cycle.autoHeld > 0 || cycle.pageBusy > 0 || cycle.refused > 0
     ) {
       app.logger.info(cycle, "Agent hydration cycle complete");
     }
