@@ -125,6 +125,22 @@ async function ownerCookie() {
   return cookie!.split(";")[0]!;
 }
 
+/** Polls collected stream state until the expected frames are in, instead of
+ * sleeping a fixed collection window. */
+async function waitUntil(predicate: () => boolean, what: string, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    }
+    await sleep(25);
+  }
+}
+
+/** After the expected frames arrived, how long a "no extra or foreign frame"
+ * assertion keeps listening. There is no positive signal for absence. */
+const NO_EXTRA_FRAME_SETTLE_MS = 250;
+
 describe("event stream v2", () => {
   it("snapshot hands out grant-scoped fresh cursors; foreign accounts 403", async (context) => {
     if (!requireSetup(context)) return;
@@ -183,9 +199,13 @@ describe("event stream v2", () => {
       },
     });
 
-    // Give the replay a beat, then append live on both pages: lana must
-    // arrive, lily must not.
-    await sleep(400);
+    // Replay reaches seq 2 only after the domain hub is listening, so appends
+    // from here on are live. Then append on both pages: lana must arrive, lily
+    // must not.
+    await waitUntil(
+      () => frames.some((frame) => frame.event.accountId === lanaId && frame.event.accountSeq === 2),
+      "the lana replay to reach seq 2",
+    );
     await appendDomainEvents(testDb!.db, lilyId, [event("message.received", { text: "foreign live" })]);
     await appendDomainEvents(testDb!.db, lanaId, [event("message.received", { text: "live" })]);
     await live;
@@ -204,7 +224,8 @@ describe("event stream v2", () => {
       cursor: resumeCursor,
       onFrame: (frame) => resumed.push(frame.event.accountSeq),
     });
-    await sleep(600);
+    await waitUntil(() => resumed.includes(3), "the resumed seq 3");
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
     resumeHandle.close();
     await resumeHandle.done;
     expect(resumed).toEqual([3]);
@@ -223,7 +244,8 @@ describe("event stream v2", () => {
       cursor: before,
       onFrame: (frame) => seen.push(frame.event),
     });
-    await sleep(500);
+    await waitUntil(() => seen.length >= 1, "the unknown-type frame");
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
     handle.close();
     await handle.done;
     expect(seen).toHaveLength(1);
@@ -298,7 +320,11 @@ describe("event stream v2", () => {
       cursor: encodeDomainEventCursor(new Map([[lanaId, 4]])),
       onFrame: (frame) => v2Frames.push(frame.event.accountSeq),
     });
-    await sleep(700);
+    await waitUntil(
+      () => v2Frames.includes(5) && v1Frames.length >= 1,
+      "a v1 frame and the v2 seq 5",
+    );
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
 
     v1Handle.close();
     v2Handle.close();
@@ -328,7 +354,7 @@ describe("event stream v2", () => {
         }
       },
     });
-    await sleep(1_500);
+    await waitUntil(() => seqs.at(-1) === 522, "the replay to reach seq 522");
     handle.close();
     await handle.done;
 
@@ -366,7 +392,7 @@ describe("event stream v2", () => {
       cursor: encodeDomainEventCursor(new Map([[lilyId, 100]])),
       onFrame: (frame) => seqs.push(frame.event.accountSeq),
     });
-    await sleep(1_200);
+    await waitUntil(() => seqs.includes(522), "the resumed replay to reach seq 522");
     okHandle.close();
     await okHandle.done;
     expect(seqs[0]).toBe(101);
@@ -440,7 +466,8 @@ describe("event stream v2", () => {
       cursor: reboundBody.cursor,
       onFrame: (frame) => replayed.push(frame.event),
     });
-    await sleep(600);
+    await waitUntil(() => replayed.length >= 1, "the replayed after-b-snapshot frame");
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
     handle.close();
     await handle.done;
     expect(replayed).toEqual([
@@ -585,7 +612,8 @@ describe("event stream v2", () => {
       },
       onSnapshotRequired: (details) => { repeatedSnapshot = details; },
     });
-    await sleep(700);
+    await waitUntil(() => replayed.includes(4), "the post-snapshot seq 4");
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
     handle.close();
     await handle.done;
     expect(repeatedSnapshot).toBeNull();
@@ -1040,7 +1068,8 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       cursor: encodeDomainEventCursor(new Map([[pageId, 0]])),
       onFrame: (frame) => frames.push(frame.event),
     });
-    await sleep(800);
+    await waitUntil(() => frames.length >= 1, "the enriched message frame");
+    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
     handle.close();
     await handle.done;
 
@@ -1092,7 +1121,11 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       ])),
       onFrame: (frame) => frames.push(frame.event as typeof frames[number]),
     });
-    await sleep(800);
+    await waitUntil(
+      () => frames.some((frame) => frame.type === "command.settled")
+        && frames.some((frame) => frame.accountId === lanaId),
+      "the command.settled and lana frames",
+    );
     handle.close();
     await handle.done;
 
@@ -1130,10 +1163,25 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       }
     })().catch(() => undefined);
 
-    // Give the subscription a beat, then push a typing event through the v1
-    // fanout: journal row -> settle with the mapped sync event -> NOTIFY (in
-    // prod the worker settles+notifies; the repo settle deliberately does not).
-    await sleep(600);
+    // Ready the shared sync hub's LISTEN (and its baseline) the way the v1
+    // route does, then wait for this stream's replay to complete: its ephemeral
+    // subscription is registered before that marker. The v2 route never awaits
+    // the sync hub itself, so without the v1 connect a typing row committed in
+    // the hub's connect window would sit below the baseline when this test runs
+    // alone.
+    const v1Abort = new AbortController();
+    const v1 = await fetch(`${baseUrl}/api/v1/events/stream`, {
+      headers: { authorization: `Bearer ${chatterKey}`, accept: "text/event-stream" },
+      signal: v1Abort.signal,
+    });
+    expect(v1.status).toBe(200);
+    v1Abort.abort();
+    await v1.body?.cancel().catch(() => undefined);
+    await waitUntil(() => wire.includes("replay_completed"), "the v2 replay_completed marker");
+
+    // Push a typing event through the v1 fanout: journal row -> settle with
+    // the mapped sync event -> NOTIFY (in prod the worker settles+notifies; the
+    // repo settle deliberately does not).
     const created = await insertOfapiWebhookEvent(testDb!.db, {
       idempotencyKey: "stage24-typing-1",
       eventType: "users.typing",
@@ -1148,7 +1196,12 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       processedAt: new Date(),
     });
     await testDb!.pool.query("select pg_notify('ofapi_sync_events', '')");
-    await sleep(1_500);
+    await waitUntil(
+      () => wire.split("\n\n").some((block) =>
+        block.includes("event: ephemeral") && block.includes(OFAPI_ACCOUNT)),
+      "this account's ephemeral typing frame",
+      5_000,
+    );
     abort.abort();
     await consumed;
 
@@ -1277,7 +1330,10 @@ describe("event stream v2 — message.ppv_unlocked delivery (INC-001)", () => {
     await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991779102", "991779900");
     await appendMessage(pageId, ofapiAccountId, fanRef, "991779103");
 
-    const collect = async (cursor: string) => {
+    // Collects until the expected last seq arrives, then listens a short settle
+    // for anything extra. With nothing expected there is no positive signal, so
+    // the settle is a plain window.
+    const collect = async (cursor: string, lastSeq: number | null) => {
       const frames: Array<{ cursor: string; event: DomainEventFrame }> = [];
       const handle = subscribeDomainEvents(bearerOptions(), {
         cursor,
@@ -1287,13 +1343,21 @@ describe("event stream v2 — message.ppv_unlocked delivery (INC-001)", () => {
           }
         },
       });
-      await sleep(600);
+      if (lastSeq !== null) {
+        await waitUntil(
+          () => frames.some((frame) => frame.event.accountSeq === lastSeq),
+          `seq ${lastSeq}`,
+        );
+        await sleep(NO_EXTRA_FRAME_SETTLE_MS);
+      } else {
+        await sleep(300);
+      }
       handle.close();
       await handle.done;
       return frames;
     };
 
-    const frames = await collect(encodeDomainEventCursor(new Map([[pageId, 0]])));
+    const frames = await collect(encodeDomainEventCursor(new Map([[pageId, 0]])), 3);
     expect(frames.map((frame) => [frame.event.accountSeq, frame.event.type])).toEqual([
       [1, "message.received"],
       [2, "message.ppv_unlocked"],
@@ -1320,10 +1384,10 @@ describe("event stream v2 — message.ppv_unlocked delivery (INC-001)", () => {
       expect(decoded.watermarks.get(pageId)).toBe(frame.event.accountSeq);
     }
 
-    const afterPpv = await collect(frames[1]!.cursor);
+    const afterPpv = await collect(frames[1]!.cursor, 3);
     expect(afterPpv.map((frame) => [frame.event.accountSeq, frame.event.type]))
       .toEqual([[3, "message.received"]]);
-    expect(await collect(frames[2]!.cursor)).toEqual([]);
+    expect(await collect(frames[2]!.cursor, null)).toEqual([]);
   });
 
   it("PPV as the last frame before an erased hole hands out its own cursor, so reconnect makes progress", async (context) => {
