@@ -338,6 +338,10 @@ export interface FanslyStatsCursorState {
    *  the daily sweep's. Null until the first capture; a cursor from before
    *  this field derives it once from the steady coverage row. */
   lastHourlyCapturedAt: string | null;
+  /** The newest bucket that capture was SERVED — the body's `dateBefore`,
+   *  ISO — which is where the next capture's window has to reach back to.
+   *  Null when the body carried no bounds; derived like the field above. */
+  lastHourlyServedBefore: string | null;
   backfill: {
     daily: DailyBackfillState;
     hourly: HourlyBackfillState;
@@ -507,6 +511,7 @@ export function parseFanslyStatsCursorState(
     deletedBroadcastPagesInSweep: Math.max(0, asInt(state.deletedBroadcastPagesInSweep, 0)),
     deletedBroadcastWalkStop: parseBroadcastWalkStop(state.deletedBroadcastWalkStop),
     lastHourlyCapturedAt: asNullableInstant(state.lastHourlyCapturedAt),
+    lastHourlyServedBefore: asNullableInstant(state.lastHourlyServedBefore),
     backfill: backfillRecord === null ? null : {
       daily: parseDailyBackfill(backfillRecord.daily, now),
       hourly: parseHourlyBackfill(backfillRecord.hourly, now),
@@ -728,6 +733,7 @@ export function emptyFanslyStatsCursorState(now: Date): FanslyStatsCursorState {
     deletedBroadcastPagesInSweep: 0,
     deletedBroadcastWalkStop: null,
     lastHourlyCapturedAt: null,
+    lastHourlyServedBefore: null,
     backfill: {
       daily: emptyDailyBackfill(now),
       hourly: {
@@ -756,25 +762,45 @@ export const rollUtcDay = rollFanslyUtcDay;
  *
  * Asked against the NEXT dispatch, not this one: `nextDispatchBy − lastCaptured
  * > 25 h`. Asked on every 6-hourly slot, that is once a day on the same slot,
- * and a capture that ran early drifts to the last slot before its window runs
- * out. A lane that has never captured is due.
+ * and a capture that ran early is caught up on the last slot before its window
+ * runs out. A lane that has never captured is due.
  */
 export function hourlyCaptureDue(lastCapturedMs: number | null, nextDispatchByMs: number): boolean {
   return lastCapturedMs === null || nextDispatchByMs - lastCapturedMs > HOURLY_WINDOW_MS;
 }
 
-/** The span between two hourly captures that neither window reached — the
- *  newer window starts after the older one ended — or null when they touch. */
+/**
+ * The hourly buckets between two captures that neither window carries, or null
+ * when the windows meet.
+ *
+ * Counted in SERVED buckets. A window's datapoints run from its `dateAfter` to
+ * its `dateBefore` INCLUSIVE, keyed by bucket start — 25 of them (production:
+ * 25 distinct `account_media` bucket starts per window). So a newer window
+ * that starts one hour after the older one's `dateBefore` has missed nothing,
+ * and the missing buckets are [older dateBefore + 1 h, newer dateAfter). The
+ * provider snaps both ends to its hour grid and ends a window 0–2 h short of
+ * the hour asked for, varying from call to call, so this is NOT the requested
+ * windows' gap: those can touch while a bucket is missed (lilly-1, 2026-09-21
+ * 02:50 -> 09-22 03:37, the 01:00 bucket) or be minutes apart while the served
+ * windows still meet. When either body carried no bounds, the requested
+ * windows stand in: the newer one's start against the older capture.
+ */
 export function hourlyCaptureGap(
-  previousCapturedMs: number | null,
-  capturedMs: number,
-): { fromMs: number; toMs: number } | null {
-  if (previousCapturedMs === null) {
+  previous: { capturedMs: number; servedBeforeMs: number | null } | null,
+  current: { capturedMs: number; servedAfterMs: number | null },
+): { fromMs: number; toMs: number; basis: "served" | "requested" } | null {
+  if (previous === null) {
     return null;
   }
-  const windowStartMs = capturedMs - HOURLY_WINDOW_MS;
-  return windowStartMs > previousCapturedMs
-    ? { fromMs: previousCapturedMs, toMs: windowStartMs }
+  if (previous.servedBeforeMs !== null && current.servedAfterMs !== null) {
+    const fromMs = previous.servedBeforeMs + HOURLY_PERIOD_MS;
+    return current.servedAfterMs > fromMs
+      ? { fromMs, toMs: current.servedAfterMs, basis: "served" }
+      : null;
+  }
+  const windowStartMs = current.capturedMs - HOURLY_WINDOW_MS;
+  return windowStartMs > previous.capturedMs
+    ? { fromMs: previous.capturedMs, toMs: windowStartMs, basis: "requested" }
     : null;
 }
 
@@ -1920,34 +1946,45 @@ export async function fanslyStatsSnapshotChunk(
   // 2026-09-29: lilly-2 123.9 h, lora-2 22.0 h, lora-3 4.5 h, lilly-1 1.7 h.
   //
   // So every dispatch asks whether the NEXT dispatch this lane can count on
-  // would already be too late, and captures only then: on slots, once a day on
-  // the same slot — no call the sweep did not already make; after an early
-  // capture, the last slot before the window runs out — one extra call, that
-  // day. It runs FIRST because it is the one call here whose delay loses data;
-  // it spends the same daily cap as everything else.
+  // would already be too late, and captures only then: on slots, once a day
+  // with the day's sweep — no call the sweep did not already make; after an
+  // early capture, also the last slot before the window runs out — one extra
+  // call, once. It runs FIRST because it is the one call here whose delay
+  // loses data; it spends the same daily cap as everything else.
+  const today = utcDayKey(now);
+  const sweepDoneToday =
+    state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null;
   if (hourlyEnabled) {
     if (state.lastHourlyCapturedAt === null) {
-      // A cursor from before this field. The steady row is written by the
-      // capture itself, so its write time IS the last capture's; with no row
-      // there is nothing to wait for.
+      // A cursor from before these fields. The steady row is written by the
+      // capture itself, so its write time IS the last capture's and its newest
+      // bound that capture's served `dateBefore`; with no row there is nothing
+      // to wait for.
       const steadyRow = (await listCaptureCoverage(app.db, {
         pageId,
         plane: CAPTURE_COVERAGE_PLANES.statsAccountHourly,
       })).find((row) => row.scopeRef === "steady");
       if (steadyRow !== undefined) {
-        state = { ...state, lastHourlyCapturedAt: steadyRow.updatedAt.toISOString() };
+        state = {
+          ...state,
+          lastHourlyCapturedAt: steadyRow.updatedAt.toISOString(),
+          lastHourlyServedBefore: steadyRow.newestCapturedAt?.toISOString() ?? null,
+        };
       }
     }
     const lastCapturedMs = state.lastHourlyCapturedAt === null
       ? null
       : Date.parse(state.lastHourlyCapturedAt);
-    // A slot is at most one cadence away — unless a history walk is open. That
-    // walk spends whatever cap the day has left and defers the lane to the next
-    // UTC day, and no slot dispatches a lane while its deferral is pending
-    // (production 2026-09-28: walks deferred at 23:02, next dispatch 00:05).
+    // A slot is at most one cadence away — unless this chunk can still end
+    // deferred to the next UTC day: a history walk is open, or today's sweep
+    // has not finished. Either spends whatever cap the day has left and defers
+    // the lane to 00:05, and no slot dispatches a lane while its deferral is
+    // pending (production 2026-09-28: walks deferred at 23:02, next dispatch
+    // 00:05). Asked that way, the window also rides with the day's sweep again
+    // the day after an early capture moved it to a late slot.
     const nextDispatchByMs = Math.max(
       now.getTime() + STATS_CADENCE_MS,
-      state.mode === "backfill" && state.backfill !== null
+      (state.mode === "backfill" && state.backfill !== null) || !sweepDoneToday
         ? nextFanslyUtcDayStart(now).getTime()
         : 0,
     );
@@ -1977,21 +2014,30 @@ export async function fanslyStatsSnapshotChunk(
       if (classifyStatsWindow(response.raw) === "invalid") {
         throw new FanslyLaneInvalidResponseError("account_stats");
       }
+      const served = servedWindow(response.raw);
       await coverage(
         CAPTURE_COVERAGE_PLANES.statsAccountHourly,
         "window_captured",
         "none",
         {
           scopeRef: "steady", replaceWindowBounds: true,
-          oldestCapturedAt: new Date(servedWindow(response.raw).afterMs ?? afterDate.getTime()),
-          newestCapturedAt: new Date(servedWindow(response.raw).beforeMs ?? now.getTime()),
+          oldestCapturedAt: new Date(served.afterMs ?? afterDate.getTime()),
+          newestCapturedAt: new Date(served.beforeMs ?? now.getTime()),
           proofObservationId: persisted.observationId,
         },
       );
       // The steady row describes the latest window and nothing before it, so a
       // hole between two windows is written down where it stays: its own row,
       // never overwritten, plus one anomaly on the run that found it.
-      const hole = hourlyCaptureGap(lastCapturedMs, now.getTime());
+      const hole = hourlyCaptureGap(
+        lastCapturedMs === null ? null : {
+          capturedMs: lastCapturedMs,
+          servedBeforeMs: state.lastHourlyServedBefore === null
+            ? null
+            : Date.parse(state.lastHourlyServedBefore),
+        },
+        { capturedMs: now.getTime(), servedAfterMs: served.afterMs },
+      );
       if (hole !== null) {
         const missingFrom = new Date(hole.fromMs).toISOString();
         const missingTo = new Date(hole.toMs).toISOString();
@@ -2000,7 +2046,8 @@ export async function fanslyStatsSnapshotChunk(
           missingFrom,
           missingTo,
           missingHours,
-          previousCapturedAt: missingFrom,
+          basis: hole.basis,
+          previousCapturedAt: state.lastHourlyCapturedAt,
           capturedAt: now.toISOString(),
         };
         await coverage(
@@ -2021,20 +2068,25 @@ export async function fanslyStatsSnapshotChunk(
           code: "fansly_stats_hourly_capture_gap",
           severity: "warn",
           message:
-            "Fansly hourly statistics were captured more than 25 h apart; the hours between "
-            + "the two windows are not recoverable",
+            "Fansly hourly statistics: no captured window carries the hours between two "
+            + "captures, and they are not recoverable",
           details: holeDetails,
         });
       }
-      state = { ...state, lastHourlyCapturedAt: now.toISOString() };
+      state = {
+        ...state,
+        lastHourlyCapturedAt: now.toISOString(),
+        lastHourlyServedBefore: served.beforeMs === null
+          ? null
+          : new Date(served.beforeMs).toISOString(),
+      };
       await saveProgress();
       hourly = "captured";
     }
   }
 
   // ── STEADY DAILY SWEEP ────────────────────────────────────────────────────
-  const today = utcDayKey(now);
-  if (state.lastSweepDay === today && state.stepIndex === 0 && state.sweepDay === null) {
+  if (sweepDoneToday) {
     const pendingHistory = await runBackfill();
     if (pendingHistory !== null) return pendingHistory;
     if (hourly === "deferred" && !hasDayCapacity()) {

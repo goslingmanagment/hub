@@ -174,12 +174,45 @@ describe("the hourly plane's clock", () => {
     expect(hourlyCaptureDue(null, CAPTURED)).toBe(true);
   });
 
-  it("names the hours between two windows that do not touch", () => {
-    expect(hourlyCaptureGap(null, CAPTURED)).toBeNull();
-    expect(hourlyCaptureGap(CAPTURED, CAPTURED + 25 * HOUR)).toBeNull();
-    expect(hourlyCaptureGap(CAPTURED, CAPTURED + 28 * HOUR + 54 * 60_000)).toEqual({
+  it("names the buckets no SERVED window carries, both ends of a window included", () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(hourlyCaptureGap(null, { capturedMs: CAPTURED, servedAfterMs: CAPTURED })).toBeNull();
+    // Production, lora-1: captures 2026-09-17 05:02 and 2026-09-18 05:02 were
+    // served [16.09 04:00, 17.09 04:00] and [17.09 05:00, 18.09 05:00]. A
+    // window carries 25 buckets, its dateBefore's included — the 17.09 04:00
+    // bucket is in stats_traffic_buckets — so nothing is missing.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-09-17T05:02:00Z"), servedBeforeMs: at("2026-09-17T04:00:00Z") },
+      { capturedMs: at("2026-09-18T05:02:00Z"), servedAfterMs: at("2026-09-17T05:00:00Z") },
+    )).toBeNull();
+    // Production, lilly-1: captures 2026-09-21 02:50 and 2026-09-22 03:37, 24.8 h
+    // apart — the REQUESTED windows touch — were served up to 21.09 00:00 and
+    // from 21.09 02:00. No window carries the 01:00 bucket.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-09-21T02:50:00Z"), servedBeforeMs: at("2026-09-21T00:00:00Z") },
+      { capturedMs: at("2026-09-22T03:37:00Z"), servedAfterMs: at("2026-09-21T02:00:00Z") },
+    )).toEqual({
+      fromMs: at("2026-09-21T01:00:00Z"),
+      toMs: at("2026-09-21T02:00:00Z"),
+      basis: "served",
+    });
+    // 25 h 04 min apart as requested, yet the served windows still meet.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-08-19T23:01:00Z"), servedBeforeMs: at("2026-08-19T22:00:00Z") },
+      { capturedMs: at("2026-08-21T00:05:00Z"), servedAfterMs: at("2026-08-19T23:00:00Z") },
+    )).toBeNull();
+    // A body without served bounds: the requested windows stand in.
+    expect(hourlyCaptureGap(
+      { capturedMs: CAPTURED, servedBeforeMs: null },
+      { capturedMs: CAPTURED + 25 * HOUR, servedAfterMs: null },
+    )).toBeNull();
+    expect(hourlyCaptureGap(
+      { capturedMs: CAPTURED, servedBeforeMs: at("2026-08-19T04:00:00Z") },
+      { capturedMs: CAPTURED + 28 * HOUR + 54 * 60_000, servedAfterMs: null },
+    )).toEqual({
       fromMs: CAPTURED,
       toMs: CAPTURED + 3 * HOUR + 54 * 60_000,
+      basis: "requested",
     });
   });
 
@@ -187,15 +220,23 @@ describe("the hourly plane's clock", () => {
     const state = {
       ...emptyFanslyStatsCursorState(NOW),
       lastHourlyCapturedAt: "2026-08-19T05:01:00.000Z",
+      lastHourlyServedBefore: "2026-08-19T04:00:00.000Z",
     };
-    expect(parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW)!
-      .lastHourlyCapturedAt).toBe("2026-08-19T05:01:00.000Z");
-    expect(parseFanslyStatsCursorState({ ...state, lastHourlyCapturedAt: "yesterday" }, NOW)!
-      .lastHourlyCapturedAt).toBeNull();
-    // A cursor from before the field: the handler derives it once.
+    const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW)!;
+    expect(parsed.lastHourlyCapturedAt).toBe("2026-08-19T05:01:00.000Z");
+    expect(parsed.lastHourlyServedBefore).toBe("2026-08-19T04:00:00.000Z");
+    const garbled = parseFanslyStatsCursorState(
+      { ...state, lastHourlyCapturedAt: "yesterday", lastHourlyServedBefore: 7 },
+      NOW,
+    )!;
+    expect(garbled.lastHourlyCapturedAt).toBeNull();
+    expect(garbled.lastHourlyServedBefore).toBeNull();
+    // A cursor from before the fields: the handler derives them once.
     const legacy: Record<string, unknown> = { ...state };
     delete legacy.lastHourlyCapturedAt;
+    delete legacy.lastHourlyServedBefore;
     expect(parseFanslyStatsCursorState(legacy, NOW)!.lastHourlyCapturedAt).toBeNull();
+    expect(parseFanslyStatsCursorState(legacy, NOW)!.lastHourlyServedBefore).toBeNull();
   });
 });
 
