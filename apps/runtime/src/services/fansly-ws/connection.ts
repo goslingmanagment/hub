@@ -10,6 +10,23 @@ export type FanslyWsStopReason = "disabled" | "ownership_lost" | "generation_cha
 const QUEUE_MAX_FRAMES = 128;
 const QUEUE_MAX_BYTES = 4 * 1024 * 1024;
 
+/** Receiver deadlines. Production always uses the defaults below; the override
+ * exists only so integration tests can run the real worker on scaled time. */
+export interface FanslyWsConnectionTiming {
+  /** Auth deadline; only a session frame clears it. */
+  authTimeoutMs: number;
+  /** Watchdog and guard interval. */
+  checkMs: number;
+  /** A guard that has not returned for this long stops the attempt. */
+  guardStaleMs: number;
+  pingMs: number;
+  /** Missing pong deadline, checked every `checkMs`. */
+  pongTimeoutMs: number;
+}
+export const FANSLY_WS_CONNECTION_TIMING: Readonly<FanslyWsConnectionTiming> = Object.freeze({
+  authTimeoutMs: 10_000, checkMs: 5_000, guardStaleMs: 15_000, pingMs: 20_000, pongTimeoutMs: 30_000,
+});
+
 /** One connection, one serial durable writer, bounded memory. Only protocol
  * controls are interpreted before capture. No route, hint or business writer. */
 export function receiveFanslyConnection(input: {
@@ -21,7 +38,9 @@ export function receiveFanslyConnection(input: {
   settle: (observationId: number, nodes: FanslyWsDecodeNode[]) => Promise<void>;
   guard: (verified: boolean) => Promise<void>;
   onStable?: () => void;
+  timing?: FanslyWsConnectionTiming;
 }): Promise<FanslyWsStopReason> {
+  const timing = input.timing ?? FANSLY_WS_CONNECTION_TIMING;
   return new Promise((resolve) => {
     const queue: { frame: string; ordinal: number; receivedAt: Date; bytes: number }[] = [];
     let queuedBytes = 0;
@@ -36,11 +55,11 @@ export function receiveFanslyConnection(input: {
     let lastGuard = Date.now();
     let guarding = false;
     let transport: ReturnType<typeof input.open> | undefined;
-    const authTimer = setTimeout(() => stop("auth_timeout"), 10_000);
+    const authTimer = setTimeout(() => stop("auth_timeout"), timing.authTimeoutMs);
     const timer = setInterval(() => {
       // Independent watchdog: a stuck DB read does not block socket shutdown.
-      if (Date.now() - lastGuard > 15_000) { stop("guard_unavailable"); return; }
-      if (opened && Date.now() - lastPong > 30_000) { stop("pong_timeout"); return; }
+      if (Date.now() - lastGuard > timing.guardStaleMs) { stop("guard_unavailable"); return; }
+      if (opened && Date.now() - lastPong > timing.pongTimeoutMs) { stop("pong_timeout"); return; }
       if (!stable && verifiedAt !== null && Date.now() - verifiedAt >= 60_000) {
         stable = true; input.onStable?.();
       }
@@ -49,11 +68,11 @@ export function receiveFanslyConnection(input: {
         void input.guard(verified).then(() => { if (!stopped) lastGuard = Date.now(); })
           .catch(() => stop("guard_unavailable")).finally(() => { guarding = false; });
       }
-    }, 5_000);
+    }, timing.checkMs);
     const pingTimer = setInterval(() => {
       if (!opened || stopped) return;
       try { transport!.socket.send("p"); } catch { stop("transport_error"); }
-    }, 20_000);
+    }, timing.pingMs);
     const abort = () => stop(isStopReason(input.signal.reason) ? input.signal.reason : "disabled");
 
     function stop(reason: FanslyWsStopReason) {
