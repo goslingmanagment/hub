@@ -164,9 +164,20 @@ export interface FanslyEarningsTransaction {
   receiverId: string | null;
 }
 
+/** The first item of a transactions page that failed the item contract. */
+export interface FanslyTransactionItemViolation {
+  /** Position in the page's `data`. */
+  index: number;
+  transactionId: string | null;
+  /** The first failing field, or "item" when the entry is not an object. */
+  field: string;
+}
+
 export interface FanslyTransactionsPage {
   total: number;
   data: FanslyEarningsTransaction[];
+  /** Set when an item failed the contract; `data` is then empty. */
+  itemViolation: FanslyTransactionItemViolation | null;
 }
 
 export interface FanslyEarningsAccount {

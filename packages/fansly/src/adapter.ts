@@ -33,6 +33,7 @@ import type {
   FanslyEarningsAccountsPageResponse,
   FanslyEarningsOverview,
   FanslyEarningsOverviewResponse,
+  FanslyEarningsTransaction,
   FanslyFollowersPage,
   FanslyGroupDetail,
   FanslyListItem,
@@ -294,6 +295,69 @@ function isFanslyErrorEnvelope(envelope: ApiEnvelope<unknown> | null): boolean {
     envelope.error.details.trim().length > 0;
 }
 
+// A createdAt before 2019 (before Fansly) or more than two days past the clock
+// is a unit change (seconds for milliseconds), not a sale time.
+const FANSLY_TRANSACTION_MIN_CREATED_AT_MS = Date.UTC(2019, 0, 1);
+const FANSLY_TRANSACTION_MAX_CREATED_AT_LEAD_MS = 2 * 24 * 60 * 60 * 1000;
+
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+/** Mills on the wire: an integer, or an integer string. A fraction is refused
+ * here rather than truncated later by `millsFromInteger`. */
+function parseFanslyMillsInteger(value: unknown): number | null {
+  const parsed = typeof value === "string" && /^-?\d+$/.test(value) ? Number(value) : value;
+  return isSafeInteger(parsed) ? parsed : null;
+}
+
+/** The fields the ledger writes or computes from. Returns the item with its
+ * amounts as numbers, or the first field that fails. */
+function parseFanslyEarningsTransaction(
+  value: unknown,
+  nowMs: number,
+): { item: FanslyEarningsTransaction } | { field: string } {
+  if (!isRecord(value)) {
+    return { field: "item" };
+  }
+  if (typeof value.transactionId !== "string" || value.transactionId.length === 0) {
+    return { field: "transactionId" };
+  }
+  if (!isSafeInteger(value.type)) {
+    return { field: "type" };
+  }
+  if (!isSafeInteger(value.status)) {
+    return { field: "status" };
+  }
+  const amount = parseFanslyMillsInteger(value.amount);
+  if (amount === null) {
+    return { field: "amount" };
+  }
+  const destinationAmount = parseFanslyMillsInteger(value.destinationAmount);
+  if (destinationAmount === null) {
+    return { field: "destinationAmount" };
+  }
+  if (value.destinationTax !== null && !isSafeInteger(value.destinationTax)) {
+    return { field: "destinationTax" };
+  }
+  if (
+    !isSafeInteger(value.createdAt) ||
+    value.createdAt < FANSLY_TRANSACTION_MIN_CREATED_AT_MS ||
+    value.createdAt > nowMs + FANSLY_TRANSACTION_MAX_CREATED_AT_LEAD_MS
+  ) {
+    return { field: "createdAt" };
+  }
+
+  return {
+    item: { ...value, amount, destinationAmount } as unknown as FanslyEarningsTransaction,
+  };
+}
+
+/**
+ * A malformed total or data array rejects the page (null). A malformed item
+ * keeps the total and names the first bad item: the caller fails the page
+ * without treating the offset scan as unstable.
+ */
 function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | null {
   if (
     !isRecord(value) ||
@@ -305,9 +369,29 @@ function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | n
     return null;
   }
 
+  const nowMs = Date.now();
+  const data: FanslyEarningsTransaction[] = [];
+  for (const [index, entry] of value.data.entries()) {
+    const parsed = parseFanslyEarningsTransaction(entry, nowMs);
+    if ("field" in parsed) {
+      const transactionId = isRecord(entry) &&
+          typeof entry.transactionId === "string" &&
+          entry.transactionId.length > 0
+        ? entry.transactionId
+        : null;
+      return {
+        total: value.total,
+        data: [],
+        itemViolation: { index, transactionId, field: parsed.field },
+      };
+    }
+    data.push(parsed.item);
+  }
+
   return {
     total: value.total,
-    data: value.data as FanslyTransactionsPage["data"],
+    data,
+    itemViolation: null,
   };
 }
 
@@ -1041,24 +1125,28 @@ export class FanslyAdapter {
           limit,
         },
         summarizeResponse: (parsed) => {
-          const accepted = parseFanslyTransactionsPage(parsed);
+          const page = parseFanslyTransactionsPage(parsed);
+          const accepted = page !== null && page.itemViolation === null;
           return {
-            total: accepted?.total ?? null,
-            returnedItems: accepted?.data.length ?? null,
-            done: accepted ? accepted.data.length < limit : null,
-            contractAccepted: accepted !== null,
+            total: page?.total ?? null,
+            returnedItems: accepted ? page.data.length : null,
+            done: accepted ? page.data.length < limit : null,
+            contractAccepted: accepted,
+            ...(page?.itemViolation ? { itemViolation: page.itemViolation } : {}),
           };
         },
       },
     );
 
     const parsed = parseFanslyTransactionsPage(response.parsed);
+    const accepted = parsed !== null && parsed.itemViolation === null;
     return {
       total: parsed?.total ?? null,
-      items: parsed?.data ?? [],
+      items: accepted ? parsed.data : [],
       offset: params.offset ?? 0,
-      done: parsed ? parsed.data.length < limit : false,
-      contractAccepted: parsed !== null,
+      done: accepted ? parsed.data.length < limit : false,
+      contractAccepted: accepted,
+      itemViolation: parsed?.itemViolation ?? null,
       raw: response.raw,
     };
   }
