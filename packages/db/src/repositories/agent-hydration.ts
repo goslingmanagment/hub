@@ -1091,10 +1091,23 @@ export async function listExpirableAgentHydrationRequests(
   return result.rows.map(mapRequest);
 }
 
-/** `requested|approved -> expired`, CAS'd on the state that was observed. */
+/**
+ * `requested|approved -> expired`, CAS'd on the state that was observed.
+ *
+ * The sweeper calls it when the window closed. The executor also calls it, with
+ * a `cause`, to retire an approval that can never dispatch (its thread moved
+ * since the decision) before its window closes; either way nothing was spent.
+ */
 export async function expireAgentHydrationRequest(
   db: Database,
-  input: { id: number; fromState: Extract<AgentHydrationState, "requested" | "approved">; now?: Date },
+  input: {
+    id: number;
+    fromState: Extract<AgentHydrationState, "requested" | "approved">;
+    actor?: Extract<AgentHydrationActor, "sweeper" | "executor">;
+    /** Journal-only: why the executor retired it early (bounded code). */
+    cause?: string;
+    now?: Date;
+  },
 ): Promise<AgentHydrationCasOutcome> {
   const now = input.now ?? new Date();
   return inTransaction(db, async (tx) => {
@@ -1117,7 +1130,8 @@ export async function expireAgentHydrationRequest(
       fromState: input.fromState,
       toState: "expired",
       rowVersion: num(row.row_version),
-      actor: "sweeper",
+      actor: input.actor ?? "sweeper",
+      ...(input.cause === undefined ? {} : { detail: { cause: input.cause } }),
     });
     return "applied" as const;
   });

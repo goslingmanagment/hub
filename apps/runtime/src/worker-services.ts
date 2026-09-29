@@ -304,7 +304,7 @@ export async function startWorkerServices(
       && (cycle.autoApprove.considered > 0 || cycle.autoApprove.approved > 0);
     if (
       cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
-      || autoActed || cycle.autoHeld > 0
+      || autoActed || cycle.autoHeld > 0 || cycle.pageBusy > 0 || cycle.refused > 0
     ) {
       app.logger.info(cycle, "Agent hydration cycle complete");
     }

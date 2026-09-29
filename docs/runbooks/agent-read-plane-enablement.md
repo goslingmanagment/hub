@@ -196,7 +196,11 @@ Fansly-прогон идёт один на страницу: второй апп
 страница отказала ДО первого запроса к Fansly (`page_busy`,
 `lease_unavailable`, `thread_checkpoint_in_progress`, занятый слот очереди),
 возвращает аппрув в `approved` (событие `rearmed`) — не больше трёх раз, потом
-`failed` с `timeout`.
+`failed` с `timeout`. Если пока аппрув ждал, покрытие треда сдвинулось
+(`coverage_fingerprint` уже не совпадёт), аппрув автопилота или уже
+возвращённый (`dispatch_count > 0`) закрывается сразу как `expired` (событие
+`expired`, actor `executor`, `cause: coverage_moved`); аппрув владельца, ни
+разу не взятый в работу, по-прежнему ждёт своего срока.
 
 ## 3½. Автопилот заявок (`agentHydrationAutoApproveMode`, decision #202)
 

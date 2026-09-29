@@ -269,21 +269,24 @@ export async function runAgentHydrationCycle(
     }
     // One run per page, checked BEFORE the claim: an approval whose page slot
     // is taken stays `approved` with its attempt unspent, and its TTL bounds the
-    // wait. At most one claim per page per cycle, too — the probe cannot see a
-    // job this cycle is about to send.
+    // wait. At most one claim per page per cycle, too. The page is marked only
+    // when a claim was made: an approval refused before its claim leaves the
+    // page as free as it found it, so it cannot take the page's turn from the
+    // approvals behind it on every cycle.
     const slotTaken = LANE_PAGE_SLOTS[request.platform as Platform] as
       | LanePageSlotProbe
       | null
       | undefined;
-    if (slotTaken) {
-      if (pagesThisCycle.has(request.pageId) || await slotTaken({ app, boss, pageId: request.pageId })) {
-        result.pageBusy += 1;
-        continue;
-      }
+    if (slotTaken
+      && (pagesThisCycle.has(request.pageId) || await slotTaken({ app, boss, pageId: request.pageId }))) {
+      result.pageBusy += 1;
+      continue;
+    }
+    const outcome = await dispatchAgentHydrationRequest(app, boss, request);
+    if (slotTaken && outcome !== "not_claimed") {
       pagesThisCycle.add(request.pageId);
     }
-    const dispatched = await dispatchAgentHydrationRequest(app, boss, request);
-    if (dispatched) {
+    if (outcome === "dispatched") {
       result.dispatched += 1;
     } else {
       result.refused += 1;
@@ -478,16 +481,20 @@ export function ofapiJobSettlement(job: {
  * ever LOSE an attempt (settled `failed` by the sweeper), never duplicate one.
  * "Read surfaces are never approval surfaces" cuts both ways — an approval is
  * not a dispatch either, and the target is checked again here.
+ *
+ * The answer says how far it got: `dispatched` (the job is out), `claimed` (the
+ * attempt was claimed, then settled, re-armed or left indeterminate), or
+ * `not_claimed` (refused or retired before the claim, or the CAS lost).
  */
 async function dispatchAgentHydrationRequest(
   app: AppContext,
   boss: HydrationBoss,
   request: AgentHydrationRequestRecord,
-): Promise<boolean> {
+): Promise<"dispatched" | "claimed" | "not_claimed"> {
   const platform = request.platform as Platform;
   const lane = AGENT_HYDRATION_LANES[platform] as typeof AGENT_HYDRATION_LANES[Platform] | undefined;
   if (!lane) {
-    return false;
+    return "not_claimed";
   }
 
   // ---- Revalidation, ALL of it, BEFORE the claim ----------------------------
@@ -502,7 +509,7 @@ async function dispatchAgentHydrationRequest(
       { requestRef: request.requestRef, pageLabel: request.pageLabel, reason },
       "Agent hydration approval is not dispatchable right now; attempt NOT consumed",
     );
-    return false;
+    return "not_claimed" as const;
   };
 
   const { thread } = await findAgentHydrationThread(app.db, {
@@ -523,6 +530,17 @@ async function dispatchAgentHydrationRequest(
     messageCoverageStatus: thread.messageCoverageStatus,
   });
   if (currentCoverage !== request.coverageFingerprint) {
+    // Coverage never moves back, so this approval can never dispatch. An owner
+    // approval never claimed waits out the owner's own expiry, as before (P1-2).
+    // The policy's approvals, and any approval a refused run handed back, are
+    // retired now instead: they are the ones that wait, and waiting is when a
+    // thread moves (a regular chunk parked on it resumes). Left `approved`, they
+    // would hold the page's one live approval and their reserved calls until
+    // the TTL. `expired` says nothing was spent.
+    if (request.decisionSource === "auto_policy" || request.dispatchCount > 0) {
+      await retireUndispatchableApproval(app, request, "coverage_moved");
+      return "not_claimed";
+    }
     return refuse("thread coverage moved since the decision");
   }
 
@@ -557,7 +575,7 @@ async function dispatchAgentHydrationRequest(
     executionRef,
   });
   if (claimed.outcome !== "applied") {
-    return false;
+    return "not_claimed";
   }
 
   try {
@@ -580,14 +598,14 @@ async function dispatchAgentHydrationRequest(
         toState: "failed",
         lastError: enqueued.lastError,
       });
-      return false;
+      return "claimed";
     }
     if (enqueued.kind === "slot_taken") {
       // DETERMINATE and FREE: the page's slot was taken between the probe and
       // the send, so no job exists and no vendor was asked. The approval goes
       // back to wait for the slot instead of losing its attempt to the race.
       await rearmOrFailRefusedRun(app, claimed.request ?? request, "page_slot_taken");
-      return false;
+      return "claimed";
     }
     if (enqueued.kind === "already_done") {
       // The exact target was already captured. Settle from that job instead of
@@ -600,7 +618,7 @@ async function dispatchAgentHydrationRequest(
         acceptedPages: enqueued.acceptedPages,
         spentCredits: enqueued.spentCredits,
       });
-      return false;
+      return "claimed";
     }
     if (enqueued.executionRef !== executionRef) {
       // The job coalesced onto a MATCHING active job (target and caps verified
@@ -623,7 +641,7 @@ async function dispatchAgentHydrationRequest(
       },
       "Agent hydration request dispatched",
     );
-    return true;
+    return "dispatched";
   } catch (error) {
     // INDETERMINATE. The send may have landed and lost its response; the job may
     // be running right now. Settling `failed` here would let the owner authorize
@@ -635,7 +653,7 @@ async function dispatchAgentHydrationRequest(
       { err: error, requestRef: request.requestRef, executionRef },
       "Agent hydration dispatch is INDETERMINATE; left dispatching for reconciliation",
     );
-    return false;
+    return "claimed";
   }
 }
 
@@ -965,6 +983,37 @@ async function rearmOrFailRefusedRun(
     app.logger.warn(
       { requestRef: request.requestRef, pageLabel: request.pageLabel, cause },
       "Agent hydration page stayed busy through every allowed run; approval settled failed",
+    );
+  }
+}
+
+/**
+ * An approval that can never dispatch, ended before its window closes:
+ * `approved -> expired`, journaled with the cause. `expired`, not `failed`: no
+ * vendor was asked, so its reservation is returned (`sumAutoApprovedCallsSince`)
+ * and its page is free for the next approval at once.
+ */
+async function retireUndispatchableApproval(
+  app: AppContext,
+  request: AgentHydrationRequestRecord,
+  cause: string,
+): Promise<void> {
+  const outcome = await expireAgentHydrationRequest(app.db, {
+    id: request.id,
+    fromState: "approved",
+    actor: "executor",
+    cause,
+  });
+  if (outcome === "applied") {
+    app.logger.warn(
+      {
+        requestRef: request.requestRef,
+        pageLabel: request.pageLabel,
+        cause,
+        decisionSource: request.decisionSource,
+        dispatchCount: request.dispatchCount,
+      },
+      "Agent hydration approval can no longer dispatch; retired as expired, no vendor request made",
     );
   }
 }

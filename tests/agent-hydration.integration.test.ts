@@ -994,6 +994,91 @@ describe("[sync-critical] agent hydration requests", () => {
     }
   }, 30_000);
 
+  it("an approval refused before its claim does not take its page's turn from the next one", async () => {
+    // The per-cycle page mark belongs to a CLAIM. The older approval here is
+    // refused by revalidation (its thread was deepened after the decision), so
+    // it stays `approved` and comes first in `decided_at` order on EVERY cycle;
+    // marking its page anyway would starve the page's other approvals until it
+    // expired.
+    await seedFanslyThread("second-thread-ref");
+    const stale = (await fileRequest()).request;
+    const fresh = (await fileRequest("lora-2", "second-thread-ref")).request;
+    expect((await approve(stale)).statusCode).toBe(200);
+    expect((await approve(fresh)).statusCode).toBe(200);
+    await testDb!.pool.query(
+      "update page_dm_threads set stored_message_count = 900 where id = $1",
+      [fanslyThreadId],
+    );
+    await setFlag("agentHydrationMode", "dispatch");
+
+    const boss = stubBoss();
+    const cycle = await runAgentHydrationCycle(appContext, boss);
+    expect(cycle.dispatched).toBe(1);
+    expect(cycle.pageBusy).toBe(0);
+    expect(boss.send).toHaveBeenCalledTimes(1);
+    const refused = await findAgentHydrationRequestByRef(testDb!.db, stale.requestRef);
+    expect(refused.request?.state).toBe("approved");
+    expect(refused.request?.dispatchCount).toBe(0);
+    const dispatched = await findAgentHydrationRequestByRef(testDb!.db, fresh.requestRef);
+    expect(dispatched.request?.state).toBe("dispatching");
+  });
+
+  it("a send that loses the page's slot after the probe re-arms the approval, never fails it", async () => {
+    // The probe saw the slot free; another sender took it before this send, so
+    // the `exclusive` queue returned null. No job exists and no vendor was asked.
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const send = vi.fn(async () => null);
+    const racing = { send, findJobs: vi.fn(async () => []) } as unknown as HydrationBoss;
+
+    const cycle = await runAgentHydrationCycle(appContext, racing);
+    expect(cycle.dispatched).toBe(0);
+    expect(send).toHaveBeenCalledTimes(1);
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("approved");
+    expect(stored.request?.lastError).toBe("none");
+    expect(stored.request?.dispatchCount).toBe(1);
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    expect(events.map((event) => event.kind)).toEqual([
+      "created",
+      "approved",
+      "dispatched",
+      "rearmed",
+    ]);
+    expect(events.at(-1)?.detail.cause).toBe("page_slot_taken");
+  });
+
+  it("an approval handed back by a refused run is retired once its thread moved", async () => {
+    // The coverage an approval was decided against cannot come back once the
+    // thread is deepened, so a re-armed approval would wait out its whole
+    // expiry holding the page. It ends `expired` instead: no vendor call, attempt
+    // unspent. An approval that was never claimed keeps the P1-2 behaviour.
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    await settleAgentHydrationFromBackfill(
+      appContext,
+      request.requestRef,
+      refusedRun("lease_unavailable"),
+    );
+    await testDb!.pool.query(
+      "update page_dm_threads set stored_message_count = 900 where id = $1",
+      [fanslyThreadId],
+    );
+
+    const boss = stubBoss();
+    expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("expired");
+    expect(stored.request?.dispatchCount).toBe(1);
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    expect(events.at(-1)).toMatchObject({ kind: "expired", fromState: "approved", actor: "executor" });
+    expect(events.at(-1)?.detail.cause).toBe("coverage_moved");
+  });
+
   it("a run refused before its first vendor request re-arms the approval instead of failing it", async () => {
     const { request } = await fileRequest();
     await approve(request);
@@ -1508,6 +1593,74 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
     expect(third.swept).toBe(1);
     expect(third.autoApprove?.approved).toBe(1);
     expect(third.autoApprove?.budgetRemaining).toBe(0);
+  });
+
+  it("an auto-approval that expired unstarted gives its reservation back", async () => {
+    await seedFanslyThread("second-thread-ref");
+    await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 });
+    await autopilot("enforce", 40);
+    // A job the table knows nothing about holds the page's slot: the approval
+    // waits, and its TTL runs out before the slot frees.
+    const busy = {
+      send: vi.fn(async () => "never"),
+      findJobs: vi.fn(async () => [{ state: "created" }]),
+    } as unknown as HydrationBoss;
+    const waiting = await runAgentHydrationCycle(appContext, busy);
+    expect(waiting.autoApprove?.reservedCalls).toBe(40);
+    expect(waiting.pageBusy).toBe(1);
+    await testDb!.pool.query(
+      `update agent_hydration_requests set expires_at = now() - interval '1 minute'
+       where state = 'approved'`,
+    );
+
+    await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 });
+    const next = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(next.expired).toBe(1);
+    // The whole 40 was available again.
+    expect(next.autoApprove?.approved).toBe(1);
+    expect(next.autoApprove?.budgetRemaining).toBe(0);
+    expect(next.dispatched).toBe(1);
+  });
+
+  it("a re-armed auto-approval whose thread moved is retired, freeing its page and its reservation", async () => {
+    // A run refused because a regular chunk was parked on this very thread is
+    // re-armed; when that chunk resumes it deepens the thread, and the
+    // approval's coverage can never match again. Left `approved`, it would hold
+    // the page's one live approval and its reserved calls until its 6 h TTL.
+    await seedFanslyThread("second-thread-ref");
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 40);
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    await settleAgentHydrationFromBackfill(
+      appContext,
+      first.requestRef,
+      refusedRun("thread_checkpoint_in_progress"),
+    );
+    expect((await findAgentHydrationRequestByRef(testDb!.db, first.requestRef)).request?.state)
+      .toBe("approved");
+
+    // The parked chunk resumes and stores older messages.
+    await testDb!.pool.query(
+      `update page_dm_threads set stored_message_count = 40, oldest_stored_message_id = 'm-60'
+       where id = $1`,
+      [fanslyThreadId],
+    );
+    await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 });
+    const boss = stubBoss();
+    const retiring = await runAgentHydrationCycle(appContext, boss);
+    expect(retiring.dispatched).toBe(0);
+    expect(boss.send).not.toHaveBeenCalled();
+    const retired = await findAgentHydrationRequestByRef(testDb!.db, first.requestRef);
+    expect(retired.request?.state).toBe("expired");
+    const events = await listAgentHydrationEvents(testDb!.db, retired.request!.id);
+    expect(events.at(-1)).toMatchObject({ kind: "expired", fromState: "approved", actor: "executor" });
+    expect(events.at(-1)?.detail.cause).toBe("coverage_moved");
+
+    // The page and the whole budget are free again on the next pass.
+    const next = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(next.autoApprove?.approved).toBe(1);
+    expect(next.autoApprove?.budgetRemaining).toBe(0);
+    expect(next.dispatched).toBe(1);
   });
 
   it("leaving enforce PARKS approvals the policy already made", async () => {
