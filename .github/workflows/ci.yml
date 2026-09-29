@@ -34,9 +34,14 @@ concurrency:
 # or DB proofs; a proof miss or lookup error executes the affected checks in
 # full. CI never publishes an image: production images build on the server.
 #
-# Runner pool: the repository variable CI_POOL=pc sends the heavy jobs (static,
-# integration) to the owner's self-hosted runners; any other value, and every
-# re-run (the PC may have died mid-run), uses GitHub-hosted runners.
+# Runner pool: the repository variable CI_POOL=pc sends every job — the gate
+# fingerprint, static, integration and the Quality Gate — to the owner's
+# self-hosted runners; any other value, and every re-run (the PC may have died
+# mid-run), uses GitHub-hosted runners. A PC that is off leaves the jobs queued
+# (`ci-pool rescue` / `ci-pool watch` cancel them and re-run them on GitHub).
+# The PC image has no Node.js on PATH and no GitHub CLI: a job that runs a
+# Node script there sets Node up first, and the gate scripts call the GitHub
+# API through Node's own fetch (scripts/ci-github-api.mjs).
 #
 # Economy mode (CI_POOL is not pc): a PR runs the integration shards only when
 # it is opened, reopened or marked ready for review, while it carries the
@@ -48,7 +53,7 @@ jobs:
   fingerprint:
     name: Gate fingerprint
     if: (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base) && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
-    runs-on: ubuntu-slim
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -65,6 +70,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # ubuntu-slim ships Node.js; the PC has none on PATH. Node 22 comes from
+      # the runner's tool cache, which the static and integration jobs keep
+      # warm, so this downloads nothing there. No pnpm: these scripts import
+      # nothing outside Node.
+      - name: Setup Node.js
+        if: runner.environment == 'self-hosted'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
 
       # The integration matrix: three shards, or CI_PC_SHARDS (1..8) on a
       # first attempt on the PC. See scripts/ci-shards.mjs.
@@ -416,9 +431,12 @@ jobs:
   # (Decision 377). A metadata-only event therefore still runs this job and
   # mirrors the verdict an earlier run recorded for the same SHA; it cannot
   # manufacture one, so a red, pending or missing gate stays that way.
+  #
+  # On the PC the job queues like any other when the PC is off, metadata-only
+  # runs included; `ci-pool rescue` re-runs it on GitHub (attempt 2).
   quality:
     name: Quality Gate
-    runs-on: ubuntu-slim
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
     needs: [fingerprint, static, integration]
     if: always()
     timeout-minutes: 5
@@ -437,6 +455,13 @@ jobs:
       - name: Checkout
         if: env.METADATA_ONLY == 'true'
         uses: actions/checkout@v6
+
+      # Only the mirror runs Node; see the fingerprint job.
+      - name: Setup Node.js
+        if: env.METADATA_ONLY == 'true' && runner.environment == 'self-hosted'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
 
       - name: An earlier run already passed this head
         if: env.METADATA_ONLY == 'true'

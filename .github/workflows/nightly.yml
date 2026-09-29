@@ -7,6 +7,10 @@ name: Nightly
 # daily job runs (~2 minutes). The whole suite in one process — the rebuild
 # proofs, the ratchets, vitest's parallel file mode — still runs weekly and on
 # manual dispatch, as the backstop that keeps the split honest.
+#
+# Runner pool: as in ci.yml. CI_POOL=pc runs both jobs on the owner's
+# self-hosted runners with ci.yml's PC setup (pnpm from corepack, the shared
+# pnpm store); any other value, and every re-run, uses GitHub-hosted runners.
 
 on:
   schedule:
@@ -19,32 +23,54 @@ on:
 jobs:
   api-remainder:
     name: api.integration remainder (daily)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     if: github.event_name == 'schedule' && github.event.schedule == '20 2 * * 0,2-6'
     timeout-minutes: 20
 
+    # Checkout, pnpm and the install exactly as in ci.yml's static checks.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup pnpm
+        if: runner.environment != 'self-hosted'
         uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+
+      - name: Setup pnpm (corepack)
+        if: runner.environment == 'self-hosted'
+        env:
+          COREPACK_DEFAULT_TO_LATEST: "0"
+        run: |
+          bin="$RUNNER_TEMP/corepack-bin"
+          mkdir -p "$bin"
+          corepack enable pnpm --install-directory "$bin"
+          pinned="$(node -p 'require("./package.json").packageManager')"
+          running="$("$bin/pnpm" --version)"
+          echo "corepack $(corepack --version) runs pnpm $running; package.json pins $pinned"
+          [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        env:
+          PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+        run: |
+          if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
+          pnpm install --frozen-lockfile
 
       - name: Whole api.integration file (the part PRs do not run)
         run: pnpm test:api:full
 
   full-suite:
     name: Full suite (Testcontainers)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     if: github.event_name != 'schedule' || github.event.schedule == '20 2 * * 1'
     timeout-minutes: 90
 
@@ -53,16 +79,46 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup pnpm
+        if: runner.environment != 'self-hosted'
         uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+
+      - name: Setup pnpm (corepack)
+        if: runner.environment == 'self-hosted'
+        env:
+          COREPACK_DEFAULT_TO_LATEST: "0"
+        run: |
+          bin="$RUNNER_TEMP/corepack-bin"
+          mkdir -p "$bin"
+          corepack enable pnpm --install-directory "$bin"
+          pinned="$(node -p 'require("./package.json").packageManager')"
+          running="$("$bin/pnpm" --version)"
+          echo "corepack $(corepack --version) runs pnpm $running; package.json pins $pinned"
+          [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        env:
+          PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+        run: |
+          if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
+          pnpm install --frozen-lockfile
 
+      # Vitest defaults to CPUs - 1 workers: one on a 2-vCPU hosted runner
+      # (kept), 23 on the PC. Every DB file in this run shares ONE Postgres
+      # cluster (tests/helpers/global-setup.ts), and the PC's 20 GB memory cap
+      # also holds whatever daytime CI is running beside a manual dispatch.
+      # Four workers keep this cluster at twice the two DB files per cluster
+      # the PC's integration shards run (SYNC_CRITICAL_DB_PARALLELISM in
+      # ci.yml) and stay below the static job's five unit-test workers.
       - name: Full test suite (unit + integration + rebuild proofs + ratchets)
-        run: pnpm test
+        env:
+          PC_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && '4' || '' }}
+        run: pnpm test ${PC_MAX_WORKERS:+"--maxWorkers=$PC_MAX_WORKERS"}
