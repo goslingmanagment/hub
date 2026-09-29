@@ -217,6 +217,30 @@ describe("sync summary service", () => {
     if (overrides.status === "blocked") expect(snapshot.pages[0]?.syncUx.requiresAction).toBe(true);
   });
 
+  it.each([
+    ["2026-03-24T12:05:00.000Z", "retrying", "2026-03-24T12:05:00.000Z"],
+    // The planner keeps a passed deadline on pending work (starvation aging
+    // counts the wait from it); it is no longer a retry.
+    ["2026-03-24T11:59:00.000Z", "catching_up", null],
+  ])("reads a pending row's retry deadline %s as %s", async (retryAt, state, nextRetryAt) => {
+    dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage()]);
+    dbMocks.listPageSyncStates.mockResolvedValue([
+      buildTaskRow({ stream: "light" }),
+      buildTaskRow({
+        stream: "transactions",
+        status: "pending",
+        requestSeq: 2,
+        appliedSeq: 1,
+        requestedAt: new Date("2026-03-24T11:58:00.000Z"),
+        retryAt: new Date(retryAt),
+      }),
+    ]);
+    const snapshot = await getSyncStatusSummarySnapshot({ db: {}, config: {} } as never, {
+      pageIds: [7], now: new Date("2026-03-24T12:00:00.000Z"),
+    });
+    expect(snapshot.pages[0]?.syncUx).toMatchObject({ state, nextRetryAt });
+  });
+
   it("reports action required from page credentials without monitor metrics", async () => {
     dbMocks.listVisiblePages.mockResolvedValue([buildVisiblePage({
       hasCredentials: false,

@@ -16,11 +16,12 @@
 // it would make an edit unrepresentable.
 //
 // THE SPECIFIC PART — `changed_at`. Comments are EDITABLE, and an edit is a new
-// content hash on the same `comment_ref`: the canonicalizer's dedup key hashes
-// the content, so an edit appends a NEW event and this upsert moves the head.
-// `changed_at` records when the stored content last actually changed, which is
-// what tells "we re-read the same comment 40 times" apart from "the fan edited
-// it". Re-observing identical bytes moves `last_observed_at` and nothing else.
+// content hash on the same `comment_ref`. The canonicalizer appends one row
+// event per LOOK (its dedup key carries the hash and the observation), so an
+// edit — or a return to an earlier body — moves the head. `changed_at` records
+// when the stored content last actually changed, which is what tells "we
+// re-read the same comment 40 times" apart from "the fan edited it".
+// Re-observing identical bytes moves `last_observed_at` and nothing else.
 //
 // AND `missing_since` — the deletion story. DP 7 forbids removing a row that
 // captured a fact, so a comment a later walk stops naming is MARKED, not
@@ -28,9 +29,10 @@
 // `post.comment_list_observed` roster event, so the mark is derived from the
 // ledger and survives truncate-and-replay; it is not a scheduled sweep and it
 // issues no DELETE. Both halves run: mark the complement, and CLEAR the mark on
-// everything the roster still names — a comment that disappears and comes back
-// UNCHANGED emits no row event at all (its content hash is the one it had
-// before), so only the roster can un-mark it.
+// everything the roster still names. A comment that comes back clears its own
+// mark through its per-look row event, but events minted under the older
+// hash-only key (an UNCHANGED comment that came back emitted none) still
+// replay, so the roster un-marks it regardless.
 
 import { sql, type SQL } from "drizzle-orm";
 
@@ -191,9 +193,12 @@ async function upsertPostCommentUnfenced(
       possibly_truncated = ${pick("possibly_truncated")},
       -- AN EDIT MOVES THIS; A RE-READ DOES NOT. The hash is over the comment's
       -- material, so identical bytes re-observed for the fortieth time leave
-      -- changed_at where it was and only last_observed_at advances.
+      -- changed_at where it was and only last_observed_at advances. The guard
+      -- is PARENTHESIZED: it is an OR, and bare it binds as "newer instant, OR
+      -- (same instant and higher seq and a new hash)" — with per-look row
+      -- events, every newer look would move changed_at.
       changed_at = case
-        when ${newerWins()} and excluded.content_hash <> post_comments.content_hash
+        when (${newerWins()}) and excluded.content_hash <> post_comments.content_hash
           then excluded.changed_at
         else post_comments.changed_at
       end,

@@ -158,10 +158,11 @@ export async function upsertCreatorVaultAlbum(
  * clear the mark on what it did.
  *
  * BOTH HALVES, and the CLEAR is the one that is easy to leave out. An album's
- * own upsert clears `missing_since` when the album's content changed — but a
- * row that disappears and comes back UNCHANGED emits no row event at all (its
- * content hash is the one it had before), so only the roster can un-mark it.
- * Without the clear, "gone" would be a tombstone rather than a state.
+ * own upsert clears `missing_since` on every newer look (row events are keyed
+ * per look since their `:v2:` dedup keys) — but under the older hash-only
+ * keys a row that disappeared and came back UNCHANGED emitted no row event at
+ * all, and events already in the ledger replay that way. The roster un-marks
+ * it regardless. Without the clear, "gone" would be a tombstone.
  *
  * `missing_since is null` on the mark is what makes it STICKY: the instant an
  * album FIRST went missing is the interesting one, and a second roster that

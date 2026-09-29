@@ -40,6 +40,7 @@ import {
   FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
   FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
   captureFanslyFollowerPayload,
+  captureFanslyMessagingGroupsPayload,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
   trimFanslyNotificationsPayload,
@@ -72,6 +73,38 @@ const VERBATIM = JSON.parse(readFileSync(
 function verbatimRaw(): Record<string, unknown> {
   return JSON.parse(JSON.stringify(VERBATIM.data.response)) as Record<string, unknown>;
 }
+
+describe("rejected conversation-list capture", () => {
+  it("keeps accepted capture bytes unchanged, including an explicit empty page", () => {
+    for (const raw of [{ data: [] }, verbatimRaw()]) {
+      expect(captureFanslyMessagingGroupsPayload(raw, true)).toEqual(trimFanslyMessagingGroupsPayload(raw));
+      expect(captureFanslyMessagingGroupsPayload(raw, undefined)).toEqual(trimFanslyMessagingGroupsPayload(raw));
+    }
+  });
+
+  it("never presents a refused body as a valid page, and keeps the allowlist and redaction", () => {
+    expect(captureFanslyMessagingGroupsPayload({}, false)).toMatchObject({ contractAccepted: false,
+      responseShape: { response: "object", data: "undefined", dataLength: null } });
+    const raw = verbatimRaw();
+    const groups = (raw.aggregationData as Record<string, unknown>).groups as Array<Record<string, unknown>>;
+    (groups[0]!.lastMessage as Record<string, unknown>).content = "private preview text";
+    // One row lost its id: the page is refused, and the evidence of the loss
+    // is a count, not the row.
+    (raw.data as Array<Record<string, unknown>>).push({ partnerUsername: "drifted_row" });
+    const captured = captureFanslyMessagingGroupsPayload(raw, false);
+    expect(captured).not.toHaveProperty("data");
+    expect(captured).toEqual({
+      contractAccepted: false,
+      responseShape: {
+        response: "object", data: "array", aggregationData: "object", total: "undefined",
+        groups: "array", accounts: "array", dataLength: 3, groupsLength: 2, accountsLength: 2,
+      },
+      captured: trimFanslyMessagingGroupsPayload(raw),
+    });
+    expect(JSON.stringify(captured)).not.toContain("private preview text");
+    expect(JSON.stringify(captured)).not.toContain("drifted_row");
+  });
+});
 
 const LIVE_CONVERSATION_ROW_FIELDS = [
   "account_id",
@@ -345,7 +378,9 @@ describe("the three journaling call sites", () => {
     const groups = [...conversationSource.matchAll(
       /responsePayload: capturedPayload,\s*\n\s*mapperVersion: (\w+),/g,
     )];
-    expect(conversationSource).toContain("const capturedPayload = trimFanslyMessagingGroupsPayload(page.raw)");
+    expect(conversationSource).toContain(
+      "const capturedPayload = captureFanslyMessagingGroupsPayload(page.raw, page.contractAccepted)",
+    );
     expect(groups).toHaveLength(1);
     expect(groups[0]![1]).toBe("FANSLY_GROUPS_CAPTURE_MAPPER_VERSION");
 

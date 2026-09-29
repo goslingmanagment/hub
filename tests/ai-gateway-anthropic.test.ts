@@ -197,14 +197,30 @@ describe("Anthropic AI gateway request builder", () => {
     },
   );
 
-  it("builds the reply-feature default (Sonnet 5, low) as an adaptive request with no sampling params", () => {
+  it("switches thinking off on Sonnet 5.5 with between_tools, never the rejected disable", () => {
+    expect(resolveAnthropicGatewayRequestTuning({
+      providerModelId: "claude-sonnet-5-5",
+      feature: "fan-summary",
+      temperature: 0.4,
+      reasoningEffort: "off",
+    })).toEqual({ maxTokens: 24000, thinking: { type: "between_tools" } });
+    expect(resolveAnthropicGatewayRequestTuning({
+      providerModelId: "claude-sonnet-5-5",
+      feature: "fan-summary",
+      temperature: 0.4,
+      reasoningEffort: "medium",
+      disableAdaptiveThinking: true,
+    })).toEqual({ maxTokens: 8192, thinking: { type: "between_tools" } });
+  });
+
+  it("builds the reply-feature default (Sonnet 5.5, low) as an adaptive request with no sampling params", () => {
     const request = buildAnthropicGatewayStreamRequest(body({
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-sonnet-5-5",
       feature: "fast-reply",
       reasoningEffort: "low",
     }));
 
-    expect(request.model).toBe("claude-sonnet-5");
+    expect(request.model).toBe("claude-sonnet-5-5");
     expect(request.max_tokens).toBe(8000);
     expect(request).toHaveProperty("thinking", { type: "adaptive", display: "summarized" });
     expect(request).toHaveProperty("output_config", { effort: "low" });

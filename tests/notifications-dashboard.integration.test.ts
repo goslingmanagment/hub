@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -16,6 +16,10 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 function sessionCookieFrom(response: { headers: Record<string, string | string[] | number | undefined> }) {
   const header = response.headers["set-cookie"];

@@ -59,6 +59,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 const FAN = "555000555";
@@ -303,6 +304,10 @@ describe("erasure vs capture: the reference race (#222)", () => {
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
+    let signalReached = () => {};
+    const reached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
     const writer = testDb.db.transaction(async (tx) => {
       await insertObservation(asDb(tx), {
         source: "pull",
@@ -316,14 +321,24 @@ describe("erasure vs capture: the reference race (#222)", () => {
         payloadRef: ref,
         omitInlinePayload: true,
       });
+      signalReached();
       await held;
     });
 
-    // Let the writer reach its lock, then start the sweep and let it block.
-    await sleep(300);
+    // Once the writer holds its liveness lock, start the sweep and observe it
+    // block on the object's `FOR UPDATE` instead of assuming it after a sleep.
+    // Racing the writer surfaces a failed insert instead of hanging on `reached`.
+    await Promise.race([reached, writer]);
     const sweeping = runCatalogSweep();
-    await sleep(500);
-    release();
+    try {
+      await waitForRowLockWait(
+        testDb.pool,
+        ["%capture_payload_objects%", "%for update%"],
+        { blocked: sweeping },
+      );
+    } finally {
+      release();
+    }
     await writer;
     const swept = await sweeping;
 

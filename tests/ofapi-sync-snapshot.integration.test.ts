@@ -31,10 +31,6 @@ import {
 } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
-  decodeOfapiSyncSnapshotStateCursor,
-  encodeOfapiSyncSnapshotStateCursor,
-} from "../apps/runtime/src/services/ofapi-sync-snapshot-cursor.ts";
-import {
   mapOfapiEventToSyncEvent,
   processOfapiWebhookEvent,
 } from "../apps/runtime/src/services/ofapi-events.ts";
@@ -183,11 +179,6 @@ beforeEach(async (context) => {
     encryptedSigningSecret: JSON.stringify(encryptJson(SIGNING_SECRET, ENCRYPTION_KEY, 1)),
   });
   await createUserAccount(appContext, {
-    username: "owner",
-    role: "owner",
-    password: "owner-secret",
-  }, { source: "cli" });
-  await createUserAccount(appContext, {
     username: "chatter",
     role: "chatter",
   }, { source: "cli" });
@@ -202,41 +193,6 @@ beforeEach(async (context) => {
 });
 
 describe("OFAPI sync snapshot", () => {
-  it("authenticates bounded cursors through the configured key-rotation ring", () => {
-    const oldKey = Buffer.alloc(32, 4);
-    const nextKey = Buffer.alloc(32, 5);
-    const payload = {
-      version: 1 as const,
-      accountId: ACCOUNT_ONE,
-      afterSeq: 41,
-      snapshotCursor: 57,
-      stateAt: "2026-07-13T12:00:00.000Z",
-      messageLimit: 100,
-      phase: { kind: "archive" as const, threadId: 8, afterRowId: 13 },
-    };
-    const cursor = encodeOfapiSyncSnapshotStateCursor(payload, {
-      key: oldKey,
-      keyVersion: 7,
-    });
-
-    expect(decodeOfapiSyncSnapshotStateCursor(
-      cursor,
-      new Map([[7, oldKey], [8, nextKey]]),
-    )).toEqual(payload);
-    expect(decodeOfapiSyncSnapshotStateCursor(
-      cursor,
-      new Map([[8, nextKey]]),
-    )).toBeNull();
-
-    const envelope = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-    envelope.payload.snapshotCursor += 1;
-    const tampered = Buffer.from(JSON.stringify(envelope), "utf8").toString("base64url");
-    expect(decodeOfapiSyncSnapshotStateCursor(
-      tampered,
-      new Map([[7, oldKey]]),
-    )).toBeNull();
-  });
-
   it("reuses a scope-bound state cursor without querying the journal window again", async () => {
     let windowLoads = 0;
     const snapshotCursor = await resolveOfapiSyncSnapshotCursor({

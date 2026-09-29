@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { PageSyncLeaseLostError } from "@agency_hub_core/db";
+import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
 import { describe, expect, it } from "vitest";
+
+import {
+  FanslyDailyAttemptBudgetExhaustedError,
+  isSubjectScopedFanslyFailure,
+} from "../apps/runtime/src/services/sync/fansly-lane.ts";
 
 const ROOT = join(__dirname, "..");
 const LANE_FILES = [
@@ -72,5 +79,63 @@ describe("Fansly lane scaffold ratchet", () => {
     expect(purchaseHistory).toContain("createFanslyLaneJournal");
     expect(purchaseHistory).not.toContain("upsertCheckpointProgress");
     expect(purchaseHistory).not.toContain("persistRawPayload");
+  });
+});
+
+describe("Fansly lane failure scope", () => {
+  const retryAfterAt = new Date("2026-09-20T00:10:00.000Z");
+
+  it("scopes only an answer ABOUT the subject to that subject", () => {
+    for (
+      const error of [
+        new FanslyApiError("gone", 404),
+        new FanslyApiError("gone", 410),
+        new FanslyApiError("bad request", 400),
+        // A 4xx carries no deadline the executor reads; re-raised it would park
+        // the whole stream as provider_bad_data.
+        new FanslyApiError("bad request", 400, undefined, undefined, retryAfterAt),
+        new FanslyApiError("Fansly request failed (500)", 500, 500, "error getting media offer"),
+        new FanslyApiError("Fansly request failed (502)", 502),
+        new FanslyApiError("Fansly response envelope was unsuccessful", 200),
+      ]
+    ) {
+      expect(isSubjectScopedFanslyFailure(error), `${error.message} ${error.status}`).toBe(true);
+    }
+  });
+
+  it("leaves the session, the provider's pace, the wire and the lease to the executor", () => {
+    const transport = new TypeError("fetch failed", {
+      cause: new Error("Socks5 proxy rejected connection - NotAllowed"),
+    });
+    const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    for (
+      const error of [
+        new FanslyApiError("unauthorized", 401),
+        new FanslyApiError("forbidden", 403),
+        new FanslyApiError("Fansly request failed (429)", 429),
+        new FanslyApiError("Fansly request failed (429)", 429, undefined, undefined, retryAfterAt),
+        new FanslyApiError("Fansly request failed (503)", 503, undefined, undefined, retryAfterAt),
+        new FanslyApiError("Fansly session verification returned an invalid account"),
+        transport,
+        timeout,
+        new Error("Socks5 Authentication failed"),
+        new FanslyProxyMissingError(),
+        new PageSyncLeaseLostError(),
+        new FanslyDailyAttemptBudgetExhaustedError(300),
+        "not even an error",
+      ]
+    ) {
+      expect(isSubjectScopedFanslyFailure(error), String(error)).toBe(false);
+    }
+  });
+
+  it("keeps the per-subject lanes on the shared predicate", () => {
+    for (const file of ["fansly-media-stats.ts", "fansly-post-replies.ts"]) {
+      const source = syncSource(file);
+      expect(source, `${file} must scope failures through the shared predicate`)
+        .toContain("isSubjectScopedFanslyFailure(error)");
+      expect(source, `${file} reintroduced an auth-only rethrow`)
+        .not.toContain("isAuthFailure");
+    }
   });
 });

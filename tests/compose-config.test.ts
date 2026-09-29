@@ -98,7 +98,12 @@ describe("compose config", () => {
     expect(dockerignore.split(/\r?\n/)).toContain("**/node_modules");
     expect(dockerignore.split(/\r?\n/)).toContain("packages/**/dist");
     expect(ciWorkflow).toContain(
-      "docker run --rm --entrypoint node agency_hub_core/runtime:ci scripts/smoke-playwright-runtime.mjs",
+      'docker run --rm --entrypoint node "$IMAGE" scripts/smoke-playwright-runtime.mjs',
+    );
+    // Self-hosted runners share one Docker daemon: the smoke tests run this
+    // run's own tag, never a fixed one another job could overwrite.
+    expect(ciWorkflow).toContain(
+      "IMAGE: agency_hub_core/runtime:ci-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(fullBuild).toContain("DOCKER_BUILDKIT=1 docker build");
     expect(sourceCopyIndex).toBeGreaterThan(installIndex);

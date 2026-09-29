@@ -254,6 +254,9 @@ export async function runMediaPlaneProjection(
             createdAtPlatform: isoDate(data.createdAtPlatform),
             deletedAtPlatform: isoDate(data.deletedAtPlatform),
             firstOrigin: asText(data.firstOrigin) ?? "dm_sidecar",
+            // Gates the per-media stats queue row: a fan's DM media is kept,
+            // never queued (the route cannot serve another account's offer).
+            ownerAccountRef: asText(data.ownerAccountRef),
             ...lineage,
           });
           if (result.applied) totals.media += 1;

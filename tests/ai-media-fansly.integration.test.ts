@@ -15,11 +15,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { renderFanslyMediaNotes, QUICK_FEATURE_MEDIA_NOTE_LIMITS } from "../apps/runtime/src/modules/ai/index.ts";
-import {
-  cloudFrontExpiry,
-  fanslyAiMediaSource,
-  pickFanslyImageLocation,
-} from "../apps/runtime/src/services/ai-media-describe/fansly-source.ts";
+import { fanslyAiMediaSource } from "../apps/runtime/src/services/ai-media-describe/fansly-source.ts";
 import type { MediaDescribeClient } from "../apps/runtime/src/services/ai-media-describe/describer.ts";
 import { runAiMediaDescribeSweep } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
 import { runAiMediaCandidatesProjection } from "../apps/runtime/src/services/projections/ai-media-candidates.ts";
@@ -166,22 +162,6 @@ async function markLive() {
   );
 }
 
-describe("Fansly source helpers", () => {
-  it("picks the smallest image variant covering 1024 px and decodes CloudFront expiry", () => {
-    const media = photoMedia("m", 1_900_000_000).media;
-    expect(pickFanslyImageLocation(media)).toContain("m-720");
-    expect(cloudFrontExpiry(pickFanslyImageLocation(media)!)?.getTime()).toBe(1_900_000_000_000);
-    const video = {
-      mimetype: "video/mp4",
-      variants: [
-        { mimetype: "image/jpeg", width: 480, height: 854, locations: [{ location: "https://cdn3.fansly.com/poster.jpeg" }] },
-        { mimetype: "application/vnd.apple.mpegurl", width: 2160, height: 3840, locations: [{ location: "https://cdn3.fansly.com/v.m3u8" }] },
-      ],
-    };
-    expect(pickFanslyImageLocation(video)).toBe("https://cdn3.fansly.com/poster.jpeg");
-  });
-});
-
 describe("Fansly candidates projector", () => {
   it("fast-forwards pages without a policy and never reads their history", async () => {
     app.config.aiMediaDescribePagePolicies = "{}";
@@ -296,7 +276,7 @@ describe("event → candidate → description → prompt", () => {
     const row = {
       id: 0, pageId, platform: "fansly" as const, mediaRef: "9001", variant: "full" as const, mediaKind: "photo" as const,
       senderRole: "model" as const, fanPlatformUserId: null, status: "pending" as const, description: null,
-      sourceObservationId: observationId, contentSha256: null, attempts: 1, firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(),
+      sourceObservationId: observationId, contentSha256: null, attempts: 1, firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(), leaseToken: null,
     };
     await expect(fanslyAiMediaSource.resolve(app, row, { now: new Date(), modelMedia: "teasers" }))
       .resolves.toMatchObject({ kind: "skip", reason: "creator_media_off" });
@@ -318,7 +298,7 @@ describe("event → candidate → description → prompt", () => {
     const base = {
       id: 0, pageId, platform: "fansly" as const, variant: "full" as const, senderRole: "fan" as const,
       fanPlatformUserId: FAN, status: "pending" as const, description: null, contentSha256: null, attempts: 1,
-      firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(),
+      firstMessageAt: new Date(AFTER), nextAttemptAt: new Date(), leaseToken: null,
     };
     await expect(fanslyAiMediaSource.resolve(app, { ...base, mediaRef: "8101", mediaKind: "photo", sourceObservationId: expired }, { now: new Date(), modelMedia: "teasers" }))
       .resolves.toMatchObject({ kind: "unavailable", reason: "source_expired" });

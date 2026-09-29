@@ -127,8 +127,14 @@ describe.each(["material", "reader"] as const)("bounded A0 %s cost read plane", 
     expect((await withReader(client => probe(client, 1))).sampledHeads[0]?.messageId).toBe("message-102");
   });
 
-  it.each([null, 0, -1, 101])("refuses an invalid sample limit %s", async limit => {
-    await expect(withReader(client => probe(client, limit))).rejects.toThrow(`invalid_${kind}_probe_sample_limit`);
+  // Argument checks: each value runs in its own rolled-back reader transaction,
+  // so the values share one fixture. Soft, labelled checks keep one failing
+  // value from hiding the others.
+  it("refuses an invalid sample limit", async () => {
+    for (const limit of [null, 0, -1, 101]) {
+      await expect.soft(withReader(client => probe(client, limit)), `limit ${limit}`)
+        .rejects.toThrow(`invalid_${kind}_probe_sample_limit`);
+    }
   });
 
   it("refuses unknown and non-Fansly pages and keeps an empty sample unmeasured", async () => {
@@ -140,23 +146,27 @@ describe.each(["material", "reader"] as const)("bounded A0 %s cost read plane", 
     await expect(withReader(client => probe(client))).rejects.toThrow("unknown_fansly_page");
   });
 
-  it.each([
-    "set transaction read write", "set transaction isolation level read committed",
-  ])("refuses an unsafe transaction: %s", async statement => {
-    await expect(withReader(async client => {
-      await client.query(statement);
-      return probe(client);
-    })).rejects.toThrow(`${kind}_probe_requires_repeatable_read_only`);
+  it("refuses an unsafe transaction", async () => {
+    for (const statement of [
+      "set transaction read write", "set transaction isolation level read committed",
+    ]) {
+      await expect.soft(withReader(async client => {
+        await client.query(statement);
+        return probe(client);
+      }), statement).rejects.toThrow(`${kind}_probe_requires_repeatable_read_only`);
+    }
   });
 
-  it.each([
-    "set local statement_timeout = '0'", "set local statement_timeout = '6s'",
-    "set local lock_timeout = '0'", "set local lock_timeout = '101ms'",
-  ])("refuses an unbounded caller: %s", async statement => {
-    await expect(withReader(async client => {
-      await client.query(statement);
-      return probe(client);
-    })).rejects.toThrow(`${kind}_probe_requires_bounded_timeouts`);
+  it("refuses an unbounded caller", async () => {
+    for (const statement of [
+      "set local statement_timeout = '0'", "set local statement_timeout = '6s'",
+      "set local lock_timeout = '0'", "set local lock_timeout = '101ms'",
+    ]) {
+      await expect.soft(withReader(async client => {
+        await client.query(statement);
+        return probe(client);
+      }), statement).rejects.toThrow(`${kind}_probe_requires_bounded_timeouts`);
+    }
   });
 
   it("quotes stored head IDs as data, even when they contain SQL syntax", async () => {

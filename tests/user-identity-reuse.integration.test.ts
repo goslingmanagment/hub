@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFanslyPage, createModel, findUserById, insertAiUsageEvents,
   listChatterUsageSummary, listUserUsageReport,
@@ -15,6 +15,10 @@ import {
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;

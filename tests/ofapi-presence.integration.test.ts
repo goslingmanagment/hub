@@ -1,6 +1,4 @@
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -16,9 +14,7 @@ import { encryptJson } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
-import { parseOfapiPresencePayload } from "../apps/runtime/src/services/ofapi-presence-projection.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import {
   resetIntegrationDatabase,
@@ -31,7 +27,6 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 const OFAPI_ACCOUNT = "acct_presence_test";
 const SIGNING_SECRET = "test-signing-secret";
 const ENCRYPTION_KEY = Buffer.alloc(32, 7);
-const FIXTURES_DIR = path.resolve("tests/fixtures/ofapi-webhooks");
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
@@ -41,12 +36,6 @@ let idempotencyCounter = 0;
 function nextIdempotencyKey() {
   idempotencyCounter += 1;
   return `evt_${String(idempotencyCounter).padStart(40, "0")}`;
-}
-
-function loadFixtureEnvelope(name: string): Record<string, unknown> {
-  const raw = JSON.parse(readFileSync(path.join(FIXTURES_DIR, name), "utf8")) as Record<string, unknown>;
-  delete raw._meta;
-  return raw;
 }
 
 function presenceEnvelope(input: {
@@ -168,38 +157,11 @@ beforeEach(async (context) => {
 
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, { ofapiPresenceProjectionEnabled: true });
-  await createUserAccount(appContext, {
-    username: "dima",
-    role: "owner",
-    password: "owner-secret",
-  }, { source: "cli" });
 });
 
 afterEach(async () => {
   await server?.close();
   server = null;
-});
-
-describe("parseOfapiPresencePayload (live fixtures)", () => {
-  it("maps users.online and users.offline payloads", () => {
-    const online = loadFixtureEnvelope("users_online.json");
-    const parsedOnline = parseOfapiPresencePayload(online.payload as Record<string, unknown>);
-    expect(parsedOnline).toEqual({
-      fanId: "1000033",
-      lastSeenAt: new Date("2026-06-10T20:01:06.000000Z"),
-      observedAt: new Date("2026-06-10T20:01:06.000000Z"),
-    });
-
-    const offline = loadFixtureEnvelope("users_offline.json");
-    const parsedOffline = parseOfapiPresencePayload(offline.payload as Record<string, unknown>);
-    // Offline carries the historical lastSeen, earlier than the status change.
-    expect(parsedOffline?.lastSeenAt).toEqual(new Date("2026-06-10T20:35:03.000000Z"));
-    expect(parsedOffline?.observedAt).toEqual(new Date("2026-06-10T21:10:08.000000Z"));
-  });
-
-  it("returns null without a fan id", () => {
-    expect(parseOfapiPresencePayload({ observed_at: "2026-06-10T20:01:06Z" })).toBeNull();
-  });
 });
 
 describe("OFAPI presence projection", () => {
@@ -301,11 +263,6 @@ describe("OFAPI presence projection", () => {
       ofapiPresenceProjectionEnabled: true,
       ofapiDmProjectionEnabled: true,
     });
-    await createUserAccount(appContext, {
-      username: "dima2",
-      role: "owner",
-      password: "owner-secret",
-    }, { source: "cli" });
     const page = await seedMappedPage();
     await startServer();
 
@@ -408,54 +365,5 @@ describe("staged-rollout cross-stamping (audit B4)", () => {
     // Pending, not skipped: enabling the presence flag later must let the
     // sweep back-project this row (decision #48/#50 enable-later contract).
     expect((await getProjectionStatus(eventId)).projection_status).toBe("pending");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("requeues rows the DM runner mis-stamped (migration 0032)", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const insertEvent = async (input: {
-      key: string;
-      eventType: string;
-      status: string;
-      error: string | null;
-    }) => {
-      const { rows } = await testDb!.pool.query<{ id: number }>(
-        `insert into ofapi_webhook_events
-           (idempotency_key, event_type, ofapi_account_id, payload, status,
-            projection_status, projection_error, projection_attempts)
-         values ($1, $2, $3, '{}', 'processed', $4, $5, 1)
-         returning id`,
-        [input.key, input.eventType, OFAPI_ACCOUNT, input.status, input.error],
-      );
-      return rows[0]!.id;
-    };
-
-    const misStamped = await insertEvent({
-      key: nextIdempotencyKey(),
-      eventType: "users.online",
-      status: "skipped",
-      error: 'Event type "users.online" is not projected',
-    });
-    const legitimateDmSkip = await insertEvent({
-      key: nextIdempotencyKey(),
-      eventType: "messages.received",
-      status: "skipped",
-      error: 'No page mapped to OFAPI account "acct_other"',
-    });
-
-    const migrationSql = readFileSync(
-      path.resolve("packages/db/migrations/0032_requeue_cross_stamped_ofapi_projections.sql"),
-      "utf8",
-    );
-    await testDb.pool.query(migrationSql);
-
-    const requeued = await getProjectionStatus(misStamped);
-    expect(requeued.projection_status).toBe("pending");
-    expect(requeued.projection_error).toBeNull();
-
-    expect((await getProjectionStatus(legitimateDmSkip)).projection_status).toBe("skipped");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

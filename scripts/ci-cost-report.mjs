@@ -1,4 +1,6 @@
 // Read-only: reports completed runs without creating another billed workflow.
+// Hosted minutes are the billed estimate; jobs on the owner's self-hosted pool
+// (runner label "self-hosted") are counted separately and cost nothing here.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +14,8 @@ export function summarizeRun(run, jobs) {
     return Math.ceil(Math.max(0, duration) / 60_000);
   };
   const used = completed.filter(job => job.conclusion !== "skipped");
+  const hosted = used.filter(job => !isSelfHosted(job));
+  const selfHosted = used.filter(isSelfHosted);
   const staticJob = completed.find(job => job.name === "Static checks");
   const integrationRan = used.some(job => job.name.startsWith("Integration "));
   let mode = run.name === "Nightly" ? "nightly" : "other";
@@ -20,12 +24,17 @@ export function summarizeRun(run, jobs) {
     // cancelled real run can contain the same raw name, so require skipped.
     if (run.conclusion === "skipped"
       && completed.some(job => job.name.includes("PR description edit (no gate)"))) mode = "metadata-only";
+    // Since the metadata-only mirror, only a description edit or a non-ci:full
+    // label skips the fingerprint job; the Quality Gate still runs.
+    else if (completed.some(job => job.name === "Gate fingerprint" && job.conclusion === "skipped")) mode = "metadata-only";
     else if (integrationRan) mode = "full";
     else if (staticJob?.conclusion === "skipped" && run.conclusion === "success"
       && completed.some(job => job.name === "Quality Gate" && job.conclusion === "success")) mode = "gate-reused";
     else if (staticJob?.conclusion === "success") {
-      mode = staticJob.steps?.some(step => step.name === "Typecheck" && step.conclusion === "skipped")
-        ? "gate-reused-image" : "integration-reused";
+      if (staticJob.steps?.some(step => step.name === "Typecheck" && step.conclusion === "skipped")) mode = "gate-reused-image";
+      // Economy mode: static ran, integration neither ran nor was proven.
+      else if (completed.some(job => job.name === "Quality Gate" && job.conclusion === "success")) mode = "integration-reused";
+      else mode = "static-only";
     } else mode = "no-completed-heavy-checks";
   }
   return {
@@ -33,10 +42,15 @@ export function summarizeRun(run, jobs) {
     // Caller supplies latest-attempt jobs for mode and each attempt separately
     // for accounting; reruns must not silently disappear from the total.
     attempt: run.run_attempt ?? 1,
-    runner_minutes: used.reduce((sum, job) => sum + minutes(job), 0),
-    cancelled_minutes: used.filter(job => job.conclusion === "cancelled").reduce((sum, job) => sum + minutes(job), 0),
-    by_job: used.map(job => ({ name: job.name, minutes: minutes(job), conclusion: job.conclusion })),
+    runner_minutes: hosted.reduce((sum, job) => sum + minutes(job), 0),
+    cancelled_minutes: hosted.filter(job => job.conclusion === "cancelled").reduce((sum, job) => sum + minutes(job), 0),
+    self_hosted_minutes: selfHosted.reduce((sum, job) => sum + minutes(job), 0),
+    by_job: used.map(job => ({ name: job.name, minutes: minutes(job), conclusion: job.conclusion, self_hosted: isSelfHosted(job) })),
   };
+}
+
+export function isSelfHosted(job) {
+  return Array.isArray(job.labels) && job.labels.includes("self-hosted");
 }
 
 export function summarizeAttempts(run, attemptJobs) {
@@ -56,6 +70,7 @@ export function summarizeAttempts(run, attemptJobs) {
   return { ...latest,
     runner_minutes: attempts.reduce((sum, item) => sum + item.runner_minutes, 0),
     cancelled_minutes: attempts.reduce((sum, item) => sum + item.cancelled_minutes, 0),
+    self_hosted_minutes: attempts.reduce((sum, item) => sum + item.self_hosted_minutes, 0),
     attempts,
   };
 }
@@ -106,13 +121,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     runs.push(summarizeAttempts(run, attemptJobs));
   }
   const report = { repo, since, sampled_runs: runs.length, matching_runs: total, truncated: total > runs.length,
-    runner_minutes: runs.reduce((sum, run) => sum + run.runner_minutes, 0), runs };
+    runner_minutes: runs.reduce((sum, run) => sum + run.runner_minutes, 0),
+    self_hosted_minutes: runs.reduce((sum, run) => sum + run.self_hosted_minutes, 0), runs };
   if (json) console.log(JSON.stringify(report, null, 2));
   else {
     console.log(`# CI runner usage: ${repo}\n\nSince ${since}; ${runs.length}/${total} completed runs${report.truncated ? " (TRUNCATED: increase --limit)" : ""}.`);
-    console.log("Estimate: each job rounded up to a minute; includes rerun attempts. Not a billing statement.\n");
-    console.log("| Run | Event | Mode | Result | Attempts | Runner minutes | Cancelled minutes |\n|---|---|---|---|---:|---:|---:|");
-    for (const run of runs) console.log(`| [${run.id}](${run.url}) | ${run.event} | ${run.mode} | ${run.conclusion} | ${run.attempt} | ${run.runner_minutes} | ${run.cancelled_minutes} |`);
-    console.log(`\nTotal in sample: ${report.runner_minutes} runner-minutes.\n`);
+    console.log("Estimate: each job rounded up to a minute; includes rerun attempts. Not a billing statement.");
+    console.log("Hosted minutes are billed; self-hosted (PC pool) minutes are not.\n");
+    console.log("| Run | Event | Mode | Result | Attempts | Hosted minutes | Cancelled hosted minutes | Self-hosted minutes |\n|---|---|---|---|---:|---:|---:|---:|");
+    for (const run of runs) console.log(`| [${run.id}](${run.url}) | ${run.event} | ${run.mode} | ${run.conclusion} | ${run.attempt} | ${run.runner_minutes} | ${run.cancelled_minutes} | ${run.self_hosted_minutes} |`);
+    console.log(`\nTotal in sample: ${report.runner_minutes} hosted runner-minutes; ${report.self_hosted_minutes} self-hosted.\n`);
   }
 }

@@ -11,6 +11,12 @@ export const TEMPLATE_DATABASE = "hub_template";
  * `postgres` database) to every worker. */
 export const TEST_DB_ADMIN_URL_KEY = "testDbAdminUrl";
 
+/** Password of the disposable `read_only` login role global setup creates.
+ * Roles are cluster-wide, so every test database (and every test file running
+ * at the same time) sees this one role: suites grant to it in their own
+ * database and log in with this password, and never create, alter or drop it. */
+export const READ_ONLY_ROLE_PASSWORD = "read-only-test";
+
 declare module "vitest" {
   interface ProvidedContext {
     /** Null when Docker was unavailable and no cluster could be started. */

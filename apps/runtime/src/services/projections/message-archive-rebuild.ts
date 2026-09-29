@@ -2,8 +2,8 @@
 // replacement for the lossy delete+replay rebuild. Staged machinery:
 //   R0 preflight  — per-account census + detached-partition census
 //   R1 build      — legacy-seed LIFT + event replay from seq 0 + backfill
-//                   re-run + purchase re-apply (H2), all into
-//                   message_archive_shadow, behind a HARD
+//                   re-run + purchase re-apply (H2) + Fansly WS deletion
+//                   marks (D-6), all into message_archive_shadow, behind a HARD
 //                   detached-partition gate
 //   R2 verify     — set-difference fidelity proof (shadow ⊇ old) + material
 //                   comparison; nonzero missing rows fails
@@ -31,6 +31,7 @@ import {
   listDomainEventPartitionCensus,
   listEventAccounts,
   listEventsSince,
+  markFanslyWsArchiveDeletions,
   openArchivePurchases,
   setProjectionWatermark,
   switchMessageArchiveShadowTables,
@@ -107,6 +108,8 @@ export interface ShadowBuildAccountResult {
   hotBatches: number;
   /** H2 (INC-001): shadow rows the post-backfill purchase pass opened. */
   purchasesOpened: number;
+  /** D-6: shadow rows the Fansly WS deletion pass marked deleted. */
+  wsDeletionsMarked: number;
   /** The replay's high seq — becomes the live watermark at switch. */
   highSeq: number;
   /** True when the page no longer resolves a platform: legacy seeds are
@@ -244,6 +247,15 @@ async function buildShadowForAccount(
       { accountId, includeHot: true },
       "message_archive_shadow",
     );
+    // D-6: Fansly WS deletions are marks from exact receipts, not message.*
+    // events, so the replay cannot re-derive them. Same facts, same writer as
+    // the live reconcile and archive:backfill-fansly-ws-deletions; after the
+    // backfills, because a mark lands only on a row that exists.
+    const wsDeletionsMarked = await markFanslyWsArchiveDeletions(
+      db,
+      { accountId },
+      "message_archive_shadow",
+    );
 
     const gateAtEnd = await listDetachedPartitionsHoldingAccount(db, accountId);
     if (gateAtEnd.length > 0) {
@@ -262,6 +274,7 @@ async function buildShadowForAccount(
       archiveBatches,
       hotBatches,
       purchasesOpened,
+      wsDeletionsMarked,
       highSeq: watermark,
       replaySkipped: !replayed,
     };

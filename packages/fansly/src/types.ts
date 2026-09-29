@@ -17,6 +17,8 @@ export interface FanslyRequestContext {
     provider: "fansly" | "onlyfans";
     scope: string;
   }>) => Promise<number>) | null;
+  /** Per-request timeout override (default 30 s); the fetch is aborted. */
+  requestTimeoutMs?: number | null;
 }
 
 export interface FanslyAccount {
@@ -309,7 +311,11 @@ export interface FanslyPaginatedResponse<T> {
 export interface FanslyMessagingGroupsPageResponse extends FanslyPaginatedResponse<FanslyMessagingGroup> {
   accounts: FanslyAccount[];
   groups: FanslyMessagingAggregatedGroup[];
-  raw: FanslyMessagingGroupsPage;
+  /** False means the successful envelope drifted from `{data: [...]}` or a
+   * row/group/account lost its id. Callers must capture raw before refusing
+   * the page. */
+  contractAccepted?: boolean;
+  raw: FanslyMessagingGroupsPage | unknown;
 }
 
 export interface FanslyMessagesPageResponse {
@@ -317,7 +323,10 @@ export interface FanslyMessagesPageResponse {
   groupId: string;
   before: string | null;
   done: boolean;
-  raw: FanslyMessagesPage;
+  /** False means the successful envelope drifted from `{messages: [...]}`.
+   * Callers must capture raw before refusing the page. */
+  contractAccepted?: boolean;
+  raw: FanslyMessagesPage | unknown;
 }
 
 /** Minimal stable fields observed on GET /timelinenew/{accountId}. Unknown

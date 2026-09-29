@@ -100,6 +100,7 @@ const DIRECT_WRITERS = [
   "apps/runtime/src/services/dm-corrections-lineage-intake.ts",
   "apps/runtime/src/services/ingest-observations.ts",
   "apps/runtime/src/services/observations-rejournal.ts",
+  "apps/runtime/src/services/observations-account-me-rejournal.ts",
   "apps/runtime/src/services/ofapi-smart-links.ts",
   "apps/runtime/src/services/ofapi-actions.ts",
   "apps/runtime/src/services/ofapi-command-executor.ts",

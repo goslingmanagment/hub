@@ -143,6 +143,7 @@ describe("Fansly fail-closed egress (W3.1)", () => {
       pageLabel: page.label,
       platform: "fansly",
       stream: "light",
+      providerRecoveredAt: new Date(),
     });
     expect(await getNotificationIncidentByKey(
       testDb.db,

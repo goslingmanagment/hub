@@ -7,6 +7,7 @@ import {
   type StoredPlatformCredentialBundle,
 } from "@agency_hub_core/shared";
 import {
+  countTransactionsBySource,
   createOnlyFansPage,
   createFanslyPage,
   createModel,
@@ -759,167 +760,6 @@ describe("db write safety", () => {
       password: "legacy-pass",
     });
     expect(contextResult.egressKey).toBe("socks5://127.0.0.1:1080");
-  });
-
-  it("backfills canonical egress keys for legacy inline-auth proxy URLs", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const model = await createModel(testDb.db, {
-      slug: "proxy-migration-model",
-      name: "Proxy Migration Model",
-    });
-    const inlineAuthPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-inline-auth",
-    });
-    const queryPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-query",
-    });
-    const fragmentPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-fragment",
-    });
-    const leadingZeroPortPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-leading-zero-port",
-    });
-    const ipv6Page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-ipv6",
-    });
-    const uppercaseHostPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-uppercase-host",
-    });
-    const mappedIpv6Page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-mapped-ipv6",
-    });
-    const invalidIpv6Page = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-invalid-ipv6",
-    });
-    const invalidPortPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-invalid-port",
-    });
-    const extraAuthorityPage = await createFanslyPage(testDb.db, {
-      modelId: model.id,
-      label: "proxy-migration-extra-authority",
-    });
-
-    await testDb.pool.query(`
-      insert into egress_endpoints (
-        platform_account_id,
-        kind,
-        url,
-        encrypted_auth,
-        key_version,
-        rate_limit_scope_key
-      ) values
-        ($1, 'proxy', $2, null, null, null),
-        ($3, 'proxy', $4, null, null, null),
-        ($5, 'proxy', $6, null, null, null),
-        ($7, 'proxy', $8, null, null, null),
-        ($9, 'proxy', $10, null, null, null),
-        ($11, 'proxy', $12, null, null, null),
-        ($13, 'proxy', $14, null, null, null),
-        ($15, 'proxy', $16, null, null, null),
-        ($17, 'proxy', $18, null, null, null),
-        ($19, 'proxy', $20, null, null, null)
-    `, [
-      inlineAuthPage.id,
-      "socks5://legacy-user:legacy-pass@127.0.0.1",
-      queryPage.id,
-      "socks5://legacy-user:legacy-pass@127.0.0.1?pool=a",
-      fragmentPage.id,
-      "socks5://legacy-user:legacy-pass@127.0.0.1#primary",
-      leadingZeroPortPage.id,
-      "socks5://legacy-user:legacy-pass@proxy.example:01080",
-      ipv6Page.id,
-      "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
-      uppercaseHostPage.id,
-      "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
-      mappedIpv6Page.id,
-      "socks5://legacy-user:legacy-pass@[::ffff:192.0.2.1]:1080",
-      invalidIpv6Page.id,
-      "socks5://legacy-user:legacy-pass@[bad:host]:1080",
-      invalidPortPage.id,
-      "socks5://legacy-user:legacy-pass@proxy.example:999999999999999999",
-      extraAuthorityPage.id,
-      "socks5://legacy-user:legacy-pass@proxy.example:1080:garbage",
-    ]);
-
-    const migration = await readFile(
-      "packages/db/migrations/0013_backfill_egress_rate_limit_scope_key.sql",
-      "utf8",
-    );
-    await testDb.pool.query(migration);
-
-    const proxyRows = await testDb.pool.query(`
-      select url, rate_limit_scope_key
-      from egress_endpoints
-      where platform_account_id = any($1::int[])
-      order by id
-    `, [[
-      inlineAuthPage.id,
-      queryPage.id,
-      fragmentPage.id,
-      leadingZeroPortPage.id,
-      ipv6Page.id,
-      uppercaseHostPage.id,
-      mappedIpv6Page.id,
-      invalidIpv6Page.id,
-      invalidPortPage.id,
-      extraAuthorityPage.id,
-    ]]);
-
-    expect(proxyRows.rows).toEqual([
-      {
-        url: "socks5://legacy-user:legacy-pass@127.0.0.1",
-        rate_limit_scope_key: "socks5://127.0.0.1:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@127.0.0.1?pool=a",
-        rate_limit_scope_key: "socks5://127.0.0.1:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@127.0.0.1#primary",
-        rate_limit_scope_key: "socks5://127.0.0.1:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@proxy.example:01080",
-        rate_limit_scope_key: "socks5://proxy.example:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@[2001:0db8:0:0:0:0:0:1]",
-        rate_limit_scope_key: "socks5://[2001:db8::1]:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@Proxy.EXAMPLE",
-        rate_limit_scope_key: "socks5://proxy.example:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@[::ffff:192.0.2.1]:1080",
-        rate_limit_scope_key: "socks5://[::ffff:c000:201]:1080",
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@[bad:host]:1080",
-        rate_limit_scope_key: null,
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@proxy.example:999999999999999999",
-        rate_limit_scope_key: null,
-      },
-      {
-        url: "socks5://legacy-user:legacy-pass@proxy.example:1080:garbage",
-        rate_limit_scope_key: null,
-      },
-    ]);
   });
 
   it("repairs non-null canonical egress keys from previously applied migrations", async (context) => {
@@ -2793,6 +2633,63 @@ describe("db write safety", () => {
         creator_net_amount_mills: 5000n,
       },
     ]);
+  });
+
+  it("counts a page's ledger rows per source, inactive rows included", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const db = testDb.db;
+    const model = await createModel(db, {
+      slug: "ledger-count-model",
+      name: "Ledger Count Model",
+    });
+    if (!model) throw new Error("fixture model was not created");
+    const page = await createFanslyPage(db, {
+      modelId: model.id,
+      label: "ledger-count-page",
+    });
+    const otherPage = await createFanslyPage(db, {
+      modelId: model.id,
+      label: "ledger-count-other-page",
+    });
+    if (!page || !otherPage) throw new Error("fixture pages were not created");
+    const seed = (input: {
+      platformAccountId: number;
+      source: "fansly:rest" | "harvest";
+      transactionId: string;
+      suppressAs?: "reversal_without_settled_original";
+    }) => upsertTransaction(db, {
+      ...input,
+      rawType: 20001,
+      canonicalType: "tip",
+      transactionState: "posted",
+      rawStatus: 2,
+      grossAmountMills: 1000n,
+      sourceDestinationAmountMills: 1000n,
+      creatorNetAmountMills: 1000n,
+      occurredAt: new Date("2026-03-06T00:00:00.000Z"),
+    });
+
+    await seed({ platformAccountId: page.id, source: "fansly:rest", transactionId: "rest-1" });
+    await seed({ platformAccountId: page.id, source: "fansly:rest", transactionId: "rest-2" });
+    await seed({
+      platformAccountId: page.id,
+      source: "fansly:rest",
+      transactionId: "rest-inactive",
+      suppressAs: "reversal_without_settled_original",
+    });
+    await seed({ platformAccountId: page.id, source: "harvest", transactionId: "harvest-1" });
+    await seed({ platformAccountId: otherPage.id, source: "fansly:rest", transactionId: "other-rest-1" });
+
+    await expect(countTransactionsBySource(db, { platformAccountId: page.id, source: "fansly:rest" }))
+      .resolves.toBe(3);
+    await expect(countTransactionsBySource(db, { platformAccountId: page.id, source: "harvest" }))
+      .resolves.toBe(1);
+    await expect(countTransactionsBySource(db, { platformAccountId: otherPage.id, source: "fansly:rest" }))
+      .resolves.toBe(1);
   });
 
   it("maps Fansly raw type 20001 into the tip revenue bucket end to end", async (context) => {

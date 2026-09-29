@@ -82,6 +82,11 @@ describe("Fansly image notes rendering", () => {
       "[10:03] Fan: [Video #5: A dog running on a beach.] and this",
     ].join("\n") + MEDIA_NOTES_GUIDE);
     expect(rendered.manifest).toMatchObject({ described: 3, notRecognized: 1, pending: 1 });
+    // Per file, newest first: what reached this prompt (ids and outcomes only).
+    expect(rendered.manifest.entries?.map((entry) => [entry.n, entry.note])).toEqual([
+      [5, "described"], [4, "described"], [3, "pending"], [2, "not_recognized"], [1, "described"],
+    ]);
+    expect(JSON.stringify(rendered.manifest.entries)).not.toContain("selfie");
   });
 
   it("never describes the body of a paid PPV, even with a stored description", () => {
@@ -138,9 +143,15 @@ describe("Fansly image notes rendering", () => {
     const items = Array.from({ length: 400 }, (_, index) => item({ n: index + 1, mediaId: String(9000 + index) }));
     const transcript = items.map((entry) => `[10:00] Fan: [Photo #${entry.n}] hello there`).join("\n");
     const descriptions = items.map((entry) => ({ mediaRef: entry.mediaId, variant: "full" as const, status: "described", description: "A photo." }));
-    const started = performance.now();
-    renderFanslyMediaNotes({ transcript, items, active: true, descriptions, limits: mediaNoteLimitsFor("coach-chat") });
-    expect(performance.now() - started).toBeLessThan(20);
+    // Best of 5: one sample on a shared CI machine measures scheduler noise as
+    // well as the renderer; the fastest run is the renderer's real cost.
+    let best = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < 5; run += 1) {
+      const started = performance.now();
+      renderFanslyMediaNotes({ transcript, items, active: true, descriptions, limits: mediaNoteLimitsFor("coach-chat") });
+      best = Math.min(best, performance.now() - started);
+    }
+    expect(best).toBeLessThan(20);
   });
 });
 

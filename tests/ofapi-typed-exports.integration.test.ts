@@ -18,6 +18,11 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 vi.mock("node:dns/promises", async importOriginal => ({ ...await importOriginal<typeof DnsPromises>(), lookup: vi.fn(async () => [{ address: "52.216.1.1", family: 4 }]) }));
 let testDb: StartedTestDatabase; let app: ReturnType<typeof createTestAppContext>; let pageId: number; let actorId: number;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;

@@ -36,6 +36,8 @@ import {
 } from "./fansly-earnings.ts";
 import {
   canonicalizeSyncPullObservation,
+  canParseSyncPullObservation,
+  diagnoseSyncPullObservationRejection,
   SYNC_PULL_CANONICALIZED_KINDS,
   SYNC_PULL_CANONICALIZER_VERSION,
 } from "./sync-pull.ts";
@@ -216,6 +218,8 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: SYNC_PULL_CANONICALIZER_VERSION,
     prioritizeUnparsed: true,
     canonicalize: canonicalizeSyncPullObservation,
+    canParse: canParseSyncPullObservation,
+    parseRejection: diagnoseSyncPullObservationRejection,
     mixed: true,
   },
   {

@@ -79,6 +79,10 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 async function seedPhase2Fixture(testDb: StartedTestDatabase) {
   const lanaModel = await createModel(testDb.db, {
     slug: "lana-model",
@@ -631,7 +635,7 @@ async function seedConversationApiFixture(input: {
   await finalizePageDmConversationMessageSync(input.testDb.db, {
     conversationId: conversation.id,
     messageCoverageStatus: "complete",
-    lastMessageSyncAt: new Date("2026-03-17T11:45:00.000Z"),
+    headReadAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
   await upsertFanPage(input.testDb.db, {
@@ -943,7 +947,7 @@ async function seedSyncMonitorScenario(
   await finalizePageDmConversationMessageSync(testDb.db, {
     conversationId: completedConversation.id,
     messageCoverageStatus: "complete",
-    lastMessageSyncAt: completedSyncAt,
+    headReadAt: completedSyncAt,
   });
 
   await upsertPageDmConversation(testDb.db, {

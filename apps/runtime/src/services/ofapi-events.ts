@@ -60,6 +60,7 @@ import { OFAPI_EPHEMERAL_EVENT_TYPES, finalizeOfapiWebhookRaw } from "./ofapi-we
 import { runCanonicalization } from "./canonicalize-driver.ts";
 import { OFAPI_WEBHOOK_CANONICALIZED_KINDS } from "./canonicalize/ofapi-webhook.ts";
 import { cleanupOfapiMediaLocators, recordOfapiWebhookMediaLocators } from "./ofapi-media-locators.ts";
+import { recordOnlyFansMediaCandidates } from "./ai-media-describe/onlyfans-candidates.ts";
 
 export { ofapiWebhookEnvelopeSchema, type OfapiWebhookEnvelope } from "./ofapi-payloads.ts";
 
@@ -348,6 +349,12 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
   // messages.deleted stops serving media known only through that message.
   // Fail-open: never blocks the settle.
   await recordOfapiWebhookMediaLocators(app, {
+    envelope: envelope.data, pageId: page.id, observedAt: row.receivedAt, eventId: row.id,
+  });
+  // AI media describer (OFF unless the page has a describer policy): fan
+  // media and PPV teasers become candidates while their free URL is fresh.
+  // Fail-open, DB only — the AI path never calls OFAPI.
+  await recordOnlyFansMediaCandidates(app, {
     envelope: envelope.data, pageId: page.id, observedAt: row.receivedAt, eventId: row.id,
   });
 

@@ -157,6 +157,8 @@ export function selectOfapiMediaVariantUrls(media: Record<string, unknown>) {
     thumb: fileUrl(files?.thumb) ?? fileUrl(files?.squarePreview) ?? fileUrl(files?.preview)
       ?? fileUrl(media.thumb) ?? fileUrl(media.squarePreview) ?? fileUrl(media.preview),
     full: fileUrl(files?.full) ?? fileUrl(media.full) ?? fileUrl(media.src),
+    // AI describer (0216): the mid-size rendition (photo) / poster (video).
+    preview: fileUrl(files?.preview) ?? fileUrl(media.preview),
   };
 }
 
@@ -185,6 +187,10 @@ export function ofapiMediaLocatorsFromItem(item: unknown, provenance: OfapiMedia
   const variants: Array<[OfapiMediaVariant, string | null]> = [["thumb", urls.thumb]];
   // Only photos have a servable full variant; the others are never minted.
   if (mediaType === "photo") variants.push(["full", urls.full]);
+  // AI describer (0216): photos and video/GIF posters, when served.
+  if ((mediaType === "photo" || mediaType === "video" || mediaType === "gif") && urls.preview !== null) {
+    variants.push(["preview", urls.preview]);
+  }
   const rows: OfapiMediaLocatorInput[] = [];
   for (const [variant, raw] of variants) {
     const parsed = raw === null ? null : parseOfapiMediaUrl(raw);

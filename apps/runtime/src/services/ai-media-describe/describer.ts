@@ -115,7 +115,7 @@ export interface MediaDescribeUsage {
 
 export type MediaDescribeOutcome =
   | { kind: "described"; description: string; usage: MediaDescribeUsage; stopReason: string | null }
-  | { kind: "refused"; reason: "provider_refusal" | "unavailable_sentinel" | "empty"; usage: MediaDescribeUsage; stopReason: string | null }
+  | { kind: "refused"; reason: "provider_refusal" | "unavailable_sentinel" | "declined_text" | "empty"; usage: MediaDescribeUsage; stopReason: string | null }
   /** 429/5xx or a connect failure: the provider did not process the request. */
   | { kind: "retryable"; errorCode: string; httpStatus: number | null }
   /** Timeout or a stream/connection drop after the request left: the
@@ -127,6 +127,7 @@ export type MediaDescribeOutcome =
   | { kind: "failed"; errorCode: string; httpStatus: number | null };
 
 const WHITESPACE = /\s+/g;
+const DECLINED_TEXT = /^(?:sorry\b|i\s*(?:can(?:no|'|’)?t|am\s+(?:not\s+able|unable)|'m\s+(?:not\s+able|unable)|won(?:'|’)t|will\s+not)\b)/i;
 
 /** Collapse whitespace and clamp to the stored bound on a word boundary. */
 export function normalizeMediaDescription(raw: string) {
@@ -179,6 +180,11 @@ export function classifyMediaDescribeResponse(
   // opens with it is the model declining, never a description.
   if (text.toUpperCase().startsWith(MEDIA_DESCRIBE_UNAVAILABLE_SENTINEL)) {
     return { kind: "refused", reason: "unavailable_sentinel", usage, stopReason };
+  }
+  // A refusal in words instead of the sentinel ("I can't describe this
+  // image…") is a refusal too, never a note for the prompt.
+  if (DECLINED_TEXT.test(text)) {
+    return { kind: "refused", reason: "declined_text", usage, stopReason };
   }
   return { kind: "described", description: normalizeMediaDescription(text), usage, stopReason };
 }

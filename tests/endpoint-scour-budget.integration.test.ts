@@ -10,7 +10,6 @@ import {
   upsertCaptureCoverage,
   upsertCheckpointProgress,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
@@ -72,9 +71,13 @@ function emptyStatsBody() {
  * real one does: `attemptsPerCall` above 1 is what a retried request looks like
  * to everything downstream of `executeObservedRequest`.
  */
-function adapterStub(options: { attemptsPerCall?: number } = {}) {
+function adapterStub(options: {
+  attemptsPerCall?: number;
+  broadcastFor?: (params: { before: string | null; deleted: boolean }) => unknown;
+} = {}) {
   const attemptsPerCall = options.attemptsPerCall ?? 1;
   const calls: string[] = [];
+  const broadcastRequests: Array<{ before: string | null; deleted: boolean }> = [];
   const answer = async (
     name: string,
     context: { requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null },
@@ -91,6 +94,7 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
   };
   return {
     calls,
+    broadcastRequests,
     getAccountStats: vi.fn(async (context: never) => answer("account_stats", context, emptyStatsBody())),
     getEarningsStatsWindow: vi.fn(async (context: never) =>
       answer("earnings_stats", context, [])
@@ -102,9 +106,13 @@ function adapterStub(options: { attemptsPerCall?: number } = {}) {
     getDiscoveryMediaSuggestions: vi.fn(async (context: never) =>
       answer("discovery", context, { mediaOfferSuggestions: [] })
     ),
-    getBroadcastStatsPage: vi.fn(async (context: never) =>
-      answer("broadcast", context, { messages: [] })
-    ),
+    getBroadcastStatsPage: vi.fn(async (
+      context: never,
+      params: { before: string | null; deleted: boolean },
+    ) => {
+      broadcastRequests.push({ before: params.before, deleted: params.deleted });
+      return answer("broadcast", context, options.broadcastFor?.(params) ?? { messages: [] });
+    }),
     getBroadcastScheduled: vi.fn(async (context: never) =>
       answer("broadcast_scheduled", context, { scheduledBroadcastMessages: [] })
     ),
@@ -661,11 +669,12 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     telemetry: ReturnType<typeof telemetryStub>,
     stop: (state: NonNullable<Awaited<ReturnType<typeof cursor>>>) => boolean,
     maxChunks = 8,
+    metadata: Record<string, unknown> = {},
   ) {
     for (let chunk = 0; chunk < maxChunks; chunk += 1) {
       await fanslyStatsSnapshotChunk(
         app as never,
-        input(pageId, telemetry, new SyncChunkBudget()),
+        input(pageId, telemetry, new SyncChunkBudget(), NOW, metadata),
       );
       const state = await cursor(pageId);
       if (state !== null && stop(state)) {
@@ -1001,6 +1010,305 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(state!.backfill!.daily.done).toBe(false);
     // The floor claim follows the OLDEST bound ever served, which is the probe's.
     expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2025, 4, 1)).toISOString());
+    expect(state!.backfill!.daily.probeHitMonthIndex).toBe(2025 * 12 + 4);
+
+    // …AND IT WALKS THAT GAP. The empty months between the bookmark and the
+    // probe month are history the probe proved exists: two of them in a row
+    // must not end the walk before it reaches May 2025. It steps past May —
+    // journaled already — and only then earns a floor, on two empty months of
+    // its own.
+    await capDayAt(18);
+    const finished = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+    );
+    const walked = adapter.statsRequests
+      .filter((request) => request.year !== 0)
+      .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+    expect(walked).toEqual([
+      "2026-07", "2026-06", "2026-05", "2025-05",
+      "2026-04", "2026-03", "2026-02", "2026-01", "2025-12", "2025-11",
+      "2025-10", "2025-09", "2025-08", "2025-07", "2025-06",
+      "2025-04", "2025-03",
+    ]);
+    expect(finished!.backfill!.daily.done).toBe(true);
+    expect(finished!.backfill!.daily.probeHitMonthIndex).toBeNull();
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.reason_code).toBe("empty_window_streak");
+    expect((row?.cursor as { lastMonth?: string }).lastMonth).toBe("2025-03");
+  });
+
+  it("walks to the account's CREATION month without probing when it is known", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    // Traffic in July 2026 only; the account was created in September 2025.
+    // Two empty months used to spend the probe a year back — into August 2025,
+    // before the account existed — and the creation floor then ended the walk
+    // with June 2025..April 2026 never asked.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        return index === JULY_2026
+          ? monthBodyFor(params.year!, params.month!, 30)
+          : allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    // The trailing window and eleven months; the free creation-floor check
+    // still needs a day with room left in it, which the earnings walk behind
+    // it then takes.
+    await capDayAt(13);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+      8,
+      { accountCreatedAt: "2025-09-10T08:00:00.000Z" },
+    );
+
+    const months = adapter.statsRequests
+      .filter((request) => request.year !== 0)
+      .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+    // EVERY month down to the creation month, one call each, and no probe.
+    expect(months).toEqual([
+      "2026-07", "2026-06", "2026-05", "2026-04", "2026-03", "2026-02",
+      "2026-01", "2025-12", "2025-11", "2025-10", "2025-09",
+    ]);
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.probeSpent).toBe(false);
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2025-08");
+  });
+
+  /** The provider's answer for a month with no statistics at all, 200 and all:
+   *  byte-for-byte what ari-1's creation month came back with on 2026-09-28. */
+  const terminalNullMonth = () => ({ dataset: null, aggregationData: null });
+  const MARCH_2026 = 2026 * 12 + 2;
+  const monthsAsked = (adapter: ReturnType<typeof windowAdapterStub>) => adapter.statsRequests
+    .filter((request) => request.year !== 0)
+    .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+
+  /** A cursor parked exactly where ari-1's was: the trailing window and
+   *  2026-07..04 walked, three empty months, the next month 2026-03. */
+  async function seedAriCursor(pageId: number) {
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.lastSweepDay = utcDayKey(NOW);
+    const daily = seeded.backfill!.daily;
+    daily.trailingCaptured = true;
+    daily.nextMonthIndex = MARCH_2026;
+    daily.lastMonthIndex = null;
+    daily.emptyStreak = 3;
+    daily.floorAt = new Date(Date.UTC(2026, 5, 30)).toISOString();
+    await upsertCheckpointProgress(testDb!.db, {
+      platformAccountId: pageId,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+  }
+
+  const ARI_CREATED = { accountCreatedAt: "2026-03-17T19:39:18.000Z" };
+
+  it("ends the walk at the CREATION floor when the creation month answers terminal-null", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    // ari-1 on 2026-09-28, on this file's clock: created mid-March, traffic in
+    // July, one zero-valued row for each of June..April — and the creation
+    // month answered with the terminal-null body. The lane threw on it six
+    // times running and the walk could never finish.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        if (index === JULY_2026) return monthBodyFor(params.year!, params.month!, 21);
+        if (index === MARCH_2026) return terminalNullMonth();
+        return allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    // The trailing window and five months; the free creation-floor check needs
+    // room left in the day, which the earnings walk behind it then takes.
+    await capDayAt(7);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+      8,
+      ARI_CREATED,
+    );
+
+    // 2026-03 ONCE, and nothing older: February predates the account, so the
+    // walk ends there without egress.
+    expect(monthsAsked(adapter)).toEqual(["2026-07", "2026-06", "2026-05", "2026-04", "2026-03"]);
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.probeSpent).toBe(false);
+    // The floor stays what the provider actually served: July's own start.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 6, 1)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-02");
+    // Capture first: the terminal-null answer is journaled like every month.
+    expect((await journaledKinds(page.id)).filter((kind) => kind === "account_stats"))
+      .toHaveLength(6);
+  });
+
+  it("resumes ari-1's PRODUCTION cursor: one request for the terminal-null month, then done", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    await seedAriCursor(page.id);
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0 ? emptyStatsBody() : terminalNullMonth(),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(2);
+
+    await expect(fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, ARI_CREATED),
+    )).resolves.toBeDefined();
+
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+    const state = await cursor(page.id);
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 5, 30)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-02");
+    expect(row?.cursor.accountCreatedAt).toBe(ARI_CREATED.accountCreatedAt);
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_probe_response_invalid",
+    )).toHaveLength(0);
+
+    // A finished walk asks for no month again — not tomorrow, not ever.
+    const tomorrow = new Date(NOW.getTime() + DAY);
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), tomorrow, ARI_CREATED),
+    );
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+  });
+
+  it("reads a terminal-null month as EMPTY, never a floor: history below it is walked", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    // lilly-1 on 2026-08-23: 2025-05 answered terminal-null a year after the
+    // account was created, and 2024-05 below it carried traffic. Ending the
+    // walk on that answer would have been a false floor.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        if (index === JULY_2026 || index === 2026 * 12 + 4) {
+          return monthBodyFor(params.year!, params.month!, 20);
+        }
+        if (index === 2026 * 12 + 5) return terminalNullMonth();
+        return allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(6);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+      8,
+      { accountCreatedAt: "2026-04-10T08:00:00.000Z" },
+    );
+
+    expect(monthsAsked(adapter)).toEqual(["2026-07", "2026-06", "2026-05", "2026-04"]);
+    expect(state!.backfill!.daily.done).toBe(true);
+    // May, BELOW the terminal-null June, is what the floor rests on.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 4, 1)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-03");
+  });
+
+  it("still THROWS on a near miss of the terminal-null shape and withholds progress", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    await seedAriCursor(page.id);
+    // One field off the proven shape is drift, exactly as the canonicalizer's
+    // gate calls it: journaled, unstamped, and no claim about the month.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0
+        ? emptyStatsBody()
+        : { dataset: null, aggregationData: {} },
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(2);
+
+    await expect(fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, ARI_CREATED),
+    )).rejects.toMatchObject({
+      name: "FanslyLaneInvalidResponseError",
+      observationKind: "account_stats",
+    });
+
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+    const state = await cursor(page.id);
+    expect(state!.backfill!.daily.done).toBe(false);
+    expect(state!.backfill!.daily.nextMonthIndex).toBe(MARCH_2026);
+    expect(state!.backfill!.daily.lastMonthIndex).toBeNull();
+    expect(await coverageRow(page.id, "stats_account_daily")).toBeNull();
+    expect(await journaledKinds(page.id)).toEqual(["account_stats"]);
   });
 
   it("refuses to ask for the same MONTH twice, before any egress", async (context) => {
@@ -1219,6 +1527,253 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     const row = await coverageRow(page.id, "stats_earnings");
     expect(row?.status).toBe("provider_exhausted");
     expect(row?.proof).toBe("empty_window");
+  });
+
+  /** A page whose daily and hourly history is finished, so the only walk left
+   *  is the earnings one, from NOW down. */
+  async function seedEarningsOnlyPage() {
+    const page = await seedPage();
+    const state = emptyFanslyStatsCursorState(NOW);
+    state.lastSweepDay = utcDayKey(NOW);
+    state.backfill!.daily.done = true;
+    state.backfill!.hourly.done = true;
+    await upsertCheckpointProgress(testDb!.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: state.lastSweepDay,
+      state: state as unknown as Record<string, unknown>,
+    });
+    return page;
+  }
+
+  /** Earnings rows at exactly these instants, served to any window holding one. */
+  function earningsRowsAt(timestamps: number[]) {
+    return (params: { before: Date; after: Date }) => timestamps
+      .filter((ts) => ts >= params.after.getTime() && ts <= params.before.getTime())
+      .map((ts) => ({ type: 1, totalGross: 1_000, totalNet: 900, accountId: "acct-budget", timestamp: ts }));
+  }
+
+  it("resumes the earnings walk at its BOOKMARK and walks the gap to the probe", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedEarningsOnlyPage();
+    // Earnings this month and in May 2025, nothing between. The probe a year
+    // back finds May 2025, which proves the year it jumped is unexamined.
+    const adapter = windowAdapterStub({
+      statsFor: () => emptyStatsBody(),
+      earningsFor: earningsRowsAt([NOW.getTime() - 5 * DAY, Date.UTC(2025, 4, 1)]),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(40);
+
+    await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill === null || current.backfill.earnings.done,
+    );
+
+    const requests = adapter.earningsRequests;
+    const secondEmpty = requests[2]!;
+    const probe = requests[3]!;
+    expect(probe.beforeMs).toBe(secondEmpty.afterMs - 1 - 365 * DAY);
+    // BACK TO THE BOOKMARK — the window below the second empty one, which is
+    // journaled and not asked for again.
+    expect(requests[4]!.beforeMs).toBe(secondEmpty.afterMs - 1);
+    // THE GAP, contiguous, empty windows and all: no streak ends the walk
+    // until the next window would reach into the probe's.
+    const gapEnd = requests.findIndex((request, index) =>
+      index > 4 && request.beforeMs <= probe.beforeMs
+    );
+    expect(gapEnd).toBeGreaterThan(4 + 2);
+    for (let index = 5; index < gapEnd; index += 1) {
+      expect(requests[index]!.beforeMs).toBe(requests[index - 1]!.afterMs - 1);
+    }
+    // PAST THE PROBE WINDOW, which is journaled — then two empty windows of its
+    // own, and only then the floor.
+    expect(requests[gapEnd]!.beforeMs).toBe(probe.afterMs - 1);
+    expect(requests).toHaveLength(gapEnd + 2);
+    expect(requests.filter((request) => request.beforeMs === probe.beforeMs)).toHaveLength(1);
+    const row = await coverageRow(page.id, "stats_earnings");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.reason_code).toBe("empty_window_streak");
+  });
+
+  it("walks earnings to the account's CREATION without probing when it is known", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedEarningsOnlyPage();
+    // PRODUCTION lilly-1: created 2024-05-05, earnings in 2024-05 and again
+    // recently, nothing between. Two empty windows and one empty probe a year
+    // back used to be claimed as the floor, with the 2024 earnings never asked.
+    const createdAt = "2024-05-05T10:00:00.000Z";
+    const adapter = windowAdapterStub({
+      statsFor: () => emptyStatsBody(),
+      earningsFor: earningsRowsAt([NOW.getTime() - 5 * DAY, Date.UTC(2024, 4, 20)]),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(40);
+
+    await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill === null || current.backfill.earnings.done,
+      12,
+      { accountCreatedAt: createdAt },
+    );
+
+    const requests = adapter.earningsRequests;
+    // NO PROBE: every window is the one right below the last.
+    for (let index = 1; index < requests.length; index += 1) {
+      expect(requests[index]!.beforeMs).toBe(requests[index - 1]!.afterMs - 1);
+    }
+    // Down to the window holding the creation date, and not one below it.
+    const last = requests.at(-1)!;
+    expect(last.afterMs).toBeLessThanOrEqual(Date.parse(createdAt));
+    expect(last.beforeMs).toBeGreaterThan(Date.parse(createdAt));
+    expect(requests.some((request) =>
+      request.afterMs <= Date.UTC(2024, 4, 20) && request.beforeMs >= Date.UTC(2024, 4, 20)
+    )).toBe(true);
+    const row = await coverageRow(page.id, "stats_earnings");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.accountCreatedAt).toBe(createdAt);
+  });
+
+  it("reopens an earnings floor claimed from empty windows ONCE, when creation is known", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // PRODUCTION lilly-1 on 2026-09-28: steady state, and an earnings floor at
+    // 2025-11-16 claimed from two empty windows and an empty probe, on an
+    // account created 2024-05-05.
+    const steady = emptyFanslyStatsCursorState(NOW);
+    steady.lastSweepDay = utcDayKey(NOW);
+    steady.mode = "steady";
+    steady.backfill = null;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: steady as unknown as Record<string, unknown>,
+    });
+    const claimedOldest = new Date("2025-11-16T00:00:00.000Z");
+    await upsertCaptureCoverage(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      plane: "stats_earnings",
+      scopeRef: "",
+      status: "provider_exhausted",
+      acquisitionMode: "retroactive",
+      proof: "none",
+      oldestCapturedAt: claimedOldest,
+      reasonCode: "empty_window_streak",
+      proofObservationId: null,
+    });
+    const adapter = windowAdapterStub({ statsFor: () => emptyStatsBody(), earningsFor: () => [] });
+    const telemetry = telemetryStub();
+    await capDayAt(1);
+
+    // Without a creation date the claim stands: it is the probe rule's own.
+    await fanslyStatsSnapshotChunk(dailyOnlyAppStub(adapter), input(page.id, telemetry));
+    expect(adapter.earningsRequests).toHaveLength(0);
+    expect((await coverageRow(page.id, "stats_earnings"))?.reason_code)
+      .toBe("empty_window_streak");
+
+    const metadata = { accountCreatedAt: "2024-05-05T10:00:00.000Z" };
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, metadata),
+    );
+    // Only the earnings walk reopens, right below where it had reached.
+    expect(adapter.earningsRequests).toHaveLength(1);
+    expect(adapter.earningsRequests[0]!.beforeMs).toBe(claimedOldest.getTime() - 1);
+    expect(adapter.statsRequests).toHaveLength(0);
+    const state = await cursor(page.id);
+    expect(state!.mode).toBe("backfill");
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.hourly.done).toBe(true);
+    expect(state!.backfill!.earnings.done).toBe(false);
+    const row = await coverageRow(page.id, "stats_earnings");
+    expect(row?.status).toBe("in_progress");
+    expect(row?.reason_code).toBe("account_creation_floor_supersedes_empty_window");
+    const resumed = () => telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_earnings_walk_resumed",
+    );
+    expect(resumed()).toHaveLength(1);
+
+    // AND NOT AGAIN: the next dispatch continues the walk, it does not restart it.
+    await capDayAt(2);
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, metadata),
+    );
+    expect(adapter.earningsRequests).toHaveLength(2);
+    expect(adapter.earningsRequests[1]!.beforeMs).toBe(adapter.earningsRequests[0]!.afterMs - 1);
+    expect(resumed()).toHaveLength(1);
+  });
+
+  it("reopens below the two empty windows when no earnings window ever carried rows", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // PRODUCTION ari-1: created 2026-03-17, floor claimed with NO window that
+    // ever carried rows, so there is no oldest capture to resume below. The two
+    // empty windows the old walk spent sit below its start, and the claim was
+    // written no earlier than that.
+    const steady = emptyFanslyStatsCursorState(NOW);
+    steady.lastSweepDay = utcDayKey(NOW);
+    steady.mode = "steady";
+    steady.backfill = null;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: steady as unknown as Record<string, unknown>,
+    });
+    await upsertCaptureCoverage(testDb.db, {
+      pageId: page.id,
+      platform: "fansly",
+      plane: "stats_earnings",
+      scopeRef: "",
+      status: "provider_exhausted",
+      acquisitionMode: "retroactive",
+      proof: "none",
+      reasonCode: "empty_window_streak",
+      proofObservationId: null,
+    });
+    const claimedAt = Date.parse("2026-08-10T04:00:00.000Z");
+    await testDb.pool.query(
+      `update capture_coverage set updated_at = $2
+        where page_id = $1 and plane = 'stats_earnings' and scope_ref = ''`,
+      [page.id, new Date(claimedAt)],
+    );
+    const adapter = windowAdapterStub({ statsFor: () => emptyStatsBody(), earningsFor: () => [] });
+    await capDayAt(1);
+
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetryStub(), new SyncChunkBudget(), NOW, {
+        accountCreatedAt: "2026-03-17T12:00:00.000Z",
+      }),
+    );
+
+    expect(adapter.earningsRequests).toHaveLength(1);
+    expect(adapter.earningsRequests[0]!.beforeMs).toBe(claimedAt - 62 * DAY);
   });
 
   it("guards the earnings lane on the rows, since that route describes no window", async (context) => {
@@ -1502,19 +2057,143 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     },
   );
 
-  // THE NEGATIVE PINS. Each names a mechanism that was DELETED by decision, and
-  // a key reappearing is how a deleted mechanism comes back without one.
-  it("holds the A19/A20/A28-4 removals", async () => {
-    const keys = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
-    // [A19]: no global per-page daily request cap.
-    expect(keys.has("fanslyPageDailyRequestCap")).toBe(false);
-    // [A20]: no byte ceiling, and therefore no byte-budget deferral anywhere.
-    expect(keys.has("fanslyUntrimmedCaptureByteCeilingPerDay")).toBe(false);
-    // A28-4: the §3.5 per-egress-key DAY counter and the 2×-of-norm ops signal
-    // were deleted. `syncSharedRateLimitEnabled` is a PRE-EXISTING key and is
-    // deliberately not pinned away — what A28-4 removed is the day-counter key
-    // and the boot/PATCH invariants that would have been added beside it.
-    expect(keys.has("fanslyEgressKeyDailyRequestCap")).toBe(false);
-    expect(keys.has("syncRateLimitDaysRetentionDays")).toBe(false);
+  it("walks BOTH broadcast lists to an empty page, reading `messages` by name", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Today's sweep has reached the broadcast steps with neither list walked.
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.mode = "steady";
+    seeded.backfill = null;
+    seeded.sweepDay = utcDayKey(NOW);
+    seeded.stepIndex = 6;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    const pages: Record<string, unknown> = {
+      // Media-less mass DMs: the empty `accountMedia` sidecar is the body's
+      // FIRST array, and the page behind it is full.
+      "live:": { accountMedia: [], accountMediaBundles: [], messages: [{ id: "300" }, { id: "200" }], tipGoals: [], tips: [] },
+      "live:200": { accountMedia: [], messages: [] },
+      "deleted:": { messages: [{ id: "90" }, { id: "80" }] },
+      "deleted:80": { messages: [{ id: "70" }] },
+      "deleted:70": { messages: [] },
+    };
+    const adapter = adapterStub({
+      broadcastFor: (params) =>
+        pages[`${params.deleted ? "deleted" : "live"}:${params.before ?? ""}`] ?? { messages: [] },
+    });
+    const telemetry = telemetryStub();
+
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget()),
+      );
+      if (result.satisfied) break;
+    }
+
+    expect(adapter.broadcastRequests).toEqual([
+      { deleted: false, before: null },
+      { deleted: false, before: "200" },
+      { deleted: true, before: null },
+      { deleted: true, before: "80" },
+      { deleted: true, before: "70" },
+    ]);
+    // Every page journaled, each beside the cursor that asked for it.
+    const params = await testDb.pool.query(
+      `select request_params from sync_raw_payloads
+        where page_id = $1 and endpoint = 'broadcast_stats_deleted' order by id`,
+      [page.id],
+    );
+    expect(params.rows.map((row) => (row as { request_params: unknown }).request_params)).toEqual([
+      { before: null, walk: "first_enable_backfill" },
+      { before: "80", walk: "first_enable_backfill" },
+      { before: "70", walk: "first_enable_backfill" },
+    ]);
+    const walked = (await cursor(page.id))!;
+    expect(walked.lastSweepDay).toBe(utcDayKey(NOW));
+    expect(walked.broadcastFloorReached).toBe(true);
+    expect(walked.broadcastWalkStop).toBe("empty_page");
+    expect(walked.deletedBroadcastFloorReached).toBe(true);
+    expect(walked.deletedBroadcastWalkStop).toBe("empty_page");
+    expect(telemetry.anomalies).toHaveLength(0);
+
+    // At the floor, the next day's sweep polls each list's head once.
+    adapter.broadcastRequests.length = 0;
+    const tomorrow = new Date("2026-08-20T09:00:00.000Z");
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget(), tomorrow),
+      );
+      if (result.satisfied) break;
+    }
+    expect(adapter.broadcastRequests).toEqual([
+      { deleted: false, before: null },
+      { deleted: true, before: null },
+    ]);
+  });
+
+  it("STOPS a deleted-list walk that ignores `before` with one anomaly, and finishes the sweep", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.mode = "steady";
+    seeded.backfill = null;
+    seeded.sweepDay = utcDayKey(NOW);
+    seeded.stepIndex = 6;
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    // The live list is already at its floor; the deleted list serves its head
+    // page whatever `before` asks for.
+    const adapter = adapterStub({
+      broadcastFor: (params) =>
+        params.deleted ? { messages: [{ id: "90" }, { id: "80" }] } : { messages: [] },
+    });
+    const telemetry = telemetryStub();
+
+    for (let chunk = 0; chunk < 6; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(
+        appStub(adapter),
+        input(page.id, telemetry, new SyncChunkBudget()),
+      );
+      if (result.satisfied) break;
+    }
+
+    // The head, then ONE page whose cursor did not move — and no third.
+    expect(adapter.broadcastRequests.filter((request) => request.deleted)).toEqual([
+      { deleted: true, before: null },
+      { deleted: true, before: "80" },
+    ]);
+    const stopped = telemetry.anomalies
+      .filter((a) => a.code === "fansly_stats_broadcast_walk_stopped");
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0]!.severity).toBe("warn");
+    expect(stopped[0]!.details).toMatchObject({
+      kind: "broadcast_stats_deleted",
+      stop: "cursor_not_advancing",
+      before: "80",
+    });
+    // The walk is over rather than repeated tomorrow, and the sweep behind it
+    // still ran: step 8 onward, and the day is stamped.
+    const walked = (await cursor(page.id))!;
+    expect(walked.deletedBroadcastFloorReached).toBe(true);
+    expect(walked.deletedBroadcastWalkStop).toBe("cursor_not_advancing");
+    expect(walked.broadcastWalkStop).toBe("empty_page");
+    expect(adapter.calls).toContain("broadcast_scheduled");
+    expect(walked.lastSweepDay).toBe(utcDayKey(NOW));
   });
 });

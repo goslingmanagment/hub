@@ -29,7 +29,7 @@ order by conname;
 Acceptance: the table and partial raw keyset index exist; both raw-payload FKs
 are nullable with `ON DELETE SET NULL`; and the note-lineage check requires a
 capture time whenever note text is present. A restricted/non-null FK would
-eventually block ordinary `sync_raw_payloads` retention cleanup.
+block the owner-initiated erasure of `sync_raw_payloads` rows.
 
 ## 2. Replay retained raw once
 

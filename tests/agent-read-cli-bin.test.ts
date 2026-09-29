@@ -25,6 +25,13 @@ const run = promisify(execFile);
  * So every case here asserts the same two things about the ACTUAL process:
  * stdout parses as exactly ONE JSON document, and the exit code is one of
  * {0, 3, 4}. Never a stack trace, never an empty stdout, never exit 1.
+ *
+ * Each spawn is a full node+tsx boot, so the process-level cases are the ones
+ * that reach a distinct branch of the bin: hub error (4), missing key (the
+ * `HubCredentialsError` branch, 4), clean answer (0) and --fail-on-partial (3).
+ * The usage document, unknown flags and a blocked answer without the flag
+ * return through the same single write and are asserted in-process in
+ * tests/agent-read-cli.test.ts.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -82,28 +89,12 @@ describe("hub bin: spawned from outside the repository", () => {
     expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
   }, SPAWN_TIMEOUT_MS);
 
-  it("prints one usage document and exits 4 with no command", async () => {
-    const result = await hub([], { HUB_AGENT_KEY: "agency_hub_agent_spawn-test" });
-    expect(result.code).toBe(4);
-    const document = soleDocument(result.stdout);
-    const error = document.error as { commands: Record<string, string> };
-    expect(Object.keys(error.commands)).toContain("capabilities");
-  }, SPAWN_TIMEOUT_MS);
-
   it("prints one document and exits 4 with no key configured", async () => {
     // HOME points at an empty temp dir, so there is no credentials file either.
     const result = await hub(["capabilities"]);
     expect(result.code).toBe(4);
     const document = soleDocument(result.stdout);
     expect(String((document.error as { message: string }).message)).toContain("HUB_AGENT_KEY");
-  }, SPAWN_TIMEOUT_MS);
-
-  it("prints one document and exits 4 on an unknown flag", async () => {
-    const result = await hub(["threads", "--not-a-flag"], {
-      HUB_AGENT_KEY: "agency_hub_agent_spawn-test",
-    });
-    expect(result.code).toBe(4);
-    expect(soleDocument(result.stdout).ok).toBe(false);
   }, SPAWN_TIMEOUT_MS);
 
   it("exits 0 on a clean answer and 3 on a blocked one, through the real bin", async () => {
@@ -163,12 +154,9 @@ describe("hub bin: spawned from outside the repository", () => {
       expect(cleanDocument.blockers).toEqual([]);
       expect(cleanDocument.exitCode).toBe(0);
 
-      // Same answer, now narrowed. WITHOUT the flag it is still a 0; with it, a 3.
+      // Same answer, now narrowed, with the flag: a 3. (Without the flag it
+      // is still a 0 — asserted in-process in tests/agent-read-cli.test.ts.)
       blockers = ["window_before_capture_floor"];
-      const tolerated = await hub(["threads"], env);
-      expect(tolerated.code).toBe(0);
-      expect(soleDocument(tolerated.stdout).blockers).toEqual(["window_before_capture_floor"]);
-
       const strict = await hub(["threads", "--fail-on-partial"], env);
       expect(strict.code).toBe(3);
       const strictDocument = soleDocument(strict.stdout);

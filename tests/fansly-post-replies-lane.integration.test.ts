@@ -15,12 +15,7 @@ import { millsFromInteger } from "@agency_hub_core/shared";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   fanslyPostRepliesChunk,
-  hasAccountSidecar,
-  nextRepliesCursor,
-  p99PostsLength,
   parseFanslyPostRepliesCursorState,
-  replyAuthorRefs,
-  replyRows,
 } from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
 import { REPLIES_FULL_PAGE_THRESHOLD } from "../apps/runtime/src/services/canonicalize/fansly-comments.ts";
 import {
@@ -599,19 +594,28 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     const page = await seedPage();
     await seedPost(page.id, ref(1), "2026-08-01T00:00:00.000Z");
     // The adapter's SYNTHETIC 204 marker. No GET anywhere in the capture ever
-    // returned 204, so this is the honest handling of a case never observed.
+    // returned 204, and production's "no replies" is a 200 with `posts: []`, so
+    // this is the handling of a case never observed.
     const adapter = adapterStub({ reply: () => ({ __empty: true, httpStatus: 204 }) });
     const telemetry = telemetryStub();
     const result = await drain(page.id, adapter, telemetry);
 
     expect(result?.satisfied).toBe(true);
-    expect(telemetry.anomalies).toEqual([]);
+    // The first live one has to be VISIBLE: the look still counts, but the
+    // parser will not mark any comment missing from it.
+    expect(telemetry.anomalies).toEqual([
+      expect.objectContaining({
+        code: "fansly_replies_empty_body",
+        severity: "warn",
+        details: { postRef: ref(1), before: null, httpStatus: 204 },
+      }),
+    ]);
     const rows = await walkRows(page.id);
     expect(rows[0]?.lastVisitedAt).not.toBeNull();
     expect(rows[0]?.knownCount).toBe(0);
     expect(rows[0]?.consecutiveFailures).toBe(0);
-    // The empty body is still JOURNALED — it is the evidence that this post has
-    // no comments, and the roster the projector marks `missing_since` from.
+    // The empty body is still JOURNALED — capture first; the roster it yields
+    // clears marks but never sets `missing_since`.
     expect(await requestParams(page.id, "post_replies")).toHaveLength(1);
   });
 
@@ -674,6 +678,47 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
       input(page.id, telemetryStub()),
     )).rejects.toMatchObject({ status: 401 });
   });
+
+  for (
+    const [label, failure] of [
+      ["a dead proxy", () => new TypeError("fetch failed", {
+        cause: new Error("Socks5 Authentication failed"),
+      })],
+      ["a 429 with Retry-After", () => new FanslyApiError(
+        "Fansly request failed (429)", 429, 429, undefined, new Date(NOW.getTime() + 600_000),
+      )],
+    ] as const
+  ) {
+    it(`leaves ${label} to the executor instead of pushing the post out`, async (context) => {
+      if (!testDb) {
+        context.skip();
+        return;
+      }
+      const page = await seedPage();
+      await seedPost(page.id, ref(1), "2026-08-01T00:00:00.000Z");
+      await seedPost(page.id, ref(2), "2026-07-01T00:00:00.000Z");
+      const before = await walkRows(page.id);
+      const thrown = failure();
+      const adapter = adapterStub({ fail: (route) => route === "post_replies" ? thrown : null });
+      const telemetry = telemetryStub();
+
+      // The SAME throwable reaches the executor, `retryAfterAt` and all.
+      await expect(fanslyPostRepliesChunk(appStub(adapter), input(page.id, telemetry)))
+        .rejects.toBe(thrown);
+      // The walk stopped at the wall instead of carrying on into the next post.
+      expect(adapter.calls.map((call) => call.params.postId)).toEqual([ref(1)]);
+      // No post was charged for the page's outage: no failure, no day's push.
+      const after = await walkRows(page.id);
+      for (const row of after) {
+        const seeded = before.find((entry) => entry.subjectRef === row.subjectRef);
+        expect(row.consecutiveFailures).toBe(0);
+        expect(row.lastVisitedAt).toBeNull();
+        expect(row.nextDueAt?.toISOString()).toBe(seeded?.nextDueAt?.toISOString());
+      }
+      expect(telemetry.anomalies.map((anomaly) => anomaly.code))
+        .not.toContain("fansly_replies_post_failed");
+    });
+  }
 
   it("lets a healthy post run while failed posts wait for their retry due time", async (
     context,
@@ -1085,47 +1130,5 @@ describe("[sync-critical] WP-F5 post_replies lane", () => {
     )).stats as Record<string, unknown>;
     expect(stats.paginationMode).toBe("before");
     expect(Number(stats.p99PostsLength)).toBe(REPLIES_FULL_PAGE_THRESHOLD);
-  });
-});
-
-describe("WP-F5 reply-page helpers", () => {
-  it("tells an unreadable body from an EMPTY one", () => {
-    // The distinction the whole archive rests on: `null` is "refuse", `[]` is
-    // "this post has no comments", and confusing them either loses comments or
-    // deletes them.
-    expect(replyRows({ posts: [] })).toEqual([]);
-    expect(replyRows({ __empty: true, httpStatus: 204 })).toEqual([]);
-    expect(replyRows({ data: [] })).toBeNull();
-    expect(replyRows(null)).toBeNull();
-    expect(replyRows("nope")).toBeNull();
-  });
-
-  it("takes the cursor from the LAST row's own id", () => {
-    expect(nextRepliesCursor([{ id: "a" }, { id: "b" }])).toBe("b");
-    expect(nextRepliesCursor([])).toBeNull();
-    expect(nextRepliesCursor([{ mediaOfferId: "x" }])).toBeNull();
-  });
-
-  it("de-duplicates author refs in order", () => {
-    expect(replyAuthorRefs([
-      { accountId: "a" },
-      { accountId: "b" },
-      { accountId: "a" },
-      {},
-    ])).toEqual(["a", "b"]);
-  });
-
-  it("knows whether the sidecar was populated", () => {
-    expect(hasAccountSidecar({ accounts: [{ id: "a" }] })).toBe(true);
-    // EMPTY in 2 of 5 live responses — the fact that makes the hydration
-    // fallback mandatory rather than an optimization.
-    expect(hasAccountSidecar({ accounts: [] })).toBe(false);
-    expect(hasAccountSidecar({})).toBe(false);
-  });
-
-  it("computes p99 by nearest rank, and null on no samples", () => {
-    expect(p99PostsLength([])).toBeNull();
-    expect(p99PostsLength([1])).toBe(1);
-    expect(p99PostsLength([1, 1, 1, 1, 9])).toBe(9);
   });
 });

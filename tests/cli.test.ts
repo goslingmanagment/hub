@@ -151,7 +151,7 @@ vi.mock("../apps/runtime/src/services/sync.ts", async () => {
   };
 });
 
-import { buildProgram } from "../apps/runtime/src/cli.ts";
+import { buildProgram, replayWindowMonths } from "../apps/runtime/src/cli.ts";
 import { SYNC_PLANNER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
 import { TARGETED_THREAD_BACKFILL_QUEUE } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import {
@@ -1495,5 +1495,26 @@ describe("CLI parsing", () => {
       expect(command?.helpInformation().replace(/\s+/g, " "))
         .toContain("Rejected together with --execute");
     });
+  });
+});
+
+// The window enumeration behind events:replay's up-front partition refusal. The
+// refusal itself, against a detached partition, is
+// replay-partition-guard.integration.test.ts.
+describe("§3.2c(ii) the events:replay CLI refuses up front", () => {
+  it("enumerates one instant per month in the --from/--to window", () => {
+    expect(replayWindowMonths(new Date("2026-02-10T00:00:00Z"), new Date("2026-04-02T00:00:00Z"))
+      .map((date) => date.toISOString()))
+      .toEqual([
+        "2026-02-01T00:00:00.000Z",
+        "2026-03-01T00:00:00.000Z",
+        "2026-04-01T00:00:00.000Z",
+      ]);
+    // An open-ended window anchors on the bound it has; a window with neither
+    // is left to the engine gate rather than guessed at.
+    expect(replayWindowMonths(new Date("2026-03-10T00:00:00Z"), null)).toHaveLength(1);
+    expect(replayWindowMonths(null, null)).toEqual([]);
+    expect(replayWindowMonths(new Date("2026-04-01T00:00:00Z"), new Date("2026-03-01T00:00:00Z")))
+      .toEqual([]);
   });
 });

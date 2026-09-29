@@ -14,8 +14,10 @@ import {
 // day and a short single-flight marker per file. It never stores or relays
 // file bytes.
 
-export type OfapiMediaVariant = "thumb" | "full";
-export type OfapiMediaLocatorSource = "webhook" | "gateway";
+/** `preview` (0216) is the AI describer's variant; the desktop resolves thumb/full. */
+export type OfapiMediaVariant = "thumb" | "full" | "preview";
+/** `resolve` (0216): a cdn.fansapi.com URL the desktop resolve handed out. */
+export type OfapiMediaLocatorSource = "webhook" | "gateway" | "resolve";
 export type OfapiMediaSigKind = "expires" | "policy" | "fansapi" | "unknown";
 
 export interface OfapiMediaLocatorInput {
@@ -171,6 +173,24 @@ export async function upsertOfapiMediaLocators(db: Database, input: readonly Ofa
           fan_platform_user_id = coalesce(excluded.fan_platform_user_id, ofapi_media_links.fan_platform_user_id),
           observed_at = greatest(excluded.observed_at, ofapi_media_links.observed_at),
           updated_at = now()
+      `);
+    }
+    // AI media describer: a file that was waiting for a free source becomes
+    // due the moment one is recorded (webhook Expires URL, OFAPI cache URL),
+    // instead of at its next retry. The source adapter still re-checks it.
+    // Only a URL with usable life left (the source adapter wants ≥120 s), and a
+    // fresh start of the retry budget: the waiting checks were not failures.
+    const usableUntil = Date.now() + 5 * 60_000;
+    const freeIds = [...new Set(rows
+      .filter((row) => row.url !== null && (row.sigKind === "expires" || row.sigKind === "fansapi")
+        && (row.expiresAt === null || row.expiresAt.getTime() > usableUntil))
+      .map((row) => `${row.ofapiAccountId}:${row.mediaId}`))];
+    if (freeIds.length > 0) {
+      await database.execute(sql`
+        update ai_media_descriptions d set status = 'pending', attempts = 0, next_attempt_at = now(), updated_at = now()
+        from pages p
+        where d.page_id = p.id and d.platform = 'onlyfans' and d.status = 'awaiting_source'
+          and (p.ofapi_account_id || ':' || d.media_ref) in (${sql.join(freeIds.map((id) => sql`${id}`), sql`, `)})
       `);
     }
     return result.rowCount ?? 0;

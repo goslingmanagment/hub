@@ -1,5 +1,5 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -18,6 +18,10 @@ import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 // Kernel Stage 22: all-roles sessions, device tokens, the append-only grant
 // log, and attribution — against a live server in BOTH read paths (legacy

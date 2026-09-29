@@ -4,8 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // GitHub resolves a required check against the NEWEST check suite for the head
-// SHA. A description-only edit starts a run on that same SHA, so the run must
-// report a check named exactly this or the PR loses its gate (Decision 377).
+// SHA. A metadata-only event (a description edit, or a label other than
+// ci:full) starts a run on that same SHA, so the run must report a check named
+// exactly this or the PR loses its gate (Decision 377).
 export const GATE_CHECK_NAME = "Quality Gate";
 
 // filter=all keeps older suites in the answer; the default (latest) can hide

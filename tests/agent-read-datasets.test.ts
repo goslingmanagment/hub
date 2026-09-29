@@ -13,6 +13,7 @@ import {
   isAgentCapability,
   type AgentDataset,
 } from "@agency_hub_core/contracts";
+import { agentSubscriptionState } from "@agency_hub_core/db";
 
 /**
  * The dataset registry is the ONLY bridge from a dataset name in a request path to
@@ -401,6 +402,28 @@ describe("agent capability matrix", () => {
     expect(isAgentCapability("READ:MESSAGES")).toBe(false);
     expect(isAgentCapability("")).toBe(false);
     expect(isAgentCapability("constructor")).toBe(false);
+  });
+});
+
+describe("agent subscription state", () => {
+  it("reads retirement from is_current, not from the last provider status", () => {
+    // `canonical_status` is the LAST status the provider sent; a sync that no
+    // longer sees the subscription retires the row with `is_current = false`
+    // and leaves the status alone. An `active` status on a retired row is an
+    // ended subscription. Other statuses keep their own reading: a retired
+    // `pending` row is not guessed into `expired`.
+    const cases: Array<[string | null, boolean, "active" | "expired" | "unknown"]> = [
+      ["active", true, "active"],
+      ["active", false, "expired"],
+      ["expired", true, "expired"],
+      ["ended", false, "expired"],
+      ["cancelled", false, "expired"],
+      ["pending", false, "unknown"],
+      [null, true, "unknown"],
+    ];
+    for (const [status, isCurrent, expected] of cases) {
+      expect(agentSubscriptionState(status, isCurrent), `${status}/${isCurrent}`).toBe(expected);
+    }
   });
 });
 

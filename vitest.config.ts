@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { defineConfig } from "vitest/config";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./tests/helpers/timeouts.ts";
+import { WeightedShardSequencer } from "./tests/helpers/weighted-shard-sequencer.ts";
 
 export default defineConfig({
   resolve: {
@@ -26,6 +27,9 @@ export default defineConfig({
     globalSetup: ["tests/helpers/global-setup.ts"],
     hookTimeout: INTEGRATION_TEST_TIMEOUT_MS,
     testTimeout: INTEGRATION_TEST_TIMEOUT_MS,
+    // --shard=k/N packs files by measured duration (tests/ci/shard-weights.json)
+    // instead of splitting by count; runs without --shard are unaffected.
+    sequence: { sequencer: WeightedShardSequencer },
     coverage: {
       reporter: ["text", "lcov"],
     },

@@ -31,7 +31,9 @@ const nativeRef = (value: unknown): string | null =>
 
 /** Address extraction from already durable B0 envelopes. No full message,
  * auth, arbitrary field, timestamp ordering or business write escapes here.
- * Delete remains mutation debt; a read of the current head cannot settle it. */
+ * Delete remains mutation debt, never a hint: a read of the current head
+ * cannot settle it. Its exact receipt later marks the stored copies deleted
+ * (runtime services/fansly-ws-deletions.ts). */
 export function extractFanslyWsHints(frame: string, enabled: ReadonlySet<FanslyWsHintType>) {
   const nodes: FanslyWsHintNode[] = [];
   if (Buffer.byteLength(frame) > FANSLY_WS_MAX_FRAME_BYTES) {

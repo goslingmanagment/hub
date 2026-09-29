@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark, listEventAccounts, listEventsSince, setProjectionWatermark,
-  lockFanslyWsGeneration, routeFanslyWsHintEvent, requestPageSync,
+  lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent, requestPageSync,
   tryAcquireDmArchiveWriterFenceLock, type Database,
 } from "@agency_hub_core/db";
 import { FANSLY_WS_HINT_TYPES, resolveFanslyWsHintPolicy } from "@agency_hub_core/shared";
@@ -81,7 +81,11 @@ export async function runFanslyWsHintProjection(
       const due = await app.db.execute(sql`select 1 from subject_refresh_state where page_id = ${accountId}
         and plane = 'fansly_ws_dm' and requested_revision > applied_revision and next_due_at <= now()
         and backfill_cursor->>'generation' = ${policy.generation} limit 1`);
-      if (due.rows.length) await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
+      // A wake exists to spend B1's budget; while it is spent the run would
+      // only defer a subject. Ordinary DM chunks still visit the queue.
+      if (due.rows.length && !await nextFanslyWsHintBudgetAt(app.db, {
+        pageId: accountId, maxAttempts24h: policy.maxAttempts24h, now: new Date(),
+      })) await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
     }
   }
   return totals;

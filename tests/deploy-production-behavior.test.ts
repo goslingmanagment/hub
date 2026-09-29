@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const deployPath = path.join(repoRoot, "scripts/deploy-production.sh");
@@ -91,6 +91,14 @@ SSH_ARGS=()
 describe("production deploy behavior without production access", () => {
   let fixtureRoot: string;
   let commandLog: string;
+  let infrastructureBaseline: string;
+
+  beforeAll(() => {
+    // The baseline input is the constant `resolvedConfig()` and the script is a
+    // pure hash of it: one node spawn serves every case. The script itself is
+    // exercised in "resolved Compose infrastructure fingerprint" below.
+    infrastructureBaseline = fingerprint(resolvedConfig());
+  });
 
   beforeEach(() => {
     fixtureRoot = mkdtempSync(path.join(tmpdir(), "hub deploy behavior "));
@@ -113,7 +121,7 @@ describe("production deploy behavior without production access", () => {
       REMOTE: "root@fixture.invalid", REMOTE_APP_DIR_ESCAPED: "/opt/agency-hub",
       REMOTE_COMPOSE: "docker compose --current", REMOTE_CANDIDATE_COMPOSE: "docker compose --candidate",
       REMOTE_RUNTIME_IMAGE_ENV: "RUNTIME_IMAGE=fixture", DEPLOY_RUN_ID: "fixture-123",
-      INFRASTRUCTURE_BASELINE: fingerprint(resolvedConfig()), POSTGRES_BASELINE: "",
+      INFRASTRUCTURE_BASELINE: infrastructureBaseline, POSTGRES_BASELINE: "",
       TEST_COMMAND_LOG: commandLog, TEST_STAGED_COMPOSE: path.join(fixtureRoot, "staged.yml"),
       TEST_IMAGE_METADATA: `linux/amd64|${revision}|${checksum}`,
       TEST_CURRENT_COMPOSE_JSON: "", TEST_COMPOSE_JSON: JSON.stringify(resolvedConfig()), TEST_CONFIG_HASH: `postgres ${configHash}`,

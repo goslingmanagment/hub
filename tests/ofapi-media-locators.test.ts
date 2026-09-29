@@ -103,8 +103,11 @@ describe("locator extraction", () => {
       media: [photoMedia(3000001, expiresSignedUrl, EXPIRES), videoMedia(3000002, expiresSignedUrl, EXPIRES), lockedMedia(3000003)],
     });
     const rows = ofapiMediaLocatorsFromWebhook(envelope, { pageId: 7, observedAt });
+    // `preview` (0216) is the AI describer's variant: minted for a photo and a
+    // video poster whenever the payload serves one; a locked item has none.
     expect(rows.map((row) => `${row.mediaId}:${row.variant}`)).toEqual([
-      "3000001:thumb", "3000001:full", "3000002:thumb", "3000003:thumb", "3000003:full",
+      "3000001:thumb", "3000001:full", "3000001:preview", "3000002:thumb", "3000002:preview",
+      "3000003:thumb", "3000003:full",
     ]);
     const photoThumb = rows[0]!;
     expect(photoThumb).toMatchObject({
@@ -127,7 +130,7 @@ describe("locator extraction", () => {
       pathname: `/${MEDIA_ACCOUNT}/chats/${MEDIA_FAN_ID}/media`,
       body: syntheticChatMediaPage([photoMedia(3000004, policySignedUrl, EXPIRES)]), observedAt,
     });
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows[0]).toMatchObject({ source: "gateway", sigKind: "policy", chatId: String(MEDIA_FAN_ID), messageId: "2000002", vaultMedia: false });
   });
 
@@ -139,7 +142,8 @@ describe("locator extraction", () => {
       observedAt,
     });
     expect(rows.map((row) => [row.mediaId, row.variant, row.vaultMedia, row.isReady])).toEqual([
-      ["3000005", "thumb", true, true], ["3000005", "full", true, true], ["3000006", "thumb", true, false],
+      ["3000005", "thumb", true, true], ["3000005", "full", true, true], ["3000005", "preview", true, true],
+      ["3000006", "thumb", true, false],
     ]);
   });
 
@@ -162,7 +166,7 @@ describe("locator extraction", () => {
       media: [photoMedia(30, expiresSignedUrl, EXPIRES), photoMedia(4, expiresSignedUrl, EXPIRES), videoMedia(200, expiresSignedUrl, EXPIRES)],
     }), { pageId: 7, observedAt });
     const keys = dedupeOfapiMediaLocators([...rows].reverse()).map((row) => `${row.mediaId}|${row.variant}`);
-    expect(keys).toEqual(["200|thumb", "30|full", "30|thumb", "4|full", "4|thumb"]);
+    expect(keys).toEqual(["200|preview", "200|thumb", "30|full", "30|preview", "30|thumb", "4|full", "4|preview", "4|thumb"]);
     expect(dedupeOfapiMediaLocators(rows).map((row) => `${row.mediaId}|${row.variant}`)).toEqual(keys);
   });
 

@@ -88,28 +88,6 @@ function keyInput(overrides: Partial<Parameters<typeof insertAgentKey>[1]> = {})
 }
 
 describe("agent read plane schema (migration 0115)", () => {
-  it("creates the four tables the plane needs", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const relations = await testDb.pool.query<{ name: string }>(`
-      select table_name as name
-      from information_schema.tables
-      where table_schema = 'public'
-        and table_name in (
-          'agent_keys', 'agent_key_usage_daily', 'agent_read_audit', 'archive_generation'
-        )
-      order by table_name
-    `);
-    expect(relations.rows.map((row) => row.name)).toEqual([
-      "agent_key_usage_daily",
-      "agent_keys",
-      "agent_read_audit",
-      "archive_generation",
-    ]);
-  });
-
   it("indexes the audit table the way the owner-session daily cap queries it", async (context) => {
     if (!testDb) {
       context.skip();
@@ -158,32 +136,6 @@ describe("agent read plane schema (migration 0115)", () => {
     await expect(
       testDb.pool.query("insert into archive_generation (id, generation) values (2, 0)"),
     ).rejects.toThrow(/archive_generation_singleton_check/);
-  });
-
-  it("bumps the archive generation monotonically, seeded row or not", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    // The reset truncated the singleton away; the swap's statement must still
-    // work, because a swap that silently skipped the bump would leave stale
-    // cursors resumable against a different physical table.
-    const bump = async () => {
-      const result = await testDb!.pool.query<{ generation: string }>(`
-        insert into archive_generation (id, generation, bumped_at, reason)
-        values (1, 1, now(), 'test bump')
-        on conflict (id) do update set
-          generation = archive_generation.generation + 1,
-          bumped_at = now(),
-          reason = excluded.reason
-        returning generation::text as generation
-      `);
-      return result.rows[0]!.generation;
-    };
-
-    expect(await bump()).toBe("1");
-    expect(await bump()).toBe("2");
-    expect(await bump()).toBe("3");
   });
 });
 

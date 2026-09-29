@@ -34,6 +34,7 @@ describe("C1 restricted followers run timeline", () => {
 
   it("exposes the real handler's decision, counts and locked queue receipt without private material", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
+    await db.pool.query("update page_sync_states set applied_seq = request_seq where page_id = $1", [fixture.page.id]);
     await fixture.runHandlerAndFinishTelemetry();
     const result = await read();
     expect(result.records).toEqual([expect.objectContaining({
@@ -42,10 +43,22 @@ describe("C1 restricted followers run timeline", () => {
       sections: expect.objectContaining({
         decision: expect.objectContaining({ countMismatch: true, requested: true, requestedSeq: 2 }),
         counts: { activeFollowerCount: 1, sourceFollowerCount: 2, pageCount: 1, processedThisChunk: 1 },
-        queueBefore: { requestedSeq: 1, appliedSeq: 0 },
+        queueBefore: { requestedSeq: 1, appliedSeq: 1 },
       }),
     })]);
     expect(JSON.stringify(result)).not.toMatch(/test-token|fan-1|authorization|lease_token/);
+  });
+
+  it("keeps a request coalesced into outstanding work identifiable but outside known receipts", async () => {
+    const fixture = await followersDiagnosticFixture(db, "count");
+    await fixture.runHandlerAndFinishTelemetry();
+    expect((await read()).records).toEqual([expect.objectContaining({
+      run_id: fixture.run.id, decision_valid: true, queue_valid: false,
+      sections: expect.objectContaining({
+        decision: expect.objectContaining({ requested: true, requestedSeq: 1 }),
+        queueBefore: { requestedSeq: 1, appliedSeq: 0 },
+      }),
+    })]);
   });
 
   it("keeps revisions, roster generations and uncertified completions distinct", async () => {
@@ -157,17 +170,22 @@ describe("C1 restricted followers run timeline", () => {
     expect((await read()).records[0]).toMatchObject({ decision_valid: true, queue_valid: false });
   });
 
-  it.each([
-    { name: "unbounded interval", args: [null, TO, 0, null, 1] },
-    { name: "reversed interval", args: [TO, FROM, 0, null, 1] },
-    { name: "interval longer than eight days", args: [FROM, TOO_LONG_END, 0, null, 1] },
-    { name: "negative cursor", args: [FROM, TO, -1, null, 1] },
-    { name: "cursor beyond the pinned cohort", args: [FROM, TO, 2, 1, 1] },
-    { name: "oversized page", args: [FROM, TO, 0, null, 501] },
-    { name: "empty page", args: [FROM, TO, 0, null, 0] },
-  ])("rejects $name", async ({ args }) => {
-    await expect(db.pool.query("select fansly_followers_diagnostic_timeline($1,$2,$3,$4,$5)",
-      args))
-      .rejects.toThrow(/required/);
+  // The function checks its arguments before it reads any table, so the cases
+  // need no data and share one reset. Soft, labelled checks keep one failing
+  // case from hiding the others.
+  it("rejects invalid windows, cursors and page sizes", async () => {
+    for (const { name, args } of [
+      { name: "unbounded interval", args: [null, TO, 0, null, 1] },
+      { name: "reversed interval", args: [TO, FROM, 0, null, 1] },
+      { name: "interval longer than eight days", args: [FROM, TOO_LONG_END, 0, null, 1] },
+      { name: "negative cursor", args: [FROM, TO, -1, null, 1] },
+      { name: "cursor beyond the pinned cohort", args: [FROM, TO, 2, 1, 1] },
+      { name: "oversized page", args: [FROM, TO, 0, null, 501] },
+      { name: "empty page", args: [FROM, TO, 0, null, 0] },
+    ]) {
+      await expect.soft(db.pool.query("select fansly_followers_diagnostic_timeline($1,$2,$3,$4,$5)",
+        args), name)
+        .rejects.toThrow(/required/);
+    }
   });
 });

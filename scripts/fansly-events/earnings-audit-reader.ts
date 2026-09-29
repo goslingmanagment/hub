@@ -17,8 +17,11 @@ export class EarningsAuditReader {
     resolve: (values: unknown[]) => void; reject: (error: Error) => void;
   } | null = null;
   private stderr = "";
+  /** How long close() waits after EOF and again after SIGTERM before escalating. */
+  private readonly escalationGraceMs: number;
 
-  constructor(sshHost: string) {
+  constructor(sshHost: string, options: { escalationGraceMs?: number } = {}) {
+    this.escalationGraceMs = options.escalationGraceMs ?? 1000;
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.@:-]{0,253}$/.test(sshHost)) {
       throw new Error("Invalid audit SSH host");
     }
@@ -112,13 +115,14 @@ export class EarningsAuditReader {
     if (!this.closed) {
       if (this.failure || this.pending) this.child.kill("SIGTERM");
       else this.child.stdin.end();
-      await Promise.race([this.finished, delay(1000)]);
+      await Promise.race([this.finished, delay(this.escalationGraceMs)]);
     }
     if (!this.closed) {
       this.child.kill("SIGTERM");
-      await Promise.race([this.finished, delay(1000)]);
+      await Promise.race([this.finished, delay(this.escalationGraceMs)]);
     }
     if (!this.closed) {
+      // SIGKILL cannot be ignored; this wait only covers the close event.
       this.child.kill("SIGKILL");
       await Promise.race([this.finished, delay(1000)]);
     }

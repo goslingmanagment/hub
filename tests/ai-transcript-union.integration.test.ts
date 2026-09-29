@@ -31,7 +31,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (testDb) {
-    await resetIntegrationDatabase(testDb.pool);
+    // Physical: the perf gate asserts index plans after ANALYZE.
+    await resetIntegrationDatabase(testDb.pool, { physical: true });
   }
 });
 

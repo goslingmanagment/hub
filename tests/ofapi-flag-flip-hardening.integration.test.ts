@@ -45,16 +45,13 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { hasSettled, waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 const ACCOUNT_ID = "acct_01000000000000000000000000000000";
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 async function seedMappedPage(label: string) {
   const model = await createModel(appContext.db, {
@@ -527,6 +524,10 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       const restGate = new Promise<void>((resolve) => {
         releaseRest = resolve;
       });
+      let restLocked = () => {};
+      const restLockAcquired = new Promise<void>((resolve) => {
+        restLocked = resolve;
+      });
 
       // Simulates the REST reconcile: lock the row, hold the transaction open
       // (a slow chats walk), then write the full-row snapshot it read.
@@ -538,6 +539,7 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
           forUpdate: true,
         });
         expect(snapshot?.lastMessageId).toBe("7001");
+        restLocked();
         await restGate;
         await upsertPageDmConversation(db, {
           ...dmConversationInput(page.id, "601", { messageId: "7001", createdAt: t1 }),
@@ -546,9 +548,9 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
         });
       });
 
-      // Give the REST transaction time to take its lock, then start the
-      // projection of a NEWER webhook message — it must block, not interleave.
-      await sleep(150);
+      // Once the REST transaction holds its row lock, start the projection of
+      // a NEWER webhook message — it must block, not interleave.
+      await Promise.race([restLockAcquired, restTransaction]);
       const projection = projectOfapiDmEvent(appContext, {
         id: 1,
         eventType: "messages.received",
@@ -569,11 +571,10 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
         receivedAt: t2,
       });
 
-      const racedBeforeCommit = await Promise.race([
-        projection.then(() => "projected" as const),
-        sleep(300).then(() => "blocked" as const),
-      ]);
-      expect(racedBeforeCommit).toBe("blocked");
+      // Observed, not assumed: the projection is parked on a lock while the
+      // REST transaction is still open, and it has not finished.
+      await waitForRowLockWait(testDb!.pool, ["%page_dm_threads%"], { blocked: projection });
+      expect(await hasSettled(projection)).toBe(false);
 
       releaseRest();
       await restTransaction;
@@ -677,6 +678,10 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       const sweepGate = new Promise<void>((resolve) => {
         releaseSweep = resolve;
       });
+      let sweepLocked = () => {};
+      const sweepLockAcquired = new Promise<void>((resolve) => {
+        sweepLocked = resolve;
+      });
 
       // Simulates the audience sweep: lock the row, hold the transaction open,
       // then write the authoritative dates and generation stamp.
@@ -687,6 +692,7 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
           platformSubscriptionId: "801",
           forUpdate: true,
         });
+        sweepLocked();
         await sweepGate;
         await upsertPageSubscription(db, {
           platformSubscriptionId: "801",
@@ -705,7 +711,7 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
         });
       });
 
-      await sleep(150);
+      await Promise.race([sweepLockAcquired, sweepTransaction]);
       const projection = runOfapiSubscriptionProjectionForSettledRow(appContext, {
         id: journalRow!.id,
         eventType: "subscriptions.renewed",
@@ -722,11 +728,8 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
         receivedAt: new Date("2026-06-13T10:00:01Z"),
       });
 
-      const racedBeforeCommit = await Promise.race([
-        projection.then(() => "projected" as const),
-        sleep(300).then(() => "blocked" as const),
-      ]);
-      expect(racedBeforeCommit).toBe("blocked");
+      await waitForRowLockWait(testDb!.pool, ["%page_subscriptions%"], { blocked: projection });
+      expect(await hasSettled(projection)).toBe(false);
 
       releaseSweep();
       await sweepTransaction;

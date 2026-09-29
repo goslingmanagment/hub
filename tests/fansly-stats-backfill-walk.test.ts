@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { canParseFanslyStatsObservation } from "../apps/runtime/src/services/canonicalize/fansly-stats.ts";
 import {
   describeStatsMonthAnswer,
   probeStatsMonth,
 } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import {
+  advanceBroadcastWalk,
   backfillContinuationAt,
+  broadcastMessageRows,
+  classifyStatsMonth,
+  classifyStatsWindow,
   emptyFanslyStatsCursorState,
   isEmptyStatsMonth,
   monthFromIndex,
@@ -17,6 +22,7 @@ import {
   parseFanslyStatsCursorState,
   rollUtcDay,
   servedEarningsWindow,
+  trustedAccountCreatedAt,
   utcDayKey,
   windowsAreContiguous,
   windowWasHonoured,
@@ -72,8 +78,22 @@ describe("stats backfill cursor state", () => {
     expect(parsed!.backfill!.daily.trailingCaptured).toBe(true);
     expect(parsed!.backfill!.daily.floorAt).toBe("2019-01-01T00:00:00.000Z");
     expect(parsed!.callsToday).toBe(7);
+    // A pre-probe-hit cursor parses as a walk with no gap to fill.
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBeNull();
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBeNull();
     expect(parsed!.stepIndex).toBe(4);
     expect(parsed!.sweepDay).toBe("2026-08-19");
+  });
+
+  it("round-trips the probe HIT, which keeps an empty gap from ending the walk", () => {
+    const state = emptyFanslyStatsCursorState(NOW);
+    state.backfill!.daily.probeHitMonthIndex = monthIndexOf(NOW) - 15;
+    state.backfill!.earnings.probeHitAfterMs = Date.UTC(2025, 3, 14);
+    state.backfill!.earnings.probeHitBeforeMs = Date.UTC(2025, 4, 15) - 1;
+    const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW);
+    expect(parsed!.backfill!.daily.probeHitMonthIndex).toBe(monthIndexOf(NOW) - 15);
+    expect(parsed!.backfill!.earnings.probeHitAfterMs).toBe(Date.UTC(2025, 3, 14));
+    expect(parsed!.backfill!.earnings.probeHitBeforeMs).toBe(Date.UTC(2025, 4, 15) - 1);
   });
 
   it("clamps a step index past the last step instead of wedging the lane", () => {
@@ -135,6 +155,104 @@ describe("stats backfill cursor state", () => {
   });
 });
 
+describe("the broadcast walks", () => {
+  const OPEN = { before: null, floorReached: false, pagesInSweep: 0 };
+
+  it("reads `messages` by NAME, not the first array in the body", () => {
+    // Media-less mass DMs: every sidecar empty, `accountMedia` ahead of the
+    // page. The first array is empty and the page is not.
+    const mediaLess = {
+      accountMedia: [],
+      accountMediaBundles: [],
+      messages: [{ id: "900" }, { id: "800" }],
+      tipGoals: [],
+      tips: [],
+    };
+    expect(broadcastMessageRows(mediaLess)).toHaveLength(2);
+    expect(advanceBroadcastWalk(OPEN, mediaLess)).toEqual({
+      walk: { before: "800", floorReached: false, pagesInSweep: 1 },
+      stepDone: false,
+      stop: null,
+    });
+    expect(advanceBroadcastWalk(OPEN, { tips: [], messages: [{ id: "20" }, { id: "19" }] })
+      .walk.before).toBe("19");
+    expect(advanceBroadcastWalk(OPEN, [{ id: "5" }, { id: "4" }]).walk.before).toBe("4");
+  });
+
+  it("reaches the floor on an EMPTY page, whatever the sidecars carry", () => {
+    expect(advanceBroadcastWalk(
+      { ...OPEN, before: "800" },
+      { accountMedia: [{ id: "m1" }], messages: [] },
+    )).toEqual({
+      walk: { before: null, floorReached: true, pagesInSweep: 0 },
+      stepDone: true,
+      stop: "empty_page",
+    });
+  });
+
+  it("ends a walk it cannot move rather than repeat it, and names why", () => {
+    // Fansly ignoring `before` serves the same page again.
+    const repeated = advanceBroadcastWalk(
+      { ...OPEN, before: "800" },
+      { messages: [{ id: "900" }, { id: "800" }] },
+    );
+    expect(repeated.stop).toBe("cursor_not_advancing");
+    expect(repeated.walk.floorReached).toBe(true);
+    expect(advanceBroadcastWalk(OPEN, { messages: [{}] }).stop).toBe("no_row_ids");
+    expect(advanceBroadcastWalk(OPEN, { foo: 1 }).stop).toBe("malformed_shape");
+  });
+
+  it("takes three pages a sweep and keeps its place for the next", () => {
+    const page = (id: string) => ({ messages: [{ id }] });
+    const first = advanceBroadcastWalk(OPEN, page("30"));
+    const second = advanceBroadcastWalk(first.walk, page("20"));
+    const third = advanceBroadcastWalk(second.walk, page("10"));
+    expect([first.stepDone, second.stepDone, third.stepDone]).toEqual([false, false, true]);
+    expect(third.walk).toEqual({ before: "10", floorReached: false, pagesInSweep: 0 });
+    expect(third.stop).toBeNull();
+  });
+
+  it("polls only the head once the floor is reached", () => {
+    const floor = { before: null, floorReached: true, pagesInSweep: 0 };
+    expect(advanceBroadcastWalk(floor, { messages: [{ id: "1" }] }))
+      .toEqual({ walk: floor, stepDone: true, stop: null });
+  });
+
+  it("starts the DELETED walk once from a cursor saved before it existed", () => {
+    const legacy = JSON.parse(JSON.stringify({
+      ...emptyFanslyStatsCursorState(NOW),
+      mode: "steady",
+      backfill: null,
+      broadcastFloorReached: true,
+    })) as Record<string, unknown>;
+    for (const key of [
+      "broadcastWalkStop",
+      "deletedBroadcastBefore",
+      "deletedBroadcastFloorReached",
+      "deletedBroadcastPagesInSweep",
+      "deletedBroadcastWalkStop",
+    ]) {
+      delete legacy[key];
+    }
+    const parsed = parseFanslyStatsCursorState(legacy, NOW)!;
+    expect(parsed.broadcastFloorReached).toBe(true);
+    expect(parsed.broadcastWalkStop).toBeNull();
+    expect(parsed.deletedBroadcastFloorReached).toBe(false);
+    expect(parsed.deletedBroadcastBefore).toBeNull();
+    expect(parsed.deletedBroadcastPagesInSweep).toBe(0);
+    expect(parsed.deletedBroadcastWalkStop).toBeNull();
+
+    const walking = {
+      ...parsed,
+      broadcastWalkStop: "empty_page" as const,
+      deletedBroadcastBefore: "77",
+      deletedBroadcastPagesInSweep: 2,
+    };
+    expect(parseFanslyStatsCursorState(JSON.parse(JSON.stringify(walking)), NOW))
+      .toEqual(walking);
+  });
+});
+
 describe("account creation floor", () => {
   const accountCreatedAt = new Date("2025-02-06T12:00:00.000Z");
 
@@ -146,6 +264,20 @@ describe("account creation floor", () => {
 
   it("does not invent a floor when account metadata is absent", () => {
     expect(monthPredatesAccountCreation(2020 * 12, null)).toBe(false);
+  });
+
+  it("believes only a plausible creation date, since a known one ends no walk early", () => {
+    // With a creation date the walks step all the way to it: an epoch or a
+    // future value would walk to 1970 or stop at once, so both are unknown.
+    expect(trustedAccountCreatedAt(accountCreatedAt, NOW)).toBe(accountCreatedAt);
+    expect(trustedAccountCreatedAt(null, NOW)).toBeNull();
+    expect(trustedAccountCreatedAt(new Date(0), NOW)).toBeNull();
+    // Older than the platform is bad metadata, not a floor: every month in
+    // between would be a guaranteed-empty request.
+    expect(trustedAccountCreatedAt(new Date("2018-12-31T23:59:59.999Z"), NOW)).toBeNull();
+    const oldestBelieved = new Date("2019-01-01T00:00:00.000Z");
+    expect(trustedAccountCreatedAt(oldestBelieved, NOW)).toBe(oldestBelieved);
+    expect(trustedAccountCreatedAt(new Date(NOW.getTime() + 1), NOW)).toBeNull();
   });
 });
 
@@ -429,6 +561,72 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     // must not be mistaken for evidence that the provider has no older data.
     expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
     expect(isEmptyStatsMonth(null)).toBe(false);
+    // A dataset whose datapoints drifted is not an empty month either.
+    expect(isEmptyStatsMonth({ dataset: {} })).toBe(false);
+  });
+
+  it("reads the EXACT terminal-null month as empty — the canonicalizer's shape, nothing wider", () => {
+    // Production 2026-09-28: ari-1's creation month 2026-03 answered exactly
+    // this, 200 and all, and the walk threw on it six times running.
+    const terminalNull = { dataset: null, aggregationData: null };
+    expect(classifyStatsMonth(terminalNull)).toBe("empty");
+    expect(isEmptyStatsMonth(terminalNull)).toBe(true);
+    expect(canParseFanslyStatsObservation({
+      kind: "account_stats",
+      payload: terminalNull,
+      accountId: 1,
+    })).toBe(true);
+    // ONE definition: every near miss the gate leaves unstamped, the walk still
+    // calls invalid — no body is an empty month here and unreadable there.
+    const nearMisses: unknown[] = [
+      { dataset: null },
+      { dataset: null, aggregationData: {} },
+      { dataset: null, aggregationData: null, futureField: null },
+      { dataset: [], aggregationData: null },
+      { aggregationData: null },
+      null,
+      [],
+    ];
+    for (const payload of nearMisses) {
+      expect(classifyStatsMonth(payload)).toBe("invalid");
+      expect(isEmptyStatsMonth(payload)).toBe(false);
+      expect(canParseFanslyStatsObservation({
+        kind: "account_stats",
+        payload,
+        accountId: 1,
+      })).toBe(false);
+    }
+    // Only the MONTH walk reads it: the trailing/steady windows and the
+    // per-media lane classify through `classifyStatsWindow`, where it stays
+    // invalid (never served there; per-media nulls are drift for the gate too).
+    expect(classifyStatsWindow(terminalNull)).toBe("invalid");
+    // The ordinary month readings are unchanged.
+    expect(classifyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBe("empty");
+    expect(classifyStatsMonth({ dataset: { datapoints: [{ timestamp: 1, views: 2 }] } }))
+      .toBe("nonempty");
+    expect(classifyStatsMonth({ dataset: { datapoints: [{ timestamp: 1, views: 0 }] } }))
+      .toBe("empty");
+    expect(classifyStatsMonth({ dataset: {} })).toBe("invalid");
+  });
+
+  it("reads a dataset without datapoint ARRAYS as invalid, never as an empty window", () => {
+    // Two "empty" windows are a floor claim. A missing or drifted `datapoints`
+    // used to read as empty — false completeness from a body nothing can parse.
+    expect(classifyStatsWindow({ dataset: {} })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: "x" } })).toBe("invalid");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: 3 } }))
+      .toBe("invalid");
+    expect(classifyStatsWindow({ dataset: null })).toBe("invalid");
+    // The served shapes: the per-media route carries no profileDatapoints.
+    expect(classifyStatsWindow({ dataset: { datapoints: [] } })).toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: null } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBe("empty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [{ timestamp: 1 }] } })).toBe("nonempty");
+    expect(classifyStatsWindow({ dataset: { datapoints: [], profileDatapoints: [{}] } }))
+      .toBe("nonempty");
   });
 });
 

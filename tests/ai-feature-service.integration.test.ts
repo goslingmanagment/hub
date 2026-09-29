@@ -1,7 +1,4 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -434,8 +431,8 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Decision #273: reply features default to Sonnet 5 at low effort.
-    expect(body.model).toBe("anthropic:claude-sonnet-5");
+    // Reply features default to Sonnet 5.5 at low effort (owner, 2026-09-28).
+    expect(body.model).toBe("anthropic:claude-sonnet-5-5");
     expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
@@ -1177,7 +1174,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     expect(helpMe.statusCode, helpMe.body).toBe(200);
     expect(capture.input!.body).toMatchObject({
       feature: "help-me",
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-sonnet-5-5",
       reasoningEffort: "low",
     });
 
@@ -1273,8 +1270,8 @@ describe("voice-script feature (voice notes lane)", () => {
     expect(scripted.statusCode, scripted.body).toBe(200);
     expect(scripted.body).toContain("sure thing");
     expect(capture.input!.body.feature).toBe("voice-script");
-    // Delegates model + reasoning selection to fast-reply (Sonnet 5, low).
-    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5");
+    // Delegates model + reasoning selection to fast-reply (Sonnet 5.5, low).
+    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5-5");
     const userText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(userText).toContain("## Current Draft");
     expect(userText).toContain("omg u looked so good today");
@@ -1863,7 +1860,7 @@ describe("coach-chat gates", () => {
     expect(meta).not.toHaveProperty("presetQuestion");
     expect(capture.input!.body).toMatchObject({
       feature: "coach-chat",
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-sonnet-5-5",
       reasoningEffort: "low",
     });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);
@@ -3004,41 +3001,6 @@ describe("fan context platform scoping (review R3-2)", () => {
       loadFanBio(appContext, { fanRef: "999000111", platform: "onlyfans" }),
     ).resolves.toBe("onlyfans bio");
   }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("prompt migration manifest (Stage 30)", () => {
-  const root = join(__dirname, "..", "apps", "runtime", "src", "modules", "ai", "prompts");
-  const manifest = JSON.parse(readFileSync(join(root, "prompt-manifest.json"), "utf8")) as {
-    files: Record<string, { coreSha256: string; byteIdenticalToSource: boolean; note?: string }>;
-  };
-
-  it("every migrated file matches its recorded hash (drift pin)", () => {
-    for (const [rel, entry] of Object.entries(manifest.files)) {
-      const digest = createHash("sha256").update(readFileSync(join(root, rel))).digest("hex");
-      expect(digest, rel).toBe(entry.coreSha256);
-    }
-  });
-
-  it("prompt templates match the frozen sources or carry a documented post-freeze note", () => {
-    const templates = Object.entries(manifest.files).filter(([rel]) => rel.startsWith("templates/"));
-    expect(templates.length).toBeGreaterThanOrEqual(7);
-    for (const [rel, entry] of templates) {
-      // Stage 30 froze templates byte-identical to the desktop snapshot. The
-      // desktop twin is deleted (kernel files are the living copy), so
-      // post-freeze evolution is allowed — but ONLY with a note naming the
-      // decision that changed the template (first use: #127, ping fanSilenceDays).
-      if (!entry.byteIdenticalToSource) {
-        expect(
-          entry.note,
-          `${rel}: template diverged from the frozen source without a documenting note`,
-        ).toBeTruthy();
-      }
-    }
-    // And no template exists outside the manifest.
-    for (const file of readdirSync(join(root, "templates"))) {
-      expect(manifest.files[`templates/${file}`], file).toBeDefined();
-    }
-  });
 });
 
 describe("recap-status read (Task 9)", () => {

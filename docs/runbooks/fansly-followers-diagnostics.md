@@ -22,6 +22,15 @@ It does not prove how many eventual reconcile generations absorbed those
 requests. Pair it with the completed-run timeline before claiming coalescing
 savings or choosing a cooldown.
 
+The incremental request now coalesces into outstanding work. When the prior
+request sequence already exceeds the applied sequence, the locked row is left
+untouched: an in-flight sweep keeps its cursor revision, restart bound and
+backoff. The note then carries `coalesced: true`, with `requestedSeq` equal to
+`queueBefore.requestedSeq`. The report and timeline predate this and count such
+receipts as unknown queue receipts (`queue_valid` false), so
+`requests_with_pending_work` stays zero for them. Identify them in the timeline
+by `requestedSeq` equal to `queueBefore.requestedSeq`.
+
 Initial state seeding is a different path: missing/old lastFollowerSyncAt or a
 headline/active mismatch can seed recovery. These notes cover the incremental
 trigger only. Seed/recovery, manual and scheduled reconcile costs must remain

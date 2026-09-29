@@ -197,8 +197,11 @@ describe("adapter hardening", () => {
     const { fetchMock } = harness;
     const { events, requestObserver } = captureEvents();
     // No wall clock in a unit test; the ladder itself is pinned in
-    // tests/http-client.test.ts.
-    const exponentialRetryDelayMs = vi.spyOn(httpClient, "exponentialRetryDelayMs")
+    // tests/http-client.test.ts. The HTTP-response retry takes its delay from
+    // `resolveRetryDelayMs`, which reaches `exponentialRetryDelayMs` through a
+    // module-local binding a namespace spy cannot intercept — so the spy goes
+    // on the function the adapter actually calls.
+    const resolveRetryDelayMs = vi.spyOn(httpClient, "resolveRetryDelayMs")
       .mockReturnValue(1);
 
     fetchMock.mockImplementation(async () => rateLimitedResponse());
@@ -218,7 +221,9 @@ describe("adapter hardening", () => {
       ["started", 2],
       ["failed", 2],
     ]);
-    exponentialRetryDelayMs.mockRestore();
+    // The spy is the one on the path: the retry waited its 1ms, not the ladder.
+    expect(events[1]).toMatchObject({ state: "retry", httpStatus: 429, retryDelayMs: 1 });
+    resolveRetryDelayMs.mockRestore();
   });
 
   it("takes its transport backoff from the shared exponential ladder", async () => {

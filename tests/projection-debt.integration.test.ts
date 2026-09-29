@@ -331,17 +331,21 @@ describe("projection debt (#135 A2b)", () => {
       storedMessageCount: number;
       newestStoredMessageId: string | null;
       oldestStoredMessageId: string | null;
+      lastMessageSyncAt: Date | null;
     }>(`
       select stored_message_count as "storedMessageCount",
              newest_stored_message_id as "newestStoredMessageId",
-             oldest_stored_message_id as "oldestStoredMessageId"
+             oldest_stored_message_id as "oldestStoredMessageId",
+             last_message_sync_at as "lastMessageSyncAt"
       from page_dm_threads
       where id = $1
     `, [conversationId]);
+    // A summary recount reads no head, so it does not stamp one as read.
     expect(thread.rows[0]).toEqual({
       storedMessageCount: 3,
       newestStoredMessageId: "m3",
       oldestStoredMessageId: "m1",
+      lastMessageSyncAt: null,
     });
 
     // An idle sweep after repair reports zero work (the quiet-log contract).

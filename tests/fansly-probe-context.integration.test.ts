@@ -13,6 +13,7 @@ import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page
 import { readProbeSnapshot } from "../scripts/fansly-ws/probe.ts";
 import { inspectFanslyBinding } from "../apps/runtime/src/services/egress/fansly-binding-preflight.ts";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { READ_ONLY_ROLE_PASSWORD } from "./helpers/db-context.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 
@@ -21,41 +22,21 @@ let app: Pick<AppContext, "db" | "config">;
 const realResolveEgress = resolver.resolveEgress;
 const resolveSpy = vi.spyOn(resolver, "resolveEgress");
 let readOnlyPool: ReturnType<typeof createPool>;
-let originalRole: { password: string | null; login: boolean } | undefined;
 
 beforeAll(async () => {
   testDb = await startTestDatabase();
-  // Roles are cluster-wide; preserve any earlier suite's disposable test role.
-  const role = await testDb.pool.query(
-    "select rolpassword as password, rolcanlogin as login from pg_authid where rolname = 'read_only'",
-  );
-  originalRole = role.rows[0];
-  await testDb.pool.query(originalRole
-    ? "alter role read_only login password 'fansly-probe-test'"
-    : "create role read_only login password 'fansly-probe-test'");
+  // The cluster-wide read_only login role comes from global setup; grants are
+  // per database, so these stay inside this suite's clone.
   await testDb.pool.query("grant usage on schema public to read_only");
   await testDb.pool.query("grant select on pages, page_credentials, egress_endpoints to read_only");
   const connection = new URL(testDb.connectionString);
   connection.username = "read_only";
-  connection.password = "fansly-probe-test";
+  connection.password = READ_ONLY_ROLE_PASSWORD;
   readOnlyPool = createPool(connection.toString());
 }, 120_000);
 afterAll(async () => {
   await readOnlyPool?.end();
-  if (testDb) {
-    if (originalRole) {
-      const restore = await testDb.pool.query(
-        "select format('alter role read_only %s password %L', $1::text, $2::text) as statement",
-        [originalRole.login ? "login" : "nologin", originalRole.password],
-      );
-      await testDb.pool.query(restore.rows[0].statement);
-    } else {
-      await testDb.pool.query("revoke select on pages, page_credentials, egress_endpoints from read_only");
-      await testDb.pool.query("revoke usage on schema public from read_only");
-      await testDb.pool.query("drop role if exists read_only");
-    }
-    await testDb.stop();
-  }
+  await testDb?.stop();
 });
 beforeEach(async () => {
   resolveSpy.mockReset().mockImplementation(realResolveEgress);

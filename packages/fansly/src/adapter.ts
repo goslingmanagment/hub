@@ -74,6 +74,9 @@ type RequestResult<T> = {
 };
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** How much of Fansly's `error.details` an error message carries. The whole
+ *  body stays in `responseSnippet`. */
+const ERROR_DETAILS_MAX_CHARS = 200;
 const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
 /**
@@ -112,8 +115,9 @@ export const POST_BATCH_SIZE = 100;
  * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
  *
  * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
- * are OPTIONS preflights), so this is the honest handling of a case we have
- * never seen rather than a contract we have observed. It is scoped to that ONE
+ * are OPTIONS preflights), and production's "no replies" is a 200 with an empty
+ * `posts[]` — so this is the handling of a case we have never seen rather than
+ * a contract we have observed. It is scoped to that ONE
  * method deliberately: everywhere else an envelope-less body is a failure, and
  * a global softening would let a truncated response read as "no data" on every
  * lane at once.
@@ -276,6 +280,20 @@ function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
     (value.error === undefined || value.error === null || isApiError(value.error));
 }
 
+/**
+ * Fansly's own APPLICATION error, well-formed: `success: false` with a numeric
+ * `error.code` and a non-empty `error.details`, e.g.
+ * `{"success":false,"error":{"code":500,"details":"error getting graph"}}`.
+ * A proxy or gateway page, an empty body or a bare `{success:false}` is not one.
+ */
+function isFanslyErrorEnvelope(envelope: ApiEnvelope<unknown> | null): boolean {
+  return envelope !== null &&
+    envelope.success === false &&
+    typeof envelope.error?.code === "number" &&
+    typeof envelope.error.details === "string" &&
+    envelope.error.details.trim().length > 0;
+}
+
 function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | null {
   if (
     !isRecord(value) ||
@@ -332,6 +350,40 @@ function parseFanslyFollowersPage(value: unknown): FanslyFollowersPage | null {
     return null;
   }
   return value as unknown as FanslyFollowersPage;
+}
+
+function hasNullableIdentityRecords(value: unknown) {
+  return value === undefined || value === null ||
+    (Array.isArray(value) && value.every((item) => isRecord(item) &&
+      typeof item.id === "string" && item.id.length > 0));
+}
+
+/** The container and identity contract of `/messaging/groups`, mirroring
+ * parseFanslyFollowersPage: a row, group or account without its id cannot be
+ * applied, and the capture trim would silently drop it. Scalar fields (flags,
+ * counters, head ids, `total`) stay with the lane's own guards. */
+function parseFanslyMessagingGroupsPage(value: unknown): FanslyMessagingGroupsPage | null {
+  if (!isRecord(value) || !Array.isArray(value.data) ||
+    !value.data.every((item) => isRecord(item) &&
+      typeof item.groupId === "string" && item.groupId.length > 0)) {
+    return null;
+  }
+  if (value.aggregationData !== undefined && value.aggregationData !== null &&
+    (!isRecord(value.aggregationData) ||
+      !hasNullableIdentityRecords(value.aggregationData.groups) ||
+      !hasNullableIdentityRecords(value.aggregationData.accounts))) {
+    return null;
+  }
+  return value as unknown as FanslyMessagingGroupsPage;
+}
+
+/** Container contract only. Per-message drift (a missing id or createdAt) is
+ * the lane's to account for after capture; rejecting the page for one bad
+ * message would wedge the conversation sweep's limit-1 head repair. */
+function parseFanslyMessagesPage(value: unknown): FanslyMessagesPage | null {
+  return isRecord(value) && Array.isArray(value.messages)
+    ? value as unknown as FanslyMessagesPage
+    : null;
 }
 
 export class FanslyAdapter {
@@ -517,6 +569,9 @@ export class FanslyAdapter {
         afterDate: params.afterDate.toISOString(),
         periodMs: params.periodMs,
       },
+      // A 500 with Fansly's error envelope is this route's answer for a gone
+      // item or a refused span, and a retry has never changed it.
+      finalServerErrorEnvelope: true,
       summarizeResponse: summarizeUnknownResponse,
     });
 
@@ -1187,7 +1242,7 @@ export class FanslyAdapter {
       listIds?: string | null;
     },
   ): Promise<FanslyMessagingGroupsPageResponse> {
-    const response = await this.request<FanslyMessagingGroupsPage>(context, "/messaging/groups", {
+    const response = await this.request<unknown>(context, "/messaging/groups", {
       operation: "messaging_groups",
       endpointTemplate: "/messaging/groups",
       query: {
@@ -1213,23 +1268,31 @@ export class FanslyAdapter {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
       },
-      summarizeResponse: (parsed) => ({
-        total: parsed.aggregationData?.total ?? null,
-        returnedItems: parsed.data.length,
-        accountCount: parsed.aggregationData?.accounts?.length ?? 0,
-        groupCount: parsed.aggregationData?.groups?.length ?? 0,
-        done: parsed.data.length < (params.limit ?? 100),
-      }),
+      summarizeResponse: (value) => {
+        const parsed = parseFanslyMessagingGroupsPage(value);
+        return {
+          total: parsed?.aggregationData?.total ?? null,
+          returnedItems: parsed?.data.length ?? null,
+          accountCount: parsed ? parsed.aggregationData?.accounts?.length ?? 0 : null,
+          groupCount: parsed ? parsed.aggregationData?.groups?.length ?? 0 : null,
+          done: parsed ? parsed.data.length < (params.limit ?? 100) : null,
+          contractAccepted: parsed !== null,
+        };
+      },
     });
 
+    // A drifted body comes back as a refusable page with its raw bytes, never
+    // as a TypeError before the caller could journal it.
     const limit = params.limit ?? 100;
+    const parsed = parseFanslyMessagingGroupsPage(response.parsed);
     return {
-      total: response.parsed.aggregationData?.total,
-      items: response.parsed.data,
+      total: parsed?.aggregationData?.total,
+      items: parsed?.data ?? [],
       offset: params.offset ?? 0,
-      done: response.parsed.data.length < limit,
-      accounts: response.parsed.aggregationData?.accounts ?? [],
-      groups: response.parsed.aggregationData?.groups ?? [],
+      done: parsed ? parsed.data.length < limit : false,
+      accounts: parsed?.aggregationData?.accounts ?? [],
+      groups: parsed?.aggregationData?.groups ?? [],
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -1262,7 +1325,7 @@ export class FanslyAdapter {
       before?: string | null;
     },
   ): Promise<FanslyMessagesPageResponse> {
-    const response = await this.request<FanslyMessagesPage>(context, "/message", {
+    const response = await this.request<unknown>(context, "/message", {
       operation: "messages",
       endpointTemplate: "/message",
       query: {
@@ -1280,19 +1343,25 @@ export class FanslyAdapter {
         cursorPresent: Boolean(params.before),
         limit: params.limit ?? 25,
       },
-      summarizeResponse: (parsed) => ({
-        groupId: params.groupId,
-        returnedItems: parsed.messages.length,
-        done: parsed.messages.length < (params.limit ?? 25),
-      }),
+      summarizeResponse: (value) => {
+        const parsed = parseFanslyMessagesPage(value);
+        return {
+          groupId: params.groupId,
+          returnedItems: parsed?.messages.length ?? null,
+          done: parsed ? parsed.messages.length < (params.limit ?? 25) : null,
+          contractAccepted: parsed !== null,
+        };
+      },
     });
 
     const limit = params.limit ?? 25;
+    const parsed = parseFanslyMessagesPage(response.parsed);
     return {
-      items: response.parsed.messages,
+      items: parsed?.messages ?? [],
       groupId: params.groupId,
       before: params.before ?? null,
-      done: response.parsed.messages.length < limit,
+      done: parsed ? parsed.messages.length < limit : false,
+      contractAccepted: parsed !== null,
       raw: response.raw,
     };
   }
@@ -1470,12 +1539,12 @@ export class FanslyAdapter {
    *
    * ── `emptyStatuses: [204]`, on THIS METHOD ONLY ───────────────────────────
    *
-   * "No replies" has never been observed live in any form: NO GET anywhere in
-   * the HAR returned 204 (all 197 are OPTIONS preflights). 200 with an empty
-   * `posts[]`, a 204, and an empty body are therefore all handled as the same
-   * honest answer, and none of the three is live-proven. The 204 branch returns
-   * `{__empty: true, httpStatus}` rather than throwing, so the walk can journal
-   * "this post has no comments" instead of recording a lane failure.
+   * NO GET anywhere in the HAR returned 204 (all 197 are OPTIONS preflights),
+   * and production has since answered "no replies" only as a 200 with an empty
+   * `posts[]` — never a 204, never an empty body. The 204 / empty-body branch
+   * returns `{__empty: true, httpStatus}` rather than throwing, so the walk
+   * journals the response instead of recording a lane failure; the parser then
+   * treats the marker as clear-only, never as proof that a comment is gone.
    */
   async getPostRepliesPage(
     context: FanslyRequestContext,
@@ -2030,6 +2099,17 @@ export class FanslyAdapter {
        * answer from an absent one and the journal records which.
        */
       emptyStatuses?: readonly number[];
+      /**
+       * An HTTP 5xx that carries a well-formed Fansly error envelope
+       * (`isFanslyErrorEnvelope`) is FINAL on this route: the application's
+       * own answer about this request, not the wire's, so it fails on the
+       * first attempt. Opt-in per method, because only `/it/moie/statsnew` is
+       * measured: none of its thousands of such retries in a week recovered
+       * (`error getting graph`, `error getting media offer`). A `Retry-After`,
+       * a body that is not such an envelope, a 429 and a transport failure keep
+       * the retries every route has.
+       */
+      finalServerErrorEnvelope?: boolean;
       summarizeResponse?: (parsed: T) => Record<string, unknown>;
     },
   ): Promise<RequestResult<T>> {
@@ -2060,7 +2140,7 @@ export class FanslyAdapter {
         const response = await fetch(url, {
           method: "GET",
           headers: buildFanslyRequestHeaders(context.session, pathname),
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.timeout(context.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
           dispatcher: this.getDispatcher(context.proxy),
         });
         const text = await response.text();
@@ -2100,6 +2180,17 @@ export class FanslyAdapter {
         // Redact BEFORE slicing: a cut through a credential URL leaves a
         // fragment the redactor no longer recognises as one (decision #248).
         const responseSnippet = redactSensitiveText(text).slice(0, 400);
+        // Fansly puts the reason in `error.details`, not `message`. Redacted
+        // before it is sliced, like the snippet.
+        const envelopeDetails = envelope?.error?.details === undefined
+          || envelope.error.details.trim().length === 0
+          ? undefined
+          : redactSensitiveText(envelope.error.details.trim()).slice(0, ERROR_DETAILS_MAX_CHARS);
+        /** The provider's message when it sent one; otherwise ours, with the
+         *  provider's details after it. */
+        const failureMessage = (fallback: string) =>
+          envelopeMessage
+            ?? (envelopeDetails === undefined ? fallback : `${fallback}: ${envelopeDetails}`);
         const retryAfterHeader = response.headers.get("retry-after");
         const observedAt = Date.now();
         // Unclamped on purpose: the provider's deadline is a fact, and a
@@ -2124,10 +2215,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "http",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly authorization failed (${response.status})`),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? `Fansly authorization failed (${response.status})`,
+              failureMessage(`Fansly authorization failed (${response.status})`),
               response.status,
               envelope?.error?.code,
               responseSnippet,
@@ -2153,10 +2244,19 @@ export class FanslyAdapter {
           };
         }
 
+        // The route's own deterministic answer, where the route opts in (see
+        // `finalServerErrorEnvelope`): it falls through to the terminal failure
+        // below on the first attempt. A `Retry-After` says "come back later",
+        // which is the opposite claim, so it keeps its retries.
+        const finalServerError = options.finalServerErrorEnvelope === true
+          && response.status >= 500
+          && retryAfterHeader === null
+          && isFanslyErrorEnvelope(envelope);
         if (
           [429, 500, 502, 503, 504].includes(response.status)
           && executionContext.retriesRemaining > 0
           && !retryAfterExceedsInProcessClamp
+          && !finalServerError
         ) {
           return {
             kind: "retry",
@@ -2168,7 +2268,7 @@ export class FanslyAdapter {
               observedAt,
             ),
             responseMetadata: failureResponseMetadata,
-            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
           };
         }
 
@@ -2177,10 +2277,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "http",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? `Fansly request failed (${response.status})`,
+            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? `Fansly request failed (${response.status})`,
+              failureMessage(`Fansly request failed (${response.status})`),
               response.status,
               envelope?.error?.code,
               responseSnippet,
@@ -2194,10 +2294,10 @@ export class FanslyAdapter {
             kind: "failed",
             failureKind: "provider",
             httpStatus: response.status,
-            errorMessage: envelopeMessage ?? "Fansly response envelope was unsuccessful",
+            errorMessage: failureMessage("Fansly response envelope was unsuccessful"),
             responseMetadata: failureResponseMetadata,
             error: new FanslyApiError(
-              envelopeMessage ?? "Fansly response envelope was unsuccessful",
+              failureMessage("Fansly response envelope was unsuccessful"),
               response.status,
               envelope?.error?.code,
               responseSnippet,

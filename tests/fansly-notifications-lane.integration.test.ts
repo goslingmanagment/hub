@@ -17,20 +17,16 @@ import {
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   backfillAttemptCeiling,
-  backfillContinuationAt,
-  compareNotificationRefs,
   fanslyNotificationsChunk,
   FORWARD_HEAD_RESERVED_ATTEMPTS,
-  forwardPollDue,
-  nextForwardPollAt,
   parseFanslyNotificationsCursorState,
-  typesForFilterMode,
 } from "../apps/runtime/src/services/sync/fansly-notifications.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { envelope, NOW, ref, row } from "./helpers/fansly-notifications-fixtures.ts";
 import {
   fanslyLaneAppStub,
   fanslyLaneInput,
@@ -54,63 +50,6 @@ beforeEach(async () => {
     await resetIntegrationDatabase(testDb.pool);
   }
 });
-
-const NOW = new Date("2026-08-19T09:00:00.000Z");
-
-/** Synthetic snowflakes, newest first. Length-then-lexicographic ordering is
- *  what the walk compares on, and every id here is the same length. */
-function ref(n: number): string {
-  return `0009${String(90000000000000 - n * 100).padStart(14, "0")}`;
-}
-
-function row(n: number, type = 3003, extra: Record<string, unknown> = {}) {
-  return {
-    id: ref(n),
-    idString: ref(n),
-    accountId: "000910000000000001",
-    type,
-    correlationId: "000920000000000001",
-    correlationGroupId: "000930000000000001",
-    acknowledgedAt: 1787000000 - n * 60,
-    createdAt: 1787000000 - n * 3600,
-    metadata: null,
-    ...extra,
-  };
-}
-
-/** The [A20] hazard: the sidecar the platform serves is a FULL account record. */
-function fullAccountSidecar() {
-  return [{
-    id: "000920000000000001",
-    username: "fixture_fan",
-    displayName: "Fixture Fan",
-    createdAt: 1690000000,
-    followsYou: true,
-    notes: "fixture note",
-    // The eight [A20]-rejected fields. `lastSeenAt` moves every minute and is
-    // the one that destroys the dedup collapse.
-    lastSeenAt: 1787000123,
-    followCount: 41,
-    subscriberCount: 7,
-    postLikes: 19,
-    accountMediaLikes: 4,
-    timelineStats: { imageCount: 12 },
-    streaming: { lastFetchedAt: 0 },
-    version: 3,
-  }];
-}
-
-function envelope(rows: ReturnType<typeof row>[]) {
-  return {
-    notifications: rows,
-    tips: [],
-    accountMedia: [],
-    accountMediaBundles: [],
-    subscriptions: [],
-    subscriptionHistory: [],
-    accounts: fullAccountSidecar(),
-  };
-}
 
 interface AdapterCall {
   before: string;
@@ -248,6 +187,51 @@ async function drain(
   return result;
 }
 
+/** The `n` a synthetic `ref(n)` was built from. */
+function refIndex(value: string): number {
+  return (90000000000000 - Number(value.slice(4))) / 100;
+}
+
+/** A full 50-row page directly below `before` — a busy page's backlog. */
+function backlogPage(before: string) {
+  const start = before === "0" ? 0 : refIndex(before);
+  return envelope(Array.from({ length: 50 }, (_value, offset) => row(start + offset + 1)));
+}
+
+/** Finish the one-off walk with `ref(newestSeen)` as the overlap stop, so the
+ *  lane is a pure head poller. */
+async function settleAt(pageId: number, newestSeen: number) {
+  const settle = adapterStub({
+    pages: (_call, index) => index === 0 ? envelope([row(newestSeen)]) : envelope([]),
+  });
+  await drain(pageId, settle, telemetryStub());
+  const state = await cursor(pageId);
+  expect(state!.backfill).toBeNull();
+  expect(state!.newestSeenNotificationId).toBe(ref(newestSeen));
+  return state!;
+}
+
+/** Run chunks at `now` until the lane is satisfied or asks to be woken later —
+ *  one scheduler dispatch cycle, including the chunk-budget yields. */
+async function forwardSlice(
+  pageId: number,
+  adapter: ReturnType<typeof adapterStub>,
+  telemetry: ReturnType<typeof telemetryStub>,
+  now: Date,
+) {
+  let result: Awaited<ReturnType<typeof fanslyNotificationsChunk>> | null = null;
+  for (let chunk = 0; chunk < 10; chunk += 1) {
+    result = await fanslyNotificationsChunk(
+      appStub(adapter),
+      input(pageId, telemetry, new SyncChunkBudget(), now),
+    );
+    if (result.satisfied || result.continuationRetryAt) {
+      break;
+    }
+  }
+  return result!;
+}
+
 describe("[sync-critical] WP-F2 notifications lane", () => {
   it("polls the head first, then walks the backfill to the floor and records it", async (context) => {
     if (!testDb) {
@@ -313,6 +297,42 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect((archive.cursor as Record<string, unknown>).notificationFloorAt)
       .toBe("2026-08-17T08:53:20.000Z");
     expect(archive.oldest_captured_at).not.toBeNull();
+  });
+
+  it("never calls a history page with rows but no ids the floor", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    // The rows came back, and none of them carries an id the walk can step
+    // by. That page used to read as EMPTY, and an empty backfill page is the
+    // archive's floor: `provider_exhausted`, durable, from a drifted body.
+    const idless = {
+      ...envelope([]),
+      notifications: [{ type: 3003, createdAt: 1786000000 }, null],
+    };
+    const bodies = [historyPage1(), idless];
+    let served = 0;
+    const adapter = adapterStub({
+      pages: () => bodies[Math.min(served++, bodies.length - 1)],
+    });
+    const telemetry = telemetryStub();
+
+    await expect(drain(seeded.id, adapter, telemetry)).rejects.toThrow(/response is invalid/);
+
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(4)]);
+    // Journaled FIRST, and only then refused.
+    expect(await observations(seeded.id)).toHaveLength(2);
+    const archive = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications");
+    expect(archive?.status).not.toBe("provider_exhausted");
+    // The walk is exactly where it was: the next run asks the same page again.
+    const state = await cursor(seeded.id);
+    expect(state!.backfill).not.toBeNull();
+    expect(state!.backfill!.done).toBe(false);
+    expect(state!.backfill!.nextBeforeRef).toBe(ref(4));
+    expect(state!.backfill!.lastRequestedBefore).not.toBe(ref(4));
   });
 
   it("[A20] allowlists accounts[] BEFORE journaling, and narrows nothing else", async (context) => {
@@ -433,6 +453,132 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     expect(archive.reason_code).toBe("repeat_request");
     // Fewer calls than the day's cap, by a wide margin: that IS the fix.
     expect(stuck.calls.length).toBeLessThan(10);
+  });
+
+  it("pauses a forward walk at its page cap and resumes it at the next page", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    const settled = await settleAt(seeded.id, 2250);
+    const coverageBefore = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications")!;
+
+    // 45 full pages above the last id we saw — 2 250 notifications, more than
+    // two slices of the forward walk — then the page that overlaps.
+    const adapter = adapterStub({ pages: (call) => backlogPage(call.before) });
+    const telemetry = telemetryStub();
+    const later = new Date(NOW.getTime() + 1_800_000);
+
+    const first = await forwardSlice(seeded.id, adapter, telemetry, later);
+    expect(adapter.calls).toHaveLength(20);
+    expect(first.satisfied).toBe(false);
+    expect(first.stats?.stopReason).toBe("page_cap");
+    // PACED, at the lane's own cadence ± 30 %: a backlog is fetched in slices,
+    // never as one burst that drinks the daily cap.
+    const firstDelay = first.continuationRetryAt!.getTime() - later.getTime();
+    expect(firstDelay).toBeGreaterThanOrEqual(21 * 60_000);
+    expect(firstDelay).toBeLessThanOrEqual(39 * 60_000);
+    const paused = await cursor(seeded.id);
+    // Paused, NOT finished: the head is uncommitted and the cursor sits on the
+    // page after the last one fetched, with a fresh slice allowance. Left on
+    // the page just fetched, the next dispatch read it as a repeat and
+    // committed the head over every notification below page 20.
+    expect(paused!.newestSeenNotificationId).toBe(ref(2250));
+    expect(paused!.lastForwardPollAt).toBe(settled.lastForwardPollAt);
+    expect(paused!.forward).toEqual({
+      beforeRef: ref(1000),
+      pendingHeadRef: ref(1),
+      lastRequestedBefore: ref(950),
+      pages: 0,
+    });
+    // …and it claims nothing: the coverage row is the one the settle wrote.
+    const coverageWhilePaused = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications")!;
+    expect(coverageWhilePaused.status).toBe(coverageBefore.status);
+    expect(coverageWhilePaused.reason_code).toBe(coverageBefore.reason_code);
+
+    // The pages counter resets per slice: without it the second slice would
+    // pause after ONE page.
+    const second = await forwardSlice(seeded.id, adapter, telemetry, first.continuationRetryAt!);
+    expect(adapter.calls).toHaveLength(40);
+    expect(second.stats?.stopReason).toBe("page_cap");
+    expect((await cursor(seeded.id))!.forward.beforeRef).toBe(ref(2000));
+
+    const third = await forwardSlice(seeded.id, adapter, telemetry, second.continuationRetryAt!);
+    expect(third.satisfied).toBe(true);
+    expect(third.stats?.stopReason).toBe("overlap");
+
+    // Every page from the head down to the overlap, each exactly once and in
+    // strictly descending order.
+    expect(adapter.calls.map((call) => call.before)).toEqual([
+      "0",
+      ...Array.from({ length: 44 }, (_value, index) => ref((index + 1) * 50)),
+    ]);
+    expect(telemetry.anomalies.map((entry) => entry.code)).toEqual([
+      "fansly_notifications_forward_walk_capped",
+      "fansly_notifications_forward_walk_capped",
+    ]);
+    // The settle's two bodies plus all 45 walk pages.
+    expect(await observations(seeded.id)).toHaveLength(47);
+
+    // ONLY NOW is the head committed, and the window it claims was walked.
+    const done = await cursor(seeded.id);
+    expect(done!.newestSeenNotificationId).toBe(ref(1));
+    expect(done!.forward).toEqual({
+      beforeRef: null,
+      pendingHeadRef: null,
+      lastRequestedBefore: null,
+      pages: 0,
+    });
+    const archive = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications")!;
+    expect(archive.status).toBe("window_captured");
+    expect(archive.reason_code).toBe("overlap");
+  });
+
+  it("stops a forward walk whose cursor drifts without repeating, and claims no window", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const seeded = await seedPage();
+    await settleAt(seeded.id, 2250);
+
+    // A provider that ignores `before` while new notifications keep landing on
+    // top: every call serves the head again, one row newer. No `before` is
+    // ever sent twice, so the exact-repeat guard cannot see it — and the page
+    // cap only pauses the walk now, so it would page for ever.
+    const adapter = adapterStub({
+      pages: (_call, index) =>
+        envelope(Array.from({ length: 50 }, (_value, offset) => row(offset + 1 - index))),
+    });
+    const telemetry = telemetryStub();
+    const result = await forwardSlice(
+      seeded.id,
+      adapter,
+      telemetry,
+      new Date(NOW.getTime() + 1_800_000),
+    );
+
+    // Stopped on the first page that did not move below its cursor.
+    expect(adapter.calls.map((call) => call.before)).toEqual(["0", ref(50)]);
+    expect(result.satisfied).toBe(true);
+    expect(result.stats?.stopReason).toBe("cursor_repeat");
+    const repeat = telemetry.anomalies.find((entry) =>
+      entry.code === "fansly_notifications_cursor_repeat"
+    );
+    expect(repeat?.details).toMatchObject({ before: ref(50), oldest: ref(49), phase: "forward" });
+
+    // The head is still committed, so a broken provider is not re-walked on
+    // every poll — but the unwalked span below it is a gap we name, not a
+    // captured window.
+    expect((await cursor(seeded.id))!.newestSeenNotificationId).toBe(ref(1));
+    const archive = (await coverageRows(seeded.id))
+      .find((entry) => entry.plane === "notifications")!;
+    expect(archive.status).toBe("partial_provider_surface");
+    expect(archive.reason_code).toBe("cursor_repeat");
   });
 
   it("counts ATTEMPTS, defers at the backfill's ceiling, and still journals what it fetched", async (context) => {
@@ -914,55 +1060,6 @@ describe("[sync-critical] WP-F2 notifications lane", () => {
     );
     expect(closed.gatedSkip).toBe("not_allowlisted");
     expect(adapter.calls).toHaveLength(0);
-  });
-});
-
-describe("WP-F2 walk helpers", () => {
-  it("orders snowflake refs by length first, then lexicographically", () => {
-    expect(compareNotificationRefs("100", "99")).toBeGreaterThan(0);
-    expect(compareNotificationRefs("100", "101")).toBeLessThan(0);
-    expect(compareNotificationRefs("100", "100")).toBe(0);
-  });
-
-  it("spaces backfill continuations with ±30% jitter", () => {
-    // Burst shape, not daily volume, is the real ban-risk surface.
-    expect(backfillContinuationAt(NOW, 20_000, () => 0).getTime() - NOW.getTime()).toBe(14_000);
-    expect(backfillContinuationAt(NOW, 20_000, () => 1).getTime() - NOW.getTime()).toBe(26_000);
-  });
-
-  it("makes a head poll due again after the stream's cadence", () => {
-    const base = { lastForwardPollAt: NOW.toISOString() } as never;
-    expect(forwardPollDue(base, new Date(NOW.getTime() + 1_000))).toBe(false);
-    expect(forwardPollDue(base, new Date(NOW.getTime() + 1_800_000))).toBe(true);
-    // A lane that has never polled is always due.
-    expect(forwardPollDue({ lastForwardPollAt: null } as never, NOW)).toBe(true);
-  });
-
-  it("reserves the head's share of the daily allowance from the backfill", () => {
-    // 48 scheduled polls plus a quarter as pagination/retry headroom.
-    expect(FORWARD_HEAD_RESERVED_ATTEMPTS).toBe(60);
-    // The shipped cap: the backfill gets what is left, not the whole day.
-    expect(backfillAttemptCeiling(96)).toBe(36);
-    // A deliberately small cap slows the one-off walk down; it never parks it.
-    expect(backfillAttemptCeiling(8)).toBe(1);
-  });
-
-  it("sends a reserve-deferred backfill back when the head is next due", () => {
-    const state = { lastForwardPollAt: NOW.toISOString() };
-    expect(nextForwardPollAt(state, new Date(NOW.getTime() + 60_000)).toISOString())
-      .toBe(new Date(NOW.getTime() + 1_800_000).toISOString());
-    // Never into the past, and a lane that has never polled goes now.
-    const overdue = new Date(NOW.getTime() + 3_600_000);
-    expect(nextForwardPollAt(state, overdue)).toEqual(overdue);
-    expect(nextForwardPollAt({ lastForwardPollAt: null }, NOW)).toEqual(NOW);
-  });
-
-  it("maps each filter mode to the form it issues", () => {
-    expect(typesForFilterMode("unfiltered", 0)).toBeNull();
-    expect(typesForFilterMode("declared_csv", 0)?.join(","))
-      .toBe(FANSLY_NOTIFICATION_DECLARED_TYPE_CSV);
-    // The purchase group leads the iteration: money first on the degraded path.
-    expect(typesForFilterMode("type_groups", 0)).toEqual([2007, 2008, 32007, 45012]);
   });
 });
 

@@ -232,4 +232,109 @@ describe("fan_earnings_stats board reads", () => {
       limit: 10,
     })).toEqual([]);
   });
+
+  it("ranks lifetime by the fan's latest monthly rows, not the 100-row-capped lifetime row", async () => {
+    if (!testDb) throw new Error("db not started");
+    const model = await createModel(testDb.db, { slug: "m-capped", name: "M Capped" });
+    const page = await createFanslyPage(testDb.db, {
+      modelId: model!.id,
+      label: "capped-1",
+    });
+    if (!page) throw new Error("page not created");
+    const fans = await upsertFans(testDb.db, [
+      { platform: "fansly", platformUserId: "fan-c-capped" },
+      { platform: "fansly", platformUserId: "fan-c-whole" },
+      { platform: "fansly", platformUserId: "fan-c-lifetime-only" },
+      { platform: "fansly", platformUserId: "fan-c-stale-month" },
+      { platform: "fansly", platformUserId: "fan-c-net-unknown" },
+      { platform: "fansly", platformUserId: "fan-c-monthly-only" },
+    ]);
+    const [capped, whole, lifetimeOnly, staleMonth, netUnknown, monthlyOnly] = fans;
+    const t1 = new Date("2026-07-01T00:00:00Z");
+    const t2 = new Date("2026-07-02T00:00:00Z");
+    let sourceEventId = 0;
+    const seed = async (
+      fan: { id: number },
+      window: string,
+      grossMills: number,
+      netMills: number | null,
+      observedAt: Date,
+    ) => {
+      sourceEventId += 1;
+      await upsertFanEarningsStat(testDb!.db, {
+        accountId: page.id, fanId: fan.id, window, grossMills, netMills, observedAt, sourceEventId,
+      });
+    };
+    // The prod shape: Fansly's lifetime answer hit its 100-row cap, so the
+    // stored lifetime row is a slice (835_450) of what the months add up to.
+    await seed(capped!, "lifetime", 835_450, 668_360, t2);
+    await seed(capped!, "2026-05", 1_000_000, 800_000, t2);
+    await seed(capped!, "2026-06", 1_481_980, 1_185_584, t2);
+    await seed(capped!, "2026-07", 1_000_000, 800_000, t2);
+    // Uncapped: lifetime and Σmonthly agree (every other fan on prod).
+    await seed(whole!, "lifetime", 3_103_980, 2_483_184, t2);
+    await seed(whole!, "2026-06", 3_000_000, 2_400_000, t2);
+    await seed(whole!, "2026-07", 103_980, 83_184, t2);
+    // No month rows: the stored lifetime row is all there is.
+    await seed(lifetimeOnly!, "lifetime", 5_000, 4_000, t1);
+    // 2026-05 came from an OLDER monthly answer and the newest one no longer
+    // serves it: it must not be summed in.
+    await seed(staleMonth!, "lifetime", 150_000, 120_000, t2);
+    await seed(staleMonth!, "2026-05", 900_000, 720_000, t1);
+    await seed(staleMonth!, "2026-06", 150_000, 120_000, t2);
+    // One month without a net: the total net is unknown, not smaller.
+    await seed(netUnknown!, "lifetime", 60_000, 48_000, t2);
+    await seed(netUnknown!, "2026-06", 40_000, 32_000, t2);
+    await seed(netUnknown!, "2026-07", 20_000, null, t2);
+    // Month rows without a lifetime row still rank.
+    await seed(monthlyOnly!, "2026-07", 7_000, 5_600, t2);
+
+    const entries = await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+      limit: 150,
+    });
+    expect(entries.map((entry) => [entry.platformUserId, entry.grossMills, entry.netMills]))
+      .toEqual([
+        ["fan-c-capped", 3_481_980, 2_785_584],
+        ["fan-c-whole", 3_103_980, 2_483_184],
+        ["fan-c-stale-month", 150_000, 120_000],
+        ["fan-c-net-unknown", 60_000, null],
+        ["fan-c-monthly-only", 7_000, 5_600],
+        ["fan-c-lifetime-only", 5_000, 4_000],
+      ]);
+    expect(entries[0]!.observedAt.toISOString()).toBe(t2.toISOString());
+    expect(entries[0]!.currency).toBe("USD");
+    expect(entries.at(-1)!.observedAt.toISOString()).toBe(t1.toISOString());
+
+    const limited = await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+      limit: 2,
+    });
+    expect(limited.map((entry) => entry.platformUserId)).toEqual(["fan-c-capped", "fan-c-whole"]);
+
+    // Meta reads the same board, so fanCount vs entries stays a truncation check.
+    expect(await getFanEarningsSnapshotMeta(testDb.db, {
+      accountId: page.id,
+      window: "lifetime",
+    })).toEqual({ fanCount: 6, builtAt: t2 });
+
+    // A month window still reads its stored rows, unchanged.
+    const june = await listTopFanEarnings(testDb.db, {
+      accountId: page.id,
+      window: "2026-06",
+      limit: 150,
+    });
+    expect(june.map((entry) => [entry.platformUserId, entry.grossMills])).toEqual([
+      ["fan-c-whole", 3_000_000],
+      ["fan-c-capped", 1_481_980],
+      ["fan-c-stale-month", 150_000],
+      ["fan-c-net-unknown", 40_000],
+    ]);
+    expect(await getFanEarningsSnapshotMeta(testDb.db, {
+      accountId: page.id,
+      window: "2026-06",
+    })).toEqual({ fanCount: 4, builtAt: t2 });
+  });
 });

@@ -1,6 +1,7 @@
 import {
-  assertOwnedPageSyncLease, getCheckpoint, getPageSyncExecutionContext, isFanEarningsFresh,
-  listPageFanNativeIds, upsertCheckpoint, upsertCheckpointProgress,
+  assertOwnedPageSyncLease, findDurableFanEarningsRejection, getCheckpoint,
+  getPageSyncExecutionContext, isFanEarningsFresh, listPageFanNativeIds, upsertCheckpoint,
+  upsertCheckpointProgress, type FanEarningsRefreshWindow,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import type { AppContext } from "../../bootstrap.ts";
@@ -10,10 +11,23 @@ import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types
 import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
-import { executeFanEarningsRecovery } from "./fan-earnings-recovery.ts";
+import {
+  executeFanEarningsRecovery, FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD,
+} from "./fan-earnings-recovery.ts";
 import {
   fanEarningsRecoveryEnabled, fanEarningsRosterMaxAgeMs, runFanEarningsTargetStep,
 } from "./fan-earnings-targets.ts";
+
+/** Deterministic rejections the legacy walk may cross in a row, with no fan
+ * read successfully between them. The next one stops the walk as before: a
+ * burst is a provider problem, not one fan. The run is kept in the checkpoint
+ * across the walk's chunks, because a chunk (five requests by default) holds
+ * only two or three fans. */
+const FAN_EARNINGS_MAX_CONSECUTIVE_CROSSINGS = 3;
+/** A 404 is deterministic on its endpoint's third rejected receipt in a row,
+ * normally the first attempt plus the executor's two provider_404 retries of
+ * the same fan. Any other receipt, such as a 5xx or timeout, resets the run. */
+const REJECTED_404_RECEIPTS = 3;
 
 function fanslyNewStreamSkip(reason: string): StreamChunkResult {
   return { satisfied: true, yieldReason: null, stats: { skipped: reason }, gatedSkip: reason };
@@ -63,10 +77,26 @@ export async function executeFanEarningsChunk(
   // or parsing so a partial per-fan failure cannot discard captured bytes.
   const window = { after: new Date(0), before: new Date() };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "fan_earnings");
-  const state = checkpoint?.state as { cursorFanId?: number; completedAt?: string } | null;
+  const state = checkpoint?.state as {
+    cursorFanId?: number; completedAt?: string; crossedFans?: number;
+    consecutiveCrossings?: number; qualityHold?: string;
+  } | null;
   const execution = getPageSyncExecutionContext();
-  if (execution?.pageId === input.pageContext.page.id && execution.stream === "fan_earnings" &&
-    checkpoint?.cursorSeq === execution.requestSeq && state?.cursorFanId === 0 &&
+  const sameCompletedGeneration = execution?.pageId === input.pageContext.page.id &&
+    execution.stream === "fan_earnings" && checkpoint?.cursorSeq === execution.requestSeq &&
+    state?.cursorFanId === 0;
+  if (sameCompletedGeneration && state.qualityHold === FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD) {
+    // A walk that crossed a rejected fan committed its held completion before
+    // the generation could settle. Settle it held again, without refetching.
+    await assertOwnedPageSyncLease(app.db);
+    return {
+      satisfied: true,
+      yieldReason: null,
+      qualityHold: FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD,
+      stats: { fansFetched: 0, walkCompleted: true, reusedCompletedWalk: true },
+    };
+  }
+  if (sameCompletedGeneration && state.qualityHold === undefined &&
     typeof state.completedAt === "string" && Number.isFinite(Date.parse(state.completedAt))) {
     // The walk committed before its generation could settle. Keep that read's
     // timestamps and finish only this generation, without fetching it again.
@@ -80,12 +110,20 @@ export async function executeFanEarningsChunk(
   await runFanEarningsTargetStep(app, { ...input, pageContext: input.pageContext });
   let cursorFanId = typeof state?.cursorFanId === "number" ? state.cursorFanId : 0;
   // A43 (W8.2): the PERSISTED cursor advances only through one contiguous
-  // prefix of successful fans. A fan-scoped rejection stops the walk; it may
-  // never be crossed by a later success in the same keyset generation.
+  // prefix of settled fans. A fan-scoped rejection stops the walk unless it is
+  // a deterministic rejection with a durable receipt on a shadow page, which
+  // the walk may cross; the crossing is counted for the whole generation.
   let persistableCursorFanId = cursorFanId;
+  let crossedFans = cursorFanId > 0 && Number.isSafeInteger(state?.crossedFans)
+    ? Number(state?.crossedFans) : 0;
+  // Crossings in this walk since a fan was last read successfully; a retry
+  // after the stop resumes the same run, so a burst stays stopped.
+  let consecutiveCrossings = cursorFanId > 0 && Number.isSafeInteger(state?.consecutiveCrossings)
+    ? Number(state?.consecutiveCrossings) : 0;
   let fansFetched = 0;
   let fansSkipped = 0;
   let fansFresh = 0;
+  let fansCrossed = 0;
   let walkCompleted = false;
   let rejectedFanError: FanslyApiError | null = null;
 
@@ -119,6 +157,8 @@ export async function executeFanEarningsChunk(
       continue;
     }
 
+    let fetchedWindow: FanEarningsRefreshWindow = "lifetime";
+    const attemptStartedAt = new Date();
     try {
       const captureInput = {
         pageId: input.pageContext.page.id, syncRunId: input.syncRunId,
@@ -131,6 +171,7 @@ export async function executeFanEarningsChunk(
         }),
       });
       await assertOwnedPageSyncLease(app.db);
+      fetchedWindow = "monthly";
       await captureFanEarningsEndpoint(app, {
         ...captureInput, window: "monthly",
         fetch: () => app.adapter.getEarningsMonthlyStatsAccountsPage(requestContext, {
@@ -138,28 +179,55 @@ export async function executeFanEarningsChunk(
         }),
       });
     } catch (error) {
-      // A fan-scoped rejection cannot be skipped inside a keyset walk: doing
-      // so and later persisting a successful fan would jump the durable cursor
-      // over the rejected fan. Stop at the first rejection and persist only
-      // the contiguous successful prefix before surfacing the provider error.
+      // Skipping a rejected fan would let a later success jump the durable
+      // cursor over it. Only a deterministic rejection (400/410, or a 404 on
+      // its endpoint's third rejected receipt in a row) whose own receipt is
+      // durable, outside a provider cooldown and within the run of consecutive
+      // crossings, may be crossed: the receipt keeps that endpoint as debt and
+      // the generation finishes held. The crossed fan is not retried here; its
+      // other endpoint is not requested. Any other rejection stops at the
+      // contiguous prefix and surfaces the error.
       const fanScoped = error instanceof FanslyApiError &&
         typeof error.status === "number" &&
         [400, 404, 410].includes(error.status);
       if (!fanScoped) {
         throw error;
       }
+      const rejection = shadow && error.retryAfterAt === null &&
+        consecutiveCrossings < FAN_EARNINGS_MAX_CONSECUTIVE_CROSSINGS
+        ? await findDurableFanEarningsRejection(app.db, {
+          pageId: input.pageContext.page.id, fanRef: fan.platformUserId,
+          window: fetchedWindow, since: attemptStartedAt,
+        })
+        : null;
+      const crossed = rejection !== null &&
+        (error.status !== 404 || rejection.consecutiveRejections >= REJECTED_404_RECEIPTS);
       await input.telemetry.addAnomaly({
         code: "fan_earnings_fan_rejected",
         severity: "warn",
-        message: `Stopped fan-earnings walk after HTTP ${error.status} for one fan`,
+        message: crossed
+          ? `Crossed one fan after HTTP ${error.status}; its endpoint stays unconfirmed`
+          : `Stopped fan-earnings walk after HTTP ${error.status} for one fan`,
         details: {
           fanId: fan.fanId,
           platformUserId: fan.platformUserId,
           status: error.status,
           fanslyCode: error.code ?? null,
+          window: fetchedWindow,
+          crossed,
+          rejectedInRow: rejection?.consecutiveRejections ?? null,
+          consecutiveCrossings: consecutiveCrossings + (crossed ? 1 : 0),
         },
       });
       fansSkipped += 1;
+      if (crossed) {
+        cursorFanId = fan.fanId;
+        persistableCursorFanId = fan.fanId;
+        fansCrossed += 1;
+        crossedFans += 1;
+        consecutiveCrossings += 1;
+        continue;
+      }
       rejectedFanError = error;
       break;
     }
@@ -167,11 +235,27 @@ export async function executeFanEarningsChunk(
     cursorFanId = fan.fanId;
     persistableCursorFanId = fan.fanId;
     fansFetched += 1;
+    consecutiveCrossings = 0;
   }
 
-  // Persist only completion or the contiguous successful prefix. If the first
+  // Persist only completion or the contiguous settled prefix. If the first
   // fan rejects, leave the checkpoint untouched so retry targets that fan.
-  if (walkCompleted) {
+  const held = crossedFans > 0;
+  if (walkCompleted && held) {
+    // The roster was traversed, but crossed endpoints remain unconfirmed. Keep
+    // the last certified completedAt and stamp no success or freshness.
+    await upsertCheckpointProgress(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      stream: "fan_earnings",
+      state: {
+        cursorFanId: 0,
+        ...(state?.completedAt ? { completedAt: state.completedAt } : {}),
+        qualityHold: FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD,
+        walkCompletedAt: new Date().toISOString(),
+        crossedFans,
+      },
+    });
+  } else if (walkCompleted) {
     await upsertCheckpoint(app.db, {
       platformAccountId: input.pageContext.page.id,
       stream: "fan_earnings",
@@ -180,14 +264,17 @@ export async function executeFanEarningsChunk(
       state: { cursorFanId: 0, completedAt: new Date().toISOString() },
       lastSuccessfulRunId: input.syncRunId,
     });
-  } else if (fansFetched > 0 || fansFresh > 0) {
+  } else if (fansFetched > 0 || fansFresh > 0 || fansCrossed > 0) {
     const progressState = {
       cursorFanId: persistableCursorFanId,
       ...(state?.completedAt ? { completedAt: state.completedAt } : {}),
+      ...(held ? { crossedFans } : {}),
+      ...(consecutiveCrossings > 0 ? { consecutiveCrossings } : {}),
     };
-    if (rejectedFanError) {
-      // The prefix is durable progress, but this run is about to fail. Do not
-      // stamp it as the stream's last successful run/freshness marker.
+    if (rejectedFanError || held) {
+      // The prefix is durable progress, but this run is about to fail or its
+      // generation will finish held. Do not stamp it as the stream's last
+      // successful run/freshness marker.
       await upsertCheckpointProgress(app.db, {
         platformAccountId: input.pageContext.page.id,
         stream: "fan_earnings",
@@ -212,7 +299,8 @@ export async function executeFanEarningsChunk(
     return {
       satisfied: true,
       yieldReason: null,
-      stats: { fansFetched, fansSkipped, fansFresh, walkCompleted: true },
+      ...(held ? { qualityHold: FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD } : {}),
+      stats: { fansFetched, fansSkipped, fansFresh, fansCrossed, walkCompleted: true },
     };
   }
   return {
@@ -220,6 +308,6 @@ export async function executeFanEarningsChunk(
     // The walk exits on hasRequestCapacity(2) — resolve the reason against
     // the same two-call unit cost or every non-final chunk yields reasonless.
     yieldReason: input.budget.resolveYieldReason(2),
-    stats: { fansFetched, fansSkipped, fansFresh, cursorFanId },
+    stats: { fansFetched, fansSkipped, fansFresh, fansCrossed, cursorFanId },
   };
 }

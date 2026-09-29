@@ -27,6 +27,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  appendProjectionOnlyDomainEvents,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -38,7 +39,6 @@ import {
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
-  FANSLY_CATALOG_PROJECTION,
   FANSLY_CATALOG_PROJECTION_TABLES,
   measureFanslyCatalogMedia,
   rebuildFanslyCatalogProjection,
@@ -48,7 +48,6 @@ import {
   rebuildMediaPlaneProjection,
   runMediaPlaneProjection,
 } from "../apps/runtime/src/services/projections/media-plane.ts";
-import { findProjection } from "../apps/runtime/src/services/projections/registry.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -117,7 +116,13 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, kind: string, key: string, payload: unknown) {
+async function seedObservation(
+  pageId: number,
+  kind: string,
+  key: string,
+  payload: unknown,
+  receivedAt?: Date,
+) {
   await insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:catalog",
@@ -127,6 +132,7 @@ async function seedObservation(pageId: number, kind: string, key: string, payloa
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `${kind}:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
 }
 
@@ -173,6 +179,38 @@ async function checksums(pageId: number): Promise<Record<string, string>> {
   return out;
 }
 
+/**
+ * A look that reached the ledger as a ROSTER and nothing else: the first
+ * roster of `listingKind` again, at a later instant, with no row event before
+ * it. That is what an unchanged returning row minted under the hash-only `:v1:`
+ * row keys (the row events deduped), and a truncate-and-replay of that history
+ * still feeds the projector exactly this.
+ */
+async function appendRosterOnlyLook(pageId: number, listingKind: string) {
+  const [roster] = await rows<{ data: unknown; schema_version: number; observation_id: string }>(
+    `select data, schema_version, observation_id::text
+       from domain_events
+      where account_id = $1 and type = 'catalog.listing_observed'
+        and data->>'listingKind' = $2
+      order by account_seq limit 1`,
+    [pageId, listingKind],
+  );
+  const occurredAt = new Date();
+  const observationId = Number(roster!.observation_id);
+  await appendProjectionOnlyDomainEvents(testDb!.db, pageId, [{
+    type: "catalog.listing_observed",
+    occurredAt,
+    data: roster!.data,
+    schemaVersion: roster!.schema_version,
+    observationId,
+    dedupKey: `test:roster-only-look:${pageId}:${listingKind}`,
+  }], {
+    occurredAt,
+    observationId,
+    dedupKey: `test:roster-only-look:checkpoint:${pageId}:${listingKind}`,
+  });
+}
+
 /** Seed everything the fixtures describe, once. */
 async function seedAll(pageId: number) {
   await seedObservation(pageId, "vault_albums", "v1", fixture("vault-albums"));
@@ -199,7 +237,7 @@ async function seedAll(pageId: number) {
 }
 
 describe("[sync-critical] WP-F3 catalog projection", () => {
-  it("projects every catalog surface, and replaying appends nothing", async (context) => {
+  it("projects every catalog surface with NO delivery URL in any serving table, and replaying appends nothing", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -207,6 +245,29 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     const page = await seedPage();
     await seedAll(page.id);
     const first = await project(page.id);
+
+    // Puts NO delivery URL, location or variant into any serving table. These
+    // checks only read the state this first projection left, so they share
+    // its setup.
+    for (const table of [...FANSLY_CATALOG_PROJECTION_TABLES, "creator_media"]) {
+      const columns = await rows<{ column_name: string }>(
+        `select column_name from information_schema.columns where table_name = $1`,
+        [table],
+      );
+      for (const column of columns) {
+        expect(
+          /^(location|locations|variants|variant_hash|url|filename)$/.test(column.column_name),
+          `${table}.${column.column_name}`,
+        ).toBe(false);
+      }
+      // …and no VALUE smuggled one in through a jsonb column either. The
+      // fixtures carry a "SIGNED-…" placeholder exactly so this can fail.
+      const smuggled = await rows(
+        `select 1 from ${table} t where t.page_id = $1 and t::text like '%SIGNED-%'`,
+        [page.id],
+      );
+      expect(smuggled, `${table} leaked a signed location`).toHaveLength(0);
+    }
 
     expect(first.catalog.albums).toBe(8);
     expect(first.catalog.tiers).toBe(2);
@@ -294,6 +355,58 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     // Promo money is kept as the platform served it, inside the jsonb, and is
     // never summed with the plan price it discounts.
     expect(plan?.promos[0]?.price).toBe(7770);
+  });
+
+  it("lands a plan that goes A→B→A, and every look advances the head (J12)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A promo added to a plan and removed again. Keyed on the hash alone, the
+    // third look collided with the first look's key and never reached the
+    // projector: the head kept advertising a promo that was gone.
+    const page = await seedPage();
+    const withoutPromo = fixture("subscription-tiers") as {
+      rows: { plans: { promos: unknown[] }[] }[];
+    };
+    withoutPromo.rows[0]!.plans[0]!.promos = [];
+    const withPromo = fixture("subscription-tiers");
+    const at = (day: number) => new Date(`2026-08-${day}T09:00:00.000Z`);
+    const plan = async () => (await rows<{ promos: unknown[]; last_observed_at: Date }>(
+      `select promos, last_observed_at from page_subscription_tier_plans
+        where page_id = $1 and plan_ref = $2`,
+      [page.id, "000900000000000401"],
+    ))[0]!;
+
+    await seedObservation(page.id, "subscription_tiers", "t1", withoutPromo, at(20));
+    await project(page.id);
+    expect((await plan()).promos).toEqual([]);
+
+    await seedObservation(page.id, "subscription_tiers", "t2", withPromo, at(21));
+    await project(page.id);
+    expect((await plan()).promos).toHaveLength(1);
+
+    await seedObservation(page.id, "subscription_tiers", "t3", withoutPromo, at(22));
+    await project(page.id);
+    const reverted = await plan();
+    expect(reverted.promos).toEqual([]);
+    expect(reverted.last_observed_at.toISOString()).toBe(at(22).toISOString());
+
+    // An UNCHANGED later look still reaches the head: last_observed_at is when
+    // the platform last served it, not when it last changed.
+    await seedObservation(page.id, "subscription_tiers", "t4", withoutPromo, at(23));
+    await project(page.id);
+    expect((await plan()).last_observed_at.toISOString()).toBe(at(23).toISOString());
+    const [tier] = await rows<{ last_observed_at: Date }>(
+      `select last_observed_at from page_subscription_tiers where page_id = $1 and tier_ref = $2`,
+      [page.id, "000900000000000301"],
+    );
+    expect(tier!.last_observed_at.toISOString()).toBe(at(23).toISOString());
+
+    // …and replaying the same observations still appends nothing.
+    const before = await checksums(page.id);
+    expect((await project(page.id)).catalog.applied).toBe(0);
+    expect(await checksums(page.id)).toEqual(before);
   });
 
   it("writes gift codes into page_promo_links without touching the tracking half", async (context) => {
@@ -417,6 +530,33 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     ).toHaveLength(0);
   });
 
+  it("clears missing_since from the roster alone, as hash-keyed row events replay", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    await seedAll(page.id);
+    await project(page.id);
+    await seedObservation(page.id, "account_walls", "w2", { rows: [] });
+    await project(page.id);
+    const marked = async () => await rows(
+      `select 1 from page_walls where page_id = $1 and missing_since is not null`,
+      [page.id],
+    );
+    expect(await marked()).toHaveLength(3);
+
+    // The walls come back UNCHANGED in the ledger's older shape: a roster with
+    // no row event before it (see `appendRosterOnlyLook`). No upsert runs, so
+    // the roster's clear half is the only thing that can un-mark them — the
+    // case a rebuild over pre-`:v2:` history depends on.
+    await appendRosterOnlyLook(page.id, "page_walls");
+    const result = await runFanslyCatalogProjection(appStub(), { accountId: page.id });
+    expect(result.walls).toBe(0);
+    expect(result.clearedMissing).toBe(3);
+    expect(await marked()).toHaveLength(0);
+  });
+
   it("counts raw vault membership across albums without conflating offers", async (context) => {
     if (!testDb) {
       context.skip();
@@ -490,36 +630,6 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     expect(media[0]?.price_mills).toBe(79000n);
   });
 
-  it("puts NO delivery URL, location or variant into any serving table", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedAll(page.id);
-    await project(page.id);
-
-    for (const table of [...FANSLY_CATALOG_PROJECTION_TABLES, "creator_media"]) {
-      const columns = await rows<{ column_name: string }>(
-        `select column_name from information_schema.columns where table_name = $1`,
-        [table],
-      );
-      for (const column of columns) {
-        expect(
-          /^(location|locations|variants|variant_hash|url|filename)$/.test(column.column_name),
-          `${table}.${column.column_name}`,
-        ).toBe(false);
-      }
-      // …and no VALUE smuggled one in through a jsonb column either. The
-      // fixtures carry a "SIGNED-…" placeholder exactly so this can fail.
-      const smuggled = await rows(
-        `select 1 from ${table} t where t.page_id = $1 and t::text like '%SIGNED-%'`,
-        [page.id],
-      );
-      expect(smuggled, `${table} leaked a signed location`).toHaveLength(0);
-    }
-  });
-
   it("reproduces every row and every missing_since from a truncate-and-replay", async (context) => {
     if (!testDb) {
       context.skip();
@@ -586,20 +696,5 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
       [page.id],
     );
     expect(gift).toHaveLength(2);
-  });
-
-  it("is registered with a rebuild, and declares creator_media on nobody but the media plane", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const projection = findProjection(FANSLY_CATALOG_PROJECTION);
-    expect(projection).not.toBeNull();
-    expect(projection?.rebuildKind).toBe("truncate_replay");
-    expect(projection?.rebuild).not.toBeNull();
-    expect(projection?.tables).not.toContain("creator_media");
-    expect(projection?.tables).not.toContain("creator_media_bundles");
-    // The single-writer rule, stated as an ownership claim rather than a hope.
-    expect(projection?.eventTypes).not.toContain("media.observed");
   });
 });

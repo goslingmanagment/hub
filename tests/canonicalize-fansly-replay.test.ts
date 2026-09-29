@@ -16,6 +16,7 @@ import {
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import type { CanonicalizableObservation } from "../apps/runtime/src/services/canonicalize/types.ts";
 import {
+  captureFanslyMessagingGroupsPayload,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
 } from "../apps/runtime/src/services/sync/shared.ts";
@@ -470,6 +471,13 @@ describe("Fansly replay canonicalizers (slice D)", () => {
       }
       for (const payload of [null, 42, "text", []]) {
         expect(canParseFanslyReplayObservation(observation("followers", payload))).toBe(false);
+      }
+    });
+
+    it("never presents a refused conversation-list capture as a valid empty page", () => {
+      for (const raw of [{}, { data: "drifted" }, { data: [{ partnerUsername: "no group id" }] }]) {
+        const captured = captureFanslyMessagingGroupsPayload(raw, false);
+        expect(canParseFanslyReplayObservation(observation("dm_conversations", captured))).toBe(false);
       }
     });
 

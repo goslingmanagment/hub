@@ -203,14 +203,25 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-beforeEach(async (context) => {
-  if (!testDb) {
-    context.skip();
-    return;
-  }
+/**
+ * The production worker registration with one test-only change: pg-boss's
+ * polling interval drops from its 2 s default to its 0.5 s minimum. The worker
+ * sleeps a full interval after every fetch, so each webhook otherwise waits up
+ * to 2 s for pickup. Nothing here asserts on the worker's cadence.
+ */
+function fastPollingWorker(boss: PgBoss): Pick<PgBoss, "send" | "work"> {
+  const work = (name: string, options: object, handler: unknown) =>
+    boss.work(name, { ...options, pollingIntervalSeconds: 0.5 } as never, handler as never);
+  return { send: boss.send.bind(boss), work: work as PgBoss["work"] };
+}
 
-  await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { databaseUrl: testDb.connectionString });
+/** Per-test fixture. `withQueue` also gives the API server its pg-boss and starts
+ * the OFAPI event worker; only the webhook end-to-end test delivers webhooks. */
+async function bootFixture(db: StartedTestDatabase, withQueue: boolean) {
+  await resetIntegrationDatabase(db.pool);
+  // databaseUrl gives the API server its pg-boss (queues, webhook enqueue).
+  // Only the webhook end-to-end test needs it; the others leave it out.
+  appContext = createTestAppContext(db, withQueue ? { databaseUrl: db.connectionString } : undefined);
 
   // Pages mapped to the two captured OFAPI accounts; the chatter only sees the first.
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
@@ -250,16 +261,20 @@ beforeEach(async (context) => {
   }
   baseUrl = `http://127.0.0.1:${address.port}`;
 
+  if (!withQueue) {
+    return;
+  }
   if (workerBoss) {
     await workerBoss.stop();
   }
-  // The real async-processing path: a pg-boss worker on the same database, exactly
-  // as registered by startWorkerServices in the worker role.
-  workerBoss = new PgBoss({ connectionString: testDb.connectionString });
+  // The real async-processing path: a pg-boss worker on the same database,
+  // registered by the production startOfapiEventWorker, with only its polling
+  // accelerated (see fastPollingWorker).
+  workerBoss = new PgBoss({ connectionString: db.connectionString });
   await workerBoss.start();
   await ensureOfapiQueues(workerBoss);
-  releaseWorkerLock = await startOfapiEventWorker(appContext, workerBoss);
-}, 60_000);
+  releaseWorkerLock = await startOfapiEventWorker(appContext, fastPollingWorker(workerBoss));
+}
 
 afterEach(async () => {
   if (releaseWorkerLock) {
@@ -277,6 +292,14 @@ afterEach(async () => {
 });
 
 describe("OFAPI webhook → SSE end-to-end", () => {
+  beforeEach(async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await bootFixture(testDb, true);
+  }, 60_000);
+
   it("delivers captured webhook fixtures as page-filtered SSE frames with dedupe and Last-Event-ID resume", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -402,6 +425,18 @@ describe("OFAPI webhook → SSE end-to-end", () => {
       await client.close();
     }
   }, E2E_TIMEOUT_MS);
+});
+
+// Replay, continuity and auth. None of these delivers a webhook, so they run
+// without the API's pg-boss and without the worker.
+describe("OFAPI SSE replay and stream boundary", () => {
+  beforeEach(async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await bootFixture(testDb, false);
+  }, 60_000);
 
   it("paginates the replay past rows orphaned by page deletion (audit P-7)", async (context) => {
     if (!testDb) {

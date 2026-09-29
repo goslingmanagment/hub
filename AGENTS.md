@@ -13,6 +13,14 @@
 - After API contract changes, run `pnpm contracts:generate`.
   Clients needing those changes re-vendor via `scripts/vendor-sdk.mjs`.
 - `pnpm check` excludes integration tests; they need Docker (Testcontainers).
-- Keep unfinished PRs Draft; their red Quality Gate is expected.
-  Never use `[skip ci]`, including in squash messages: it can skip production images.
+- CI (repo variable `CI_POOL`: `pc` = owner's self-hosted runners, else GitHub-hosted):
+  - Open PRs as Draft; a Draft's red Quality Gate is expected.
+  - Run `pnpm check` locally before marking Ready; mark Ready once.
+  - With `CI_POOL` not `pc`, a push to a Ready PR runs static checks only and
+    the Quality Gate stays red until integration runs. When the PR is final,
+    add the label: `gh pr edit <number> --add-label ci:full`.
+  - A job queued over 10 minutes on the self-hosted pool means the PC is down;
+    tell the owner (they switch pools with `ci-pool`).
+  - Never use `[skip ci]`, including in squash messages: every main commit
+    must keep a Quality Gate record.
 - Do not create or maintain decision/session logs.

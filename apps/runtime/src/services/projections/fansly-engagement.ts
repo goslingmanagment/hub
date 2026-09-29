@@ -10,7 +10,10 @@
 //   capture wins" — are both guaranteed WRONG here. Rows are ordered by the
 //   PROVIDER's `occurred_at`, with `notification_ref` as the deterministic
 //   tie-break, and the guard lives in the repository's upsert so no caller can
-//   forget it. `tests/endpoint-scour-projections.integration.test.ts` pins that
+//   forget it. (`platform_notifications`, one row per notification, breaks a
+//   same-`occurred_at` tie by the later look instead, so a read state lands;
+//   the repository header says why that is safe.)
+//   `tests/endpoint-scour-projections.integration.test.ts` pins that
 //   a higher-seq, older-`occurred_at` event cannot regress the head.
 //
 // THREE RULES IT SHARES WITH EVERY OTHER PROJECTOR IN THIS TREE:
@@ -38,19 +41,24 @@
 //
 // THE COMMERCE SIGNAL, and its whole extent: a 2007/2008/32007/45012 event
 // marks the purchased media DIRTY in `subject_refresh_state`
-// (`plane='media_stats'`, `next_due_at = now`). It FETCHES NOTHING. WP-F4 owns
-// the fetching; this is the "somebody bought this, its counters moved" note.
+// (`plane='media_stats'`, due at the purchase). It FETCHES NOTHING. WP-F4 owns
+// the fetching; this is the "somebody bought this, its counters moved" note —
+// so a purchase older than the lane's widest window, one the item was already
+// visited after, or one against a known bundle marks nothing
+// (`markMediaStatsPurchaseDirty`).
 
 import {
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
   listEventAccounts,
   listEventsSince,
-  markSubjectRefreshDirty,
+  markMediaStatsPurchaseDirty,
   setProjectionWatermark,
   upsertPlatformNotification,
   upsertPostLike,
+  type DomainEventRow,
   type EngagementPlatform,
+  type UpsertPlatformNotificationInput,
 } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
 
@@ -80,10 +88,6 @@ export const FANSLY_ENGAGEMENT_PROJECTION_TABLES = [
   "post_likes",
 ] as const;
 
-/** Where a purchase signal lands. WP-F4 reads this plane. */
-const PURCHASE_SIGNAL_PLANE = "media_stats" as const;
-const PURCHASE_SIGNAL_REASON = "purchase_notification" as const;
-
 export interface FanslyEngagementProjectionResult extends Record<string, unknown> {
   accounts: number;
   eventsSeen: number;
@@ -112,6 +116,53 @@ function isoDate(value: unknown): Date | null {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * The `platform_notifications` row one `notification.observed` event projects
+ * to, or null when the projector skips the event. Parsed HERE, once, for the
+ * projector and for the owner-run read-state replay
+ * (`fansly:notifications-replay-read-state`), so the two can never date or
+ * skip a notification differently.
+ */
+export function platformNotificationInputFromEvent(
+  pageId: number,
+  platform: EngagementPlatform,
+  event: Pick<DomainEventRow, "id" | "accountSeq" | "occurredAt" | "observationId" | "data">,
+): UpsertPlatformNotificationInput | null {
+  const data = eventData(event.data);
+  const contentHash = asText(data.contentHash) ?? "";
+  const notificationRef = asText(data.notificationRef);
+  if (contentHash.length !== 64 || notificationRef === null) {
+    return null;
+  }
+  const typeCode = asInt(data.rawTypeCode);
+  // The provider's own instant. A row with no `createdAt` has no place on a
+  // time-ordered head, and a fabricated one would order the state machine by
+  // a lie — so the row is skipped and the event stays in the ledger for a
+  // parser that can date it.
+  const occurredAt = isoDate(data.occurredAtSeconds);
+  if (typeCode === null || occurredAt === null) {
+    return null;
+  }
+  return {
+    pageId,
+    platform,
+    notificationRef,
+    // RAW. Never a label, never filtered against a known set.
+    typeCode,
+    correlationRef: asText(data.correlationRef),
+    correlationGroupRef: asText(data.correlationGroupRef),
+    metadata: eventData(data.metadataJson),
+    // Dated from `data`, never from event.occurredAt.
+    occurredAt,
+    acknowledgedAt: isoDate(data.acknowledgedAtSeconds),
+    observedAt: event.occurredAt,
+    contentHash,
+    sourceEventId: event.id,
+    sourceObservationId: event.observationId,
+    sourceAccountSeq: event.accountSeq,
+  };
 }
 
 export async function runFanslyEngagementProjection(
@@ -190,34 +241,15 @@ export async function runFanslyEngagementProjection(
           }
 
           case "notification.observed": {
-            const typeCode = asInt(data.rawTypeCode);
-            // The provider's own instant. A row with no `createdAt` has no
-            // place on a time-ordered head, and a fabricated one would order
-            // the state machine by a lie — so the row is skipped and the event
-            // stays in the ledger for a parser that can date it.
-            const occurredAt = isoDate(data.occurredAtSeconds);
-            if (typeCode === null || occurredAt === null) {
+            const notification = platformNotificationInputFromEvent(
+              accountId,
+              engagementPlatform,
+              event,
+            );
+            if (notification === null) {
               continue;
             }
-            const metadata = eventData(data.metadataJson);
-            const result = await upsertPlatformNotification(app.db, {
-              pageId: accountId,
-              platform: engagementPlatform,
-              notificationRef,
-              // RAW. Never a label, never filtered against a known set.
-              typeCode,
-              correlationRef: asText(data.correlationRef),
-              correlationGroupRef: asText(data.correlationGroupRef),
-              metadata,
-              // Dated from `data`, never from event.occurredAt.
-              occurredAt,
-              acknowledgedAt: isoDate(data.acknowledgedAtSeconds),
-              observedAt: event.occurredAt,
-              contentHash,
-              sourceEventId: event.id,
-              sourceObservationId: event.observationId,
-              sourceAccountSeq: event.accountSeq,
-            });
+            const result = await upsertPlatformNotification(app.db, notification);
             if (result.applied) {
               totals.notifications += 1;
               totals.applied += 1;
@@ -238,15 +270,16 @@ export async function runFanslyEngagementProjection(
               continue;
             }
             const occurredAt = isoDate(data.occurredAtSeconds);
-            const result = await markSubjectRefreshDirty(app.db, {
+            const result = await markMediaStatsPurchaseDirty(app.db, {
               pageId: accountId,
-              plane: PURCHASE_SIGNAL_PLANE,
               subjectRef,
-              dirtyReason: PURCHASE_SIGNAL_REASON,
               // Due NOW. A purchase is the strongest freshness signal this
               // system has: somebody paid, and the counters behind that number
               // are what the creator will ask about.
-              nextDueAt: occurredAt ?? event.occurredAt,
+              purchasedAt: occurredAt ?? event.occurredAt,
+              // Receipt time: the deep backfill delivers year-old purchases,
+              // and a replay has to decide "too old" the same way every time.
+              receivedAt: event.occurredAt,
             });
             if (result.applied) {
               totals.purchaseSignals += 1;

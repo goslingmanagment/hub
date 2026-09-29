@@ -3,11 +3,15 @@ import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import {
   aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
+  clearConversationSyncHealth,
+  countOtherDmMessageGroupsFailingSinceLastSuccess,
   countRecentTerminalDmMessageConversationFailureStreak,
   countActivePageFollows,
+  countCurrentPageSubscriptionsByGeneration,
   countPageFollowsByGeneration,
   deactivatePageFollowsByGeneration,
   deactivatePageSubscriptionsByGeneration,
+  retireLapsedPageSubscriptionsForEmptySnapshot,
   finalizePageDmConversationMessageSync,
   recordFanslyDmHeadAttempt,
   getFanslyDmHeadTarget,
@@ -15,7 +19,10 @@ import {
   getEarliestSpenderTransactionAt,
   getPageDmConversationById,
   getCheckpoint,
+  getConversationSyncHealth,
+  countConversationSyncFailuresByAccount,
   getPageSyncExecutionContext,
+  getPageDmOnboardedAt,
   getCurrentSubscribers,
   getSyncRun,
   listFanslyPurchaseHistoryCaptures,
@@ -24,9 +31,12 @@ import {
   listFanslyMessagePurchaseTargetsAfterId,
   maxPageFollowGeneration,
   maxPageSubscriptionGeneration,
+  nextConversationSyncBackoffRetryAt,
   PAGE_DM_LIVE_BACKFILL_CAP,
+  PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES,
   PageSyncLeaseLostError,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+  recordConversationSyncFailure,
   recordProjectionDebt,
   requestPageSync,
   readPageFollowReconcileActivity,
@@ -50,6 +60,7 @@ import {
   withOwnedPageSyncTransaction,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type PageDmConversationRow,
   type PageSyncLease,
   type SyncStream,
   type UpsertFanPageInput,
@@ -172,6 +183,8 @@ import {
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
+  isDmHeadStaleByTime,
+  isDmMessagePageAfterOnboarding,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
@@ -194,9 +207,26 @@ import { runAiMediaAcceleratorStep } from "./ai-media-accelerator.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
+// Per-thread breaker outage guard: a first-page failure while this many OTHER
+// groups of the page failed since its last successful /message read (3+
+// distinct threads) is a page-wide outage, not a poison thread.
+const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
+// Scan window for that guard; also lets a guarded pin fall to the breaker
+// once nothing else has failed for this long.
+const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+// The deferral (or, with nothing left to wait for, quality hold) of a
+// dm_messages chunk whose only work was threads the breaker deferred.
+const FANSLY_DM_THREADS_DEFERRED = "fansly_dm_threads_deferred";
 const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
 const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
 const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
+const SUBSCRIBERS_MAX_WALK_RESTARTS = 2;
+const SUBSCRIBERS_WALK_RESTART_DELAY_MS = 60_000;
+// Most current subscriptions a stated-empty active snapshot retires on its
+// own, each already lapsed with auto-renew off before the walk began. A share
+// cannot tell one-to-zero from ten-thousand-to-zero; any larger or unexplained
+// drop keeps the empty-first-page guard.
+const SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS = 5;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
@@ -332,6 +362,35 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     error.status < 600;
 }
 
+/** An application answer about this request that may be the thread's own: a
+ * terminal HTTP 500 after in-process retries, or a 404/4xx. Everything else
+ * is page-level and never opens a per-thread breaker: auth (401/403), a
+ * timeout (408), rate limits (429), a provider Retry-After deadline, gateway
+ * and edge answers (502/503/504 and every 5xx but 500 describe the path to
+ * Fansly, not the thread), an envelope failure at HTTP 200 (as likely a
+ * proxy's page as Fansly's verdict), and every status-less failure
+ * (transport, proxy, capture, contract drift). */
+function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
+  if (!(error instanceof FanslyApiError) || typeof error.status !== "number" || error.retryAfterAt !== null) {
+    return false;
+  }
+  const status = error.status;
+  if (status >= 500) {
+    return status === 500;
+  }
+  return status >= 400 && status !== 401 && status !== 403 && status !== 408 && status !== 429;
+}
+
+/** A partner-account probe failure that speaks for the page, not the partner:
+ * auth (401/403), a rate limit (429) or a provider Retry-After deadline. It
+ * fails the stream with its own classification and deadline before the
+ * thread is deferred; carrying on to other threads would walk straight into
+ * the same refusal. */
+function isPageLevelFanslyProbeFailure(error: unknown): error is FanslyApiError {
+  return error instanceof FanslyApiError &&
+    (error.status === 401 || error.status === 403 || error.status === 429 || error.retryAfterAt !== null);
+}
+
 async function triggerFollowersReconcileAnomaly(
   app: AppContext,
   platformAccountId: number,
@@ -341,6 +400,9 @@ async function triggerFollowersReconcileAnomaly(
     streams: ["followers_reconcile"],
     source: "anomaly",
     includeQueueState: true,
+    // A mid-sweep bump would restart the sweep from offset zero and reset its
+    // snapshot-restart bound; the outstanding revision already reconciles.
+    coalesceOutstanding: true,
     ...pageSyncDependencyInput(app),
   });
   return receipts?.find(row => row.stream === "followers_reconcile") ?? null;
@@ -1404,6 +1466,130 @@ export async function onlyfansSubscribersChunk(
   } satisfies StreamChunkResult;
 }
 
+type SubscribersWalkRestartReason = "total_changed" | "partial_result" | "offset_duplicates";
+
+/** Rewalk from offset zero under the same request revision. */
+async function subscribersWalkRestartState(
+  db: Parameters<typeof maxPageSubscriptionGeneration>[0],
+  platformAccountId: number,
+  state: SubscribersCursorState,
+): Promise<SubscribersCursorState> {
+  const walk = {
+    offset: 0,
+    observedCount: 0,
+    distinctObservedCount: 0,
+    pageCount: 0,
+    providerReportedTotal: null,
+    restartCount: state.restartCount + 1,
+  };
+  if (state.mode === "expired") {
+    // The active walk already finalized; only the archive-only history is reread.
+    return { ...state, ...walk };
+  }
+  // A fresh generation keeps rows stamped by the abandoned walk from counting
+  // as seen, and a fresh start keeps them from counting as touched mid-walk.
+  const storedGeneration = await maxPageSubscriptionGeneration(db, platformAccountId);
+  return {
+    ...state,
+    ...walk,
+    generation: Math.max(state.generation, storedGeneration) + 1,
+    walkStartedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * A cursor written before the walk-start fence cannot say when its active
+ * walk began. One still at offset zero has stamped nothing it could vouch for,
+ * so its fence starts now, before the read. One already past the first page
+ * rewalks from offset zero under a fresh generation and fence rather than
+ * guess. Neither is a provider anomaly, so the bounded restart allowance is
+ * untouched; the fenced state persists with the walk's next page write.
+ */
+async function fenceLegacySubscribersWalk(
+  db: Parameters<typeof maxPageSubscriptionGeneration>[0],
+  platformAccountId: number,
+  state: SubscribersCursorState,
+): Promise<SubscribersCursorState> {
+  const walkStartedAt = new Date().toISOString();
+  if (state.offset === 0) {
+    return { ...state, walkStartedAt };
+  }
+  const storedGeneration = await maxPageSubscriptionGeneration(db, platformAccountId);
+  return {
+    ...state,
+    generation: Math.max(state.generation, storedGeneration) + 1,
+    walkStartedAt,
+    offset: 0,
+    observedCount: 0,
+    distinctObservedCount: 0,
+    pageCount: 0,
+    providerReportedTotal: null,
+  };
+}
+
+/**
+ * Until an active walk has written a page, nothing carries its generation, so
+ * its start can move up to each read: every row touched before that read is
+ * one the read could observe (Audit P-25). Retries of a failed or yielded
+ * first read keep the same revision and cursor; judged against the first
+ * attempt's start, a subscription that lapsed in between would never count as
+ * lapsed and a stated zero would be refused for good. The moved start
+ * persists with the walk's first page write.
+ */
+function refreshUnreadSubscribersWalkStart(state: SubscribersCursorState): SubscribersCursorState {
+  const unread = state.mode === "active" &&
+    state.offset === 0 &&
+    state.pageCount === 0 &&
+    state.observedCount === 0;
+  return unread ? { ...state, walkStartedAt: new Date().toISOString() } : state;
+}
+
+/** Rows touched at or after this instant survive the walk's finalization. */
+function subscribersWalkFence(state: SubscribersCursorState) {
+  if (state.walkStartedAt === null) {
+    throw new Error("Subscriber walk has no start fence; refusing destructive finalization");
+  }
+  return new Date(state.walkStartedAt);
+}
+
+/**
+ * A zero the provider states outright: an accepted contract on the first and
+ * terminal page of an active walk, an explicit active total of zero, and
+ * nothing positive earlier in the same walk. An empty array alone (a missing
+ * total, an absent or rejected contract) is not a statement of zero.
+ */
+function isStatedEmptyActiveSnapshot(
+  state: SubscribersCursorState,
+  page: { contractAccepted?: boolean; total?: number | null; items: unknown[]; done: boolean },
+  totalChanged: boolean,
+) {
+  return state.mode === "active" &&
+    state.offset === 0 &&
+    state.observedCount === 0 &&
+    !totalChanged &&
+    page.contractAccepted === true &&
+    page.done &&
+    page.items.length === 0 &&
+    page.total === 0;
+}
+
+/** The stats trail of a revision whose walks could not be certified past the restart bound. */
+function subscribersWithheldStats(
+  state: Pick<SubscribersCursorState, "activeWithheldReason" | "historyWithheldReason">,
+) {
+  return {
+    ...(state.activeWithheldReason === undefined ? {} : {
+      destructiveFinalization: false,
+      finalizationWithheld: true,
+      withheldReason: state.activeWithheldReason,
+    }),
+    ...(state.historyWithheldReason === undefined ? {} : {
+      historyCertified: false,
+      historyWithheldReason: state.historyWithheldReason,
+    }),
+  };
+}
+
 export async function fanslySubscribersChunk(
   app: AppContext,
   input: ExecutorRequestContext & {
@@ -1427,6 +1613,23 @@ export async function fanslySubscribersChunk(
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
 
   const existingState = parseSubscribersCursorState(checkpoint?.state, input.streamState.requestSeq);
+  // Only a withheld active completion leaves an active state with a withheld
+  // reason, and it closes its revision. Re-reading its last page on a replay
+  // could certify the walk and retire the rows it never served.
+  if (existingState?.mode === "active" && existingState.activeWithheldReason !== undefined) {
+    return {
+      satisfied: true,
+      yieldReason: null,
+      stats: {
+        generation: existingState.generation,
+        mode: existingState.mode,
+        pageCount: existingState.pageCount,
+        processedThisChunk: 0,
+        providerReportedTotal: existingState.providerReportedTotal,
+        ...subscribersWithheldStats(existingState),
+      },
+    } satisfies StreamChunkResult;
+  }
   const previousCheckpointState = asRecord(checkpoint?.state);
   const previousGeneration = asNumber(previousCheckpointState?.generation) ?? 0;
   const previousHistoryBackfilledAt = typeof previousCheckpointState?.historyBackfilledAt === "string"
@@ -1434,8 +1637,11 @@ export async function fanslySubscribersChunk(
     : null;
   let state: SubscribersCursorState;
   if (existingState) {
-    state = existingState;
+    state = existingState.mode === "active" && existingState.walkStartedAt === null
+      ? await fenceLegacySubscribersWalk(app.db, input.pageContext.page.id, existingState)
+      : existingState;
   } else {
+    const walkStartedAt = new Date().toISOString();
     const storedGeneration = await maxPageSubscriptionGeneration(
       app.db,
       input.pageContext.page.id,
@@ -1447,8 +1653,11 @@ export async function fanslySubscribersChunk(
       historyBackfilledAt: previousHistoryBackfilledAt,
       offset: 0,
       observedCount: 0,
+      distinctObservedCount: 0,
       pageCount: 0,
       providerReportedTotal: null,
+      restartCount: 0,
+      walkStartedAt,
     };
     await upsertCheckpointProgress(app.db, {
       platformAccountId: input.pageContext.page.id,
@@ -1458,11 +1667,35 @@ export async function fanslySubscribersChunk(
   }
 
   let processedThisChunk = 0;
+  const restartWalk = async (
+    walk: SubscribersCursorState,
+    reason: SubscribersWalkRestartReason,
+    restartState: SubscribersCursorState,
+    checkpoint: Awaited<ReturnType<typeof upsertCheckpointProgress>>,
+  ) => {
+    await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(checkpoint));
+    return {
+      satisfied: false,
+      yieldReason: null,
+      continuationRetryAt: spreadFanslyContinuation(new Date(), SUBSCRIBERS_WALK_RESTART_DELAY_MS),
+      continuationRequestSource: "scheduled",
+      stats: {
+        generation: restartState.generation,
+        mode: walk.mode,
+        pageCount: walk.pageCount,
+        processedThisChunk,
+        restartCount: restartState.restartCount,
+        restartReason: reason,
+        destructiveFinalization: false,
+      },
+    } satisfies StreamChunkResult;
+  };
 
   // A non-empty subscribers page is followed by one batched account lookup.
   // Reserve both calls so a chunk never starts a page it cannot hydrate.
   while (input.budget.hasRequestCapacity(2) && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
+    state = refreshUnreadSubscribersWalkStart(state);
     const status = state.mode === "active" ? "3,4" : "5";
     const page = await app.adapter.getSubscribersPage(
       requestContext,
@@ -1487,13 +1720,46 @@ export async function fanslySubscribersChunk(
     if (page.contractAccepted === false) {
       throw new Error("Fansly subscribers response contract rejected; captured before refusal");
     }
+    // Offsets index one provider snapshot. A shifted total moves rows between
+    // pages already read and pages still ahead, so this walk can no longer be
+    // certified; resuming at the same offset against the first total never
+    // converges. Restart it, bounded, before spending the account lookup.
+    const pageTotal = page.total ?? null;
+    const totalChanged = state.providerReportedTotal !== null && pageTotal !== state.providerReportedTotal;
+    if (totalChanged) {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_total_changed",
+        severity: "warn",
+        message: "Subscriber total changed during an offset walk; the walk cannot certify membership",
+        details: {
+          mode: state.mode,
+          previousTotal: state.providerReportedTotal,
+          currentTotal: pageTotal,
+          offset: state.offset,
+          pageCount: state.pageCount,
+          restartCount: state.restartCount,
+        },
+      });
+      if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+        const restartState = await subscribersWalkRestartState(app.db, input.pageContext.page.id, state);
+        return restartWalk(state, "total_changed", restartState, await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state: restartState,
+        }));
+      }
+    }
     state = {
       ...state,
       pageCount: state.pageCount + 1,
-      providerReportedTotal: state.providerReportedTotal ?? page.total ?? null,
+      providerReportedTotal: totalChanged ? pageTotal : state.providerReportedTotal ?? pageTotal,
     };
 
-    if (state.mode === "active" && state.offset === 0 && page.items.length === 0) {
+    // An empty first page vouches for nothing unless the provider states the
+    // zero outright; even then the finalization transaction retires only the
+    // small, already-lapsed membership it can explain, or refuses.
+    const statedEmptySnapshot = isStatedEmptyActiveSnapshot(state, page, totalChanged);
+    if (!statedEmptySnapshot && state.mode === "active" && state.offset === 0 && page.items.length === 0) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
       if (currentSubscribers.rows.length > 0) {
         await input.telemetry.addAnomaly({
@@ -1502,27 +1768,17 @@ export async function fanslySubscribersChunk(
           message: "Subscriber sync returned zero rows on the first page while current subscriptions already exist",
           details: {
             existingCurrentSubscribers: currentSubscribers.rows.length,
+            reason: "zero_not_stated",
           },
         });
         throw new Error("Subscriber sync returned zero rows; refusing destructive finalization");
       }
     }
 
-    const hydratedFans = await lookupHydratedFans(app, {
-      requestContext,
-      platformUserIds: page.items.map((item) => item.subscriberId),
-      telemetry: input.telemetry,
-      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
-    });
-    const nextPageState = page.done
-      ? state
-      : {
-        ...state,
-        offset: state.offset + 100,
-        observedCount: state.observedCount + page.items.length,
-      };
     const finalObservedCount = state.observedCount + page.items.length;
-    if (page.done && state.providerReportedTotal !== null && finalObservedCount !== state.providerReportedTotal) {
+    const partialResult = !totalChanged && page.done && state.providerReportedTotal !== null &&
+      finalObservedCount !== state.providerReportedTotal;
+    if (partialResult) {
       await input.telemetry.addAnomaly({
         code: "subscribers_partial_page_guard",
         severity: "warn",
@@ -1534,23 +1790,68 @@ export async function fanslySubscribersChunk(
           mode: state.mode,
         },
       });
-      throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
+      // One response is one snapshot, and its retry re-reads it from offset
+      // zero. A multi-page walk would resume at this offset forever instead.
+      if (state.pageCount === 1) {
+        throw new Error("Subscriber sync returned a partial result; refusing destructive finalization");
+      }
+      if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+        const restartState = await subscribersWalkRestartState(app.db, input.pageContext.page.id, state);
+        return restartWalk(state, "partial_result", restartState, await upsertCheckpointProgress(app.db, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "subscribers",
+          state: restartState,
+        }));
+      }
     }
+    // Past the restart bound, keep what this walk saw and retire nothing.
+    const withheldReason: SubscribersWalkRestartReason | null = totalChanged
+      ? "total_changed"
+      : partialResult ? "partial_result" : null;
+    if (state.mode === "expired" && withheldReason !== null) {
+      // The archive is walked only once and its writes retire nothing, so
+      // stopping here would leave the rest of it unread for good. Adopt the
+      // new total and read on to the end; the completion stays uncertified.
+      state = { ...state, historyWithheldReason: state.historyWithheldReason ?? withheldReason };
+    }
+    // An active walk stops at the page it cannot certify; the next revision
+    // walks the current list again.
+    const lastPage = page.done || (state.mode === "active" && withheldReason !== null);
+
+    const hydratedFans = await lookupHydratedFans(app, {
+      requestContext,
+      platformUserIds: page.items.map((item) => item.subscriberId),
+      telemetry: input.telemetry,
+      capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
+    });
+    const pageDistinctCount = new Set(page.items.map((item) => item.id)).size;
+    const nextPageState = lastPage
+      ? state
+      : {
+        ...state,
+        offset: state.offset + 100,
+        observedCount: state.observedCount + page.items.length,
+        distinctObservedCount: state.distinctObservedCount + pageDistinctCount,
+      };
 
     const shouldBackfillHistory =
       state.mode === "active" &&
-      page.done &&
+      lastPage &&
       state.historyBackfilledAt === null;
     const historyState: SubscribersCursorState = {
       ...state,
       mode: "expired",
       offset: 0,
       observedCount: 0,
+      distinctObservedCount: 0,
       pageCount: 0,
       providerReportedTotal: null,
+      restartCount: 0,
     };
 
+    let emptySnapshotRetiredCount: number | null = null;
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
+      emptySnapshotRetiredCount = null;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFans.accounts,
@@ -1610,33 +1911,85 @@ export async function fanslySubscribersChunk(
         await upsertArchivedPageSubscriptions(dbTx, subscriptionInputs);
       }
 
-      if (state.mode === "active" && page.done) {
-        await deactivatePageSubscriptionsByGeneration(dbTx, {
-          platformAccountId: input.pageContext.page.id,
-          generation: state.generation,
-        });
+      if (state.mode === "active" && lastPage) {
+        let finalWithheldReason: SubscribersWalkRestartReason | null = withheldReason;
+        let membership: { generationCurrentCount: number; expectedCount: number } | null = null;
+        if (finalWithheldReason === null && state.pageCount > 1) {
+          // Summed page lengths cannot tell a row served on two pages from two
+          // rows, and such an overlap leaves a current row unseen. Rows stamped
+          // with this generation are the distinct subscriptions the walk saw.
+          const generationCurrentCount = await countCurrentPageSubscriptionsByGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+          });
+          const expectedCount = state.distinctObservedCount + pageDistinctCount;
+          if (generationCurrentCount < expectedCount) {
+            membership = { generationCurrentCount, expectedCount };
+            if (state.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+              const restartState = await subscribersWalkRestartState(dbTx, input.pageContext.page.id, state);
+              return {
+                kind: "restart" as const,
+                restartState,
+                membership,
+                checkpoint: await upsertCheckpointProgress(dbTx, {
+                  platformAccountId: input.pageContext.page.id,
+                  stream: "subscribers",
+                  state: restartState,
+                }),
+                processedThisPage: subscriptionInputs.length,
+              };
+            }
+            finalWithheldReason = "offset_duplicates";
+          }
+        }
+        if (finalWithheldReason === null && statedEmptySnapshot) {
+          // The assessment and the retirement act on one locked set.
+          const retirement = await retireLapsedPageSubscriptionsForEmptySnapshot(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+            walkStartedAt: subscribersWalkFence(state),
+            maxRetirements: SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS,
+          });
+          if (!retirement.certified) {
+            return { kind: "empty_refused" as const, retirement };
+          }
+          emptySnapshotRetiredCount = retirement.retiredCount;
+        } else if (finalWithheldReason === null) {
+          await deactivatePageSubscriptionsByGeneration(dbTx, {
+            platformAccountId: input.pageContext.page.id,
+            generation: state.generation,
+            lastSeenBefore: subscribersWalkFence(state),
+          });
+        }
         await refreshFanPageSubscriberState(dbTx, input.pageContext.page.id);
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
+        const withheldState = finalWithheldReason === null ? {} : { activeWithheldReason: finalWithheldReason };
         if (shouldBackfillHistory) {
+          const nextState: SubscribersCursorState = { ...historyState, ...withheldState };
           return {
             kind: "progress" as const,
-            nextState: historyState,
+            nextState,
+            membership,
             checkpoint: await upsertCheckpointProgress(dbTx, {
               platformAccountId: input.pageContext.page.id,
               stream: "subscribers",
-              state: historyState,
+              state: nextState,
             }),
             processedThisPage: subscriptionInputs.length,
           };
         }
         return {
           kind: "complete" as const,
+          withheld: withheldState,
+          membership,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "subscribers",
             state: {
               ...state,
               observedCount: finalObservedCount,
+              ...withheldState,
+              ...(finalWithheldReason === null ? {} : { destructiveFinalization: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1644,11 +1997,13 @@ export async function fanslySubscribersChunk(
         };
       }
 
-      if (state.mode === "expired" && page.done) {
+      if (state.mode === "expired" && lastPage) {
         const historyBackfilledAt = new Date().toISOString();
         await rebuildSubscriberRollups(dbTx, input.pageContext.page.id);
         return {
           kind: "complete" as const,
+          withheld: state,
+          membership: null,
           checkpoint: await upsertCheckpoint(dbTx, {
             platformAccountId: input.pageContext.page.id,
             stream: "subscribers",
@@ -1656,6 +2011,11 @@ export async function fanslySubscribersChunk(
               ...state,
               observedCount: finalObservedCount,
               historyBackfilledAt,
+              // This revision's active walk retired nothing.
+              ...(state.activeWithheldReason === undefined ? {} : { destructiveFinalization: false }),
+              // Archive writes are non-destructive, so an uncertified history
+              // walk still closes instead of re-walking the archive every hour.
+              ...(state.historyWithheldReason === undefined ? {} : { historyCertified: false }),
             },
             lastSuccessfulRunId: input.syncRunId,
           }),
@@ -1666,6 +2026,7 @@ export async function fanslySubscribersChunk(
       return {
         kind: "progress" as const,
         nextState: nextPageState,
+        membership: null,
         checkpoint: await upsertCheckpointProgress(dbTx, {
           platformAccountId: input.pageContext.page.id,
           stream: "subscribers",
@@ -1674,8 +2035,45 @@ export async function fanslySubscribersChunk(
         processedThisPage: subscriptionInputs.length,
       };
     });
+    if (pageWrite.kind === "empty_refused") {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_empty_first_page_guard",
+        severity: "warn",
+        message: "Subscriber sync returned zero rows on the first page while current subscriptions already exist",
+        details: {
+          existingCurrentSubscribers: pageWrite.retirement.currentCount,
+          reason: pageWrite.retirement.reason,
+        },
+      });
+      throw new Error("Subscriber sync returned zero rows; refusing destructive finalization");
+    }
+    if (emptySnapshotRetiredCount !== null) {
+      await input.telemetry.addNote("Fansly subscribers stated-empty snapshot certified", {
+        code: "subscribers_empty_snapshot_certified",
+        generation: state.generation,
+        walkStartedAt: state.walkStartedAt,
+        retiredCount: emptySnapshotRetiredCount,
+      });
+    }
     processedThisChunk += pageWrite.processedThisPage;
 
+    if (pageWrite.membership) {
+      await input.telemetry.addAnomaly({
+        code: "subscribers_offset_duplicates",
+        severity: "warn",
+        message: "Subscriber offset walk saw fewer distinct subscriptions than rows served; refusing destructive finalization",
+        details: {
+          generation: state.generation,
+          generationCurrentCount: pageWrite.membership.generationCurrentCount,
+          expectedCount: pageWrite.membership.expectedCount,
+          pageCount: state.pageCount,
+          restartCount: state.restartCount,
+        },
+      });
+    }
+    if (pageWrite.kind === "restart") {
+      return restartWalk(state, "offset_duplicates", pageWrite.restartState, pageWrite.checkpoint);
+    }
     if (pageWrite.kind === "complete") {
       await input.telemetry.recordCheckpointAdvanced("subscribers", summarizeCheckpoint(pageWrite.checkpoint));
       return {
@@ -1687,6 +2085,7 @@ export async function fanslySubscribersChunk(
           pageCount: state.pageCount,
           processedThisChunk,
           providerReportedTotal: state.providerReportedTotal,
+          ...subscribersWithheldStats(pageWrite.withheld),
         },
       } satisfies StreamChunkResult;
     }
@@ -1704,6 +2103,7 @@ export async function fanslySubscribersChunk(
           offset: state.offset,
           pageCount: state.pageCount,
           processedThisChunk,
+          ...subscribersWithheldStats(state),
         },
       } satisfies StreamChunkResult;
     }
@@ -1718,6 +2118,7 @@ export async function fanslySubscribersChunk(
       offset: state.offset,
       pageCount: state.pageCount,
       processedThisChunk,
+      ...subscribersWithheldStats(state),
     },
   } satisfies StreamChunkResult;
 }
@@ -1960,6 +2361,7 @@ export async function executeFollowersChunk(
             pageCount: state.pageCount, processedThisChunk },
           knownCheckpoint: Boolean(state.knownFollowId), pageDone: page.done,
           requestedSeq: receipt?.requestedSeq ?? null, queueBefore: receipt?.queueBefore ?? null,
+          coalesced: receipt?.coalesced === true,
         },
       });
 
@@ -2736,6 +3138,9 @@ export async function fanslyDmMessagesChunk(
     ),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
   };
+  // For a failing thread's retry: the adapter clamps its in-process retries
+  // to this allowance, so the page costs one physical attempt.
+  const singleAttemptRequestContext = { ...requestContext, remainingAttempts: () => 1 };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_messages");
   await input.telemetry.recordCheckpointLoaded("dm_messages", summarizeCheckpoint(checkpoint));
 
@@ -2779,6 +3184,18 @@ export async function fanslyDmMessagesChunk(
   let deepBackfillRequests = 0;
   let deepBackfillPaused = false;
   let deepBackfillSelectionReason: "quota" | "idle" | null = null;
+  // Read at most once per chunk, and only when a first read fills its start
+  // window: the one question the new-thread history walk asks the database.
+  let dmOnboardedAt: Date | null | undefined;
+  // Settlement evidence. A message page the provider answered and the contract
+  // accepted is progress; a thread failure the breaker deferred is not.
+  let acceptedMessagePages = 0;
+  let deferredThreads = 0;
+  // A thread still carrying breaker failures whose window has lapsed is a
+  // retry, not ordinary work: at most one per chunk, its first page on a
+  // single physical attempt, so a poison thread costs the chunk one request.
+  // Once the retry is spent, the pickers skip failing threads.
+  let failingThreadRetrySpent = false;
 
   const emitDmMessagesChunkSummary = async () => {
     if (emittedDmMessagesChunkSummary) {
@@ -2788,6 +3205,185 @@ export async function fanslyDmMessagesChunk(
     emittedDmMessagesChunkSummary = dmMessagesRequestObserver.buildSummary(Date.now() - chunkStartedAt);
     await input.telemetry.recordDmMessagesChunkSummary(emittedDmMessagesChunkSummary);
     return emittedDmMessagesChunkSummary;
+  };
+
+  /** The pinned walk has not written a page yet. */
+  const isAtWalkStart = (
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ) => state.currentBeforeMessageId === (state.headCatchup || currentMode === "incremental"
+    ? null
+    : conversation.oldestStoredMessageId);
+
+  /**
+   * Per-thread circuit breaker (0086). The pin is checkpointed before the
+   * fetch and the next chunk resumes it without reselecting, so one thread
+   * the provider refuses deterministically would otherwise stop the page's
+   * whole lane. When the walk's FIRST page fails with a thread-attributable
+   * answer, the failure is recorded (backoff, quarantine from the 4th) and the
+   * pin is cleared in one owned transaction: the thread is deferred, and the
+   * chunk goes on with other threads under its normal budgets. Everything
+   * else fails the stream with its ordinary classification and backoff: a
+   * failure that is not the thread's, several groups failing since the page's
+   * last successful read (an outage, which never opens a breaker), a failed
+   * breaker write, and lease loss. A walk with pages already written keeps
+   * its pin and fails the stream too: a later head walk would stop on those
+   * pages and hide the gap below them.
+   */
+  const recordFirstPageThreadFailure = async (
+    error: unknown,
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ): Promise<{ deferred: true } | { deferred: false; streamError: unknown }> => {
+    if (!isThreadAttributableFanslyFailure(error)) {
+      return { deferred: false, streamError: error };
+    }
+    if (!isAtWalkStart(conversation, currentMode)) {
+      return { deferred: false, streamError: error };
+    }
+
+    const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
+      emptyDmMessagesCursorState(),
+      getDmMessagesLiveRequestsSinceDeepBackfill(state),
+    );
+    let otherFailingGroups: number;
+    let recorded: {
+      health: Awaited<ReturnType<typeof recordConversationSyncFailure>>;
+      progressCheckpoint: Awaited<ReturnType<typeof upsertCheckpointProgress>>;
+    };
+    try {
+      otherFailingGroups = await countOtherDmMessageGroupsFailingSinceLastSuccess(app.db, {
+        platformAccountId: input.pageContext.page.id,
+        platformConversationId: conversation.platformConversationId,
+        since: new Date(Date.now() - DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS),
+      });
+      if (otherFailingGroups >= DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS) {
+        await input.telemetry.addNote(
+          "DM message failures span several conversations; treated as a page-wide outage, no breaker",
+          {
+            conversationId: conversation.id,
+            groupId: conversation.platformConversationId,
+            httpStatus: error.status,
+            otherFailingGroups,
+          },
+        );
+        return { deferred: false, streamError: error };
+      }
+
+      recorded = await withOwnedPageSyncTransaction(app.db, async (dbTx) => ({
+        health: await recordConversationSyncFailure(dbTx, {
+          conversationId: conversation.id,
+          platformAccountId: input.pageContext.page.id,
+          errorClass: `fansly_${error.status}`,
+          errorMessage: error.message,
+        }),
+        progressCheckpoint: await upsertCheckpointProgress(dbTx, {
+          platformAccountId: input.pageContext.page.id,
+          stream: "dm_messages",
+          state: nextState,
+        }),
+      }));
+    } catch (breakerError) {
+      if (breakerError instanceof PageSyncLeaseLostError) {
+        // Fencing stays fatal: another owner may already be running.
+        return { deferred: false, streamError: breakerError };
+      }
+      app.logger.warn({
+        err: breakerError,
+        conversationId: conversation.id,
+        platformAccountId: input.pageContext.page.id,
+      }, "DM conversation breaker write failed; the stream keeps its pin");
+      return { deferred: false, streamError: error };
+    }
+
+    state = nextState;
+    await input.telemetry.recordCheckpointAdvanced(
+      "dm_messages",
+      summarizeCheckpoint(recorded.progressCheckpoint),
+    );
+    await input.telemetry.addNote(
+      recorded.health.quarantineUntil !== null
+        ? "DM conversation quarantined after repeated first-page failures"
+        : "DM conversation first-page failure recorded, backing off",
+      {
+        conversationId: conversation.id,
+        groupId: conversation.platformConversationId,
+        currentMode,
+        httpStatus: error.status,
+        failureCount: recorded.health.failureCount,
+        nextRetryAt: recorded.health.nextRetryAt?.toISOString() ?? null,
+        quarantineUntil: recorded.health.quarantineUntil?.toISOString() ?? null,
+        otherFailingGroups,
+      },
+    );
+    return { deferred: true };
+  };
+
+  /** Defers a thread's failed first page, or throws what fails the stream.
+   * On return the chunk continues with another thread. */
+  const deferThreadOrFailStream = async (
+    error: unknown,
+    conversation: PageDmConversationRow,
+    currentMode: "backfill" | "deep_backfill" | "incremental",
+  ) => {
+    const outcome = await recordFirstPageThreadFailure(error, conversation, currentMode);
+    if (!outcome.deferred) {
+      throw outcome.streamError;
+    }
+    deferredThreads += 1;
+  };
+
+  /** A failing thread whose window has lapsed, which the pickers would offer
+   * now had the chunk not spent its retry. */
+  const hasDueFailingThread = async () => {
+    const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
+      ...(headCatchupEnabled ? { includeHeadDebt: true } : {}),
+      platformAccountId: input.pageContext.page.id,
+    });
+    if (candidate !== null || deepBackfillRequests >= deepBackfillMaxRequests) {
+      return candidate !== null;
+    }
+    const effective = await loadEffectiveConfig(app.db, app.config);
+    return await selectNextPageDmMessageDeepBackfillCandidate(app.db, {
+      platformAccountId: input.pageContext.page.id,
+      ignoreRetentionLimit: effective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+    }) !== null;
+  };
+
+  /**
+   * A pinned walk dropped after it wrote pages (the thread became excluded,
+   * invisible or unbound) leaves rows its thread summary does not cover yet.
+   * A later incremental walk reads through them (overlap counts only rows at
+   * or before the recorded newest message), unless a writer recomputes the
+   * summary first and moves that boundary onto them. A backfill or deep
+   * backfill walk re-picked from the stale oldest message meets its own pages
+   * as ordinary overlap and can certify the unread history below them
+   * complete. Record the dropped cursor so such a gap stays findable for the
+   * targeted backfill; this anomaly is its only record.
+   */
+  const recordDroppedWalk = async (conversation: PageDmConversationRow, reason: string) => {
+    if (!state.currentMode) {
+      return;
+    }
+    const walkStartBeforeMessageId = state.headCatchup || state.currentMode === "incremental"
+      ? null
+      : conversation.oldestStoredMessageId;
+    if (state.currentBeforeMessageId === walkStartBeforeMessageId) {
+      return;
+    }
+    await input.telemetry.addAnomaly({
+      code: "dm_messages_walk_dropped",
+      severity: "warn",
+      message: "DM walk dropped after writing pages; history below its cursor may be unread",
+      details: {
+        reason,
+        conversationId: state.currentConversationId,
+        groupId: state.currentPlatformConversationId,
+        currentMode: state.currentMode,
+        droppedBeforeMessageId: state.currentBeforeMessageId,
+        newestStoredMessageId: conversation.newestStoredMessageId,
+      },
+    });
   };
 
   try {
@@ -2820,6 +3416,7 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (conversation && isFanslyDmMessageSyncExcluded(conversation.metadata)) {
+        await recordDroppedWalk(conversation, "excluded");
         state = emptyDmMessagesCursorState();
         const progressCheckpoint = await upsertCheckpointProgress(app.db, {
           platformAccountId: input.pageContext.page.id,
@@ -2834,6 +3431,9 @@ export async function fanslyDmMessagesChunk(
       }
 
       if (!conversation || !conversation.isVisible || conversation.fanId === null) {
+        if (conversation) {
+          await recordDroppedWalk(conversation, conversation.isVisible ? "unbound" : "invisible");
+        }
         let currentMode: "backfill" | "deep_backfill" | "incremental" | null = null;
         const shouldTryQuotaDeepBackfill =
           deepBackfillRequests < deepBackfillMaxRequests &&
@@ -2846,6 +3446,7 @@ export async function fanslyDmMessagesChunk(
             // Stage 17: the exhaustion crawl lifts the per-conversation depth
             // cap; archive coverage (not hot-table size) is the goal.
             ignoreRetentionLimit: deepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+            ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
           });
           if (deepBackfillCandidate) {
             conversation = await getPageDmConversationById(app.db, deepBackfillCandidate.id);
@@ -2865,6 +3466,7 @@ export async function fanslyDmMessagesChunk(
           const candidate = await selectNextPageDmMessageSyncCandidate(app.db, {
             ...(headCatchupEnabled ? { includeHeadDebt: true } : {}),
             platformAccountId: input.pageContext.page.id,
+            ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
           });
           if (candidate) {
             conversation = await getPageDmConversationById(app.db, candidate.id);
@@ -2888,6 +3490,7 @@ export async function fanslyDmMessagesChunk(
               // both selection paths must honor the lifted depth cap.
               ignoreRetentionLimit:
                 idleDeepBackfillEffective.fanslyDeepBackfillIgnoreRetentionLimit === true,
+              ...(failingThreadRetrySpent ? { excludeFailingThreads: true } : {}),
             });
             if (!deepBackfillCandidate) {
               exhaustedEligibleConversations = true;
@@ -2915,10 +3518,14 @@ export async function fanslyDmMessagesChunk(
 
         const headTarget = headCatchupEnabled && currentMode !== "deep_backfill"
           ? await getFanslyDmHeadTarget(app.db, { conversationId: conversation.id }) : null;
-        if (headCatchupEnabled && headTarget === null && currentMode === "incremental" &&
-          conversation.messageCoverageStatus === "pending_backfill") {
-          // An exhausted head can still differ from the newest stored message.
-          // Resume ordinary history from its oldest cursor instead of rereading that head.
+        if (headTarget === null && currentMode === "incremental" &&
+          conversation.messageCoverageStatus === "pending_backfill" &&
+          (headCatchupEnabled || !isDmHeadStaleByTime(conversation))) {
+          // A head can keep differing from the newest stored message after it
+          // was read (list lag, or an id /message never returns). Pending
+          // history without a due head read resumes from its oldest cursor
+          // instead of rereading that head forever. Off the catch-up allowlist
+          // a time-stale head is still read once first.
           currentMode = "backfill";
         }
         const nextState: DmMessagesCursorState = {
@@ -2960,6 +3567,15 @@ export async function fanslyDmMessagesChunk(
       const currentMode = state.currentMode;
       const headAttemptStartedAt = new Date(state.headCatchup?.startedAt ?? Date.now());
       let collectedThisConversation = 0;
+      // The chunk's one failing-thread retry (see failingThreadRetrySpent).
+      // Only the chunk's first walk can come from a restored pin; every later
+      // walk is a pick, and the pickers skip failing threads once it is spent.
+      let pageRequestContext = requestContext;
+      if (isAtWalkStart(conversation, currentMode) &&
+        ((await getConversationSyncHealth(app.db, conversation.id))?.failureCount ?? 0) > 0) {
+        failingThreadRetrySpent = true;
+        pageRequestContext = singleAttemptRequestContext;
+      }
       while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
         const currentConversation = conversation;
         await assertOwnedPageSyncLease(app.db);
@@ -2968,12 +3584,20 @@ export async function fanslyDmMessagesChunk(
         // The fetch + verbatim journal + normalization is the unit shared with
         // the targeted thread backfill (slice C′). It stays inside this
         // try/catch exactly as the bare adapter call did: only a terminal
-        // Fansly 5xx reaches the partner-unresolvable recovery below, every
-        // other failure (including a capture failure) rethrows as before.
+        // Fansly 5xx reaches the partner-unresolvable recovery below; every
+        // other failure (including a capture failure) goes to the per-thread
+        // breaker, which defers the thread or fails the stream.
+        if (state.currentBeforeMessageId === null) {
+          // This page reads the head (incremental, head catch-up, or a first
+          // backfill of an empty thread). Overwritten on every head fetch and
+          // carried by the in-walk checkpoint, so a walk finishing chunks
+          // later certifies the head only as of this read.
+          state.headReadAt = new Date().toISOString();
+        }
         let messagePage;
         try {
           messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
-            requestContext,
+            requestContext: pageRequestContext,
             telemetry: input.telemetry,
             syncRunId: input.syncRunId,
             platformAccountId: input.pageContext.page.id,
@@ -2982,6 +3606,12 @@ export async function fanslyDmMessagesChunk(
             conversation: currentConversation,
             before: state.currentBeforeMessageId,
             limit: FANSLY_DM_MESSAGE_PAGE_LIMIT,
+            // The summary moves only at finalize, so an incremental walk that
+            // was dropped mid-way and picked again must not stop on its own
+            // earlier pages above the recorded newest message.
+            overlapBoundaryMessageId: currentMode === "incremental"
+              ? currentConversation.newestStoredMessageId
+              : null,
           });
         } catch (error) {
           const partnerPlatformUserId = currentConversation.partnerPlatformUserId;
@@ -2989,7 +3619,8 @@ export async function fanslyDmMessagesChunk(
             !isTerminalFanslyServerError(error) ||
             !partnerPlatformUserId
           ) {
-            throw error;
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const failureStreak = await countRecentTerminalDmMessageConversationFailureStreak(
@@ -3000,11 +3631,13 @@ export async function fanslyDmMessagesChunk(
             },
           );
           if (failureStreak < DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD) {
-            throw error;
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           if (!input.budget.hasRequestCapacity() || !input.budget.hasWallClockCapacity()) {
-            throw error;
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const resolution = await probeFanslyAccountResolution(
@@ -3012,9 +3645,12 @@ export async function fanslyDmMessagesChunk(
             requestContext,
             partnerPlatformUserId,
             { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
+            // Thrown from here, it fails the stream with the pin kept.
+            { rethrow: isPageLevelFanslyProbeFailure },
           );
           if (resolution !== "unresolved") {
-            throw error;
+            await deferThreadOrFailStream(error, currentConversation, currentMode);
+            continue conversationLoop;
           }
 
           const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
@@ -3051,6 +3687,7 @@ export async function fanslyDmMessagesChunk(
                 FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
             },
           );
+          await recordDroppedWalk(currentConversation, "partner_unresolvable");
 
           state = emptyDmMessagesCursorState();
           await input.telemetry.recordCheckpointAdvanced(
@@ -3059,7 +3696,13 @@ export async function fanslyDmMessagesChunk(
           );
           continue conversationLoop;
         }
+        acceptedMessagePages += 1;
+        // A thread that answered is walked on with the ordinary retries.
+        pageRequestContext = requestContext;
         const { normalizedMessages, insertedMessageCount, overlapFound } = messagePage;
+        // Debt from an earlier page of this walk rides the checkpoint, so a
+        // multi-chunk walk cannot finish 'complete' over a skipped message.
+        const normalizationDebt = state.normalizationDebt === true || messagePage.normalizationDebt;
         collectedThisConversation += insertedMessageCount;
         processedMessages += normalizedMessages.length;
         const nextLiveRequestState = deepBackfillMaxRequests <= 0
@@ -3072,9 +3715,29 @@ export async function fanslyDmMessagesChunk(
           );
 
         const { oldestMessageId, providerHistoryExhausted } = messagePage;
-        const hitWindowCap =
+        const windowFilled =
           currentMode === "backfill" &&
           (currentConversation.storedMessageCount + collectedThisConversation) >= PAGE_DM_LIVE_BACKFILL_CAP;
+        // The first read of a thread (still pending_backfill) whose history
+        // began after the page's DM onboarding walks on past the start window
+        // toward the provider's end, so a new dialog that grew past 25
+        // messages before its first read keeps its beginning. Old threads
+        // stop at the window as before: the page's first message older than
+        // onboarding ends the walk, deep backfill stays off, and the extra
+        // pages are capped across chunks inside the chunk's own budget.
+        const newThreadHistoryPages = state.newThreadHistoryPages ?? 0;
+        let readsNewThreadHistory = false;
+        if (
+          windowFilled && !overlapFound && !providerHistoryExhausted &&
+          currentConversation.messageCoverageStatus === "pending_backfill" &&
+          newThreadHistoryPages < PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES
+        ) {
+          if (dmOnboardedAt === undefined) {
+            dmOnboardedAt = await getPageDmOnboardedAt(app.db, input.pageContext.page.id);
+          }
+          readsNewThreadHistory = isDmMessagePageAfterOnboarding(messagePage, dmOnboardedAt);
+        }
+        const hitWindowCap = windowFilled && !readsNewThreadHistory;
         const headCatchup = state.headCatchup;
         const targetFound = headCatchup && normalizedMessages.some(
           (message) => message.platformMessageId === headCatchup.messageId,
@@ -3105,6 +3768,12 @@ export async function fanslyDmMessagesChunk(
             overlapFound,
             providerHistoryExhausted,
             hitWindowCap,
+            // A deep walk's one page below the oldest stored message reached
+            // the provider's end: its unparseable tail can never be stored, so
+            // partial_window would hand the unchanged thread straight back to
+            // the deep picker. The anomaly stays the record of the skip.
+            normalizationDebt: normalizationDebt &&
+              !(currentMode === "deep_backfill" && providerHistoryExhausted),
           });
           // #135 A2b: the message upsert commits on its own; the thread-summary
           // recompute + checkpoint advance ride a SECOND transaction. The
@@ -3121,6 +3790,10 @@ export async function fanslyDmMessagesChunk(
               conversationId: currentConversation.id, messageId: headCatchup.messageId,
               startedAt: headAttemptStartedAt,
             });
+            // A completed walk resets the thread's breaker (no-op when it never
+            // failed). Here, not in the finalize below: that one can be
+            // deferred into projection_debt although the thread synced.
+            await clearConversationSyncHealth(dbTx, currentConversation.id);
           });
           let finalized: {
             finalizedConversation: Awaited<ReturnType<typeof finalizePageDmConversationMessageSync>>;
@@ -3132,6 +3805,8 @@ export async function fanslyDmMessagesChunk(
               const finalizedConversation = await finalizePageDmConversationMessageSync(dbTx, {
                 conversationId: currentConversation.id,
                 messageCoverageStatus,
+                // A walk from a stored cursor never read the head.
+                headReadAt: state.headReadAt ? new Date(state.headReadAt) : null,
                 enforceRetention: await isPageDmPruneAllowed(app),
               });
               const nextState = setDmMessagesLiveRequestsSinceDeepBackfill(
@@ -3220,6 +3895,8 @@ export async function fanslyDmMessagesChunk(
             overlapReached: headCatchup.overlapReached === true || overlapFound,
           } } : {}),
           currentBeforeMessageId: oldestMessageId,
+          ...(normalizationDebt ? { normalizationDebt: true as const } : {}),
+          ...(readsNewThreadHistory ? { newThreadHistoryPages: newThreadHistoryPages + 1 } : {}),
         };
         if (targetAttemptFinished) delete state.headCatchup;
         const progressCheckpoint = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
@@ -3246,11 +3923,28 @@ export async function fanslyDmMessagesChunk(
     }
 
     const dmMessagesChunk = await emitDmMessagesChunkSummary();
+    // Threads deferred behind their breaker windows are scheduling, not
+    // progress. A chunk that got no message page accepted must not reset the
+    // stream's failure streak, resolve its incidents or claim completion
+    // (StreamChunkResult.deferral) while breaker failures are outstanding:
+    // threads it deferred itself, or ones an earlier chunk deferred that now
+    // back off or sit out a quarantine. Otherwise the continuation after a
+    // deferral, or any request during a quarantine, would find nothing to
+    // read and certify recovery.
+    const deferredOnly = acceptedMessagePages === 0 && (
+      deferredThreads > 0 ||
+      (await countConversationSyncFailuresByAccount(app.db, {
+        platformAccountIds: [input.pageContext.page.id],
+      })).length > 0
+    );
+    const deferral = deferredOnly ? { deferral: FANSLY_DM_THREADS_DEFERRED } : {};
+    const deferredStats = deferredThreads > 0 ? { deferredThreads } : {};
 
     if (!exhaustedEligibleConversations && !deepBackfillPaused) {
       return {
         satisfied: false,
         yieldReason: input.budget.resolveYieldReason(),
+        ...deferral,
         stats: {
           currentConversationId: state.currentConversationId,
           currentBeforeMessageId: state.currentBeforeMessageId,
@@ -3260,6 +3954,7 @@ export async function fanslyDmMessagesChunk(
           overlapHits,
           projectionDebtRecorded,
           deepBackfillRequests,
+          ...deferredStats,
           dmMessagesChunk,
         },
       } satisfies StreamChunkResult;
@@ -3319,15 +4014,60 @@ export async function fanslyDmMessagesChunk(
       } satisfies StreamChunkResult;
     }
 
-    if (headCatchupEnabled) {
-      const retryAt = await nextFanslyDmHeadRetryAt(app.db, {
+    // The pickers skipped failing threads once this chunk spent its retry;
+    // another one may be due now. It runs in the next chunk, not after the
+    // next window or the daily cadence.
+    if (failingThreadRetrySpent && await hasDueFailingThread()) {
+      return {
+        satisfied: false, yieldReason: null, continuationRetryAt: null, ...deferral,
+        stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk, failingThreadRetryDue: true },
+      } satisfies StreamChunkResult;
+    }
+
+    // Only threads waiting out a short backoff window remain: sleep until the
+    // first one ends instead of completing, which would leave them to the next
+    // request (dm_messages runs on a daily cadence). A chunk that read nothing
+    // before going back to that wait made no progress either, so it cannot
+    // turn a deferral into recovery. A quarantine holds nothing open, not even
+    // through a quarantined thread's head debt: the breaker re-arms it on
+    // every later failure, so waiting on it would keep the request outstanding
+    // for good, and B1 cannot wake a stream with ordinary work outstanding
+    // (requestPageSync).
+    const headRetryAt = headCatchupEnabled
+      ? await nextFanslyDmHeadRetryAt(app.db, {
         platformAccountId: input.pageContext.page.id,
-      });
-      if (retryAt) return {
-        satisfied: false, yieldReason: null,
-        continuationRetryAt: new Date(Math.max(retryAt.getTime(), Date.now() + 60_000)),
-        stats: { processedMessages, completedConversations, dmMessagesChunk, headDebtPending: true },
-      };
+        excludeQuarantined: true,
+      })
+      : null;
+    const deferredRetryAt = await nextConversationSyncBackoffRetryAt(app.db, {
+      platformAccountId: input.pageContext.page.id,
+    });
+    const wakeAt = headRetryAt === null ||
+      (deferredRetryAt !== null && deferredRetryAt.getTime() < headRetryAt.getTime())
+      ? deferredRetryAt
+      : headRetryAt;
+    if (wakeAt) return {
+      satisfied: false, yieldReason: null,
+      continuationRetryAt: new Date(Math.max(wakeAt.getTime(), Date.now() + 60_000)),
+      ...(deferredOnly || (acceptedMessagePages === 0 && deferredRetryAt !== null)
+        ? { deferral: FANSLY_DM_THREADS_DEFERRED } : {}),
+      stats: {
+        processedMessages, completedConversations, ...deferredStats, dmMessagesChunk,
+        ...(headRetryAt ? { headDebtPending: true } : {}),
+        ...(deferredRetryAt ? { deferredThreadsRetryAt: deferredRetryAt.toISOString() } : {}),
+      },
+    } satisfies StreamChunkResult;
+
+    if (deferredOnly) {
+      // Nothing was read, and nothing is left to wait for: the failing
+      // threads sit out a quarantine, left the lane (hidden, unbound,
+      // excluded) or have nothing to read. Settle the request without
+      // success, the stream going idle; the next ordinary request retries a
+      // quarantined thread once its window ends.
+      return {
+        satisfied: true, yieldReason: null, qualityHold: FANSLY_DM_THREADS_DEFERRED,
+        stats: { processedMessages, completedConversations, ...deferredStats, dmMessagesChunk },
+      } satisfies StreamChunkResult;
     }
 
     const completedCheckpoint = await upsertCheckpoint(app.db, {

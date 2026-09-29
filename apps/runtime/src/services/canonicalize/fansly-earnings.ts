@@ -24,7 +24,10 @@ interface EarningsAggregate {
 }
 
 /** Both earnings kinds: rows aggregate per (fan, window); window = 'lifetime'
- *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS. */
+ *  for the stats snapshot, 'YYYY-MM' for monthly rows. Amounts are MILLS.
+ *  The stats answer is capped at 100 rows, so a heavy spender's 'lifetime'
+ *  is a truncated slice, kept as served; the top-spenders board derives
+ *  lifetime from the monthly rows instead (fanEarningsBoardRows). */
 export function parseFanslyEarningsObservation(
   observation: CanonicalizableObservation,
 ): CanonicalParseResult {

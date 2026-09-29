@@ -65,7 +65,10 @@
 // THE REPEAT-REQUEST GUARD is WP-F1's lesson, paid for on production on
 // 2026-08-22: a walk that re-issues the identical request spends a whole day's
 // cap proving nothing. The identical `before` twice in one walk stops the walk
-// and writes a terminal coverage row instead.
+// and writes a terminal coverage row instead. The forward walk also stops on a
+// page whose oldest id is not older than its `before`: its page cap only paces
+// the walk, so it is no longer the backstop against a cursor that drifts
+// without repeating exactly.
 
 import {
   assertOwnedPageSyncLease,
@@ -115,12 +118,15 @@ const HEAD_CURSOR = "0";
 const FORWARD_POLL_INTERVAL_MS = 1_800_000;
 
 /**
- * Pages the FORWARD walk may take before it gives up on reaching overlap.
+ * Pages the FORWARD walk may take in one paced slice before it pauses.
  *
- * At 50 rows a page and ~15 notifications/day this is ~33 days of silence — far
- * past any plausible outage. Reaching it means something is wrong with the
- * cursor, not that the page is popular, so the walk stops with an anomaly
- * rather than paging until the daily cap is gone.
+ * At 50 rows a page this is 1 000 notifications — a busy page's day, or a long
+ * outage. Reaching it pauses the walk with an anomaly: the cursor is kept at
+ * the next page and the walk resumes from it one cadence later, so a backlog is
+ * fetched in slices instead of a burst that drinks the daily cap. It never
+ * ENDS the walk — only overlap, an empty page or a cursor that stops advancing
+ * does, and only those commit the head. Ending it here committed the head over
+ * everything below page 20, which is a permanent loss on this lane.
  */
 const FORWARD_MAX_PAGES_PER_POLL = 20;
 
@@ -386,11 +392,27 @@ export function notificationRows(payload: unknown): Record<string, unknown>[] {
     : [];
 }
 
+/** The id a notification row is walked by — the one `pageRefBounds` reads. */
+function notificationRef(row: Record<string, unknown>): string | null {
+  return asNullableString(row.id) ?? asNullableString(row.idString);
+}
+
+/**
+ * Valid when `notifications` is an array that is either empty or carries at
+ * least ONE row with a usable id. A non-empty page with none — `[null]`, rows
+ * whose id key drifted — used to read as empty, and in the backfill an empty
+ * page is the archive's FLOOR: a durable `provider_exhausted` claim from a body
+ * nothing can walk. One odd row among good ones stays tolerated per row.
+ */
 export function classifyNotificationResponse(payload: unknown) {
   return classifyFanslyResponse(payload, {
     isValid: (value) => {
       const record = asRecord(value);
-      return record !== null && Array.isArray(record.notifications);
+      if (record === null || !Array.isArray(record.notifications)) {
+        return false;
+      }
+      return record.notifications.length === 0
+        || notificationRows(value).some((row) => notificationRef(row) !== null);
     },
     isEmpty: (value) => notificationRows(value).length === 0,
   });
@@ -417,7 +439,7 @@ function pageRefBounds(
   let newest: string | null = null;
   let oldest: string | null = null;
   for (const row of rows) {
-    const id = asNullableString(row.id) ?? asNullableString(row.idString);
+    const id = notificationRef(row);
     if (id === null) {
       continue;
     }
@@ -925,6 +947,27 @@ export async function fanslyNotificationsChunk(
         break;
       }
 
+      // THE CURSOR MUST MOVE DOWN. A served `before` page holds only rows older
+      // than `before`; one that does not is a provider ignoring the cursor (a
+      // head that shifts between calls, a cycle) — never an exact repeat, so
+      // the guard above cannot see it, and the page cap no longer ends the
+      // walk. Without this stop it would page for ever and never poll the head.
+      if (
+        before !== HEAD_CURSOR && bounds.oldest !== null
+        && compareNotificationRefs(bounds.oldest, before) >= 0
+      ) {
+        await input.telemetry.addAnomaly({
+          code: "fansly_notifications_cursor_repeat",
+          severity: "warn",
+          message: "Fansly notification pagination did not move past its cursor; forward poll stopped",
+          details: { before, oldest: bounds.oldest, phase: "forward" },
+        });
+        complete = true;
+        stopReason = "cursor_repeat";
+        await saveProgress();
+        break;
+      }
+
       const overlap = state.newestSeenNotificationId !== null
         && pageReachesOverlap(rows, state.newestSeenNotificationId);
       // FIRST EVER POLL: one page is the whole forward obligation. Everything
@@ -940,18 +983,41 @@ export async function fanslyNotificationsChunk(
         break;
       }
       if (state.forward.pages >= FORWARD_MAX_PAGES_PER_POLL) {
-        // Not a hole we hide: the walk stops, the anomaly names it, and the
-        // NEXT poll resumes from the same cursor because the head is not
-        // committed below.
+        // Not a hole we hide: the walk PAUSES at the next page and the anomaly
+        // names it. The head stays uncommitted and no coverage is claimed, so
+        // the next slice resumes from `bounds.oldest` one cadence later. The
+        // cursor has to move here: left on the page just fetched, the next
+        // dispatch read it as a repeat, ended the walk with zero calls and
+        // committed the head over every page below this one.
         await input.telemetry.addAnomaly({
           code: "fansly_notifications_forward_walk_capped",
           severity: "warn",
           message: "Fansly notification forward walk hit its page cap before reaching overlap",
-          details: { pages: state.forward.pages, before, newestSeen: state.newestSeenNotificationId },
+          details: {
+            pages: state.forward.pages,
+            before,
+            resumeFrom: bounds.oldest,
+            newestSeen: state.newestSeenNotificationId,
+          },
         });
-        stopReason = "page_cap";
+        state = {
+          ...state,
+          forward: { ...state.forward, beforeRef: bounds.oldest, pages: 0 },
+        };
         await saveProgress();
-        break;
+        return {
+          satisfied: false,
+          yieldReason: null,
+          continuationRetryAt: backfillContinuationAt(now, FORWARD_POLL_INTERVAL_MS),
+          stats: {
+            phase: "forward",
+            journaled,
+            callsToday: state.callsToday,
+            dailyCap,
+            stopReason: "page_cap",
+            filterMode: state.filterMode,
+          },
+        };
       }
       state = { ...state, forward: { ...state.forward, beforeRef: bounds.oldest } };
       await saveProgress();
@@ -972,7 +1038,12 @@ export async function fanslyNotificationsChunk(
       rotateTypeGroupAtWalkBoundary();
       await coverage(
         CAPTURE_COVERAGE_PLANES.notifications,
-        archiveStatus("window_captured"),
+        // A cursor the provider would not move committed the head WITHOUT
+        // reaching overlap: whatever sat below it is a gap we can name, not a
+        // captured window.
+        stopReason === "cursor_repeat"
+          ? "partial_provider_surface"
+          : archiveStatus("window_captured"),
         "none",
         {
           newestCapturedAt: now,
@@ -1118,13 +1189,20 @@ export async function fanslyNotificationsChunk(
       state = { ...state, backfill };
       continue;
     }
+    const rows = notificationRows(page.payload);
+    const bounds = pageRefBounds(rows);
+    if (rows.length > 0 && bounds.oldest === null) {
+      // Rows, and not one id to walk by. NOT a floor — nothing proves the
+      // archive ends here. `classifyNotificationResponse` already refuses such
+      // a page, so this is unreachable; it stays loud rather than trusted, and
+      // like any invalid page it leaves the cursor exactly where it was.
+      throw new FanslyLaneInvalidResponseError(OBSERVATION_KIND);
+    }
     // ARMED ONLY BY A SERVED PAGE (see the forward walk): a rethrown 429, 5xx
     // or dead session must leave the walk resumable at exactly this cursor,
     // not looking like a provider that ignored `before`.
     backfill.lastRequestedBefore = before;
     backfill.lastObservationId = page.observationId ?? backfill.lastObservationId;
-    const rows = notificationRows(page.payload);
-    const bounds = pageRefBounds(rows);
     const oldestIso = oldestCreatedAtIso(rows);
     if (oldestIso !== null) {
       backfill.floorAt = backfill.floorAt === null || oldestIso < backfill.floorAt
@@ -1132,9 +1210,10 @@ export async function fanslyNotificationsChunk(
         : backfill.floorAt;
     }
 
-    if (rows.length === 0 || bounds.oldest === null) {
-      // THE FLOOR. The empty response IS the evidence and it is journaled, so
-      // the coverage row points at the observation rather than restating it.
+    if (bounds.oldest === null) {
+      // THE FLOOR: an EMPTY page — one with rows and no id was refused above.
+      // The empty response IS the evidence and it is journaled, so the
+      // coverage row points at the observation rather than restating it.
       backfill.done = true;
       await coverage(
         CAPTURE_COVERAGE_PLANES.notifications,

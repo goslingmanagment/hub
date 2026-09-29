@@ -14,10 +14,11 @@ chunk. A running chunk can finish its already selected work after a change.
 The flag records semantic transaction revisions plus receipts for the two
 ordinary earnings calls per selected spender. It adds no HTTP request, changes
 no cadence and does not select dirty targets. Existing earnings enablement,
-page allowlisting, request budget and contiguous-prefix rejection behavior
-still apply. Zero/negative and missing-roster dirty targets remain visible debt.
-The baseline rotation can still stall on a deterministic fan rejection; C2c
-owns the separately gated selection and per-fan continuation policy.
+page allowlisting and request budget still apply. Zero/negative and
+missing-roster dirty targets remain visible debt. The receipts also let the
+daily walk cross a deterministic fan rejection instead of stalling (see
+[Crossing a rejected fan](#crossing-a-rejected-fan)); a page without this flag
+keeps the contiguous-prefix stop. C2c owns the separately gated selection.
 
 Migrations 0180/0181 extend operational state and add a metadata-only reader.
 0179 is reserved by C1 PR166; recheck unapplied numbers and decision reservations
@@ -105,9 +106,16 @@ Those times are local checks, not the provider's undisclosed correction time.
 The most recent attempt has a separate observation pointer, so a failed/empty
 attempt cannot masquerade as the successful check's source.
 
-The first baseline or an unchanged response after a signal remains unconfirmed;
-empty responses never mint zero. Invalid money or another fan's payload cannot
-settle a check. A changed snapshot acknowledges only the claimed R, leaving R+1.
+A changed snapshot acknowledges only the claimed R, leaving R+1. An unchanged
+valid response acknowledges R only when the current baseline was first seen
+after every content-changing (money/type/binding) signal: the read that first
+saw that fingerprint was claimed at or after the signal's revision, so its
+request followed the signal. The first baseline itself confirms nothing; the
+next unchanged read does. A baseline seen before the signal stays unconfirmed
+until the content changes, even if that earlier read already included the
+purchase. Exact status-only signals keep their own rule (targets runbook).
+Empty responses never mint zero. Invalid money or another fan's payload cannot
+settle a check.
 Unknown/inconsistent transaction attribution is separate debt until a semantic
 update resolves it. Retry state is stored with a fifteen-minute floor and a
 longer provider Retry-After; current daily rotation is the only retry mechanism.
@@ -122,6 +130,9 @@ request sequence, a completed zero cursor and current lease ownership. The
 `completedAt` and last successful read timestamp stay unchanged. Stream
 settlement time is not a new provider-check time.
 
+A generation that crossed a rejected fan was committed with a quality hold;
+its reuse settles held again, never as success.
+
 A newer explicit request or ordinary next scheduled generation still walks.
 Partial progress carrying an older `completedAt` still continues. Reset/erasure
 removes the applicable checkpoint through the existing path. There is no new
@@ -129,13 +140,71 @@ flag or operator action; rollback restores the possibility of repeated work
 without changing persisted checkpoint format. This fix does not pass C2c or
 establish any production savings or historical attribution.
 
+## Signal and baseline times (migration 0217)
+
+Each endpoint row records `earnings_content_signal_at` (when its current
+content revision was signalled), `content_baseline_at` (when the current
+fingerprint was first seen) and `content_baseline_revision` (the claimed
+revision of that first read). `fansly_earnings_refresh_status` returns them as
+`contentSignalAt`, `contentBaselineAt` and `contentBaselineRevision`. Null means
+unknown: rows from before 0217 or from an older writer stay strict.
+
+Migration 0217 proves existing pending debt from retained evidence only: the
+endpoint row was created by its first signal's transaction batch, every content
+revision since is one transaction insert for that fan, and every capture of that
+endpoint for that fan since then is more than an hour after the newest insert.
+It writes only the three fields above; the next ordinary claim and valid
+unchanged receipt performs the acknowledgement, so no request is added.
+
+## Crossing a rejected fan
+
+On a shadow page without isolated recovery, a fan-scoped rejection normally
+stops the daily walk at its contiguous prefix, and the executor retries or
+blocks the stream. The walk instead crosses the fan when all of these hold:
+
+- the rejection is HTTP 400 or 410, or a 404 that is that endpoint's third
+  rejected receipt in a row (`consecutive_rejections`, migration 0217). Any other
+  receipt resets that run, including a 5xx, a timeout or an empty or invalid
+  answer. Normally the three are the first attempt and the executor's two
+  `provider_404` retries of the same fan. When other failures came just before
+  the 404s, the executor can block the stream (`provider_404_exhausted`) before
+  the third rejection, and nothing is crossed;
+- there is no provider cooldown (`Retry-After`);
+- the endpoint's `rejected` receipt for this attempt is durable;
+- fewer than three fans were crossed in a row in this walk since a fan was last
+  read successfully. The checkpoint keeps this run (`consecutiveCrossings`)
+  across chunks, because a default five-request chunk holds only two or three
+  fans. A fresh-skipped fan makes no request and does not reset it.
+
+The fourth rejected fan in a row stops the walk at its contiguous prefix, so a
+provider-wide burst still blocks the stream. A retry resumes the same run and
+stops on the same fan until that fan reads successfully.
+
+The crossed fan is not retried in that generation and its other endpoint is
+not requested; its receipt keeps the debt. Each rejection is a
+`fan_earnings_fan_rejected` warning with `crossed`, `rejectedInRow` and
+`consecutiveCrossings`. The generation keeps `crossedFans` in its checkpoint,
+stamps no success on partial progress, and finishes with the
+`fan_earnings_unconfirmed_coverage` quality hold, keeping the last certified
+`completedAt`. The next generation starts a new run and reads the fan again.
+
+More than three genuinely rejected spenders in a row cannot be crossed:
+`retry` stops on the same fan, and `reset` walks the roster again and stops at
+the same place. Such a page needs isolated recovery (targets runbook,
+"Isolated daily recovery").
+
 ## Rollback and next gate
 
 On diagnostic failures, capture/latency regression or unexplained discrepancies,
 disable only `fanslyFanEarningsShadowPageAllowlist` with the audited UI. Preserve
 pending revisions and receipts. Daily rotation continues; disabling shadow does
 not roll back C2a v2 events or earnings projections. A code rollback must retain
-the compatible C2a reader and additive schema.
+the compatible C2a reader and additive schema. An older runtime ignores the
+0217 signal/baseline fields and the crossing checkpoint state: it returns to the
+strict unchanged-response rule and the rejection stop, and its reads leave those
+fields stale in the conservative direction. Its receipts also leave
+`consecutive_rejections` unchanged, so after rolling forward a 404's run can
+still include rejections from before the rollback.
 
 C2c may change selection/rotation only after measured quiet-correction detection
 within the existing freshness bound or a separate owner decision on max-age.

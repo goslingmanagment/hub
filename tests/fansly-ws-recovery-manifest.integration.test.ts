@@ -12,7 +12,9 @@ afterAll(async () => { await db?.stop(); });
 beforeEach(async () => { await resetIntegrationDatabase(db.pool); });
 const privateText = "retained private text must never appear in diagnostic output";
 
-async function fixture() {
+// A minute-old message, sent as the frame carries it: epoch seconds, usually
+// fractional (prod service-5 frames, 2026-09-28).
+async function fixture(createdAtMs = Date.now() - 60_000, createdAt = createdAtMs / 1000) {
   const app = createTestAppContext(db);
   const { page } = await seedFanslyPage(app.db, app.config.encryptionKey);
   if (!page) throw new Error("missing page");
@@ -20,7 +22,7 @@ async function fixture() {
   const generation = "a".repeat(64);
   const frame = JSON.stringify({ t: 10001, d: [JSON.stringify({ t: 10000, d: {
     serviceId: 5, event: { type: 1, message: { id: "150", groupId: "100", senderId: "111",
-      createdAt: Date.now() - 60_000, content: privateText } },
+      createdAt, content: privateText } },
   } })] });
   const receivedAt = new Date();
   const captured = await insertObservation(db.db, { source: "fansly_ws", producer: "fansly:b0", platform: "fansly",
@@ -39,7 +41,7 @@ async function fixture() {
     (select count(*) from message_archive) as archive,
     (select count(*) from fansly_ws_hint_receipts) as receipts,
     (select count(*) from config_audit_log) as audits`)).rows[0];
-  return { app, page, generation, request, manifest, counts };
+  return { app, page, generation, request, manifest, counts, createdAtMs };
 }
 
 describe("bounded read-only WS recovery manifest", () => {
@@ -48,7 +50,7 @@ describe("bounded read-only WS recovery manifest", () => {
     const result = await f.manifest();
     expect(result).toMatchObject({ mode: "read_only", recoveryApplied: false, items: [{
       reader: { state: "missing" }, membership: null, sourcePath: [0],
-      textLength: privateText.length,
+      textLength: privateText.length, createdAt: new Date(f.createdAtMs).toISOString(),
       custodyProof: "stored_expected_identity_only", blockers: ["ws_archive_projector_not_enabled"],
     }] });
     expect(JSON.stringify(result)).not.toContain(privateText);
@@ -84,6 +86,18 @@ describe("bounded read-only WS recovery manifest", () => {
     const result = await f.manifest();
     expect(result.items[0]).toMatchObject({ blockers: ["owner_erased"] });
     expect(result.items[0]).not.toHaveProperty("textSha256");
+  });
+  it("fences whole-second material at its own time, not at a 1970 instant", async () => {
+    const createdAtMs = Math.floor((Date.now() - 60_000) / 1000) * 1000;
+    const f = await fixture(createdAtMs, createdAtMs / 1000);
+    const user = (await db.pool.query("insert into users(username,role) values ('manifest-owner','owner') returning id")).rows[0];
+    // An erasure that finished before this message existed does not cover it.
+    await db.pool.query(`insert into erasure_log(scope_type,scope_ref,initiated_by,dry_run,plan,started_at)
+      values ('fan','fan:fansly:111',$1,false,$2,now() - interval '1 hour')`,
+    [user.id, JSON.stringify({ resolvedFanGroupIds: ["100"] })]);
+    expect((await f.manifest()).items[0]).toMatchObject({
+      createdAt: new Date(createdAtMs).toISOString(), blockers: ["ws_archive_projector_not_enabled"],
+    });
   });
   it("enforces the exact bounded input", async () => {
     const f = await fixture();

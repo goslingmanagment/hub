@@ -36,17 +36,13 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runNotificationReadStateReplay } from "../apps/runtime/src/services/fansly-notification-read-state-replay.ts";
 import {
   FANSLY_ENGAGEMENT_PROJECTION,
   FANSLY_ENGAGEMENT_PROJECTION_TABLES,
   rebuildFanslyEngagementProjection,
   runFanslyEngagementProjection,
 } from "../apps/runtime/src/services/projections/fansly-engagement.ts";
-import {
-  findProjection,
-  OPERATIONAL_STATE_TABLES,
-  PROJECTION_REGISTRY,
-} from "../apps/runtime/src/services/projections/registry.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -100,8 +96,8 @@ async function seedPage() {
   return page;
 }
 
-async function seedObservation(pageId: number, key: string, payload: unknown) {
-  await insertObservation(testDb!.db, {
+async function seedObservation(pageId: number, key: string, payload: unknown, receivedAt?: Date) {
+  return insertObservation(testDb!.db, {
     source: "pull",
     producer: "sync:fansly:notifications",
     platform: "fansly",
@@ -110,7 +106,55 @@ async function seedObservation(pageId: number, key: string, payload: unknown) {
     payload,
     payloadHash: sha256(key),
     idempotencyKey: `notifications:${key}`,
+    ...(receivedAt === undefined ? {} : { receivedAt }),
   });
+}
+
+/** Received two days after the census fixture's newest purchase (2026-08-19),
+ *  so its purchases stay inside the purchase-signal horizon whatever the wall
+ *  clock says: that horizon is measured from RECEIPT. */
+const CENSUS_RECEIVED_AT = new Date("2026-08-21T12:00:00.000Z");
+
+/** One page carrying ONE 2007 purchase, built from the census template. */
+function purchasePage(options: { id: string; correlationId: string; createdAt: Date }) {
+  const census = fixture("notifications-census.json");
+  const template = (census.notifications as Record<string, unknown>[])
+    .find((row) => row.type === 2007)!;
+  const seconds = Math.floor(options.createdAt.getTime() / 1000);
+  return {
+    ...census,
+    notifications: [{
+      ...template,
+      id: options.id,
+      idString: options.id,
+      correlationId: options.correlationId,
+      createdAt: seconds,
+      acknowledgedAt: seconds + 60,
+    }],
+  };
+}
+
+async function mediaStatsRow(pageId: number, subjectRef: string) {
+  const [row] = await rows<{
+    dirty_reason: string | null;
+    refresh_class: string | null;
+    next_due_at: Date | null;
+  }>(
+    `select dirty_reason, refresh_class, next_due_at from subject_refresh_state
+      where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+    [pageId, subjectRef],
+  );
+  return row ?? null;
+}
+
+/** A media_stats row the lane has ANSWERED: visited, clean, due in a week. */
+async function seedVisitedRow(pageId: number, subjectRef: string, visitedAt: Date) {
+  await testDb!.pool.query(
+    `insert into subject_refresh_state (
+       page_id, plane, subject_ref, refresh_class, next_due_at, last_visited_at
+     ) values ($1, 'media_stats', $2, 'mid', $3::timestamptz + interval '7 days', $3)`,
+    [pageId, subjectRef, visitedAt],
+  );
 }
 
 async function project(pageId: number) {
@@ -225,7 +269,12 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       return;
     }
     const page = await seedPage();
-    await seedObservation(page.id, "census", fixture("notifications-census.json"));
+    await seedObservation(
+      page.id,
+      "census",
+      fixture("notifications-census.json"),
+      CENSUS_RECEIVED_AT,
+    );
     const result = await project(page.id);
 
     // The verbatim row is there…
@@ -266,6 +315,113 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(await count("post_likes", page.id)).toBe(0);
   });
 
+  it("marks nothing for a purchase older than the horizon at RECEIPT", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // The deep backfill delivers year-old purchases every week. No refresh the
+    // mark triggers reaches back that far, so it would buy a call for nothing.
+    await seedObservation(page.id, "stale", purchasePage({
+      id: "000989999999990001",
+      correlationId: "000920000000009001",
+      createdAt: new Date("2026-05-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    await seedObservation(page.id, "recent", purchasePage({
+      id: "000989999999990002",
+      correlationId: "000920000000009002",
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    const result = await project(page.id);
+
+    // The notification row is stored either way: only the SIGNAL is dropped.
+    expect(await count("platform_notifications", page.id)).toBe(2);
+    expect(result.purchaseSignals).toBe(1);
+    expect(await mediaStatsRow(page.id, "000920000000009001")).toBeNull();
+    expect(await mediaStatsRow(page.id, "000920000000009002")).toMatchObject({
+      dirty_reason: "purchase_notification",
+      refresh_class: "dirty",
+    });
+  });
+
+  it("does not re-mark an item VISITED after the purchase, and does re-mark one visited before", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const answered = "000920000000009011";
+    const stale = "000920000000009012";
+    await seedVisitedRow(page.id, answered, new Date("2026-08-20T06:00:00.000Z"));
+    await seedVisitedRow(page.id, stale, new Date("2026-08-18T06:00:00.000Z"));
+    const purchasedAt = new Date("2026-08-19T06:00:00.000Z");
+    await seedObservation(page.id, "answered", purchasePage({
+      id: "000989999999990011",
+      correlationId: answered,
+      createdAt: purchasedAt,
+    }), CENSUS_RECEIVED_AT);
+    await seedObservation(page.id, "stale", purchasePage({
+      id: "000989999999990012",
+      correlationId: stale,
+      createdAt: purchasedAt,
+    }), CENSUS_RECEIVED_AT);
+    await project(page.id);
+
+    // Its numbers already include the purchase: a re-read would spend a call on
+    // numbers we have.
+    expect(await mediaStatsRow(page.id, answered)).toMatchObject({
+      dirty_reason: null,
+      refresh_class: "mid",
+    });
+    const remarked = await mediaStatsRow(page.id, stale);
+    expect(remarked).toMatchObject({ dirty_reason: "purchase_notification", refresh_class: "dirty" });
+    expect(remarked?.next_due_at?.toISOString()).toBe(purchasedAt.toISOString());
+
+    // A REBUILD replays every purchase. It must not re-dirty what the lane has
+    // answered since — a repair that should cost zero platform calls.
+    await testDb.pool.query(
+      `update subject_refresh_state
+          set last_visited_at = $3, dirty_reason = null, refresh_class = 'mid'
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, stale, new Date("2026-08-21T06:00:00.000Z")],
+    );
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    for (const subjectRef of [answered, stale]) {
+      expect(await mediaStatsRow(page.id, subjectRef)).toMatchObject({ dirty_reason: null });
+    }
+  });
+
+  it("queues no media_stats row for a purchase against a known BUNDLE", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const bundleRef = "000920000000009021";
+    await testDb.pool.query(
+      `insert into creator_media_bundles (
+         page_id, platform, bundle_ref, member_refs, first_observed_at, last_observed_at,
+         content_hash, source_event_id, source_observation_id, source_account_seq
+       ) values ($1, 'fansly', $2, $3::text[], $4, $4, $5, 1, 1, 1)`,
+      [page.id, bundleRef, ["000920000000009022"], CENSUS_RECEIVED_AT, "e".repeat(64)],
+    );
+    await seedObservation(page.id, "bundle", purchasePage({
+      id: "000989999999990021",
+      correlationId: bundleRef,
+      createdAt: new Date("2026-08-20T00:00:00.000Z"),
+    }), CENSUS_RECEIVED_AT);
+    await project(page.id);
+
+    // The route reads media offers: a bundle ref is never a subject it can
+    // answer. Its members are not marked either — that is not this signal.
+    expect(await count("platform_notifications", page.id)).toBe(1);
+    expect(await mediaStatsRow(page.id, bundleRef)).toBeNull();
+    expect(await mediaStatsRow(page.id, "000920000000009022")).toBeNull();
+  });
+
   it("dedupes by id across OVERLAPPING pages", async (context) => {
     if (!testDb) {
       context.skip();
@@ -284,7 +440,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(await count("platform_notifications", page.id)).toBe(80);
   });
 
-  it("is a no-op on replay", async (context) => {
+  it("keeps every engagement event out of the deliverable stream, and is a no-op on replay", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -292,6 +448,24 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     const page = await seedPage();
     await seedObservation(page.id, "census", fixture("notifications-census.json"));
     await project(page.id);
+
+    // The deliverable-stream claim reads the state the first projection left,
+    // so it shares this census setup instead of building its own.
+    const visible = await rows<{ type: string }>(
+      `select distinct type from domain_events where account_id = $1
+        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
+      [page.id],
+    );
+    expect(visible.length).toBeGreaterThan(0);
+    // The family's checkpoint covers the hidden seq range — which is what the
+    // SSE v2 replay validator requires of a gap.
+    const [checkpoints] = await rows<{ n: number }>(
+      `select count(*)::int as n from domain_events
+        where account_id = $1 and type = 'stream.projection_checkpoint'`,
+      [page.id],
+    );
+    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
+
     const before = await checksum(page.id);
     const beforeEvents = await rows<{ n: string }>(
       `select count(*)::text as n from domain_events where account_id = $1`,
@@ -365,6 +539,259 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(after!.occurred_at.toISOString()).toBe("2026-08-19T00:40:00.000Z");
   });
 
+  it("a LATER look at the same createdAt lands the read state; an older look replayed later does not revert it (J7)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The platform serves one notification unread, then read. Same createdAt,
+    // so the provider-instant guard alone froze the head at the first look
+    // and acknowledged_at stayed NULL although the ledger held the ack.
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const target = { ...(base.notifications as Record<string, unknown>[])[5]! };
+    const ref = target.idString as string;
+    const unread = { ...base, notifications: [{ ...target, acknowledgedAt: null }] };
+    const readAt = 1787050500;
+    const read = { ...base, notifications: [{ ...target, acknowledgedAt: readAt }] };
+    const head = async () => (await rows<{
+      acknowledged_at: Date | null;
+      source_observation_id: string;
+      content_hash: string;
+      last_observed_at: Date;
+    }>(
+      `select acknowledged_at, source_observation_id::text, content_hash, last_observed_at
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+
+    await seedObservation(page.id, "look-1", unread, new Date("2026-08-19T10:00:00.000Z"));
+    await project(page.id);
+    expect((await head()).acknowledged_at).toBeNull();
+
+    resetCanonicalizeSweepRuntime();
+    const second = await seedObservation(page.id, "look-2", read, new Date("2026-08-19T11:00:00.000Z"));
+    await project(page.id);
+    const acked = await head();
+    expect(acked.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    // One guard for every column: the ack and its lineage move together.
+    expect(acked.source_observation_id).toBe(String(second.observationId));
+    const [ackEvent] = await rows<{ hash: string }>(
+      `select data->>'contentHash' as hash from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, second.observationId],
+    );
+    expect(acked.content_hash).toBe(ackEvent!.hash);
+
+    // An OLDER unread look (earlier receipt) appended at a HIGHER seq — a
+    // late-journaled capture — must not reset the ack. Its body differs
+    // (metadata), or the dedup key would drop it before the projector.
+    resetCanonicalizeSweepRuntime();
+    const older = await seedObservation(page.id, "look-0", {
+      ...base,
+      notifications: [{ ...target, acknowledgedAt: null, metadata: "{\"older\":true}" }],
+    }, new Date("2026-08-19T09:00:00.000Z"));
+    await project(page.id);
+    const [olderEvent] = await rows<{ account_seq: string }>(
+      `select account_seq::text from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, older.observationId],
+    );
+    expect(olderEvent).toBeDefined(); // it reached the ledger, at a higher seq
+    const after = await head();
+    expect(after.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    expect(after.source_observation_id).toBe(String(second.observationId));
+    expect(after.last_observed_at.toISOString()).toBe("2026-08-19T11:00:00.000Z");
+
+    // Replaying the head's own event is idempotent, and a rebuild agrees.
+    const before = await checksum(page.id);
+    resetCanonicalizeSweepRuntime();
+    expect((await project(page.id)).applied).toBe(0);
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    expect(await checksum(page.id)).toEqual(before);
+  });
+
+  it("replays the read looks the pre-J7 guard discarded, and touches nothing else (fansly:notifications-replay-read-state)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const all = base.notifications as Record<string, unknown>[];
+    const stale = { ...all[5]! };
+    const pending = { ...all[1]! };
+    const staleRef = stale.idString as string;
+    const pendingRef = pending.idString as string;
+    const readAt = 1787050500;
+    const look = (notifications: Record<string, unknown>[]) => ({ ...base, notifications });
+    type Head = {
+      acknowledged_at: Date | null;
+      content_hash: string;
+      source_event_id: string;
+      source_observation_id: string;
+      source_account_seq: string;
+      last_observed_at: Date;
+    };
+    const headOf = async (ref: string) => (await rows<Head>(
+      `select acknowledged_at, content_hash, source_event_id::text, source_observation_id::text,
+              source_account_seq::text, last_observed_at
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+    const table = () => rows(
+      "select * from platform_notifications where page_id = $1 order by notification_ref",
+      [page.id],
+    );
+    const watermark = async () => (await rows<{ high_seq: string }>(
+      "select high_seq::text from projection_seq_watermarks where projection = $1 and account_id = $2",
+      [FANSLY_ENGAGEMENT_PROJECTION, page.id],
+    ))[0]!.high_seq;
+
+    // Purchases in the ledger — what a projection rebuild would re-apply.
+    await seedObservation(page.id, "census", fixture("notifications-census.json"), CENSUS_RECEIVED_AT);
+    // First looks: both notifications unread.
+    await seedObservation(page.id, "look-1", look([
+      { ...stale, acknowledgedAt: null },
+      { ...pending, acknowledgedAt: null },
+    ]), new Date("2026-08-19T10:00:00.000Z"));
+    await project(page.id);
+    const firstLook = await headOf(staleRef);
+    expect(firstLook.acknowledged_at).toBeNull();
+
+    // The read look of `stale`, consumed the way the PRE-J7 guard consumed it:
+    // it lost the createdAt tie, and only last_observed_at moved.
+    resetCanonicalizeSweepRuntime();
+    const readLook = await seedObservation(page.id, "look-2", look([
+      { ...stale, acknowledgedAt: readAt },
+    ]), new Date("2026-08-19T11:00:00.000Z"));
+    await project(page.id);
+    await testDb.pool.query(
+      `update platform_notifications
+          set acknowledged_at = null, content_hash = $3, source_event_id = $4,
+              source_observation_id = $5, source_account_seq = $6
+        where page_id = $1 and notification_ref = $2`,
+      [page.id, staleRef, firstLook.content_hash, firstLook.source_event_id,
+        firstLook.source_observation_id, firstLook.source_account_seq],
+    );
+    expect((await headOf(staleRef)).last_observed_at.toISOString()).toBe("2026-08-19T11:00:00.000Z");
+
+    // `pending`'s read look is in the ledger ABOVE the watermark: the live
+    // projector's to apply, not the repair's.
+    resetCanonicalizeSweepRuntime();
+    await seedObservation(page.id, "look-2b", look([
+      { ...pending, acknowledgedAt: readAt },
+    ]), new Date("2026-08-19T12:00:00.000Z"));
+    await runCanonicalization(appStub(), { kinds: ["notifications"] });
+
+    // The purchase signals were applied once; clear them so any re-application
+    // is visible.
+    await testDb.pool.query("delete from subject_refresh_state where page_id = $1", [page.id]);
+    const before = await table();
+    const watermarkBefore = await watermark();
+
+    // ── dry-run (the default): the count, and not one write ─────────────────
+    const expected = {
+      events: 1,
+      heads: 1,
+      acknowledged: 1,
+      unacknowledged: 0,
+      deferred: 0,
+      erasureFenced: 0,
+      pages: [{ pageId: page.id, events: 1, heads: 1, acknowledged: 1, unacknowledged: 0 }],
+    };
+    expect(await runNotificationReadStateReplay(appStub())).toEqual({ dryRun: true, ...expected });
+    expect(await table()).toEqual(before);
+
+    // ── execute ─────────────────────────────────────────────────────────────
+    expect(await runNotificationReadStateReplay(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, ...expected });
+    const healed = await headOf(staleRef);
+    expect(healed.acknowledged_at?.toISOString()).toBe(new Date(readAt * 1000).toISOString());
+    expect(healed.source_observation_id).toBe(String(readLook.observationId));
+    // Nothing else moved: not the look above the watermark, not the watermark,
+    // not any other row, and no purchase was re-applied.
+    expect((await headOf(pendingRef)).acknowledged_at).toBeNull();
+    expect(await watermark()).toBe(watermarkBefore);
+    const others = (list: Record<string, unknown>[]) =>
+      list.filter((row) => row.notification_ref !== staleRef);
+    expect(others(await table())).toEqual(others(before));
+    expect(await count("subject_refresh_state", page.id)).toBe(0);
+
+    // ── a re-run finds nothing ──────────────────────────────────────────────
+    const zero = {
+      events: 0, heads: 0, acknowledged: 0, unacknowledged: 0, deferred: 0, erasureFenced: 0, pages: [],
+    };
+    expect(await runNotificationReadStateReplay(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, ...zero });
+    expect(await runNotificationReadStateReplay(appStub())).toEqual({ dryRun: true, ...zero });
+
+    // The projector lands the rest, and the repaired table is what a
+    // truncate-and-replay produces — which, unlike the repair, re-marks the
+    // purchased media due.
+    await project(page.id);
+    expect((await headOf(pendingRef)).acknowledged_at).not.toBeNull();
+    const repaired = await checksum(page.id);
+    await rebuildFanslyEngagementProjection(appStub(), { accountId: page.id });
+    expect(await checksum(page.id)).toEqual(repaired);
+    expect(await count("subject_refresh_state", page.id)).toBeGreaterThan(0);
+  });
+
+  it("a replayed look that ties the head at the same instant settles in one run (J7 repair)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Two looks journaled at the SAME instant: unread, then read. The pre-J7
+    // guard kept the first; the fixed guard (>=) gives the head to the later
+    // one in ledger order. Once it has it, the earlier look — which ties it
+    // exactly — must not be replayed back over it on the next run.
+    const page = await seedPage();
+    const base = fixture("notifications-edge-cases.json");
+    const target = { ...(base.notifications as Record<string, unknown>[])[5]! };
+    const ref = target.idString as string;
+    const at = new Date("2026-08-19T10:00:00.000Z");
+    const readAt = 1787050500;
+    const unread = await seedObservation(page.id, "same-1", {
+      ...base, notifications: [{ ...target, acknowledgedAt: null }],
+    }, at);
+    const read = await seedObservation(page.id, "same-2", {
+      ...base, notifications: [{ ...target, acknowledgedAt: readAt }],
+    }, at);
+    await project(page.id);
+    const head = async () => (await rows<{ acknowledged_at: Date | null; source_observation_id: string }>(
+      `select acknowledged_at, source_observation_id::text
+         from platform_notifications where page_id = $1 and notification_ref = $2`,
+      [page.id, ref],
+    ))[0]!;
+    expect((await head()).source_observation_id).toBe(String(read.observationId));
+
+    // The pre-J7 state: the first look kept the head.
+    const [first] = await rows<{ id: string; account_seq: string; hash: string }>(
+      `select id::text, account_seq::text, data->>'contentHash' as hash from domain_events
+        where account_id = $1 and type = 'notification.observed' and observation_id = $2`,
+      [page.id, unread.observationId],
+    );
+    await testDb.pool.query(
+      `update platform_notifications
+          set acknowledged_at = null, content_hash = $3, source_event_id = $4,
+              source_observation_id = $5, source_account_seq = $6
+        where page_id = $1 and notification_ref = $2`,
+      [page.id, ref, first!.hash, first!.id, unread.observationId, first!.account_seq],
+    );
+
+    const done = await runNotificationReadStateReplay(appStub(), { dryRun: false });
+    expect(done).toMatchObject({ events: 1, heads: 1, acknowledged: 1 });
+    expect(await head()).toEqual({
+      acknowledged_at: new Date(readAt * 1000),
+      source_observation_id: String(read.observationId),
+    });
+
+    const again = await runNotificationReadStateReplay(appStub(), { dryRun: false });
+    expect(again).toMatchObject({ events: 0, heads: 0, pages: [] });
+    expect((await head()).source_observation_id).toBe(String(read.observationId));
+  });
+
   it("reproduces every row from a truncate-and-replay, leaving subject_refresh_state alone", async (context) => {
     if (!testDb) {
       context.skip();
@@ -408,51 +835,5 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
         [page.id],
       ),
     ).toEqual(stateBefore);
-  });
-
-  it("declares subject_refresh_state as operational state, and no projection truncates it", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    // BY CLASSIFICATION (§3.4), never by a quiet exemption in this file.
-    const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
-    expect(declared.has("subject_refresh_state")).toBe(true);
-    const projected = new Set(PROJECTION_REGISTRY
-      .filter((projection) => projection.rebuildKind !== "none")
-      .flatMap((projection) => projection.tables));
-    expect(projected.has("subject_refresh_state")).toBe(false);
-
-    const engagement = findProjection(FANSLY_ENGAGEMENT_PROJECTION);
-    expect([...(engagement?.tables ?? [])]).toEqual([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]);
-    expect(engagement?.rebuildKind).toBe("truncate_replay");
-    // `post_likes` IS truncated on rebuild: it is a fact projection whose
-    // Fansly half happens to be empty, and "empty because nothing wrote it" has
-    // to stay distinguishable from "empty because it was truncated".
-    expect([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]).toContain("post_likes");
-  });
-
-  it("keeps every engagement event out of the deliverable stream", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedObservation(page.id, "census", fixture("notifications-census.json"));
-    await project(page.id);
-    const visible = await rows<{ type: string }>(
-      `select distinct type from domain_events where account_id = $1
-        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
-      [page.id],
-    );
-    expect(visible.length).toBeGreaterThan(0);
-    // The family's checkpoint covers the hidden seq range — which is what the
-    // SSE v2 replay validator requires of a gap.
-    const [checkpoints] = await rows<{ n: number }>(
-      `select count(*)::int as n from domain_events
-        where account_id = $1 and type = 'stream.projection_checkpoint'`,
-      [page.id],
-    );
-    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
   });
 });

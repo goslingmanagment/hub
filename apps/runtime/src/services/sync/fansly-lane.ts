@@ -7,7 +7,7 @@ import {
   type Database,
   type SyncStream,
 } from "@agency_hub_core/db";
-import type { FanslyRequestContext } from "@agency_hub_core/fansly";
+import { FanslyApiError, type FanslyRequestContext } from "@agency_hub_core/fansly";
 import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { SyncRunTelemetry } from "./observability.ts";
@@ -230,6 +230,43 @@ export class FanslyDailyAttemptBudgetExhaustedError extends Error {
     super(`Fansly daily attempt budget exhausted at ${dailyCap}`);
     this.name = "FanslyDailyAttemptBudgetExhaustedError";
   }
+}
+
+/**
+ * Is this failure about ONE subject (a media item, a post) rather than about
+ * the page?
+ *
+ * A per-subject lane isolates a subject's failure so one unreachable item
+ * cannot wedge a queue of thousands. Only an answer the provider gave ABOUT
+ * THE REQUEST qualifies: an addressed 4xx (404/410/400…), a 200 envelope with
+ * `success: false`, or a 5xx without a `Retry-After` — the production shape of
+ * a gone item (`error getting media offer`).
+ *
+ * Everything else is about the page and belongs to the executor, untouched:
+ * a dead session (401/403 → auth pause), the provider's pace (any 429, or a
+ * 5xx naming its own deadline → `retry_at` from `retryAfterAt`, Decision
+ * #275), a transport, proxy or timeout failure with no status at all
+ * (transient_network ladder), a missing proxy (blocker), a lost lease, and
+ * every local error. Counted against the subject, those discarded the
+ * provider's deadline, walked on to the next subject into the same wall, and
+ * pushed each subject a day out for an outage that was never theirs (prod: a
+ * dead page proxy, `Socks5 proxy rejected connection`, marked 75 media failed
+ * in under an hour).
+ *
+ * A 4xx that happens to carry a `Retry-After` stays scoped: the executor reads
+ * no deadline for it and would park the whole stream as provider_bad_data.
+ * The cost of the split: a subject whose request DETERMINISTICALLY times out
+ * is no longer skipped — the stream retries it on the executor ladder, with an
+ * incident, instead.
+ */
+export function isSubjectScopedFanslyFailure(error: unknown): boolean {
+  if (!(error instanceof FanslyApiError) || typeof error.status !== "number") {
+    return false;
+  }
+  if (error.status === 401 || error.status === 403 || error.status === 429) {
+    return false;
+  }
+  return !(error.status >= 500 && error.retryAfterAt !== null);
 }
 
 export class FanslyLaneInvalidResponseError extends Error {

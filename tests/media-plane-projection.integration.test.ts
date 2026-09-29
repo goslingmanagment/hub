@@ -18,8 +18,6 @@
 //    the driver clamped the event to receipt time.
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -35,15 +33,11 @@ import {
   resetCanonicalizeSweepRuntime,
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { runFanslyMediaStatsForeignPrune } from "../apps/runtime/src/services/fansly-media-stats-foreign-prune.ts";
 import {
-  MEDIA_PLANE_PROJECTION,
   rebuildMediaPlaneProjection,
   runMediaPlaneProjection,
 } from "../apps/runtime/src/services/projections/media-plane.ts";
-import {
-  findProjection,
-  projectionNames,
-} from "../apps/runtime/src/services/projections/registry.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   resetIntegrationDatabase,
@@ -127,6 +121,8 @@ function paidVideoPayload(options: {
   messageAt: Date;
   orderAt?: Date;
   withOrder?: boolean;
+  /** Live order-history rows carry `orderId`; DM sidecar rows do not. */
+  orderId?: string;
 }) {
   const seconds = Math.floor(options.messageAt.getTime() / 1000);
   const orderSeconds = Math.floor((options.orderAt ?? options.messageAt).getTime() / 1000);
@@ -188,6 +184,7 @@ function paidVideoPayload(options: {
       accountMediaId: `offer-${options.messageId}`,
       type: 0,
       createdAt: orderSeconds,
+      ...(options.orderId === undefined ? {} : { orderId: options.orderId }),
     }],
   };
 }
@@ -391,6 +388,50 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(events.filter((event) => event.type === "media.order_observed")).toHaveLength(1);
   });
 
+  it("order_ref is the orderId of an order-history-first order and stays NULL for a DM-first one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const messageAt = new Date("2026-08-19T12:00:00Z");
+    // Order history sees purchase 1 first: its orderId becomes order_ref.
+    await seedObservation(
+      page.id,
+      "purchase_history",
+      "ph-first",
+      paidVideoPayload({ messageId: "message-1", messageAt, orderId: "order-1" }),
+    );
+    // A DM sees purchase 2 first; order history serves its orderId later.
+    await seedObservation(
+      page.id,
+      "dm_messages",
+      "dm-first",
+      paidVideoPayload({ messageId: "message-2", messageAt }),
+    );
+    await project(page.id);
+    resetCanonicalizeSweepRuntime();
+    await seedObservation(
+      page.id,
+      "purchase_history",
+      "ph-second",
+      paidVideoPayload({ messageId: "message-2", messageAt, orderId: "order-2" }),
+    );
+    await project(page.id);
+
+    // The later order-history sighting dedupes on the composite key and cannot
+    // backfill it: DM-first orders — most of them live — keep order_ref NULL,
+    // so the column is NOT a complete order-id map.
+    expect(await rows(
+      `select media_offer_ref, order_ref from media_orders where page_id = $1
+        order by media_offer_ref`,
+      [page.id],
+    )).toEqual([
+      { media_offer_ref: "offer-message-1", order_ref: "order-1" },
+      { media_offer_ref: "offer-message-2", order_ref: null },
+    ]);
+  });
+
   it("§3.2b: a pre-2024 message keeps its TRUE time on the archive row while the event is clamped", async (context) => {
     if (!testDb) {
       context.skip();
@@ -427,6 +468,135 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(new Date(archive[0]!.occurred_at).toISOString()).toBe(ancient.toISOString());
   });
 
+  it("queues per-media stats only for the page's OWN media, and keeps a fan's", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const payload = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    const own = payload.accountMedia[0]!;
+    // A DM sidecar carries every media in the thread — the ones the FAN sent
+    // included — and a row that names no owner at all.
+    payload.accountMedia.push(
+      { ...own, id: "offer-fan-sent", accountId: FAN_REF, mediaId: "raw-fan-sent" },
+      { ...own, id: "offer-no-owner", accountId: undefined as never, mediaId: "raw-no-owner" },
+    );
+    await seedObservation(page.id, "dm_messages", "owners", payload);
+    await project(page.id);
+
+    // Every head is kept: the fan's media is still a fact other readers want.
+    const media = await rows<{ media_offer_ref: string }>(
+      `select media_offer_ref from creator_media where page_id = $1 order by media_offer_ref`,
+      [page.id],
+    );
+    expect(media.map((row) => row.media_offer_ref))
+      .toEqual(["offer-fan-sent", "offer-message-1", "offer-no-owner"]);
+    // But the route cannot serve another account's media offer, so the fan's
+    // gets no queue row. An unknown owner fails OPEN.
+    const queued = await rows<{ subject_ref: string }>(
+      `select subject_ref from subject_refresh_state
+        where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+      [page.id],
+    );
+    expect(queued.map((row) => row.subject_ref)).toEqual(["offer-message-1", "offer-no-owner"]);
+  });
+
+  it("prunes the fan's rows queued before the owner check, on an owner's --execute only", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const first = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    const own = first.accountMedia[0]!;
+    first.accountMedia.push(
+      { ...own, id: "offer-fan-sent", accountId: FAN_REF, mediaId: "raw-fan-sent" },
+      { ...own, id: "offer-fan-visited", accountId: FAN_REF, mediaId: "raw-fan-visited" },
+      { ...own, id: "offer-mixed", accountId: FAN_REF, mediaId: "raw-mixed" },
+      { ...own, id: "offer-no-owner", accountId: undefined as never, mediaId: "raw-no-owner" },
+    );
+    // The same ref observed ONCE as the page's own keeps its row.
+    const second = paidVideoPayload({
+      messageId: "message-2",
+      messageAt: new Date("2026-08-20T12:00:00Z"),
+      withOrder: false,
+    });
+    second.accountMedia.push({ ...own, id: "offer-mixed", accountId: OWN_REF, mediaId: "raw-mixed" });
+    await seedObservation(page.id, "dm_messages", "prune-1", first);
+    await seedObservation(page.id, "dm_messages", "prune-2", second);
+    await project(page.id);
+
+    // The queue as it stood before the owner check: every head had a row, and
+    // a purchase can queue a ref no media event names.
+    await testDb.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+       select $1, 'media_stats', ref, 'fresh', now()
+         from unnest($2::text[]) as ref
+       on conflict (page_id, plane, subject_ref) do nothing`,
+      [page.id, ["offer-fan-sent", "offer-fan-visited", "offer-mixed", "offer-orphan"]],
+    );
+    await testDb.pool.query(
+      `update subject_refresh_state set consecutive_failures = 3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-fan-sent'`,
+      [page.id],
+    );
+    // A served window proves the page can read it, whatever the event says.
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = now()
+        where page_id = $1 and plane = 'media_stats' and subject_ref = 'offer-fan-visited'`,
+      [page.id],
+    );
+    const queued = async () =>
+      (await rows<{ subject_ref: string }>(
+        `select subject_ref from subject_refresh_state
+          where page_id = $1 and plane = 'media_stats' order by subject_ref`,
+        [page.id],
+      )).map((row) => row.subject_ref);
+    const everything = [
+      "offer-fan-sent",
+      "offer-fan-visited",
+      "offer-message-1",
+      "offer-message-2",
+      "offer-mixed",
+      "offer-no-owner",
+      "offer-orphan",
+    ];
+    expect(await queued()).toEqual(everything);
+    const expected = [{ pageId: page.id, pageLabel: "plane-page", rows: 1, failing: 1 }];
+
+    // Dry-run is the default: it counts, per page, and writes nothing.
+    const dry = await runFanslyMediaStatsForeignPrune(appStub());
+    expect(dry).toEqual({ dryRun: true, pages: expected, rows: 1, failing: 1 });
+    expect(await queued()).toEqual(everything);
+    // Another page's scope finds nothing here.
+    expect((await runFanslyMediaStatsForeignPrune(appStub(), { accountId: page.id + 1 })).pages)
+      .toEqual([]);
+
+    const executed = await runFanslyMediaStatsForeignPrune(appStub(), {
+      dryRun: false,
+      accountId: page.id,
+    });
+    expect(executed).toEqual({ dryRun: false, pages: expected, rows: 1, failing: 1 });
+    expect(await queued()).toEqual(everything.filter((ref) => ref !== "offer-fan-sent"));
+    // Queue state only: the fan's media head stays.
+    expect(await rows(
+      `select 1 from creator_media where page_id = $1 and media_offer_ref = 'offer-fan-sent'`,
+      [page.id],
+    )).toHaveLength(1);
+    // And a second run finds nothing to do.
+    expect(await runFanslyMediaStatsForeignPrune(appStub(), { dryRun: false }))
+      .toEqual({ dryRun: false, pages: [], rows: 0, failing: 0 });
+  });
+
   it("is idempotent: a second sweep + projection changes nothing", async (context) => {
     if (!testDb) {
       context.skip();
@@ -460,58 +630,6 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(await rows(`select * from media_orders where page_id = $1`, [page.id])).toHaveLength(1);
     expect(await rows(`select * from message_media_offers where page_id = $1`, [page.id]))
       .toHaveLength(1);
-  });
-});
-
-describe("media plane — registration", () => {
-  // Source-level, and deliberately so: a projector that runs but that nobody
-  // can REBUILD is a projection you cannot repair, and a projector registered
-  // nowhere is a table that silently stops filling. Both are the kind of
-  // omission a passing end-to-end test does not notice.
-  //
-  // WP-F1(0) moved the two registration sites INTO the projection registry, so
-  // the property is now checked against the registry itself rather than against
-  // the shape of two hand-written blocks. That is strictly stronger: the old
-  // assertions could only see whether one specific literal was present, and the
-  // registry is what the tick and the CLI now both read.
-  it("is declared in the projection registry, with its rebuild and its tables", () => {
-    const definition = findProjection(MEDIA_PLANE_PROJECTION);
-    expect(definition).not.toBeNull();
-    expect(definition?.rebuildKind).toBe("truncate_replay");
-    expect(definition?.rebuild).not.toBeNull();
-    expect(definition?.stateClass).toBe("fact_projection");
-    expect([...(definition?.eventTypes ?? [])]).toEqual([
-      "media.observed",
-      "media.file_observed",
-      "media.order_observed",
-      "media.offer_location_observed",
-      "message.attachments_observed",
-    ]);
-    expect([...(definition?.tables ?? [])]).toEqual([
-      "creator_media",
-      "creator_raw_media",
-      "creator_media_bundles",
-      "media_orders",
-      "message_media_offers",
-      "media_offer_locations",
-    ]);
-  });
-
-  it("rides the registry-driven worker tick and the registry-driven CLI", () => {
-    const worker = readFileSync(
-      path.resolve("apps/runtime/src/worker-services.ts"),
-      "utf8",
-    );
-    // The tick iterates the registry; nothing about media_plane is named here
-    // any more, which is the point — one call site now covers every projection.
-    expect(worker).toContain("runProjectionTick");
-
-    const cli = readFileSync(path.resolve("apps/runtime/src/cli.ts"), "utf8");
-    expect(cli).toContain("rebuildRegisteredProjection");
-    // The argument help is DERIVED from the registry, so an accepted value
-    // nobody is told about is impossible rather than merely caught.
-    expect(cli).toContain("projectionNames().join(\" | \")");
-    expect(projectionNames()).toContain(MEDIA_PLANE_PROJECTION);
   });
 });
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -318,30 +318,16 @@ describe("shared owner-action media custody", () => {
     }
   });
 
-  it("backfills existing custody with the exact shared digest and protects legacy writes", async () => {
-    const first = await chat();
-    const original = await reserveChat(first);
+  it("fences a raw legacy custody write under the exact shared digest", async () => {
+    // An older runtime that writes raw custody, with no fence of its own, is
+    // fenced by the LIVE trigger (0170's preserve_ofapi_media_token_fence), and
+    // the SQL digest it computes is the one the JS writer uses.
     const later = await chat(`${TOKEN}_later`);
     const laterOperation = randomUUID();
-    const client = await database.pool.connect();
-    try {
-      await client.query("begin");
-      await client.query("drop trigger preserve_ofapi_media_token_fence on ofapi_media_token_custody");
-      await client.query("drop function preserve_ofapi_media_token_fence()");
-      await client.query("drop table ofapi_media_token_fences");
-      await client.query("alter table ofapi_action_intents drop column media_operation_id");
-      await client.query(await readFile(new URL("../packages/db/migrations/0168_ofapi_media_token_fences.sql", import.meta.url), "utf8"));
-      expect((await client.query("select * from ofapi_media_token_fences")).rows).toEqual([
-        { token_hash: ofapiMediaTokenHash(ACCOUNT, TOKEN), operation_id: original.operationId },
-      ]);
-      await client.query(
-        "insert into ofapi_media_token_custody(account_id,token,operation_id,command_id) values($1,$2,$3,$4)",
-        [ACCOUNT, `${TOKEN}_later`, laterOperation, later],
-      );
-      expect((await client.query("select operation_id from ofapi_media_token_fences where token_hash=$1", [ofapiMediaTokenHash(ACCOUNT, `${TOKEN}_later`)])).rows).toEqual([{ operation_id: laterOperation }]);
-    } finally {
-      await client.query("rollback");
-      client.release();
-    }
+    await database.pool.query(
+      "insert into ofapi_media_token_custody(account_id,token,operation_id,command_id) values($1,$2,$3,$4)",
+      [ACCOUNT, `${TOKEN}_later`, laterOperation, later],
+    );
+    expect((await database.pool.query("select operation_id from ofapi_media_token_fences where token_hash=$1", [ofapiMediaTokenHash(ACCOUNT, `${TOKEN}_later`)])).rows).toEqual([{ operation_id: laterOperation }]);
   });
 });

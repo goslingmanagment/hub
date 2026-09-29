@@ -26,8 +26,12 @@ async function claim(seconds = 0, window: "lifetime" | "monthly" = "lifetime") {
   if (!result) throw new Error("Claim unavailable");
   return result;
 }
-async function dirty() {
-  await db.db.transaction((tx) => markFanEarningsDirty(tx, { pageId: f.page.id, fanRefs: ["fan-a"], now: at(0) }));
+async function dirty(statusOnly = false, seconds = 0) {
+  const now = at(seconds);
+  await db.db.transaction((tx) => markFanEarningsDirty(tx, {
+    pageId: f.page.id, fanRefs: ["fan-a"], now, statusOnly,
+  }));
+  return now;
 }
 async function settle(token: FanEarningsClaim, fingerprint: string, seconds = 1) {
   return settleFanEarningsReceipt(db.db, token, {
@@ -47,12 +51,65 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     expect(await lifetime()).toMatchObject({ refresh_checks: 3n, refresh_changes: 1n, unsignaled_changes: 1n });
   });
 
-  it("does not certify an unchanged or first baseline snapshot after a dirty signal", async () => {
-    await dirty();
+  it("confirms an unchanged recheck of a baseline first seen after the signal, never the first baseline", async () => {
+    const signalAt = await dirty();
+    expect((await lifetime()).earnings_content_signal_at).toEqual(signalAt);
     await settle(await claim(), "a");
-    await settle(await claim(2), "a", 3);
-    expect(await lifetime()).toMatchObject({ requested_revision: 1n, applied_revision: 0n, last_refresh_outcome: "unconfirmed" });
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 1n, applied_revision: 0n, last_refresh_outcome: "unconfirmed",
+      content_baseline_revision: 1n, refresh_changes: 0n,
+    });
     expect((await lifetime()).retry_after_at).toBeInstanceOf(Date);
+    const baselineAt = (await lifetime()).content_baseline_at;
+    expect(baselineAt).toBeInstanceOf(Date);
+    await settle(await claim(2), "a", 3);
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 1n, applied_revision: 1n, last_refresh_outcome: "observed",
+      refresh_class: null, next_due_at: null, retry_after_at: null,
+      content_baseline_at: baselineAt, refresh_changes: 0n, last_changed_at: null,
+    });
+  });
+
+  it("keeps an unchanged recheck strict when the baseline predates the signal", async () => {
+    await settle(await claim(), "a");
+    await dirty();
+    await settle(await claim(2), "a", 3);
+    await settle(await claim(4), "a", 5);
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 1n, applied_revision: 0n, last_refresh_outcome: "unconfirmed",
+      content_baseline_revision: 0n,
+    });
+    await settle(await claim(6), "b", 7);
+    expect(await lifetime()).toMatchObject({
+      applied_revision: 1n, last_refresh_outcome: "observed", content_baseline_revision: 1n,
+    });
+  });
+
+  it("keeps a content signal that arrives during the baseline fetch strict", async () => {
+    await dirty();
+    const r = await claim();
+    await dirty(false, 1);
+    await settle(r, "a");
+    await settle(await claim(2), "a", 3);
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 2n, applied_revision: 0n, content_baseline_revision: 1n,
+      last_refresh_outcome: "unconfirmed",
+    });
+    await settle(await claim(4), "b", 5);
+    expect(await lifetime()).toMatchObject({ applied_revision: 2n, content_baseline_revision: 2n });
+  });
+
+  it("settles a money signal and a later status signal both seen before the first baseline", async () => {
+    const signalAt = await dirty();
+    await dirty(true, 1);
+    // A status-only mark keeps the money signal's revision and time.
+    expect(await lifetime()).toMatchObject({
+      requested_revision: 2n, earnings_content_revision: 1n, earnings_content_signal_at: signalAt,
+    });
+    await settle(await claim(2), "a", 3);
+    expect(await lifetime()).toMatchObject({ applied_revision: 0n, last_refresh_outcome: "unconfirmed" });
+    await settle(await claim(4), "a", 5);
+    expect(await lifetime()).toMatchObject({ applied_revision: 2n, last_refresh_outcome: "observed" });
   });
 
   it("settles only claim R while a concurrent R+1 remains pending", async () => {
@@ -138,6 +195,22 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     expect(lifeAfter.last_checked_observation_id).not.toBe(old.last_checked_observation_id);
     expect(lifeAfter.last_checked_observation_id).not.toBe(lifeAfter.last_receipt_observation_id);
     expect(lifeAfter.last_content_fingerprint).toBe("b".repeat(64));
+  });
+
+  it("counts an endpoint's rejections in a row apart from its other failures", async () => {
+    const fail = async (outcome: "rejected" | "failed", seconds: number) =>
+      settleFanEarningsReceipt(db.db, await claim(seconds), {
+        outcome, observationId: null, fingerprint: null, checkedAt: at(seconds + 1),
+      });
+    await fail("rejected", 0);
+    await fail("rejected", 2);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 2, consecutive_rejections: 2 });
+    await fail("failed", 4);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 3, consecutive_rejections: 0 });
+    await fail("rejected", 6);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 4, consecutive_rejections: 1 });
+    await settle(await claim(8), "a", 9);
+    expect(await lifetime()).toMatchObject({ consecutive_failures: 0, consecutive_rejections: 0 });
   });
 
   it("reports per-endpoint ages, uncovered roster and receipt loss without fan identities", async () => {

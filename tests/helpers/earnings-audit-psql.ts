@@ -12,10 +12,8 @@ export async function earningsAuditPsql(db: StartedTestDatabase) {
   if (!container || !/^[a-z0-9_]+$/i.test(container + database)) {
     throw new Error("Docker Postgres is required for the real psql audit transport");
   }
+  // read_only is created once per run by tests/helpers/global-setup.ts.
   await db.pool.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'read_only') THEN CREATE ROLE read_only; END IF;
-    END $$;
     GRANT EXECUTE ON FUNCTION fansly_earnings_audit_scope(text,timestamptz,timestamptz) TO read_only;
     GRANT EXECUTE ON FUNCTION fansly_earnings_audit_observations(jsonb,timestamptz,bigint,integer) TO read_only;
     GRANT EXECUTE ON FUNCTION fansly_earnings_audit_projection(jsonb,bigint,text,integer) TO read_only;

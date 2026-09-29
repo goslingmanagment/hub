@@ -128,8 +128,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // ONE kind for one route. Its observation payload is an ENVELOPE
   // (`{walk, response}`) because the post id lives in the request PATH: an
   // empty reply page is a body with no way to say which post it is about, and
-  // that is precisely the body `missing_since` is computed from. The verbatim
-  // response still lands in `sync_raw_payloads.response_payload` unchanged.
+  // that is precisely the body `missing_since` is computed from. The response,
+  // [A20]-trimmed (only `accounts[]` allowlisted), lands in
+  // `sync_raw_payloads.response_payload` without the envelope.
   { kind: "post_replies", source: "pull", writer: "services/sync/fansly-post-replies.ts" },
   // ── WP-F7: the `payouts` lane (services/sync/fansly-payouts.ts) ───────────
   // ONE kind per route, two routes. Both are RESTRICTED-CLASS bodies:
@@ -428,7 +429,8 @@ export const DYNAMIC_OBSERVATION_KIND_RULES: readonly DynamicObservationKindRule
       /^(auth|user|api_key|device_token|page|model|config|erasure|agent_key)\./.test(kind),
   },
   // NOT a rule, and deliberately so: services/observations-rejournal.ts writes
-  // `kind = rawRow.endpoint`. It mints no NEW value space — every kind it can
+  // `kind = rawRow.endpoint` (and observations-account-me-rejournal.ts writes
+  // `account_me`). Neither mints a NEW value space — every kind they can
   // write is already a registered sync-plane kind above, so the static half of
   // the ratchet already covers it. A rule here would only launder future
   // unregistered sync kinds through the word "dynamic".

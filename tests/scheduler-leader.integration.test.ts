@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -32,7 +30,7 @@ describe("scheduler leader election", () => {
     const leader = await acquireSchedulerLeadership({ pool: harness.pool, retryMs: 50 });
     expect(leader).not.toBeNull();
 
-    // The standby loops on the lock — give it a few cycles, prove it stays out.
+    // The standby loops on the lock — watch it fail a few cycles, prove it stays out.
     let standbyAttempts = 0;
     let standbyStopped = false;
     const standbyPromise = acquireSchedulerLeadership({
@@ -43,8 +41,8 @@ describe("scheduler leader election", () => {
       },
       isStopped: () => standbyStopped,
     });
-    await sleep(200);
-    expect(standbyAttempts).toBeGreaterThanOrEqual(2);
+    await expect.poll(() => standbyAttempts, { timeout: 5_000, interval: 10 })
+      .toBeGreaterThanOrEqual(2);
 
     // Leadership hand-off: release → the standby acquires within its retry.
     await leader!.release();
@@ -83,8 +81,7 @@ describe("scheduler leader election", () => {
          and database = (select oid from pg_database where datname = current_database())`,
       [SCHEDULER_LEADER_LOCK_NS, SCHEDULER_LEADER_LOCK_KEY],
     );
-    await sleep(300);
-    expect(lostSeen).toBe(true);
+    await expect.poll(() => lostSeen, { timeout: 5_000, interval: 10 }).toBe(true);
 
     // The lock is free again — a new contender wins immediately.
     const successor = await acquireSchedulerLeadership({ pool: harness.pool, retryMs: 50 });
@@ -95,12 +92,18 @@ describe("scheduler leader election", () => {
   it("stops contending when asked (clean shutdown of a standby)", async () => {
     const leader = await acquireSchedulerLeadership({ pool: harness.pool, retryMs: 25 });
     let stopped = false;
+    let standbyAttempts = 0;
     const standby = acquireSchedulerLeadership({
       pool: harness.pool,
       retryMs: 25,
+      onStandby: () => {
+        standbyAttempts += 1;
+      },
       isStopped: () => stopped,
     });
-    await sleep(100);
+    // Stop only once it is really contending (it has lost at least one attempt).
+    await expect.poll(() => standbyAttempts, { timeout: 5_000, interval: 10 })
+      .toBeGreaterThanOrEqual(1);
     stopped = true;
     const outcome = await standby;
     expect(outcome).toBeNull();

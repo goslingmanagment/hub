@@ -19,6 +19,7 @@ import { refreshOfapiBinding } from "../apps/runtime/src/services/ofapi-binding-
 import { OFAPI_WEBHOOK_EVENTS, registerOfapiWebhook } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { hasSettled, waitForRowLockWait } from "./helpers/lock-waits.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 
 let testDb: StartedTestDatabase | null = null;
@@ -336,8 +337,12 @@ describe("OFAPI owner pause and verified recovery", () => {
         ...preview, authVerifiedAt: new Date(), evidence: { source: "concurrency_test" },
       }, { afterLock: async () => {
         resume = resumePageSync(app.db, { pageId, streams: ["subscribers"] });
-        const outcome = await Promise.race([resume.then(() => "resumed"), new Promise(resolve => setTimeout(() => resolve("waiting"), 300))]);
-        expect(outcome).toBe("waiting");
+        // Observed, not assumed: Resume is parked on apply's page_sync_states
+        // row lock. No text filter: the locking select's table name sits past
+        // track_activity_query_size, and apply's own transaction is the only
+        // other backend here, so any lock waiter in this database is Resume.
+        await waitForRowLockWait(testDb!.pool, [], { blocked: resume });
+        expect(await hasSettled(resume)).toBe(false);
       } })).toBe(true);
     } finally { await resume; }
     expect(await subscriber()).toMatchObject({ blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: false });

@@ -5,7 +5,7 @@ import { GenericContainer, type StartedTestContainer } from "testcontainers";
 import { createPool } from "@agency_hub_core/db";
 
 import { runMigrations } from "../../packages/db/src/migrate-runner.ts";
-import { TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
+import { READ_ONLY_ROLE_PASSWORD, TEMPLATE_DATABASE, TEST_DB_ADMIN_URL_KEY } from "./db-context.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./timeouts.ts";
 
 async function waitForDatabaseReady(pool: ReturnType<typeof createPool>) {
@@ -56,11 +56,17 @@ export default async function setup({ provide }: {
       // and dropped it only because stopping a container under a live pool
       // raised FATAL 57P01 into a pool with no listener; createPool absorbs
       // that now, which is the same precondition #239 rests on.
+      //
+      // autovacuum=off: resetIntegrationDatabase empties tables with DELETE,
+      // and a vacuum or analyze fired by its dead tuples would change heap
+      // layout and planner stats at an arbitrary point in a file. Its lock
+      // would also hold the next reset for deadlock_timeout.
       .withCommand([
         "postgres",
         "-c", "fsync=off",
         "-c", "synchronous_commit=off",
         "-c", "full_page_writes=off",
+        "-c", "autovacuum=off",
       ])
       .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
       .withExposedPorts(5432)
@@ -99,6 +105,13 @@ export default async function setup({ provide }: {
       templateClient.release();
       await templatePool.end();
     }
+
+    // The production `read_only` role, created once for the whole run: two
+    // test files may share this cluster at the same time, and a suite that
+    // created, re-passworded or dropped a cluster-wide role would pull it out
+    // from under the other. Created AFTER the template is migrated, so clones
+    // start with no grants to it, exactly as before.
+    await adminPool.query(`create role read_only login password '${READ_ONLY_ROLE_PASSWORD}'`);
   } catch (error) {
     await adminPool.end().catch(() => undefined);
     await container.stop().catch(() => undefined);

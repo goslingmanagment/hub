@@ -10,10 +10,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   fanslyCatalogChunk,
-  nextVaultCursor,
   parseFanslyCatalogCursorState,
-  vaultMediaRows,
-  walkContinuationAt,
 } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
 import {
   resetIntegrationDatabase,
@@ -264,12 +261,13 @@ async function drain(
   adapter: ReturnType<typeof adapterStub>,
   telemetry: ReturnType<typeof telemetryStub>,
   maxChunks = 30,
+  now = NOW,
 ) {
   let result: Awaited<ReturnType<typeof fanslyCatalogChunk>> | null = null;
   for (let chunk = 0; chunk < maxChunks; chunk += 1) {
     result = await fanslyCatalogChunk(
       appStub(adapter),
-      input(pageId, telemetry, new SyncChunkBudget()),
+      input(pageId, telemetry, new SyncChunkBudget(), now),
     );
     if (result.satisfied) {
       break;
@@ -517,7 +515,7 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     expect((await cursor(page.id))?.vaultWalk[ref(101)]?.proof?.seenMediaRefs).toEqual([]);
   });
 
-  it("stops the sublane on an empty FIRST page for a non-empty album, with ONE anomaly", async (context) => {
+  it("parks only the album that serves an empty FIRST page, with ONE anomaly", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -527,34 +525,171 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     // the server did not honour, NOT an empty vault — and recording it as an
     // empty vault would size WP-F4 against a zero that does not exist.
     await seedAlbum(page.id, ref(101), 4760, ref(903));
-    const adapter = adapterStub({ vaultPage: () => ({ albumMedia: [], media: [] }) });
+    // …and a healthy album beside it, which the refusal must not freeze.
+    await seedAlbum(page.id, ref(102), 2, ref(904));
+    const adapter = adapterStub({
+      vaultPage: (params) =>
+        params.albumId === ref(102) && params.before === "0"
+          ? {
+            albumMedia: [
+              { id: ref(911), mediaId: ref(611), albumId: ref(102) },
+              { id: ref(912), mediaId: ref(612), albumId: ref(102) },
+            ],
+            media: [],
+          }
+          : { albumMedia: [], media: [] },
+    });
+    const walkCalls = (albumRef: string) =>
+      adapter.calls.filter((call) => call.route === "vault_media" && call.params.albumId === albumRef);
     const telemetry = telemetryStub();
-    await drain(page.id, adapter, telemetry);
+    const result = await drain(page.id, adapter, telemetry);
+    expect(result?.satisfied).toBe(true);
 
-    const walkCalls = adapter.calls.filter((call) => call.route === "vault_media");
-    // ONE call, and no loop. WP-F1 spent a whole day's cap re-asking a question
-    // it could not answer, across five chunks, and nothing said a word.
-    expect(walkCalls).toHaveLength(1);
+    // ONE call for the refusing album, and no loop. WP-F1 spent a whole day's
+    // cap re-asking a question it could not answer, across five chunks, and
+    // nothing said a word.
+    expect(walkCalls(ref(101))).toHaveLength(1);
     const anomalies = telemetry.anomalies
       .filter((entry) => entry.code === "fansly_catalog_vault_empty_first_page");
     expect(anomalies).toHaveLength(1);
     expect(anomalies[0]?.severity).toBe("warn");
 
-    const coverage = (await coverageRows(page.id))
-      .find((row) => row.plane === "catalog_vault_media");
-    expect(coverage?.status).toBe("partial_provider_surface");
-    expect(coverage?.reason_code).toBe("empty_first_page_on_non_empty_album");
-    expect(Number(coverage?.expected_count)).toBe(4760);
+    const coverage = await coverageRows(page.id);
+    const refused = coverage.find((row) => row.plane === "catalog_vault_media" && row.scope_ref === ref(101));
+    expect(refused?.status).toBe("partial_provider_surface");
+    expect(refused?.reason_code).toBe("empty_first_page_on_non_empty_album");
+    expect(Number(refused?.expected_count)).toBe(4760);
+    // The rest of the vault is still walked and certified. This used to stop
+    // the whole walk "until an operator looks", and nothing ever looked.
+    expect(walkCalls(ref(102))).toHaveLength(2);
+    const healthy = coverage.find((row) => row.plane === "catalog_vault_media" && row.scope_ref === ref(102));
+    expect(healthy?.status).toBe("provider_exhausted");
+    expect(healthy?.reason_code).toBe("walk_exhausted");
 
     // The empty response IS journaled — the evidence outlives the verdict.
-    expect((await observations(page.id)).filter((row) => row.kind === "vault_media"))
-      .toHaveLength(1);
+    expect((await requestParams(page.id, "vault_media"))
+      .filter((params) => params.albumId === ref(101))).toHaveLength(1);
 
-    // And the sublane stays BLOCKED: a later dispatch does not retry it, so a
-    // provider that refuses one album cannot burn the lane's cap on it.
-    expect((await cursor(page.id))?.vaultWalkBlockedAlbumRef).toBe(ref(101));
+    // Parked, not certified: no completion is recorded for the refused album.
+    const state = await cursor(page.id);
+    expect(state?.vaultWalkBlockedAlbumRef).toBeNull();
+    expect(state?.vaultWalk[ref(101)]).toMatchObject({ done: true, completedOnUtcDay: "2026-08-22" });
+    expect(state?.vaultWalk[ref(101)]?.lastCompleteWalkAt).toBeUndefined();
+    expect(state?.vaultWalk[ref(102)]?.lastCompleteWalkAt).toBeTruthy();
+
+    // A later dispatch the same day does not retry it, so a provider that
+    // refuses one album cannot burn the lane's cap on it…
     await drain(page.id, adapter, telemetry);
-    expect(adapter.calls.filter((call) => call.route === "vault_media")).toHaveLength(1);
+    expect(walkCalls(ref(101))).toHaveLength(1);
+
+    // …and the weekly recheck asks it exactly once more.
+    await drain(page.id, adapter, telemetry, 30, new Date("2026-08-29T09:00:00.000Z"));
+    expect(walkCalls(ref(101))).toHaveLength(2);
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_empty_first_page")).toHaveLength(2);
+  });
+
+  it("re-asks a parked album when its count moves, and a stale count settles as empty", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // A creator emptied the album before the projection caught up: the stale
+    // count says 4 760, the walk honestly gets nothing.
+    await seedAlbum(page.id, ref(101), 4760, ref(903));
+    const adapter = adapterStub({ vaultPage: () => ({ albumMedia: [], media: [] }) });
+    const walkCalls = () => adapter.calls.filter((call) => call.route === "vault_media");
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    expect(walkCalls()).toHaveLength(1);
+
+    // A new day with the album unchanged: parked, not re-asked every day.
+    await drain(page.id, adapter, telemetry, 30, new Date("2026-08-23T09:00:00.000Z"));
+    expect(walkCalls()).toHaveLength(1);
+
+    // The next albums projection lands the true count, and the recheck rule
+    // re-opens the album: one call, recorded as the honest empty album.
+    await testDb!.pool.query(
+      `update creator_vault_albums set item_count = 0 where page_id = $1 and album_ref = $2`,
+      [page.id, ref(101)],
+    );
+    await drain(page.id, adapter, telemetry, 30, new Date("2026-08-24T09:00:00.000Z"));
+    expect(walkCalls()).toHaveLength(2);
+    const coverage = (await coverageRows(page.id))
+      .find((row) => row.plane === "catalog_vault_media" && row.scope_ref === ref(101));
+    expect(coverage?.status).toBe("provider_exhausted");
+    expect(coverage?.reason_code).toBe("album_empty");
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]?.lastCompleteWalkAt).toBeTruthy();
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_empty_first_page")).toHaveLength(1);
+  });
+
+  it("lifts a whole-vault block left in an older cursor", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const adapter = adapterStub({
+      vaultPage: (params) =>
+        params.albumId === ref(102) && params.before === "0"
+          ? { albumMedia: [{ id: ref(911), mediaId: ref(611), albumId: ref(102) }], media: [] }
+          : { albumMedia: [], media: [] },
+    });
+    const walkCalls = (albumRef: string) =>
+      adapter.calls.filter((call) => call.route === "vault_media" && call.params.albumId === albumRef);
+    const telemetry = telemetryStub();
+    // The day's fixed steps write the cursor; then an older build's block,
+    // with the refused album's walk left where that build stopped it: at the
+    // head it had already asked.
+    await drain(page.id, adapter, telemetry);
+    await testDb!.pool.query(
+      `update page_sync_cursors
+          set state = state
+            || jsonb_build_object('vaultWalkBlockedAlbumRef', $2::text)
+            || jsonb_build_object('vaultWalk', jsonb_build_object($2::text, $3::jsonb))
+        where page_id = $1 and stream = 'catalog'`,
+      [page.id, ref(101), JSON.stringify({
+        beforeRef: "0",
+        lastRequestedBefore: "0",
+        sawRows: false,
+        pages: 1,
+        completedAtLastItemRef: null,
+        done: false,
+        proof: {
+          walkRef: "legacy-walk",
+          startedAt: "2026-08-21T09:00:00.000Z",
+          expectedCount: 4760,
+          headRef: ref(903),
+          seenMediaRefs: [],
+          observationRefs: [1],
+          valid: true,
+        },
+      })],
+    );
+    expect((await cursor(page.id))?.vaultWalkBlockedAlbumRef).toBe(ref(101));
+
+    await seedAlbum(page.id, ref(101), 4760, ref(903));
+    await seedAlbum(page.id, ref(102), 1, ref(904));
+    const result = await drain(page.id, adapter, telemetry);
+
+    expect(walkCalls(ref(102))).toHaveLength(2);
+    expect(result?.stats?.vaultWalkStatus).toBe("exhausted");
+    expect((await cursor(page.id))?.vaultWalkBlockedAlbumRef).toBeNull();
+    // The refused album is asked once more, not taken for a cursor loop, and
+    // a refusal that stands parks it under its own reason.
+    expect(walkCalls(ref(101))).toEqual([expect.objectContaining({
+      params: expect.objectContaining({ before: "0" }),
+    })]);
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_cursor_repeat")).toHaveLength(0);
+    expect(telemetry.anomalies
+      .filter((entry) => entry.code === "fansly_catalog_vault_empty_first_page")).toHaveLength(1);
+    const refused = (await coverageRows(page.id))
+      .find((row) => row.plane === "catalog_vault_media" && row.scope_ref === ref(101));
+    expect(refused?.reason_code).toBe("empty_first_page_on_non_empty_album");
+    expect((await cursor(page.id))?.vaultWalk[ref(101)]).toMatchObject({ done: true });
   });
 
   it("treats an empty first page on an EMPTY album as the honest answer", async (context) => {
@@ -786,31 +921,5 @@ describe("[sync-critical] WP-F3 catalog lane", () => {
     // The two steps BEFORE it are journaled — capture-first survives the throw.
     expect((await observations(page.id)).map((row) => row.kind))
       .toEqual(["vault_albums", "uservault_albums"]);
-  });
-});
-
-describe("WP-F3 catalog lane helpers", () => {
-  it("reads albumMedia rows and nothing from the raw media sidecar", () => {
-    expect(vaultMediaRows({ albumMedia: [{ id: "a" }], media: [{ id: "b" }] }))
-      .toEqual([{ id: "a" }]);
-    expect(vaultMediaRows({ media: [{ id: "b" }] })).toEqual([]);
-    expect(vaultMediaRows(null)).toEqual([]);
-  });
-
-  it("takes the next cursor from the LAST row's own id", () => {
-    expect(nextVaultCursor([{ id: "1", mediaId: "x" }, { id: "2", mediaId: "y" }]))
-      .toBe("2");
-    // A page of rows with no usable id cannot advance the walk, and saying so
-    // is better than pretending it did.
-    expect(nextVaultCursor([{ mediaId: "x" }])).toBeNull();
-    expect(nextVaultCursor([])).toBeNull();
-  });
-
-  it("jitters the continuation so a deep walk cannot run contiguously", () => {
-    const base = new Date("2026-08-22T09:00:00.000Z");
-    // Burst SHAPE, not daily volume, is the real ban-risk surface.
-    expect(walkContinuationAt(base, 20_000, () => 0).getTime() - base.getTime()).toBe(14_000);
-    expect(walkContinuationAt(base, 20_000, () => 1).getTime() - base.getTime()).toBe(26_000);
-    expect(walkContinuationAt(base, 20_000, () => 0.5).getTime() - base.getTime()).toBe(20_000);
   });
 });

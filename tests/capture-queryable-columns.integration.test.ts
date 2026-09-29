@@ -59,7 +59,9 @@ beforeEach(async (context) => {
     context.skip();
     return;
   }
-  await resetIntegrationDatabase(testDb.pool);
+  // Physical: a case asserts the plan and a buffer ceiling, which dead
+  // tuples from earlier cases would inflate.
+  await resetIntegrationDatabase(testDb.pool, { physical: true });
 });
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest();

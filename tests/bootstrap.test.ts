@@ -108,6 +108,7 @@ vi.mock("@agency_hub_core/fansly", async (importOriginal) => {
 
 describe("bootstrap", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     delete process.env.FANSLY_DEFAULT_DELAY_MS;
     delete process.env.FANSLY_GLOBAL_DELAY_MS;
@@ -242,8 +243,16 @@ describe("bootstrap", () => {
       ofapiDmSyncEnabled: true,
     });
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+    // The retry backoff is the only timer on this path; fake it instead of
+    // sleeping the real second.
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
 
-    const app = await createAppContext();
+    const booting = createAppContext();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const app = await booting;
+    expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledTimes(2);
 
     // The retried read supplies the overrides; normalization still forces
     // dmSync OFF (prerequisite off) and surfaces the skip.
@@ -255,7 +264,7 @@ describe("bootstrap", () => {
     );
 
     await app.close();
-  }, 15_000);
+  });
 
   it("refuses to boot fail-open when the override read keeps failing (A31)", async () => {
     bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
@@ -264,13 +273,22 @@ describe("bootstrap", () => {
     // api running pre-cutover code paths is not).
     bootstrapMocks.getConfigOverrides.mockRejectedValue(new Error("db down"));
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
 
-    await expect(createAppContext()).rejects.toThrow("db down");
+    // The rejection handler goes on BEFORE the clock moves: the boot rejects
+    // while the timers advance, and an unhandled rejection would fail the run.
+    const refused = expect(createAppContext()).rejects.toThrow("db down");
+    // The 1s-then-2s ladder: the third read waits for the full 3s.
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await refused;
+    expect(bootstrapMocks.getConfigOverrides).toHaveBeenCalledTimes(3);
     expect(bootstrapMocks.logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error), attempts: 3 }),
       "boot override read failed after retries; refusing fail-open boot",
     );
-  }, 15_000);
+  });
 });
 
 afterEach(() => {

@@ -90,8 +90,9 @@ function isOfapiMappedConnectionUsable(block: SyncDomainBlockStatus | undefined)
   return block.connectionStatus !== "error" && block.statusReason?.code !== "ofapi_auth";
 }
 
-/** Streams whose failure streak crossed the wedge threshold. The streak only
- * resets on a real success (completePageSync), so it must degrade health in
+/** Streams whose failure streak crossed the wedge threshold. The streak resets
+ * only on a success (completePageSync) or a partial yield (yieldPageSync; see
+ * the #138 addendum below), so it must degrade health in
  * EVERY active state — a wedged stream that flips retrying → pending/
  * backfilling/syncing between failures is still wedged (prod 2026-07-11:
  * 425-streak dm_messages read as ok the moment its state left retrying).
@@ -207,8 +208,9 @@ export async function getPublicSyncHealth(
       input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
     ),
     // #138 addendum: conversation-level coverage debt. The page-level failure
-    // streak is reset to 0 by every partial yield, so once the breaker keeps
-    // a stream moving the streak can no longer carry the wedge signal — the
+    // streak is reset to 0 by every partial yield that read something, and a
+    // deferred thread no longer fails the stream, so once the breaker keeps a
+    // stream moving the streak can no longer carry the wedge signal — the
     // breaker rows themselves can: they clear only when their conversation
     // actually syncs.
     countConversationSyncFailuresByAccount(
@@ -311,10 +313,14 @@ export async function getPublicSyncHealth(
       issues.push("projection_debt");
     }
 
-    // page_dm_message_sync_health belongs to the permanently retired legacy
-    // OnlyFans dm_messages crawler. Its historical breaker rows are not mirror
-    // coverage debt and must not keep /health/sync at 503 after the retirement
-    // fence. Fansly still uses this table, so its signal remains unchanged.
+    // page_dm_message_sync_health rows of OnlyFans pages are historical, left
+    // by the permanently retired legacy dm_messages crawler. They are not
+    // mirror coverage debt and must not keep /health/sync at 503 after the
+    // retirement fence. The Fansly dm_messages lane writes the table (its
+    // per-thread breaker), so a Fansly page stays coverage_degraded while a
+    // thread the lane still selects carries failures: until a successful read
+    // of that thread clears them, or the thread leaves the lane (excluded,
+    // hidden, unbound).
     if (platform !== "onlyfans" && (coverageDebtByPageId.get(pageId) ?? 0) > 0) {
       issues.push("dm_messages:coverage_degraded");
     }

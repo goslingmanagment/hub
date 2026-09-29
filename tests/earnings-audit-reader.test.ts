@@ -17,9 +17,9 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-async function fakeSsh(source: string) {
+async function fakeSsh(source: string, options?: ConstructorParameters<typeof EarningsAuditReader>[1]) {
   await writeFile(join(directory, "ssh"), "#!/usr/bin/env node\n" + source, { flag: "wx", mode: 0o700 });
-  reader = new EarningsAuditReader("fixture");
+  reader = new EarningsAuditReader("fixture", options);
   return reader;
 }
 
@@ -37,11 +37,14 @@ describe("earnings audit subprocess ownership", () => {
   });
 
   it("escalates cleanup when its child ignores SIGTERM", async () => {
+    // The child ignores EOF and SIGTERM, so both graces run out in full; a
+    // shorter grace keeps the same EOF -> SIGTERM -> SIGKILL order without
+    // sleeping the production 1s twice. The post-SIGKILL wait stays at 1s.
     const child = await fakeSsh(`
       process.on('SIGTERM', () => {});
       process.stdin.on('data', () => process.stdout.write('{"ready":true}\\n'));
       setInterval(() => {}, 1000);
-    `);
+    `, { escalationGraceMs: 200 });
     expect(await child.read("ready")).toEqual({ ready: true });
     const cleanup = await child.close();
     expect(cleanup.error).toMatch(/ended unexpectedly/);

@@ -134,13 +134,24 @@ const DM_THREADS = `
  */
 export const AGENT_SUBSCRIPTION_EXPIRED_STATUSES = ["expired", "ended", "cancelled"] as const;
 
-/** The wire state of one raw `canonical_status`. The SQL below is generated from
- *  the same list, so a new terminal status cannot reach only one of the two. */
+/**
+ * The wire state of one subscription row. The SQL below follows the same rules
+ * and is generated from the same list, so a new terminal status cannot reach
+ * only one of the two.
+ *
+ * `canonical_status` is the LAST status the provider sent; `is_current` carries
+ * retirement. A sync that no longer sees a subscription in the provider's
+ * active list sets `is_current = false` and leaves the status as it was, so an
+ * `active` status on a retired row is an ended subscription, not a live one —
+ * the same reading Hub's own subscriber state takes. `isCurrent` is required so
+ * no caller can forget it.
+ */
 export function agentSubscriptionState(
   canonicalStatus: string | null | undefined,
+  isCurrent: boolean,
 ): "active" | "expired" | "unknown" {
   if (canonicalStatus === "active") {
-    return "active";
+    return isCurrent ? "active" : "expired";
   }
   return (AGENT_SUBSCRIPTION_EXPIRED_STATUSES as readonly string[])
     .includes(canonicalStatus ?? "")
@@ -149,7 +160,8 @@ export function agentSubscriptionState(
 }
 
 const SUBSCRIPTION_STATE_SQL = `case
-           when s.canonical_status = 'active' then 'active'
+           when s.canonical_status = 'active' and s.is_current then 'active'
+           when s.canonical_status = 'active' then 'expired'
            when s.canonical_status in (${
   AGENT_SUBSCRIPTION_EXPIRED_STATUSES.map((status) => `'${status}'`).join(", ")
 }) then 'expired'

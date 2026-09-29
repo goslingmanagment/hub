@@ -1,5 +1,5 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createModel,
@@ -22,6 +22,10 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 const MACHINE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_MACHINE_ID = "22222222-2222-4222-8222-222222222222";

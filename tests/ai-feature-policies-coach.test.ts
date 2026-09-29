@@ -24,7 +24,7 @@ describe("coach-chat feature policy", () => {
       requiresDraft: false,
       usesPingSegment: false,
     });
-    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-sonnet-5");
+    expect(DEFAULT_FEATURE_MODELS["coach-chat"]).toBe("anthropic:claude-sonnet-5-5");
     expect(DEFAULT_FEATURE_REASONING["coach-chat"]).toBe("low");
   });
 

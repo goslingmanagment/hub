@@ -3,7 +3,11 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 
 /** Called in the list writer's owned transaction, after capture and the erasure
- * fence. A later head never replaces an earlier unconfirmed ID. */
+ * fence. A later head never replaces an earlier unconfirmed ID. A stored row
+ * marked deleted still counts as captured: on Fansly the only deletion mark is
+ * the WS one (fansly-ws-deletions.ts), which keeps the captured message, and
+ * the conversation list can keep naming that message as its head. Requiring a
+ * live row made that head permanent, unresolvable debt. */
 export async function observeFanslyDmHead(
   db: Database,
   input: { conversationId: number; messageId: string | null; messageAt: Date | null },
@@ -15,14 +19,15 @@ export async function observeFanslyDmHead(
     where not exists (
       select 1 from page_dm_messages m
       where m.conversation_id = ${input.conversationId}
-        and m.platform_message_id = ${input.messageId} and m.deleted_at is null
+        and m.platform_message_id = ${input.messageId}
     )
     on conflict (conversation_id, message_id) do nothing
   `);
 }
 
 /** Exact stored identity is the receipt; newest timestamp/ID and HTTP success
- * cannot substitute for it. Also used by the targeted writer and debt repair. */
+ * cannot substitute for it. Also used by the targeted writer and debt repair.
+ * A WS-marked row is a capture too (see observeFanslyDmHead). */
 export async function resolveCapturedFanslyDmHeads(db: Database, conversationId: number): Promise<void> {
   await db.execute(sql`
     update fansly_dm_head_debt d set captured_at = now()
@@ -30,7 +35,7 @@ export async function resolveCapturedFanslyDmHeads(db: Database, conversationId:
       and exists (
         select 1 from page_dm_messages m
         where m.conversation_id = d.conversation_id
-          and m.platform_message_id = d.message_id and m.deleted_at is null
+          and m.platform_message_id = d.message_id
       )
   `);
 }
@@ -58,7 +63,15 @@ export async function recordFanslyDmHeadAttempt(
 }
 
 export async function nextFanslyDmHeadRetryAt(
-  db: Database, input: { platformAccountId: number; conversationId?: number },
+  db: Database, input: {
+    platformAccountId: number;
+    conversationId?: number;
+    /** Leave out threads the DM breaker has quarantined. The dm_messages
+     * stream never sleeps on a quarantine (6 hours, re-armed by every later
+     * failure): its thread waits for the next ordinary request. */
+    excludeQuarantined?: boolean;
+    now?: Date;
+  },
 ): Promise<Date | null> {
   const result = await db.execute<{ retry_at: Date | string | null }>(sql`
     select min(greatest(d.next_retry_at, h.next_retry_at, h.quarantine_until)) as retry_at
@@ -70,6 +83,9 @@ export async function nextFanslyDmHeadRetryAt(
       and coalesce(c.metadata ->> 'messageSyncExcludedReason', '') = ''
       and d.captured_at is null and d.attempts < 5
       ${input.conversationId === undefined ? sql`` : sql`and c.id = ${input.conversationId}`}
+      ${input.excludeQuarantined === true
+        ? sql`and (h.quarantine_until is null or h.quarantine_until <= ${input.now ?? new Date()}::timestamptz)`
+        : sql``}
   `);
   const value = result.rows[0]?.retry_at;
   return value == null ? null : new Date(value);

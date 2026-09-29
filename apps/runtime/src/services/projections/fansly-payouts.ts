@@ -17,11 +17,13 @@
 // derived from the ledger, in ledger order, which is what makes it survive
 // truncate-and-replay identically.
 //
-// The CLEAR half is not symmetry for its own sake. A method whose content
-// changed clears its own mark through the ordinary upsert — but a method
-// removed and re-added UNCHANGED emits no row event at all, because its content
-// hash is the one it had before. Only the roster can un-mark it, which is also
-// why the roster is keyed per LOOK rather than per ref-set.
+// The CLEAR half is not symmetry for its own sake. A method that comes back
+// clears its own mark through the ordinary upsert, because method events are
+// keyed per LOOK (`payoutmethod:v2`) — but under `payoutmethod:v1` a method
+// removed and re-added UNCHANGED emitted no row event at all (its content hash
+// was the one it had before), and only the roster could un-mark it. The roster
+// keeps doing so, which is also why it is keyed per LOOK rather than per
+// ref-set.
 //
 // ORDER MATTERS, and it is guaranteed by the canonicalizer: the roster is the
 // LAST draft of its observation, so every method it names has already been

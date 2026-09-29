@@ -26,7 +26,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createHash } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import type { PoolClient } from "pg";
 
@@ -56,6 +55,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { waitForRelationLockWait } from "./helpers/lock-waits.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -1132,8 +1132,10 @@ describe("C — capture:reclaim, observations", () => {
     await holder.query("select 1 from observations limit 1");
 
     const swapping = reclaim({ phase: "swap", confirm: PARTITION, lockTimeoutMs: 15_000 });
-    await sleep(700);
     try {
+      // An ungranted table lock on observations proves the swap is parked on
+      // its ACCESS EXCLUSIVE request; the fixed sleep here only assumed it.
+      await waitForRelationLockWait(testDb!.pool, "observations", { blocked: swapping });
       await act(holder);
       await holder.query("commit");
     } finally {

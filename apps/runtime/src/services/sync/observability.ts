@@ -34,6 +34,10 @@ interface RequestTotalsSnapshot {
   logicalRequests: number;
   retryAttempts: number;
   failedAttempts: number;
+  /** Attempts that ended in a successful provider response. */
+  successfulAttempts: number;
+  /** The newest of those responses: the run's provider-health evidence. */
+  lastSuccessfulAttemptAt: Date | null;
   totalRequestDurationMs: number;
 }
 
@@ -240,6 +244,8 @@ class RequestSummaryCollector implements HttpRequestObserver {
   private requestAttempts = 0;
   private retryAttempts = 0;
   private failedAttempts = 0;
+  private successfulAttempts = 0;
+  private lastSuccessfulAttemptAt: Date | null = null;
   private totalRequestDurationMs = 0;
 
   async onRequestEvent(event: HttpRequestEvent) {
@@ -270,6 +276,10 @@ class RequestSummaryCollector implements HttpRequestObserver {
 
     if (event.state === "success") {
       summary.successes += 1;
+      this.successfulAttempts += 1;
+      if (this.lastSuccessfulAttemptAt === null || event.timestamp > this.lastSuccessfulAttemptAt) {
+        this.lastSuccessfulAttemptAt = event.timestamp;
+      }
     } else if (event.state === "retry") {
       summary.retries += 1;
       this.retryAttempts += 1;
@@ -292,6 +302,8 @@ class RequestSummaryCollector implements HttpRequestObserver {
       logicalRequests: this.logicalRequests.size,
       retryAttempts: this.retryAttempts,
       failedAttempts: this.failedAttempts,
+      successfulAttempts: this.successfulAttempts,
+      lastSuccessfulAttemptAt: this.lastSuccessfulAttemptAt,
       totalRequestDurationMs: this.totalRequestDurationMs,
     };
   }

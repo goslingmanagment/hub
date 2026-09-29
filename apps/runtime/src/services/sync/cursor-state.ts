@@ -8,8 +8,26 @@ type SubscribersCursorState = {
   historyBackfilledAt: string | null;
   offset: number;
   observedCount: number;
+  /** Distinct subscription ids summed per page: the generation rows a
+   * multi-page walk must find before it retires unseen subscriptions. */
+  distinctObservedCount: number;
   pageCount: number;
   providerReportedTotal: number | null;
+  /** Restarts of this walk after its provider total shifted or its pages overlapped. */
+  restartCount: number;
+  /** When this active walk began: taken again right before each read until
+   * the walk has written a page, so a retried or yielded first read is judged
+   * by its own start, not a failed attempt's. Finalization spares every row
+   * touched since (Audit P-25), and an empty snapshot vouches only for
+   * subscriptions that had lapsed by then. Null on a cursor written before
+   * the fence existed; execution never finalizes an active walk without one. */
+  walkStartedAt: string | null;
+  /** Why this revision's active walk retired nothing past the restart bound;
+   * the history walk carries it so the revision's completion records it. */
+  activeWithheldReason?: string;
+  /** Why this history walk cannot certify the archive past the restart bound;
+   * the walk still reads on to its last page. */
+  historyWithheldReason?: string;
 };
 
 type FollowersCursorState = {
@@ -64,6 +82,10 @@ type DmConversationCursorState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  /** Consecutive non-final pages whose every id an earlier page of this sweep
+   *  already applied. Persisted only while positive, so a document without it
+   *  is byte-identical to the one every earlier writer produced. */
+  repeatOnlyPageStreak?: number;
   diagnostics?: DmShadowState;
   polling?: DmFullSweepSchedule;
 };
@@ -76,6 +98,17 @@ type DmMessagesCursorState = {
   currentMode: "backfill" | "deep_backfill" | "incremental" | null;
   liveMessageRequestsSinceDeepBackfill?: number;
   headCatchup?: { messageId: string; startedAt: string; pagesRead: number; overlapReached?: boolean };
+  /** An earlier page of this conversation's walk left a message unstored; the
+   * walk's final coverage verdict must not be 'complete'. */
+  normalizationDebt?: true;
+  /** ISO dispatch time of this walk's head page (before = null). Finalize
+   * stamps it as last_message_sync_at; a walk without it (from a stored
+   * cursor, or checkpointed before the field existed) leaves that alone. */
+  headReadAt?: string;
+  /** Pages this first read has walked past the 25-message start window
+   * because the thread's history began after the page's DM onboarding;
+   * bounded by PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES across chunks. */
+  newThreadHistoryPages?: number;
 };
 
 // OFAPI-fed OnlyFans dm_conversations checkpoint (mode "ofapi" keeps it
@@ -186,13 +219,26 @@ export function parseSubscribersCursorState(
     : null;
   const offset = asNumber(state.offset);
   const observedCount = asNumber(state.observedCount) ?? offset;
+  const distinctObservedCount = asNumber(state.distinctObservedCount) ?? observedCount;
   const pageCount = asNumber(state.pageCount);
   const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
+  const restartCount = asNumber(state.restartCount) ?? 0;
+  const walkStartedAt = typeof state.walkStartedAt === "string"
+    && Number.isFinite(Date.parse(state.walkStartedAt))
+    ? state.walkStartedAt
+    : null;
+  const activeWithheldReason = typeof state.activeWithheldReason === "string"
+    ? state.activeWithheldReason
+    : undefined;
+  const historyWithheldReason = typeof state.historyWithheldReason === "string"
+    ? state.historyWithheldReason
+    : undefined;
   if (
     generation === null ||
     mode === null ||
     offset === null ||
     observedCount === null ||
+    distinctObservedCount === null ||
     pageCount === null ||
     providerReportedTotal === undefined
   ) {
@@ -206,8 +252,13 @@ export function parseSubscribersCursorState(
     historyBackfilledAt,
     offset,
     observedCount,
+    distinctObservedCount,
     pageCount,
     providerReportedTotal,
+    restartCount,
+    walkStartedAt,
+    ...(activeWithheldReason === undefined ? {} : { activeWithheldReason }),
+    ...(historyWithheldReason === undefined ? {} : { historyWithheldReason }),
   };
 }
 
@@ -394,6 +445,9 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
 
   const diagnostics = parseDmShadowState(state.diagnostics);
   const polling = parseDmFullSweepSchedule(state.polling);
+  // A garbled streak reads as none: it can only let one more repeat-only page
+  // through before the guard counts again, never refuse a healthy cursor.
+  const repeatOnlyPageStreak = asNumber(state.repeatOnlyPageStreak);
   return {
     version: 2,
     mode: "full_scan",
@@ -406,6 +460,9 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     unchangedPageStreak,
     fullSweepStartedAt,
     lastFullSweepCompletedAt,
+    ...(repeatOnlyPageStreak !== null && Number.isSafeInteger(repeatOnlyPageStreak) && repeatOnlyPageStreak > 0
+      ? { repeatOnlyPageStreak }
+      : {}),
     ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(polling === undefined ? {} : { polling }),
   };
@@ -457,6 +514,7 @@ type DmConversationSweepInProgressState = {
   unchangedPageStreak: number;
   fullSweepStartedAt: string;
   lastFullSweepCompletedAt: string | null;
+  repeatOnlyPageStreak?: number;
   diagnostics?: DmShadowState;
   polling?: DmFullSweepSchedule;
 };
@@ -594,6 +652,7 @@ export function serializeDmConversationSweepState(
     unchangedPageStreak: state.unchangedPageStreak,
     fullSweepStartedAt: state.fullSweepStartedAt,
     lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
+    ...(state.repeatOnlyPageStreak ? { repeatOnlyPageStreak: state.repeatOnlyPageStreak } : {}),
     ...(telemetry === undefined ? {} : { generationSetCount: telemetry.generationSetCount }),
     ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
     ...(state.polling === undefined ? {} : { polling: state.polling }),
@@ -754,6 +813,15 @@ export function parseDmMessagesCursorState(value: unknown): DmMessagesCursorStat
     currentMode,
     ...(liveMessageRequestsSinceDeepBackfill > 0
       ? { liveMessageRequestsSinceDeepBackfill: Math.floor(liveMessageRequestsSinceDeepBackfill) }
+      : {}),
+    ...(state.normalizationDebt === true ? { normalizationDebt: true } : {}),
+    // Unparseable means unknown: preserve last_message_sync_at, never "now".
+    ...(typeof state.headReadAt === "string" && Number.isFinite(Date.parse(state.headReadAt))
+      ? { headReadAt: state.headReadAt }
+      : {}),
+    ...(typeof state.newThreadHistoryPages === "number" && Number.isSafeInteger(state.newThreadHistoryPages) &&
+        state.newThreadHistoryPages > 0
+      ? { newThreadHistoryPages: state.newThreadHistoryPages }
       : {}),
   };
 }

@@ -87,27 +87,39 @@ function firstLocation(node: Record<string, unknown>): string | null {
   return null;
 }
 
+/** Variant type 3 is Fansly's blurred copy (it duplicates the smallest
+ * resize, or the whole file when it is small): never something to describe. */
+const BLURRED_VARIANT_TYPE = 3;
+
 /**
- * The best still image of a Fansly media object: for a photo the smallest
- * image variant covering 1024 px (else the largest image variant, else the
- * original); for a video/GIF the largest image variant (the platform's own
- * poster). Never a video stream.
+ * The best still image of a Fansly media object, never a blurred copy: for a
+ * photo the smallest of its resizes and the original that covers 1024 px,
+ * else the largest of them (a small photo's original); for a video/GIF the
+ * largest image variant (the platform's own poster). Never a video stream.
  */
 export function pickFanslyImageLocation(media: Record<string, unknown>): string | null {
   const mime = text(media.mimetype) ?? "";
   const images = records(media.variants)
     .filter((variant) => (text(variant.mimetype) ?? "").startsWith("image/"))
+    .filter((variant) => num(variant.type) !== BLURRED_VARIANT_TYPE && text(variant.type) !== String(BLURRED_VARIANT_TYPE))
     .map((variant) => ({
       edge: Math.max(num(variant.width) ?? 0, num(variant.height) ?? 0),
       url: firstLocation(variant),
     }))
-    .filter((variant): variant is { edge: number; url: string } => variant.url !== null)
-    .sort((left, right) => left.edge - right.edge);
+    .filter((variant): variant is { edge: number; url: string } => variant.url !== null);
   if (mime.startsWith("image/") && mime !== "image/gif") {
-    const covering = images.find((variant) => variant.edge >= TARGET_EDGE_PX);
-    return covering?.url ?? images.at(-1)?.url ?? firstLocation(media);
+    const original = firstLocation(media);
+    const candidates = original === null
+      ? images
+      : [...images, { edge: Math.max(num(media.width) ?? 0, num(media.height) ?? 0), url: original }];
+    // Ties go to the resize (listed first), which is never larger in bytes.
+    const sorted = candidates
+      .map((candidate, index) => ({ ...candidate, index }))
+      .sort((left, right) => left.edge - right.edge || left.index - right.index);
+    const covering = sorted.find((candidate) => candidate.edge >= TARGET_EDGE_PX);
+    return covering?.url ?? sorted.at(-1)?.url ?? null;
   }
-  return images.at(-1)?.url ?? null;
+  return [...images].sort((left, right) => left.edge - right.edge).at(-1)?.url ?? null;
 }
 
 function hasPrice(row: Record<string, unknown>): boolean {

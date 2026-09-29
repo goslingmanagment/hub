@@ -1,6 +1,6 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import argon2 from "argon2";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -19,6 +19,10 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 // Decision 352 — the rights matrix of the unified account (plan §7). One test
 // per row: not "does this service function work" (the PR-1A suites pin that),

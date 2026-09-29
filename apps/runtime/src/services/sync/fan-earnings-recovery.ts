@@ -14,7 +14,10 @@ import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 
-const DEBT_HOLD = "fan_earnings_unconfirmed_coverage";
+/** A traversed roster whose coverage is not certified: recovery debt, or a
+ * legacy walk that crossed a deterministically rejected fan. */
+export const FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD = "fan_earnings_unconfirmed_coverage";
+const DEBT_HOLD = FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD;
 
 /** The independent daily roster still runs. A failed endpoint can be crossed
  * only after its own durable receipt; crossing never certifies that endpoint. */

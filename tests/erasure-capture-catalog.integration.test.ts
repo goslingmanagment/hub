@@ -180,7 +180,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (testDb) {
-    await resetIntegrationDatabase(testDb.pool);
+    // Physical: a case asserts which index the probe plans use.
+    await resetIntegrationDatabase(testDb.pool, { physical: true });
   }
   observationSeq = 0;
 });

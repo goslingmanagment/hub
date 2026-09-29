@@ -738,6 +738,30 @@ export async function countActiveInWindowTransactionsByScanToken(
   };
 }
 
+/**
+ * Counts every ledger row a writer recorded for a page, active or not: an
+ * inactive row was still listed by the provider, and captured rows are never
+ * deleted. The Fansly transactions scan compares it with the provider's
+ * lifetime total to detect ledger holes an early-stopped scan cannot see.
+ */
+export async function countTransactionsBySource(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    source: TransactionSource;
+  },
+) {
+  const [row] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(transactions)
+    .where(and(
+      eq(transactions.platformAccountId, input.platformAccountId),
+      eq(transactions.source, input.source),
+    ));
+
+  return row?.total ?? 0;
+}
+
 export async function getOldestPendingTransactionAt(
   db: Database,
   platformAccountId: number,

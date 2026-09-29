@@ -665,7 +665,8 @@ export const agentPredicateCatalogSchema = z.object({
 
 export const agentTransactionTypeEnum = transactionTypeEnum;
 export const agentTransactionStateEnum = transactionStateEnum;
-/** DERIVED from `page_subscriptions.canonical_status`, never the raw column. */
+/** DERIVED from `page_subscriptions.canonical_status` and `is_current`, never
+ *  the raw column: a retired row whose last status was active is `expired`. */
 export const agentSubscriptionStateEnum = z.enum(["active", "expired", "unknown"]);
 export const agentCoverageStatusEnum = z.enum(["pending_backfill", "partial_window", "complete"]);
 export const agentSenderRoleEnum = z.enum(["fan", "model", "system", "unknown"]);
@@ -1439,6 +1440,10 @@ export const agentSearchLocatorSchema = z.object({
   /** Only when `includeSnippet` is true. A FLAT window of +/-120 characters
    *  around the first match, no `ts_headline`. Still requires `read:messages`. */
   snippet: z.string().max(300).nullable(),
+  /** Set when the platform deleted the message. A Fansly deletion keeps the
+   *  text, so a deleted message still matches and still has a snippet; this
+   *  marks the hit, like `state: "deleted"` on the transcript. */
+  deletedAt: agentIsoTimestamp.nullable(),
   fieldStates: z.partialRecord(agentClaimFieldEnum, agentFieldStateSchema),
   provenance: agentProvenanceSchema,
 }).strict();

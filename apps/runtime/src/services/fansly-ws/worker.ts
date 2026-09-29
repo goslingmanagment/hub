@@ -9,7 +9,40 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { readFanslyPageGeneration, readProbeGeneration, readProbeSnapshot } from "../egress/fansly-probe-context.ts";
 import { openFanslyReceiverSocket } from "../egress/fansly-receiver-socket.ts";
-import { receiveFanslyConnection, type FanslyWsStopReason } from "./connection.ts";
+import {
+  FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsConnectionTiming, type FanslyWsStopReason,
+} from "./connection.ts";
+
+/** Told about every committed frame, after the commit and outside the serial
+ * writer; it must never block or fail the capture (the AI media fast lane). */
+export type FanslyWsCapturedListener = (input: {
+  pageId: number;
+  label: string;
+  generation: string;
+  ownRef: string;
+  observationId: number;
+  frame: string;
+  receivedAt: Date;
+}) => void;
+
+/** Worker and receiver timing. Production always uses the defaults; the
+ * override exists only so integration tests can run the real worker on scaled
+ * time. It is not configuration. */
+export interface FanslyWsWorkerTiming extends FanslyWsConnectionTiming {
+  /** Live-config poll interval; also the staleness check interval. */
+  configPollMs: number;
+  /** Connections stop as `guard_unavailable` when the last good read is older. */
+  configStaleMs: number;
+  /** Page-loop pause while another session owns the page, and between
+   * credential-generation re-checks after an auth refusal. */
+  pagePauseMs: number;
+  /** Reconnect backoff base, doubled per unstable attempt. */
+  backoffBaseMs: number;
+}
+export const FANSLY_WS_WORKER_TIMING: Readonly<FanslyWsWorkerTiming> = Object.freeze({
+  ...FANSLY_WS_CONNECTION_TIMING,
+  configPollMs: 10_000, configStaleMs: 20_000, pagePauseMs: 10_000, backoffBaseMs: 1_500,
+});
 
 export function fanslyWsPages(config: Pick<AppContext["config"], "fanslyWsCaptureEnabled" | "fanslyWsCapturePageAllowlist">) {
   if (config.fanslyWsCaptureEnabled !== true) return new Set<string>();
@@ -19,7 +52,11 @@ export function fanslyWsPages(config: Pick<AppContext["config"], "fanslyWsCaptur
 
 /** Worker-local supervisor. The only cross-process authority is each page's
  * dedicated PostgreSQL session. Live config is read at most every ten seconds. */
-export function startFanslyWsWorker(app: AppContext) {
+export function startFanslyWsWorker(app: AppContext, options: {
+  onCaptured?: FanslyWsCapturedListener;
+  timing?: FanslyWsWorkerTiming;
+} = {}) {
+  const timing = options.timing ?? FANSLY_WS_WORKER_TIMING;
   const pages = new Map<string, { controller: AbortController; done: Promise<void> }>();
   let stopped = false;
   let polling = false;
@@ -39,7 +76,7 @@ export function startFanslyWsWorker(app: AppContext) {
       for (const label of desired) {
         if (pages.has(label)) continue;
         const controller = new AbortController();
-        const done = runPage(app, label, controller.signal).catch(() => {
+        const done = runPage(app, label, controller.signal, timing, options.onCaptured).catch(() => {
           app.logger.warn({ pageLabel: label }, "Fansly B0 stopped; inspect connection receipts");
         }).finally(() => pages.delete(label));
         pages.set(label, { controller, done });
@@ -48,9 +85,9 @@ export function startFanslyWsWorker(app: AppContext) {
     finally { polling = false; }
   }
   const timer = setInterval(() => {
-    if (Date.now() - configReadAt > 20_000) stopPages("guard_unavailable");
+    if (Date.now() - configReadAt > timing.configStaleMs) stopPages("guard_unavailable");
     void poll();
-  }, 10_000);
+  }, timing.configPollMs);
   void poll();
   return {
     async stop() {
@@ -60,7 +97,9 @@ export function startFanslyWsWorker(app: AppContext) {
   };
 }
 
-async function runPage(app: AppContext, label: string, signal: AbortSignal) {
+async function runPage(
+  app: AppContext, label: string, signal: AbortSignal, timing: FanslyWsWorkerTiming, onCaptured?: FanslyWsCapturedListener,
+) {
   let failures = 0;
   let previousGeneration: string | null = null;
   while (!signal.aborted) {
@@ -85,7 +124,7 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
       if (!stored || signal.aborted) return;
       owner = await acquireFanslyWsOwnership(app.config.databaseUrl, stored.page.id,
         () => controller.abort("ownership_lost"));
-      if (!owner) { await pause(signal, 10_000); continue; }
+      if (!owner) { await pause(signal, timing.pagePauseMs); continue; }
       context = await readProbeSnapshot(owner.db, app.config, label);
       if (context.pageId !== stored.page.id || !context.expectedAccountId) throw new Error("fansly_ws_identity_changed");
       if (context.generation !== previousGeneration) { failures = 0; previousGeneration = context.generation; }
@@ -111,12 +150,20 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
       // Check once more before opening, then at capture commit and every 5s.
       await validate(owned.db);
       reason = await receiveFanslyConnection({
-        open: () => openFanslyReceiverSocket(egress), token, signal: controller.signal,
+        open: () => openFanslyReceiverSocket(egress), token, signal: controller.signal, timing,
         onStable: () => { failures = 0; },
-        capture: (frame, ordinal, receivedAt) => serial(() => captureFanslyWsFrame(owned.db, {
-          connectionId: id, pageId, generation, accountRef: expectedAccountId,
-          frame, ordinal, receivedAt, validate,
-        })),
+        capture: async (frame, ordinal, receivedAt) => {
+          const observationId = await serial(() => captureFanslyWsFrame(owned.db, {
+            connectionId: id, pageId, generation, accountRef: expectedAccountId,
+            frame, ordinal, receivedAt, validate,
+          }));
+          if (onCaptured) {
+            try {
+              onCaptured({ pageId, label, generation, ownRef: expectedAccountId, observationId, frame, receivedAt });
+            } catch { /* A listener never costs the journal a frame. */ }
+          }
+          return observationId;
+        },
         settle: (observationId, nodes) => serial(() => settleFanslyWsDecode(owned.db, observationId, nodes)),
         guard: (verified) => serial(async () => {
           await validate(owned.db);
@@ -133,7 +180,25 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
     } finally {
       controller.abort("disabled");
       if (owner) {
-        if (connectionId) await serial(() => finishFanslyWsConnection(owner!.db, connectionId!, reason)).catch(() => undefined);
+        const closing = owner;
+        const id = connectionId;
+        // No retry through app.db: only the lock-owning session writes. The
+        // next owner of this page closes the row as `abandoned`. A client-side
+        // timeout or lost session may still have committed the close.
+        if (id) await serial(() => finishFanslyWsConnection(closing.db, id, reason)).catch((error: unknown) => {
+          const fields = { pageLabel: label, connectionId: id, stopReason: reason,
+            closeError: closeErrorClass(error, closing.alive) };
+          // Residual: `abandoned` does not block the generation. The wait loop
+          // below blocks only this runner; the next start of this page (worker
+          // restart, disable/re-enable, live-config stop) gets one more WS auth.
+          if (reason === "auth_refused") {
+            app.logger.error(fields,
+              "Fansly B0 auth refusal not confirmed; if it did not commit, the next page start retries this generation once");
+          } else {
+            app.logger.warn(fields,
+              "Fansly B0 connection close not confirmed; if it did not commit, the next owner marks it abandoned");
+          }
+        });
         await owner.close();
       }
       if (context) await context.egress.dispatcher?.destroy().catch(() => undefined);
@@ -144,16 +209,29 @@ async function runPage(app: AppContext, label: string, signal: AbortSignal) {
       // Fail closed for this generation, including worker restarts (journal
       // check below). REST authority remains independent; no logout/revoke.
       while (!signal.aborted) {
-        await pause(signal, 10_000);
+        await pause(signal, timing.pagePauseMs);
         try { if (await readProbeGeneration(app.db, label) !== previousGeneration) break; }
         catch { /* unavailable is not a new credential generation */ }
       }
     } else {
       failures++;
-      const backoff = failures >= 10 ? 30 * 60_000 : Math.min(60_000, 1_500 * 2 ** Math.min(failures, 6));
+      const backoff = failures >= 10 ? 30 * 60_000 : Math.min(60_000, timing.backoffBaseMs * 2 ** Math.min(failures, 6));
       await pause(signal, backoff * (0.8 + Math.random() * 0.4));
     }
   }
+}
+
+/** A fixed class only: driver errors embed SQL and bound parameters. */
+function closeErrorClass(error: unknown, alive: boolean) {
+  if (!alive) return "ownership_lost";
+  let current = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    if (current.message === "Query read timeout") return "timeout";
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+    current = current.cause;
+  }
+  return "unknown";
 }
 
 async function pause(signal: AbortSignal, ms: number) {

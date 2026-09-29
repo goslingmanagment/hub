@@ -10,6 +10,10 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 let testDb: StartedTestDatabase;
 let pageId: number;
 let app: ReturnType<typeof createTestAppContext>;

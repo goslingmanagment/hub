@@ -74,6 +74,13 @@
 // had before it vanished, so the event would dedupe and the row would stay
 // marked forever.
 //
+// The METHOD rows are keyed per look as well (`payoutmethod:v2:…:obs:<id>`):
+// their only change marker in the hash is the platform `version`, whose
+// monotonicity is unverified, so a method that went A→B→A could drop its
+// third look and keep B's head. Payout REQUESTS keep their hash-only key:
+// `updatedAt` is in their hash, so a status that moves back still hashes
+// differently.
+//
 // PAYOUT REQUESTS GET NO ROSTER, deliberately. They arrive from an OFFSET-paged
 // walk, and a roster built from one page of ten would claim the page holds the
 // whole history — every page would mark the other seventy-three missing and the
@@ -408,7 +415,7 @@ function methodDrafts(
       occurredAt: observation.receivedAt,
       data: { ...material, contentHash: hash },
       schemaVersion: SCHEMA_VERSION,
-      dedupKey: `payoutmethod:v1:${pageRef}:${methodRef}:${hash}`,
+      dedupKey: `payoutmethod:v2:${pageRef}:${methodRef}:${hash}:obs:${observation.id}`,
     });
   }
 

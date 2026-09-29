@@ -77,6 +77,74 @@ describe("Fansly audience response contracts", () => {
     await adapter.close();
   });
 
+  it.each([
+    null, {}, "private body", { data: null }, { data: "" }, { data: {} }, { data: [null] },
+    { data: [{ flags: 0 }] }, { data: [{ groupId: 7 }] }, { data: [], aggregationData: "malformed" },
+    { data: [], aggregationData: { accounts: "malformed" } },
+    { data: [], aggregationData: { groups: [{ type: 1 }] } },
+    { data: [], aggregationData: { accounts: [{ username: "no-id" }] } },
+  ])("returns rejected messaging groups capture material without throwing before capture: %j", async raw => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const observed = captureEvents();
+    const result = await adapter.getMessagingGroupsPage({
+      session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+    }, { offset: 100, limit: 100 });
+    await adapter.close();
+    expect(result).toMatchObject({
+      contractAccepted: false, done: false, items: [], accounts: [], groups: [], raw, offset: 100,
+    });
+    expect(observed.events.map(event => event.state)).toEqual(["started", "success"]);
+    expect(observed.events[1]).toMatchObject({ httpStatus: 200, responseMetadata: { contractAccepted: false } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    null, {}, "private body", { messages: null }, { messages: "" }, { messages: {} },
+  ])("returns rejected message page capture material without throwing before capture: %j", async raw => {
+    const { FanslyAdapter, fetchMock } = harness;
+    fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const observed = captureEvents();
+    const result = await adapter.getMessagesPage({
+      session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+    }, { groupId: "group-1", limit: 25, before: "m-9" });
+    await adapter.close();
+    expect(result).toMatchObject({
+      contractAccepted: false, done: false, items: [], groupId: "group-1", before: "m-9", raw,
+    });
+    expect(observed.events.map(event => event.state)).toEqual(["started", "success"]);
+    expect(observed.events[1]).toMatchObject({ httpStatus: 200, responseMetadata: { contractAccepted: false } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts empty and thin DM pages with their original completion semantics", async () => {
+    const { FanslyAdapter, fetchMock } = harness;
+    const groupPages = [{ data: [] }, { data: [], aggregationData: null },
+      { data: [], aggregationData: { total: 0, accounts: null, groups: null } }];
+    for (const response of groupPages) fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
+    // Per-message drift is the lane's to account for after capture, not a
+    // page refusal (a limit-1 head repair must not wedge the sweep on it).
+    for (const response of [{ messages: [] }, { messages: [{ content: "no id or createdAt" }] }]) {
+      fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
+    }
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const context = { session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+      rateLimitWaiter: vi.fn(async () => 0) };
+    for (const _ of groupPages) {
+      expect(await adapter.getMessagingGroupsPage(context, {}))
+        .toMatchObject({ contractAccepted: true, done: true, items: [], accounts: [], groups: [] });
+    }
+    expect(await adapter.getMessagesPage(context, { groupId: "group-1" }))
+      .toMatchObject({ contractAccepted: true, done: true, items: [] });
+    expect(await adapter.getMessagesPage(context, { groupId: "group-1" }))
+      .toMatchObject({ contractAccepted: true, done: true, items: [{ content: "no id or createdAt" }] });
+    await adapter.close();
+  });
+
   it("keeps a throwing diagnostic summary separate from capture and excludes its private error text", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     const raw = { content: "private DM body" };

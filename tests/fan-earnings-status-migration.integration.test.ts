@@ -11,9 +11,8 @@ it("keeps pre-migration signals strict and grants only the bounded metadata func
     await db.pool.query(`insert into subject_refresh_state
       (page_id, plane, subject_ref, requested_revision, applied_revision, dirty_reason)
       values ($1, 'fan_earnings_lifetime', 'fan-a', 4, 3, 'semantic_transaction_change')`, [f.page.id]);
-    await db.pool.query(`do $$ begin
-      if not exists (select 1 from pg_roles where rolname = 'read_only') then create role read_only; end if;
-      end $$`);
+    // 0201 grants to read_only only when the role exists; tests/helpers/global-setup.ts
+    // creates it once per run.
     const client = await db.pool.connect();
     try { await runMigrations({ db: client }); } finally { client.release(); }
     expect((await f.rows())[0]).toMatchObject({

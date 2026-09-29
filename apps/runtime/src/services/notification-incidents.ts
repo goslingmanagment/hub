@@ -26,6 +26,8 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
+/** The Fansly fast lane was unavailable on a describer page for > 10 min. */
+export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
 
 type IncidentApp = Pick<AppContext, "db"> & {
   logger: Pick<AppContext["logger"], "warn">;
@@ -88,6 +90,9 @@ function openTitleForIncident(
   }
   if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
     return "🚨 AI image describer stopped: provider rejected the key (401/403)";
+  }
+  if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+    return "⚠️ Fansly image fast lane unavailable for over 10 minutes";
   }
   switch (input.kind) {
     case "auth_blocked":
@@ -248,6 +253,9 @@ function resolveDetailForIncident(
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
         return "AI image describer re-enabled by the owner";
+      }
+      if (input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+        return "Fansly image fast lane available again";
       }
       return "AI provider generation recovered";
     case "capture_payload_parity":
@@ -571,23 +579,28 @@ export async function resolveSyncChunkRecoveryIncidents(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
-    /** A reused result proves provider health only at its original read time. */
-    providerRecoveredAt?: Date;
+    /** When the provider last answered successfully: the chunk's newest
+     * successful response. Null when the chunk has no such evidence (zero
+     * requests, every attempt failed, or a settlement retry reusing an earlier
+     * result): page-wide auth/proxy incidents then stay open and get no
+     * tombstone. */
+    providerRecoveredAt: Date | null;
     stream: SyncStream;
   },
 ) {
   const recoveredAt = input.recoveredAt ?? new Date();
-  const providerRecoveredAt = input.providerRecoveredAt ?? recoveredAt;
-  await resolveIncidentAndNotify(app, {
-    ...input,
-    kind: "auth_blocked",
-    recoveredAt: providerRecoveredAt,
-  });
-  await resolveIncidentAndNotify(app, {
-    ...input,
-    kind: "proxy_failed",
-    recoveredAt: providerRecoveredAt,
-  });
+  if (input.providerRecoveredAt !== null) {
+    await resolveIncidentAndNotify(app, {
+      ...input,
+      kind: "auth_blocked",
+      recoveredAt: input.providerRecoveredAt,
+    });
+    await resolveIncidentAndNotify(app, {
+      ...input,
+      kind: "proxy_failed",
+      recoveredAt: input.providerRecoveredAt,
+    });
+  }
   // W3.1: a successful chunk implies the page context resolved, which the
   // fail-closed guard only allows with a proxy present.
   await resolveIncidentAndNotify(app, {
@@ -595,6 +608,8 @@ export async function resolveSyncChunkRecoveryIncidents(
     kind: "proxy_missing",
     recoveredAt,
   });
+  // The stream's own alert follows its failure streak, which this chunk's
+  // completion or yield has just reset.
   await resolveIncidentAndNotify(app, {
     ...input,
     kind: "stream_failed_threshold",

@@ -125,13 +125,19 @@ export async function prepareHydratedFans(
   ] satisfies UpsertFanInput[];
 }
 
+type HydratedFansForPageInput = {
+  platformAccountId: number;
+  accounts: FanslyAccount[];
+  /** Ids an account lookup asked for and did not get back: marked deleted. */
+  fallbackIds?: string[];
+  /** Ids seen without an account snapshot and never looked up: the fan row is
+   * ensured and linked, but nothing about the account is inferred. */
+  unverifiedIds?: string[];
+};
+
 export async function upsertHydratedFansForPage(
   db: Database,
-  input: {
-    platformAccountId: number;
-    accounts: FanslyAccount[];
-    fallbackIds?: string[];
-  },
+  input: HydratedFansForPageInput,
 ) {
   const result = await upsertHydratedFansForPageDetailed(db, input);
   return result.fanMap;
@@ -139,11 +145,7 @@ export async function upsertHydratedFansForPage(
 
 export async function upsertHydratedFansForPageDetailed(
   db: Database,
-  input: {
-    platformAccountId: number;
-    accounts: FanslyAccount[];
-    fallbackIds?: string[];
-  },
+  input: HydratedFansForPageInput,
 ) {
   const deletedDetectedAt = new Date();
   const fans = await upsertFans(db, [
@@ -153,6 +155,10 @@ export async function upsertHydratedFansForPageDetailed(
       platformUserId,
       metadata: {},
       deletedDetectedAt,
+    })),
+    ...(input.unverifiedIds ?? []).map((platformUserId) => ({
+      platform: "fansly" as const,
+      platformUserId,
     })),
   ]);
   const fanMap = new Map(fans.map((fan) => [fan.platformUserId, fan.id] as const));

@@ -14,7 +14,7 @@ export type SyncRateLimitScope = {
 
 export function createSyncRateLimitWaiter(
   app: Pick<AppContext, "config" | "db">,
-  input: { egressKey: string },
+  input: { egressKey: string; holdMs?: number },
 ): ((scopes: SyncRateLimitScope[]) => Promise<number>) | null {
   if (!app.config.syncSharedRateLimitEnabled) {
     return null;
@@ -52,6 +52,7 @@ export function createSyncRateLimitWaiter(
         ...scope,
         egressKey: input.egressKey,
       })),
+      ...(input.holdMs !== undefined ? { holdMs: input.holdMs } : {}),
     });
     const waitMs = Math.max(0, scheduledAt.getTime() - Date.now());
     assertHttpRequestActive();

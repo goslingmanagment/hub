@@ -30,10 +30,11 @@ import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-// Stage 1 retention stand-down: raw payloads are captured business facts. Rows
-// are stamped far-future so the existing `retain_until < now` purge
-// (packages/db repositories/sync.ts deleteExpiredRawPayloads) never matches;
-// the cleanup job stays in place as a no-op.
+// Stage 1 retention stand-down: raw payloads are captured business facts and
+// nothing deletes sync_raw_payloads on a schedule (the nightly purge was
+// removed; tests/retention-deleters.test.ts pins that). `retain_until` is an
+// inert envelope stamp kept far-future; the only deleter is the
+// owner-initiated erasure.
 const RAW_RETENTION_DAYS = 36500;
 const DM_RAW_RETENTION_DAYS = 36500;
 
@@ -151,7 +152,9 @@ export async function persistRawPayload(
   // the raw insert — a failed capture fails the chunk (which retries); never a
   // silent drop. The idempotency key is unique per fetch by construction
   // (page:stream:run:requestSeq.fetchN — the fetch counter lives on the
-  // executor context, so multi-page walks journal every page); outside the
+  // executor context, so multi-page walks journal every page; continuation
+  // chunks share requestSeq and restart fetchN, so an in-context caller MUST
+  // pass syncRunId or its key repeats across chunks); outside the
   // page-executor context a UUID takes its place — retries then produce extra
   // observations with distinct keys, which the Stage 7 reconciliation expects.
   const context = getPageSyncExecutionContext();
@@ -541,10 +544,17 @@ function redactFanslyMessageLike(raw: unknown) {
  * [A20] repairs it as the named allowlist above.
  *
  * `aggregationData.groups[].lastMessage` KEEPS its redaction deliberately: it
- * is 3.7 % of the payload delta and a duplicate of material the verbatim
- * `dm_messages` journal already holds (sync/fansly-dm-messages.ts persists
- * `page.raw` untrimmed) — so the agent-read scrub justification in
+ * is 3.7 % of the payload delta and, for every head the DM stream reads, a
+ * duplicate of material the verbatim `dm_messages` journal already holds
+ * (sync/fansly-dm-messages.ts persists `page.raw` untrimmed). A head that
+ * stream never fetches (a mass-DM copy, say) is held only by the WS frame
+ * journal. Either way the agent-read scrub justification in
  * modules/agent-read/observation-scrub.ts stays true.
+ *
+ * The trim drops a row, group or account without its id and nulls a mistyped
+ * scalar. The adapter refuses the first case (contractAccepted false) and
+ * captureFanslyMessagingGroupsPayload marks that capture; the second is
+ * accepted as-is, the same scope as the follower capture.
  */
 export function trimFanslyMessagingGroupsPayload(raw: unknown) {
   const payload = isRecord(raw) ? raw : {};
@@ -627,6 +637,37 @@ export function trimFanslyMessagingGroupsPayload(raw: unknown) {
   };
 }
 
+/** The dm_conversations journal body. An accepted page is the trim, byte for
+ * byte. A page the adapter refused (and the lane then refuses) keeps the same
+ * allowlist and lastMessage redaction, nested so replay cannot mistake the
+ * trim's fallback arrays for a valid page; type names and raw lengths keep the
+ * drift evidence without any text. */
+export function captureFanslyMessagingGroupsPayload(raw: unknown, contractAccepted: boolean | undefined) {
+  const captured = trimFanslyMessagingGroupsPayload(raw);
+  if (contractAccepted !== false) {
+    return captured;
+  }
+  const payload = isRecord(raw) ? raw : {};
+  const aggregationData = isRecord(payload.aggregationData) ? payload.aggregationData : {};
+  const shape = (value: unknown) => value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  const length = (value: unknown) => Array.isArray(value) ? value.length : null;
+  return {
+    contractAccepted: false as const,
+    responseShape: {
+      response: shape(raw),
+      data: shape(payload.data),
+      aggregationData: shape(payload.aggregationData),
+      total: shape(aggregationData.total),
+      groups: shape(aggregationData.groups),
+      accounts: shape(aggregationData.accounts),
+      dataLength: length(payload.data),
+      groupsLength: length(aggregationData.groups),
+      accountsLength: length(aggregationData.accounts),
+    },
+    captured,
+  };
+}
+
 /** Fansly-only since Stage 18: the OnlyMonster metadata refresh is retired
  * (OnlyFans page identity is static post-onboarding; counts ride the OFAPI
  * audience sweep). */
@@ -651,6 +692,11 @@ export async function refreshPageMetadata(
     });
     await persistRawPayload(app.db, {
       platformAccountId: pageContext.page.id,
+      // The run id keeps the observation key unique per chunk: continuation
+      // chunks of one request share requestSeq and restart the fetch counter,
+      // so without it followers_reconcile's terminal account_me collided with
+      // the sweep-start one and was silently dropped by the key claim.
+      syncRunId: telemetry?.metadata.runId ?? null,
       endpoint: "account_me",
       requestParams: {},
       responsePayload: accountMe.raw,

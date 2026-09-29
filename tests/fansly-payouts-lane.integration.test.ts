@@ -10,17 +10,23 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   fanslyPayoutsChunk,
-  oldestCreatedAtMs,
   parseFanslyPayoutsCursorState,
   payoutRequestRows,
-  payoutRequestTotal,
-  walkContinuationAt,
 } from "../apps/runtime/src/services/sync/fansly-payouts.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  LIVE_TOTAL,
+  NOW,
+  OLDEST_MS,
+  PAGE_SIZE,
+  ref,
+  requestPage,
+  stableRequestPage,
+} from "./helpers/fansly-payouts-fixtures.ts";
 import {
   fanslyLaneAppStub,
   fanslyLaneInput,
@@ -45,40 +51,7 @@ beforeEach(async () => {
   }
 });
 
-const NOW = new Date("2026-08-22T09:00:00.000Z");
 const NEXT_DAY = new Date("2026-08-23T09:00:00.000Z");
-
-/** The live history: `total = 83`, page size 10, oldest 2025-06-23. */
-const LIVE_TOTAL = 83;
-const PAGE_SIZE = 10;
-const OLDEST_MS = Date.parse("2025-06-23T12:00:00.000Z");
-
-function ref(n: number): string {
-  return `0009${String(10000000000000 + n).padStart(14, "0")}`;
-}
-
-/** One page of the request history at `offset`, shaped exactly as the wire is:
- *  `{total, data[]}`, ten rows until the last, `createdAt` descending. */
-function requestPage(offset: number, total = LIVE_TOTAL) {
-  const remaining = Math.max(0, total - offset);
-  const size = Math.min(PAGE_SIZE, remaining);
-  const data = Array.from({ length: size }, (_unused, index) => {
-    const row = offset + index;
-    return {
-      id: ref(20000 + row),
-      accountId: "acct-payouts",
-      amount: 131000 + row,
-      payoutMethodId: ref(9001),
-      // ONE CODE DEEP: every live row carried 8.
-      status: 8,
-      version: 1,
-      // Descending, so the LAST row of the LAST page is the floor.
-      createdAt: OLDEST_MS + (total - 1 - row) * 86_400_000,
-      updatedAt: OLDEST_MS + (total - 1 - row) * 86_400_000 + 3_600_000,
-    };
-  });
-  return { total, data };
-}
 
 /** The two live payout methods, `metadata` JSON-ENCODED exactly as served. */
 function payoutMethods() {
@@ -243,7 +216,7 @@ async function requestParams(pageId: number, endpoint: string) {
 async function coverageRows(pageId: number) {
   const result = await testDb!.pool.query(
     `select plane, scope_ref, status, proof, reason_code, expected_count,
-            oldest_captured_at, cursor
+            oldest_captured_at, cursor, proof_observation_id
        from capture_coverage where page_id = $1 order by plane, scope_ref`,
     [pageId],
   );
@@ -465,6 +438,69 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
     expect(state?.walkDone).toBe(true);
     // The lane did not invent a floor beyond what it actually read.
     expect(state?.walkTotal).toBe(900);
+    expect(state?.walkStop).toBe("short_before_total");
+
+    // ...and it does not CLAIM one either. The page's own `total` counts rows
+    // past the 14 it served, so the history is partial, and says why — once.
+    const shortStops = telemetry.anomalies
+      .filter((a) => a.code === "fansly_payouts_short_before_total");
+    expect(shortStops).toHaveLength(1);
+    expect(shortStops[0]!.details).toMatchObject({ offset: 10, rows: 4, total: 900 });
+    const requests = async () => (await coverageRows(page.id))
+      .find((row) => row.scope_ref === "payout_requests")!;
+    expect((await requests()).status).toBe("partial_provider_surface");
+    expect((await requests()).reason_code).toBe("short_before_total");
+    expect((await requests()).proof).toBe("terminal_response");
+    expect(Number((await requests()).expected_count)).toBe(900);
+    // The proof is the SHORT page that stopped the walk, not the head before it.
+    const requestObservationIds = async () => (await testDb!.pool.query(
+      `select id from observations where account_id = $1 and kind = 'payout_requests'
+        order by id`,
+      [page.id],
+    )).rows.map((row) => String((row as { id: unknown }).id));
+    const [headObservationId, shortObservationId] = await requestObservationIds();
+    const stopProof = String((await requests()).proof_observation_id);
+    expect(stopProof).toBe(shortObservationId);
+    expect(stopProof).not.toBe(headObservationId);
+
+    // The NEXT day's head read restates the stop rather than upgrading it, and
+    // the stop alone never re-opens the walk: two calls, as on any steady day.
+    const firstDayCalls = adapter.calls.length;
+    await drain(page.id, adapter, telemetry, NEXT_DAY);
+    expect(adapter.calls.slice(firstDayCalls).map((call) => [call.route, call.params.offset]))
+      .toEqual([["payout_methods", undefined], ["payout_requests", 0]]);
+    expect((await requests()).status).toBe("partial_provider_surface");
+    expect((await requests()).reason_code).toBe("short_before_total");
+    // A head read proves nothing about where the walk stopped: it restates the
+    // claim with proof 'none', and the stored proof still names the short page.
+    expect((await requests()).proof).toBe("none");
+    expect(String((await requests()).proof_observation_id)).toBe(stopProof);
+    expect((await cursor(page.id))?.walkDone).toBe(true);
+    expect(telemetry.anomalies
+      .filter((a) => a.code === "fansly_payouts_short_before_total")).toHaveLength(1);
+  });
+
+  it("claims a partial history when the HEAD page is short of its own `total`", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const adapter = adapterStub({
+      page: (params) => ({ total: 900, data: requestPage(params.offset, 4).data }),
+    });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    expect(adapter.calls.filter((call) => call.route === "payout_requests")
+      .map((call) => call.params.offset)).toEqual([0]);
+    expect((await cursor(page.id))?.walkStop).toBe("short_before_total");
+    expect(telemetry.anomalies.map((a) => a.code))
+      .toEqual(["fansly_payouts_short_before_total"]);
+    const requests = (await coverageRows(page.id))
+      .find((row) => row.scope_ref === "payout_requests")!;
+    expect(requests.status).toBe("partial_provider_surface");
+    expect(requests.reason_code).toBe("short_before_total");
   });
 
   it("STOPS on a repeated offset with one anomaly, and never loops", async (context) => {
@@ -501,6 +537,157 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
     // provider, and a guard that dropped it would leave nothing to diagnose.
     expect((await observations(page.id)).filter((row) => row.kind === "payout_requests"))
       .toHaveLength(2);
+
+    // And the claim OUTLIVES the day: the next head read restates the partial
+    // stop instead of calling the history exhausted.
+    await drain(page.id, adapter, telemetry, NEXT_DAY);
+    const nextDay = (await coverageRows(page.id))
+      .find((row) => row.scope_ref === "payout_requests")!;
+    expect(nextDay.status).toBe("partial_provider_surface");
+    expect(nextDay.reason_code).toBe("repeat_request");
+    expect(adapter.calls.filter((call) => call.route === "payout_requests")).toHaveLength(3);
+  });
+
+  it("CATCHES UP when more payouts landed than the head holds, and stops at the overlap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    let total = LIVE_TOTAL;
+    const adapter = adapterStub({ page: (params) => stableRequestPage(params.offset, total) });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    const firstDayCalls = adapter.calls.length;
+    expect(firstDayCalls).toBe(10);
+
+    // 25 payouts land while the lane is down: the head holds ten of them, and
+    // the other fifteen now sit at offsets 10-24, where no head read reaches.
+    total = LIVE_TOTAL + 25;
+    const result = await drain(page.id, adapter, telemetry, NEXT_DAY);
+    expect(result?.satisfied).toBe(true);
+    // The head, then offset 10, then offset 20 — whose rows reach the ones the
+    // previous head held — and nothing past it.
+    expect(adapter.calls.slice(firstDayCalls).filter((call) => call.route === "payout_requests")
+      .map((call) => call.params.offset)).toEqual([0, 10, 20]);
+    expect(telemetry.anomalies.map((a) => a.code)).toEqual(["fansly_payouts_head_gap"]);
+
+    // Every new payout is journaled...
+    const journaledRefs = new Set(
+      (await observations(page.id))
+        .filter((row) => row.kind === "payout_requests")
+        .flatMap((row) => payoutRequestRows(row.payload).map((payout) => payout.id)),
+    );
+    for (let n = LIVE_TOTAL; n < total; n += 1) {
+      expect(journaledRefs.has(ref(20000 + n))).toBe(true);
+    }
+    // ...and the history is exactly as exhausted as it was before.
+    const state = await cursor(page.id);
+    expect(state?.walkDone).toBe(true);
+    expect(state?.walkStop).toBe("exhausted");
+    expect(state?.catchUp).toBeNull();
+    const requests = (await coverageRows(page.id))
+      .find((row) => row.scope_ref === "payout_requests")!;
+    expect(requests.status).toBe("provider_exhausted");
+    expect(requests.reason_code).toBe("walk_exhausted");
+    expect(Number(requests.expected_count)).toBe(total);
+  });
+
+  it("does not catch up while the head still overlaps the previous one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    let total = LIVE_TOTAL;
+    const adapter = adapterStub({ page: (params) => stableRequestPage(params.offset, total) });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    const firstDayCalls = adapter.calls.length;
+
+    // Three new payouts: the head still carries seven it held yesterday.
+    total = LIVE_TOTAL + 3;
+    await drain(page.id, adapter, telemetry, NEXT_DAY);
+    expect(adapter.calls.length - firstDayCalls).toBe(2);
+
+    // Exactly a head page of new payouts shares nothing with yesterday's head,
+    // so ONE page past it is read, and it is yesterday's head.
+    const secondDayCalls = adapter.calls.length;
+    total += 10;
+    await drain(page.id, adapter, telemetry, new Date("2026-08-24T09:00:00.000Z"));
+    expect(adapter.calls.slice(secondDayCalls).filter((call) => call.route === "payout_requests")
+      .map((call) => call.params.offset)).toEqual([0, 10]);
+    expect((await cursor(page.id))?.walkDone).toBe(true);
+  });
+
+  it("never upgrades a PARTIAL history when a catch-up reaches the overlap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    // Day one: a server ignoring `offset`, so the walk stops partial on its
+    // second page.
+    let total = 30;
+    let honoursOffset = false;
+    const adapter = adapterStub({
+      page: (params) => stableRequestPage(honoursOffset ? params.offset : 0, total),
+    });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    expect((await cursor(page.id))?.walkStop).toBe("repeat_request");
+
+    // Day two: 15 new payouts, and a server that pages properly again.
+    const firstDayCalls = adapter.calls.length;
+    total += 15;
+    honoursOffset = true;
+    await drain(page.id, adapter, telemetry, NEXT_DAY);
+    // Offsets 10-14 are new, 15-24 are yesterday's head: one page past the head.
+    expect(adapter.calls.slice(firstDayCalls).filter((call) => call.route === "payout_requests")
+      .map((call) => call.params.offset)).toEqual([0, 10]);
+    expect(telemetry.anomalies.filter((a) => a.code === "fansly_payouts_head_gap")).toHaveLength(1);
+
+    // The catch-up reached new rows at the head, not the rows the first walk
+    // never read: the claim stays what it was.
+    const state = await cursor(page.id);
+    expect(state?.walkDone).toBe(true);
+    expect(state?.walkStop).toBe("repeat_request");
+    const requests = (await coverageRows(page.id))
+      .find((row) => row.scope_ref === "payout_requests")!;
+    expect(requests.status).toBe("partial_provider_surface");
+    expect(requests.reason_code).toBe("repeat_request");
+  });
+
+  it("catches up by `total` from a cursor saved before head refs were kept", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    let total = LIVE_TOTAL;
+    const adapter = adapterStub({ page: (params) => stableRequestPage(params.offset, total) });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+    // The cursor as the lane wrote it before this change.
+    await testDb!.pool.query(
+      `update page_sync_cursors set state = state - 'headRefs' - 'walkStop' - 'catchUp'
+        where page_id = $1 and stream = 'payouts'`,
+      [page.id],
+    );
+    const legacy = await cursor(page.id);
+    expect(legacy?.headRefs).toEqual([]);
+    expect(legacy?.walkStop).toBe("exhausted");
+
+    // `total` grew by 25: the walk reads exactly past offset 24 and stops.
+    const firstDayCalls = adapter.calls.length;
+    total = LIVE_TOTAL + 25;
+    await drain(page.id, adapter, telemetry, NEXT_DAY);
+    expect(adapter.calls.slice(firstDayCalls).filter((call) => call.route === "payout_requests")
+      .map((call) => call.params.offset)).toEqual([0, 10, 20]);
+    const state = await cursor(page.id);
+    expect(state?.walkDone).toBe(true);
+    expect(state?.walkStop).toBe("exhausted");
+    expect(state?.headRefs).toHaveLength(PAGE_SIZE);
   });
 
   it("DEFERS at the cap in ATTEMPTS, keeping the page it already fetched", async (context) => {
@@ -656,33 +843,5 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
     expect(stats.methodCount).toBe(0);
     expect(stats.payoutCount).toBe(0);
     expect(stats.oldestPayoutAt).toBeNull();
-  });
-});
-
-describe("WP-F7 payout walk helpers", () => {
-  it("reads rows and `total` out of the wire shape, and refuses anything else", () => {
-    const page = requestPage(0);
-    expect(payoutRequestRows(page)).toHaveLength(10);
-    expect(payoutRequestTotal(page)).toBe(LIVE_TOTAL);
-    // A drifted body is EMPTY here, and the shape gate refuses to parse it at
-    // all — the two together are what stop a truncated response from reading as
-    // "the history ends here".
-    expect(payoutRequestRows({ total: 83 })).toEqual([]);
-    expect(payoutRequestRows(null)).toEqual([]);
-    expect(payoutRequestTotal({ data: [] })).toBeNull();
-  });
-
-  it("takes the FLOOR as the oldest instant on the page, ignoring junk", () => {
-    expect(oldestCreatedAtMs(requestPage(80).data)).toBe(OLDEST_MS);
-    expect(oldestCreatedAtMs([{ createdAt: 0 }, { createdAt: -1 }, { createdAt: "x" }]))
-      .toBeNull();
-    expect(oldestCreatedAtMs([])).toBeNull();
-  });
-
-  it("spaces a walk continuation with jitter, never contiguously", () => {
-    // Burst SHAPE is the ban-risk surface, not daily volume.
-    expect(walkContinuationAt(NOW, 20_000, () => 0).getTime() - NOW.getTime()).toBe(14_000);
-    expect(walkContinuationAt(NOW, 20_000, () => 1).getTime() - NOW.getTime()).toBe(26_000);
-    expect(walkContinuationAt(NOW, 0, () => 0.5).getTime()).toBe(NOW.getTime());
   });
 });

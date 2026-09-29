@@ -58,6 +58,11 @@ import {
   executeErasure,
   planErasure,
 } from "../apps/runtime/src/services/erasure/index.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 let db: StartedTestDatabase;
 let app: ReturnType<typeof createTestAppContext>;
 let pageId: number, actor: number;

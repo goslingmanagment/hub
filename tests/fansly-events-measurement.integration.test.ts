@@ -16,7 +16,8 @@ describe("A0/T0 bounded read operations", () => {
   beforeAll(async () => { db = await startTestDatabase(); }, INTEGRATION_TEST_TIMEOUT_MS);
   afterAll(async () => { await db?.stop(); });
   beforeEach(async () => {
-    await resetIntegrationDatabase(db.pool);
+    // Physical: cases assert plan nodes and buffers after ANALYZE.
+    await resetIntegrationDatabase(db.pool, { physical: true });
     const model = await createModel(db.db, { slug: "measurement", name: "Measurement" });
     const page = await createFanslyPage(db.db, { modelId: model!.id, label: "lilly-2" });
     pageId = page!.id;

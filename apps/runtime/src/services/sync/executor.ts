@@ -304,6 +304,22 @@ async function resolveOfapiCreditsIncidentIfRecovered(
   await resolveOfapiGlobalIncident(app, { ...OFAPI_INSUFFICIENT_CREDITS_INCIDENT, recoveredAt });
 }
 
+/**
+ * Page-wide auth/proxy recovery needs provider evidence: a chunk that made no
+ * request, or whose every attempt failed, proves nothing (prod 2026-09-19/20:
+ * 91 such chunks "recovered" a 38-hour proxy outage on one page). The chunk's
+ * newest successful response is the recovery instant, not the chunk end, so a
+ * chunk cannot close or tombstone past another stream's later failure. A
+ * `succeededAt` is never evidence: a walk completion stamps it with the wall
+ * clock even when the walk made no request, and a settlement retry reuses
+ * that stamp without making one either.
+ */
+function resolveProviderRecoveredAt(
+  telemetry: Pick<SyncRunTelemetry, "getRequestTotalsSnapshot">,
+): Date | null {
+  return telemetry.getRequestTotalsSnapshot().lastSuccessfulAttemptAt;
+}
+
 /** A provider that named its own deadline outranks the local ladder, but only
  * upward: `retry_at` becomes the LATER of the two. Fansly answers a 429 with a
  * `Retry-After` far beyond anything the in-process loop may sleep (600s against
@@ -567,12 +583,15 @@ function hasMeaningfulProgress(
   result: {
     satisfied: boolean;
     gatedSkip?: string | null;
+    deferral?: string | null;
     stats?: Record<string, unknown>;
   },
 ) {
   // A ramp-gated chunk issued zero requests. Treating it as progress moved
   // progressed_at on every cycle and made a frozen stream look alive.
   if (result.gatedSkip) return false;
+  // A deferral only rescheduled failing work; its stats describe the deferral.
+  if (result.deferral) return false;
   return result.satisfied || Boolean(result.stats && Object.keys(result.stats).length > 0);
 }
 export async function executeNextSyncPageChunk(
@@ -758,7 +777,7 @@ export async function executeNextSyncPageChunk(
           pageLabel: pageContext.page.label,
           platform: pageContext.platform,
           recoveredAt,
-          ...(result.succeededAt ? { providerRecoveredAt: result.succeededAt } : {}),
+          providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
           stream: taskLease.stream,
         });
         await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
@@ -783,6 +802,9 @@ export async function executeNextSyncPageChunk(
     // an endless chain of high-priority successors and starve its egress
     // peers. Handlers may still choose an explicit continuation source.
     const continuationRequestSource = result.continuationRequestSource ?? "scheduled";
+    // A deferral read nothing: the stream keeps its failure streak, last error
+    // and incidents, and only its wake-up time moves.
+    const deferral = result.deferral ?? null;
     const yieldResult = await yieldPageSync(app.db, {
       pageId: platformAccountId,
       stream: taskLease.stream,
@@ -794,6 +816,7 @@ export async function executeNextSyncPageChunk(
       progress,
       retryAt: result.continuationRetryAt ?? null,
       dispatchSource: continuationRequestSource,
+      ...(deferral ? { keepFailureStreak: true } : {}),
     });
     if (!yieldResult.updated) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -807,15 +830,19 @@ export async function executeNextSyncPageChunk(
         elapsedMs: budget.elapsedMs,
       },
       ...result.stats,
+      ...(deferral ? { deferral } : {}),
     });
-    await resolveSyncChunkRecoveryIncidents(app, {
-      platformAccountId,
-      pageLabel: pageContext.page.label,
-      platform: pageContext.platform,
-      recoveredAt,
-      stream: taskLease.stream,
-    });
-    await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
+    if (!deferral) {
+      await resolveSyncChunkRecoveryIncidents(app, {
+        platformAccountId,
+        pageLabel: pageContext.page.label,
+        platform: pageContext.platform,
+        recoveredAt,
+        providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
+        stream: taskLease.stream,
+      });
+      await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
+    }
     // A newer request OR another stream on this page may already be runnable.
     // Immediate page work wins over this stream's delayed yield; otherwise a
     // deferred retry stays only in page_sync_states for the planner to wake.

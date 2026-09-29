@@ -60,7 +60,7 @@ function fakeTelemetry() {
 /** One provider page shaped so the sweep resolves every partner from the
  *  aggregation block — no group-detail fetch, no head repair, no second
  *  adapter method to stub. */
-function groupsPage(input: { groupIds: string[]; total: number; offset: number; done: boolean }) {
+function groupsPage(input: { groupIds: string[]; total: number | null; offset: number; done: boolean }) {
   const items = input.groupIds.map((groupId) => ({
     groupId,
     flags: 0,
@@ -668,5 +668,60 @@ describe("Fansly dm_conversations generation membership (G3)", () => {
     });
     const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
     expect(checkpoint?.state).toMatchObject({ version: 2, generation: 2, offset: 0, observedCount: 0 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts an id repeated across offset pages once when the provider sends no total", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const telemetry = fakeTelemetry();
+    const { stored } = await seedPage("membership-overlap-total-absent", [
+      groupsPage({ groupIds: ["grp-1", "grp-2"], total: null, offset: 0, done: false }),
+      // grp-2 again: a thread below the cursor jumped to the top between the
+      // two requests. Fansly has never sent a total for this list.
+      groupsPage({ groupIds: ["grp-2", "grp-3"], total: null, offset: 100, done: true }),
+    ]);
+
+    const result = await runChunk(stored, telemetry, 5);
+
+    expect(result).toMatchObject({
+      satisfied: true,
+      stats: {
+        observedCount: 3,
+        generationSetCount: 3,
+        membershipCertified: true,
+        destructiveFinalization: false,
+        finalizationWithheld: false,
+        fullSweepCompleted: true,
+        crossPageRepeats: 1,
+      },
+    });
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    expect(telemetry.addNote).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        code: "dm_conversations_cross_page_repeat_counted_once",
+        repeatedConversationIds: ["grp-2"],
+        repeatCount: 1,
+      }),
+    );
+    expect(await readThreads(stored.page.id)).toEqual({
+      "grp-1": { generation: 1, isVisible: true },
+      "grp-2": { generation: 1, isVisible: true },
+      "grp-3": { generation: 1, isVisible: true },
+    });
+    const checkpoint = await getCheckpoint(appContext.db, stored.page.id, "dm_conversations");
+    expect(checkpoint?.cursorLastSucceededRunId ?? null).not.toBeNull();
+    expect(checkpoint?.state).toMatchObject({
+      version: 2,
+      generation: 1,
+      observedCount: 3,
+      generationSetCount: 3,
+      providerTotalMode: "absent",
+      membershipCertified: true,
+      destructiveFinalization: false,
+    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
