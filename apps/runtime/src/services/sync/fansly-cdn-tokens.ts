@@ -10,15 +10,29 @@
 // hourly re-reads of an unchanged page stopped collapsing: ~40 catalog objects
 // a day became ~390, about 170 MB a day on disk for transactions alone.
 //
+// WHERE — by position, never by content alone. On production (every Fansly
+// kind, 2026-07..09) a signed URL string occurs ONLY as `locations[].location`
+// and the signing object ONLY as `locations[].metadata`, and nothing else is
+// ever rewritten. The same bodies carry user-authored text (comment and post
+// `content`, tip `message`, profile `about` / `note` / `title` and even a
+// profile `location`), which is journaled byte for byte whatever it holds. A
+// draft that judged every string by its content alone would have cut a comment
+// opening with a signed link at its `Signature` value, prose and all (external
+// review of PR #319).
+//
 // WHAT IS REMOVED — the four CloudFront signing names, and nothing else:
-//   * from a string that IS a URL (starts with http:// or https://) whose query
-//     carries `Signature` or `Key-Pair-Id`: the `Policy`, `Signature`,
-//     `Key-Pair-Id` and `Expires` params (both the custom-policy and the canned
-//     form). Path, fragment and every other param keep their bytes and order; a
-//     query left empty loses its `?`;
-//   * from an object with a string `Signature` or `Key-Pair-Id` key (the
-//     `locations[].metadata` form): those same four keys. The object stays,
-//     even when it is left empty.
+//   * from a `locations[].location` string that is ENTIRELY one https URL
+//     (printable ASCII, no space or control character anywhere, so no prose,
+//     line or second URL can ride along) on a Fansly CDN host (`cdn3.fansly.com`
+//     on production; `cdn<N>.fansly.com` in general) whose query carries
+//     `Signature` or `Key-Pair-Id`: the `Policy`, `Signature`, `Key-Pair-Id` and
+//     `Expires` params (both the custom-policy and the canned form). Path,
+//     fragment and every other param keep their bytes and order; a query left
+//     empty loses its `?`. Any other string, at that place or anywhere, keeps
+//     every byte;
+//   * from a `locations[].metadata` object with a string `Signature` or
+//     `Key-Pair-Id` key: those same four keys. The object stays, even when it
+//     is left empty.
 // `ngsw-bypass` is KEPT. It is Fansly's static Angular service-worker switch,
 // the same on every read, not a token; keeping it keeps the stored URL in its
 // served shape, and the agent-read scrub (modules/agent-read/observation-scrub.ts)
@@ -91,12 +105,21 @@ const STRIPPED_KINDS_BY_PLATFORM: ReadonlyMap<string, ReadonlySet<string>> = new
 /** CloudFront's signing names: the URL query params and the metadata keys. */
 const SIGNING_NAMES: ReadonlySet<string> = new Set(["Policy", "Signature", "Key-Pair-Id", "Expires"]);
 
+/** A string that is ONE https URL and nothing else: printable ASCII from its
+ *  first byte to its last, so no space, line break, control or non-ASCII
+ *  character, and with it no trailing prose, can be read as part of a query. */
+const LONE_HTTPS_URL = /^https:\/\/[!-~]+$/;
+
+/** A Fansly CDN host, exactly: no userinfo, no port, no longer name ending in
+ *  it. Production serves every signed location from `cdn3.fansly.com`. */
+const FANSLY_CDN_ORIGIN = /^https:\/\/cdn\d*\.fansly\.com(?=[/?#]|$)/;
+
 export function fanslyCdnTokenStripApplies(platform: string | null | undefined, kind: string): boolean {
   return STRIPPED_KINDS_BY_PLATFORM.get(platform ?? "")?.has(kind) ?? false;
 }
 
 function stripSignedUrl(value: string): string {
-  if (!value.startsWith("https://") && !value.startsWith("http://")) {
+  if (!LONE_HTTPS_URL.test(value) || !FANSLY_CDN_ORIGIN.test(value)) {
     return value;
   }
   const queryStart = value.indexOf("?");
@@ -118,39 +141,72 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function strip(value: unknown): unknown {
-  if (typeof value === "string") {
-    return stripSignedUrl(value);
+/** Copy-on-write over an array's entries. */
+function mapEntries(value: unknown[], next: (entry: unknown) => unknown): unknown[] {
+  let copy: unknown[] | null = null;
+  value.forEach((entry, index) => {
+    const mapped = next(entry);
+    if (mapped !== entry) {
+      copy ??= value.slice();
+      copy[index] = mapped;
+    }
+  });
+  return copy ?? value;
+}
+
+const DROP: unique symbol = Symbol("drop");
+
+/** Copy-on-write over a record's own keys, in served order; `DROP` removes one. */
+function mapFields(
+  value: Record<string, unknown>,
+  next: (key: string, entry: unknown) => unknown,
+): Record<string, unknown> {
+  let changed = false;
+  const copy: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const mapped = next(key, entry);
+    if (mapped === DROP) {
+      changed = true;
+      continue;
+    }
+    changed ||= mapped !== entry;
+    // A served `__proto__` key is data; plain assignment would set the
+    // prototype instead and drop it from the body.
+    Object.defineProperty(copy, key, { value: mapped, enumerable: true, writable: true, configurable: true });
   }
+  return changed ? copy : value;
+}
+
+/** Any JSON value. Rewrites nothing itself, strings included; it only finds the
+ *  `locations` arrays, wherever they are nested. */
+function strip(value: unknown): unknown {
   if (Array.isArray(value)) {
-    let copy: unknown[] | null = null;
-    value.forEach((entry, index) => {
-      const next = strip(entry);
-      if (next !== entry) {
-        copy ??= value.slice();
-        copy[index] = next;
-      }
-    });
-    return copy ?? value;
+    return mapEntries(value, strip);
   }
   if (!isRecord(value)) {
     return value;
   }
-  const signing = typeof value.Signature === "string" || typeof value["Key-Pair-Id"] === "string";
-  let changed = false;
-  const copy: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (signing && SIGNING_NAMES.has(key)) {
-      changed = true;
-      continue;
-    }
-    const next = strip(entry);
-    changed ||= next !== entry;
-    // A served `__proto__` key is data; plain assignment would set the
-    // prototype instead and drop it from the body.
-    Object.defineProperty(copy, key, { value: next, enumerable: true, writable: true, configurable: true });
+  return mapFields(value, (key, entry) => (
+    key === "locations" && Array.isArray(entry) ? mapEntries(entry, stripLocation) : strip(entry)
+  ));
+}
+
+/** One `locations[]` entry, `{locationId, location, metadata?}`: the only place
+ *  a string or an object is ever rewritten. */
+function stripLocation(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return strip(value);
   }
-  return changed ? copy : value;
+  return mapFields(value, (key, entry) => {
+    if (key === "location" && typeof entry === "string") {
+      return stripSignedUrl(entry);
+    }
+    if (key === "metadata" && isRecord(entry)) {
+      const signing = typeof entry.Signature === "string" || typeof entry["Key-Pair-Id"] === "string";
+      return mapFields(entry, (name, field) => (signing && SIGNING_NAMES.has(name) ? DROP : strip(field)));
+    }
+    return strip(entry);
+  });
 }
 
 /**

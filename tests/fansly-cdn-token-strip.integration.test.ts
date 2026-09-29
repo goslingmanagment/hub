@@ -176,6 +176,52 @@ describe("Fansly CDN tokens are stripped before the journal", () => {
     )).toBe(0);
   });
 
+  // External review (PR #319): a comment that opens with a signed link keeps
+  // every byte in both journal copies, while the media record next to it still
+  // loses its tokens.
+  it("journals a post_replies comment that starts with a signed URL byte for byte", async () => {
+    const comments = ["blue", "red"].map((colour) => `https://cdn3.fansly.com/x?Signature=s\nPlease make it ${colour}`);
+    for (const [index, content] of comments.entries()) {
+      const response = {
+        posts: [{ id: "940000000000000001", accountId: "700000000000000002", content,
+          inReplyTo: "930000000000000001", createdAt: 1790000000, attachments: [] }],
+        accountMedia: [accountMedia("800000000000000001", { epoch: 1790600000 + index, signature: `reply${index}` })],
+        accounts: [],
+      };
+      await persistRawPayload(app.db, {
+        platformAccountId: pageId,
+        endpoint: "post_replies",
+        requestParams: { postId: "930000000000000001", before: null },
+        responsePayload: response,
+        mapperVersion: "fansly-post-replies-v1",
+        payloadKind: "mapping_critical",
+        retainUntil: retentionDate(),
+      }, { platform: "fansly", observationPayload: { walk: { postId: "930000000000000001", before: null }, response } });
+    }
+
+    const raws = (await testDb!.pool.query<{ body: { posts: Array<{ content: string }> } }>(
+      "select response_payload as body from sync_raw_payloads order by id",
+    )).rows;
+    type Envelope = { response: { posts: Array<{ content: string }> } };
+    const observations = (await testDb!.pool.query<{ inline: Envelope; stored: Envelope }>(
+      `select o.payload as inline, h.body as stored from observations o
+         join capture_json_hot_bodies h on h.bucket_month = o.payload_bucket_month and h.object_id = o.payload_object_id
+        where o.kind = 'post_replies' order by o.id`,
+    )).rows;
+    expect(raws.map((raw) => raw.body.posts[0]!.content)).toEqual(comments);
+    expect(observations.map((observation) => observation.inline.response.posts[0]!.content)).toEqual(comments);
+    expect(observations.map((observation) => observation.stored.response.posts[0]!.content)).toEqual(comments);
+    const bodies = [...raws.map((raw) => raw.body), ...observations.flatMap((row) => [row.inline, row.stored])];
+    for (const body of bodies.map((value) => JSON.stringify(value))) {
+      expect(body).not.toMatch(/Policy|Key-Pair-Id|Expires/);
+      expect(body.match(/Signature/g)).toHaveLength(1);
+    }
+    const hashes = await testDb!.pool.query<{ hash: string }>(
+      "select encode(payload_hash, 'hex') as hash from observations where kind = 'post_replies' order by id",
+    );
+    expect(new Set(hashes.rows.map((row) => row.hash)).size).toBe(2);
+  });
+
   it("keeps a DM page's signed URLs byte-identical, and the describer still resolves one", async () => {
     const future = Math.floor(Date.now() / 1000) + 3600;
     const media = accountMedia("810000000000000001", { epoch: future, signature: "dmRead~C_3" });

@@ -87,17 +87,28 @@ function body(tag: string, expires: number) {
 const STRIPPED_POLICY_URL = "https://cdn3.fansly.com/700000000000000001/800000000000000001.jpeg?ngsw-bypass=true";
 const STRIPPED_CANNED_URL = "https://cdn3.fansly.com/700000000000000001/800000000000000002.mp4?ngsw-bypass=true";
 
+/** A `locations[]` entry as Fansly serves it: on production (2026-07..09) the
+ *  ONE place a signed URL string occurs. */
+function located(location: string) {
+  return { locations: [{ locationId: "1", location }] };
+}
+
+function locationOf(value: unknown): unknown {
+  return (value as { locations: Array<{ location: unknown }> }).locations[0]!.location;
+}
+
 describe("stripFanslySignedCdnTokens", () => {
   it("removes the signing params from both URL forms and keeps the rest byte-stable", () => {
-    expect(stripFanslySignedCdnTokens(POLICY_URL)).toBe(STRIPPED_POLICY_URL);
-    expect(stripFanslySignedCdnTokens(CANNED_URL)).toBe(STRIPPED_CANNED_URL);
+    expect(locationOf(stripFanslySignedCdnTokens(located(POLICY_URL)))).toBe(STRIPPED_POLICY_URL);
+    expect(locationOf(stripFanslySignedCdnTokens(located(CANNED_URL)))).toBe(STRIPPED_CANNED_URL);
     // Unrelated params keep their order and spelling; a fragment survives; a
     // query left empty loses its `?`.
-    expect(stripFanslySignedCdnTokens(
+    expect(locationOf(stripFanslySignedCdnTokens(located(
       "https://cdn3.fansly.com/a/b.jpeg?width=480&Policy=p&Signature=s&Key-Pair-Id=k&v=2%203#frag",
-    )).toBe("https://cdn3.fansly.com/a/b.jpeg?width=480&v=2%203#frag");
-    expect(stripFanslySignedCdnTokens("https://cdn3.fansly.com/a/b.jpeg?Expires=1&Signature=s&Key-Pair-Id=k"))
-      .toBe("https://cdn3.fansly.com/a/b.jpeg");
+    )))).toBe("https://cdn3.fansly.com/a/b.jpeg?width=480&v=2%203#frag");
+    expect(locationOf(stripFanslySignedCdnTokens(located(
+      "https://cdn3.fansly.com/a/b.jpeg?Expires=1&Signature=s&Key-Pair-Id=k",
+    )))).toBe("https://cdn3.fansly.com/a/b.jpeg");
   });
 
   it("removes the metadata form's keys and keeps the object and its other keys", () => {
@@ -106,9 +117,10 @@ describe("stripFanslySignedCdnTokens", () => {
       metadata: { Policy: "p", Signature: "s", "Key-Pair-Id": "k" },
       locationId: "102",
     };
-    expect(stripFanslySignedCdnTokens(location)).toEqual({ location: STREAM_URL, metadata: {}, locationId: "102" });
-    expect(JSON.stringify(stripFanslySignedCdnTokens(location)))
-      .toBe(`{"location":"${STREAM_URL}","metadata":{},"locationId":"102"}`);
+    expect(stripFanslySignedCdnTokens({ locations: [location] }))
+      .toEqual({ locations: [{ location: STREAM_URL, metadata: {}, locationId: "102" }] });
+    expect(JSON.stringify(stripFanslySignedCdnTokens({ locations: [location] })))
+      .toBe(`{"locations":[{"location":"${STREAM_URL}","metadata":{},"locationId":"102"}]}`);
   });
 
   it("makes two reads that differ only in tokens identical, and is idempotent", () => {
@@ -166,10 +178,99 @@ describe("stripFanslySignedCdnTokens", () => {
   });
 
   it("keeps a served `__proto__` key as data", () => {
-    const parsed = JSON.parse(`{"__proto__":{"location":${JSON.stringify(POLICY_URL)}},"id":"1"}`) as unknown;
+    const parsed = JSON.parse(`{"__proto__":${JSON.stringify(located(POLICY_URL))},"id":"1"}`) as unknown;
     const stripped = stripFanslySignedCdnTokens(parsed);
-    expect(JSON.stringify(stripped)).toBe(`{"__proto__":{"location":"${STRIPPED_POLICY_URL}"},"id":"1"}`);
+    expect(JSON.stringify(stripped)).toBe(`{"__proto__":${JSON.stringify(located(STRIPPED_POLICY_URL))},"id":"1"}`);
     expect(Object.getPrototypeOf(stripped)).toBe(Object.prototype);
+  });
+});
+
+/** A `post_replies` observation envelope with one comment, as the lane journals it. */
+function replies(content: string) {
+  return {
+    walk: { postId: "930000000000000001", before: null },
+    response: {
+      posts: [{ id: "940000000000000001", accountId: "700000000000000002", content, inReplyTo: "930000000000000001",
+        createdAt: 1790000000, attachments: [] }],
+      accountMedia: [],
+      accounts: [],
+    },
+  };
+}
+
+// External review (PR #319): the walk used to rewrite ANY string that began
+// with a URL, so a comment that opens with a signed link lost the rest of its
+// text to the "Signature" value — in both journal copies, beyond replay.
+describe("only a lone signed Fansly CDN URL at locations[].location is rewritten", () => {
+  it("keeps every byte of a comment that starts with a signed URL", () => {
+    const blue = "https://cdn3.fansly.com/x?Signature=s\nPlease make it blue";
+    const red = "https://cdn3.fansly.com/x?Signature=s\nPlease make it red";
+    for (const value of [replies(blue), located(blue), { content: `${POLICY_URL} please make it blue` }]) {
+      const snapshot = JSON.stringify(value);
+      expect(stripFanslySignedCdnTokens(value)).toBe(value);
+      expect(JSON.stringify(stripFanslySignedCdnTokens(value))).toBe(snapshot);
+    }
+    expect(JSON.stringify(stripFanslySignedCdnTokens(replies(blue))))
+      .not.toBe(JSON.stringify(stripFanslySignedCdnTokens(replies(red))));
+  });
+
+  it("strips a lone signed CDN URL in a locations[].location field", () => {
+    expect(locationOf(stripFanslySignedCdnTokens(located(POLICY_URL)))).toBe(STRIPPED_POLICY_URL);
+    expect(locationOf(stripFanslySignedCdnTokens(located(CANNED_URL)))).toBe(STRIPPED_CANNED_URL);
+    expect(locationOf(stripFanslySignedCdnTokens(located(POLICY_URL.replace("cdn3.", "cdn.")))))
+      .toBe(STRIPPED_POLICY_URL.replace("cdn3.", "cdn."));
+  });
+
+  it("leaves a signed URL on any host but a Fansly CDN host untouched", () => {
+    const query = "?Policy=p&Key-Pair-Id=k&Signature=s";
+    for (const url of [
+      `https://example.com/a.jpeg${query}`,
+      `https://d1234567890.cloudfront.net/a.jpeg${query}`,
+      `https://fansly.com/a.jpeg${query}`,
+      `https://apiv3.fansly.com/a.jpeg${query}`,
+      `https://cdn3.fansly.com.example.com/a.jpeg${query}`,
+      `https://cdn3.fansly.com@example.com/a.jpeg${query}`,
+      `https://cdn3.fansly.com:8443/a.jpeg${query}`,
+      `http://cdn3.fansly.com/a.jpeg${query}`,
+    ]) {
+      const value = located(url);
+      expect(stripFanslySignedCdnTokens(value), url).toBe(value);
+    }
+  });
+
+  it("leaves a lone signed CDN URL in a user-authored field untouched", () => {
+    // The prose-bearing string keys of the stripped kinds on production, the
+    // account profile's own `location` among them.
+    const authored = [
+      "content", "message", "about", "note", "title", "description", "name", "displayName", "label",
+      "subscriptionBenefits", "subscriptionTierName", "badgeDescription", "filename", "customFilename", "location",
+    ];
+    for (const key of authored) {
+      const value = { [key]: POLICY_URL };
+      expect(stripFanslySignedCdnTokens(value), key).toBe(value);
+    }
+    // The shapes that surround those fields: a profile, a comment, an embedded
+    // media record's unsigned `location` path.
+    const account = { accounts: [{ id: "1", location: CANNED_URL, about: POLICY_URL, avatar: { location: POLICY_URL } }] };
+    expect(stripFanslySignedCdnTokens(account)).toBe(account);
+    const comment = replies(POLICY_URL);
+    expect(stripFanslySignedCdnTokens(comment)).toBe(comment);
+    const media = { accountMedia: [{ media: { location: POLICY_URL, variants: [{ location: CANNED_URL }] } }] };
+    expect(stripFanslySignedCdnTokens(media)).toBe(media);
+  });
+
+  it("strips the signing metadata only in its locations[].metadata place", () => {
+    const signing = { Policy: "p", Signature: "s", "Key-Pair-Id": "k" };
+    const elsewhere = [
+      { metadata: signing },
+      { Signature: "s", "Key-Pair-Id": "k", note: "a user's own words" },
+      { locations: { metadata: signing } },
+    ];
+    for (const value of elsewhere) {
+      expect(stripFanslySignedCdnTokens(value)).toBe(value);
+    }
+    expect(stripFanslySignedCdnTokens({ locations: [{ location: STREAM_URL, metadata: signing, locationId: "102" }] }))
+      .toEqual({ locations: [{ location: STREAM_URL, metadata: {}, locationId: "102" }] });
   });
 });
 
@@ -248,6 +349,23 @@ describe("persistRawPayload applies the strip", () => {
     expect(JSON.stringify(captured.raws[0]!.responsePayload)).not.toMatch(/Signature|Key-Pair-Id/);
     expect(JSON.stringify(captured.observations[0]!.payload)).not.toMatch(/Signature|Key-Pair-Id/);
     expect(captured.observations[0]!.payload).toMatchObject({ walk: { postId: "1" } });
+  });
+
+  it("journals a post_replies comment that starts with a signed URL byte for byte", async () => {
+    const hashes: Buffer[] = [];
+    for (const colour of ["blue", "red"]) {
+      reset();
+      const envelope = replies(`https://cdn3.fansly.com/x?Signature=s\nPlease make it ${colour}`);
+      await persistRawPayload({} as never, row("post_replies", envelope.response), {
+        platform: "fansly",
+        observationPayload: envelope,
+      });
+      expect(captured.raws[0]!.responsePayload).toBe(envelope.response);
+      expect(captured.observations[0]!.payload).toBe(envelope);
+      expect(JSON.stringify(captured.observations[0]!.payload)).toContain(`Please make it ${colour}`);
+      hashes.push(captured.observations[0]!.payloadHash);
+    }
+    expect(hashes[0]!.equals(hashes[1]!)).toBe(false);
   });
 
   it("leaves dm_messages, purchase_history, unlisted kinds and OnlyFans verbatim", async () => {
