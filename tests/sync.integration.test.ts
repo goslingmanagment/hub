@@ -375,6 +375,10 @@ async function requestLightSync(
   return requests;
 }
 
+/** Idle poll for the executor tests: production naps 1 s after an empty fetch,
+ * which a worker whose egress group is busy also pays. */
+const TEST_EXECUTOR_IDLE_POLL_MS = 25;
+
 describe("sync integration", () => {
   let testDb: StartedTestDatabase | null = null;
 
@@ -1062,15 +1066,19 @@ describe("sync integration", () => {
 
     await boss.start();
     await ensureSyncQueues(boss);
-    const executorPromise = startSyncPageExecutor(app, boss, {
-      signal: abortController.signal,
-    });
+    let executorPromise: Promise<void> | undefined;
 
     try {
+      // Work is queued BEFORE the executor starts, so its first fetch finds it
+      // instead of idling a poll interval on an empty queue.
       const request = await requestPageSync(app, boss, {
         pageLabel: page.label,
         scope: "all",
         reason: "manual",
+      });
+      executorPromise = startSyncPageExecutor(app, boss, {
+        signal: abortController.signal,
+        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await waitForRequestedSyncRequests(app, {
@@ -1234,11 +1242,11 @@ describe("sync integration", () => {
 
     await boss.start();
     await ensureSyncQueues(boss);
-    const executorPromise = startSyncPageExecutor(app, boss, {
-      signal: abortController.signal,
-    });
+    let executorPromise: Promise<void> | undefined;
 
     try {
+      // Both pages are queued before the four workers start, so they compete
+      // for the shared egress from the first fetch.
       const firstRevisions = await requestLightSync(app, boss, {
         platformAccountId: firstPage.id,
         provider: "fansly",
@@ -1248,6 +1256,10 @@ describe("sync integration", () => {
         platformAccountId: secondPage.id,
         provider: "fansly",
         proxyUrl: "socks5://proxy-serial.example",
+      });
+      executorPromise = startSyncPageExecutor(app, boss, {
+        signal: abortController.signal,
+        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await Promise.all([
@@ -1321,9 +1333,7 @@ describe("sync integration", () => {
 
     await boss.start();
     await ensureSyncQueues(boss);
-    const executorPromise = startSyncPageExecutor(app, boss, {
-      signal: abortController.signal,
-    });
+    let executorPromise: Promise<void> | undefined;
 
     try {
       const directFanslyRevisions = await requestLightSync(app, boss, {
@@ -1339,6 +1349,11 @@ describe("sync integration", () => {
       const onlyFansRevisions = await requestLightSync(app, boss, {
         platformAccountId: onlyFansPage.id,
         provider: "onlyfans",
+      });
+      // All three pages are queued before the workers start.
+      executorPromise = startSyncPageExecutor(app, boss, {
+        signal: abortController.signal,
+        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await Promise.all([
