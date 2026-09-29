@@ -1728,6 +1728,40 @@ export async function hasRecentTerminalProxyFailure(
   return Boolean(result.rows[0]?.hasFailure);
 }
 
+/** E-2: the ops watchdog's Fansly sync deadman. The planner is one
+ * all-or-nothing cycle and a wedged executor starts nothing, so either failure
+ * shows up the same way: no Fansly chunk starts while a stream is due. "Due"
+ * mirrors the runnable filter minus `request_seq > applied_seq`, which only
+ * the planner advances: not paused, not blocked, not backing off. The run
+ * lookup is bounded to `since` so it stays on `sync_runs_started_idx`;
+ * `latestStartedAt` is null when nothing started inside it. */
+export async function getFanslySyncLiveness(
+  db: Database,
+  input: { now: Date; since: Date },
+): Promise<{ latestStartedAt: Date | null; hasDueStream: boolean }> {
+  const result = await db.execute<{ latestStartedAt: TimestampValue; hasDueStream: boolean }>(sql`
+    select
+      (select max(r.started_at)
+         from ${syncRuns} r
+         join ${pages} p on p.id = r.page_id and p.platform = 'fansly'
+        where r.started_at > ${input.since}) as "latestStartedAt",
+      exists (
+        select 1
+          from ${pageSyncStates} st
+          join ${pages} p on p.id = st.page_id and p.status = 'active' and p.platform = 'fansly'
+         where st.status <> 'paused'
+           and st.blocker_kind is null
+           and (st.retry_at is null or st.retry_at <= ${input.now})
+      ) as "hasDueStream"
+  `);
+  const row = result.rows[0];
+  const latest = row?.latestStartedAt;
+  return {
+    latestStartedAt: latest ? new Date(latest) : null,
+    hasDueStream: row?.hasDueStream === true,
+  };
+}
+
 export async function listRunningSyncRuns(
   db: Database,
   input?: {

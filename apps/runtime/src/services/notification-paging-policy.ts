@@ -32,13 +32,23 @@ export interface NotificationPagingPolicy {
 }
 
 const DEFAULT_FLAP = { episodes: 5, windowMs: 6 * HOUR_MS } as const;
+/** The watchdog deadmen open on every deploy: production had 12 such
+ * episodes on 2026-09-22..29, up to three inside six hours, so the default
+ * rule would page "flapping" on the fifth deploy of a busy afternoon. A
+ * process that really dies stays down past the open hold and pages as
+ * sustained; this only keeps a backstop for one that keeps dropping out. */
+const DEPLOY_TOLERANT_FLAP = { episodes: 12, windowMs: 6 * HOUR_MS } as const;
 
 function immediate(recoveryHoldMs = 5 * MINUTE_MS): NotificationPagingPolicy {
   return { openHoldMs: 0, recoveryHoldMs, flap: null };
 }
 
-function sustained(openHoldMs: number, recoveryHoldMs: number): NotificationPagingPolicy {
-  return { openHoldMs, recoveryHoldMs, flap: DEFAULT_FLAP };
+function sustained(
+  openHoldMs: number,
+  recoveryHoldMs: number,
+  flap: NotificationPagingPolicy["flap"] = DEFAULT_FLAP,
+): NotificationPagingPolicy {
+  return { openHoldMs, recoveryHoldMs, flap };
 }
 
 /** Kinds that page through their own atomic outbox at transition time
@@ -78,8 +88,12 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   // above those, the flap rule catches the proxy that hiccups all day.
   proxy_failed: sustained(15 * MINUTE_MS, 30 * MINUTE_MS),
   stream_failed_threshold: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),
-  scheduler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS),
-  ops_sampler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS),
+  scheduler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, DEPLOY_TOLERANT_FLAP),
+  ops_sampler_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, DEPLOY_TOLERANT_FLAP),
+  // Opens only after 15 min without a Fansly chunk (the widest production
+  // gap between chunk starts over 21 days was 5 min 10 s), so a deploy never
+  // opens it and the default flap rule stays.
+  sync_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS),
   golden_signal_lag: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_burn_rate: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_webhook_silence: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),

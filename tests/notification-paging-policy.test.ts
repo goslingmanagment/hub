@@ -61,6 +61,40 @@ describe("notification paging policy table", () => {
     }
   });
 
+  it("does not page a day of deploys as a flapping watchdog deadman", () => {
+    // Production 2026-09-22..29: 12 scheduler_silent episodes, all deploys,
+    // up to three inside six hours. Five on a busy afternoon is not an outage.
+    const deploys = observation({
+      status: "resolved",
+      openedAt: at(4 * HOUR),
+      resolvedAt: at(4 * HOUR + 6 * MINUTE),
+      episodesInWindow: 5,
+      earliestEpisodeInWindowAt: T0,
+    });
+    const now = at(4 * HOUR + 7 * MINUTE);
+    for (const kind of ["scheduler_silent", "ops_sampler_silent"] as const) {
+      const policy = notificationPagingPolicyFor(kind, null);
+      expect(decideNotificationPaging(deploys, policy, now)).toEqual({ action: "none" });
+      expect(decideNotificationPaging({ ...deploys, episodesInWindow: 11 }, policy, now))
+        .toEqual({ action: "none" });
+      // A deadman that drops out for minutes every half hour still pages.
+      expect(decideNotificationPaging({ ...deploys, episodesInWindow: 12 }, policy, now))
+        .toMatchObject({ action: "page", mode: "flapping" });
+    }
+  });
+
+  it("holds a stalled Fansly sync for ten minutes each way", () => {
+    const policy = notificationPagingPolicyFor("sync_silent", null);
+    expect(policy.openHoldMs).toBe(10 * MINUTE);
+    expect(policy.recoveryHoldMs).toBe(10 * MINUTE);
+    expect(decideNotificationPaging(observation(), policy, at(9 * MINUTE))).toEqual({ action: "none" });
+    expect(decideNotificationPaging(observation(), policy, at(10 * MINUTE))).toMatchObject({
+      action: "page",
+      mode: "sustained",
+      transitionAt: T0,
+    });
+  });
+
   it("gives the disk runway warning its own long holds without touching the critical latch", () => {
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_warning").openHoldMs).toBe(6 * HOUR);
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_critical").openHoldMs).toBe(0);

@@ -22,7 +22,8 @@ export async function runApiRuntime() {
     // Advertise as live only once the server is actually accepting connections.
     heartbeat = startRuntimeHeartbeat(appContext, "api");
     // W5.2 (A53): the api is the deadman for the scheduler + sampler — the
-    // one long-lived process independent of both.
+    // one long-lived process independent of both — and delivers the pages
+    // itself while either is down. The whole context: Telegram egress needs it.
     watchdog = startOpsWatchdog(appContext);
   } catch (error) {
     clearInterval(keepAlive);

@@ -16,7 +16,12 @@ import {
 } from "@agency_hub_core/db";
 
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
-import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
+import {
+  NOTIFICATION_PAGING_SWEEP_LOCK_KEY,
+  NOTIFICATION_PAGING_SWEEP_LOCK_NS,
+  runNotificationPagingSweep,
+  runNotificationPagingSweepExclusive,
+} from "../apps/runtime/src/services/notification-paging-sweep.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -151,6 +156,52 @@ describe("notification paging sweep (Decision 381)", () => {
     await runNotificationPagingSweep(app(), { now: at(6 * MINUTE) });
     await runNotificationPagingSweep(app(), { now: at(HOUR) });
     expect((await outboxFor(key)).rows).toEqual([]);
+  });
+
+  it("five deploy gaps inside six hours are five quiet episodes, not a flapping page", async () => {
+    // Each deploy restarts the scheduler; the default flap rule (5 in 6 h)
+    // paged "flapping" on the fifth deploy of a busy afternoon.
+    let key = "";
+    for (let deploy = 0; deploy < 5; deploy += 1) {
+      const start = deploy * HOUR;
+      key = await openLatch({ kind: "scheduler_silent", platformAccountId: null, at: at(start) });
+      await runNotificationPagingSweep(app(), { now: at(start + MINUTE) });
+      await resolveLatch(key, at(start + 5 * MINUTE + 30_000));
+      await runNotificationPagingSweep(app(), { now: at(start + 6 * MINUTE) });
+    }
+    await runNotificationPagingSweep(app(), { now: at(5 * HOUR) });
+    expect((await outboxFor(key)).rows).toEqual([]);
+    const cycles = await listNotificationIncidentCyclesSince(testDb!.db, { since: at(-HOUR) });
+    expect(cycles.map((cycle) => cycle.paged)).toEqual([false, false, false, false, false]);
+  });
+
+  it("the exclusive sweep skips a pass while another process holds the sweep lock", async () => {
+    const key = await openLatch({ kind: "scheduler_silent", platformAccountId: null, at: T0 });
+    const exclusiveApp = { ...app(), pool: testDb!.pool };
+    const holder = await testDb!.pool.connect();
+    try {
+      await holder.query("select pg_advisory_lock($1, $2)", [
+        NOTIFICATION_PAGING_SWEEP_LOCK_NS,
+        NOTIFICATION_PAGING_SWEEP_LOCK_KEY,
+      ]);
+      expect(await runNotificationPagingSweepExclusive(exclusiveApp, { now: at(11 * MINUTE) })).toBeNull();
+      expect((await outboxFor(key)).rows).toEqual([]);
+    } finally {
+      await holder.query("select pg_advisory_unlock_all()");
+      holder.release();
+    }
+
+    expect(await runNotificationPagingSweepExclusive(exclusiveApp, { now: at(11 * MINUTE) }))
+      .toMatchObject({ paged: 1 });
+    expect((await outboxFor(key)).rows.map((row) => row.transition)).toEqual(["opened"]);
+    // The lock is a session lock on a dedicated client: it is released, not leaked.
+    const held = await testDb!.pool.query(
+      `select count(*)::int as count from pg_locks
+       where locktype = 'advisory' and classid = $1 and objid = $2
+         and database = (select oid from pg_database where datname = current_database())`,
+      [NOTIFICATION_PAGING_SWEEP_LOCK_NS, NOTIFICATION_PAGING_SWEEP_LOCK_KEY],
+    );
+    expect(held.rows[0]?.count).toBe(0);
   });
 
   it("a failure that outlasts the hold pages once and its recovery waits for the quiet hold", async () => {

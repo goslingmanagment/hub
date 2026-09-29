@@ -40,6 +40,12 @@ import {
 // place delivers, and both are idempotent on the incident's own timestamps.
 
 export const NOTIFICATION_PAGING_SWEEP_QUEUE = "notifications.paging.sweep";
+/** Session advisory lock (namespace, key) serialising sweeps across
+ * processes: the worker's minutely job and the api watchdog's fallback while
+ * the scheduler or worker is down (ops-watchdog.ts). 58211-58213 are the OFAPI
+ * event worker, the scheduler leader and the Fansly websocket. */
+export const NOTIFICATION_PAGING_SWEEP_LOCK_NS = 58214;
+export const NOTIFICATION_PAGING_SWEEP_LOCK_KEY = 1;
 /** Episodes that resolved earlier than this were either recorded by an
  * earlier sweep or are older than anything the digest reports. */
 const RESOLVED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
@@ -368,12 +374,68 @@ export async function runNotificationPagingSweep(
   return result;
 }
 
+/**
+ * `runNotificationPagingSweep` under the cross-process sweep lock; null when
+ * another process holds it (that pass covers this minute). Two concurrent
+ * passes are not idempotent: a flapping page is keyed by its decision instant,
+ * and both would record the same new episode.
+ *
+ * A SESSION lock on a dedicated client, not `pg_try_advisory_xact_lock`: the
+ * sweep commits many short transactions on other pool connections, which no
+ * transaction-scoped lock can span.
+ */
+export async function runNotificationPagingSweepExclusive(
+  app: Pick<AppContext, "db" | "logger" | "pool">,
+  input?: { now?: Date },
+): Promise<NotificationPagingSweepResult | null> {
+  const client = await app.pool.connect();
+  // A session lock survives a normal release back to the pool: whenever
+  // unlocking is not certain, destroy the connection so Postgres drops it.
+  let destroyClient = false;
+  try {
+    let acquired: boolean;
+    try {
+      const locked = await client.query<{ locked: boolean }>(
+        "select pg_try_advisory_lock($1, $2) as locked",
+        [NOTIFICATION_PAGING_SWEEP_LOCK_NS, NOTIFICATION_PAGING_SWEEP_LOCK_KEY],
+      );
+      acquired = locked.rows[0]?.locked === true;
+    } catch (error) {
+      // The server may have granted the lock before the response was lost.
+      destroyClient = true;
+      throw error;
+    }
+    if (!acquired) {
+      return null;
+    }
+    try {
+      return await runNotificationPagingSweep(app, input);
+    } finally {
+      try {
+        const unlocked = await client.query<{ unlocked: boolean }>(
+          "select pg_advisory_unlock($1, $2) as unlocked",
+          [NOTIFICATION_PAGING_SWEEP_LOCK_NS, NOTIFICATION_PAGING_SWEEP_LOCK_KEY],
+        );
+        destroyClient = unlocked.rows[0]?.unlocked !== true;
+      } catch {
+        destroyClient = true;
+      }
+    }
+  } finally {
+    client.release(destroyClient);
+  }
+}
+
 export function startNotificationPagingSweepWorker(
-  app: Pick<AppContext, "db" | "logger">,
+  app: Pick<AppContext, "db" | "logger" | "pool">,
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
   return boss.work(NOTIFICATION_PAGING_SWEEP_QUEUE, { batchSize: 1 }, async () => {
-    const result = await runNotificationPagingSweep(app);
+    const result = await runNotificationPagingSweepExclusive(app);
+    if (result === null) {
+      // The api watchdog's fallback holds this minute's pass.
+      return;
+    }
     if (result.paged > 0 || result.resolved > 0 || result.failed > 0) {
       app.logger.info(result, "Notification paging sweep complete");
     }

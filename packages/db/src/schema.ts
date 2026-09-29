@@ -261,6 +261,8 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   // inline authority, or points at an object that is not there.
   "capture_payload_parity",
   "ofapi_binding_conflict",
+  // 0218: the ops watchdog's Fansly sync deadman (planner or executor stalled).
+  "sync_silent",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",

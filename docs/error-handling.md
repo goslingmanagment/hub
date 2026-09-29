@@ -300,10 +300,19 @@ critical pair against a per-kind policy in
 resulting page or recovery notice into the durable outbox under
 `sync_failure`. The policy is exhaustive over the kind union.
 
+The sweep and the outbox delivery are pg-boss crons that the scheduler fires
+and the worker consumes, so while either process is down the pages about it
+could not be sent. While a watchdog deadman is tripped (`scheduler_silent`,
+`ops_sampler_silent`, `sync_silent`, outside the api's 5-minute boot grace) the
+api's ops watchdog runs the sweep and a short delivery pass itself. Sweeps from
+any process are serialized by a session advisory lock
+(`NOTIFICATION_PAGING_SWEEP_LOCK_NS`); a pass that finds it held is skipped.
+Delivery concurrency stays with the outbox lease.
+
 | Rule | Meaning |
 |---|---|
-| Open hold | The condition must have stayed open this long before its page is enqueued. `0` pages on the first sweep that sees it open (the kinds that need a hand today). Sustained kinds: `proxy_failed` 15 min, `stream_failed_threshold` 10 min, `scheduler_silent` / `ops_sampler_silent` 10 min, `golden_signal_lag` / `ofapi_burn_rate` 30 min, `ofapi_webhook_silence` 10 min, `db_disk_usage:runway_warning` 6 h. |
-| Flap rule | A sustained kind whose latch opened ≥ 5 times inside 6 h pages once as "flapping" even if no episode outlasted the open hold. The page covers every episode in the window. |
+| Open hold | The condition must have stayed open this long before its page is enqueued. `0` pages on the first sweep that sees it open (the kinds that need a hand today). Sustained kinds: `proxy_failed` 15 min, `stream_failed_threshold` 10 min, `scheduler_silent` / `ops_sampler_silent` / `sync_silent` 10 min, `golden_signal_lag` / `ofapi_burn_rate` 30 min, `ofapi_webhook_silence` 10 min, `db_disk_usage:runway_warning` 6 h. |
+| Flap rule | A sustained kind whose latch opened ≥ 5 times inside 6 h pages once as "flapping" even if no episode outlasted the open hold. The page covers every episode in the window. `scheduler_silent` and `ops_sampler_silent` open on deploys, so theirs is ≥ 12 in 6 h. |
 | Quiet hold | The recovery notice is enqueued only once the latch has stayed resolved for the hold (immediate kinds 5–60 min, proxy kinds 30 min, watchdog 10 min, runway warning 24 h). A reopen inside the hold is the same standing page: no message either way. A page whose outbox row ended `suppressed` or `exhausted` never reached the owner, so its recovery is settled silently rather than as an orphan "Resolved". |
 | Episodes | Every latch episode (a distinct `opened_at`) is recorded in `notification_incident_cycles` on the first sweep that sees it, including episodes that began and ended between two sweeps; `paged` marks the ones a page covered. |
 | Manual resolve | The dashboard's own "Manually resolved" line is the recovery notice; the sweep sees the `incident_manually_resolved` attempt and settles the standing page silently. |
