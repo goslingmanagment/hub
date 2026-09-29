@@ -11,6 +11,7 @@ import {
   fans,
   fanUsernameAliases,
   pageFollows,
+  pages,
   pageSubscriptions,
 } from "../schema.ts";
 import { rebuildSpenderProjections } from "./spenders.ts";
@@ -1239,12 +1240,27 @@ export async function deactivatePageSubscriptionsByGeneration(
   `);
 }
 
+/** Fansly's own account subscriber counter (`/account/me` subscriberCount),
+ * as last written to the page with the instant it was read. */
+export type PageSubscriberCounter = {
+  subscriberCount: number | null;
+  lastVerifiedAt: Date | null;
+};
+
 export type EmptySnapshotSubscriptionRetirement =
-  | { certified: true; retiredCount: number; currentCount: number }
+  | {
+    certified: true;
+    retiredCount: number;
+    currentCount: number;
+    /** Present when the account counter, not the lapsed rule, confirmed the zero. */
+    counter?: PageSubscriberCounter;
+  }
   | {
     certified: false;
     reason: "observed_by_walk" | "too_many_current" | "not_known_lapsed";
     currentCount: number;
+    /** The counter that was consulted and did not confirm the zero. */
+    counter?: PageSubscriberCounter;
   };
 
 /**
@@ -1253,11 +1269,15 @@ export type EmptySnapshotSubscriptionRetirement =
  * owned transaction. The zero is trusted only as far as it is independently
  * plausible: at most `maxRetirements` current subscriptions, each known to have
  * lapsed before the walk began (`ends_at` earlier than `walkStartedAt`) with
- * auto-renew off. The candidates are locked, assessed and retired as one set,
- * so a row renewed or inserted after the assessment is never swept up with it;
- * rows touched since the walk began are not candidates at all (Audit P-25). A
- * current row stamped with the walk's own generation is a positive observation
- * from the same walk and refuses the zero. A refusal writes nothing.
+ * auto-renew off. Failing that, and given `counterVerifiedSince`, the zero is
+ * trusted when the page's account subscriber counter also reads 0 and was
+ * verified at or after that instant; every candidate is then retired, whatever
+ * its count, end or auto-renew. The candidates are locked, assessed and retired
+ * as one set, so a row renewed or inserted after the assessment is never swept
+ * up with it; rows touched since the walk began are not candidates at all
+ * (Audit P-25). A current row stamped with the walk's own generation is a
+ * positive observation from the same walk and refuses the zero. A refusal
+ * writes nothing.
  */
 export async function retireLapsedPageSubscriptionsForEmptySnapshot(
   db: Database,
@@ -1266,6 +1286,7 @@ export async function retireLapsedPageSubscriptionsForEmptySnapshot(
     generation: number;
     walkStartedAt: Date;
     maxRetirements: number;
+    counterVerifiedSince?: Date;
   },
 ): Promise<EmptySnapshotSubscriptionRetirement> {
   const current = await db.execute<{ current_count: number; observed_by_walk: number }>(sql`
@@ -1280,35 +1301,77 @@ export async function retireLapsedPageSubscriptionsForEmptySnapshot(
     return { certified: false, reason: "observed_by_walk", currentCount };
   }
 
+  const candidatePredicate = sql`
+    platform_account_id = ${input.platformAccountId}
+      and is_current = true
+      and (last_seen_generation is null or last_seen_generation < ${input.generation})
+      and last_seen_at < ${input.walkStartedAt}`;
   const candidates = await db.execute<{ id: string; lapsed: boolean }>(sql`
     select id::text as id,
            (ends_at is not null and ends_at < ${input.walkStartedAt} and auto_renew is false) as lapsed
     from page_subscriptions
-    where platform_account_id = ${input.platformAccountId}
-      and is_current = true
-      and (last_seen_generation is null or last_seen_generation < ${input.generation})
-      and last_seen_at < ${input.walkStartedAt}
+    where ${candidatePredicate}
     order by id
     limit ${input.maxRetirements + 1}
     for update
   `);
-  if (candidates.rows.length > input.maxRetirements) {
-    return { certified: false, reason: "too_many_current", currentCount };
+  const refusal = candidates.rows.length > input.maxRetirements
+    ? "too_many_current" as const
+    : candidates.rows.every((row) => row.lapsed === true) ? null : "not_known_lapsed" as const;
+  if (refusal !== null) {
+    if (input.counterVerifiedSince === undefined) {
+      return { certified: false, reason: refusal, currentCount };
+    }
+    const [counter] = await db
+      .select({ subscriberCount: pages.subscriberCount, lastVerifiedAt: pages.lastVerifiedAt })
+      .from(pages)
+      .where(eq(pages.id, input.platformAccountId));
+    const pageCounter: PageSubscriberCounter = {
+      subscriberCount: counter?.subscriberCount ?? null,
+      lastVerifiedAt: counter?.lastVerifiedAt ?? null,
+    };
+    const confirmed = pageCounter.subscriberCount === 0 &&
+      pageCounter.lastVerifiedAt !== null &&
+      pageCounter.lastVerifiedAt.getTime() >= input.counterVerifiedSince.getTime();
+    if (!confirmed) {
+      return { certified: false, reason: refusal, currentCount, counter: pageCounter };
+    }
+    // The whole candidate set, locked before it is retired; it contains the
+    // rows the lapsed rule already locked.
+    const confirmedCandidates = await db.execute<{ id: string }>(sql`
+      select id::text as id
+      from page_subscriptions
+      where ${candidatePredicate}
+      order by id
+      for update
+    `);
+    const retiredCount = await retireCurrentPageSubscriptions(
+      db,
+      input.platformAccountId,
+      confirmedCandidates.rows.map((row) => row.id),
+    );
+    return { certified: true, retiredCount, currentCount, counter: pageCounter };
   }
-  if (!candidates.rows.every((row) => row.lapsed === true)) {
-    return { certified: false, reason: "not_known_lapsed", currentCount };
-  }
-  if (candidates.rows.length > 0) {
+  const retiredCount = await retireCurrentPageSubscriptions(
+    db,
+    input.platformAccountId,
+    candidates.rows.map((row) => row.id),
+  );
+  return { certified: true, retiredCount, currentCount };
+}
+
+async function retireCurrentPageSubscriptions(db: Database, platformAccountId: number, ids: string[]) {
+  if (ids.length > 0) {
     await db.execute(sql`
       update page_subscriptions
       set is_current = false,
           last_seen_at = now()
-      where platform_account_id = ${input.platformAccountId}
-        and id = any(${sql.param(candidates.rows.map((row) => row.id))}::bigint[])
+      where platform_account_id = ${platformAccountId}
+        and id = any(${sql.param(ids)}::bigint[])
         and is_current = true
     `);
   }
-  return { certified: true, retiredCount: candidates.rows.length, currentCount };
+  return ids.length;
 }
 
 export async function refreshFanPageSubscriberState(db: Database, platformAccountId: number) {

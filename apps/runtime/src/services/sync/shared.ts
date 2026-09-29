@@ -740,7 +740,13 @@ export async function refreshPageMetadata(
       username: accountMe.parsed.account.username,
       displayName: accountMe.parsed.account.displayName,
       followerCount: accountMe.parsed.account.followCount,
-      subscriberCount: accountMe.parsed.account.subscriberCount,
+      // This write always advances last_verified_at, which the stated-empty
+      // subscribers rule reads as the counter's freshness. A counter missing
+      // from the response is cleared, not skipped (Drizzle drops undefined),
+      // so the last 0 cannot keep looking fresh.
+      subscriberCount: typeof accountMe.parsed.account.subscriberCount === "number"
+        ? accountMe.parsed.account.subscriberCount
+        : null,
       earningsBalanceMills: millsFromInteger(accountMe.parsed.account.earningsWallet?.balance ?? 0),
       metadata: buildFanslyMetadata(accountMe.parsed.account, pageContext.page.metadata),
       ...(syncType ? { syncType } : {}),

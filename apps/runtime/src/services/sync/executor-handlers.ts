@@ -60,6 +60,7 @@ import {
   withOwnedPageSyncTransaction,
   refreshFanPageFollowerState,
   refreshFanPageSubscriberState,
+  type EmptySnapshotSubscriptionRetirement,
   type PageDmConversationRow,
   type PageSyncLease,
   type SyncStream,
@@ -225,8 +226,15 @@ const SUBSCRIBERS_WALK_RESTART_DELAY_MS = 60_000;
 // Most current subscriptions a stated-empty active snapshot retires on its
 // own, each already lapsed with auto-renew off before the walk began. A share
 // cannot tell one-to-zero from ten-thousand-to-zero; any larger or unexplained
-// drop keeps the empty-first-page guard.
+// drop needs the account counter's confirmation below or keeps the
+// empty-first-page guard.
 const SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS = 5;
+// A stated zero the lapsed rule cannot explain is accepted when Fansly's own
+// /account/me subscriberCount, which the light and followers streams write to
+// the page hourly, also reads 0 and was verified no earlier than this long
+// before the walk began. The counter trails a lapse by about a day, which is
+// the confirmation pause.
+const SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
@@ -1757,7 +1765,8 @@ export async function fanslySubscribersChunk(
 
     // An empty first page vouches for nothing unless the provider states the
     // zero outright; even then the finalization transaction retires only the
-    // small, already-lapsed membership it can explain, or refuses.
+    // small, already-lapsed membership it can explain or a membership a fresh
+    // zero account counter confirms, or refuses.
     const statedEmptySnapshot = isStatedEmptyActiveSnapshot(state, page, totalChanged);
     if (!statedEmptySnapshot && state.mode === "active" && state.offset === 0 && page.items.length === 0) {
       const currentSubscribers = await getCurrentSubscribers(app.db, input.pageContext.page.id);
@@ -1849,9 +1858,11 @@ export async function fanslySubscribersChunk(
       restartCount: 0,
     };
 
-    let emptySnapshotRetiredCount: number | null = null;
+    // Asserted, not annotated: assigned inside the transaction callback, which
+    // an annotated `null` initializer would narrow away.
+    let emptySnapshotRetirement = null as Extract<EmptySnapshotSubscriptionRetirement, { certified: true }> | null;
     const pageWrite = await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
-      emptySnapshotRetiredCount = null;
+      emptySnapshotRetirement = null;
       const fanMap = await upsertHydratedFansForPage(dbTx, {
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFans.accounts,
@@ -1944,16 +1955,18 @@ export async function fanslySubscribersChunk(
         }
         if (finalWithheldReason === null && statedEmptySnapshot) {
           // The assessment and the retirement act on one locked set.
+          const walkStartedAt = subscribersWalkFence(state);
           const retirement = await retireLapsedPageSubscriptionsForEmptySnapshot(dbTx, {
             platformAccountId: input.pageContext.page.id,
             generation: state.generation,
-            walkStartedAt: subscribersWalkFence(state),
+            walkStartedAt,
             maxRetirements: SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS,
+            counterVerifiedSince: new Date(walkStartedAt.getTime() - SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS),
           });
           if (!retirement.certified) {
             return { kind: "empty_refused" as const, retirement };
           }
-          emptySnapshotRetiredCount = retirement.retiredCount;
+          emptySnapshotRetirement = retirement;
         } else if (finalWithheldReason === null) {
           await deactivatePageSubscriptionsByGeneration(dbTx, {
             platformAccountId: input.pageContext.page.id,
@@ -2043,17 +2056,33 @@ export async function fanslySubscribersChunk(
         details: {
           existingCurrentSubscribers: pageWrite.retirement.currentCount,
           reason: pageWrite.retirement.reason,
+          ...(pageWrite.retirement.counter === undefined ? {} : {
+            subscriberCount: pageWrite.retirement.counter.subscriberCount,
+            lastVerifiedAt: pageWrite.retirement.counter.lastVerifiedAt?.toISOString() ?? null,
+          }),
         },
       });
       throw new Error("Subscriber sync returned zero rows; refusing destructive finalization");
     }
-    if (emptySnapshotRetiredCount !== null) {
-      await input.telemetry.addNote("Fansly subscribers stated-empty snapshot certified", {
-        code: "subscribers_empty_snapshot_certified",
-        generation: state.generation,
-        walkStartedAt: state.walkStartedAt,
-        retiredCount: emptySnapshotRetiredCount,
-      });
+    if (emptySnapshotRetirement !== null) {
+      const { counter, retiredCount } = emptySnapshotRetirement;
+      if (counter === undefined) {
+        await input.telemetry.addNote("Fansly subscribers stated-empty snapshot certified", {
+          code: "subscribers_empty_snapshot_certified",
+          generation: state.generation,
+          walkStartedAt: state.walkStartedAt,
+          retiredCount,
+        });
+      } else {
+        await input.telemetry.addNote("Fansly subscribers stated-empty snapshot confirmed by the account counter", {
+          code: "subscribers_empty_snapshot_confirmed_by_counter",
+          generation: state.generation,
+          walkStartedAt: state.walkStartedAt,
+          retiredCount,
+          subscriberCount: counter.subscriberCount,
+          lastVerifiedAt: counter.lastVerifiedAt?.toISOString() ?? null,
+        });
+      }
     }
     processedThisChunk += pageWrite.processedThisPage;
 
