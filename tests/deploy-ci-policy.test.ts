@@ -643,8 +643,10 @@ describe("CI integration shards", () => {
   it("splits the sync-critical DB suite by measured duration through the root Vitest config", () => {
     expect(vitestConfig.test?.sequence?.sequencer).toBe(WeightedShardSequencer);
     const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> };
-    const flags = (manifest.scripts["test:sync-critical:db"] ?? "").split(/\s+/).filter(token => token.startsWith("-"));
-    expect(new Set(flags)).toEqual(new Set(["--no-file-parallelism", "--exclude"]));
+    const tokens = (manifest.scripts["test:sync-critical:db"] ?? "").split(/\s+/);
+    // No flag may override the config; the PC switch expands only to file-parallelism flags (pinned below).
+    expect(new Set(tokens.filter(token => token.startsWith("-")))).toEqual(new Set(["--exclude"]));
+    expect(tokens.filter(token => token.startsWith("${"))).toEqual(["${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"]);
     expect(syncCritical.length).toBeGreaterThan(8);
   });
 
@@ -682,7 +684,46 @@ describe("CI integration shards", () => {
     // The API suite is one file: it runs on the first shard only.
     const api = step("integration", "Sync-critical API tests");
     expect(api.if).toBe("matrix.shard == 1");
+    expect(api.env).toBeUndefined();
     expect(shell(api)).toBe("pnpm test:sync-critical:api");
+  });
+
+  // Hosted runners run a shard's DB files one at a time, exactly as before;
+  // the PC runs two at a time. The switch is one step env var that the package
+  // script expands, so the hosted vitest command stays byte-identical.
+  const hostedDbCommand = "NODE_OPTIONS=--max-old-space-size=8192 vitest run --no-file-parallelism tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts";
+  const packageScripts = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> }).scripts;
+
+  /** The argv the package script hands vitest, as pnpm runs it: `sh -c` with the extra args appended. */
+  function vitestArgv(script: string, env: Record<string, string>): string[] {
+    const { SYNC_CRITICAL_DB_PARALLELISM: _inherited, ...inherited } = process.env;
+    const result = spawnSync("sh", ["-c", `vitest() { printf '%s\\n' "NODE_OPTIONS=$NODE_OPTIONS" "$@"; }\n${script} --shard=2/6`], {
+      encoding: "utf8",
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: { ...inherited, ...env },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trimEnd().split("\n");
+  }
+
+  it.each([
+    ["github-hosted", "", ["--no-file-parallelism"]],
+    ["self-hosted", "--fileParallelism --maxWorkers=2", ["--fileParallelism", "--maxWorkers=2"]],
+  ] as const)("runs the DB files on %s with %j", (environment, value, flags) => {
+    const db = step("integration", dbStepName);
+    expect(db.if).toBeUndefined();
+    expect(db.env).toEqual({ SYNC_CRITICAL_DB_PARALLELISM: "${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}" });
+    expect(packageScripts["test:sync-critical:db"]).toBe(hostedDbCommand.replace("--no-file-parallelism", "${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"));
+    const env = field(db.env?.SYNC_CRITICAL_DB_PARALLELISM ?? "", eventContext({ runnerEnvironment: environment }));
+    expect(env).toBe(value);
+
+    const baseline = vitestArgv(hostedDbCommand, {});
+    expect(baseline.slice(0, 3)).toEqual(["NODE_OPTIONS=--max-old-space-size=8192", "run", "--no-file-parallelism"]);
+    expect(baseline.filter(arg => arg.endsWith(".integration.test.ts")).length).toBeGreaterThan(100);
+    expect(baseline).not.toContain("tests/*.integration.test.ts");
+    expect(baseline.at(-1)).toBe("--shard=2/6");
+    expect(vitestArgv(packageScripts["test:sync-critical:db"] ?? "", { SYNC_CRITICAL_DB_PARALLELISM: env }))
+      .toEqual([...baseline.slice(0, 2), ...flags, ...baseline.slice(3)]);
   });
 
   it.each([
