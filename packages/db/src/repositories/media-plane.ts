@@ -124,12 +124,13 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  * be days. It is exactly the argument WP-F5 made for `creator_posts`, and it is
  * why WP-F4's own first-enable seeding only has to run ONCE.
  *
- * The queue insert is `ON CONFLICT DO NOTHING` and runs on every upsert, not
- * only the applied ones: the head upsert is guarded (a replayed older capture
- * writes nothing), and a media item whose head did not move still needs its
- * queue row to exist. It is a no-op the second time and every time after —
- * which is also what makes a `creator_media` truncate-and-replay leave the queue
- * untouched instead of re-marking the whole catalogue as first-sight.
+ * The queue insert runs on every upsert, not only the applied ones: the head
+ * upsert is guarded (a replayed older capture writes nothing), and a media item
+ * whose head did not move still needs its queue row to exist. On an existing
+ * row it writes one column only, `media_shown_outside_dm_at` (below), and only
+ * when that moves earlier. The visit state is never touched, which is what
+ * makes a `creator_media` truncate-and-replay leave it as it was instead of
+ * re-marking the whole catalogue as first-sight.
  *
  * FANSLY ONLY, decided in SQL rather than in TypeScript — `/it/moie/statsnew`
  * is a Fansly route and an OnlyFans media item has no per-media series to queue.
@@ -155,6 +156,15 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  * post observation that carries it. A DM-only head with no queue row is this
  * rule working, not the hole above. The rows queued before this check are
  * removed by the owner-run one-off `fansly:media-stats-prune-dm-only`.
+ *
+ * AND THE ROW RECORDS THAT IT WAS SHOWN (`media_shown_outside_dm_at`, 0222):
+ * the earliest such observation's instant, set on a new row and on one a DM
+ * sidecar queued before the check. It is the repair's evidence that the media
+ * is not DM-only, and it is written HERE, in the statement that queues, because
+ * the repair's other evidence is not: a post's attachments reach
+ * `creator_posts` through another projector, which may run after this one. On a
+ * row the repair is deleting at the same moment, the upsert waits for it and
+ * then inserts the row again.
  */
 export async function upsertCreatorMedia(
   db: Database,
@@ -168,10 +178,11 @@ export async function upsertCreatorMedia(
     }
     await database.execute(sql`
       insert into subject_refresh_state (
-        page_id, plane, subject_ref, refresh_class, next_due_at
+        page_id, plane, subject_ref, refresh_class, next_due_at,
+        media_shown_outside_dm_at
       )
       select ${input.pageId}, 'media_stats', ${input.mediaOfferRef}, 'fresh',
-             ${input.observedAt}
+             ${input.observedAt}, ${input.observedAt}
        where ${input.platform} = 'fansly'
          and coalesce(
            ${input.ownerAccountRef ?? null}::text = (
@@ -179,7 +190,12 @@ export async function upsertCreatorMedia(
            ),
            true
          )
-      on conflict (page_id, plane, subject_ref) do nothing
+      on conflict (page_id, plane, subject_ref) do update
+        set media_shown_outside_dm_at = excluded.media_shown_outside_dm_at,
+            updated_at = now()
+        where subject_refresh_state.media_shown_outside_dm_at is null
+           or subject_refresh_state.media_shown_outside_dm_at
+                > excluded.media_shown_outside_dm_at
     `);
     return head;
   });

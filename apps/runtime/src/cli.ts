@@ -66,7 +66,10 @@ import { runFansly1970Repair } from "./services/fansly-1970-repair.ts";
 import { runOfapiPpvRefRepair } from "./services/ofapi-ppv-ref-repair.ts";
 import { runPpvPurchaseBackfill } from "./services/ppv-purchase-backfill.ts";
 import { runFanslyWsDeletionBackfill } from "./services/fansly-ws-deletions.ts";
-import { runFanslyMediaStatsDmOnlyPrune } from "./services/fansly-media-stats-dm-only-prune.ts";
+import {
+  DM_ONLY_PRUNE_DEFAULT_WAIT_MS,
+  runFanslyMediaStatsDmOnlyPrune,
+} from "./services/fansly-media-stats-dm-only-prune.ts";
 import { runFanslyMediaStatsForeignPrune } from "./services/fansly-media-stats-foreign-prune.ts";
 import { runNotificationReadStateReplay } from "./services/fansly-notification-read-state-replay.ts";
 import { runAccountMeRejournal } from "./services/observations-account-me-rejournal.ts";
@@ -2151,25 +2154,51 @@ export function buildProgram() {
 
   // Owner decision 2026-09-29, an owner-run one-off like M11 above: dry-run
   // default (READ ONLY), `--execute` opts in, a re-run reports zeros. It deletes
-  // queue state only and makes no Fansly call.
+  // queue state only and makes no Fansly call. `--execute` waits for the
+  // media_plane, creator_posts and fansly_stats projectors to reach the journal
+  // head, and refuses when they do not.
   program
     .command("fansly:media-stats-prune-dm-only")
     .description(
-      "Delete the media_stats queue rows of media the page showed only in DMs: not attached "
-        + "to a post, not in a bundle on a post, not named by stats_top_media, and not first "
-        + "seen on a post or in the account statistics. Heads, buckets and journal stay. "
-        + "Dry-run default; idempotent",
+      "Delete the media_stats queue rows of media the page showed only in DMs: not queued "
+        + "from a post or the account statistics, not attached to a post, not in a bundle on "
+        + "a post, not named by stats_top_media, and not first seen on a post or in the "
+        + "account statistics. Heads, buckets and journal stay. Dry-run default; idempotent; "
+        + "--execute refuses while its projectors are behind the journal head",
     )
     .option("--execute", "actually delete (default is a read-only dry-run count)")
     .option("--account <id>", "restrict to one internal account (page) id", parsePositiveInt)
+    .option(
+      "--wait-seconds <n>",
+      "--execute: how long to wait for the projectors to reach the journal head",
+      parseNonnegativeInt,
+      DM_ONLY_PRUNE_DEFAULT_WAIT_MS / 1000,
+    )
     .action(async (options) => {
       const app = await createAppContext();
       try {
         const result = await runFanslyMediaStatsDmOnlyPrune(app, {
           dryRun: !options.execute,
+          waitMs: options.waitSeconds * 1000,
           ...(options.account !== undefined ? { accountId: options.account } : {}),
         });
         console.log(JSON.stringify(result));
+        for (const lag of result.lagging) {
+          console.log(
+            `page ${lag.pageId} (${lag.pageLabel}): ${lag.projection} at ${lag.watermark}, `
+              + `journal head ${lag.head} (${lag.head - lag.watermark} behind)`,
+          );
+        }
+        if (result.refused) {
+          console.error(
+            "REFUSED: the projectors above did not reach the journal head in time. A row queued "
+              + "before the deploy is kept by its post in creator_posts or its ranking in "
+              + "stats_top_media, which may not be projected yet. Nothing was deleted; re-run "
+              + "once they catch up, or with a longer --wait-seconds.",
+          );
+          process.exitCode = 1;
+          return;
+        }
         for (const page of result.pages) {
           console.log(
             `page ${page.pageId} (${page.pageLabel}): ${page.rows} `
@@ -2181,6 +2210,12 @@ export function buildProgram() {
             + `DM-only media_stats rows (visited ${result.visited}, dirty ${result.dirty}, `
             + `headless ${result.headless}) on ${result.pages.length} page(s)`,
         );
+        if (result.dryRun && result.lagging.length > 0) {
+          console.log(
+            "[dry-run] projectors are behind the journal head (above): --execute waits for "
+              + "them and refuses if they do not catch up.",
+          );
+        }
       } finally {
         await app.close();
       }
