@@ -20,8 +20,15 @@
 // Bounded by construction: one job = one run. When the thread is deeper than
 // the run's request budget the outcome is reported as `partial` and the owner
 // re-runs; there is no checkpoint-and-re-enqueue continuation.
+//
+// The run's result is the job's return value, so pg-boss keeps it in
+// pgboss.job.output — the record the CLI's `--wait` reads. A refusal is a
+// completed job with a refusal outcome there, not an error.
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+
+import { sql } from "drizzle-orm";
 
 import {
   acquireTargetedPageSyncLease,
@@ -33,6 +40,7 @@ import {
   getConversationSyncHealth,
   getPageDmConversationById,
   getPageDmMessageRetentionLimit,
+  getPageSyncState,
   getSyncStreamsForPlatform,
   heartbeatPageSyncLease,
   isConversationSyncHealthExcluded,
@@ -84,7 +92,23 @@ const TARGETED_BACKFILL_HEARTBEAT_MS = 30_000;
 // One attempt, no auto-retry: a half-walked thread is re-runnable by hand and
 // a silent retry would double the vendor traffic behind the owner's back.
 const TARGETED_BACKFILL_RETRY_LIMIT = 0;
-const TARGETED_BACKFILL_EXPIRE_SECONDS = 20 * 60;
+export const TARGETED_BACKFILL_EXPIRE_SECONDS = 20 * 60;
+/**
+ * How long a run waits out the page's own chunks before refusing `page_busy` /
+ * `lease_unavailable`. A regular chunk holds the page for seconds (p99 ≈ 1 min
+ * in prod, 2026-09), but chunks come in bursts, and on 28.09 an owner repair
+ * was refused in 20 ms behind a followers_reconcile burst that ended 40 s
+ * later. The wait makes no vendor request, and wait + the walk's wall clock
+ * (4 + 10 min) stays well inside the job's 20-minute expiry.
+ */
+const TARGETED_BACKFILL_CONTENTION_WAIT_MS = 4 * 60 * 1000;
+const TARGETED_BACKFILL_CONTENTION_POLL_MS = 5_000;
+
+export interface TargetedThreadBackfillRunOptions {
+  /** Test seams for the contention wait above. */
+  contentionWaitMs?: number;
+  contentionPollMs?: number;
+}
 
 export interface TargetedThreadBackfillJob {
   threadId: number;
@@ -273,6 +297,78 @@ function emptyResult(
   };
 }
 
+/** pgboss.job, as the CLI reads it back for one targeted backfill job. */
+export interface TargetedThreadBackfillJobStatus {
+  state: string;
+  /** The run's TargetedThreadBackfillResult once `completed`; the error once `failed`. */
+  output: unknown;
+  startedOn: Date | null;
+  completedOn: Date | null;
+}
+
+const TERMINAL_JOB_STATES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
+
+export async function readTargetedThreadBackfillJobStatus(
+  db: AppContext["db"],
+  jobId: string,
+): Promise<TargetedThreadBackfillJobStatus | null> {
+  const result = await db.execute<{
+    state: string;
+    output: unknown;
+    startedOn: Date | null;
+    completedOn: Date | null;
+  }>(sql`
+    select state::text as "state",
+           output,
+           started_on as "startedOn",
+           completed_on as "completedOn"
+    from pgboss.job
+    where name = ${TARGETED_THREAD_BACKFILL_QUEUE}
+      and id = ${jobId}::uuid
+  `);
+  const row = result.rows[0];
+  return row
+    ? { state: row.state, output: row.output ?? null, startedOn: row.startedOn, completedOn: row.completedOn }
+    : null;
+}
+
+/**
+ * Poll one job until it is completed, failed or cancelled, reporting each state
+ * change once. A missing row returns at once (`status: null`); running out of
+ * time returns the last row seen with `timedOut`. Read-only.
+ */
+export async function waitForTargetedThreadBackfillJob(input: {
+  read: () => Promise<TargetedThreadBackfillJobStatus | null>;
+  timeoutMs: number;
+  pollMs: number;
+  onState?: (status: TargetedThreadBackfillJobStatus) => void;
+  sleep?: (ms: number) => Promise<unknown>;
+  now?: () => number;
+}): Promise<{ status: TargetedThreadBackfillJobStatus | null; timedOut: boolean }> {
+  const now = input.now ?? Date.now;
+  const sleep = input.sleep ?? ((ms: number) => delay(ms));
+  const deadline = now() + input.timeoutMs;
+  let lastState: string | null = null;
+  for (;;) {
+    const status = await input.read();
+    if (status === null) {
+      return { status: null, timedOut: false };
+    }
+    if (status.state !== lastState) {
+      lastState = status.state;
+      input.onState?.(status);
+    }
+    if (TERMINAL_JOB_STATES.has(status.state)) {
+      return { status, timedOut: false };
+    }
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      return { status, timedOut: true };
+    }
+    await sleep(Math.min(input.pollMs, remainingMs));
+  }
+}
+
 function isFanslyAuthError(error: unknown) {
   return error instanceof FanslyApiError && (error.status === 401 || error.status === 403);
 }
@@ -342,10 +438,46 @@ async function findConcurrentPageChunk(
  *
  * Refusals (no vendor traffic at all): unknown/ineligible thread, a page that
  * is not Fansly, an open breaker window, the depth cap without an explicit
- * override, another stream of the page mid-chunk, a regular chunk parked on
- * this very thread, and an unavailable page-sync lease.
+ * override, a regular chunk parked on this very thread, and — only after the
+ * bounded contention wait — another stream of the page mid-chunk or an
+ * unavailable page-sync lease.
+ *
+ * Contention with the page's own chunks is transient, so on `page_busy` or
+ * `lease_unavailable` the whole attempt is re-run every few seconds until
+ * TARGETED_BACKFILL_CONTENTION_WAIT_MS runs out. Both refusals happen before
+ * the run starts (no sync run, no vendor request, the lease handed back), and
+ * each attempt re-reads the thread, so one the regular crawl walked meanwhile
+ * is judged on its current summary rather than the one read before the wait.
+ * A paused or blocked dm_messages stream does not clear on its own within
+ * minutes and refuses at once, like every other refusal.
  */
 export async function runTargetedThreadBackfill(
+  app: AppContext,
+  input: TargetedThreadBackfillJob,
+  options?: TargetedThreadBackfillRunOptions,
+): Promise<TargetedThreadBackfillResult> {
+  const deadline = Date.now() + (options?.contentionWaitMs ?? TARGETED_BACKFILL_CONTENTION_WAIT_MS);
+  const pollMs = options?.contentionPollMs ?? TARGETED_BACKFILL_CONTENTION_POLL_MS;
+  for (;;) {
+    const result = await runTargetedThreadBackfillOnce(app, input);
+    if (result.outcome !== "page_busy" && result.outcome !== "lease_unavailable") {
+      return result;
+    }
+    if (result.outcome === "lease_unavailable" && result.platformAccountId !== null) {
+      const own = await getPageSyncState(app.db, result.platformAccountId, "dm_messages");
+      if (!own || own.status === "paused" || own.blockerKind !== null) {
+        return result;
+      }
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return result;
+    }
+    await delay(Math.min(pollMs, remainingMs));
+  }
+}
+
+async function runTargetedThreadBackfillOnce(
   app: AppContext,
   input: TargetedThreadBackfillJob,
 ): Promise<TargetedThreadBackfillResult> {
@@ -424,10 +556,10 @@ export async function runTargetedThreadBackfill(
     // Stage 25: a page runs ONE sync chunk at a time. The regular path gets
     // that from the fixed page singleton on `sync.page.execute`; this run lives
     // on its own queue, so it re-establishes the invariant here. Read UNDER the
-    // lease and used twice: refuse outright when another stream is already
-    // mid-chunk, and keep the thread-summary writers' part of the snapshot as
-    // the baseline that finalize time compares against (a dm_conversations
-    // chunk that starts AFTER this check is caught there).
+    // lease and used twice: refuse when another stream is already mid-chunk
+    // (the caller waits that out), and keep the thread-summary writers' part
+    // of the snapshot as the baseline that finalize time compares against (a
+    // dm_conversations chunk that starts AFTER this check is caught there).
     const now = Date.now();
     const pageStates = await listPageSyncStates(app.db, { pageId: platformAccountId });
     const busyStream = pageStates.find((state) =>
