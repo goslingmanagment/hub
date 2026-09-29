@@ -532,6 +532,10 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       params: { beforeDate: Date; afterDate: Date; periodMs: number; year?: number; month?: number },
     ) => unknown;
     earningsFor?: (params: { before: Date; after: Date; limit?: number | null; offset?: number | null }) => unknown;
+    /** Attempts a call needs, retries included — each capped by the request's
+     *  retry allowance the way the real adapter caps it. Unset: one attempt,
+     *  allowance unread. */
+    attemptsFor?: (name: string) => number;
   }) {
     const calls: string[] = [];
     const statsRequests: Array<
@@ -540,10 +544,22 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     const earningsRequests: Array<{ afterMs: number; beforeMs: number; offset: number | null | undefined }> = [];
     const answer = async (
       name: string,
-      context: { requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null },
+      context: {
+        requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null;
+        remainingAttempts?: (() => number) | null;
+      },
       body: unknown,
     ) => {
       calls.push(name);
+      if (options.attemptsFor !== undefined) {
+        await observeFanslyLaneAttempts(context, {
+          attempts: options.attemptsFor(name),
+          requestId: `${name}:${calls.length}`,
+          operation: name,
+          endpointTemplate: `/${name}`,
+        });
+        return { items: body, raw: body };
+      }
       await context.requestObserver?.onRequestEvent({
         requestId: `${name}:${calls.length}`,
         state: "started",
@@ -2254,9 +2270,10 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
    * between 0 and 2 h from call to call (production 2026-09); each hourly
    * call takes the next of `lags`, then 1.
    */
-  function hourGridStatsAdapter(lags: number[] = []) {
+  function hourGridStatsAdapter(lags: number[] = [], attemptsFor?: (name: string) => number) {
     const pending = [...lags];
     return windowAdapterStub({
+      ...(attemptsFor === undefined ? {} : { attemptsFor }),
       statsFor: (params) => {
         if (params.periodMs !== HOUR) {
           return statsBodyFor(
@@ -2590,6 +2607,62 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(adapter.calls).toHaveLength(11);
   });
 
+  it("keeps the held call out of a sweep request's retries", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The same 23:01 capture and 05:01 sweep, but the earnings request's first
+    // attempt fails on the wire. Two attempts were left, one of them held, and
+    // the adapter was allowed both: the retry spent the held call, the lane
+    // deferred to 00:05 without the window, and the next capture came 25 h
+    // 04 min after the last — two buckets lost as the lag went 2 h -> 0 h.
+    const page = await seedSteadyPage("2026-08-19");
+    const seeded = (await cursor(page.id))!;
+    seeded.lastHourlyCapturedAt = "2026-08-19T23:01:00.000Z";
+    seeded.lastHourlyServedBefore = "2026-08-19T21:00:00.000Z";
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: seeded.lastSweepDay,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    await capDayAt(3);
+    let earningsRequests = 0;
+    const adapter = hourGridStatsAdapter(
+      [0, 0],
+      (name) => name === "earnings_stats" && (earningsRequests += 1) === 1 ? 2 : 1,
+    );
+    const telemetry = telemetryStub();
+    const app = appStub(adapter as never);
+
+    // The request's allowance leaves the held call out: one attempt, and the
+    // request fails the chunk the way any exhausted retry does.
+    await expect(dispatchAt(app, page.id, telemetry, at("2026-08-20", "05:01")))
+      .rejects.toThrow("retry allowance exhausted");
+    expect(adapter.calls).toEqual(["account_stats", "earnings_stats"]);
+    expect((await cursor(page.id))!.callsToday).toBe(2);
+
+    // The executor's retry finds the held call still there and spends it on
+    // the window before the lane sleeps until 00:05.
+    const deferredResult = await dispatchAt(app, page.id, telemetry, at("2026-08-20", "05:06"));
+    expect(deferredResult.continuationRetryAt?.toISOString()).toBe("2026-08-21T00:05:00.000Z");
+    expect(deferredResult.stats).toMatchObject({ deferred: "daily_call_budget", hourly: "captured" });
+    expect((await cursor(page.id))!.callsToday).toBe(3);
+    await dispatchAt(app, page.id, telemetry, at("2026-08-21", "00:05"));
+
+    const captures = ["2026-08-19T23:01:00.000Z", ...hourlyCaptures(adapter)];
+    expect(captures).toEqual([
+      "2026-08-19T23:01:00.000Z",
+      "2026-08-20T05:06:00.000Z",
+      "2026-08-21T00:05:00.000Z",
+    ]);
+    expect(Math.max(...gapHours(captures))).toBeLessThanOrEqual(23);
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_hourly_capture_gap",
+    )).toHaveLength(0);
+  });
+
   it("makes no hourly request at all while fanslyStatsHourlyEnabled is off", async (context) => {
     if (!testDb) {
       context.skip();
@@ -2738,6 +2811,54 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       input(page.id, telemetry, new SyncChunkBudget(), at("2026-08-21", "00:05")),
     );
     expect(hourlyCaptures(adapter)).toEqual(["2026-08-21T00:05:00.000Z"]);
+  });
+
+  it("yields at once, never completes, when the chunk's own budget leaves the window due", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // Today's sweep is done, there is no history walk and the cap has room,
+    // but loading the config, context and checkpoint spent the chunk's 45 s
+    // (or its requests). The window due at 23:01 was deferred and the chunk
+    // completed as `sweep_not_due`: the next chance was the 05:01 slot, 24 h
+    // after the last capture — one bucket lost as the lag went 2 h -> 0 h.
+    const page = await seedSteadyPage("2026-08-20");
+    const seeded = (await cursor(page.id))!;
+    seeded.lastHourlyCapturedAt = "2026-08-20T05:01:00.000Z";
+    seeded.lastHourlyServedBefore = "2026-08-20T03:00:00.000Z";
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: seeded.lastSweepDay,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    const adapter = hourGridStatsAdapter([0]);
+    const telemetry = telemetryStub();
+    const app = appStub(adapter as never);
+    const dispatch = at("2026-08-20", "23:01");
+
+    for (
+      const [budget, yieldReason] of [
+        [new SyncChunkBudget(5, 0), "wall_clock"],
+        [new SyncChunkBudget(0), "request_budget"],
+      ] as const
+    ) {
+      const result = await fanslyStatsSnapshotChunk(app, input(page.id, telemetry, budget, dispatch));
+      expect(result).toMatchObject({ satisfied: false, yieldReason });
+      // No wake-up time: the executor chains the next chunk at once.
+      expect(result.continuationRetryAt ?? null).toBeNull();
+      expect(result.stats).toMatchObject({ deferred: null, hourly: "deferred" });
+    }
+    expect(adapter.calls).toEqual([]);
+
+    const continued = await dispatchAt(app, page.id, telemetry, dispatch);
+    expect(continued).toMatchObject({ satisfied: true });
+    expect(continued.stats).toMatchObject({ skipped: "sweep_not_due", hourly: "captured" });
+    const captures = ["2026-08-20T05:01:00.000Z", ...hourlyCaptures(adapter)];
+    expect(gapHours(captures)).toEqual([18]);
   });
 
   it("derives a legacy cursor's last hourly capture from its steady coverage row", async (

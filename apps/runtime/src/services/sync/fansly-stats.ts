@@ -1036,7 +1036,9 @@ export async function fanslyStatsSnapshotChunk(
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
   });
-  const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
+  const {
+    attemptBudget, complete: completeLane, holdingBack, requestContext, saveProgress,
+  } = lane;
 
   let journaled = 0;
   let deferred: string | null = null;
@@ -1930,11 +1932,12 @@ export async function fanslyStatsSnapshotChunk(
    * on anything but an empty page says so once, as an anomaly.
    */
   const readBroadcastPage = async (
+    context: typeof requestContext,
     kind: "broadcast_stats" | "broadcast_stats_deleted",
     walk: BroadcastWalk,
   ) => {
     const before = walk.floorReached ? null : walk.before;
-    const response = await app.adapter.getBroadcastStatsPage(requestContext, {
+    const response = await app.adapter.getBroadcastStatsPage(context, {
       before,
       limit: null,
       deleted: kind === "broadcast_stats_deleted",
@@ -2127,21 +2130,25 @@ export async function fanslyStatsSnapshotChunk(
   if (sweepDoneToday) {
     const pendingHistory = await runBackfill();
     if (pendingHistory !== null) return pendingHistory;
-    if (hourly === "deferred" && !hasDayCapacity()) {
-      // The hourly window is due and the day's cap is spent: DEFER, as the
-      // sweep does, so it is captured at the UTC roll rather than at whichever
-      // slot comes after it.
+    if (hourly === "deferred") {
+      // The hourly window is due and this chunk could not take it: it never
+      // completes over it. The day's cap spent, DEFER as the sweep does, so
+      // the window is captured at the UTC roll rather than at whichever slot
+      // comes after it. This chunk's own requests or wall clock spent (loading
+      // can eat the 45 s), YIELD for the continuation the executor chains at
+      // once.
+      const capSpent = !hasDayCapacity();
       await saveProgress();
       return {
         satisfied: false,
-        yieldReason: null,
-        continuationRetryAt: nextFanslyUtcDayStart(now),
+        yieldReason: capSpent ? null : input.budget.resolveYieldReason(1),
+        ...(capSpent ? { continuationRetryAt: nextFanslyUtcDayStart(now) } : {}),
         stats: {
           mode: "steady",
           journaled,
           callsToday: state.callsToday,
           dailyCap,
-          deferred: "daily_call_budget",
+          deferred: capSpent ? "daily_call_budget" : null,
           hourly,
         },
       };
@@ -2154,8 +2161,13 @@ export async function fanslyStatsSnapshotChunk(
     };
   }
 
+  // The held call is out of the sweep's reach altogether: out of the capacity
+  // it checks before a step, and out of the allowance the adapter reads for
+  // retries and the admission of every attempt. A retry that spent it would
+  // leave the lane deferring to 00:05 without the window.
+  const sweep = holdingBack(hourlyHoldsCall ? 1 : 0);
   while (input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity()) {
-    if (!hasDayCapacity(hourlyHoldsCall ? 2 : 1)) {
+    if (!sweep.hasCapacity()) {
       if (hourlyHoldsCall && hasDayCapacity()) {
         // The call held back for the hourly window: the lane now sleeps until
         // 00:05, more than 23 h after the last capture, so the window goes
@@ -2177,7 +2189,7 @@ export async function fanslyStatsSnapshotChunk(
     if (state.stepIndex === 0) {
       const beforeDate = now;
       const afterDate = new Date(now.getTime() - DAILY_TRAILING_DAYS * DAY_MS);
-      const response = await app.adapter.getAccountStats(requestContext, {
+      const response = await app.adapter.getAccountStats(sweep.requestContext, {
         beforeDate,
         afterDate,
         periodMs: DAILY_PERIOD_MS,
@@ -2221,7 +2233,7 @@ export async function fanslyStatsSnapshotChunk(
       );
       const walk = state.earningsWalk;
       const requested = walk.pending.at(-1)!;
-      const response = await app.adapter.getEarningsStatsWindow(requestContext, {
+      const response = await app.adapter.getEarningsStatsWindow(sweep.requestContext, {
         before: new Date(requested.beforeMs), after: new Date(requested.afterMs),
         limit: EARNINGS_PAGE_LIMIT,
       });
@@ -2251,7 +2263,7 @@ export async function fanslyStatsSnapshotChunk(
       // All-time in one call. `after` is set below any plausible account
       // creation date rather than left off: the observed live call carried both
       // bounds, and an unbounded form has never been seen answering.
-      const response = await app.adapter.getEarningsMonthlyStats(requestContext, {
+      const response = await app.adapter.getEarningsMonthlyStats(sweep.requestContext, {
         before: now,
         after: new Date(Date.UTC(2015, 0, 1)),
       });
@@ -2265,7 +2277,7 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === 4) {
-      const response = await app.adapter.getTrackingLinks(requestContext);
+      const response = await app.adapter.getTrackingLinks(sweep.requestContext);
       await persist("tracking_links", {}, response.raw);
       state = { ...state, stepIndex: 5 };
       await saveProgress();
@@ -2274,7 +2286,7 @@ export async function fanslyStatsSnapshotChunk(
 
     if (state.stepIndex === 5) {
       const page = state.discoveryPage;
-      const response = await app.adapter.getDiscoveryMediaSuggestions(requestContext, {
+      const response = await app.adapter.getDiscoveryMediaSuggestions(sweep.requestContext, {
         limit: DISCOVERY_PAGE_LIMIT,
         offset: page * DISCOVERY_PAGE_LIMIT,
       });
@@ -2299,7 +2311,7 @@ export async function fanslyStatsSnapshotChunk(
       // broadcast `before` cursor to the floor — every page journaled — because
       // mass-DM performance before today is otherwise unrecoverable; afterwards
       // only the first page is polled.
-      const next = await readBroadcastPage("broadcast_stats", {
+      const next = await readBroadcastPage(sweep.requestContext, "broadcast_stats", {
         before: state.broadcastBefore,
         floorReached: state.broadcastFloorReached,
         pagesInSweep: state.broadcastPagesInSweep,
@@ -2320,7 +2332,7 @@ export async function fanslyStatsSnapshotChunk(
       // The DELETED list is paged the same way and walked the same way: a
       // withdrawn broadcast and its sales exist nowhere else, and its head
       // holds only the newest page of them.
-      const next = await readBroadcastPage("broadcast_stats_deleted", {
+      const next = await readBroadcastPage(sweep.requestContext, "broadcast_stats_deleted", {
         before: state.deletedBroadcastBefore,
         floorReached: state.deletedBroadcastFloorReached,
         pagesInSweep: state.deletedBroadcastPagesInSweep,
@@ -2338,7 +2350,7 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === 8) {
-      const response = await app.adapter.getBroadcastScheduled(requestContext);
+      const response = await app.adapter.getBroadcastScheduled(sweep.requestContext);
       await persist("broadcast_scheduled", {}, response.raw);
       state = { ...state, stepIndex: 9 };
       await saveProgress();
@@ -2346,7 +2358,7 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === 9) {
-      const response = await app.adapter.getPolls(requestContext);
+      const response = await app.adapter.getPolls(sweep.requestContext);
       await persist("polls", {}, response.raw);
       state = { ...state, stepIndex: 10 };
       await saveProgress();
@@ -2354,7 +2366,7 @@ export async function fanslyStatsSnapshotChunk(
     }
 
     if (state.stepIndex === LAST_SWEEP_STEP) {
-      const response = await app.adapter.getRecapStats(requestContext);
+      const response = await app.adapter.getRecapStats(sweep.requestContext);
       await persist("recapstats", {}, response.raw);
       const completedSweepDay = state.sweepDay ?? today;
       state = {
