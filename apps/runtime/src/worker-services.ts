@@ -110,6 +110,7 @@ import {
   parseTargetedThreadBackfillJob,
   runTargetedThreadBackfill,
   TARGETED_THREAD_BACKFILL_QUEUE,
+  type TargetedThreadBackfillResult,
 } from "./services/sync/targeted-thread-backfill.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
 import {
@@ -181,6 +182,42 @@ function listPendingTelegramReportDates(
  * line and not a latch: the deferral needs a signal, not a circuit breaker.
  */
 const PROJECTION_TICK_DURATION_ALERT_MS = 45_000;
+
+/**
+ * Slice C′: owner-initiated targeted thread backfill. One job = one bounded
+ * run of ONE thread under the page's real dm_messages sync lease; the queue
+ * policy keeps at most one job per page queued or active.
+ *
+ * The run's result is RETURNED: with batchSize 1, pg-boss stores a handler's
+ * return value as pgboss.job.output, which is where the CLI's `--wait` (and
+ * anyone after the worker's log is gone) reads the outcome — a refusal
+ * included.
+ */
+export async function handleTargetedThreadBackfillJobs(
+  app: AppContext,
+  jobs: ReadonlyArray<{ id: string; data: unknown }>,
+): Promise<TargetedThreadBackfillResult | undefined> {
+  let output: TargetedThreadBackfillResult | undefined;
+  for (const job of jobs) {
+    const payload = parseTargetedThreadBackfillJob(job.data);
+    if (!payload) {
+      app.logger.error({ jobId: job.id, data: job.data },
+        "Targeted thread backfill job carried no usable threadId");
+      continue;
+    }
+    const result = await runTargetedThreadBackfill(app, payload);
+    // Slice C: a run that answered a hydration request settles it here, with
+    // the outcome in hand. A crash before this leaves the request
+    // `dispatching` until the stuck sweeper closes it — the correct order of
+    // failure: an unsettled request is visible, a wrongly-settled one is not.
+    if (payload.hydrationRequestRef !== undefined) {
+      await settleAgentHydrationFromBackfill(app, payload.hydrationRequestRef, result);
+    }
+    app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
+    output = result;
+  }
+  return output;
+}
 
 export async function startWorkerServices(
   app: AppContext,
@@ -272,28 +309,10 @@ export async function startWorkerServices(
     await runSyncPlannerCycle(app, boss);
   });
 
-  // Slice C′: owner-initiated targeted thread backfill. One job = one bounded
-  // run of ONE thread under the page's real dm_messages sync lease; the queue
-  // policy keeps at most one job per thread queued or active.
-  await boss.work(TARGETED_THREAD_BACKFILL_QUEUE, { batchSize: 1 }, async (jobs) => {
-    for (const job of jobs) {
-      const payload = parseTargetedThreadBackfillJob(job.data);
-      if (!payload) {
-        app.logger.error({ jobId: job.id, data: job.data },
-          "Targeted thread backfill job carried no usable threadId");
-        continue;
-      }
-      const result = await runTargetedThreadBackfill(app, payload);
-      // Slice C: a run that answered a hydration request settles it here, with
-      // the outcome in hand. A crash before this leaves the request
-      // `dispatching` until the stuck sweeper closes it — the correct order of
-      // failure: an unsettled request is visible, a wrongly-settled one is not.
-      if (payload.hydrationRequestRef !== undefined) {
-        await settleAgentHydrationFromBackfill(app, payload.hydrationRequestRef, result);
-      }
-      app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
-    }
-  });
+  // Slice C′: see handleTargetedThreadBackfillJobs. batchSize MUST stay 1 —
+  // pg-boss keeps the returned result as the job output only for a batch of one.
+  await boss.work(TARGETED_THREAD_BACKFILL_QUEUE, { batchSize: 1 }, (jobs) =>
+    handleTargetedThreadBackfillJobs(app, jobs));
 
   // Slice C: the hydration executor. It expires, sweeps, reconciles and — only
   // when `agentHydrationMode` is `dispatch` — hands approvals to the backfill

@@ -263,11 +263,15 @@ vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
   startGoldenSignalWorker: vi.fn(async () => "gs-worker"),
   runGoldenSignalSample: vi.fn(),
 }));
+const targetedBackfillMocks = vi.hoisted(() => ({
+  parseTargetedThreadBackfillJob: vi.fn((): unknown => null),
+  runTargetedThreadBackfill: vi.fn(),
+}));
 vi.mock("../apps/runtime/src/services/sync/targeted-thread-backfill.ts", () => ({
   TARGETED_THREAD_BACKFILL_QUEUE: "sync.thread.backfill",
   ensureTargetedThreadBackfillQueue: vi.fn(),
-  parseTargetedThreadBackfillJob: vi.fn(() => null),
-  runTargetedThreadBackfill: vi.fn(),
+  parseTargetedThreadBackfillJob: targetedBackfillMocks.parseTargetedThreadBackfillJob,
+  runTargetedThreadBackfill: targetedBackfillMocks.runTargetedThreadBackfill,
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";
@@ -1061,6 +1065,71 @@ describe("worker startup", () => {
       app,
       new Date("2026-03-23T00:00:00.000Z"),
     );
+
+    await runtime.shutdown();
+  });
+
+  it("returns the targeted backfill result so pg-boss keeps it as the job output", async () => {
+    const app = {
+      db: {},
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      config: {
+        syncObservabilityRetentionDays: 30,
+        telegramEnabled: false,
+        telegramReportHourUtc: 9,
+      },
+      close: vi.fn(async () => {}),
+    };
+    const boss = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      schedule: vi.fn(async () => {}),
+      work: vi.fn(async () => {}),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      fetch: vi.fn(),
+      send: vi.fn(),
+      touch: vi.fn(),
+      updateQueue: vi.fn(async () => {}),
+      getQueue: vi.fn(async () => ({
+        name: "notifications.delivery-outbox.sweep",
+        policy: "exclusive",
+        expireInSeconds: 600,
+        heartbeatSeconds: 30,
+        retryLimit: 0,
+      })),
+    };
+    const result = {
+      outcome: "retention_limit_reached",
+      threadId: 1807,
+      platformAccountId: 2,
+      syncRunId: null,
+      requests: 0,
+      insertedMessages: 0,
+      journaledMessages: 0,
+      overlapFound: false,
+      providerHistoryExhausted: false,
+      storedMessageCountBefore: 1027,
+      oldestStoredMessageIdBefore: null,
+      messageCoverageStatus: null,
+      retentionLimit: 1000,
+      projectionDebtRecorded: false,
+    };
+    targetedBackfillMocks.parseTargetedThreadBackfillJob.mockReturnValueOnce({
+      threadId: 1807,
+      ignoreRetentionLimit: false,
+    });
+    targetedBackfillMocks.runTargetedThreadBackfill.mockResolvedValueOnce(result);
+
+    const runtime = await startWorkerServices(app as never, boss as never);
+    const handler = getWorkHandler(boss, "sync.thread.backfill") as unknown as (
+      jobs: Array<{ id: string; data: unknown }>,
+    ) => Promise<unknown>;
+
+    // pg-boss 12 stores a batchSize-1 handler's return value in
+    // pgboss.job.output; a handler that only logs leaves the outcome nowhere
+    // the owner can read it once the worker's log is gone.
+    await expect(handler([{ id: "job-1807", data: { threadId: 1807 } }])).resolves.toEqual(result);
 
     await runtime.shutdown();
   });
