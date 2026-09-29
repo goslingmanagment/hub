@@ -33,7 +33,7 @@ const dispatcher = createProxyRequestDispatcher({
   url: process.env.PROBE_TEST_PROXY,
   username: "fixture-user", password: "fixture-password",
 });
-const deadline = setTimeout(() => process.exit(3), 4000);
+const deadline = setTimeout(() => process.exit(3), 15_000);
 const result = { opened: false, message: null, closeCode: null, error: false };
 const diagnostics = createProbeTransportDiagnostics();
 const socket = openFanslyProbeSocket({
@@ -65,7 +65,9 @@ async function runClient(proxy: string, trustFixture: boolean) {
   if (trustFixture) env.NODE_EXTRA_CA_CERTS = ca;
   const { stdout } = await exec(process.execPath, [
     "--import", "tsx/esm", "--input-type=module", "-e", client,
-  ], { cwd: root, env, timeout: 7000, killSignal: "SIGKILL", maxBuffer: 4096 });
+  // Hang guards, not speed checks: a cold `tsx` import alone took over 4 s on a loaded
+  // CI machine (run 36611934822), so the child gets 15 s and the parent kills it at 20 s.
+  ], { cwd: root, env, timeout: 20_000, killSignal: "SIGKILL", maxBuffer: 4096 });
   return JSON.parse(stdout) as {
     opened: boolean; message: string | null; closeCode: number; error: boolean;
     fallbackCalls: number; paceCalls: number; url: string;
@@ -116,7 +118,7 @@ describe("one-page Fansly probe transport", () => {
       } finally { await network.stop(); }
     }, 10_000);
 
-    it.for(["proxy_refused", "untrusted_tls"])("fails closed for %s", { timeout: 10_000 }, async (failure, t) => {
+    it.for(["proxy_refused", "untrusted_tls"])("fails closed for %s", async (failure, t) => {
       const network = await startFanslyProbeNetwork(protocol, failure === "proxy_refused");
       if (!network) { t.skip(); return; }
       try {
