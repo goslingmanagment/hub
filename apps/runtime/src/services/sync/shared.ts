@@ -22,6 +22,11 @@ import { buildFanslyMetadata } from "../fansly.ts";
 import { noteCaptureCasRefVanished, putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
+import {
+  FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
+  fanslyCdnTokenStripApplies,
+  stripFanslySignedCdnTokens,
+} from "./fansly-cdn-tokens.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 
@@ -83,14 +88,15 @@ export type RawPayloadInsertInput = Parameters<typeof insertRawPayload>[1];
 
 export async function persistRawPayload(
   db: Database,
-  input: RawPayloadInsertInput,
+  served: RawPayloadInsertInput,
   options?: {
     action?: string;
     /** Producer platform for the observation (Stage 7); callers know theirs. */
     platform?: "fansly" | "onlyfans";
     /** Optional contextual observation envelope. The raw table still stores
-     * `responsePayload` verbatim; this is reserved for a quarantined response
-     * that a future parser needs request context to replay safely. */
+     * `responsePayload` verbatim (bar the CDN-token strip below); this is
+     * reserved for a quarantined response that a future parser needs request
+     * context to replay safely. */
     observationPayload?: unknown;
   },
 ) {
@@ -100,10 +106,31 @@ export async function persistRawPayload(
   // keeps deriving its own received_at as before — this instant addresses the
   // payload object, it does not restamp the journal.
   const captureInstant = new Date();
-  const observedPayload = options !== undefined
+  // Owner decision 2026-09-29 (./fansly-cdn-tokens.ts): for the named Fansly
+  // kinds the one-off CDN signing tokens leave BOTH bodies here, before the
+  // catalog write and the payload hash, so the catalog object, the inline raw
+  // row and the inline observation all hold the same stripped body and the
+  // parity job compares like with like. The served object is never mutated —
+  // the lane keeps parsing it after this returns.
+  const stripCdnTokens = fanslyCdnTokenStripApplies(options?.platform, served.endpoint);
+  const input: RawPayloadInsertInput = stripCdnTokens
+    ? {
+      ...served,
+      responsePayload: stripFanslySignedCdnTokens(served.responsePayload),
+      mapperVersion: `${served.mapperVersion}${FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX}`,
+    }
+    : served;
+  let observedPayload = options !== undefined
       && Object.hasOwn(options, "observationPayload")
     ? options.observationPayload ?? null
-    : input.responsePayload ?? null;
+    : served.responsePayload ?? null;
+  if (stripCdnTokens) {
+    // The ordinary path journals the very object the raw row stores; keep it
+    // ONE object so the catalog write below still does a single put.
+    observedPayload = observedPayload === served.responsePayload
+      ? input.responsePayload ?? null
+      : stripFanslySignedCdnTokens(observedPayload);
+  }
   // Content-addressed copy FIRST, in its own transaction, and it can never
   // throw: on any failure it returns null references and the two inline writes
   // below proceed byte-identically to the pre-slice code. Default-off; a page
