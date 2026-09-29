@@ -229,14 +229,16 @@ describe("C1 followers decision receipts", () => {
     }
   });
 
-  it.each([
-    { name: "a reversed window", from: TO, to: FROM },
-    { name: "an unbounded window", from: null, to: TO },
-    { name: "a window longer than eight days", from: FROM, to: TOO_LONG_END },
-  ])(
-    "refuses $name", async ({ from, to }) => {
-      await expect(db.pool.query("select fansly_followers_diagnostic_report($1, $2)", [from, to]))
+  // Window checks run before the report reads any table: one reset for all
+  // cases, each check soft and labelled.
+  it("refuses a reversed, unbounded or over-eight-day window", async () => {
+    for (const { name, from, to } of [
+      { name: "a reversed window", from: TO, to: FROM },
+      { name: "an unbounded window", from: null, to: TO },
+      { name: "a window longer than eight days", from: FROM, to: TOO_LONG_END },
+    ]) {
+      await expect.soft(db.pool.query("select fansly_followers_diagnostic_report($1, $2)", [from, to]), name)
         .rejects.toThrow("ordered report window");
-    },
-  );
+    }
+  });
 });

@@ -510,9 +510,12 @@ describe("B1 REST execution and rollback", () => {
       requestSeq: before!.requestSeq + 1, dispatchSource: "event", requestPayload: { fanslyWsHintOnly: true },
     });
   });
+  // One body per rejection class (#259). Which shapes are rejected is pinned by
+  // the contract's unit matrix; persistence here is shape-agnostic. Kept: JSON
+  // null, the matching-id-but-invalid-membership class the pre-#259 step
+  // accepted, and an id mismatch.
   it.each([
-    null, { id: "99" }, { id: "99", users: null },
-    { id: "99", users: [{}] }, { id: "wrong-group", users: [] },
+    null, { id: "99", users: [{}] }, { id: "wrong-group", users: [] },
   ])("journals rejected group detail without marking discovery captured: %j", async raw => {
     const f = await fixture(false);
     await f.route(2, "99");

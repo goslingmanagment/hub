@@ -219,38 +219,55 @@ describe("OFAPI command outbox intake", () => {
     expect((await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId: "98765" }))).statusCode).toBe(202);
   });
 
-  it.each([
-    ["queued", 0, null], ["in_flight", 1, null], ["confirmed", 1, { source: "ofapi_response" }],
-    ["indeterminate", 1, { source: "stale_recovery" }],
-    ["failed_retryable", 1, { source: "ofapi_response", httpStatus: 429 }],
-    ["failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 }],
-    ["failed_terminal", 1, null], ["failed_retryable", 1, {}], ["cancelled", 1, null],
-  ])("holds follower custody in %s with %i attempts and ambiguous evidence %j", async (state, attempts, verifier) => {
-    const created = await createCommand(commandBody({ outreachPurpose: "new-follower" }));
-    const commandId = created.json().commandId;
-    await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
-    const denied = await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey);
-    expect(denied.statusCode, denied.body).toBe(409);
-    expect(denied.json().error).toBe("follower_outreach_conflict");
+  // Custody is scoped per (page, conversation) — the partial unique index in
+  // 0195 — so each case runs on its own canonical conversation and the cases
+  // share one fixture. Every check is soft and names its case, so one failing
+  // case cannot hide the rest.
+  const custodyCase = (state: string, attempts: number, verifier: unknown) =>
+    `${state} with ${attempts} attempts and evidence ${JSON.stringify(verifier)}`;
+
+  it("holds follower custody in every dispatched or ambiguous state", async () => {
+    const cases: Array<[string, number, unknown]> = [
+      ["queued", 0, null], ["in_flight", 1, null], ["confirmed", 1, { source: "ofapi_response" }],
+      ["indeterminate", 1, { source: "stale_recovery" }],
+      ["failed_retryable", 1, { source: "ofapi_response", httpStatus: 429 }],
+      ["failed_terminal", 1, { source: "ofapi_response", httpStatus: 400 }],
+      ["failed_terminal", 1, null], ["failed_retryable", 1, {}], ["cancelled", 1, null],
+    ];
+    for (const [index, [state, attempts, verifier]] of cases.entries()) {
+      const label = custodyCase(state, attempts, verifier);
+      const conversationId = String(700_001 + index);
+      const created = await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId }));
+      const commandId = created.json().commandId;
+      await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
+      const denied = await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId }), otherChatterKey);
+      expect.soft(denied.statusCode, `${label}: ${denied.body}`).toBe(409);
+      expect.soft(denied.json().error, label).toBe("follower_outreach_conflict");
+    }
   });
 
-  it.each([
-    ["cancelled", 0, null],
-    ["failed_retryable", 1, { source: "local_precondition", reason: "key_scope_unavailable" }],
-    ["failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" }],
-    ["failed_terminal", 1, { source: "auth_gate" }],
-  ])("releases only proven undispatched follower custody: %s %i %j", async (state, attempts, verifier) => {
-    const body = commandBody({ outreachPurpose: "new-follower" });
-    const created = await createCommand(body);
-    const commandId = created.json().commandId;
-    await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
-    expect((await createCommand(commandBody({ retryOfCommandId: commandId }))).statusCode).toBe(409);
-    const retry = await createCommand(commandBody({ outreachPurpose: "new-follower", retryOfCommandId: commandId }));
-    expect(retry.statusCode, retry.body).toBe(202);
-    const originalReplay = await createCommand(body);
-    expect(originalReplay.statusCode, originalReplay.body).toBe(200);
-    expect(originalReplay.json().commandId).toBe(commandId);
-    expect((await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey)).statusCode).toBe(409);
+  it("releases only proven undispatched follower custody", async () => {
+    const cases: Array<[string, number, unknown]> = [
+      ["cancelled", 0, null],
+      ["failed_retryable", 1, { source: "local_precondition", reason: "key_scope_unavailable" }],
+      ["failed_terminal", 1, { source: "local_precondition", reason: "binding_replaced" }],
+      ["failed_terminal", 1, { source: "auth_gate" }],
+    ];
+    for (const [index, [state, attempts, verifier]] of cases.entries()) {
+      const label = custodyCase(state, attempts, verifier);
+      const conversationId = String(710_001 + index);
+      const body = commandBody({ outreachPurpose: "new-follower", conversationId });
+      const created = await createCommand(body);
+      const commandId = created.json().commandId;
+      await testDb!.pool.query(`update ofapi_commands set state=$2, attempt_count=$3, verifier_result=$4 where id=$1`, [commandId, state, attempts, verifier]);
+      expect.soft((await createCommand(commandBody({ retryOfCommandId: commandId, conversationId }))).statusCode, label).toBe(409);
+      const retry = await createCommand(commandBody({ outreachPurpose: "new-follower", retryOfCommandId: commandId, conversationId }));
+      expect.soft(retry.statusCode, `${label}: ${retry.body}`).toBe(202);
+      const originalReplay = await createCommand(body);
+      expect.soft(originalReplay.statusCode, `${label}: ${originalReplay.body}`).toBe(200);
+      expect.soft(originalReplay.json().commandId, label).toBe(commandId);
+      expect.soft((await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId }), otherChatterKey)).statusCode, label).toBe(409);
+    }
   });
 
   it("retains one confirmed follower send and releases an actual executor local refusal", async () => {

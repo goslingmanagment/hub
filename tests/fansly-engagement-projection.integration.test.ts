@@ -445,7 +445,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     expect(await count("platform_notifications", page.id)).toBe(80);
   });
 
-  it("is a no-op on replay", async (context) => {
+  it("keeps every engagement event out of the deliverable stream, and is a no-op on replay", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -453,6 +453,24 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     const page = await seedPage();
     await seedObservation(page.id, "census", fixture("notifications-census.json"));
     await project(page.id);
+
+    // The deliverable-stream claim reads the state the first projection left,
+    // so it shares this census setup instead of building its own.
+    const visible = await rows<{ type: string }>(
+      `select distinct type from domain_events where account_id = $1
+        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
+      [page.id],
+    );
+    expect(visible.length).toBeGreaterThan(0);
+    // The family's checkpoint covers the hidden seq range — which is what the
+    // SSE v2 replay validator requires of a gap.
+    const [checkpoints] = await rows<{ n: number }>(
+      `select count(*)::int as n from domain_events
+        where account_id = $1 and type = 'stream.projection_checkpoint'`,
+      [page.id],
+    );
+    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
+
     const before = await checksum(page.id);
     const beforeEvents = await rows<{ n: string }>(
       `select count(*)::text as n from domain_events where account_id = $1`,
@@ -844,29 +862,5 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
     // Fansly half happens to be empty, and "empty because nothing wrote it" has
     // to stay distinguishable from "empty because it was truncated".
     expect([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]).toContain("post_likes");
-  });
-
-  it("keeps every engagement event out of the deliverable stream", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedObservation(page.id, "census", fixture("notifications-census.json"));
-    await project(page.id);
-    const visible = await rows<{ type: string }>(
-      `select distinct type from domain_events where account_id = $1
-        and type like any (array['notification.%','engagement.%','media.purchase%'])`,
-      [page.id],
-    );
-    expect(visible.length).toBeGreaterThan(0);
-    // The family's checkpoint covers the hidden seq range — which is what the
-    // SSE v2 replay validator requires of a gap.
-    const [checkpoints] = await rows<{ n: number }>(
-      `select count(*)::int as n from domain_events
-        where account_id = $1 and type = 'stream.projection_checkpoint'`,
-      [page.id],
-    );
-    expect(Number(checkpoints!.n)).toBeGreaterThan(0);
   });
 });

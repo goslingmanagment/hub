@@ -142,9 +142,20 @@ it("keeps both cursor orders stable across tied timestamps, duplicates and null 
   }
 });
 
-it.each([1500, 1501, 5001, 5002, 7000])(
-  "counts %i matching messages independently of the delivery ceiling",
-  async (population) => {
+// Two populations cover the #230 regression and the runtime's 5001 probe
+// boundary: 1501 is past the 1500-row delivery ceiling and still counted
+// exactly; 5002 is one past the probe. On the 5002 rows the extra probes pin
+// the exact side of that boundary (a probe that reaches the population counts
+// it exactly) and a probe AT the delivery ceiling still counting past it.
+it.each([
+  { population: 1501, extraProbes: [] },
+  { population: 5002, extraProbes: [
+    { probe: 5002, expected: { value: 5002, exact: true } },
+    { probe: 1500, expected: { value: 1501, exact: false } },
+  ] },
+])(
+  "counts $population matching messages independently of the delivery ceiling",
+  async ({ population, extraProbes }) => {
     const page = await fixture(`count-boundary-${population}`);
     await testDb.pool.query(`
       insert into message_archive(account_id,platform,conversation_ref,message_ref,occurred_at,
@@ -163,5 +174,8 @@ it.each([1500, 1501, 5001, 5002, 7000])(
       .toEqual({ value: 0, exact: true });
     expect((await listAgentTranscript(testDb.db, { ...request, limit: 6000 })).rows)
       .toHaveLength(Math.min(population, 1500));
+    for (const { probe, expected } of extraProbes) {
+      expect(await countAgentTranscript(testDb.db, request, probe), `probe ${probe}`).toEqual(expected);
+    }
   },
 );
