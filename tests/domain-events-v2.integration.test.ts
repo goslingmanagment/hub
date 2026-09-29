@@ -1,7 +1,7 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createHash } from "node:crypto";
 
@@ -37,6 +37,10 @@ import {
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 // Kernel Stage 21: event-stream v2 conformance against a real listening
 // server — per-account ordering, opaque-cursor resume, grant scoping, the

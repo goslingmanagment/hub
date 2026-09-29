@@ -34,6 +34,10 @@ import {
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
 const FIXTURES_DIR = path.resolve("tests/fixtures/ofapi-webhooks");
 const WEBHOOK_URL = "/api/v1/ofapi/webhook";
 const SIGNING_SECRET = "test-signing-secret";
