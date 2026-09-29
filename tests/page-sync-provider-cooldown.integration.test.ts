@@ -234,6 +234,20 @@ describe("page sync provider cooldown", () => {
     pageId, workerId: "next-worker", leaseToken: `next-${pageId}-${now.getTime()}`, leaseTtlMs: 60_000, now,
   });
 
+  async function holdUntil(pageId: number) {
+    const result = await testDb!.pool.query<{ until: Date }>(
+      "select hold_until as until from page_sync_provider_holds where page_id = $1",
+      [pageId],
+    );
+    return result.rows[0]?.until ?? null;
+  }
+
+  const inSequence = (...failures: FanslyApiError[]) => () => {
+    const failure = failures.shift();
+    if (!failure) throw new Error("Unexpected extra Fansly request");
+    return failure;
+  };
+
   it("holds every stream of the page until a first 429's Retry-After, leaving their rows alone", async () => {
     const retryAfterAt = new Date(Date.now() + 600_000);
     const f = await seedHeldPage({ failure: rateLimited(retryAfterAt) });
@@ -276,6 +290,56 @@ describe("page sync provider cooldown", () => {
     expect(await leaseAt(f.page.id, retryAfterAt)).toMatchObject({ stream: "subscribers", requestSource: "manual" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("holds the siblings for the whole of a Retry-After beyond 30 minutes", async () => {
+    const retryAfterAt = new Date(Date.now() + 3_600_000);
+    const f = await seedHeldPage({ failure: rateLimited(retryAfterAt) });
+
+    await executeNextSyncPageChunk(f.app, f.page.id);
+    await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["subscribers"], source: "manual" });
+
+    // Never capped: the siblings wait exactly as long as the failing stream.
+    expect(await getPageSyncState(f.app.db, f.page.id, "transactions")).toMatchObject({ retryAt: retryAfterAt });
+    expect(await holdUntil(f.page.id)).toEqual(retryAfterAt);
+    expect(await leaseAt(f.page.id, new Date(Date.now() + 30 * 60_000 + 1_000))).toBeNull();
+    expect(await leaseAt(f.page.id, new Date(retryAfterAt.getTime() - 1))).toBeNull();
+    expect(await leaseAt(f.page.id, retryAfterAt)).toMatchObject({ stream: "subscribers" });
+    expect(f.getSubscribersPage).not.toHaveBeenCalled();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it.each([
+    ["a 5xx", () => new FanslyApiError("Fansly request failed (500)", 500)],
+    ["an earlier 429 whose hold has passed", () => rateLimited(new Date(Date.now() + 600_000))()],
+  ] as const)("holds the page until a later 429's Retry-After after %s in the same streak", async (_name, first) => {
+    const retryAfterAt = new Date(Date.now() + 900_000);
+    const f = await seedHeldPage({ failure: inSequence(first(), rateLimited(retryAfterAt)()) });
+    expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "failed", stream: "transactions" });
+    // The stream's own wait, and any earlier hold, pass before it runs again.
+    await testDb!.pool.query(
+      `update page_sync_states set retry_at = now() - interval '1 second'
+       where page_id = $1 and stream = 'transactions'`,
+      [f.page.id],
+    );
+    await testDb!.pool.query(
+      "update page_sync_provider_holds set hold_until = now() - interval '1 second' where page_id = $1",
+      [f.page.id],
+    );
+
+    const failed = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(failed).toMatchObject({ kind: "failed", stream: "transactions" });
+    expect(f.getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(await getPageSyncState(f.app.db, f.page.id, "transactions")).toMatchObject({
+      status: "retrying", retryKind: "rate_limit", retryAt: retryAfterAt, consecutiveFailures: 2,
+    });
+    expect(await holdUntil(f.page.id)).toEqual(retryAfterAt);
+    expect(await anomalyCodes(failed.runId!)).toContain("page_provider_hold");
+    await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["subscribers"], source: "manual" });
+    expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "idle" });
+    expect(await leaseAt(f.page.id, new Date(retryAfterAt.getTime() - 1))).toBeNull();
+    expect(await leaseAt(f.page.id, retryAfterAt)).toMatchObject({ stream: "subscribers" });
+    expect(f.getSubscribersPage).not.toHaveBeenCalled();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("runs the siblings through the executor once the hold has passed", async () => {
     const f = await seedHeldPage({ failure: rateLimited(null) });
     const failedAt = Date.now();
@@ -283,12 +347,9 @@ describe("page sync provider cooldown", () => {
     await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["subscribers"], source: "manual" });
     expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "idle" });
     // No Retry-After: a fixed two-minute hold, longer than the stream's first rung.
-    const hold = await testDb!.pool.query<{ until: Date }>(
-      "select hold_until as until from page_sync_provider_holds where page_id = $1",
-      [f.page.id],
-    );
-    expect(hold.rows[0]?.until.getTime()).toBeGreaterThanOrEqual(failedAt + 120_000);
-    expect(hold.rows[0]?.until.getTime()).toBeLessThanOrEqual(Date.now() + 120_000);
+    const hold = await holdUntil(f.page.id);
+    expect(hold?.getTime()).toBeGreaterThanOrEqual(failedAt + 120_000);
+    expect(hold?.getTime()).toBeLessThanOrEqual(Date.now() + 120_000);
 
     await testDb!.pool.query(
       "update page_sync_provider_holds set hold_until = now() - interval '1 second' where page_id = $1",
@@ -299,16 +360,16 @@ describe("page sync provider cooldown", () => {
     expect(f.getSubscribersPage).toHaveBeenCalled();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("does not hold the page again for a later 429 in the same failure streak", async () => {
-    const retryAfterAt = new Date(Date.now() + 600_000);
-    const f = await seedHeldPage({ failure: rateLimited(retryAfterAt), transactionsStreak: 1 });
+  it("does not hold the page again for a later 429 without a Retry-After in the same failure streak", async () => {
+    const f = await seedHeldPage({ failure: rateLimited(null), transactionsStreak: 1 });
 
     const failed = await executeNextSyncPageChunk(f.app, f.page.id);
 
     expect(failed).toMatchObject({ kind: "failed", stream: "transactions" });
     expect(await getPageSyncState(f.app.db, f.page.id, "transactions")).toMatchObject({
-      status: "retrying", retryKind: "rate_limit", retryAt: retryAfterAt, consecutiveFailures: 2,
+      status: "retrying", retryKind: "rate_limit", consecutiveFailures: 2,
     });
+    expect(await holdUntil(f.page.id)).toBeNull();
     expect(await anomalyCodes(failed.runId!)).not.toContain("page_provider_hold");
     await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["subscribers"], source: "manual" });
     expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ stream: "subscribers" });

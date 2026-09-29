@@ -77,11 +77,9 @@ const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
-/** R04: a first Fansly 429 holds the whole page at least this long (the whole
- * hold when the provider named no deadline), and at most
- * PAGE_PROVIDER_HOLD_MAX_MS. */
+/** R04: the first Fansly 429 of a stream's failure streak holds the whole page
+ * at least this long (the whole hold when the provider named no deadline). */
 const PAGE_PROVIDER_HOLD_DEFAULT_MS = 120_000;
-const PAGE_PROVIDER_HOLD_MAX_MS = 30 * 60_000;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
@@ -351,33 +349,40 @@ function resolveProviderRetryAt(
  * R04: a Fansly 429 is the provider's rate limit for the page's session, not
  * for one endpoint, so the page's other streams must not keep calling inside
  * its window. Only a 429 holds the page: a 5xx `Retry-After` speaks for its
- * own endpoint (statsnew, #290). And only the first failure of the stream's
- * streak: a stream that keeps meeting 429s backs off on its own ladder without
- * starving its siblings, and a sibling that meets one arms its own hold. The
- * hold ends at the provider's deadline, no sooner than 120 s and no later than
- * 30 minutes out; the failing stream's own retry is unchanged.
+ * own endpoint (statsnew, #290). The failing stream's own retry is unchanged.
+ * - A future `Retry-After` holds the page until exactly that instant on EVERY
+ *   429, whatever the stream's streak (a 5xx before it, or an earlier hold
+ *   that has passed), and is never capped: the failing stream itself waits the
+ *   whole deadline (resolveProviderRetryAt), so its siblings may not resume
+ *   sooner.
+ * - The first 429 of the streak also holds the page at least 120 s, the whole
+ *   hold when no deadline was named. A later 429 without a deadline holds
+ *   nothing: a stream that keeps meeting them backs off on its own ladder
+ *   without starving its siblings, and a sibling that meets one arms its own.
  */
 function resolvePageProviderHold(
   error: unknown,
   input: { previousConsecutiveFailures: number; now: Date },
 ): { holdUntil: Date; retryAfterAt: Date | null } | null {
-  if (
-    !(error instanceof FanslyApiError) ||
-    error.status !== 429 ||
-    input.previousConsecutiveFailures !== 0
-  ) {
+  if (!(error instanceof FanslyApiError) || error.status !== 429) {
     return null;
   }
   const nowMs = input.now.getTime();
   const retryAfterAt = error.retryAfterAt;
-  // The default is also a floor: a thrown 429 whose deadline is seconds away
-  // (or already passed) means the adapter's in-process retries met repeated
-  // 429s, so the page never holds for less than without a Retry-After.
-  const holdUntil = new Date(Math.min(
-    Math.max(retryAfterAt?.getTime() ?? 0, nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS),
-    nowMs + PAGE_PROVIDER_HOLD_MAX_MS,
-  ));
-  return { holdUntil, retryAfterAt };
+  const holdEnds: number[] = [];
+  if (retryAfterAt !== null && retryAfterAt.getTime() > nowMs) {
+    holdEnds.push(retryAfterAt.getTime());
+  }
+  if (input.previousConsecutiveFailures === 0) {
+    // Also a floor: a thrown 429 whose deadline is seconds away (or already
+    // passed) means the adapter's in-process retries met repeated 429s, so a
+    // first 429 never holds the page for less than without a Retry-After.
+    holdEnds.push(nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS);
+  }
+  if (holdEnds.length === 0) {
+    return null;
+  }
+  return { holdUntil: new Date(Math.max(...holdEnds)), retryAfterAt };
 }
 
 async function armPageProviderHold(

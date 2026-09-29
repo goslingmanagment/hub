@@ -1752,7 +1752,9 @@ describe("sync executor", () => {
 
     it.each([
       ["the provider's Retry-After", at(600_000), at(600_000), at(600_000)],
-      ["a Retry-After clamped to 30 minutes", at(86_400_000), at(30 * 60_000), at(86_400_000)],
+      // Never capped: the failing stream waits the whole deadline, and so do
+      // its siblings.
+      ["a Retry-After a day away, uncapped", at(86_400_000), at(86_400_000), at(86_400_000)],
       ["a fixed 120 s without a Retry-After", null, at(120_000), undefined],
       ["a fixed 120 s when the Retry-After has already passed", at(-1_000), at(120_000), at(60_000)],
       // A thrown 429 with a short Retry-After means the adapter's in-process
@@ -1784,9 +1786,39 @@ describe("sync executor", () => {
       }));
     });
 
+    // A provider deadline speaks for the page on every 429, whatever the
+    // streak: exactly that instant, without the first 429's 120 s floor.
     it.each([
-      ["a later 429 of the same failure streak", { consecutiveFailures: 1, retryKind: "rate_limit" },
-        new FanslyApiError("rate limited", 429, undefined, undefined, at(600_000))],
+      ["after a 5xx", { consecutiveFailures: 1, retryKind: "provider_5xx" }, at(600_000), at(600_000)],
+      ["after an earlier 429 whose hold has passed", { consecutiveFailures: 2, retryKind: "rate_limit" },
+        at(900_000), at(900_000)],
+      ["a Retry-After seconds away", { consecutiveFailures: 1, retryKind: "rate_limit" }, at(10_000), at(120_000)],
+    ] as const)("holds the page on a later 429 of a streak until its Retry-After: %s", async (
+      _name, lease, retryAfterAt, retryAt,
+    ) => {
+      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, ...lease });
+      handlerMocks.executeStreamChunk.mockRejectedValue(
+        new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
+      );
+
+      await executeNextSyncPageChunk(app, 55);
+
+      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledWith({}, {
+        pageId: 55, stream: "followers", syncRunId: 777, reason: "rate_limit",
+        holdUntil: retryAfterAt, retryAfterAt, now,
+      });
+      const retry = dbMocks.retryPageSync.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(retry).toMatchObject({ retryKind: "rate_limit" });
+      expect(retry.retryAt).toEqual(retryAt);
+    });
+
+    it.each([
+      ["a later 429 of the same failure streak without a Retry-After",
+        { consecutiveFailures: 1, retryKind: "rate_limit" }, new FanslyApiError("rate limited", 429)],
+      ["a later 429 of the same failure streak whose Retry-After has passed",
+        { consecutiveFailures: 1, retryKind: "rate_limit" },
+        new FanslyApiError("rate limited", 429, undefined, undefined, at(-1_000))],
       ["a 5xx with a Retry-After", {},
         new FanslyApiError("unavailable", 503, undefined, undefined, at(600_000))],
       ["an OFAPI 429", {}, new OfapiApiError("rate limited", 429, null)],
