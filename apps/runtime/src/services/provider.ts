@@ -12,6 +12,12 @@ export interface ProviderPageResponse<TItem, TRaw = unknown> {
   raw: TRaw;
 }
 
+export interface ProviderTransactionsPageResponse<TItem, TRaw = unknown>
+  extends ProviderPageResponse<TItem, TRaw> {
+  /** The first item that failed the adapter's item contract; `items` is then empty. */
+  itemViolation?: { index: number; transactionId: string | null; field: string } | null;
+}
+
 export interface ProviderFollowersPageResponse<TAccount, TFollower, TRaw = unknown>
   extends ProviderPageResponse<TFollower, TRaw> {
   accounts: TAccount[];
@@ -53,7 +59,7 @@ export interface ProviderAdapter<
   getTransactionsPage(
     context: TContext,
     params: ProviderTransactionsPageParams,
-  ): Promise<ProviderPageResponse<TTransaction>>;
+  ): Promise<ProviderTransactionsPageResponse<TTransaction>>;
   getSubscribersPage(
     context: TContext,
     params: ProviderSubscribersPageParams,

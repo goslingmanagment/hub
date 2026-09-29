@@ -23,6 +23,10 @@ import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/s
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
+import {
+  FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED,
+  FanslyTransactionsItemContractError,
+} from "./errors.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
@@ -291,10 +295,10 @@ function resolveFanslyCommissionRate(
     destinationTax >= 0 &&
     destinationTax <= 10_000
   ) {
-    return destinationTax / 10_000;
+    return { commissionRate: destinationTax / 10_000, fellBack: false };
   }
 
-  return fallbackCommissionRate;
+  return { commissionRate: fallbackCommissionRate, fellBack: true };
 }
 
 function minDate(a: Date | null, b: Date | null) {
@@ -383,6 +387,33 @@ async function recordUnknownFanslyTransactionType(
   });
 }
 
+// A page item that failed the adapter's item contract (a fractional amount, a
+// createdAt in seconds) must not reach the ledger. The page is journaled by
+// now; the typed error keeps the scan's progress, so a retry re-reads this
+// offset instead of re-walking from offset 0, and the executor parks the lane
+// as provider_bad_data once the rejection repeats (classifyTaskFailure).
+async function rejectFanslyTransactionItemViolation(
+  telemetry: SyncRunTelemetry,
+  page: FanslyTransactionPage,
+  details: Record<string, unknown>,
+) {
+  if (!page.itemViolation) {
+    return;
+  }
+
+  await telemetry.addAnomaly({
+    code: FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED,
+    severity: "error",
+    message: "Fansly transaction page carried an item that failed the item contract",
+    details: {
+      ...details,
+      total: page.total,
+      itemViolation: page.itemViolation,
+    },
+  });
+  throw new FanslyTransactionsItemContractError({ field: page.itemViolation.field });
+}
+
 async function persistFanslyTransactionsPage(
   app: AppContext,
   input: {
@@ -398,6 +429,7 @@ async function persistFanslyTransactionsPage(
   state: FanslyTransactionProgressState,
   processedTransactionsThisRun: number,
   seenUnknownRawTypes: Set<number>,
+  notedCommissionFallbackIds: Set<string>,
 ) {
   const effective = await loadEffectiveConfig(app.db, app.config);
   const earningsShadow = isPageAllowlisted(
@@ -416,6 +448,7 @@ async function persistFanslyTransactionsPage(
     capture: { platformAccountId: input.platformAccountId, syncRunId: input.syncRunId },
   });
 
+  const commissionFallbacks = new Map<string, number | null>();
   await withOwnedPageSyncTransaction(app.db, async (dbTx) => {
     const fanMap = await upsertHydratedFansForPage(dbTx, {
       platformAccountId: input.platformAccountId,
@@ -430,13 +463,17 @@ async function persistFanslyTransactionsPage(
       const sourceAmountMills = millsFromInteger(item.amount);
       const destinationAmountMills = millsFromInteger(item.destinationAmount);
       const creatorNetAmountMills = destinationAmountMills;
-      const commissionRate = resolveFanslyCommissionRate(
+      const { commissionRate, fellBack } = resolveFanslyCommissionRate(
         item.destinationTax,
         input.commissionRate,
       );
-      const grossAmountMills = sourceAmountMills === destinationAmountMills
+      const grossFromNet = sourceAmountMills === destinationAmountMills;
+      const grossAmountMills = grossFromNet
         ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
         : sourceAmountMills;
+      if (grossFromNet && fellBack) {
+        commissionFallbacks.set(item.transactionId, item.destinationTax);
+      }
 
       const writeTransaction = earningsShadow ? upsertFanslyTransactionWithEarningsDirty : upsertTransaction;
       await writeTransaction(dbTx, {
@@ -479,6 +516,25 @@ async function persistFanslyTransactionsPage(
       activeLease: input.activeLease,
     }, state, processedTransactionsThisRun);
   });
+
+  // A note, not a warn anomaly: the row stays in the 7-day rescan, and a warn
+  // would degrade every hourly run for a week. Once per transaction per run.
+  const unnotedFallbacks = [...commissionFallbacks]
+    .filter(([transactionId]) => !notedCommissionFallbackIds.has(transactionId));
+  if (unnotedFallbacks.length > 0) {
+    for (const [transactionId] of unnotedFallbacks) {
+      notedCommissionFallbackIds.add(transactionId);
+    }
+    await input.telemetry.addNote(
+      "Fansly transaction gross used the configured commission: destinationTax was null or out of range",
+      {
+        code: "transaction_commission_fallback",
+        fallbackCommissionRate: input.commissionRate,
+        transactionIds: unnotedFallbacks.map(([transactionId]) => transactionId),
+        rawDestinationTaxes: unnotedFallbacks.map(([, destinationTax]) => destinationTax),
+      },
+    );
+  }
 }
 
 async function flushAndClearFanslyDirtyRange<TState extends FanslyTransactionProgressState>(
@@ -722,6 +778,7 @@ async function syncTransactionsIncremental(
   let oldestSeenAt: Date | null = state.oldestSeenAt ? new Date(state.oldestSeenAt) : null;
   let currentRunProcessed = 0;
   const seenUnknownRawTypes = new Set<number>();
+  const notedCommissionFallbackIds = new Set<string>();
 
   await input.telemetry.addNote(
     existingState
@@ -795,6 +852,11 @@ async function syncTransactionsIncremental(
       }, {
         action: "inserting earnings_transactions raw payload",
         platform: "fansly",
+      });
+
+      await rejectFanslyTransactionItemViolation(input.telemetry, page, {
+        page: state.transactionPages,
+        offset: requestOffset,
       });
 
       const pageTotal = page.total;
@@ -913,6 +975,7 @@ async function syncTransactionsIncremental(
         nextState,
         currentRunProcessed + page.items.length,
         seenUnknownRawTypes,
+        notedCommissionFallbackIds,
       );
 
       state = nextState;
@@ -1226,6 +1289,7 @@ async function syncTransactionsBackfill(
   let newestSeenAt = state.newestSeenAt ? new Date(state.newestSeenAt) : null;
   let currentRunProcessed = 0;
   const seenUnknownRawTypes = new Set<number>();
+  const notedCommissionFallbackIds = new Set<string>();
   let providerReportedTotal: number | null = state.providerReportedTotal ?? null;
 
   await input.telemetry.addNote(
@@ -1284,6 +1348,11 @@ async function syncTransactionsBackfill(
       }, {
         action: "inserting earnings_transactions raw payload",
         platform: "fansly",
+      });
+
+      await rejectFanslyTransactionItemViolation(input.telemetry, page, {
+        offset: state.offset,
+        snapshotEnd: state.snapshotEnd,
       });
 
       const pageTotal = page.total;
@@ -1407,6 +1476,7 @@ async function syncTransactionsBackfill(
         nextState,
         currentRunProcessed + page.items.length,
         seenUnknownRawTypes,
+        notedCommissionFallbackIds,
       );
 
       state = nextState;

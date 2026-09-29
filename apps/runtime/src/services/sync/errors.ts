@@ -74,6 +74,28 @@ export class FanslyPurchaseHistoryContractError extends Error {
   }
 }
 
+export const FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED = "transaction_item_contract_rejected";
+
+/**
+ * A Fansly transactions page carried an item that failed the adapter's item
+ * contract (a fractional amount, a createdAt in seconds). The page is
+ * journaled and the scan's progress is kept; the executor re-reads the page a
+ * bounded number of times, then parks the lane as provider_bad_data.
+ *
+ * The message names only the field: Fansly transaction ids are long digit
+ * strings, and the executor's fallback classifier reads digits such as 429.
+ */
+export class FanslyTransactionsItemContractError extends Error {
+  readonly code = FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED;
+  readonly field: string;
+
+  constructor(input: { field: string }) {
+    super(`Fansly transaction page item failed the item contract (field ${input.field})`);
+    this.name = "FanslyTransactionsItemContractError";
+    this.field = input.field;
+  }
+}
+
 export function boundSyncErrorSummary(summary: string | null | undefined) {
   if (!summary) {
     return null;
