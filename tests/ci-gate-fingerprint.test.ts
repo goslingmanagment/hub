@@ -115,22 +115,30 @@ describe("CI gate fingerprint", () => {
   let repo: string;
   let base: string;
   let baseFingerprint: string;
+  /** The base tree's integration-scope fingerprint: `ls-tree` of a fixed revision. */
+  let baseIntegrationFingerprint: string;
 
   beforeAll(() => {
     repo = mkdtempSync(path.join(tmpdir(), "ci-gate-fingerprint-"));
     git(repo, "init", "--quiet", "--initial-branch=main");
     base = commit(repo, BASE_TREE, "base");
     baseFingerprint = fingerprint(repo);
+    baseIntegrationFingerprint = fingerprint(repo, base, "integration");
   });
 
   afterAll(() => {
     rmSync(repo, { recursive: true, force: true });
   });
 
-  /** Start a throwaway commit from the base tree and return its fingerprint. */
-  function variant(files: Record<string, string>, message: string): string {
+  /** Start a throwaway commit from the base tree. */
+  function commitVariant(files: Record<string, string>, message: string): void {
     git(repo, "checkout", "--quiet", "--detach", base);
     commit(repo, files, message);
+  }
+
+  /** Start a throwaway commit from the base tree and return its fingerprint. */
+  function variant(files: Record<string, string>, message: string): string {
+    commitVariant(files, message);
     return fingerprint(repo);
   }
 
@@ -182,10 +190,8 @@ describe("CI gate fingerprint", () => {
 
   it.each(["apps/dashboard/src/Example.tsx", "apps/dashboard/src/style.css", "apps/dashboard/public/logo.svg"])(
     "reuses only integration proof for dashboard source %s", relative => {
-      git(repo, "checkout", "--quiet", "--detach", base);
-      const before = fingerprint(repo, base, "integration");
       expect(variant({ [relative]: "changed" }, "dashboard")).not.toBe(baseFingerprint);
-      expect(fingerprint(repo, "HEAD", "integration")).toBe(before);
+      expect(fingerprint(repo, "HEAD", "integration")).toBe(baseIntegrationFingerprint);
     },
   );
 
@@ -193,9 +199,8 @@ describe("CI gate fingerprint", () => {
     "pnpm-lock.yaml", "tests/dashboard-example.test.ts", "tests/helpers/context.ts",
     "apps/runtime/src/server.ts", "packages/shared/src/index.ts", "unknown/new-file"])(
     "invalidates the integration proof for %s", relative => {
-      const before = fingerprint(repo, base, "integration");
-      variant({ [relative]: "changed" }, "integration input");
-      expect(fingerprint(repo, "HEAD", "integration")).not.toBe(before);
+      commitVariant({ [relative]: "changed" }, "integration input");
+      expect(fingerprint(repo, "HEAD", "integration")).not.toBe(baseIntegrationFingerprint);
     },
   );
 

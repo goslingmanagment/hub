@@ -152,6 +152,8 @@ let activeHub: SyncEventHub | null = null;
 afterEach(async () => {
   await activeHub?.close();
   activeHub = null;
+  // After close(): it clears the hub's retry timers through the faked clock.
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -167,6 +169,8 @@ describe("sync event hub delivery contract (audit B3)", () => {
   // fetch error, the frame was never broadcast or retried, and once a later
   // frame advanced Last-Event-ID the strict > replay could never recover it.
   it("retries a failed journal read from the unadvanced watermark instead of losing the frame", async () => {
+    // The drain-retry backoff runs on a fake clock, advanced explicitly below.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const h = makeHarness({ baselineSeq: 99 });
     activeHub = h.hub;
     await h.hub.ready();
@@ -176,10 +180,11 @@ describe("sync event hub delivery contract (audit B3)", () => {
     h.settle(102);
     h.failNextReads(1);
     h.notify("100");
+    await vi.advanceTimersByTimeAsync(1_000);
 
     // Nothing was delivered off the failed read, and nothing was skipped: the
     // retry drain (1s backoff) delivers the full run in order.
-    await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]), { timeout: 4_000 });
+    await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]));
   });
 
   it("delivers frames stranded by a failed read on the next wake-up, in order", async () => {
@@ -241,6 +246,8 @@ describe("sync event hub delivery contract (audit B3)", () => {
   });
 
   it("catches up through the same drain after a LISTEN drop", async () => {
+    // The reconnect backoff runs on a fake clock, advanced explicitly below.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const h = makeHarness({ baselineSeq: 99 });
     activeHub = h.hub;
     await h.hub.ready();
@@ -254,8 +261,9 @@ describe("sync event hub delivery contract (audit B3)", () => {
     h.dropListen();
     h.settle(101);
     h.settle(102);
+    await vi.advanceTimersByTimeAsync(1_000);
 
-    await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]), { timeout: 4_000 });
+    await vi.waitFor(() => expect(h.delivered).toEqual([100, 101, 102]));
   });
 
   it("closes an affected live subscriber before advancing past a cleanup floor", async () => {
