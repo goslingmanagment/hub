@@ -68,7 +68,7 @@ afterAll(async () => {
 });
 
 /**
- * The suite runs TWICE, once per policy mode.
+ * Every refusal runs TWICE, once per policy mode.
  *
  * The declarative middleware defaults to `log` in this repository and only `prod`
  * runs `enforce`, so the dual-layer law (#143) requires every isolation property
@@ -76,9 +76,15 @@ afterAll(async () => {
  * someone delete an in-handler check and never notice.
  */
 const POLICY_MODES = ["log", "enforce"] as const;
-let policyMode: (typeof POLICY_MODES)[number] = "enforce";
+type PolicyMode = (typeof POLICY_MODES)[number];
 
-beforeEach(async (context) => {
+/**
+ * Boots the fixture for ONE policy mode. The mode is an argument, not a module
+ * variable a nested hook updates: vitest runs outer hooks first, so a
+ * describe-level `policyMode = mode` landed AFTER the file-level hook had built
+ * the app, and the first test of each block ran in the other block's mode.
+ */
+async function bootFixture(context: { skip: () => void }, policyMode: PolicyMode) {
   if (!testDb) {
     context.skip();
     return;
@@ -142,7 +148,7 @@ beforeEach(async (context) => {
   const raw = Array.isArray(setCookie) ? setCookie[0] : setCookie;
   ownerCookie = String(raw ?? "").split(";")[0] ?? "";
   expect(ownerCookie).not.toBe("");
-});
+}
 
 afterEach(async () => {
   await server?.close();
@@ -163,20 +169,8 @@ async function setPlaneMode(mode: "off" | "read_only" | "full") {
 }
 
 describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (mode) => {
-  policyMode = mode;
-  beforeEach(() => {
-    policyMode = mode;
-  });
-
-  it("an agent key is admitted on its own routes", async () => {
-    const response = await agentGet("/api/v1/agent/capabilities");
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.grant.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lora-2"]);
-    // The DIFFERENCE is what an agent is allowed to know, and it is what lets
-    // the person operations answer 200-empty instead of becoming an oracle.
-    expect(body.grant.totalPages).toBe(2);
-    expect(body.conclusion.blockers).toContain("claim_not_declared");
+  beforeEach(async (context) => {
+    await bootFixture(context, mode);
   });
 
   it("every agent response is no-store, errors included", async () => {
@@ -360,6 +354,54 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
     expect(missing.body).toBe(hidden.body);
   });
 
+  it("a missing capability is a 403 with the plane's own code", async () => {
+    const owner = await createUser(testDb!.db, {
+      username: "owner-3",
+      role: "owner",
+      passwordHash: null,
+    });
+    const narrow = `${AGENT_KEY_TOKEN_PREFIX}narrow-key-token`;
+    await insertAgentKey(testDb!.db, {
+      name: "narrow",
+      keyPrefix: narrow.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(narrow),
+      capabilities: ["read:datasets"],
+      pageIds: [grantedPageId],
+      dailyRequestBudget: 100,
+      dailyRowBudget: 100,
+      expiresAt: new Date(Date.now() + 30 * DAY_MS),
+      createdBy: owner?.id ?? null,
+    });
+    const response = await agentGet("/api/v1/agent/threads", narrow);
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error).toBe("agent_capability_missing");
+  });
+});
+
+/**
+ * Success paths and the plane's own gates (plane flags, budgets, cursors,
+ * boundary 400s) are answered by the module, not by the declarative middleware,
+ * so their `log` run repeated the `enforce` run exactly. They run once, under
+ * the production mode: a future declarative policy that refused one of these
+ * routes would still fail here. Refusals, including revoked and expired keys
+ * (answered by a different layer in each mode), stay in both modes above.
+ */
+describe("[sync-critical] agent read plane isolation (mode-independent, enforce)", () => {
+  beforeEach(async (context) => {
+    await bootFixture(context, "enforce");
+  });
+
+  it("an agent key is admitted on its own routes", async () => {
+    const response = await agentGet("/api/v1/agent/capabilities");
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.grant.pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lora-2"]);
+    // The DIFFERENCE is what an agent is allowed to know, and it is what lets
+    // the person operations answer 200-empty instead of becoming an oracle.
+    expect(body.grant.totalPages).toBe(2);
+    expect(body.conclusion.blockers).toContain("claim_not_declared");
+  });
+
   it("a globally addressable fan answers 200-empty, never 404", async () => {
     const response = await agentGet("/api/v1/agent/people/fansly/438766025723355136");
     expect(response.statusCode).toBe(200);
@@ -423,29 +465,6 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
     });
     expect(response.statusCode).toBe(503);
     expect(response.json().error).toBe("agent_plane_disabled");
-  });
-
-  it("a missing capability is a 403 with the plane's own code", async () => {
-    const owner = await createUser(testDb!.db, {
-      username: "owner-3",
-      role: "owner",
-      passwordHash: null,
-    });
-    const narrow = `${AGENT_KEY_TOKEN_PREFIX}narrow-key-token`;
-    await insertAgentKey(testDb!.db, {
-      name: "narrow",
-      keyPrefix: narrow.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
-      keyDigest: sha256Hex(narrow),
-      capabilities: ["read:datasets"],
-      pageIds: [grantedPageId],
-      dailyRequestBudget: 100,
-      dailyRowBudget: 100,
-      expiresAt: new Date(Date.now() + 30 * DAY_MS),
-      createdBy: owner?.id ?? null,
-    });
-    const response = await agentGet("/api/v1/agent/threads", narrow);
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error).toBe("agent_capability_missing");
   });
 
   it("a request budget refuses BEFORE the work, with the plane's 429", async () => {
