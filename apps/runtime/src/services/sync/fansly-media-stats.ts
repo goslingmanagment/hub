@@ -86,6 +86,16 @@
 // which is the trade: fairness across the catalogue, bounded by the creation
 // floor above.
 //
+// A DIRTY item keeps that promise only if one visit answers its mark. The
+// steady refresh is taken, free, from windows the visit already journaled when
+// they cover it, so a first visit — whose walk opens with the trailing window —
+// answers the mark with the calls it spends on history, and does not start
+// without room for them. A walk resuming in the past cannot answer it, so that
+// visit reads the refresh first, whole, and gives the walk what is left. A
+// dirty item whose visit did not answer the mark stayed at the head of the
+// queue: every chunk re-read its trailing window and walked on, so its whole
+// history went in one morning (production 2026-09-29: 265 same-day re-reads).
+//
 // ── 3. THE QUEUE IS NOT A PROJECTION ────────────────────────────────────────
 //
 // Rows live in `subject_refresh_state` (`plane='media_stats'`), which is
@@ -700,10 +710,64 @@ function windowKey(window: { periodMs: number; afterMs: number; beforeMs: number
   return `${window.periodMs}:${window.afterMs}:${window.beforeMs}`;
 }
 
+/**
+ * Do the windows a visit has already journaled answer `window`?
+ *
+ * They do when their union covers it end to end, to within a day at either end
+ * — the slack `windowWasHonoured` gives the provider's bucket snapping, and no
+ * more: the route serves a trailing window to its last day boundary, so a
+ * refresh asked a minute later would be served the very same buckets. Inside
+ * the window the union must be unbroken; a gap is buckets nobody read. Meant
+ * for the steady windows, which are a month wide or more.
+ */
+export function windowAnsweredBy(
+  window: { afterMs: number; beforeMs: number },
+  answered: ReadonlyArray<{ afterMs: number; beforeMs: number }>,
+): boolean {
+  const floor = window.afterMs + DAY_MS;
+  let reached = window.beforeMs - DAY_MS;
+  // Newest first: a span that ends below the point still to cover is a gap,
+  // and nothing after it in this order ends any higher.
+  for (const span of [...answered].sort((left, right) => right.beforeMs - left.beforeMs)) {
+    if (reached <= floor) {
+      return true;
+    }
+    if (span.beforeMs < reached) {
+      return false;
+    }
+    reached = Math.min(reached, span.afterMs);
+  }
+  return reached <= floor;
+}
+
+/** Every window of a refresh plan is one the visit already holds: the exact
+ *  request journaled, or covered by the windows it journaled. */
+function refreshAnswered(
+  windows: ReadonlyArray<{ periodMs: number; afterMs: number; beforeMs: number }>,
+  visit: VisitWindows,
+): boolean {
+  return windows.every((window) =>
+    visit.issued.has(windowKey(window)) || windowAnsweredBy(window, visit.answered)
+  );
+}
+
 // ── the handler ──────────────────────────────────────────────────────────────
 
 function skip(reason: string): StreamChunkResult {
   return { satisfied: true, yieldReason: null, stats: { skipped: reason }, gatedSkip: reason };
+}
+
+/**
+ * What ONE visit has asked for and what came back — in memory, for this visit
+ * only. `issued` is the repeat guard's keys. `answered` is the span each
+ * journaled, readable window covers: the served bounds, or the requested ones
+ * where the provider served none. It is what lets a refresh be taken from
+ * windows the visit already holds, and it never outlives the visit: a mark
+ * that arrives after it is answered by a call.
+ */
+interface VisitWindows {
+  issued: Set<string>;
+  answered: Array<{ afterMs: number; beforeMs: number }>;
 }
 
 /** What one window request came back as. `null` means the call was refused
@@ -790,6 +854,24 @@ export async function fanslyMediaStatsChunk(
   const hasDayCapacity = attemptBudget.hasCapacity;
   const hasChunkCapacity = () =>
     input.budget.hasRequestCapacity(1) && input.budget.hasWallClockCapacity();
+  /**
+   * Room for a WHOLE unit of `count` calls — the chunk-budget contract every
+   * multi-call unit keeps — or the reason there is none. Clamped to the budgets
+   * themselves, so a cap or chunk smaller than the unit still makes progress
+   * instead of yielding forever.
+   */
+  const unitShortfall = (count: number): "deferred" | "yielded" | null => {
+    if (!attemptBudget.hasCapacity(Math.min(count, dailyCap))) {
+      return "deferred";
+    }
+    if (
+      !input.budget.hasRequestCapacity(Math.min(count, input.budget.maxRequests))
+      || !input.budget.hasWallClockCapacity()
+    ) {
+      return "yielded";
+    }
+    return null;
+  };
   const today = utcDayKey(now);
 
   /** The most recent "failed" window's failure. Written on both failure paths
@@ -805,16 +887,18 @@ export async function fanslyMediaStatsChunk(
    * walk has anywhere left to go. A budget never turns a captured response into
    * a dropped one.
    *
-   * `issued` is the per-visit repeat-request guard. The identical
+   * `visit.issued` is the per-visit repeat-request guard. The identical
    * `(period, after, before)` twice in one visit is a loop's first visible step
    * and there is nothing to learn from issuing it — the durable half of the same
    * guard lives in each item's backfill cursor and covers chunk boundaries.
+   * A window that comes back readable joins `visit.answered`.
    */
   const requestWindow = async (
     subjectRef: string,
     params: { periodMs: number; afterMs: number; beforeMs: number; mode: string; tier: string },
-    issued: Set<string>,
+    visit: VisitWindows,
   ): Promise<WindowOutcome | "repeat" | "failed"> => {
+    const { issued } = visit;
     const key = windowKey(params);
     if (issued.has(key)) {
       await input.telemetry.addAnomaly({
@@ -925,6 +1009,10 @@ export async function fanslyMediaStatsChunk(
     const served = servedWindow(raw);
     const buckets = countMediaStatBuckets(raw);
     bucketsSeen += buckets;
+    visit.answered.push({
+      afterMs: served.afterMs ?? params.afterMs,
+      beforeMs: served.beforeMs ?? params.beforeMs,
+    });
     return {
       raw,
       served,
@@ -1097,16 +1185,28 @@ export async function fanslyMediaStatsChunk(
    * from its stored cursor — the one this visit started from, so the windows
    * it journaled before the wall are asked again, once per outage. Keeping
    * them would be a write after a failure that may be a lost lease.
+   *
+   * A DIRTY ITEM IS ANSWERED IN ONE VISIT, and only once a day. The mark asks
+   * for today's numbers, and a visit that stamps the row without answering it
+   * leaves the item at the head of the queue, where every chunk used to re-read
+   * its trailing window while the backfill walked its whole history in one
+   * morning (production 2026-09-29: 22 calls on one item in five chunks). So:
+   * a first visit's own opening windows ARE the refresh — `[now − 31 d, now]`
+   * and on — and the visit does not start without room for them; a walk that
+   * resumes in the past cannot answer it, so the refresh goes FIRST, reserved
+   * whole, and the backfill takes what is left.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
   ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
-    const issued = new Set<string>();
+    const visit: VisitWindows = { issued: new Set(), answered: [] };
     const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
     const cursorAtEntry = JSON.stringify(backfillCursorJson(cursor));
     let buckets = 0;
     let journaledWindows = 0;
+    let steadyComplete = false;
     let status: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
+    const outOfBudget = () => status === "deferred" || status === "yielded";
 
     /**
      * A FAILED VISIT KEEPS ITS PROGRESS. The failure — counter and backoff — is
@@ -1143,31 +1243,67 @@ export async function fanslyMediaStatsChunk(
       }
     }
 
-    if (!cursor.done) {
-      const walk = await runBackfill(candidate, cursor, issued);
+    const dirty = candidate.dirtyReason !== null;
+    // A walk ANCHORED IN THE PAST resumes more than a day below today, so none
+    // of its windows can answer today's refresh. An open walk anchored at today
+    // is a first visit: its opening window is the trailing one.
+    const walkInPast = !cursor.done && cursor.nextBeforeMs < now.getTime() - DAY_MS;
+    const refreshFirst = dirty && walkInPast;
+
+    if (refreshFirst) {
+      // The mark is what put the item here, and old windows do not answer it:
+      // read today's numbers whole, and leave the history what is left.
+      const steady = await runSteady(candidate, cursor, visit, state.longTailWindowMode, true);
+      if (steady.status === "failed") {
+        await keepFailedVisitProgress();
+        return "skipped";
+      }
+      buckets += steady.buckets;
+      steadyComplete = steady.complete;
+      status = steady.status === "ok" ? "visited" : steady.status;
+    } else if (dirty && !cursor.done) {
+      // A DIRTY FIRST VISIT answers the mark with its own opening windows: the
+      // first holds the fresh and mid refresh, the long tail's 90 days take the
+      // visit's four. Started with less, it would stamp the item without
+      // answering it, and the next chunk would read those windows again as a
+      // refresh — so it waits for a chunk that can carry it, and spends nothing.
+      status = unitShortfall(
+        candidate.tier === "long_tail" ? BACKFILL_WINDOWS_PER_VISIT : 1,
+      ) ?? status;
+    }
+
+    if (!cursor.done && !outOfBudget()) {
+      const walk = await runBackfill(candidate, cursor, visit);
       if (walk.status === "failed") {
         await keepFailedVisitProgress();
         return "skipped";
       }
       buckets += walk.buckets;
       journaledWindows += walk.windows;
-      status = walk.status === "ok" ? "skipped" : walk.status;
+      if (walk.status !== "ok") {
+        status = walk.status;
+      }
     }
 
-    // THE STEADY WINDOW, budget permitting. On a visit whose backfill is not yet
-    // done this is the part that gets dropped first: history is durable in the
-    // cursor — a failed steady window included — and today's numbers will still
-    // be there tomorrow.
-    let steadyComplete = false;
-    if (status !== "deferred" && status !== "yielded" && hasDayCapacity() && hasChunkCapacity()) {
-      // With nothing else durable in this visit, a partial refresh is thrown
-      // away and re-read whole — so it is reserved whole, up front.
+    // THE STEADY WINDOW AFTER THE WALK, budget permitting — and free, budget or
+    // not, when the windows this visit journaled already cover it. On a visit
+    // whose backfill is not yet done this is the part that gets dropped first:
+    // history is durable in the cursor — a failed steady window included — and
+    // today's numbers will still be there tomorrow.
+    if (!refreshFirst && outOfBudget()) {
+      steadyComplete = journaledWindows > 0
+        && refreshAnswered(steadyWindows(candidate.tier, now, state.longTailWindowMode), visit);
+    } else if (!refreshFirst) {
+      // With nothing else durable in this visit a partial refresh is thrown
+      // away and re-read whole, and a dirty item's half refresh leaves the mark
+      // for the next chunk to answer again — so both are reserved whole, up
+      // front.
       const steady = await runSteady(
         candidate,
         cursor,
-        issued,
+        visit,
         state.longTailWindowMode,
-        journaledWindows === 0,
+        journaledWindows === 0 || dirty,
       );
       if (steady.status === "failed") {
         await keepFailedVisitProgress();
@@ -1234,7 +1370,7 @@ export async function fanslyMediaStatsChunk(
   async function runBackfill(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
-    issued: Set<string>,
+    visit: VisitWindows,
   ): Promise<WalkResult> {
     // THE CREATION FLOOR, from the same age basis the tier is computed from.
     const creationFloorMs = mediaBackfillCreationFloorMs(candidate);
@@ -1293,7 +1429,7 @@ export async function fanslyMediaStatsChunk(
         beforeMs: requested.beforeMs,
         mode: "backfill",
         tier: candidate.tier,
-      }, issued);
+      }, visit);
       windows += 1;
       backfillWindows += 1;
       if (outcome === "failed") {
@@ -1412,11 +1548,12 @@ export async function fanslyMediaStatsChunk(
    *  refuses 90 days. `planMode` is the long-tail plan to run — the page's
    *  mode, unless the 90-day fallback is probing the split plan before it
    *  commits to it. `reserveWhole` is set when a partial refresh would be
-   *  discarded: the unit then never STARTS without room for all its windows. */
+   *  discarded, or would leave a dirty mark standing: the unit then never
+   *  STARTS without room for all its windows. */
   async function runSteady(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
-    issued: Set<string>,
+    visit: VisitWindows,
     planMode: LongTailWindowMode = state.longTailWindowMode,
     reserveWhole = false,
   ): Promise<SteadyResult> {
@@ -1424,35 +1561,31 @@ export async function fanslyMediaStatsChunk(
     let buckets = 0;
     let served = 0;
 
-    // ALREADY ANSWERED THIS VISIT, at no cost. A fresh item's first visit opens
-    // its backfill with `[now − 31 d, now]` daily, which IS the fresh steady
-    // window: asked again, it would be the byte-identical request the repeat
-    // guard stops, and a refresh stopped by that guard never answers the dirty
-    // mark. The backfill's journaled answer is the refresh, and its buckets
-    // were counted there. A key in `issued` that a steady plan can ask for was
-    // journaled: a backfill window that fails ends the visit before this runs.
-    // Only a refresh whose EVERY window was answered is taken this way — the
-    // long tail's split plan shares just its first window with the backfill,
-    // and keeps its own rules.
-    if (windows.every((window) => issued.has(windowKey(window)))) {
+    // ALREADY ANSWERED THIS VISIT, at no cost. A first visit opens its backfill
+    // with `[now − 31 d, now]` daily, which IS the fresh steady window and holds
+    // the mid one; its four windows reach 121 days back, past the long tail's
+    // 90 and the split plan's 93. Asked again, the refresh would be the same
+    // buckets — the byte-identical request the repeat guard stops, or one the
+    // provider snaps to the same day — and a refresh stopped by that guard
+    // never answers the dirty mark. So every window the plan asks for that the
+    // visit's journaled windows already cover, within a day at either end, is
+    // taken from them, and their buckets were counted there. A key in `issued`
+    // that a steady plan can ask for was journaled: a window that fails ends
+    // the visit before this runs. Only a refresh whose EVERY window is covered
+    // is taken this way; a partly covered one keeps its own rules.
+    if (refreshAnswered(windows, visit)) {
       return { status: "ok", buckets, complete: true, served: windows.length };
     }
 
     // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
     // multi-call unit keeps. Three split windows started with two calls left
     // were read, discarded unstamped, and read again next chunk: up to five
-    // calls an item for three. Clamped to the budgets themselves, so a cap or
-    // chunk smaller than the unit still makes progress instead of yielding
-    // forever. The per-window checks below stay: retries count too.
+    // calls an item for three. The per-window checks below stay: retries count
+    // too.
     if (reserveWhole) {
-      if (!attemptBudget.hasCapacity(Math.min(windows.length, dailyCap))) {
-        return { status: "deferred", buckets, complete: false, served };
-      }
-      if (
-        !input.budget.hasRequestCapacity(Math.min(windows.length, input.budget.maxRequests))
-        || !input.budget.hasWallClockCapacity()
-      ) {
-        return { status: "yielded", buckets, complete: false, served };
+      const shortfall = unitShortfall(windows.length);
+      if (shortfall !== null) {
+        return { status: shortfall, buckets, complete: false, served };
       }
     }
 
@@ -1474,10 +1607,10 @@ export async function fanslyMediaStatsChunk(
         beforeMs: window.beforeMs,
         mode: "steady",
         tier: candidate.tier,
-      }, issued);
+      }, visit);
       if (outcome === "failed") {
         if (candidate.tier === "long_tail" && index === 0 && planMode !== "split_31") {
-          return await fallBackFromNinetyDays(candidate, cursor, issued, planMode);
+          return await fallBackFromNinetyDays(candidate, cursor, visit, planMode);
         }
         return { status: "failed", buckets, complete: false, served };
       }
@@ -1532,7 +1665,7 @@ export async function fanslyMediaStatsChunk(
           const rerun = await runSteady(
             candidate,
             cursor,
-            issued,
+            visit,
             state.longTailWindowMode,
             reserveWhole,
           );
@@ -1581,14 +1714,15 @@ export async function fanslyMediaStatsChunk(
   async function fallBackFromNinetyDays(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
-    issued: Set<string>,
+    visit: VisitWindows,
     previousMode: LongTailWindowMode,
   ): Promise<SteadyResult> {
     const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, served: 0 };
     const refusal = lastWindowFailure;
     if (refusal === null || !isProviderRefusal(refusal)) return failed;
     const [probeWindow] = steadyWindows(candidate.tier, now, "split_31");
-    const answeredThisVisit = probeWindow !== undefined && issued.has(windowKey(probeWindow));
+    const answeredThisVisit = probeWindow !== undefined
+      && visit.issued.has(windowKey(probeWindow));
     // The day's failed probe and the budget limit only a NEW request: evidence
     // this visit already holds costs nothing.
     if (
@@ -1600,7 +1734,7 @@ export async function fanslyMediaStatsChunk(
 
     // NOT reserved whole: ONE answered 31-day window is the evidence, and the
     // split it proves is found once per page.
-    const probe = await runSteady(candidate, cursor, issued, "split_31");
+    const probe = await runSteady(candidate, cursor, visit, "split_31");
     if (!answeredThisVisit && probe.served === 0) {
       if (probe.status === "failed") {
         state = { ...state, longTailProbeFailedDay: today };
