@@ -77,8 +77,9 @@ const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
-/** R04: a first Fansly 429 holds the whole page this long when the provider
- * named no deadline, and at most PAGE_PROVIDER_HOLD_MAX_MS when it did. */
+/** R04: a first Fansly 429 holds the whole page at least this long (the whole
+ * hold when the provider named no deadline), and at most
+ * PAGE_PROVIDER_HOLD_MAX_MS. */
 const PAGE_PROVIDER_HOLD_DEFAULT_MS = 120_000;
 const PAGE_PROVIDER_HOLD_MAX_MS = 30 * 60_000;
 
@@ -353,8 +354,8 @@ function resolveProviderRetryAt(
  * own endpoint (statsnew, #290). And only the first failure of the stream's
  * streak: a stream that keeps meeting 429s backs off on its own ladder without
  * starving its siblings, and a sibling that meets one arms its own hold. The
- * hold ends at the provider's deadline, at most 30 minutes out, else after a
- * fixed 120 s; the failing stream's own retry is unchanged.
+ * hold ends at the provider's deadline, no sooner than 120 s and no later than
+ * 30 minutes out; the failing stream's own retry is unchanged.
  */
 function resolvePageProviderHold(
   error: unknown,
@@ -369,10 +370,13 @@ function resolvePageProviderHold(
   }
   const nowMs = input.now.getTime();
   const retryAfterAt = error.retryAfterAt;
-  // A deadline that already passed names no window left to wait out.
-  const holdUntil = retryAfterAt !== null && retryAfterAt.getTime() > nowMs
-    ? new Date(Math.min(retryAfterAt.getTime(), nowMs + PAGE_PROVIDER_HOLD_MAX_MS))
-    : new Date(nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS);
+  // The default is also a floor: a thrown 429 whose deadline is seconds away
+  // (or already passed) means the adapter's in-process retries met repeated
+  // 429s, so the page never holds for less than without a Retry-After.
+  const holdUntil = new Date(Math.min(
+    Math.max(retryAfterAt?.getTime() ?? 0, nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS),
+    nowMs + PAGE_PROVIDER_HOLD_MAX_MS,
+  ));
   return { holdUntil, retryAfterAt };
 }
 

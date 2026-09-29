@@ -23,7 +23,8 @@ No new flag or notification destination is introduced.
 A 429 speaks for the page's session, not one endpoint. The first 429 of a
 stream's failure streak (its `consecutive_failures` was 0) also holds the whole
 page: a row in `page_sync_provider_holds` (0219) until the provider's
-Retry-After, clamped to 30 minutes, or 120 s when it named none. While
+Retry-After, no sooner than 120 s and no later than 30 minutes out (120 s when
+it named none). While
 `hold_until` is in the future, no stream of the page is leased (regular chunk,
 Sync now, B1 wake, targeted thread backfill) and the AI fast lane stays off it.
 The failing stream keeps its own `retry_at`; sibling rows, streaks and health

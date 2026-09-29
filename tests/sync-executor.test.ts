@@ -1755,6 +1755,10 @@ describe("sync executor", () => {
       ["a Retry-After clamped to 30 minutes", at(86_400_000), at(30 * 60_000), at(86_400_000)],
       ["a fixed 120 s without a Retry-After", null, at(120_000), undefined],
       ["a fixed 120 s when the Retry-After has already passed", at(-1_000), at(120_000), at(60_000)],
+      // A thrown 429 with a short Retry-After means the adapter's in-process
+      // retries already met repeated 429s: the page never holds for less.
+      ["a 120 s floor when the Retry-After is seconds away", at(10_000), at(120_000), at(60_000)],
+      ["a Retry-After just past the 120 s floor", at(121_000), at(121_000), at(121_000)],
     ] as const)("holds the page on a first Fansly 429 until %s", async (_name, retryAfterAt, holdUntil, retryAt) => {
       const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
       dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
