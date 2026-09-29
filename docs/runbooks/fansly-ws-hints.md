@@ -138,6 +138,11 @@ Every enabled message-created target must also exist as an active REST-derived
 hot row. A stale REST response reaching the old boundary leaves
 `target_unconfirmed` debt and retries from the head. Only contiguous material
 can be applied; unconfirmed message receipts retain a null `hot_applied_at`.
+When ordinary polling already stored every enabled target of a claim (a
+model's own mass message reaches every thread), the claim settles as
+`already_materialized` before any head read or budget check: up to 50 per step,
+with no freshness stamp and no breaker reset. Deletion-only evidence, group
+receipts and walks already past the head keep the REST path.
 
 An unknown group gets one addressed detail read and stays `membership_pending`
 until ordinary discovery binds it. Neither visibility nor full-sweep generation

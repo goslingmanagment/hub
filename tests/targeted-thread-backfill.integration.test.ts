@@ -10,9 +10,14 @@
 //      a successful read clears a lapsed one;
 //   4. the run holds the page's real dm_messages sync lease: a regular
 //      executor cannot lease the stream while the targeted run walks, and a
-//      lease already held by the regular path aborts the targeted run instead
-//      of double-running it. A pending scheduled request survives the run.
+//      lease the regular path keeps holding refuses the targeted run (after
+//      the bounded wait below) instead of double-running it. A pending
+//      scheduled request survives the run.
+//   5. contention with the page's own chunks is waited out (bounded, no
+//      vendor request) instead of refused on first sight, and the run's
+//      result lands in pgboss.job.output where the CLI's --wait reads it.
 
+import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -38,7 +43,15 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { loadEffectiveConfig } from "../apps/runtime/src/services/effective-config.ts";
 import { emptyDmMessagesCursorState } from "../apps/runtime/src/services/sync/cursor-state.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { runTargetedThreadBackfill } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
+import {
+  ensureTargetedThreadBackfillQueue,
+  readTargetedThreadBackfillJobStatus,
+  runTargetedThreadBackfill,
+  sendTargetedThreadBackfillJob,
+  TARGETED_THREAD_BACKFILL_QUEUE,
+  waitForTargetedThreadBackfillJob,
+} from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
+import { handleTargetedThreadBackfillJobs } from "../apps/runtime/src/worker-services.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -490,7 +503,7 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(await getConversationSyncHealth(testDb.db, targetThreadId)).toBeNull();
   }, 120_000);
 
-  it("aborts when the regular sync path already holds the page's dm_messages lease", async (context) => {
+  it("refuses after a bounded wait when the regular sync path keeps the page's dm_messages lease", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -514,7 +527,11 @@ describe("targeted thread backfill (slice C′)", () => {
       adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
     };
 
-    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 300, contentionPollMs: 100 },
+    );
 
     expect(result.outcome).toBe("lease_unavailable");
     expect(calls).toHaveLength(0);
@@ -762,7 +779,7 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
   }, 120_000);
 
-  it("refuses while another stream of the same page is mid-chunk", async (context) => {
+  it("refuses after a bounded wait while another stream of the same page stays mid-chunk", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -782,11 +799,250 @@ describe("targeted thread backfill (slice C′)", () => {
       adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
     };
 
-    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 300, contentionPollMs: 100 },
+    );
 
     expect(result.outcome).toBe("page_busy");
     expect(calls).toHaveLength(0);
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null });
+  }, 120_000);
+
+  it("waits out another stream's chunk and runs instead of refusing page_busy", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    // Prod, 28.09 20:30:12: thread 8793 was refused page_busy in 20 ms while
+    // a followers_reconcile chunk held lora-1; that chunk ended 12 s later.
+    await testDb.pool.query(`
+      update page_sync_states
+      set status = 'running', leased_seq = request_seq, lease_owner = 'regular-executor',
+          lease_token = 'conversations-lease', lease_heartbeat_at = now(),
+          lease_expires_at = now() + interval '2 minutes', started_at = now()
+      where page_id = $1 and stream = 'dm_conversations'
+    `, [page.id]);
+    const chunkEnds = setTimeout(() => {
+      void testDb!.pool.query(`
+        update page_sync_states
+        set status = 'idle', leased_seq = null, lease_owner = null, lease_token = null,
+            lease_heartbeat_at = null, lease_expires_at = null, finished_at = now()
+        where page_id = $1 and stream = 'dm_conversations'
+      `, [page.id]);
+    }, 400);
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    try {
+      const result = await runTargetedThreadBackfill(
+        appContext,
+        { threadId: targetThreadId },
+        { contentionWaitMs: 10_000, contentionPollMs: 100 },
+      );
+
+      expect(result).toMatchObject({ outcome: "completed", requests: 1, insertedMessages: 1 });
+      // The wait itself made no request: the one call is the walk's.
+      expect(calls).toHaveLength(1);
+      expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+    } finally {
+      clearTimeout(chunkEnds);
+    }
+  }, 120_000);
+
+  it("waits out the regular executor's dm_messages lease and runs instead of refusing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await testDb.pool.query(
+      "update page_sync_states set request_seq = request_seq + 1, status = 'pending' where page_id = $1 and stream = 'dm_messages'",
+      [page.id],
+    );
+    const executorLease = await acquirePageSyncLease(appContext.db, {
+      pageId: page.id,
+      workerId: "regular-executor",
+      leaseToken: "regular-lease-token",
+      leaseTtlMs: 120_000,
+    });
+    expect(executorLease?.stream).toBe("dm_messages");
+    const chunkEnds = setTimeout(() => {
+      void testDb!.pool.query(`
+        update page_sync_states
+        set status = 'pending', leased_seq = null, lease_owner = null, lease_token = null,
+            lease_heartbeat_at = null, lease_expires_at = null
+        where page_id = $1 and stream = 'dm_messages'
+      `, [page.id]);
+    }, 400);
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    try {
+      const result = await runTargetedThreadBackfill(
+        appContext,
+        { threadId: targetThreadId },
+        { contentionWaitMs: 10_000, contentionPollMs: 100 },
+      );
+
+      expect(result).toMatchObject({ outcome: "completed", requests: 1 });
+      expect(calls).toHaveLength(1);
+    } finally {
+      clearTimeout(chunkEnds);
+    }
+  }, 120_000);
+
+  it("refuses a paused dm_messages stream at once instead of waiting", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    // Paused (or blocked) does not clear within minutes; waiting would only
+    // hold the worker.
+    await testDb.pool.query(
+      "update page_sync_states set status = 'paused' where page_id = $1 and stream = 'dm_messages'",
+      [page.id],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const startedAt = Date.now();
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 60_000, contentionPollMs: 100 },
+    );
+
+    expect(result.outcome).toBe("lease_unavailable");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(calls).toHaveLength(0);
+  }, 120_000);
+
+  it("refuses at once when the dm_messages retry backoff outlasts the wait", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    // Prod, 28.09 11:01-20:31: lilly-2's dm_messages failed 22 times in a row
+    // and its backoff reached the 30-minute cap. The lease cannot be taken
+    // before retry_at, so waiting the budget out only holds the worker.
+    await testDb.pool.query(
+      `update page_sync_states
+       set status = 'retrying', retry_kind = 'provider_5xx', retry_at = $2, consecutive_failures = 22
+       where page_id = $1 and stream = 'dm_messages'`,
+      [page.id, new Date(Date.now() + 60 * 60 * 1000)],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const startedAt = Date.now();
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 60_000, contentionPollMs: 100 },
+    );
+
+    expect(result.outcome).toBe("lease_unavailable");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(calls).toHaveLength(0);
+  }, 120_000);
+
+  it("waits out a retry backoff that ends inside the wait and runs", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await testDb.pool.query(
+      `update page_sync_states
+       set status = 'retrying', retry_kind = 'provider_5xx', retry_at = $2, consecutive_failures = 1
+       where page_id = $1 and stream = 'dm_messages'`,
+      [page.id, new Date(Date.now() + 400)],
+    );
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(
+      appContext,
+      { threadId: targetThreadId },
+      { contentionWaitMs: 10_000, contentionPollMs: 100 },
+    );
+
+    expect(result).toMatchObject({ outcome: "completed", requests: 1 });
+    expect(calls).toHaveLength(1);
+  }, 120_000);
+
+  it("keeps the worker's result as the pg-boss job output the CLI waits on", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { page, targetThreadId } = await seedPageWithThreads();
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, []) as never,
+    };
+    const boss = new PgBoss({ connectionString: testDb.connectionString, schedule: false });
+    await boss.start();
+    try {
+      await ensureTargetedThreadBackfillQueue(boss);
+      // The worker's real handler, on a real pg-boss: before this fix it
+      // logged the outcome and returned nothing, so pgboss.job.output stayed
+      // empty for every sync.thread.backfill job in prod.
+      await boss.work(
+        TARGETED_THREAD_BACKFILL_QUEUE,
+        { batchSize: 1, pollingIntervalSeconds: 0.5 },
+        (jobs) => handleTargetedThreadBackfillJobs(appContext, jobs),
+      );
+      const jobId = await sendTargetedThreadBackfillJob(boss, {
+        threadId: targetThreadId,
+        platformAccountId: page.id,
+      });
+      expect(jobId).not.toBeNull();
+
+      const states: string[] = [];
+      const waited = await waitForTargetedThreadBackfillJob({
+        read: () => readTargetedThreadBackfillJobStatus(appContext.db, jobId!),
+        timeoutMs: 60_000,
+        pollMs: 100,
+        onState: (status) => states.push(status.state),
+      });
+
+      expect(waited.timedOut).toBe(false);
+      expect(waited.status).toMatchObject({
+        state: "completed",
+        output: {
+          outcome: "completed",
+          threadId: targetThreadId,
+          platformAccountId: page.id,
+          requests: 1,
+          insertedMessages: 1,
+          messageCoverageStatus: "complete",
+        },
+      });
+      expect(states.at(-1)).toBe("completed");
+    } finally {
+      await boss.stop({ graceful: false });
+    }
   }, 120_000);
   it("skips finalization and leaves debt when another stream chunks the page mid-run", async (context) => {
     if (!testDb) {

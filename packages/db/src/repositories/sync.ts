@@ -26,7 +26,9 @@ import {
 } from "../schema.ts";
 import {
   SYNC_STREAM_POLICY,
+  computeCurrentPageSyncSlot,
   getSyncStreamsForPlatform,
+  pageSyncRunnableSinceSql,
   resolvePageSyncPriority,
   type PageSyncStatus,
   type SyncRequestSource,
@@ -1726,6 +1728,71 @@ export async function hasRecentTerminalProxyFailure(
   `);
 
   return Boolean(result.rows[0]?.hasFailure);
+}
+
+/** E-2: the ops watchdog's Fansly sync deadman. The planner is one
+ * all-or-nothing cycle and a wedged executor starts nothing, so either failure
+ * shows up the same way: no Fansly chunk starts while a stream is due.
+ *
+ * A stream counts only once it has been due since `dueBefore`: work that just
+ * came due (a slot reached, a request made, a back-off run out) first gets the
+ * watchdog's own threshold to start, and a stream idling toward its next slot
+ * never counts. It must be runnable (not paused, not blocked, no retry or
+ * pacing deadline after `dueBefore`) and either hold an outstanding request
+ * (`request_seq > applied_seq`) whose runnable-since clock, the one starvation
+ * aging uses, is at or before `dueBefore`, or have a slot the planner would
+ * have claimed by then (its own `computeCurrentPageSyncSlot` against
+ * `last_scheduled_slot`), which is how a planner that stopped claiming shows.
+ *
+ * The run lookup is bounded to `since` so it stays on `sync_runs_started_idx`;
+ * `latestStartedAt` is null when nothing started inside it. */
+export async function getFanslySyncLiveness(
+  db: Database,
+  input: { since: Date; dueBefore: Date },
+): Promise<{ latestStartedAt: Date | null; hasDueStream: boolean }> {
+  const latest = await db.execute<{ latestStartedAt: TimestampValue }>(sql`
+    select max(r.started_at) as "latestStartedAt"
+      from ${syncRuns} r
+      join ${pages} p on p.id = r.page_id and p.platform = 'fansly'
+     where r.started_at > ${input.since}
+  `);
+  const streams = await db.execute<{
+    outstanding: boolean;
+    runnableSince: TimestampValue;
+    cadenceSeconds: NumericValue;
+    slotOffsetSeconds: NumericValue;
+    lastScheduledSlot: NumericValue;
+  }>(sql`
+    select st.request_seq > st.applied_seq as "outstanding",
+           ${pageSyncRunnableSinceSql("st")} as "runnableSince",
+           st.cadence_seconds as "cadenceSeconds",
+           st.slot_offset_seconds as "slotOffsetSeconds",
+           st.last_scheduled_slot as "lastScheduledSlot"
+      from ${pageSyncStates} st
+      join ${pages} p on p.id = st.page_id and p.status = 'active' and p.platform = 'fansly'
+     where st.status <> 'paused'
+       and st.blocker_kind is null
+       and (st.retry_at is null or st.retry_at <= ${input.dueBefore})
+  `);
+  const hasDueStream = streams.rows.some((row) => {
+    if (row.outstanding) {
+      // Every request stamps requested_at; a row without any clock is due.
+      const runnableSince = row.runnableSince ? new Date(row.runnableSince) : null;
+      if (runnableSince === null || runnableSince.getTime() <= input.dueBefore.getTime()) {
+        return true;
+      }
+    }
+    return computeCurrentPageSyncSlot(
+      input.dueBefore,
+      normalizeNumber(row.cadenceSeconds, "cadenceSeconds"),
+      normalizeNumber(row.slotOffsetSeconds, "slotOffsetSeconds"),
+    ) > normalizeNumber(row.lastScheduledSlot, "lastScheduledSlot");
+  });
+  const latestStartedAt = latest.rows[0]?.latestStartedAt;
+  return {
+    latestStartedAt: latestStartedAt ? new Date(latestStartedAt) : null,
+    hasDueStream,
+  };
 }
 
 export async function listRunningSyncRuns(

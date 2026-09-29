@@ -25,11 +25,13 @@ import { witnessFor, type PlaneReadWitness } from "./agent-read-witness.ts";
  * 2. **Every transition appends an event in the SAME transaction.** The request
  *    row is the current state; `agent_hydration_events` is how it got there. A
  *    state that moved without a journal row would be a decision nobody can audit.
- * 3. **One attempt per approval.** `approved -> dispatching` is a CAS like any
- *    other, so it happens exactly once. There is no `dispatching -> approved`
- *    transition anywhere in this file: a crashed run ends `failed` and a re-run
- *    needs a fresh request and a fresh owner decision (outbox discipline — a
- *    duplicated paid backfill behind the owner's back is worse than a missed one).
+ * 3. **One vendor attempt per approval.** `approved -> dispatching` is a CAS
+ *    like any other. The only way back is `rearmAgentHydrationRequest`, and only
+ *    for a run that DETERMINATELY made no vendor request (it was refused at the
+ *    page's door) — capped, journaled `rearmed`. Anything that may have spent
+ *    stays one-way: a crashed run ends `failed` and a re-run needs a fresh
+ *    request and a fresh owner decision (outbox discipline — a duplicated paid
+ *    backfill behind the owner's back is worse than a missed one).
  *
  * NO FREE-FORM CALLER TEXT crosses this boundary. The agent's `reason` and the
  * owner's decision reason arrive already digested as {sha256, length}, exactly
@@ -95,6 +97,8 @@ export type AgentHydrationEventKind =
   | "approved"
   | "rejected"
   | "dispatched"
+  /** `dispatching -> approved`: the run was refused before any vendor request. */
+  | "rearmed"
   | "settled"
   | "expired"
   | "failed";
@@ -675,6 +679,13 @@ export async function decideAgentHydrationRequest(
  *     decider blocks the page — this is also the per-page fairness bound);
  *   - one auto-approval per conversation per UTC day.
  *
+ * The live-approval guard is a snapshot taken ONCE for the whole list, so it
+ * cannot see approvals the caller makes while walking it: the caller enforces
+ * "one per page" within its pass. The order serves that: every page's oldest
+ * request first, then every page's second, so a page with a hundred requests
+ * cannot crowd the others out of the batch, and a page whose first candidate
+ * is refused still has a fallback in it.
+ *
  * Sequencing: the caller is the single exclusive hydration cycle, so a plain
  * sum-then-decide over this list is race-free without reservations.
  */
@@ -684,35 +695,39 @@ export async function listAutoApprovableAgentHydrationRequests(
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
   const result = await db.execute<Record<string, unknown>>(sql`
-    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
-    where r.state = 'requested'
-      and r.admissible = true
-      and (r.expires_at is null or r.expires_at > ${now})
-      and r.target_kind = 'thread_backfill_before'
-      and p.platform = 'fansly'
-      and k.revoked_at is null
-      and k.expires_at > ${now}
-      and 'request:hydration' = any(k.capabilities)
-      and r.page_id = any(k.page_ids)
-      and not exists (
-        select 1 from page_sync_states pss
-        where pss.page_id = r.page_id
-          and pss.stream = 'dm_messages'
-          and pss.blocker_kind = 'auth'
-      )
-      and not exists (
-        select 1 from agent_hydration_requests live
-        where live.page_id = r.page_id
-          and live.state in ('approved', 'dispatching')
-      )
-      and not exists (
-        select 1 from agent_hydration_requests today
-        where today.page_id = r.page_id
-          and today.conversation_ref = r.conversation_ref
-          and today.decision_source = 'auto_policy'
-          and today.decided_at >= ${input.utcDayStart}
-      )
-    order by r.created_at asc, r.id asc
+    select * from (
+      select ${REQUEST_COLUMNS},
+        row_number() over (partition by r.page_id order by r.created_at asc, r.id asc) as page_rank
+      ${REQUEST_FROM}
+      where r.state = 'requested'
+        and r.admissible = true
+        and (r.expires_at is null or r.expires_at > ${now})
+        and r.target_kind = 'thread_backfill_before'
+        and p.platform = 'fansly'
+        and k.revoked_at is null
+        and k.expires_at > ${now}
+        and 'request:hydration' = any(k.capabilities)
+        and r.page_id = any(k.page_ids)
+        and not exists (
+          select 1 from page_sync_states pss
+          where pss.page_id = r.page_id
+            and pss.stream = 'dm_messages'
+            and pss.blocker_kind = 'auth'
+        )
+        and not exists (
+          select 1 from agent_hydration_requests live
+          where live.page_id = r.page_id
+            and live.state in ('approved', 'dispatching')
+        )
+        and not exists (
+          select 1 from agent_hydration_requests today
+          where today.page_id = r.page_id
+            and today.conversation_ref = r.conversation_ref
+            and today.decision_source = 'auto_policy'
+            and today.decided_at >= ${input.utcDayStart}
+        )
+    ) candidates
+    order by page_rank asc, created_at asc, id asc
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);
@@ -721,7 +736,13 @@ export async function listAutoApprovableAgentHydrationRequests(
 /**
  * What the policy has RESERVED so far today: the sum of maxCalls it approved
  * since the UTC day start. Counted at decision time — an approval that later
- * fails or under-spends does not return its reservation (v1, documented).
+ * under-spends does not return the difference (v1, documented).
+ *
+ * The one exception is an approval KNOWN to have made no vendor request: it
+ * ended `expired` (an approval only returns to `approved` after a run that made
+ * none, so an expired one never spent), or `failed` with nothing accepted and a
+ * cause other than `timeout`. `timeout` stays counted because the stuck sweeper
+ * writes it without knowing what the dead run spent.
  */
 export async function sumAutoApprovedCallsSince(
   db: Database,
@@ -733,15 +754,26 @@ export async function sumAutoApprovedCallsSince(
     where decision_source = 'auto_policy'
       and decision_approved = true
       and decided_at >= ${since}
+      and state <> 'expired'
+      and not (state = 'failed' and last_error <> 'timeout' and accepted_pages = 0)
   `);
   const raw = result.rows[0]?.reserved;
   return raw == null ? 0 : Number(raw);
 }
 
-/** Approved requests the executor may dispatch: in date, admissible, not expired. */
+/**
+ * Approved requests the executor may dispatch: in date, admissible, not
+ * expired, oldest decision first.
+ *
+ * `excludeIds` is the executor's scan cursor: the rows it already walked this
+ * cycle. It pages PAST the approvals that wait (busy page, parked, refused
+ * before the claim) instead of being handed the same head of the queue again.
+ * Ids, not a `decided_at` keyset: a JS Date cursor is milliseconds, the column
+ * is microseconds, and a truncated cursor would return its own row again.
+ */
 export async function listDispatchableAgentHydrationRequests(
   db: Database,
-  input: { limit: number; now?: Date },
+  input: { limit: number; excludeIds?: readonly number[]; now?: Date },
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -749,6 +781,7 @@ export async function listDispatchableAgentHydrationRequests(
     where r.state = 'approved'
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
+      and r.id <> all(${sql.param([...(input.excludeIds ?? [])])}::bigint[])
     order by r.decided_at asc, r.id asc
     limit ${input.limit}
   `);
@@ -756,9 +789,10 @@ export async function listDispatchableAgentHydrationRequests(
 }
 
 /**
- * `approved -> dispatching`, CAS'd. This is the ONE attempt: there is no
- * transition back to `approved` anywhere, so a crashed run is settled `failed`
- * by the sweeper and only a fresh owner decision can produce another attempt.
+ * `approved -> dispatching`, CAS'd. This is the ONE vendor attempt: the only
+ * way back to `approved` is `rearmAgentHydrationRequest`, for a run that made
+ * no vendor request at all, so a crashed run is settled `failed` by the
+ * sweeper and only a fresh owner decision can produce another attempt.
  *
  * The EXECUTION REFERENCE IS WRITTEN BY THIS STATEMENT, not by a follow-up
  * update. The caller mints the id first and hands it to the job it is about to
@@ -822,6 +856,104 @@ export async function claimAgentHydrationRequestForDispatch(
 }
 
 /**
+ * `dispatching -> approved`, CAS'd on the version the caller observed.
+ *
+ * ONLY for a run that DETERMINATELY made no vendor request: it was refused at
+ * the page's door (another stream mid-chunk, the page lease held, the page's
+ * targeted slot taken). Nothing was spent, so the approval's one vendor attempt
+ * is still unspent and failing it would throw away an authorization for work
+ * that never started. Never call this for a run that may have reached the
+ * vendor — that stays one-way (file header, property 3).
+ *
+ * Capped by `dispatch_count`, which every claim increments and this does not
+ * reset: at most `maxDispatches` claims per approval, after which the caller
+ * settles the row instead. The execution columns are cleared so the row reads
+ * as an ordinary not-yet-started approval; the refused job's reference is kept
+ * in the journal. The expiry is left alone — an approval whose window closed
+ * while it was being refused is expired by the next cycle, which is the honest
+ * end for it.
+ */
+export async function rearmAgentHydrationRequest(
+  db: Database,
+  input: {
+    id: number;
+    expectedVersion: number;
+    maxDispatches: number;
+    /** The refusal, as a bounded code (e.g. a targeted-backfill outcome). */
+    cause: string;
+    now?: Date;
+  },
+): Promise<{ outcome: AgentHydrationCasOutcome; request: AgentHydrationRequestRecord | null }> {
+  const now = input.now ?? new Date();
+  return inTransaction(db, async (tx) => {
+    // The reference the refused run carried, read under the row lock so the
+    // journal records exactly what the update below clears.
+    const current = await tx.execute<Record<string, unknown>>(sql`
+      select execution_ref from agent_hydration_requests where id = ${input.id} for update
+    `);
+    const refusedExecutionRef = nullableText(current.rows[0]?.execution_ref);
+    const updated = await tx.execute<Record<string, unknown>>(sql`
+      update agent_hydration_requests set
+        state = 'approved',
+        row_version = row_version + 1,
+        dispatched_at = null,
+        dispatch_deadline_at = null,
+        execution_lane = null,
+        execution_ref = null,
+        updated_at = ${now}
+      where id = ${input.id}
+        and row_version = ${input.expectedVersion}
+        and state = 'dispatching'
+        and dispatch_count < ${input.maxDispatches}
+      returning id, row_version, dispatch_count
+    `);
+    const row = updated.rows[0];
+    if (!row) {
+      return {
+        outcome: "conflict" as const,
+        request: await findAgentHydrationRequestById(tx, input.id),
+      };
+    }
+    await appendEvent(tx, {
+      requestId: input.id,
+      kind: "rearmed",
+      fromState: "dispatching",
+      toState: "approved",
+      rowVersion: num(row.row_version),
+      actor: "executor",
+      detail: {
+        cause: input.cause,
+        dispatchCount: num(row.dispatch_count),
+        executionRef: refusedExecutionRef,
+      },
+    });
+    return {
+      outcome: "applied" as const,
+      request: await findAgentHydrationRequestById(tx, input.id),
+    };
+  });
+}
+
+/**
+ * Whether the page already has a hydration run in flight. The Fansly lane runs
+ * one targeted job per page at a time; its dispatcher reads this before it
+ * claims, so a second approval for the page waits instead of being claimed
+ * into a send the queue must refuse.
+ */
+export async function hasDispatchingAgentHydrationRequestOnPage(
+  db: Database,
+  pageId: number,
+): Promise<boolean> {
+  const result = await db.execute<{ dispatching: boolean }>(sql`
+    select exists (
+      select 1 from agent_hydration_requests
+      where page_id = ${pageId} and state = 'dispatching'
+    ) as dispatching
+  `);
+  return result.rows[0]?.dispatching === true;
+}
+
+/**
  * Corrects the execution reference when the created job COALESCED onto an
  * existing one.
  *
@@ -860,6 +992,8 @@ export interface SettleAgentHydrationRequestInput {
   acceptedPages?: number;
   spentCredits?: number;
   actor?: AgentHydrationActor;
+  /** Journal-only: the executor's own code for why it settled (bounded). */
+  cause?: string;
   now?: Date;
 }
 
@@ -905,6 +1039,7 @@ export async function settleAgentHydrationRequest(
         lastError: input.lastError ?? "none",
         acceptedItems: input.acceptedItems ?? 0,
         acceptedPages: input.acceptedPages ?? 0,
+        ...(input.cause === undefined ? {} : { cause: input.cause }),
       },
     });
     return {
@@ -966,10 +1101,23 @@ export async function listExpirableAgentHydrationRequests(
   return result.rows.map(mapRequest);
 }
 
-/** `requested|approved -> expired`, CAS'd on the state that was observed. */
+/**
+ * `requested|approved -> expired`, CAS'd on the state that was observed.
+ *
+ * The sweeper calls it when the window closed. The executor also calls it, with
+ * a `cause`, to retire an approval that can never dispatch (its thread moved
+ * since the decision) before its window closes; either way nothing was spent.
+ */
 export async function expireAgentHydrationRequest(
   db: Database,
-  input: { id: number; fromState: Extract<AgentHydrationState, "requested" | "approved">; now?: Date },
+  input: {
+    id: number;
+    fromState: Extract<AgentHydrationState, "requested" | "approved">;
+    actor?: Extract<AgentHydrationActor, "sweeper" | "executor">;
+    /** Journal-only: why the executor retired it early (bounded code). */
+    cause?: string;
+    now?: Date;
+  },
 ): Promise<AgentHydrationCasOutcome> {
   const now = input.now ?? new Date();
   return inTransaction(db, async (tx) => {
@@ -992,7 +1140,8 @@ export async function expireAgentHydrationRequest(
       fromState: input.fromState,
       toState: "expired",
       rowVersion: num(row.row_version),
-      actor: "sweeper",
+      actor: input.actor ?? "sweeper",
+      ...(input.cause === undefined ? {} : { detail: { cause: input.cause } }),
     });
     return "applied" as const;
   });

@@ -105,7 +105,17 @@ export async function runAgentHydrationAutoApprove(
     now,
   });
 
+  // ONE live approval per page. The candidate query checked that against the
+  // table as it stood BEFORE this pass, so the approvals this pass makes are
+  // the caller's to count: the page's targeted run is one job at a time, and a
+  // second same-page approval would only sit behind it (2026-09-27..29: ten
+  // same-page approvals per pass, nine of them failed without a Fansly call).
+  const approvedPages = new Set<number>();
+
   for (const request of candidates) {
+    if (approvedPages.has(request.pageId)) {
+      continue;
+    }
     result.considered += 1;
     const requested = request.requestedMaxCalls ?? AUTO_APPROVE_MAX_CALLS_PER_REQUEST;
     const maxCalls = Math.min(requested, AUTO_APPROVE_MAX_CALLS_PER_REQUEST);
@@ -120,6 +130,7 @@ export async function runAgentHydrationAutoApprove(
       result.approved += 1;
       result.reservedCalls += maxCalls;
       remaining -= maxCalls;
+      approvedPages.add(request.pageId);
       app.logger.info(
         {
           requestRef: request.requestRef,
@@ -193,6 +204,7 @@ export async function runAgentHydrationAutoApprove(
       result.approved += 1;
       result.reservedCalls += maxCalls;
       remaining -= maxCalls;
+      approvedPages.add(request.pageId);
     } else {
       // conflict / coverage_stale: the world moved between the list and the
       // decision. The CAS already refused; the request keeps its state and a

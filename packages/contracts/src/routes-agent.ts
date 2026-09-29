@@ -1803,9 +1803,12 @@ export const agentHydrationLaneEnum = z.enum([
  * The eight wire states. `requested` is the only entry; `completed`,
  * `partially_completed`, `rejected`, `expired` and `failed` are terminal.
  *
- * There is deliberately NO transition back from `dispatching`: one approval
- * buys exactly one attempt (outbox discipline), and a crashed run ends `failed`
- * so a re-run needs a fresh owner decision rather than a silent retry.
+ * One approval buys exactly one VENDOR attempt (outbox discipline): a crashed
+ * run, or one that may have reached the vendor, ends `failed`, so a re-run
+ * needs a fresh owner decision rather than a silent retry. The one way back
+ * from `dispatching` is to `approved`, for a run refused at the page's door
+ * before any vendor request (page busy, page lease held) — capped, and
+ * counted in `progress.dispatchCount`.
  */
 export const agentHydrationStateEnum = z.enum([
   "requested",

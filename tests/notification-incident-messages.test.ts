@@ -53,6 +53,9 @@ describe("resolveMessageForIncident", () => {
     expect(
       resolveMessageForIncident({ kind: "ops_sampler_silent", pageLabel: null, platform: null }),
     ).toContain("sampler emitting again");
+    expect(
+      resolveMessageForIncident({ kind: "sync_silent", pageLabel: null, platform: null }),
+    ).toBe("✅ Resolved\nFansly sync chunks starting again");
   });
 
   it("chargebacks reconcile resolves with its own recovery text", () => {

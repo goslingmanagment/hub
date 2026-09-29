@@ -127,6 +127,8 @@ function openTitleForIncident(
       return "🚨 Scheduler heartbeat silent — cron is not firing";
     case "ops_sampler_silent":
       return "🚨 Golden-signal sampler silent — ops telemetry is blind";
+    case "sync_silent":
+      return "🚨 Fansly sync silent — no chunk is starting";
     case "ofapi_chargebacks_reconcile_failed":
       return "🚨 OFAPI chargebacks reconcile failed";
     case "ofapi_link_stats_reconcile_failed":
@@ -241,6 +243,8 @@ function resolveDetailForIncident(
       return "Scheduler heartbeat back; cron firing again";
     case "ops_sampler_silent":
       return "Golden-signal sampler emitting again";
+    case "sync_silent":
+      return "Fansly sync chunks starting again";
     case "ofapi_chargebacks_reconcile_failed":
       return "OFAPI chargebacks reconcile recovered";
     case "ofapi_link_stats_reconcile_failed":
@@ -695,6 +699,7 @@ type GlobalIncidentKind =
   | "golden_signal_lag"
   | "scheduler_silent"
   | "ops_sampler_silent"
+  | "sync_silent"
   | "ofapi_chargebacks_reconcile_failed"
   | "ofapi_link_stats_reconcile_failed"
   | "capture_payload_parity";

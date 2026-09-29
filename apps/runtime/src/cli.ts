@@ -15,6 +15,7 @@ import {
   findPageByLabel,
   findUserById,
   getPageDmConversationById,
+  getPageDmMessageRetentionLimit,
   insertDeliveryAttempt,
   insertErasureLog,
   replayFanslyWsDecode,
@@ -125,7 +126,12 @@ import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
   ensureTargetedThreadBackfillQueue,
+  readTargetedThreadBackfillJobStatus,
   sendTargetedThreadBackfillJob,
+  TARGETED_BACKFILL_EXPIRE_SECONDS,
+  targetedThreadBackfillWaitBudget,
+  waitForTargetedThreadBackfillJob,
+  type TargetedThreadBackfillResult,
 } from "./services/sync/targeted-thread-backfill.ts";
 import {
   buildStatusRows,
@@ -546,6 +552,66 @@ async function queueTargetedThreadBackfill(
   }
 }
 
+const TARGETED_BACKFILL_WAIT_POLL_MS = 2_000;
+
+/**
+ * `dm backfill-thread --wait`: follow the job in pgboss.job (read-only) and
+ * report the run's own result, which the worker returns as the job output.
+ * Anything but a `completed` / `partial` run exits non-zero.
+ */
+async function waitForTargetedThreadBackfill(
+  app: Awaited<ReturnType<typeof createAppContext>>,
+  input: { jobId: string; threadId: number; wait: number | true },
+) {
+  const { jobId, threadId } = input;
+  const startedAt = Date.now();
+  const elapsedSeconds = () => Math.floor((Date.now() - startedAt) / 1000);
+  const { status, timedOut } = await waitForTargetedThreadBackfillJob({
+    read: () => readTargetedThreadBackfillJobStatus(app.db, jobId),
+    ...targetedThreadBackfillWaitBudget(input.wait),
+    pollMs: TARGETED_BACKFILL_WAIT_POLL_MS,
+    onState: (row) => {
+      console.log(`job ${jobId}: ${row.state} (${elapsedSeconds()} s)`);
+    },
+  });
+  if (status === null) {
+    console.error(`Targeted backfill job ${jobId} is not in pgboss.job`);
+    process.exitCode = 1;
+    return;
+  }
+  if (timedOut) {
+    console.error(
+      `Targeted backfill job ${jobId} is still ${status.state} after ${elapsedSeconds()} s; `
+        + "it keeps running — its outcome will be in pgboss.job.output",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (status.state !== "completed") {
+    const output = status.output as { message?: unknown } | null;
+    const reason = typeof output?.message === "string" ? output.message : JSON.stringify(output);
+    console.error(`Targeted backfill job ${jobId} ${status.state}: ${reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  const result = status.output as TargetedThreadBackfillResult | null;
+  if (result === null || typeof result.outcome !== "string") {
+    console.error(`Targeted backfill job ${jobId} completed without a recorded outcome`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(JSON.stringify(result));
+  if (result.outcome !== "completed" && result.outcome !== "partial") {
+    console.error(
+      `Targeted backfill of thread ${threadId} ended ${result.outcome} after ${result.requests} request(s)`
+        + (result.outcome === "retention_limit_reached"
+          ? "; pass --ignore-retention-limit to walk past the depth cap for one run"
+          : ""),
+    );
+    process.exitCode = 1;
+  }
+}
+
 async function queuePlannerRecovery(
   databaseUrl: string,
 ) {
@@ -903,22 +969,62 @@ export function buildProgram() {
       "--ignore-retention-limit",
       "walk past the per-thread depth cap for THIS run only (global config unchanged)",
     )
+    .option(
+      "--wait [seconds]",
+      "follow the job and print the run's outcome; non-zero exit unless completed/partial. "
+        + `Bare: until the job ends (up to ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60} min queued, `
+        + `then its ${TARGETED_BACKFILL_EXPIRE_SECONDS / 60}-min expiry once running); `
+        + "with seconds: at most that long",
+      parsePositiveInt,
+    )
     .action(async (options) => {
       const app = await createAppContext();
       try {
         const threadId = options.thread as number;
+        const ignoreRetentionLimit = options.ignoreRetentionLimit === true;
         // The queue key is the PAGE (Stage 25: one sync chunk per page at a
         // time), so the enqueue resolves the thread's page first.
         const thread = await getPageDmConversationById(app.db, threadId);
         if (!thread) {
           throw new Error(`DM thread ${threadId} not found`);
         }
+        // The one worker refusal the owner controls from here, read-only: a job
+        // the worker would refuse on the depth cap is not queued at all. Every
+        // other check stays the worker's, under the lease.
+        if (!ignoreRetentionLimit) {
+          const retentionLimit = await getPageDmMessageRetentionLimit(app.db, threadId);
+          if (thread.storedMessageCount >= retentionLimit) {
+            console.error(
+              `Thread ${threadId} stores ${thread.storedMessageCount} messages, at or above its `
+                + `retention limit of ${retentionLimit}: the worker would refuse it as `
+                + "retention_limit_reached. Pass --ignore-retention-limit to walk past the cap "
+                + "for this run.",
+            );
+            process.exitCode = 1;
+            return;
+          }
+        }
         const jobId = await queueTargetedThreadBackfill(app.config.databaseUrl, {
           threadId,
           platformAccountId: thread.platformAccountId,
-          ignoreRetentionLimit: options.ignoreRetentionLimit === true,
+          ignoreRetentionLimit,
         });
         console.log(JSON.stringify({ jobId, threadId }));
+        if (jobId === null) {
+          console.error(
+            `Not queued: another targeted backfill for this page is queued or running `
+              + `(one per page; page ${thread.platformAccountId}). Re-run once it finishes.`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        if (options.wait !== undefined) {
+          await waitForTargetedThreadBackfill(app, {
+            jobId,
+            threadId,
+            wait: options.wait as number | true,
+          });
+        }
       } finally {
         await app.close();
       }

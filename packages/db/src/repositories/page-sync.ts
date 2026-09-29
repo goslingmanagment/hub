@@ -4,6 +4,7 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   pageFollows,
+  pageSyncProviderHolds,
   pageSyncStates,
   pages,
 } from "../schema.ts";
@@ -902,11 +903,21 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
 /** The time a runnable row last became eligible or was last served: its
  * request, its last lease, or the retry/pacing deadline it waited out. The
  * planner keeps a passed retry_at until the next lease outcome or request
- * rewrites it, so the deadline still counts after the row turns pending. */
-function pageSyncRunnableSinceSql(tableAlias: string) {
+ * rewrites it, so the deadline still counts after the row turns pending.
+ * Also the ops watchdog's clock for an outstanding request (sync_silent). */
+export function pageSyncRunnableSinceSql(tableAlias: string) {
   return sql.raw(
     `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
   );
+}
+
+/** True unless the page is inside a provider hold at `now`
+ * (armPageSyncProviderHold): then none of its streams may start. */
+function pageSyncProviderHoldClearSql(pageIdColumn: string, now: Date) {
+  return sql`not exists (
+    select 1 from ${pageSyncProviderHolds} ph
+    where ph.page_id = ${sql.raw(pageIdColumn)} and ph.hold_until > ${now}
+  )`;
 }
 
 /** SYNC_STREAM_STARVED_PRIORITY for a row that has starved past its stream's
@@ -2125,6 +2136,7 @@ export async function listRunnablePageSync(
         and not (p.platform = 'onlyfans' and st.stream = 'dm_messages')
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
+        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
     )
     select rs."pageId" as "pageId",
            rs."platform" as "platform",
@@ -2205,6 +2217,7 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
+        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
       from runnable r
@@ -2313,7 +2326,8 @@ export interface TargetedPageSyncLease {
  *    request (`applied_seq` is never advanced here, so a queued scheduled
  *    request survives the run untouched).
  * Everything that guards the regular acquire still guards this one: paused,
- * blocked, retry-backoff, already-leased, and non-active pages all refuse.
+ * blocked, retry-backoff, already-leased, provider-held and non-active pages
+ * all refuse.
  * `started_at` is left alone — this run is not the stream's scheduled chunk.
  */
 export async function acquireTargetedPageSyncLease(
@@ -2349,6 +2363,7 @@ export async function acquireTargetedPageSyncLease(
       and st.blocker_kind is null
       and st.leased_seq is null
       and (st.retry_at is null or st.retry_at <= ${now})
+      and ${pageSyncProviderHoldClearSql("st.page_id", now)}
       and exists (
         select 1 from ${pages} p
         where p.id = st.page_id and p.status = 'active'
@@ -2735,6 +2750,51 @@ export function activePageSyncRetryAt(retryAt: Date | null, now: Date) {
 function hasProviderCooldown(retryKind: string | null, retryAt: Date | null, now: Date) {
   return (retryKind === "rate_limit" || retryKind === "provider_5xx") &&
     retryAt !== null && retryAt.getTime() > now.getTime();
+}
+
+/**
+ * R04: hold EVERY sync stream of the page until `holdUntil` — the regular
+ * lease, the targeted lease and the runnable listing all refuse a held page.
+ * The hold lives beside page_sync_states on purpose: a Sync now, a B1 wake or
+ * a planner tick rewrites a stream's retry state, and none of them may lift
+ * it; sibling rows, streaks and health stay untouched. Never shortens a hold
+ * already in force. Returns the hold's end when this call armed or extended
+ * it, else null.
+ */
+export async function armPageSyncProviderHold(
+  db: Database,
+  input: {
+    pageId: number;
+    stream: SyncStream;
+    syncRunId: number | null;
+    reason: string;
+    holdUntil: Date;
+    /** The provider's own deadline, unclamped (diagnostics only). */
+    retryAfterAt: Date | null;
+    now?: Date;
+  },
+): Promise<Date | null> {
+  const now = input.now ?? new Date();
+  const result = await db.execute<{ holdUntil: TimestampValue }>(sql`
+    insert into ${pageSyncProviderHolds} as ph
+      (page_id, hold_until, reason, stream, sync_run_id, retry_after_at, armed_at)
+    values (
+      ${input.pageId}, ${input.holdUntil}, ${input.reason}, ${input.stream},
+      ${input.syncRunId}, ${input.retryAfterAt}, ${now}
+    )
+    on conflict (page_id) do update
+    set hold_until = excluded.hold_until,
+        reason = excluded.reason,
+        stream = excluded.stream,
+        sync_run_id = excluded.sync_run_id,
+        retry_after_at = excluded.retry_after_at,
+        armed_at = excluded.armed_at
+    where ph.hold_until < excluded.hold_until
+    returning ph.hold_until as "holdUntil"
+  `);
+
+  const row = result.rows[0];
+  return row ? normalizeTimestamp(row.holdUntil, "holdUntil") : null;
 }
 
 export async function retryPageSync(

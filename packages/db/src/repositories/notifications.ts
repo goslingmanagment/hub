@@ -31,6 +31,7 @@ export type NotificationIncidentKind =
   | "golden_signal_lag"
   | "scheduler_silent"
   | "ops_sampler_silent"
+  | "sync_silent"
   | "ofapi_chargebacks_reconcile_failed"
   | "ofapi_link_stats_reconcile_failed"
   | "ai_provider_billing"
