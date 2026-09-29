@@ -114,8 +114,9 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  *
  * Why the two writes are one transaction. The queue is capture-plane
  * operational state (§3.4) keyed on the media offer ref, and its whole contract
- * is "every media the PAGE OWNS has a refresh row". A media row
- * committed without its queue row is a media item the per-media lane will never
+ * is "every media the PAGE OWNS and shows OUTSIDE A DM has a refresh row" (the
+ * two checks at the end of this comment). Such a media row committed without
+ * its queue row is a media item the per-media lane will never
  * look at, and nothing downstream would notice: its traffic history would simply
  * be missing forever, with a healthy lane and a clean coverage row. Seeding on a
  * timer instead leaves the same hole for however long the timer is — and the
@@ -142,15 +143,17 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  * (prod: ~3.6k queued, none ever answered). The media head is still written —
  * other readers want it — but the queue row is skipped when the media's owner
  * and the page's own account ref are both known and differ; either one unknown
- * fails open. `creator_media` keeps no owner, so neither the chunk query nor
- * `seedMediaStatsQueue` (first enable only) can tell such rows apart; the ones
- * queued before this check are removed by the owner-run one-off
- * `fansly:media-stats-prune-foreign`, which reads the owner from the events.
+ * fails open. `creator_media` keeps no owner, so the chunk query cannot tell
+ * such rows apart, and `seedMediaStatsQueue` (first enable only) skips them only
+ * because a fan's media is first seen in a DM; the ones queued before this check
+ * are removed by the owner-run one-off `fansly:media-stats-prune-foreign`, which
+ * reads the owner from the events.
  *
  * AND ONLY FROM AN ORIGIN THAT SHOWS IT OUTSIDE A DM (`MEDIA_STATS_QUEUE_ORIGINS`).
  * The origin is the observation's, not the head's `first_origin`: a media first
  * seen in a DM keeps that first origin for good, and is queued by the first
- * post observation that carries it. The rows queued before this check are
+ * post observation that carries it. A DM-only head with no queue row is this
+ * rule working, not the hole above. The rows queued before this check are
  * removed by the owner-run one-off `fansly:media-stats-prune-dm-only`.
  */
 export async function upsertCreatorMedia(

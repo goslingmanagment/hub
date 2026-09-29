@@ -154,9 +154,9 @@ export async function countDmOnlyMediaStatsQueueRows(
 /**
  * Delete the DM-only rows (see `dmOnlyMediaStatsRows`). Operational queue
  * state, not captured facts: the `creator_media` heads, the collected buckets
- * and every observation stay, and the enqueue's origin check and the purchase
- * mark's update-only rule keep the rows from coming back. Idempotent — a second
- * run deletes nothing.
+ * and every observation stay, and the enqueue's and the first-enable seed's
+ * origin check and the purchase mark's update-only rule keep the rows from
+ * coming back. Idempotent — a second run deletes nothing.
  */
 export async function deleteDmOnlyMediaStatsQueueRows(
   db: Database,

@@ -11,9 +11,8 @@
 // Owner-run, never scheduled: dry-run is the DEFAULT and is provably read-only
 // (a READ ONLY transaction); `--execute` opts in; a re-run reports zeros. It
 // deletes queue state only — the heads, the collected buckets and the journal
-// stay — and it makes no platform call. Also the repair for a page's first
-// enable, whose seeding cannot tell DM-only media from the rest (see
-// `seedMediaStatsQueue`).
+// stay — and it makes no platform call. A page's first enable does not need
+// it: the seeding skips the same heads (see `seedMediaStatsQueue`).
 
 import { sql } from "drizzle-orm";
 

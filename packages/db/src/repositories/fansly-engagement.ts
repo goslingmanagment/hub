@@ -37,6 +37,7 @@ import {
   isDmArchiveScopeFenced,
   tryAcquireDmArchiveWriterFenceLock,
 } from "./erasure-fence.ts";
+import { MEDIA_STATS_QUEUE_ORIGINS } from "./media-plane.ts";
 
 export type EngagementPlatform = "fansly" | "onlyfans";
 
@@ -1087,18 +1088,31 @@ export function mediaStatsIntervalDays(
  * reason: the media offer ref is a snowflake, so `> cursor` resumes exactly
  * where the last batch stopped even as rows are inserted underneath it, and the
  * cursor returned is the last ref SCANNED rather than the last inserted — a
- * batch that hits only rows already queued still has to advance or the sweep
- * re-reads the same prefix forever. Costs ZERO platform calls.
+ * batch that hits only rows already queued, or only heads the origin rule below
+ * skips, still has to advance or the sweep re-reads the same prefix forever.
+ * Costs ZERO platform calls.
  *
  * `refresh_class` is seeded `fresh` and then RECOMPUTED at read time from the
  * item's age (see the chunk query): a class stored at seed time would freeze
  * every item in the tier it happened to be in on the day the lane was enabled.
  *
- * Known gap: `creator_media` keeps no owner and no DM-only mark, so this sweep
- * cannot skip what `upsertCreatorMedia` does — the media fans sent in DMs, and
- * the page's own media seen only in DMs. A page's first enable queues them too;
- * `fansly:media-stats-prune-foreign` and `fansly:media-stats-prune-dm-only`
- * remove them.
+ * ONLY HEADS FIRST SEEN FROM AN ORIGIN THE ENQUEUE QUEUES
+ * (`MEDIA_STATS_QUEUE_ORIGINS`) — the rule `upsertCreatorMedia` applies to an
+ * observation, read here from the head's `first_origin`. A head first
+ * seen in a DM, the vault or the purchase history is skipped: the page's own
+ * DM PPV, whose per-media views are not wanted (owner decision 2026-09-29), and
+ * the media fans sent in DMs. Seeding them would put a fresh never-visited row
+ * ahead of every overdue post item until someone re-ran the prunes. Such a
+ * head that a post ALSO shows needs no seed: the media plane projects every
+ * post observation whether or not this lane is enabled, and
+ * `upsertCreatorMedia` queues it there. So what the sweep inserts is a subset
+ * of what `fansly:media-stats-prune-dm-only` keeps, and a re-seed after that
+ * prune adds nothing back.
+ *
+ * Known gap: `creator_media` keeps no owner, so a head another account owns
+ * that was first seen on a post would still be seeded (production: none; every
+ * foreign-only head was first seen in a DM). `fansly:media-stats-prune-foreign`
+ * removes it.
  */
 export async function seedMediaStatsQueue(
   db: Database,
@@ -1110,8 +1124,8 @@ export async function seedMediaStatsQueue(
   },
 ): Promise<{ scanned: number; inserted: number; cursor: string | null }> {
   const after = input.afterSubjectRef ?? "";
-  const scan = await db.execute<{ media_offer_ref: string }>(sql`
-    select m.media_offer_ref
+  const scan = await db.execute<{ media_offer_ref: string; first_origin: string }>(sql`
+    select m.media_offer_ref, m.first_origin
       from creator_media m
      where m.page_id = ${input.pageId}
        and m.platform = 'fansly'
@@ -1123,17 +1137,20 @@ export async function seedMediaStatsQueue(
   if (refs.length === 0) {
     return { scanned: 0, inserted: 0, cursor: input.afterSubjectRef };
   }
-  const inserted = await db.execute(sql`
+  const queued = scan.rows
+    .filter((row) => MEDIA_STATS_QUEUE_ORIGINS.has(row.first_origin))
+    .map((row) => row.media_offer_ref);
+  const inserted = queued.length === 0 ? null : await db.execute(sql`
     insert into subject_refresh_state (
       page_id, plane, subject_ref, refresh_class, next_due_at
     )
     select ${input.pageId}, 'media_stats', ref, 'fresh', ${input.dueAt}
-      from unnest(${subjectRefArrayParam(refs)}) as ref
+      from unnest(${subjectRefArrayParam(queued)}) as ref
     on conflict (page_id, plane, subject_ref) do nothing
   `);
   return {
     scanned: refs.length,
-    inserted: inserted.rowCount ?? 0,
+    inserted: inserted?.rowCount ?? 0,
     cursor: refs[refs.length - 1] ?? input.afterSubjectRef,
   };
 }

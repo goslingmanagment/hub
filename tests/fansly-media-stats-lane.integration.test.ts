@@ -161,7 +161,13 @@ async function seedPage() {
  */
 async function seedMedia(
   pageId: number,
-  rows: Array<{ ref: string; createdAtPlatform: Date | null; firstObservedAt?: Date }>,
+  rows: Array<{
+    ref: string;
+    createdAtPlatform: Date | null;
+    firstObservedAt?: Date;
+    /** Where the head was first seen; `stats_agg` unless a case says otherwise. */
+    firstOrigin?: string;
+  }>,
   options: { queueCursor?: Record<string, unknown> } = {},
 ) {
   for (const [index, row] of rows.entries()) {
@@ -170,7 +176,7 @@ async function seedMedia(
          page_id, platform, media_offer_ref, first_origin, created_at_platform,
          first_observed_at, last_observed_at, content_hash, source_event_id,
          source_observation_id, source_account_seq
-       ) values ($1, 'fansly', $2, 'stats_agg', $3, $4, $4, $5, 1, 1, $6)`,
+       ) values ($1, 'fansly', $2, $7, $3, $4, $4, $5, 1, 1, $6)`,
       [
         pageId,
         row.ref,
@@ -178,6 +184,7 @@ async function seedMedia(
         row.firstObservedAt ?? row.createdAtPlatform ?? NOW,
         "f".repeat(64),
         index + 1,
+        row.firstOrigin ?? "stats_agg",
       ],
     );
     if (options.queueCursor !== undefined) {
@@ -382,6 +389,34 @@ describe("media_stats lane — the queue", () => {
     // The claim is DIFFERENT, not worse: this item's age is when we first saw
     // it, and the lane says so rather than inventing a publication date.
     expect(basisByRef.get(ref(104))).toBe("first_seen");
+  });
+
+  it("seeds only media first seen outside a DM — the enqueue's own origins", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const fresh = new Date(NOW.getTime() - 5 * DAY_MS);
+    await seedMedia(page.id, [
+      { ref: ref(111), createdAtPlatform: fresh, firstOrigin: "post" },
+      { ref: ref(112), createdAtPlatform: fresh, firstOrigin: "stats_agg" },
+      // The page's own DM PPV, a fan's DM media, and what the vault and the
+      // purchase history list: `upsertCreatorMedia` queues none of them, and a
+      // first enable must not either — each would be a FRESH never-visited row
+      // ahead of every overdue post item.
+      { ref: ref(113), createdAtPlatform: fresh, firstOrigin: "dm_sidecar" },
+      { ref: ref(114), createdAtPlatform: fresh, firstOrigin: "vault" },
+      { ref: ref(115), createdAtPlatform: fresh, firstOrigin: "account_media_batch" },
+      { ref: ref(116), createdAtPlatform: fresh, firstOrigin: "order_history" },
+    ]);
+
+    await fanslyMediaStatsChunk(
+      appStub(adapterStub()),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
+    );
+
+    const queue = await listSubjectRefreshState(testDb.db, { pageId: page.id, plane: "media_stats" });
+    expect(queue.map((row) => row.subjectRef).sort()).toEqual([ref(111), ref(112)].sort());
+    // The sweep still walked every head: skipped ones do not stall the cursor.
+    expect(await cursor(page.id)).toMatchObject({ seedComplete: true, seedCursor: ref(116) });
   });
 
   it("visits DIRTY rows first — WP-F2's purchase signals and the top-50", async (ctx) => {

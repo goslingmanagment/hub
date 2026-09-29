@@ -226,21 +226,31 @@ async function seedObservation(
 }
 
 /** One `/timeline` page: a single post attaching every media it carries, with
- *  their cards in `accountMedia` exactly as the DM sidecar serves them. */
+ *  their cards in `accountMedia` exactly as the DM sidecar serves them. With
+ *  `bundles`, the post attaches each bundle instead of the media it names — the
+ *  timeline still serves the members' cards in `accountMedia`. */
 async function seedPostsObservation(
   pageId: number,
   key: string,
   media: ReadonlyArray<Record<string, unknown>>,
+  options: { bundles?: ReadonlyArray<{ id: string; accountMediaIds: string[] }> } = {},
 ) {
+  const bundles = options.bundles ?? [];
+  const bundled = new Set(bundles.flatMap((bundle) => bundle.accountMediaIds));
+  const attachments = [
+    ...media.filter((row) => !bundled.has(String(row.id)))
+      .map((row) => ({ contentType: 1, contentId: row.id })),
+    ...bundles.map((bundle) => ({ contentType: 2, contentId: bundle.id })),
+  ].map((attachment, pos) => ({ ...attachment, pos }));
   const payload = {
     posts: [{
       id: `post-${key}`,
       content: "",
       createdAt: Math.floor(new Date("2026-08-20T12:00:00Z").getTime() / 1000),
-      attachments: media.map((row, pos) => ({ contentType: 1, contentId: row.id, pos })),
+      attachments,
     }],
     accountMedia: media,
-    accountMediaBundles: [],
+    accountMediaBundles: bundles.map((bundle) => ({ ...bundle, accountId: OWN_REF })),
     account: { id: OWN_REF },
   };
   await insertObservation(testDb!.db, {
@@ -586,6 +596,38 @@ describe("media plane — one paid DM page, end to end", () => {
     expect(queued).toEqual({ last_visited_at: null, dirty_reason: null });
   });
 
+  it("queues a DM-first media once a post's BUNDLE shows it, and never the bundle", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const payload = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    });
+    await seedObservation(page.id, "dm_messages", "dm-first-bundled", payload);
+    await project(page.id);
+    expect(await mediaStatsQueue(page.id)).toEqual([]);
+
+    // The post names only the bundle; the member is reached through it.
+    await seedPostsObservation(page.id, "bundled", [payload.accountMedia[0]!], {
+      bundles: [{ id: "bundle-on-post", accountMediaIds: ["offer-message-1"] }],
+    });
+    await projectPosts(page.id);
+
+    // The member is queued — the route reads media offers — and the bundle is
+    // not a media subject, so it never is.
+    expect(await mediaStatsQueue(page.id)).toEqual(["offer-message-1"]);
+    const [bundle] = await rows<{ member_refs: string[] }>(
+      `select member_refs from creator_media_bundles
+        where page_id = $1 and bundle_ref = 'bundle-on-post'`,
+      [page.id],
+    );
+    expect(bundle!.member_refs).toEqual(["offer-message-1"]);
+  });
+
   it("prunes the fan's rows queued before the owner check, on an owner's --execute only", async (context) => {
     if (!testDb) {
       context.skip();
@@ -697,7 +739,13 @@ describe("media plane — one paid DM page, end to end", () => {
       withOrder: false,
     });
     const own = payload.accountMedia[0]!;
-    for (const id of ["offer-dm-visited", "offer-dm-posted", "offer-dm-bundled", "offer-dm-top"]) {
+    for (const id of [
+      "offer-dm-visited",
+      "offer-dm-posted",
+      "offer-dm-bundled",
+      "offer-dm-by-ref",
+      "offer-dm-top",
+    ]) {
       payload.accountMedia.push({ ...own, id, mediaId: `raw-${id}` });
     }
     await seedObservation(page.id, "dm_messages", "dm-only", payload);
@@ -715,12 +763,30 @@ describe("media plane — one paid DM page, end to end", () => {
          first_observed_at, last_observed_at, content_hash, attachment_count,
          attachment_refs, source_event_id, source_observation_id, source_account_seq)
        values ($1, 'fansly', 'post-kept', '2026-08-20T00:00:00Z', '2026-08-20T00:00:00Z',
-               '2026-08-20T00:00:00Z', repeat('d', 64), 3, $2::jsonb, 1, 1, 1)`,
+               '2026-08-20T00:00:00Z', repeat('d', 64), 4, $2::jsonb, 1, 1, 1)`,
       [page.id, JSON.stringify([
         { pos: 0, contentType: 1, contentId: "offer-dm-posted" },
         { pos: 1, contentType: 2, contentId: "bundle-on-post" },
         { pos: 2, contentType: 1, contentId: "offer-orphan-posted" },
+        { pos: 3, contentType: 2, contentId: "bundle-by-ref" },
       ])],
+    );
+    // A bundle on a post that only the MEMBER's head names — no bundle head.
+    await testDb.pool.query(
+      `update creator_media set bundle_refs = array['bundle-by-ref']
+        where page_id = $1 and media_offer_ref = 'offer-dm-by-ref'`,
+      [page.id],
+    );
+    // A ranked item: first seen from the account statistics, on no post, and
+    // no longer in any `stats_top_media` window.
+    await testDb.pool.query(
+      `insert into creator_media (
+         page_id, platform, media_offer_ref, first_origin, first_observed_at,
+         last_observed_at, content_hash, source_event_id, source_observation_id,
+         source_account_seq
+       ) values ($1, 'fansly', 'offer-ranked', 'stats_agg', now(), now(),
+                 repeat('c', 64), 1, 1, 1)`,
+      [page.id],
     );
     await testDb.pool.query(
       `insert into creator_media_bundles (
@@ -751,9 +817,11 @@ describe("media plane — one paid DM page, end to end", () => {
         "offer-dm-visited",
         "offer-dm-posted",
         "offer-dm-bundled",
+        "offer-dm-by-ref",
         "offer-dm-top",
         "offer-orphan",
         "offer-orphan-posted",
+        "offer-ranked",
       ]],
     );
     // A row the lane has visited, and a purchase has marked since: its
@@ -766,6 +834,7 @@ describe("media plane — one paid DM page, end to end", () => {
     );
     const everything = [
       "offer-dm-bundled",
+      "offer-dm-by-ref",
       "offer-dm-posted",
       "offer-dm-top",
       "offer-dm-visited",
@@ -773,6 +842,7 @@ describe("media plane — one paid DM page, end to end", () => {
       "offer-orphan",
       "offer-orphan-posted",
       "offer-post-first",
+      "offer-ranked",
     ];
     expect(await mediaStatsQueue(page.id)).toEqual(everything);
     const pruned = ["offer-dm-visited", "offer-message-1", "offer-orphan"];
@@ -812,11 +882,13 @@ describe("media plane — one paid DM page, end to end", () => {
       [page.id],
     )).map((row) => row.media_offer_ref)).toEqual([
       "offer-dm-bundled",
+      "offer-dm-by-ref",
       "offer-dm-posted",
       "offer-dm-top",
       "offer-dm-visited",
       "offer-message-1",
       "offer-post-first",
+      "offer-ranked",
     ]);
     // And a second run finds nothing to do.
     expect(await runFanslyMediaStatsDmOnlyPrune(appStub(), { dryRun: false }))
