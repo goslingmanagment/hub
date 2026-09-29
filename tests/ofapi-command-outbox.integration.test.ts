@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -401,35 +399,6 @@ describe("OFAPI command outbox intake", () => {
       "select count(*)::int as count from ofapi_credit_ledger",
     );
     expect(ledger.rows[0]?.count).toBe(0);
-  });
-
-  it("migration 0093 releases legacy 400-day typing rows for bounded cleanup", async () => {
-    const created = await createCommand(typingCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-          set created_at = now() - interval '11 seconds',
-              dedupe_expires_at = now() + interval '400 days'
-        where id = $1`,
-      [commandId],
-    );
-
-    const migrationSql = readFileSync(
-      path.resolve("packages/db/migrations/0093_typing_command_retention.sql"),
-      "utf8",
-    );
-    await testDb!.pool.query(migrationSql);
-
-    // The migration uses PostgreSQL's microsecond clock; a JS Date created in
-    // the same millisecond can still precede its strict expiry boundary.
-    // Advance from the database clock without sleeping or changing the row.
-    const { rows: [clock] } = await testDb!.pool.query<{ sweep_at: Date }>(
-      "select clock_timestamp() + interval '1 millisecond' as sweep_at",
-    );
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never, clock!.sweep_at))
-      .resolves.toMatchObject({ expired: 1, purged: 1, enqueued: 0 });
-    expect((await getCommand(commandId)).statusCode).toBe(404);
   });
 
   it("creates one queued mark-read command with an empty payload and no payload echo", async () => {
@@ -1103,6 +1072,24 @@ describe("OFAPI command outbox intake", () => {
     await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
       .resolves.toMatchObject({ expired: 0, purged: 1, enqueued: 0 });
     expect((await getCommand(commandId)).statusCode).toBe(404);
+
+    // A stale queued beacon whose dedupe window has ALREADY closed goes in ONE
+    // pass: the sweep expires before it purges, so the row it just cancelled is
+    // purged in the same sweep. (The shape migration 0093 left behind when it
+    // capped legacy 400-day typing horizons at the migration instant.)
+    const lapsed = await createCommand(typingCommandBody());
+    expect(lapsed.statusCode, lapsed.body).toBe(202);
+    const lapsedId = (lapsed.json() as { commandId: string }).commandId;
+    await testDb!.pool.query(
+      `update ofapi_commands
+          set created_at = now() - interval '11 seconds',
+              dedupe_expires_at = now() - interval '1 second'
+        where id = $1`,
+      [lapsedId],
+    );
+    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
+      .resolves.toMatchObject({ expired: 1, purged: 1, enqueued: 0 });
+    expect((await getCommand(lapsedId)).statusCode).toBe(404);
   });
 
   it("executes one unsend attempt and confirms with the target platform message id", async () => {

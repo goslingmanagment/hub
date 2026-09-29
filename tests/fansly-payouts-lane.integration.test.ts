@@ -10,20 +10,23 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
   fanslyPayoutsChunk,
-  oldestCreatedAtMs,
   parseFanslyPayoutsCursorState,
-  payoutHeadGap,
   payoutRequestRows,
-  payoutRequestTotal,
-  payoutWalkStopAt,
-  settleWalkStop,
-  walkContinuationAt,
 } from "../apps/runtime/src/services/sync/fansly-payouts.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import {
+  LIVE_TOTAL,
+  NOW,
+  OLDEST_MS,
+  PAGE_SIZE,
+  ref,
+  requestPage,
+  stableRequestPage,
+} from "./helpers/fansly-payouts-fixtures.ts";
 import {
   fanslyLaneAppStub,
   fanslyLaneInput,
@@ -48,54 +51,7 @@ beforeEach(async () => {
   }
 });
 
-const NOW = new Date("2026-08-22T09:00:00.000Z");
 const NEXT_DAY = new Date("2026-08-23T09:00:00.000Z");
-
-/** The live history: `total = 83`, page size 10, oldest 2025-06-23. */
-const LIVE_TOTAL = 83;
-const PAGE_SIZE = 10;
-const OLDEST_MS = Date.parse("2025-06-23T12:00:00.000Z");
-
-function ref(n: number): string {
-  return `0009${String(10000000000000 + n).padStart(14, "0")}`;
-}
-
-/** One page of the request history at `offset`, shaped exactly as the wire is:
- *  `{total, data[]}`, ten rows until the last, `createdAt` descending. */
-function requestPage(offset: number, total = LIVE_TOTAL) {
-  const remaining = Math.max(0, total - offset);
-  const size = Math.min(PAGE_SIZE, remaining);
-  const data = Array.from({ length: size }, (_unused, index) => {
-    const row = offset + index;
-    return {
-      id: ref(20000 + row),
-      accountId: "acct-payouts",
-      amount: 131000 + row,
-      payoutMethodId: ref(9001),
-      // ONE CODE DEEP: every live row carried 8.
-      status: 8,
-      version: 1,
-      // Descending, so the LAST row of the LAST page is the floor.
-      createdAt: OLDEST_MS + (total - 1 - row) * 86_400_000,
-      updatedAt: OLDEST_MS + (total - 1 - row) * 86_400_000 + 3_600_000,
-    };
-  });
-  return { total, data };
-}
-
-/** The same history with ids that stay with their payout as new ones land at
- *  the head: the oldest payout is always `ref(20000)`, the newest
- *  `ref(20000 + total - 1)`. What a catch-up has to be able to recognise. */
-function stableRequestPage(offset: number, total: number) {
-  const page = requestPage(offset, total);
-  return {
-    total,
-    data: page.data.map((row, index) => ({
-      ...row,
-      id: ref(20000 + (total - 1 - (offset + index))),
-    })),
-  };
-}
 
 /** The two live payout methods, `metadata` JSON-ENCODED exactly as served. */
 function payoutMethods() {
@@ -887,88 +843,5 @@ describe("[sync-critical] WP-F7 payouts lane", () => {
     expect(stats.methodCount).toBe(0);
     expect(stats.payoutCount).toBe(0);
     expect(stats.oldestPayoutAt).toBeNull();
-  });
-});
-
-describe("WP-F7 payout walk helpers", () => {
-  it("reads rows and `total` out of the wire shape, and refuses anything else", () => {
-    const page = requestPage(0);
-    expect(payoutRequestRows(page)).toHaveLength(10);
-    expect(payoutRequestTotal(page)).toBe(LIVE_TOTAL);
-    // A drifted body is EMPTY here, and the shape gate refuses to parse it at
-    // all — the two together are what stop a truncated response from reading as
-    // "the history ends here".
-    expect(payoutRequestRows({ total: 83 })).toEqual([]);
-    expect(payoutRequestRows(null)).toEqual([]);
-    expect(payoutRequestTotal({ data: [] })).toBeNull();
-  });
-
-  it("takes the FLOOR as the oldest instant on the page, ignoring junk", () => {
-    expect(oldestCreatedAtMs(requestPage(80).data)).toBe(OLDEST_MS);
-    expect(oldestCreatedAtMs([{ createdAt: 0 }, { createdAt: -1 }, { createdAt: "x" }]))
-      .toBeNull();
-    expect(oldestCreatedAtMs([])).toBeNull();
-  });
-
-  it("names a short page that contradicts its own `total`", () => {
-    expect(payoutWalkStopAt({ offset: 10, rowCount: 4, total: 900 })).toBe("short_before_total");
-    expect(payoutWalkStopAt({ offset: 80, rowCount: 3, total: 83 })).toBe("exhausted");
-    expect(payoutWalkStopAt({ offset: 10, rowCount: 4, total: null })).toBe("exhausted");
-    // A FULL page that reached `total` is the end, not a contradiction.
-    expect(payoutWalkStopAt({ offset: 80, rowCount: 10, total: 83 })).toBe("exhausted");
-  });
-
-  it("never lets a later stop upgrade a partial one", () => {
-    expect(settleWalkStop(null, "short_before_total")).toBe("short_before_total");
-    expect(settleWalkStop("exhausted", "repeat_request")).toBe("repeat_request");
-    expect(settleWalkStop("page_cap", "exhausted")).toBe("page_cap");
-    expect(settleWalkStop("short_before_total", "exhausted")).toBe("short_before_total");
-  });
-
-  it("sees a head gap only on a FULL head that shares nothing with the last one", () => {
-    const yesterday = stableRequestPage(0, LIVE_TOTAL).data.map((row) => row.id);
-    const gap = (total: number, previousTotal: number | null = LIVE_TOTAL, refs = yesterday) =>
-      payoutHeadGap({
-        previousHeadRefs: refs,
-        previousTotal,
-        headRows: stableRequestPage(0, total).data,
-        total,
-      });
-    expect(gap(LIVE_TOTAL + 9)).toBeNull();
-    expect(gap(LIVE_TOTAL + 10)).toEqual({ stopRefs: yesterday, untilOffset: null });
-    // Without refs, `total` has to grow by MORE than a head page.
-    expect(gap(LIVE_TOTAL + 10, LIVE_TOTAL, [])).toBeNull();
-    expect(gap(LIVE_TOTAL + 11, LIVE_TOTAL, [])).toEqual({ stopRefs: null, untilOffset: 11 });
-    expect(gap(LIVE_TOTAL + 11, null, [])).toBeNull();
-    // A short head holds every payout there is.
-    expect(payoutHeadGap({
-      previousHeadRefs: ["x"],
-      previousTotal: 0,
-      headRows: stableRequestPage(0, 4).data,
-      total: 4,
-    })).toBeNull();
-  });
-
-  it("reads a cursor saved before the stop was kept as an exhausted walk", () => {
-    const legacy = parseFanslyPayoutsCursorState({
-      version: 1,
-      utcDay: "2026-08-22",
-      walkOffset: 90,
-      walkPages: 9,
-      walkTotal: 83,
-      walkDone: true,
-    });
-    expect(legacy?.walkStop).toBe("exhausted");
-    expect(legacy?.headRefs).toEqual([]);
-    expect(legacy?.catchUp).toBeNull();
-    const open = parseFanslyPayoutsCursorState({ version: 1, utcDay: "2026-08-22", walkDone: false });
-    expect(open?.walkStop).toBeNull();
-  });
-
-  it("spaces a walk continuation with jitter, never contiguously", () => {
-    // Burst SHAPE is the ban-risk surface, not daily volume.
-    expect(walkContinuationAt(NOW, 20_000, () => 0).getTime() - NOW.getTime()).toBe(14_000);
-    expect(walkContinuationAt(NOW, 20_000, () => 1).getTime() - NOW.getTime()).toBe(26_000);
-    expect(walkContinuationAt(NOW, 0, () => 0.5).getTime()).toBe(NOW.getTime());
   });
 });

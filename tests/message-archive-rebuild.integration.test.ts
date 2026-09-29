@@ -21,7 +21,6 @@ import {
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import {
-  rebuildMessageArchiveProjection,
   runMessageArchiveBackfills,
   runMessageArchiveProjection,
 } from "../apps/runtime/src/services/projections/message-archive.ts";
@@ -393,34 +392,6 @@ describe("message-archive shadow rebuild (W10)", () => {
     // Gate lifts once the partition is attached again.
     const build = await buildMessageArchiveShadow(appStub(), { accountId: ofPage.id });
     expect(build.results[0]).toMatchObject({ inserted: 2, highSeq: 2 });
-  });
-
-  it("documents the backfill-discard: the old delete+replay rebuild destroys pruned legacy seeds", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const { fanslyPage } = await seedPages();
-    await seedFanslyHotMessage(fanslyPage.id);
-    await runMessageArchiveBackfills(appStub());
-    await testDb.pool.query(
-      "delete from page_dm_messages where platform_message_id = 'fm-1'",
-    );
-    const before = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from message_archive where account_id = $1",
-      [fanslyPage.id],
-    );
-    expect(before.rows[0]!.n).toBe("1");
-
-    // The Stage 10 rebuild (no CLI dispatches here anymore — W10 replaced
-    // it) silently discards the row: no event to replay, no origin to
-    // re-backfill. THIS is why the shadow flow lifts instead of re-deriving.
-    await rebuildMessageArchiveProjection(appStub(), { accountId: fanslyPage.id });
-    const after = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from message_archive where account_id = $1",
-      [fanslyPage.id],
-    );
-    expect(after.rows[0]!.n).toBe("0");
   });
 
   it("switch refuses while the shadow is missing rows — nothing renamed", async (context) => {

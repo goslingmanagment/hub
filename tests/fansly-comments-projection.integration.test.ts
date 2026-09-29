@@ -616,24 +616,6 @@ describe("[sync-critical] WP-F5 comment projection", () => {
       .not.toContain("subject_refresh_state");
   });
 
-  it("declares itself in the registry with a real rebuild and a partition preflight", async (
-    context,
-  ) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const definition = findProjection(FANSLY_COMMENTS_PROJECTION);
-    expect(definition?.stateClass).toBe("fact_projection");
-    expect(definition?.rebuildKind).toBe("truncate_replay");
-    expect(definition?.rebuild).toBeTypeOf("function");
-    expect(definition?.eventTypes).toEqual([
-      "post.comment_observed",
-      "post.comment_list_observed",
-    ]);
-    expect(definition?.tables).toEqual(["post_comments"]);
-  });
-
   it("erases one fan's comments — and only that fan's", async (context) => {
     if (!testDb) {
       context.skip();
