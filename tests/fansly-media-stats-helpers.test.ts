@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  answeredFloor,
   countMediaStatBuckets,
   estimateMediaStatsCycle,
   mediaBackfillFirstMonthProbe,
@@ -263,5 +264,23 @@ describe("media_stats — the pure helpers", () => {
     // A walk anchored in the past never answers today's trailing window.
     expect(windowAnsweredBy(s0!, [span(33, 2), span(63, 32)])).toBe(false);
     expect(windowAnsweredBy(s0!, [])).toBe(false);
+  });
+
+  it("finds how far down a visit's windows reach, unbroken, from a walk's resume point", () => {
+    const now = NOW.getTime();
+    const span = (afterDays: number, beforeDays: number) => ({
+      afterMs: now - afterDays * DAY_MS,
+      beforeMs: now - beforeDays * DAY_MS,
+    });
+    const refresh = steadyWindows("long_tail", NOW, "split_31");
+    // A walk that resumes inside the split refresh — at a window key, or
+    // between keys — is covered to the refresh's far end.
+    expect(answeredFloor(now - 31 * DAY_MS, refresh)).toBe(now - 93 * DAY_MS);
+    expect(answeredFloor(now - 31 * DAY_MS - 7 * 3_600_000, refresh)).toBe(now - 93 * DAY_MS);
+    // Below the refresh, or across a gap, nothing is held.
+    expect(answeredFloor(now - 120 * DAY_MS, refresh)).toBe(now - 120 * DAY_MS);
+    expect(answeredFloor(now - 40 * DAY_MS, [span(31, 0), span(93, 62)])).toBe(now - 40 * DAY_MS);
+    expect(answeredFloor(now - 20 * DAY_MS, [span(31, 0), span(93, 62)])).toBe(now - 31 * DAY_MS);
+    expect(answeredFloor(now - 20 * DAY_MS, [])).toBe(now - 20 * DAY_MS);
   });
 });

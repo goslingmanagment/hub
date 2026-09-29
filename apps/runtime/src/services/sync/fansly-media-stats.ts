@@ -91,7 +91,8 @@
 // they cover it, so a first visit — whose walk opens with the trailing window —
 // answers the mark with the calls it spends on history, and does not start
 // without room for them. A walk resuming in the past cannot answer it, so that
-// visit reads the refresh first, whole, and gives the walk what is left. A
+// visit reads the refresh first, whole, and gives the walk what is left, from
+// below the refresh: a walk cut short resumes inside it. A
 // dirty item whose visit did not answer the mark stayed at the head of the
 // queue: every chunk re-read its trailing window and walked on, so its whole
 // history went in one morning (production 2026-09-29: 265 same-day re-reads).
@@ -724,31 +725,45 @@ export function windowAnsweredBy(
   window: { afterMs: number; beforeMs: number },
   answered: ReadonlyArray<{ afterMs: number; beforeMs: number }>,
 ): boolean {
-  const floor = window.afterMs + DAY_MS;
-  let reached = window.beforeMs - DAY_MS;
+  return answeredFloor(window.beforeMs - DAY_MS, answered) <= window.afterMs + DAY_MS;
+}
+
+/**
+ * How far down the spans a visit holds reach from `fromMs`, unbroken: the
+ * lowest start of a run of spans that covers `fromMs`, or `fromMs` itself when
+ * none does. Everything between the two was read this visit.
+ */
+export function answeredFloor(
+  fromMs: number,
+  answered: ReadonlyArray<{ afterMs: number; beforeMs: number }>,
+): number {
+  let reached = fromMs;
   // Newest first: a span that ends below the point still to cover is a gap,
   // and nothing after it in this order ends any higher.
   for (const span of [...answered].sort((left, right) => right.beforeMs - left.beforeMs)) {
-    if (reached <= floor) {
-      return true;
-    }
     if (span.beforeMs < reached) {
-      return false;
+      break;
     }
     reached = Math.min(reached, span.afterMs);
   }
-  return reached <= floor;
+  return reached;
 }
 
-/** Every window of a refresh plan is one the visit already holds: the exact
- *  request journaled, or covered by the windows it journaled. */
+/** A window the visit already holds: the exact request journaled, or covered
+ *  by the windows it journaled. */
+function windowHeld(
+  window: { periodMs: number; afterMs: number; beforeMs: number },
+  visit: VisitWindows,
+): boolean {
+  return visit.issued.has(windowKey(window)) || windowAnsweredBy(window, visit.answered);
+}
+
+/** Every window of a refresh plan is one the visit already holds. */
 function refreshAnswered(
   windows: ReadonlyArray<{ periodMs: number; afterMs: number; beforeMs: number }>,
   visit: VisitWindows,
 ): boolean {
-  return windows.every((window) =>
-    visit.issued.has(windowKey(window)) || windowAnsweredBy(window, visit.answered)
-  );
+  return windows.every((window) => windowHeld(window, visit));
 }
 
 // ── the handler ──────────────────────────────────────────────────────────────
@@ -1192,9 +1207,10 @@ export async function fanslyMediaStatsChunk(
    * its trailing window while the backfill walked its whole history in one
    * morning (production 2026-09-29: 22 calls on one item in five chunks). So:
    * a first visit's own opening windows ARE the refresh — `[now − 31 d, now]`
-   * and on — and the visit does not start without room for them; a walk that
-   * resumes in the past cannot answer it, so the refresh goes FIRST, reserved
-   * whole, and the backfill takes what is left.
+   * and on — and the visit does not start without room for them, and a split
+   * window its walk did not reach is read alone; a walk that resumes in the
+   * past cannot answer it, so the refresh goes FIRST, reserved whole, and the
+   * backfill takes what is left, from below what the refresh read.
    */
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
@@ -1261,6 +1277,23 @@ export async function fanslyMediaStatsChunk(
       buckets += steady.buckets;
       steadyComplete = steady.complete;
       status = steady.status === "ok" ? "visited" : steady.status;
+      // THE WALK RESUMES BELOW WHAT THE REFRESH READ. A walk cut short less
+      // than 93 days deep resumes inside it, and would read those buckets
+      // again seconds later — or ask a refresh window's exact key, which the
+      // repeat guard takes for a loop and halves the walk for. So it steps
+      // down, without a call, to a day above the far end of the run of
+      // windows this visit holds from its resume point: the walk's own
+      // overlap. The skipped span was read, not judged, so the empty streak
+      // starts again: it counts CONSECUTIVE empty windows. Not while a probe
+      // is pending, which asks for the item's first month by design.
+      if (cursor.probeResumeBeforeMs === null) {
+        const resumeBeforeMs = answeredFloor(cursor.nextBeforeMs, visit.answered)
+          + BACKFILL_OVERLAP_DAYS * DAY_MS;
+        if (resumeBeforeMs < cursor.nextBeforeMs) {
+          cursor.nextBeforeMs = resumeBeforeMs;
+          cursor.emptyStreak = 0;
+        }
+      }
     } else if (dirty && !cursor.done) {
       // A DIRTY FIRST VISIT answers the mark with its own opening windows: the
       // first holds the fresh and mid refresh, the long tail's 90 days take the
@@ -1559,7 +1592,6 @@ export async function fanslyMediaStatsChunk(
   ): Promise<SteadyResult> {
     const windows = steadyWindows(candidate.tier, now, planMode);
     let buckets = 0;
-    let served = 0;
 
     // ALREADY ANSWERED THIS VISIT, at no cost. A first visit opens its backfill
     // with `[now − 31 d, now]` daily, which IS the fresh steady window and holds
@@ -1571,10 +1603,17 @@ export async function fanslyMediaStatsChunk(
     // visit's journaled windows already cover, within a day at either end, is
     // taken from them, and their buckets were counted there. A key in `issued`
     // that a steady plan can ask for was journaled: a window that fails ends
-    // the visit before this runs. Only a refresh whose EVERY window is covered
-    // is taken this way; a partly covered one keeps its own rules.
-    if (refreshAnswered(windows, visit)) {
-      return { status: "ok", buckets, complete: true, served: windows.length };
+    // the visit before this runs.
+    //
+    // WINDOW BY WINDOW. A walk that ends early — on its first-month probe, three
+    // windows in — holds the split plan's first two windows and not its third:
+    // only the third is read, and only the third is reserved. Every other plan
+    // is one window, held or not; the 90-day discovery below reads its window
+    // only when it is not held.
+    const toRead = windows.filter((window) => !windowHeld(window, visit));
+    let served = windows.length - toRead.length;
+    if (toRead.length === 0) {
+      return { status: "ok", buckets, complete: true, served };
     }
 
     // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
@@ -1583,13 +1622,13 @@ export async function fanslyMediaStatsChunk(
     // calls an item for three. The per-window checks below stay: retries count
     // too.
     if (reserveWhole) {
-      const shortfall = unitShortfall(windows.length);
+      const shortfall = unitShortfall(toRead.length);
       if (shortfall !== null) {
         return { status: shortfall, buckets, complete: false, served };
       }
     }
 
-    for (const [index, window] of windows.entries()) {
+    for (const [index, window] of toRead.entries()) {
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
         // long-tail refresh — retries count against it too. What was fetched is
@@ -1706,7 +1745,9 @@ export async function fanslyMediaStatsChunk(
    * gone. So the page moves to `split_31` only after a provider HTTP refusal
    * AND when this same item answers the split plan's first 31-day window: one
    * already answered earlier in this visit (its backfill asked for exactly that
-   * window, for free), or ONE probe now, budget permitting. A probe that fails
+   * window, for free), or ONE probe now, budget permitting. The probe takes any
+   * split window this visit's own 31-day windows already cover as answered,
+   * as every refresh does, and reads only the rest. A probe that fails
    * too spends the page's probe for the UTC day and changes nothing; the item
    * backs off like any failed look. A spent probe never discards the free
    * evidence: a later visit that answered that window still switches the page.
