@@ -1098,6 +1098,220 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(row?.cursor.requestedMonth).toBe("2025-08");
   });
 
+  /** The provider's answer for a month with no statistics at all, 200 and all:
+   *  byte-for-byte what ari-1's creation month came back with on 2026-09-28. */
+  const terminalNullMonth = () => ({ dataset: null, aggregationData: null });
+  const MARCH_2026 = 2026 * 12 + 2;
+  const monthsAsked = (adapter: ReturnType<typeof windowAdapterStub>) => adapter.statsRequests
+    .filter((request) => request.year !== 0)
+    .map((request) => `${request.year}-${String(request.month).padStart(2, "0")}`);
+
+  /** A cursor parked exactly where ari-1's was: the trailing window and
+   *  2026-07..04 walked, three empty months, the next month 2026-03. */
+  async function seedAriCursor(pageId: number) {
+    const seeded = emptyFanslyStatsCursorState(NOW);
+    seeded.lastSweepDay = utcDayKey(NOW);
+    const daily = seeded.backfill!.daily;
+    daily.trailingCaptured = true;
+    daily.nextMonthIndex = MARCH_2026;
+    daily.lastMonthIndex = null;
+    daily.emptyStreak = 3;
+    daily.floorAt = new Date(Date.UTC(2026, 5, 30)).toISOString();
+    await upsertCheckpointProgress(testDb!.db, {
+      platformAccountId: pageId,
+      stream: "stats_snapshot",
+      cursorText: null,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+  }
+
+  const ARI_CREATED = { accountCreatedAt: "2026-03-17T19:39:18.000Z" };
+
+  it("ends the walk at the CREATION floor when the creation month answers terminal-null", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    // ari-1 on 2026-09-28, on this file's clock: created mid-March, traffic in
+    // July, one zero-valued row for each of June..April — and the creation
+    // month answered with the terminal-null body. The lane threw on it six
+    // times running and the walk could never finish.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        if (index === JULY_2026) return monthBodyFor(params.year!, params.month!, 21);
+        if (index === MARCH_2026) return terminalNullMonth();
+        return allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    // The trailing window and five months; the free creation-floor check needs
+    // room left in the day, which the earnings walk behind it then takes.
+    await capDayAt(7);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+      8,
+      ARI_CREATED,
+    );
+
+    // 2026-03 ONCE, and nothing older: February predates the account, so the
+    // walk ends there without egress.
+    expect(monthsAsked(adapter)).toEqual(["2026-07", "2026-06", "2026-05", "2026-04", "2026-03"]);
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.probeSpent).toBe(false);
+    // The floor stays what the provider actually served: July's own start.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 6, 1)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-02");
+    // Capture first: the terminal-null answer is journaled like every month.
+    expect((await journaledKinds(page.id)).filter((kind) => kind === "account_stats"))
+      .toHaveLength(6);
+  });
+
+  it("resumes ari-1's PRODUCTION cursor: one request for the terminal-null month, then done", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    await seedAriCursor(page.id);
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0 ? emptyStatsBody() : terminalNullMonth(),
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(2);
+
+    await expect(fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, ARI_CREATED),
+    )).resolves.toBeDefined();
+
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+    const state = await cursor(page.id);
+    expect(state!.backfill!.daily.done).toBe(true);
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 5, 30)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.proof).toBe("none");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-02");
+    expect(row?.cursor.accountCreatedAt).toBe(ARI_CREATED.accountCreatedAt);
+    expect(telemetry.anomalies.filter(
+      (anomaly) => anomaly.code === "fansly_stats_probe_response_invalid",
+    )).toHaveLength(0);
+
+    // A finished walk asks for no month again — not tomorrow, not ever.
+    const tomorrow = new Date(NOW.getTime() + DAY);
+    await fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), tomorrow, ARI_CREATED),
+    );
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+  });
+
+  it("reads a terminal-null month as EMPTY, never a floor: history below it is walked", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    // lilly-1 on 2026-08-23: 2025-05 answered terminal-null a year after the
+    // account was created, and 2024-05 below it carried traffic. Ending the
+    // walk on that answer would have been a false floor.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => {
+        if ((params.year ?? 0) === 0) {
+          return statsBodyFor(
+            { afterMs: params.afterDate.getTime(), beforeMs: params.beforeDate.getTime() },
+            28,
+          );
+        }
+        const index = params.year! * 12 + (params.month! - 1);
+        if (index === JULY_2026 || index === 2026 * 12 + 4) {
+          return monthBodyFor(params.year!, params.month!, 20);
+        }
+        if (index === 2026 * 12 + 5) return terminalNullMonth();
+        return allZeroMonthBody(params.year!, params.month!);
+      },
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(6);
+
+    const state = await driveChunks(
+      dailyOnlyAppStub(adapter),
+      page.id,
+      telemetry,
+      (current) => current.backfill !== null && current.backfill.daily.done,
+      8,
+      { accountCreatedAt: "2026-04-10T08:00:00.000Z" },
+    );
+
+    expect(monthsAsked(adapter)).toEqual(["2026-07", "2026-06", "2026-05", "2026-04"]);
+    expect(state!.backfill!.daily.done).toBe(true);
+    // May, BELOW the terminal-null June, is what the floor rests on.
+    expect(state!.backfill!.daily.floorAt).toBe(new Date(Date.UTC(2026, 4, 1)).toISOString());
+    const row = await coverageRow(page.id, "stats_account_daily");
+    expect(row?.status).toBe("provider_exhausted");
+    expect(row?.reason_code).toBe("account_creation_floor");
+    expect(row?.cursor.requestedMonth).toBe("2026-03");
+  });
+
+  it("still THROWS on a near miss of the terminal-null shape and withholds progress", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedHistoryPage();
+    await seedAriCursor(page.id);
+    // One field off the proven shape is drift, exactly as the canonicalizer's
+    // gate calls it: journaled, unstamped, and no claim about the month.
+    const adapter = windowAdapterStub({
+      statsFor: (params) => (params.year ?? 0) === 0
+        ? emptyStatsBody()
+        : { dataset: null, aggregationData: {} },
+    });
+    const telemetry = telemetryStub();
+    await capDayAt(2);
+
+    await expect(fanslyStatsSnapshotChunk(
+      dailyOnlyAppStub(adapter),
+      input(page.id, telemetry, new SyncChunkBudget(), NOW, ARI_CREATED),
+    )).rejects.toMatchObject({
+      name: "FanslyLaneInvalidResponseError",
+      observationKind: "account_stats",
+    });
+
+    expect(monthsAsked(adapter)).toEqual(["2026-03"]);
+    const state = await cursor(page.id);
+    expect(state!.backfill!.daily.done).toBe(false);
+    expect(state!.backfill!.daily.nextMonthIndex).toBe(MARCH_2026);
+    expect(state!.backfill!.daily.lastMonthIndex).toBeNull();
+    expect(await coverageRow(page.id, "stats_account_daily")).toBeNull();
+    expect(await journaledKinds(page.id)).toEqual(["account_stats"]);
+  });
+
   it("refuses to ask for the same MONTH twice, before any egress", async (context) => {
     if (!testDb) {
       context.skip();

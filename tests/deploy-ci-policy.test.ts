@@ -1,12 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
+import type { TestSpecification, Vitest } from "vitest/node";
 
 import { mirrorEarlierGate } from "../scripts/ci-mirror-gate.mjs";
 import { DEFAULT_SHARD_TOTAL, planShards } from "../scripts/ci-shards.mjs";
+import vitestConfig from "../vitest.config.ts";
+import { syncCriticalDbFiles } from "./helpers/sync-critical-files.ts";
+import { WeightedShardSequencer, shardKey } from "./helpers/weighted-shard-sequencer.ts";
 
 type Step = {
   name: string;
@@ -614,6 +619,36 @@ describe("CI runner pool", () => {
 describe("CI integration shards", () => {
   const shardTotal = "${{ needs.fingerprint.outputs.shard_total || 3 }}";
   const dbStepName = `Sync-critical DB/schema/network tests (shard \${{ matrix.shard }}/${shardTotal})`;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const syncCritical = syncCriticalDbFiles();
+
+  /** The files `vitest --shard=<leg>/<total>` runs for the sync-critical DB suite. */
+  async function shardFiles(leg: number, total: number): Promise<string[]> {
+    const ctx = { config: { root: repoRoot, shard: { index: leg, count: total } }, logger: { log: () => undefined } };
+    const specs = syncCritical.map(file => ({ moduleId: path.join(repoRoot, file) }) as unknown as TestSpecification);
+    const chosen = await new WeightedShardSequencer(ctx as unknown as Vitest).shard(specs);
+    return chosen.map(spec => shardKey(repoRoot, spec.moduleId));
+  }
+
+  /** The legs together run every sync-critical DB file exactly once. */
+  async function expectEveryFileOnce(legs: readonly number[], total: number) {
+    const placed = (await Promise.all(legs.map(leg => shardFiles(leg, total)))).flat();
+    expect(placed).toHaveLength(new Set(placed).size);
+    expect([...placed].sort()).toEqual(syncCritical);
+  }
+
+  // Vitest alone splits --shard by file COUNT; the root config's sequencer
+  // packs by measured duration instead (tests/ci/shard-weights.json). The
+  // sharded script must keep using that config and its sequencer.
+  it("splits the sync-critical DB suite by measured duration through the root Vitest config", () => {
+    expect(vitestConfig.test?.sequence?.sequencer).toBe(WeightedShardSequencer);
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> };
+    const tokens = (manifest.scripts["test:sync-critical:db"] ?? "").split(/\s+/);
+    // No flag may override the config; the PC switch expands only to file-parallelism flags (pinned below).
+    expect(new Set(tokens.filter(token => token.startsWith("-")))).toEqual(new Set(["--exclude"]));
+    expect(tokens.filter(token => token.startsWith("${"))).toEqual(["${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"]);
+    expect(syncCritical.length).toBeGreaterThan(8);
+  });
 
   // The fingerprint job runs first on every gate run, so it plans the matrix.
   it("plans the matrix in the fingerprint job from the pool, the attempt and CI_PC_SHARDS", () => {
@@ -711,7 +746,7 @@ describe("CI integration shards", () => {
     ["pc", "2", "6", 3],
     ["", "1", "6", 3],
     ["hosted", "1", "", 3],
-  ] as const)("CI_POOL=%s attempt %s CI_PC_SHARDS=%j runs %i shards that cover every file once", (pool, attempt, pcShards, total) => {
+  ] as const)("CI_POOL=%s attempt %s CI_PC_SHARDS=%j runs %i shards that cover every file once", async (pool, attempt, pcShards, total) => {
     const context = eventContext({ pool, attempt, pcShards });
     const plan = step("fingerprint", "Plan integration shards");
     const env = Object.fromEntries(Object.entries(plan.env ?? {}).map(([key, value]) => [key, field(value, context)]));
@@ -728,11 +763,12 @@ describe("CI integration shards", () => {
     const names = legs.map(shard => field(job("integration").name ?? "", eventContext({ ...outputs, shard: Number(shard) })));
     expect(names).toEqual(legs.map(shard => `Integration ${String(shard)}/${total}`));
     expect(legs.filter(shard => condition(step("integration", "Sync-critical API tests").if, eventContext({ ...outputs, shard: Number(shard) })))).toEqual([1]);
+    await expectEveryFileOnce(legs.map(Number), total);
   });
 
   // The integration job needs a successful fingerprint job, which always sets
   // both outputs; the fallback only keeps fromJSON off an empty string.
-  it("falls back to the default three shards consistently when the plan outputs are empty", () => {
+  it("falls back to the default three shards consistently when the plan outputs are empty", async () => {
     const empty = eventContext({ shards: "", shardTotal: "" });
     const matrix = String(job("integration").strategy?.matrix?.shard);
     expect(runner(matrix, empty)).toEqual(planShards({}).shards);
@@ -742,6 +778,7 @@ describe("CI integration shards", () => {
       expect(field(job("integration").name ?? "", context)).toBe(`Integration ${shard}/${DEFAULT_SHARD_TOTAL}`);
       expect(field(shell(step("integration", dbStepName)), context)).toBe(`pnpm test:sync-critical:db --shard=${shard}/${DEFAULT_SHARD_TOTAL}`);
     }
+    await expectEveryFileOnce(planShards({}).shards, DEFAULT_SHARD_TOTAL);
   });
 });
 

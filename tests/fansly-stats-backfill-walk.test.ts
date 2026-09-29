@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { canParseFanslyStatsObservation } from "../apps/runtime/src/services/canonicalize/fansly-stats.ts";
 import {
   describeStatsMonthAnswer,
   probeStatsMonth,
@@ -8,6 +9,7 @@ import {
   advanceBroadcastWalk,
   backfillContinuationAt,
   broadcastMessageRows,
+  classifyStatsMonth,
   classifyStatsWindow,
   emptyFanslyStatsCursorState,
   isEmptyStatsMonth,
@@ -561,6 +563,51 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     expect(isEmptyStatsMonth(null)).toBe(false);
     // A dataset whose datapoints drifted is not an empty month either.
     expect(isEmptyStatsMonth({ dataset: {} })).toBe(false);
+  });
+
+  it("reads the EXACT terminal-null month as empty — the canonicalizer's shape, nothing wider", () => {
+    // Production 2026-09-28: ari-1's creation month 2026-03 answered exactly
+    // this, 200 and all, and the walk threw on it six times running.
+    const terminalNull = { dataset: null, aggregationData: null };
+    expect(classifyStatsMonth(terminalNull)).toBe("empty");
+    expect(isEmptyStatsMonth(terminalNull)).toBe(true);
+    expect(canParseFanslyStatsObservation({
+      kind: "account_stats",
+      payload: terminalNull,
+      accountId: 1,
+    })).toBe(true);
+    // ONE definition: every near miss the gate leaves unstamped, the walk still
+    // calls invalid — no body is an empty month here and unreadable there.
+    const nearMisses: unknown[] = [
+      { dataset: null },
+      { dataset: null, aggregationData: {} },
+      { dataset: null, aggregationData: null, futureField: null },
+      { dataset: [], aggregationData: null },
+      { aggregationData: null },
+      null,
+      [],
+    ];
+    for (const payload of nearMisses) {
+      expect(classifyStatsMonth(payload)).toBe("invalid");
+      expect(isEmptyStatsMonth(payload)).toBe(false);
+      expect(canParseFanslyStatsObservation({
+        kind: "account_stats",
+        payload,
+        accountId: 1,
+      })).toBe(false);
+    }
+    // Only the MONTH walk reads it: the trailing/steady windows and the
+    // per-media lane classify through `classifyStatsWindow`, where it stays
+    // invalid (never served there; per-media nulls are drift for the gate too).
+    expect(classifyStatsWindow(terminalNull)).toBe("invalid");
+    // The ordinary month readings are unchanged.
+    expect(classifyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } }))
+      .toBe("empty");
+    expect(classifyStatsMonth({ dataset: { datapoints: [{ timestamp: 1, views: 2 }] } }))
+      .toBe("nonempty");
+    expect(classifyStatsMonth({ dataset: { datapoints: [{ timestamp: 1, views: 0 }] } }))
+      .toBe("empty");
+    expect(classifyStatsMonth({ dataset: {} })).toBe("invalid");
   });
 
   it("reads a dataset without datapoint ARRAYS as invalid, never as an empty window", () => {
