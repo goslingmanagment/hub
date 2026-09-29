@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -391,13 +391,16 @@ describe("CI job admission", () => {
     }
   });
 
-  // Every check in the static job runs whenever the job runs. Only the unit
+  // Every check in the static job runs whenever the job runs. Only the
+  // runner-specific pnpm setup (see "CI self-hosted setup" below), the unit
   // tests' background start, their join and the cleanup have conditions of
   // their own; see "CI static job" below for how those behave.
   it("runs every static check, the image build and all three smoke tests whenever static runs", () => {
     const steps = job("static").steps;
     const conditional = steps.filter(item => item.if !== undefined);
     expect(conditional.map(item => [item.name, item.if])).toEqual([
+      ["Setup pnpm", "runner.environment != 'self-hosted'"],
+      ["Setup pnpm (corepack)", "runner.environment == 'self-hosted'"],
       ["Start reliable unit tests in the background", "runner.environment == 'self-hosted'"],
       ["Reliable unit tests", "!cancelled() && (success() || steps.unit-tests.outputs.started == 'true')"],
       ["Stop background unit tests", "always()"],
@@ -562,11 +565,13 @@ describe("CI runner pool", () => {
     }
     expect(workflowText).not.toMatch(/agency_hub_core\/runtime:ci(?!-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\})/);
 
-    // pnpm/action-setup wipes its dest, so each job installs pnpm under its own
-    // runner.temp; only hosted runners restore the store from the Actions cache.
+    // Hosted runners only: pnpm/action-setup wipes its dest, so each job
+    // installs pnpm under its own runner.temp; only hosted runners restore the
+    // store from the Actions cache.
     for (const name of ["static", "integration"]) {
       const pnpm = job(name).steps.find(item => item.uses?.startsWith("pnpm/action-setup@"));
       expect(pnpm?.with, name).toEqual({ dest: "${{ runner.temp }}/setup-pnpm" });
+      expect(pnpm?.if, name).toBe("runner.environment != 'self-hosted'");
       const node = job(name).steps.find(item => item.uses?.startsWith("actions/setup-node@"));
       expect(node?.with?.["node-version"], name).toBe(22);
       for (const [environment, cache] of [["github-hosted", "pnpm"], ["self-hosted", ""]] as const) {
@@ -575,11 +580,10 @@ describe("CI runner pool", () => {
     }
   });
 
-  // pnpm keeps its store under PNPM_HOME, inside that per-job dest: without an
-  // explicit store every PC job would download every package again. The PC
-  // shares one store in $HOME (safe for concurrent installs); hosted runners
-  // keep pnpm's default store, the one setup-node caches.
-  it.each(["static", "integration"])("%s installs from the shared PC store only on self-hosted runners", name => {
+  // The PC shares one explicitly named store in $HOME (safe for concurrent
+  // installs); hosted runners keep pnpm's default store, the one setup-node
+  // caches.
+  it.each(["static", "integration"])("%s installs from the shared store only on self-hosted runners", name => {
     const install = step(name, "Install dependencies");
     expect(install.if, name).toBeUndefined();
     expect(install.env).toEqual({ PNPM_PC_STORE: "${{ runner.environment == 'self-hosted' && '1' || '' }}" });
@@ -634,6 +638,129 @@ describe("CI runner pool", () => {
   });
 });
 
+describe("CI self-hosted setup: pnpm from Node's corepack", () => {
+  const setupSteps = (name: string) => {
+    const steps = job(name).steps;
+    return steps.slice(0, steps.findIndex(item => item.name === "Install dependencies") + 1);
+  };
+
+  it("gives both jobs the same checkout, pnpm setup and install", () => {
+    expect(setupSteps("static").map(item => item.name)).toEqual([
+      "Checkout",
+      "Setup pnpm",
+      "Setup Node.js",
+      "Setup pnpm (corepack)",
+      "Install dependencies",
+    ]);
+    expect(setupSteps("integration")).toEqual(setupSteps("static"));
+  });
+
+  // Hosted runners keep exactly the previous setup; the PC swaps
+  // pnpm/action-setup for corepack.
+  it.each([
+    ["github-hosted", [
+      ["Checkout", "actions/checkout@v6", {}],
+      ["Setup pnpm", "pnpm/action-setup@v6", { dest: "/runner/_temp/setup-pnpm" }],
+      ["Setup Node.js", "actions/setup-node@v6", { "node-version": "22", cache: "pnpm" }],
+      ["Install dependencies", "run", {}],
+    ]],
+    ["self-hosted", [
+      ["Checkout", "actions/checkout@v6", {}],
+      ["Setup Node.js", "actions/setup-node@v6", { "node-version": "22", cache: "" }],
+      ["Setup pnpm (corepack)", "run", {}],
+      ["Install dependencies", "run", {}],
+    ]],
+  ] as const)("on %s runs exactly one pnpm setup", (runnerEnvironment, expected) => {
+    const context = eventContext({ runnerEnvironment });
+    for (const name of ["static", "integration"]) {
+      const ran = setupSteps(name).filter(item => stepRuns(item, context, PASSING)).map(item => [
+        item.name,
+        item.uses ?? "run",
+        Object.fromEntries(Object.entries(item.with ?? {}).map(([key, value]) => [key, field(String(value), context)])),
+      ]);
+      expect(ran, name).toEqual(expected);
+    }
+  });
+
+  const corepackStep = step("static", "Setup pnpm (corepack)");
+  const pinned = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { packageManager: string }).packageManager;
+
+  function runCorepackStep(pnpmVersion: string, cwd = fileURLToPath(new URL("../", import.meta.url))) {
+    const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-corepack-"));
+    try {
+      const stubs = path.join(dir, "stubs");
+      const runnerTemp = path.join(dir, "temp");
+      mkdirSync(stubs);
+      mkdirSync(runnerTemp);
+      const calls = path.join(dir, "calls");
+      // `corepack enable pnpm --install-directory DIR` writes a pnpm shim into
+      // DIR; that shim stands in for the pnpm corepack would run.
+      writeFileSync(path.join(stubs, "corepack"), [
+        "#!/usr/bin/env bash",
+        `echo "corepack $*" >> ${JSON.stringify(calls)}`,
+        '[ "$1" = --version ] && { echo 0.36.0; exit 0; }',
+        '[ "$1 $2 $3" = "enable pnpm --install-directory" ] && [ -d "$4" ] || exit 9',
+        `printf '%s\\n' '#!/usr/bin/env bash' 'echo "pnpm $* COREPACK_DEFAULT_TO_LATEST=$COREPACK_DEFAULT_TO_LATEST" >> ${JSON.stringify(calls)}' 'echo ${pnpmVersion}' > "$4/pnpm"`,
+        'chmod +x "$4/pnpm"',
+        "",
+      ].join("\n"));
+      chmodSync(path.join(stubs, "corepack"), 0o755);
+      const githubPath = path.join(dir, "github-path");
+      writeFileSync(githubPath, "");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", shell(corepackStep)], {
+        cwd,
+        encoding: "utf8",
+        env: { ...process.env, ...corepackStep.env, PATH: `${stubs}:${process.env.PATH ?? ""}`, RUNNER_TEMP: runnerTemp, GITHUB_PATH: githubPath },
+      });
+      return {
+        status: result.status,
+        output: result.stdout + result.stderr,
+        githubPath: readFileSync(githubPath, "utf8").replaceAll(runnerTemp, "$RUNNER_TEMP"),
+        calls: readFileSync(calls, "utf8").replaceAll(runnerTemp, "$RUNNER_TEMP").split("\n").filter(Boolean),
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("puts corepack's pnpm first on PATH only when it is the version package.json pins", () => {
+    expect(corepackStep.if).toBe("runner.environment == 'self-hosted'");
+    expect(corepackStep.env).toEqual({ COREPACK_DEFAULT_TO_LATEST: "0" });
+    // corepack itself may append "+sha512.<hash>" to the pin when it updates pnpm.
+    expect(pinned).toMatch(/^pnpm@\d+\.\d+\.\d+(\+sha\d+\.[0-9a-f]+)?$/);
+    const version = pinned.replace(/^pnpm@/, "").replace(/\+.*/, "");
+
+    const ok = runCorepackStep(version);
+    expect(ok.status, ok.output).toBe(0);
+    expect(ok.githubPath).toBe("$RUNNER_TEMP/corepack-bin\n");
+    expect(ok.calls).toEqual([
+      "corepack enable pnpm --install-directory $RUNNER_TEMP/corepack-bin",
+      // The call that may download pnpm leaves the shared lastKnownGood.json alone.
+      "pnpm --version COREPACK_DEFAULT_TO_LATEST=0",
+      "corepack --version",
+    ]);
+    expect(ok.output).toContain(`corepack 0.36.0 runs pnpm ${version}; package.json pins ${pinned}`);
+
+    const drifted = runCorepackStep("11.0.0");
+    expect(drifted.status).toBe(1);
+    expect(drifted.output).toContain(`::error::corepack runs pnpm 11.0.0 but package.json pins ${pinned}`);
+    expect(drifted.githubPath).toBe("");
+  });
+
+  it("accepts a packageManager pin that carries a hash", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-corepack-pin-"));
+    try {
+      writeFileSync(path.join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@10.33.1+sha512.0123abcd" }));
+      const run = runCorepackStep("10.33.1", dir);
+      expect(run.status, run.output).toBe(0);
+      expect(run.githubPath).toBe("$RUNNER_TEMP/corepack-bin\n");
+      expect(runCorepackStep("10.33.2", dir).status).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("CI static job: unit tests beside the image checks", () => {
   const start = "Start reliable unit tests in the background";
   const unit = "Reliable unit tests";
@@ -651,6 +778,7 @@ describe("CI static job: unit tests beside the image checks", () => {
       "Checkout",
       "Setup pnpm",
       "Setup Node.js",
+      "Setup pnpm (corepack)",
       "Install dependencies",
       contracts,
       start,
@@ -690,6 +818,8 @@ describe("CI static job: unit tests beside the image checks", () => {
     failAt?: string;
     /** A check during which the job is cancelled. */
     cancelAt?: string;
+    /** When the cancel lands: once the unit tests logged something (default), or after they finished. */
+    cancelWhen?: "logged" | "finished";
     /** The unit tests' exit status, or "killed": they die without recording one. */
     unitExit: number | "killed";
     /** How long the unit tests keep running, in seconds. */
@@ -744,10 +874,11 @@ describe("CI static job: unit tests beside the image checks", () => {
         }
         if (item.name === scenario.cancelAt) {
           // Cancelled once the unit tests have logged something, as a real
-          // cancel lands well after they started.
-          const log = path.join(runnerTemp, "ci-background", "unit-tests.log");
-          const waited = spawnSync("bash", ["-c", 'for _ in $(seq 100); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1', "wait", log]);
-          expect(waited.status, "the unit tests never logged").toBe(0);
+          // cancel lands well after they started — or after they finished.
+          const finished = scenario.cancelWhen === "finished";
+          const marker = path.join(runnerTemp, "ci-background", finished ? "unit-tests.status" : "unit-tests.log");
+          const waited = spawnSync("bash", ["-c", 'for _ in $(seq 200); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1', "wait", marker]);
+          expect(waited.status, finished ? "the unit tests never finished" : "the unit tests never logged").toBe(0);
           outcomes[item.name] = "cancelled";
           status.success = false;
           status.cancelled = true;
@@ -857,6 +988,19 @@ describe("CI static job: unit tests beside the image checks", () => {
       "Remove this run's image": "success" });
     expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=5\n");
     expect(run.group).not.toBeNull();
+    expect(run.leftovers).toBe(false);
+  });
+
+  // The unit tests may well finish before a cancel lands on a later check:
+  // the join is skipped all the same, so the stop step prints their log and
+  // their exit status.
+  it.each([0, 3])("a job cancelled after the unit tests finished with %s still prints their log and status", unitExit => {
+    const run = simulateStatic({ environment: "self-hosted", cancelAt: "Startup capability manifest smoke", cancelWhen: "finished", unitExit });
+    expect(run.conclusion).toBe("cancelled");
+    expect(run.outcomes).toMatchObject({ [unit]: "skipped", [stop]: "success" });
+    expect(run.logs[stop]).toBe(
+      `unit-tests finished with exit status ${unitExit} but was never joined; its log:\npnpm test:unit --maxWorkers=5\nunit tests finished\n`,
+    );
     expect(run.leftovers).toBe(false);
   });
 

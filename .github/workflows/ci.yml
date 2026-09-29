@@ -119,10 +119,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # pnpm version comes from package.json "packageManager" — one pin, no drift.
-      # The action wipes its install directory first, and self-hosted runners
-      # share $HOME: keep that directory per runner.
+      # Hosted runners: pnpm version comes from package.json "packageManager" —
+      # one pin, no drift. The action wipes its install directory first, so it
+      # stays in runner.temp.
       - name: Setup pnpm
+        if: runner.environment != 'self-hosted'
         uses: pnpm/action-setup@v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
@@ -134,11 +135,33 @@ jobs:
           node-version: 22
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
-      # pnpm keeps its store under PNPM_HOME, inside the per-job dest above, so
-      # a self-hosted job would download everything again. Point the PC at one
-      # store shared by its runners instead: pnpm's store is safe for
-      # concurrent installs, and $HOME is on the same filesystem as _work, so
-      # packages hard-link instead of copying.
+      # Self-hosted: pnpm through the corepack bundled with Node 22, at the
+      # exact version package.json "packageManager" pins. Corepack keeps each
+      # version it downloaded (and verified against the npm registry's
+      # signature) in one cache under the shared $HOME, so a job no longer
+      # downloads pnpm; a download lands in a temporary directory that is
+      # renamed into place, so concurrent runners cannot leave a partial one.
+      # The shims go in this job's runner.temp; nothing else in $HOME changes.
+      - name: Setup pnpm (corepack)
+        if: runner.environment == 'self-hosted'
+        env:
+          # Never rewrite corepack's shared lastKnownGood.json after a download.
+          COREPACK_DEFAULT_TO_LATEST: "0"
+        run: |
+          bin="$RUNNER_TEMP/corepack-bin"
+          mkdir -p "$bin"
+          corepack enable pnpm --install-directory "$bin"
+          pinned="$(node -p 'require("./package.json").packageManager')"
+          running="$("$bin/pnpm" --version)"
+          echo "corepack $(corepack --version) runs pnpm $running; package.json pins $pinned"
+          [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # The PC's runners share one pnpm store in $HOME, named explicitly so no
+      # PNPM_HOME can move it: pnpm's store is safe for concurrent installs,
+      # and $HOME is on the same filesystem as _work, so packages hard-link
+      # instead of copying. Hosted runners keep pnpm's default store, the one
+      # setup-node caches.
       - name: Install dependencies
         env:
           PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
@@ -275,8 +298,11 @@ jobs:
   # (the PC runs two files at a time per shard; see the DB step).
   # Since #240 a shard runs ONE cluster and clones a database per acquisition,
   # so "no shared cluster" no longer holds: queries against cluster-global views
-  # (pg_locks, pg_stat_activity) must scope themselves to current_database(),
-  # and a test must not create, alter or drop a role another file may use.
+  # (pg_locks, pg_stat_activity) must scope themselves to current_database() or
+  # a backend pid, and a role is created once for the run (read_only, in
+  # tests/helpers/global-setup.ts), by a fixture that tolerates a concurrent
+  # creator, or under a name only one file uses. tests/db-isolation-policy.test.ts
+  # enforces both.
   # Sharding is by resolved FILE, so it is applied to the
   # :db half directly; `test:prerequisites` is a compound `A && B` and trailing
   # args would land only on B.
@@ -318,11 +344,13 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.fingerprint.outputs.shards || '[1,2,3]') }}
 
+    # Checkout, pnpm and the install as in static checks.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup pnpm
+        if: runner.environment != 'self-hosted'
         uses: pnpm/action-setup@v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
@@ -333,7 +361,20 @@ jobs:
           node-version: 22
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
 
-      # Same shared PC store as in static checks.
+      - name: Setup pnpm (corepack)
+        if: runner.environment == 'self-hosted'
+        env:
+          COREPACK_DEFAULT_TO_LATEST: "0"
+        run: |
+          bin="$RUNNER_TEMP/corepack-bin"
+          mkdir -p "$bin"
+          corepack enable pnpm --install-directory "$bin"
+          pinned="$(node -p 'require("./package.json").packageManager')"
+          running="$("$bin/pnpm" --version)"
+          echo "corepack $(corepack --version) runs pnpm $running; package.json pins $pinned"
+          [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         env:
           PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}

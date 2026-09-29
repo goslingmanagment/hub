@@ -7,9 +7,10 @@
 #       Wait for it, print its whole log, and exit with its exit status. A
 #       command that vanished without recording a status fails the step.
 #   ci-background.sh stop NAME
-#       Cleanup for an `if: always()` step: print the log if no join printed it
-#       (a cancelled or timed-out job) and kill whatever of the process group
-#       is still alive. Never fails.
+#       Cleanup for an `if: always()` step: print the log and the recorded
+#       status if no join printed them (a cancelled or timed-out job, whether
+#       or not the command had finished) and kill whatever of the process
+#       group is still alive. Never fails.
 #
 # State lives in $RUNNER_TEMP/ci-background/NAME.*; the runner empties
 # RUNNER_TEMP between jobs, and its orphan-process cleanup is the last resort.
@@ -80,12 +81,21 @@ case "$action" in
     [ "$#" -eq 0 ] || usage
     [ -f "$base.pid" ] || exit 0
     pid="$(cat "$base.pid" 2>/dev/null || true)"
-    [[ "$pid" =~ ^[0-9]+$ ]] || { echo "::warning::$name left no usable process group id"; exit 0; }
-    alive "$pid" || exit 0
+    [[ "$pid" =~ ^[0-9]+$ ]] || pid=""
+    # No join printed the log: the job was cancelled or timed out, and the
+    # command may well have finished before that. Print it either way.
     if [ ! -f "$base.printed" ]; then
-      echo "$name was still running; its log so far:"
+      if [ -f "$base.status" ]; then
+        echo "$name finished with exit status $(cat "$base.status" 2>/dev/null || true) but was never joined; its log:"
+      elif [ -n "$pid" ] && alive "$pid"; then
+        echo "$name was still running; its log so far:"
+      else
+        echo "$name ended without recording an exit status and was never joined; its log:"
+      fi
       cat "$base.log" || true
     fi
+    [ -n "$pid" ] || { echo "::warning::$name left no usable process group id"; exit 0; }
+    alive "$pid" || exit 0
     kill -TERM -- "-$pid" 2>/dev/null || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive "$pid" || break; sleep 0.5; done
     kill -KILL -- "-$pid" 2>/dev/null || true
