@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
@@ -246,26 +246,32 @@ describe("class-aware pacing properties (Stage 26)", () => {
     // `backlogStart` is captured BEFORE the pacers so the depth assertion below
     // measures how far the backlog pushed the class row, not how much of that
     // horizon is left after this test's own setup. Measured from `now` it was
-    // machine-speed-dependent: on a loaded CI runner the 60 ms wait and the row
-    // reads consumed enough of the ~1200 ms budget to fail (observed 193 ms and
-    // even -60 ms remaining), while the same shard passed locally.
+    // machine-speed-dependent: on a loaded CI runner the row reads consumed
+    // enough of the ~1200 ms budget to fail (observed 193 ms and even -60 ms
+    // remaining), while the same shard passed locally.
     const backlogStart = Date.now();
     const bulkRuns = Array.from({ length: 6 }, () => pacer.pace("bulk"));
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    try {
+      // The queue parks on class:bulk (≈ 6 slots deep). Wait for the claims
+      // instead of a fixed pause: on a loaded runner six concurrent claims
+      // took longer than 60 ms (the row was one slot deep).
+      await vi.waitFor(async () => {
+        expect((await readRow("class:bulk")).getTime() - backlogStart).toBeGreaterThan(capMs * 3);
+      }, { timeout: 5_000, interval: 20 });
 
-    const now = Date.now();
-    const classNext = (await readRow("class:bulk")).getTime();
-    const vendorNext = (await readRow("vendor_global")).getTime();
-    // The queue is parked on class:bulk (≈ 6 slots deep)…
-    expect(classNext - backlogStart).toBeGreaterThan(capMs * 3);
-    // …while the vendor row holds only imminent sends.
-    expect(vendorNext - now).toBeLessThanOrEqual(capMs * 2);
+      // …while the vendor row holds only imminent sends.
+      const now = Date.now();
+      const vendorNext = (await readRow("vendor_global")).getTime();
+      expect(vendorNext - now).toBeLessThanOrEqual(capMs * 2);
 
-    // An interactive arrival therefore pays vendor arithmetic, not the queue.
-    const interactiveWaitMs = await pacer.pace("interactive");
-    expect(interactiveWaitMs).toBeLessThanOrEqual(capMs * 3);
-
-    await Promise.all(bulkRuns);
+      // An interactive arrival therefore pays vendor arithmetic, not the queue.
+      const interactiveWaitMs = await pacer.pace("interactive");
+      expect(interactiveWaitMs).toBeLessThanOrEqual(capMs * 3);
+    } finally {
+      // A failed assertion must not leave the pacers claiming slots in the
+      // next tests' rows.
+      await Promise.allSettled(bulkRuns);
+    }
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("shadow plan() never moves the enforce rows and keeps bulk out of shadow's vendor row", async (context) => {
