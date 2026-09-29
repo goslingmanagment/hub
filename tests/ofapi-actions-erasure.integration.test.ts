@@ -211,7 +211,8 @@ describe("OFAPI action erasure", () => {
       let waiting = false;
       for (let poll = 0; poll < 100 && !waiting; poll++) {
         waiting = (await database.pool.query(
-          "select 1 from pg_locks where locktype='advisory' and classid=9003011 and objid=1 and not granted",
+          // pg_locks spans the whole cluster; sibling test databases share it.
+          "select 1 from pg_locks where locktype='advisory' and classid=9003011 and objid=1 and not granted and database=(select oid from pg_database where datname=current_database())",
         )).rows.length > 0;
         if (!waiting) await new Promise(resolve => setTimeout(resolve, 10));
       }
