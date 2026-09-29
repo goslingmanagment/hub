@@ -375,6 +375,20 @@ by key and type before journaling; session material is excluded, non-200 bodies
 are withheld, and identity conflicts survive the JSON projection. This control-plane
 evidence is restricted in tiering and refused by Agent Read.
 
+Fansly pull capture strips one-off CloudFront signing tokens before journaling
+(owner decision 2026-09-29, `services/sync/fansly-cdn-tokens.ts`): for the
+named kinds only, `Policy`, `Signature`, `Key-Pair-Id` and `Expires` leave
+`locations[].metadata` and a `locations[].location` string that is entirely one
+signed https URL on a Fansly CDN host (`cdn<N>.fansly.com`), in the catalog
+object and both inline bodies alike. Nothing else is rewritten: user-authored
+text such as a comment's `content` keeps every byte even when it holds or opens
+with a signed URL. `sync_raw_payloads.mapper_version` gains
+`+cdn-tokens-stripped-v1`. Like the [A20] account-field allowlist, this is a
+deliberate exception to the verbatim journal: the tokens change on nearly every
+read and would defeat content-address dedup. The allowlist fails closed, and
+`dm_messages` and `purchase_history` are never stripped because the AI media
+describer downloads from their signed URLs. Earlier captures stay verbatim.
+
 OFAPI governed transport diagnostics (#259) expose only known machine
 class/name/code values, header/body stage, elapsed/timeout values, status and
 byte counts. They reach structured logs and existing credit-ledger details;
