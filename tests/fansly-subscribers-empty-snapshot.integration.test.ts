@@ -6,8 +6,11 @@ import {
 } from "@agency_hub_core/db";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import {
+  resolvePageContextById, saveProxy, type ResolvedFanslyPageContext,
+} from "../apps/runtime/src/services/page-context.ts";
 import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
+import { refreshPageMetadata } from "../apps/runtime/src/services/sync/shared.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
@@ -75,6 +78,8 @@ describe("Fansly subscribers stated-empty snapshot", () => {
     subscriptions: SeededSubscription[];
     cursor?: Record<string, unknown>;
     serve: (params: { offset?: number; status?: string }) => SubscribersPage | Promise<SubscribersPage>;
+    /** The /account/me account the light and followers streams read. */
+    accountMe?: Record<string, unknown>;
   }) {
     const getSubscribersPage = vi.fn(async (_context: unknown, params: { offset?: number; status?: string }) =>
       input.serve(params));
@@ -82,8 +87,13 @@ describe("Fansly subscribers stated-empty snapshot", () => {
       parsed: ids.map((id) => ({ id, username: id, displayName: null, createdAt: 1_770_000_000_000 })),
       raw: {},
     }));
+    const account = input.accountMe ?? {
+      id: "acct-lilly-1", username: "lilly1", displayName: null, createdAt: 1_700_000_000_000,
+      followCount: 10, subscriberCount: 0,
+    };
+    const getAccountMe = vi.fn(async () => ({ parsed: { account }, raw: { account } }));
     const app = createTestAppContext(db, {
-      adapter: { getSubscribersPage, getAccountsByIdsPage } as unknown as AppContext["adapter"],
+      adapter: { getSubscribersPage, getAccountsByIdsPage, getAccountMe } as unknown as AppContext["adapter"],
       fanslyDefaultDelayMs: 0,
     });
     const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "lilly-1");
@@ -442,6 +452,38 @@ describe("Fansly subscribers stated-empty snapshot", () => {
     expect(state).toMatchObject({ consecutiveFailures: 16, lastErrorSummary: REFUSAL });
     expect(state?.appliedSeq).toBe(REQUEST_SEQ - 1);
     expect((await getCheckpoint(f.app.db, f.page.id, "subscribers"))?.cursorLastSucceededRunId).toBeNull();
+    expect(await incidentStatus(f.key)).toBe("open");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // Review of #321: the rule reads the counter as fresh by last_verified_at,
+  // which every /account/me refresh advances. Drizzle skips an undefined
+  // column, so an /account/me without subscriberCount used to keep the last 0
+  // looking fresh forever and confirm the next stated zero with no pause.
+  it("refuses a stated zero after /account/me stops reporting the counter", async () => {
+    const f = await fixture({
+      subscriptions: [LILLY_2_RENEWING],
+      serve: statedEmpty,
+      accountMe: {
+        id: "acct-lilly-1", username: "lilly1", displayName: null, createdAt: 1_700_000_000_000, followCount: 10,
+      },
+    });
+    await setAccountCounter(f.page.id, 0, minutesAgo(180));
+    const pageContext = await resolvePageContextById(f.app, f.page.id) as ResolvedFanslyPageContext;
+    await refreshPageMetadata(f.app, pageContext, "light");
+    const refreshed = await db.pool.query<{ subscriber_count: number | null; last_verified_at: Date | null }>(
+      "select subscriber_count, last_verified_at from pages where id=$1",
+      [f.page.id],
+    );
+    expect(refreshed.rows[0]?.subscriber_count).toBeNull();
+    expect(refreshed.rows[0]?.last_verified_at?.getTime()).toBeGreaterThan(minutesAgo(5).getTime());
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result.kind).not.toBe("success");
+    expect(await currentIds(f.page.id)).toEqual([LILLY_2_RENEWING.id]);
+    expect(await anomalies(result.runId!)).toEqual([expect.objectContaining({
+      code: "subscribers_empty_first_page_guard", reason: "not_known_lapsed", subscriberCount: null,
+    })]);
     expect(await incidentStatus(f.key)).toBe("open");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
