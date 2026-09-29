@@ -27,6 +27,7 @@ const INCIDENT_KIND_LABELS = {
   golden_signal_lag: "Golden Signal Lag",
   scheduler_silent: "Scheduler Silent",
   ops_sampler_silent: "Ops Sampler Silent",
+  sync_silent: "Fansly Sync Silent",
   ofapi_chargebacks_reconcile_failed: "OFAPI Chargebacks Reconcile",
   ofapi_link_stats_reconcile_failed: "OFAPI Link Stats Reconcile",
   ai_provider_billing: "AI Provider Billing",

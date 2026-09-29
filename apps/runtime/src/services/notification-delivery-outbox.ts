@@ -121,6 +121,10 @@ export async function runNotificationDeliveryOutbox(
     /** Test seam for time MOVING during a sweep; `now` pins it instead. */
     clock?: () => Date;
     maxRows?: number;
+    /** Wall-clock ceiling; defaults to SWEEP_BUDGET_MS. */
+    budgetMs?: number;
+    /** Aborted on shutdown: the row in flight settles, no further row is leased. */
+    signal?: AbortSignal;
     leaseMs?: number;
     retryDelayMs?: number;
     sender?: NotificationOutboxSender;
@@ -133,6 +137,7 @@ export async function runNotificationDeliveryOutbox(
   const clock = input?.clock ?? (input?.now ? () => input.now! : () => new Date());
   const sweepStartedAt = Date.now();
   const maxRows = Math.max(1, Math.floor(input?.maxRows ?? DEFAULT_BATCH_LIMIT));
+  const budgetMs = Math.max(0, input?.budgetMs ?? SWEEP_BUDGET_MS);
   const sender = input?.sender ?? ((delivery: NotificationOutboxDelivery) =>
     sendTelegramMessage(app, {
       text: delivery.text,
@@ -147,12 +152,17 @@ export async function runNotificationDeliveryOutbox(
   };
 
   for (let index = 0; index < maxRows; index += 1) {
-    if (Date.now() - sweepStartedAt >= SWEEP_BUDGET_MS) {
+    if (input?.signal?.aborted) {
+      // A process on its way out must not lease a row it may not live to
+      // settle: that row would sit leased until the lease expired.
+      break;
+    }
+    if (Date.now() - sweepStartedAt >= budgetMs) {
       // Never a silent truncation: the remainder is still due and the next
       // minutely tick takes it.
       app.logger.warn({
         ...result,
-        budgetMs: SWEEP_BUDGET_MS,
+        budgetMs,
       }, "Notification outbox sweep stopped on its wall-clock budget");
       break;
     }

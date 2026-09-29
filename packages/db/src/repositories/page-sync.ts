@@ -903,8 +903,9 @@ function streamPriorityBySourceSql(streamColumnName: string, sourceColumnName: s
 /** The time a runnable row last became eligible or was last served: its
  * request, its last lease, or the retry/pacing deadline it waited out. The
  * planner keeps a passed retry_at until the next lease outcome or request
- * rewrites it, so the deadline still counts after the row turns pending. */
-function pageSyncRunnableSinceSql(tableAlias: string) {
+ * rewrites it, so the deadline still counts after the row turns pending.
+ * Also the ops watchdog's clock for an outstanding request (sync_silent). */
+export function pageSyncRunnableSinceSql(tableAlias: string) {
   return sql.raw(
     `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
   );
