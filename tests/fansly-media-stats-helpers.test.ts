@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  answeredFloor,
   countMediaStatBuckets,
   estimateMediaStatsCycle,
   mediaBackfillFirstMonthProbe,
@@ -14,6 +15,7 @@ import {
   servedMediaOfferRef,
   servedWindowCoversRequest,
   steadyWindows,
+  windowAnsweredBy,
 } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import {
   allZeroBody,
@@ -229,5 +231,56 @@ describe("media_stats — the pure helpers", () => {
       expect((window.beforeMs - window.afterMs) / DAY_MS).toBe(31);
       expect(window.periodMs).toBe(86_400_000);
     }
+  });
+
+  it("takes a refresh from a visit's windows only when they cover it end to end", () => {
+    const now = NOW.getTime();
+    const [s0, s1, s2] = steadyWindows("long_tail", NOW, "split_31");
+    const span = (afterDays: number, beforeDays: number) => ({
+      afterMs: now - afterDays * DAY_MS,
+      beforeMs: now - beforeDays * DAY_MS,
+    });
+    // A first visit's four backfill windows as the fixtures serve them —
+    // exactly as asked, one day of overlap — reach 121 days back.
+    const walked = [span(31, 0), span(61, 30), span(91, 60), span(121, 90)];
+    for (const window of [s0!, s1!, s2!]) {
+      expect(windowAnsweredBy(window, walked)).toBe(true);
+    }
+    // Three of them reach 91: the split plan's far end is two days short.
+    expect(windowAnsweredBy(s2!, walked.slice(0, 3))).toBe(false);
+    // Production's shape: each window served a day earlier than asked, and
+    // the first snapped to the day boundary below `now` — touching, not
+    // overlapping, and short of `now` by less than a day. Three cover the plan.
+    const snapped = now - 9 * 60 * 60 * 1000;
+    const served = [0, 1, 2].map((index) => ({
+      afterMs: snapped - (index + 1) * 31 * DAY_MS,
+      beforeMs: snapped - index * 31 * DAY_MS,
+    }));
+    for (const window of [s0!, s1!, s2!]) {
+      expect(windowAnsweredBy(window, served)).toBe(true);
+    }
+    // A gap inside the window is buckets nobody read.
+    expect(windowAnsweredBy(span(62, 0), [span(31, 0), span(62, 33)])).toBe(false);
+    // A walk anchored in the past never answers today's trailing window.
+    expect(windowAnsweredBy(s0!, [span(33, 2), span(63, 32)])).toBe(false);
+    expect(windowAnsweredBy(s0!, [])).toBe(false);
+  });
+
+  it("finds how far down a visit's windows reach, unbroken, from a walk's resume point", () => {
+    const now = NOW.getTime();
+    const span = (afterDays: number, beforeDays: number) => ({
+      afterMs: now - afterDays * DAY_MS,
+      beforeMs: now - beforeDays * DAY_MS,
+    });
+    const refresh = steadyWindows("long_tail", NOW, "split_31");
+    // A walk that resumes inside the split refresh — at a window key, or
+    // between keys — is covered to the refresh's far end.
+    expect(answeredFloor(now - 31 * DAY_MS, refresh)).toBe(now - 93 * DAY_MS);
+    expect(answeredFloor(now - 31 * DAY_MS - 7 * 3_600_000, refresh)).toBe(now - 93 * DAY_MS);
+    // Below the refresh, or across a gap, nothing is held.
+    expect(answeredFloor(now - 120 * DAY_MS, refresh)).toBe(now - 120 * DAY_MS);
+    expect(answeredFloor(now - 40 * DAY_MS, [span(31, 0), span(93, 62)])).toBe(now - 40 * DAY_MS);
+    expect(answeredFloor(now - 20 * DAY_MS, [span(31, 0), span(93, 62)])).toBe(now - 31 * DAY_MS);
+    expect(answeredFloor(now - 20 * DAY_MS, [])).toBe(now - 20 * DAY_MS);
   });
 });
