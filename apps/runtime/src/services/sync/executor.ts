@@ -1272,14 +1272,8 @@ async function runSyncPageExecutorWorker(
   input: {
     signal?: AbortSignal;
     coordinator: ExecutorCoordinator;
-    idlePollMs: number;
   },
 ): Promise<void> {
-  // Abort ends an idle wait at once. The rejection is swallowed so a worker
-  // never rejects on shutdown: Promise.all(workers) would otherwise settle
-  // while a sibling is still inside a job, and shutdown would close the app
-  // under it.
-  const idle = () => delay(input.idlePollMs, undefined, { signal: input.signal }).catch(() => {});
   while (!input.signal?.aborted) {
     try {
       const previousFetch = input.coordinator.fetchLock;
@@ -1319,7 +1313,7 @@ async function runSyncPageExecutorWorker(
       }
 
       if (!job) {
-        await idle();
+        await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
         continue;
       }
 
@@ -1348,7 +1342,7 @@ async function runSyncPageExecutorWorker(
       }
 
       app.logger.error({ err: error }, "Sync page executor loop failed");
-      await idle();
+      await delay(PAGE_EXECUTOR_IDLE_POLL_MS);
     }
   }
 }
@@ -1358,9 +1352,6 @@ export async function startSyncPageExecutor(
   boss: PageExecuteBoss,
   input?: {
     signal?: AbortSignal;
-    /** Idle poll between empty fetches. Production uses the default; tests
-     * shorten it so a worker picks queued work up without a 1 s nap. */
-    idlePollMs?: number;
   },
 ): Promise<void> {
   const coordinator: ExecutorCoordinator = {
@@ -1371,7 +1362,6 @@ export async function startSyncPageExecutor(
     runSyncPageExecutorWorker(app, boss, {
       signal: input?.signal,
       coordinator,
-      idlePollMs: input?.idlePollMs ?? PAGE_EXECUTOR_IDLE_POLL_MS,
     }));
 
   await Promise.all(workers);

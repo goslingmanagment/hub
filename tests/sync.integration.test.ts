@@ -377,7 +377,6 @@ async function requestLightSync(
 
 /** Idle poll for the executor tests: production naps 1 s after an empty fetch,
  * which a worker whose egress group is busy also pays. */
-const TEST_EXECUTOR_IDLE_POLL_MS = 25;
 
 describe("sync integration", () => {
   let testDb: StartedTestDatabase | null = null;
@@ -1078,7 +1077,6 @@ describe("sync integration", () => {
       });
       executorPromise = startSyncPageExecutor(app, boss, {
         signal: abortController.signal,
-        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await waitForRequestedSyncRequests(app, {
@@ -1259,7 +1257,6 @@ describe("sync integration", () => {
       });
       executorPromise = startSyncPageExecutor(app, boss, {
         signal: abortController.signal,
-        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await Promise.all([
@@ -1353,7 +1350,6 @@ describe("sync integration", () => {
       // All three pages are queued before the workers start.
       executorPromise = startSyncPageExecutor(app, boss, {
         signal: abortController.signal,
-        idlePollMs: TEST_EXECUTOR_IDLE_POLL_MS,
       });
 
       await Promise.all([
