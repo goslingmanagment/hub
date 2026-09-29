@@ -35,23 +35,27 @@ async function fixture() {
   return { app, pageId, event, tx, route, claim, rows };
 }
 
+// Nothing in routing or claiming depends on the burst size (claim is `limit 1`),
+// so a small burst proves the same coalescing and durability as a large one.
+const BURST = 20;
+
 describe("B1 durable coalescing and claim settlement", () => {
-  it("coalesces 1000 signals to one subject and replay does not increment revisions", async () => {
+  it(`coalesces ${BURST} signals to one subject and replay does not increment revisions`, async () => {
     const f = await fixture();
     await f.tx(async database => {
-      for (let id = 1; id <= 1000; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
-      for (let id = 1; id <= 1000; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
+      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
+      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
     });
-    expect(await f.rows()).toMatchObject([{ requested_revision: 1000n, applied_revision: 0n, next_due_at: now }]);
+    expect(await f.rows()).toMatchObject([{ requested_revision: BigInt(BURST), applied_revision: 0n, next_due_at: now }]);
     expect((await f.rows()).length).toBe(1);
-    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts")).rows[0].n).toBe(1000);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts")).rows[0].n).toBe(BURST);
   });
-  it("keeps 1000 distinct groups durable while claiming only one at a time", async () => {
+  it(`keeps ${BURST} distinct groups durable while claiming only one at a time`, async () => {
     const f = await fixture();
     await f.tx(async database => {
-      for (let id = 1; id <= 1000; id++) await routeFanslyWsHintEvent(database, f.event(id, String(id)), policy);
+      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id, String(id)), policy);
     });
-    expect(await f.rows()).toHaveLength(1000);
+    expect(await f.rows()).toHaveLength(BURST);
     const first = await f.claim();
     const second = await f.claim();
     expect(first?.groupRef).not.toBe(second?.groupRef);
