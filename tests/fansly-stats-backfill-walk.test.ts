@@ -12,6 +12,8 @@ import {
   classifyStatsMonth,
   classifyStatsWindow,
   emptyFanslyStatsCursorState,
+  hourlyCaptureDue,
+  hourlyCaptureGap,
   isEmptyStatsMonth,
   monthFromIndex,
   monthIndexOf,
@@ -152,6 +154,138 @@ describe("stats backfill cursor state", () => {
     const parsedCompleted = parseFanslyStatsCursorState(completed, NOW)!;
     expect(parsedCompleted.lastSweepDay).toBeNull();
     expect(parsedCompleted.sweepDay).toBeNull();
+  });
+});
+
+describe("the hourly plane's clock", () => {
+  // The route serves hourly buckets only inside its trailing 25 h, and where
+  // that window ends moves by up to 2 h from call to call: two captures more
+  // than 23 h apart can lose an hour for good.
+  const HOUR = 3_600_000;
+  const CAPTURED = Date.parse("2026-08-19T05:01:00.000Z");
+
+  it("is due on the last slot that keeps two captures within 23 h, and not before", () => {
+    // Asked on a slot, the next dispatch is six hours on. Twelve hours after a
+    // capture that next slot is still in time; eighteen hours after, not — so
+    // on 6-hourly slots the window is taken every third slot, 18 h apart.
+    const onSlot = (hoursSince: number) => hourlyCaptureDue(
+      CAPTURED, CAPTURED + hoursSince * HOUR, CAPTURED + (hoursSince + 6) * HOUR,
+    );
+    expect(onSlot(12)).toBe(false);
+    expect(onSlot(18)).toBe(true);
+    // Exactly 23 h is in time; a millisecond more is not.
+    const laterMs = CAPTURED + 17 * HOUR;
+    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR)).toBe(false);
+    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR + 1)).toBe(true);
+    expect(hourlyCaptureDue(null, CAPTURED, CAPTURED)).toBe(true);
+  });
+
+  it("does not take the window again within the hour of the last capture", () => {
+    // A history walk at 00:05, asked against the NEXT 00:05: that is 24 h out
+    // even right after it captured, and its continuations follow seconds apart.
+    const walkMs = Date.parse("2026-08-20T00:05:00.000Z");
+    const nextDayStartMs = Date.parse("2026-08-21T00:05:00.000Z");
+    expect(hourlyCaptureDue(walkMs, walkMs + 20_000, nextDayStartMs)).toBe(false);
+    expect(hourlyCaptureDue(walkMs, walkMs + HOUR - 1, nextDayStartMs)).toBe(false);
+    // An hour on, a capture brings the next 00:05 back within 23 h.
+    expect(hourlyCaptureDue(walkMs, walkMs + HOUR, nextDayStartMs)).toBe(true);
+  });
+
+  it("finds no served hole between captures up to 23 h apart, whatever the end lag does", () => {
+    // Served the way the route serves an hourly window: snapped to the hour,
+    // ending 0–2 h short of the hour asked for, 25 buckets from dateAfter to
+    // dateBefore inclusive.
+    const servedFor = (capturedMs: number, lagHours: number) => {
+      const beforeMs = Math.floor(capturedMs / HOUR) * HOUR - lagHours * HOUR;
+      return { afterMs: beforeMs - 24 * HOUR, beforeMs };
+    };
+    const holesAt = (spacingMs: number) => {
+      const missing: number[] = [];
+      for (let minute = 0; minute < 60; minute += 1) {
+        const olderMs = Date.parse("2026-08-19T05:00:00.000Z") + minute * 60_000;
+        const newerMs = olderMs + spacingMs;
+        for (const olderLag of [0, 1, 2]) {
+          for (const newerLag of [0, 1, 2]) {
+            const hole = hourlyCaptureGap(
+              { capturedMs: olderMs, servedBeforeMs: servedFor(olderMs, olderLag).beforeMs },
+              { capturedMs: newerMs, servedAfterMs: servedFor(newerMs, newerLag).afterMs },
+            );
+            if (hole !== null) missing.push((hole.toMs - hole.fromMs) / HOUR);
+          }
+        }
+      }
+      return missing;
+    };
+    expect(holesAt(18 * HOUR)).toEqual([]);
+    expect(holesAt(23 * HOUR)).toEqual([]);
+    // A day apart, the windows meet with no margin: when the lag drops from
+    // 2 h to 0 h, one bucket is in neither — whatever minute the captures ran.
+    expect(holesAt(24 * HOUR)).toEqual(Array.from({ length: 60 }, () => 1));
+  });
+
+  it("names the buckets no SERVED window carries, both ends of a window included", () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(hourlyCaptureGap(null, { capturedMs: CAPTURED, servedAfterMs: CAPTURED })).toBeNull();
+    // Production, lora-1: captures 2026-09-17 05:02 and 2026-09-18 05:02 were
+    // served [16.09 04:00, 17.09 04:00] and [17.09 05:00, 18.09 05:00]. A
+    // window carries 25 buckets, its dateBefore's included — the 17.09 04:00
+    // bucket is in stats_traffic_buckets — so nothing is missing.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-09-17T05:02:00Z"), servedBeforeMs: at("2026-09-17T04:00:00Z") },
+      { capturedMs: at("2026-09-18T05:02:00Z"), servedAfterMs: at("2026-09-17T05:00:00Z") },
+    )).toBeNull();
+    // Production, lilly-1: captures 2026-09-21 02:50 and 2026-09-22 03:37, 24.8 h
+    // apart — the REQUESTED windows touch — were served up to 21.09 00:00 and
+    // from 21.09 02:00. No window carries the 01:00 bucket.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-09-21T02:50:00Z"), servedBeforeMs: at("2026-09-21T00:00:00Z") },
+      { capturedMs: at("2026-09-22T03:37:00Z"), servedAfterMs: at("2026-09-21T02:00:00Z") },
+    )).toEqual({
+      fromMs: at("2026-09-21T01:00:00Z"),
+      toMs: at("2026-09-21T02:00:00Z"),
+      basis: "served",
+    });
+    // 25 h 04 min apart as requested, yet the served windows still meet.
+    expect(hourlyCaptureGap(
+      { capturedMs: at("2026-08-19T23:01:00Z"), servedBeforeMs: at("2026-08-19T22:00:00Z") },
+      { capturedMs: at("2026-08-21T00:05:00Z"), servedAfterMs: at("2026-08-19T23:00:00Z") },
+    )).toBeNull();
+    // A body without served bounds: the requested windows stand in.
+    expect(hourlyCaptureGap(
+      { capturedMs: CAPTURED, servedBeforeMs: null },
+      { capturedMs: CAPTURED + 25 * HOUR, servedAfterMs: null },
+    )).toBeNull();
+    expect(hourlyCaptureGap(
+      { capturedMs: CAPTURED, servedBeforeMs: at("2026-08-19T04:00:00Z") },
+      { capturedMs: CAPTURED + 28 * HOUR + 54 * 60_000, servedAfterMs: null },
+    )).toEqual({
+      fromMs: CAPTURED,
+      toMs: CAPTURED + 3 * HOUR + 54 * 60_000,
+      basis: "requested",
+    });
+  });
+
+  it("round-trips the last capture and drops a value that is not an instant", () => {
+    const state = {
+      ...emptyFanslyStatsCursorState(NOW),
+      lastHourlyCapturedAt: "2026-08-19T05:01:00.000Z",
+      lastHourlyServedBefore: "2026-08-19T04:00:00.000Z",
+    };
+    const parsed = parseFanslyStatsCursorState(JSON.parse(JSON.stringify(state)), NOW)!;
+    expect(parsed.lastHourlyCapturedAt).toBe("2026-08-19T05:01:00.000Z");
+    expect(parsed.lastHourlyServedBefore).toBe("2026-08-19T04:00:00.000Z");
+    const garbled = parseFanslyStatsCursorState(
+      { ...state, lastHourlyCapturedAt: "yesterday", lastHourlyServedBefore: 7 },
+      NOW,
+    )!;
+    expect(garbled.lastHourlyCapturedAt).toBeNull();
+    expect(garbled.lastHourlyServedBefore).toBeNull();
+    // A cursor from before the fields: the handler derives them once.
+    const legacy: Record<string, unknown> = { ...state };
+    delete legacy.lastHourlyCapturedAt;
+    delete legacy.lastHourlyServedBefore;
+    expect(parseFanslyStatsCursorState(legacy, NOW)!.lastHourlyCapturedAt).toBeNull();
+    expect(parseFanslyStatsCursorState(legacy, NOW)!.lastHourlyServedBefore).toBeNull();
   });
 });
 

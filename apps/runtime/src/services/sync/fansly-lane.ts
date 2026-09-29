@@ -164,15 +164,24 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
     setState: input.setState,
     saveProgress,
   });
-  const requestContext: FanslyRequestContext = {
+  const requestContextFor = (
+    budget: Pick<typeof attemptBudget, "observer" | "remainingAttempts">,
+  ): FanslyRequestContext => ({
     session: input.session,
     ...(input.proxy === undefined ? {} : { proxy: input.proxy }),
     ...(input.egressKey === undefined ? {} : { egressKey: input.egressKey }),
-    requestObserver: attemptBudget.observer,
-    remainingAttempts: attemptBudget.remainingAttempts,
+    requestObserver: budget.observer,
+    remainingAttempts: budget.remainingAttempts,
     ...(input.rateLimitWaiter === undefined
       ? {}
       : { rateLimitWaiter: input.rateLimitWaiter }),
+  });
+  const requestContext = requestContextFor(attemptBudget);
+  /** Requests that leave `attempts` of the day's allowance to a later one:
+   *  neither their retries nor any physical attempt of theirs can spend it. */
+  const holdingBack = (attempts: number) => {
+    const budget = attemptBudget.holdingBack(attempts);
+    return { hasCapacity: budget.hasCapacity, requestContext: requestContextFor(budget) };
   };
   const complete = (syncRunId: number, cursorTimestamp?: Date | null) => completeFanslyLane({
     db: input.db,
@@ -184,13 +193,18 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
     telemetry: input.telemetry,
     syncRunId,
   });
-  return { attemptBudget, complete, requestContext, saveProgress };
+  return { attemptBudget, complete, holdingBack, requestContext, saveProgress };
 }
 
 /**
  * Persist the attempt reservation before the adapter is allowed to send.
  * The adapter consults `remainingAttempts` once per logical request, so its
  * retry count can never exceed the durable allowance left for the UTC day.
+ *
+ * `holdingBack(n)` is the same allowance with the day's last `n` attempts kept
+ * for a later request: a retry is an attempt like any other, so a check before
+ * the request is not enough — the allowance the adapter reads and the
+ * admission of every attempt both stop short of the held ones.
  */
 export function createDurableFanslyAttemptBudget<TState extends FanslyDailyAttemptState>(input: {
   dailyCap: number;
@@ -199,30 +213,35 @@ export function createDurableFanslyAttemptBudget<TState extends FanslyDailyAttem
   setState: (state: TState) => void;
   saveProgress: () => Promise<unknown>;
 }) {
-  const remainingAttempts = () => Math.max(0, input.dailyCap - input.getState().callsToday);
+  const holdingBack = (held: number) => {
+    const allowance = input.dailyCap - held;
+    const remainingAttempts = () => Math.max(0, allowance - input.getState().callsToday);
 
-  const observer: HttpRequestObserver = {
-    async onRequestEvent(event: HttpRequestEvent) {
-      if (event.state === "started") {
-        const state = input.getState();
-        // A caller checks capacity before starting a logical request. This is
-        // a defensive refusal for a stale/custom adapter that ignores the
-        // retry allowance; no physical request has happened at this point.
-        if (state.callsToday >= input.dailyCap) {
-          throw new FanslyDailyAttemptBudgetExhaustedError(input.dailyCap);
+    const observer: HttpRequestObserver = {
+      async onRequestEvent(event: HttpRequestEvent) {
+        if (event.state === "started") {
+          const state = input.getState();
+          // A caller checks capacity before starting a logical request. This is
+          // a defensive refusal for a stale/custom adapter that ignores the
+          // retry allowance; no physical request has happened at this point.
+          if (state.callsToday >= allowance) {
+            throw new FanslyDailyAttemptBudgetExhaustedError(allowance);
+          }
+          input.setState({ ...state, callsToday: state.callsToday + 1 });
+          await input.saveProgress();
         }
-        input.setState({ ...state, callsToday: state.callsToday + 1 });
-        await input.saveProgress();
-      }
-      await input.downstreamObserver?.onRequestEvent(event);
-    },
+        await input.downstreamObserver?.onRequestEvent(event);
+      },
+    };
+
+    return {
+      observer,
+      remainingAttempts,
+      hasCapacity: (count = 1) => remainingAttempts() >= count,
+    };
   };
 
-  return {
-    observer,
-    remainingAttempts,
-    hasCapacity: (count = 1) => remainingAttempts() >= count,
-  };
+  return { ...holdingBack(0), holdingBack };
 }
 
 export class FanslyDailyAttemptBudgetExhaustedError extends Error {
