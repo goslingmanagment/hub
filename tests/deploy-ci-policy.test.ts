@@ -1373,26 +1373,28 @@ describe("Decision 377: every event keeps the required check reported", () => {
     }
   });
 
-  it.each(["push", "workflow_dispatch"] as const)("a %s run is never metadata-only", event => {
+  it.each([["push", "ci-ref"], ["workflow_dispatch", "ci-35518904235"]] as const)("a %s run is never metadata-only", (event, expectedGroup) => {
     const context = eventContext({ event });
-    expect(field(workflow.concurrency.group, context)).toBe("ci-35518904235");
+    expect(field(workflow.concurrency.group, context)).toBe(expectedGroup);
     expect(condition(job("fingerprint").if, context)).toBe(true);
     expect(field(job("quality").env?.METADATA_ONLY ?? "", context)).toBe("false");
   });
 
   // GitHub keeps ONE pending run per concurrency group and cancels the older
-  // pending one when another arrives, whatever cancel-in-progress says. A
-  // shared ref group therefore let a burst of main pushes evict the queued
-  // ones before they ran. Every push and manual run gets a group of its own;
-  // runs of one PR still share theirs, and only there does a newer run cancel.
-  it("gives every push and manual run its own group and cancels superseded PR runs only", () => {
-    expect(workflow.concurrency.group.startsWith("ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}")).toBe(true);
+  // pending one when another arrives, whatever cancel-in-progress says. Pushes
+  // to main share the ref's group on purpose: a burst of merges runs the main
+  // run in progress plus the newest commit, not one full gate per merge (ten
+  // merges held the PC for 20 minutes on 2026-09-30). cancel-in-progress stays
+  // off for pushes, so a started main run always finishes. A manual run gets a
+  // group of its own; runs of one PR share theirs and cancel in progress.
+  it("coalesces pending main pushes, keeps manual runs apart and cancels superseded PR runs only", () => {
+    expect(workflow.concurrency.group.startsWith("ci-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")).toBe(true);
     const group = (options: EventOptions, runId: string) =>
       field(workflow.concurrency.group, { ...eventContext(options), "github.run_id": runId });
-    for (const event of ["push", "workflow_dispatch"] as const) {
-      expect(group({ event }, "101"), event).toBe("ci-101");
-      expect(group({ event }, "102"), event).not.toBe(group({ event }, "101"));
-    }
+    expect(group({ event: "push" }, "101")).toBe("ci-ref");
+    expect(group({ event: "push" }, "102")).toBe(group({ event: "push" }, "101"));
+    expect(group({ event: "workflow_dispatch" }, "101")).toBe("ci-101");
+    expect(group({ event: "workflow_dispatch" }, "102")).not.toBe(group({ event: "workflow_dispatch" }, "101"));
     expect(group({ event: "push" }, "101")).not.toBe(group({ event: "workflow_dispatch" }, "102"));
     // Two pushes to one PR share its group, so the newer run cancels the older;
     // a metadata-only event keeps its own group and cancels nothing.
