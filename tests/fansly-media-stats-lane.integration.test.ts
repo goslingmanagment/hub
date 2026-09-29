@@ -2248,6 +2248,77 @@ describe("media_stats lane — the 90-day window refused with an HTTP error", ()
     expect((await queueRow(page.id, first)).nextDueAt?.toISOString()).toBe(NEXT_DAY.toISOString());
   });
 
+  /** Not dirty, walk resumed a month back: its first window is the split
+   *  plan's SECOND, its next one covers the third, and after two empty windows
+   *  and an empty first-month probe it is done — three older split windows
+   *  held, and not the trailing one. */
+  async function seedResumedQuietWalk(pageId: number, mediaRef: string) {
+    await seedLaneState(pageId, { longTailWindowMode: "ninety", longTailWindowAnnounced: true });
+    await seedMedia(pageId, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], {
+      queueCursor: {
+        ...BACKFILL_DONE,
+        nextBeforeMs: NOW.getTime() - 31 * DAY_MS,
+        emptyStreak: 0,
+        done: false,
+        stopReason: null,
+      },
+    });
+  }
+  const isTrailing = (params: AdapterCall) => params.beforeDate.getTime() === NOW.getTime();
+
+  it("keeps 90 days when the trailing probe fails, whatever older split windows the visit holds", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    await seedResumedQuietWalk(page.id, ref(1135));
+    // The route refuses 90 days, and this item refuses the trailing 31 days
+    // too: nothing says the route answers 31-day windows.
+    const adapter = adapterStub({
+      fail: (params) =>
+        spanDays(params) > 31 || isTrailing(params) ? providerRefusal("error getting graph") : null,
+      body: quietWindow,
+    });
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    // The walk's three windows, the refused 90 days, and the trailing probe.
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 90, 31]);
+    expect(isTrailing(adapter.calls[4]!)).toBe(true);
+    // Split windows 1 and 2 were read by the walk. That is coverage, not the
+    // probe's answer: the page keeps one call a long-tail item.
+    expect(await cursor(page.id)).toMatchObject({
+      longTailWindowMode: "ninety",
+      longTailProbeFailedDay: "2026-08-22",
+    });
+    expect(splitAnomalies(telemetry)).toHaveLength(0);
+  });
+
+  it("moves to 31 days when that trailing probe answers, and takes the older split windows from the walk", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1136);
+    await seedResumedQuietWalk(page.id, mediaRef);
+    const adapter = adapterStub({ fail: refusesNinety, body: quietWindow });
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+
+    // The probe is the one new 31-day read; split windows 1 and 2 are the
+    // walk's, and not asked again.
+    expect(adapter.calls.map(spanDays)).toEqual([31, 31, 31, 90, 31]);
+    expect(isTrailing(adapter.calls[4]!)).toBe(true);
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+    expect(splitAnomalies(telemetry)[0]?.details).toMatchObject({
+      trigger: "http_error",
+      previousMode: "ninety",
+    });
+    // The split refresh is whole: the item is read and its failure cleared.
+    const row = await queueRow(page.id, mediaRef);
+    expect(row.lastVisitedAt).not.toBeNull();
+    expect(row.consecutiveFailures).toBe(0);
+  });
+
   for (
     const [label, failure, pageLevel] of [
       ["a transport error", () => new Error("Socks5 proxy rejected connection"), true],

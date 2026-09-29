@@ -1579,10 +1579,10 @@ export async function fanslyMediaStatsChunk(
 
   /** The tier's trailing window: one call, except a long tail on a route that
    *  refuses 90 days. `planMode` is the long-tail plan to run — the page's
-   *  mode, unless the 90-day fallback is probing the split plan before it
-   *  commits to it. `reserveWhole` is set when a partial refresh would be
-   *  discarded, or would leave a dirty mark standing: the unit then never
-   *  STARTS without room for all its windows. */
+   *  mode as the refresh starts; the discovery and the 90-day fallback re-run
+   *  the refresh under the split plan they commit to. `reserveWhole` is set
+   *  when a partial refresh would be discarded, or would leave a dirty mark
+   *  standing: the unit then never STARTS without room for all its windows. */
   async function runSteady(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
@@ -1745,12 +1745,19 @@ export async function fanslyMediaStatsChunk(
    * gone. So the page moves to `split_31` only after a provider HTTP refusal
    * AND when this same item answers the split plan's first 31-day window: one
    * already answered earlier in this visit (its backfill asked for exactly that
-   * window, for free), or ONE probe now, budget permitting. The probe takes any
-   * split window this visit's own 31-day windows already cover as answered,
-   * as every refresh does, and reads only the rest. A probe that fails
+   * window, for free), or ONE probe now, budget permitting. A probe that fails
    * too spends the page's probe for the UTC day and changes nothing; the item
    * backs off like any failed look. A spent probe never discards the free
    * evidence: a later visit that answered that window still switches the page.
+   *
+   * THE PROBE'S OWN ANSWER, NOT COVERAGE. What the visit holds counts for the
+   * REFRESH, not for the route. A walk resumed a month back holds split windows
+   * 1 and 2 and says nothing about the trailing one; counted as evidence, a
+   * probe that failed too still tripled every long-tail refresh on the page.
+   * So the trailing window is read here, even where other windows cover it,
+   * and only its exact request journaled or its answer now moves the page.
+   * The split refresh after it takes what the visit holds, as every refresh
+   * does, and reads the rest.
    */
   async function fallBackFromNinetyDays(
     candidate: MediaStatsRefreshCandidate,
@@ -1762,8 +1769,11 @@ export async function fanslyMediaStatsChunk(
     const refusal = lastWindowFailure;
     if (refusal === null || !isProviderRefusal(refusal)) return failed;
     const [probeWindow] = steadyWindows(candidate.tier, now, "split_31");
-    const answeredThisVisit = probeWindow !== undefined
-      && visit.issued.has(windowKey(probeWindow));
+    if (probeWindow === undefined) return failed;
+    // Read BEFORE the probe: a key joins `issued` before its request goes out.
+    // Here it can only be a window this visit journaled — one that failed
+    // ended the visit before the refresh ran.
+    const answeredThisVisit = visit.issued.has(windowKey(probeWindow));
     // The day's failed probe and the budget limit only a NEW request: evidence
     // this visit already holds costs nothing.
     if (
@@ -1775,13 +1785,24 @@ export async function fanslyMediaStatsChunk(
 
     // NOT reserved whole: ONE answered 31-day window is the evidence, and the
     // split it proves is found once per page.
-    const probe = await runSteady(candidate, cursor, visit, "split_31");
-    if (!answeredThisVisit && probe.served === 0) {
-      if (probe.status === "failed") {
+    let probeBuckets = 0;
+    if (!answeredThisVisit) {
+      const probe = await requestWindow(candidate.subjectRef, {
+        periodMs: probeWindow.periodMs,
+        afterMs: probeWindow.afterMs,
+        beforeMs: probeWindow.beforeMs,
+        mode: "steady",
+        tier: candidate.tier,
+      }, visit);
+      if (probe === "failed") {
         state = { ...state, longTailProbeFailedDay: today };
         await saveProgress();
+        return failed;
       }
-      return failed;
+      if (probe === "repeat") {
+        return failed;
+      }
+      probeBuckets = probe.buckets;
     }
 
     state = { ...state, longTailWindowMode: "split_31", longTailWindowAnnounced: true };
@@ -1804,7 +1825,10 @@ export async function fanslyMediaStatsChunk(
       },
     });
     await saveProgress();
-    return probe;
+    // The item's refresh under the plan just proven, as the discovery re-runs
+    // it: the probe's window is held now, and so is any window the visit read.
+    const split = await runSteady(candidate, cursor, visit, "split_31");
+    return { ...split, buckets: probeBuckets + split.buckets };
   }
 
   /**
