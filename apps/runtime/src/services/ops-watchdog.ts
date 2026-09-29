@@ -37,9 +37,10 @@ export const OPS_WATCHDOG_SILENCE_MS = 3 * 60_000;
  * but a fresh one still resolves, so the latch the outgoing api opened during
  * the restart closes within a minute instead of after the whole grace. */
 export const OPS_WATCHDOG_BOOT_GRACE_MS = 5 * 60_000;
-/** E-2: no Fansly chunk started for this long while a stream is due. The
- * widest production gap between Fansly chunk starts over 21 days (the host
- * power-off of 2026-09-23 aside) was 5 min 10 s; deploy gaps stay under 6 min. */
+/** E-2: no Fansly chunk started for this long while a stream has been due
+ * for as long (getFanslySyncLiveness). The widest production gap between
+ * Fansly chunk starts over 21 days (the host power-off of 2026-09-23 aside)
+ * was 5 min 10 s; deploy gaps stay under 6 min. */
 export const OPS_WATCHDOG_SYNC_SILENCE_MS = 15 * 60_000;
 /** Bounds the chunk-start lookup; anything older reads as "over an hour". */
 export const OPS_WATCHDOG_SYNC_LOOKBACK_MS = 60 * 60_000;
@@ -56,7 +57,8 @@ export interface OpsWatchdogCheckResult {
   bootGrace: boolean;
   schedulerFresh: boolean;
   samplerFresh: boolean;
-  /** No Fansly chunk started for OPS_WATCHDOG_SYNC_SILENCE_MS while a stream is due. */
+  /** No Fansly chunk started for OPS_WATCHDOG_SYNC_SILENCE_MS while a stream
+   * has been due for as long. */
   syncStalled: boolean;
 }
 
@@ -119,9 +121,11 @@ export async function runOpsWatchdogCheck(
 
   // E-2: the planner is one all-or-nothing cycle (its DLQ has no consumer)
   // and a wedged executor starts nothing; both read as chunks not starting.
+  // A stream counts once it has been due for the same threshold, so an hourly
+  // stream idling to its next slot, or work that just came due, is no stall.
   const sync = await getFanslySyncLiveness(app.db, {
-    now,
     since: new Date(now.getTime() - OPS_WATCHDOG_SYNC_LOOKBACK_MS),
+    dueBefore: new Date(now.getTime() - OPS_WATCHDOG_SYNC_SILENCE_MS),
   });
   const syncStalled = sync.hasDueStream && (
     sync.latestStartedAt === null

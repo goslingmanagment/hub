@@ -341,6 +341,52 @@ describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
     return getNotificationIncidentByKey(harness.db, "sync_silent:global");
   }
 
+  const HOUR = 60 * MINUTE;
+
+  /** A whole hour a few hours back. The scenarios below run each check at a
+   * `now` of their own on this clock, so the heartbeat and the sample written
+   * above stay fresh and the boot grace is measured from the same clock. */
+  function pastHour(): number {
+    return Math.floor(Date.now() / HOUR) * HOUR - 3 * HOUR;
+  }
+
+  function checkAt(atMs: number) {
+    return runOpsWatchdogCheck(appStub(), { startedAtMs: atMs - 10 * MINUTE, now: new Date(atMs) });
+  }
+
+  async function chunkStartedAt(pageId: number, atMs: number) {
+    await harness.pool.query(
+      `insert into sync_runs (page_id, stream, outcome, started_at, finished_at)
+       values ($1, 'light', 'succeeded', $2, $2)`,
+      [pageId, new Date(atMs)],
+    );
+  }
+
+  /** The hourly light stream at slot offset 0, so slot k starts on hour k. */
+  async function lightStream(
+    pageId: number,
+    state: { scheduledAt: number; requestSeq: number; appliedSeq: number; requestedAt: number; startedAt: number },
+  ) {
+    await harness.pool.query(
+      `insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds,
+                                     last_scheduled_slot, request_seq, applied_seq, requested_at, started_at)
+       values ($1, 'light', case when $3::bigint > $4::bigint then 'pending' else 'idle' end::page_sync_status,
+               3600, 0, $2, $3, $4, $5, $6)
+       on conflict (page_id, stream) do update
+         set status = excluded.status, last_scheduled_slot = excluded.last_scheduled_slot,
+             request_seq = excluded.request_seq, applied_seq = excluded.applied_seq,
+             requested_at = excluded.requested_at, started_at = excluded.started_at`,
+      [
+        pageId,
+        Math.floor(state.scheduledAt / HOUR),
+        state.requestSeq,
+        state.appliedSeq,
+        new Date(state.requestedAt),
+        new Date(state.startedAt),
+      ],
+    );
+  }
+
   it("opens after 16 min without a Fansly chunk while a stream is due, resolves on a fresh run", async () => {
     await syncRunStarted(fanslyPageId, 14 * MINUTE);
     const quiet = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
@@ -379,9 +425,72 @@ describe("sync_silent: the Fansly planner / executor deadman (E-2)", () => {
     expect(result.syncStalled).toBe(false);
     expect(await syncSilent()).toBeNull();
 
-    // A backoff that has run out is due again.
+    // A backoff that ran out a minute ago waits for the next planner tick;
+    // one that ran out a full threshold ago is due work nothing picked up.
     await streamState(fanslyPageId, "posts", { status: "retrying", retryInMs: -MINUTE });
+    expect((await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() })).syncStalled).toBe(false);
+    await streamState(fanslyPageId, "posts", { status: "retrying", retryInMs: -16 * MINUTE });
     expect((await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() })).syncStalled).toBe(true);
+  });
+
+  it("an hourly stream idling to its next slot is not a stall, with every other stream paused", async () => {
+    // Codex review: with only the hourly light stream runnable, a normal run at
+    // 00:00 opened sync_silent at 00:16 and paged at ~00:26, while the next
+    // run was scheduled for 01:00.
+    await streamState(fanslyPageId, "transactions", { status: "paused" });
+    const t0 = pastHour();
+    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 1, appliedSeq: 1, requestedAt: t0, startedAt: t0 });
+    await chunkStartedAt(fanslyPageId, t0 + 5_000);
+
+    for (const minute of [1, 15, 16, 30, 45, 59]) {
+      expect((await checkAt(t0 + minute * MINUTE)).syncStalled, `${minute} min into the idle hour`).toBe(false);
+    }
+
+    // 01:00: the planner claims the slot, and a check lands before the
+    // executor has started the chunk.
+    const claimedAt = t0 + HOUR + 20_000;
+    await lightStream(fanslyPageId, {
+      scheduledAt: t0 + HOUR, requestSeq: 2, appliedSeq: 1, requestedAt: claimedAt, startedAt: t0,
+    });
+    expect((await checkAt(claimedAt + 10_000)).syncStalled).toBe(false);
+    await chunkStartedAt(fanslyPageId, claimedAt + 20_000);
+    expect((await checkAt(t0 + HOUR + MINUTE)).syncStalled).toBe(false);
+    expect(await syncSilent()).toBeNull();
+  });
+
+  it("an outstanding request no chunk has picked up for 16 min opens it", async () => {
+    await streamState(fanslyPageId, "transactions", { status: "paused" });
+    const t0 = pastHour();
+    await chunkStartedAt(fanslyPageId, t0);
+    // A request between slots (manual, event): the next slot is 01:00.
+    const requestedAt = t0 + 10 * MINUTE;
+    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 2, appliedSeq: 1, requestedAt, startedAt: t0 });
+
+    // Outstanding for 10 min, silent for 20: the executor still has time.
+    expect((await checkAt(requestedAt + 10 * MINUTE)).syncStalled).toBe(false);
+    const stalled = await checkAt(requestedAt + 16 * MINUTE);
+    expect(stalled.syncStalled).toBe(true);
+    expect(await syncSilent()).toMatchObject({
+      status: "open",
+      errorSummary: "No Fansly sync chunk started for 26 min — planner or executor stalled",
+    });
+  });
+
+  it("a slot the planner never claimed opens it once it has been due for 16 min", async () => {
+    await streamState(fanslyPageId, "transactions", { status: "paused" });
+    const t0 = pastHour();
+    await lightStream(fanslyPageId, { scheduledAt: t0, requestSeq: 1, appliedSeq: 1, requestedAt: t0, startedAt: t0 });
+    // The last Fansly chunk started at 00:50; the 01:00 slot is never claimed.
+    await chunkStartedAt(fanslyPageId, t0 + 50 * MINUTE);
+
+    // Silent for 24 min, but the slot has been due for 14 only.
+    expect((await checkAt(t0 + HOUR + 14 * MINUTE)).syncStalled).toBe(false);
+    const stalled = await checkAt(t0 + HOUR + 16 * MINUTE);
+    expect(stalled.syncStalled).toBe(true);
+    expect(await syncSilent()).toMatchObject({
+      status: "open",
+      errorSummary: "No Fansly sync chunk started for 26 min — planner or executor stalled",
+    });
   });
 
   it("an OnlyFans-only run does not mask a Fansly stall", async () => {
