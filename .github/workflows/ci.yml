@@ -116,12 +116,8 @@ jobs:
       IMAGE: agency_hub_core/runtime:ci-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
-      # Self-hosted runners keep node_modules between jobs: the checkout skips
-      # its own clean there, and "Prepare the workspace" below cleans the rest.
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          clean: ${{ runner.environment != 'self-hosted' }}
 
       # Hosted runners: pnpm version comes from package.json "packageManager" —
       # one pin, no drift. The action wipes its install directory first, so it
@@ -161,27 +157,17 @@ jobs:
           [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
           echo "$bin" >> "$GITHUB_PATH"
 
-      # Self-hosted: clean everything but node_modules, and keep that only when
-      # its last install completed from the same lockfile, manifests, pnpm and
-      # Node. See scripts/ci-node-modules.sh.
-      - name: Prepare the workspace
-        if: runner.environment == 'self-hosted'
-        run: bash scripts/ci-node-modules.sh prepare
-
       # The PC's runners share one pnpm store in $HOME, named explicitly so no
       # PNPM_HOME can move it: pnpm's store is safe for concurrent installs,
       # and $HOME is on the same filesystem as _work, so packages hard-link
       # instead of copying. Hosted runners keep pnpm's default store, the one
-      # setup-node caches. --frozen-lockfile checks the lockfile against every
-      # manifest whatever node_modules holds; on the PC a completed install
-      # then seals node_modules for the next job.
+      # setup-node caches.
       - name: Install dependencies
         env:
           PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
         run: |
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
-          if [ -n "$PNPM_PC_STORE" ]; then bash scripts/ci-node-modules.sh seal; fi
 
       # Contracts come first: the generator rewrites tracked sources in place
       # (contract hash, SDK), and the unit tests started next import them.
@@ -362,8 +348,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          clean: ${{ runner.environment != 'self-hosted' }}
 
       - name: Setup pnpm
         if: runner.environment != 'self-hosted'
@@ -391,17 +375,12 @@ jobs:
           [ "pnpm@$running" = "${pinned%%+*}" ] || { echo "::error::corepack runs pnpm $running but package.json pins $pinned"; exit 1; }
           echo "$bin" >> "$GITHUB_PATH"
 
-      - name: Prepare the workspace
-        if: runner.environment == 'self-hosted'
-        run: bash scripts/ci-node-modules.sh prepare
-
       - name: Install dependencies
         env:
           PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
         run: |
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
-          if [ -n "$PNPM_PC_STORE" ]; then bash scripts/ci-node-modules.sh seal; fi
 
       # A shard runs its files one at a time (the script's default,
       # --no-file-parallelism). On the PC it runs two at a time: each file
