@@ -4534,7 +4534,7 @@ export const agentHydrationEvents = pgTable(
       ${table.actor} in ('agent_key', 'owner_session', 'executor', 'sweeper')
     `),
     kindCheck: check("agent_hydration_events_kind_check", sql`
-      ${table.kind} in ('created', 'approved', 'rejected', 'dispatched',
+      ${table.kind} in ('created', 'approved', 'rejected', 'dispatched', 'rearmed',
                         'settled', 'expired', 'failed')
     `),
   }),
