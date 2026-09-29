@@ -37,6 +37,23 @@ type SubscribersPage = {
 };
 
 const lapsed = (id: string): SeededSubscription => ({ id, endsAt: LILLY_ENDS_AT, autoRenew: false });
+const renewing = (id: string): SeededSubscription => ({ id, endsAt: "2099-01-01T00:00:00.000Z", autoRenew: true });
+// Production lilly-2 on 2026-09-29: row 197, set to renew on 2026-10-24. A
+// failed renewal leaves Fansly stating zero over a row the lapsed rule cannot
+// explain.
+const LILLY_2_RENEWING: SeededSubscription = {
+  id: "860004140804231169", endsAt: "2026-10-24T00:15:24.000Z", autoRenew: true,
+};
+// Every shape the lapsed rule refuses, one more than it retires on its own.
+const UNEXPLAINED_SIX: SeededSubscription[] = [
+  renewing("a"),
+  renewing("b"),
+  { id: "c", endsAt: "2099-01-01T00:00:00.000Z", autoRenew: false },
+  { id: "d", endsAt: null, autoRenew: false },
+  { id: "e", endsAt: LILLY_ENDS_AT, autoRenew: null },
+  lapsed("f"),
+];
+const MINUTE_MS = 60_000;
 const statedEmpty = (): SubscribersPage => ({
   total: 0, items: [], offset: 0, done: true, contractAccepted: true,
   raw: { stats: { totalActive: 0, totalExpired: 50, total: 50 }, subscriptions: [] },
@@ -135,6 +152,26 @@ describe("Fansly subscribers stated-empty snapshot", () => {
       [key],
     )).rows[0]?.status;
   }
+
+  async function emptySnapshotNotes(runId: number) {
+    return (await db.pool.query<{ details: Record<string, unknown> }>(
+      `select details from sync_run_events
+       where sync_run_id=$1 and event_type='note' and details->>'code' like 'subscribers_empty_snapshot%'`,
+      [runId],
+    )).rows.map((row) => row.details);
+  }
+
+  /** Fansly's own /account/me subscriberCount, which the light and followers
+   * streams write hourly together with last_verified_at. */
+  async function setAccountCounter(pageId: number, subscriberCount: number | null, verifiedAt: Date | null) {
+    await db.pool.query(
+      "update pages set subscriber_count=$2, last_verified_at=$3 where id=$1",
+      [pageId, subscriberCount, verifiedAt],
+    );
+    return verifiedAt;
+  }
+
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * MINUTE_MS);
 
   it("retires lilly-1's lapsed non-renewing subscription on a stated zero and recovers the stream", async () => {
     const f = await fixture({ subscriptions: [lapsed("889566")], serve: statedEmpty });
@@ -295,8 +332,10 @@ describe("Fansly subscribers stated-empty snapshot", () => {
       page: { ...statedEmpty(), total: null, contractAccepted: false },
       error: "Fansly subscribers response contract rejected; captured before refusal",
     },
-  ])("keeps the guard on an empty page with $name", async ({ page, error }) => {
+  ])("keeps the guard on an empty page with $name, even with the account counter at zero", async ({ page, error }) => {
     const f = await fixture({ subscriptions: [lapsed("889566")], serve: () => page });
+    // The counter only confirms a zero the provider states; it never stands in for one.
+    await setAccountCounter(f.page.id, 0, minutesAgo(10));
 
     const result = await executeNextSyncPageChunk(f.app, f.page.id);
 
@@ -310,6 +349,128 @@ describe("Fansly subscribers stated-empty snapshot", () => {
       }));
     }
     expect(await incidentStatus(f.key)).toBe("open");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("retires every unseen current subscription when a fresh zero account counter confirms a stated zero", async () => {
+    const f = await fixture({ subscriptions: UNEXPLAINED_SIX, serve: statedEmpty });
+    const verifiedAt = await setAccountCounter(f.page.id, 0, minutesAgo(90));
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result).toMatchObject({ kind: "success", stream: "subscribers" });
+    expect(f.getSubscribersPage).toHaveBeenCalledTimes(1);
+    expect(await currentIds(f.page.id)).toEqual([]);
+    const fanPages = await db.pool.query<{ is_subscriber: boolean }>(
+      "select is_subscriber from page_fans where platform_account_id=$1",
+      [f.page.id],
+    );
+    expect(fanPages.rows).toHaveLength(6);
+    expect(fanPages.rows.every((row) => row.is_subscriber === false)).toBe(true);
+
+    const checkpoint = await getCheckpoint(f.app.db, f.page.id, "subscribers");
+    expect(checkpoint?.cursorLastSucceededRunId).toBe(result.runId);
+    expect(checkpoint?.state).toMatchObject({
+      revision: REQUEST_SEQ, generation: 4122, mode: "active", pageCount: 1, providerReportedTotal: 0,
+      historyBackfilledAt: LILLY_HISTORY_BACKFILLED_AT,
+    });
+    expect(checkpoint?.state).not.toHaveProperty("destructiveFinalization");
+    const state = await getPageSyncState(f.app.db, f.page.id, "subscribers");
+    expect(state).toMatchObject({ consecutiveFailures: 0, lastErrorSummary: null, retryAt: null });
+    expect(state?.appliedSeq).toBe(REQUEST_SEQ);
+    expect(await incidentStatus(f.key)).toBe("resolved");
+    expect(await anomalies(result.runId!)).toEqual([]);
+    expect(await emptySnapshotNotes(result.runId!)).toEqual([expect.objectContaining({
+      code: "subscribers_empty_snapshot_confirmed_by_counter",
+      generation: 4122,
+      retiredCount: 6,
+      subscriberCount: 0,
+      lastVerifiedAt: verifiedAt!.toISOString(),
+    })]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("retires lilly-2's renewing subscription once its account counter reads zero", async () => {
+    const f = await fixture({ subscriptions: [LILLY_2_RENEWING], serve: statedEmpty });
+    await setAccountCounter(f.page.id, 0, minutesAgo(20));
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result).toMatchObject({ kind: "success", stream: "subscribers" });
+    expect(await currentIds(f.page.id)).toEqual([]);
+    expect(await getPageSyncState(f.app.db, f.page.id, "subscribers")).toMatchObject({ consecutiveFailures: 0 });
+    expect(await incidentStatus(f.key)).toBe("resolved");
+    expect(await emptySnapshotNotes(result.runId!)).toEqual([expect.objectContaining({
+      code: "subscribers_empty_snapshot_confirmed_by_counter", retiredCount: 1, subscriberCount: 0,
+    })]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it.each([
+    {
+      name: "the account counter still reads one (lilly-2 until the counter catches up)",
+      subscriptions: [LILLY_2_RENEWING], subscriberCount: 1, verifiedAt: () => minutesAgo(20),
+      reason: "not_known_lapsed",
+    },
+    {
+      name: "the zero counter was verified more than two hours before the walk",
+      subscriptions: UNEXPLAINED_SIX, subscriberCount: 0, verifiedAt: () => minutesAgo(125),
+      reason: "too_many_current",
+    },
+    {
+      name: "the counter is null",
+      subscriptions: UNEXPLAINED_SIX, subscriberCount: null, verifiedAt: () => minutesAgo(20),
+      reason: "too_many_current",
+    },
+    {
+      name: "the zero counter was never verified",
+      subscriptions: [LILLY_2_RENEWING], subscriberCount: 0, verifiedAt: () => null,
+      reason: "not_known_lapsed",
+    },
+  ])("refuses a stated zero when $name", async ({ subscriptions: seeded, subscriberCount, verifiedAt, reason }) => {
+    const f = await fixture({ subscriptions: seeded, serve: statedEmpty });
+    const counterVerifiedAt = await setAccountCounter(f.page.id, subscriberCount, verifiedAt());
+    const before = await currentIds(f.page.id);
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result.kind).not.toBe("success");
+    expect(await currentIds(f.page.id)).toEqual(before);
+    expect(await anomalies(result.runId!)).toEqual([expect.objectContaining({
+      code: "subscribers_empty_first_page_guard", reason, existingCurrentSubscribers: seeded.length,
+      subscriberCount, lastVerifiedAt: counterVerifiedAt?.toISOString() ?? null,
+    })]);
+    expect(await emptySnapshotNotes(result.runId!)).toEqual([]);
+    const state = await getPageSyncState(f.app.db, f.page.id, "subscribers");
+    expect(state).toMatchObject({ consecutiveFailures: 16, lastErrorSummary: REFUSAL });
+    expect(state?.appliedSeq).toBe(REQUEST_SEQ - 1);
+    expect((await getCheckpoint(f.app.db, f.page.id, "subscribers"))?.cursorLastSucceededRunId).toBeNull();
+    expect(await incidentStatus(f.key)).toBe("open");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("spares rows touched during a stated-empty walk the account counter confirms", async () => {
+    let touchMidWalk: () => Promise<void> = async () => {};
+    const f = await fixture({
+      subscriptions: [renewing("stale"), renewing("touched")],
+      serve: async () => {
+        await touchMidWalk();
+        return statedEmpty();
+      },
+    });
+    await setAccountCounter(f.page.id, 0, minutesAgo(30));
+    touchMidWalk = async () => {
+      const [fan] = await upsertFans(f.app.db, [{ platform: "fansly", platformUserId: "fan-touched" }]);
+      await upsertPageSubscription(f.app.db, {
+        platformSubscriptionId: "touched", platformAccountId: f.page.id, fanId: fan!.id,
+        rawStatus: 3, canonicalStatus: "active", priceMills: 5000n, renewPriceMills: 5000n,
+        autoRenew: true, endsAt: new Date("2099-01-01T00:00:00.000Z"), lastSeenGeneration: 4121,
+      });
+    };
+
+    const result = await executeNextSyncPageChunk(f.app, f.page.id);
+
+    expect(result).toMatchObject({ kind: "success", stream: "subscribers" });
+    expect(await currentIds(f.page.id)).toEqual(["touched"]);
+    expect(await emptySnapshotNotes(result.runId!)).toEqual([expect.objectContaining({
+      code: "subscribers_empty_snapshot_confirmed_by_counter", retiredCount: 1,
+    })]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("spares rows a concurrent writer touches during a stated-empty walk", async () => {
@@ -418,6 +579,56 @@ describe("Fansly subscribers stated-empty snapshot", () => {
     expect(await currentIds(f.page.id)).toEqual(["touched"]);
 
     // A current row stamped by the walk's own generation contradicts the zero.
+    await db.pool.query(
+      "update page_subscriptions set last_seen_generation=4122 where platform_account_id=$1 and platform_subscription_id='touched'",
+      [f.page.id],
+    );
+    expect(await retireLapsedPageSubscriptionsForEmptySnapshot(f.app.db, {
+      ...input, walkStartedAt: new Date("2026-09-30T00:00:00.000Z"),
+    })).toEqual({ certified: false, reason: "observed_by_walk", currentCount: 1 });
+    expect(await currentIds(f.page.id)).toEqual(["touched"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lets only a fresh zero account counter retire the whole unexplained candidate set", async () => {
+    const f = await fixture({
+      subscriptions: [
+        renewing("renewing-a"),
+        renewing("renewing-b"),
+        lapsed("lapsed"),
+        { ...renewing("touched"), lastSeenAt: "2026-09-29T12:00:00.000Z" },
+      ],
+      serve: statedEmpty,
+    });
+    const lapsedRuleOnly = {
+      platformAccountId: f.page.id, generation: 4122,
+      walkStartedAt: new Date("2026-09-29T00:00:00.000Z"), maxRetirements: 5,
+    };
+    const input = { ...lapsedRuleOnly, counterVerifiedSince: new Date("2026-09-28T22:00:00.000Z") };
+    const refused = { certified: false, reason: "not_known_lapsed", currentCount: 4 };
+
+    // Without a counter bound the lapsed rule alone decides, as before.
+    await setAccountCounter(f.page.id, 0, new Date("2026-09-28T23:00:00.000Z"));
+    expect(await retireLapsedPageSubscriptionsForEmptySnapshot(f.app.db, lapsedRuleOnly)).toEqual(refused);
+
+    await setAccountCounter(f.page.id, 1, new Date("2026-09-28T23:00:00.000Z"));
+    expect(await retireLapsedPageSubscriptionsForEmptySnapshot(f.app.db, input)).toEqual({
+      ...refused, counter: { subscriberCount: 1, lastVerifiedAt: new Date("2026-09-28T23:00:00.000Z") },
+    });
+    await setAccountCounter(f.page.id, 0, new Date("2026-09-28T21:59:59.999Z"));
+    expect(await retireLapsedPageSubscriptionsForEmptySnapshot(f.app.db, input)).toEqual({
+      ...refused, counter: { subscriberCount: 0, lastVerifiedAt: new Date("2026-09-28T21:59:59.999Z") },
+    });
+    expect(await currentIds(f.page.id)).toEqual(["lapsed", "renewing-a", "renewing-b", "touched"]);
+
+    await setAccountCounter(f.page.id, 0, new Date("2026-09-28T22:00:00.000Z"));
+    expect(await retireLapsedPageSubscriptionsForEmptySnapshot(f.app.db, input)).toEqual({
+      certified: true, retiredCount: 3, currentCount: 4,
+      counter: { subscriberCount: 0, lastVerifiedAt: new Date("2026-09-28T22:00:00.000Z") },
+    });
+    // The row touched since the walk began was never a candidate.
+    expect(await currentIds(f.page.id)).toEqual(["touched"]);
+
+    // The walk's own positive observation still refuses, counter or not.
     await db.pool.query(
       "update page_subscriptions set last_seen_generation=4122 where platform_account_id=$1 and platform_subscription_id='touched'",
       [f.page.id],
