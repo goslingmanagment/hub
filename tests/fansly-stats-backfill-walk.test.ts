@@ -158,20 +158,69 @@ describe("stats backfill cursor state", () => {
 });
 
 describe("the hourly plane's clock", () => {
-  // The route serves hourly buckets only inside its trailing 25 h: two captures
-  // further apart than that lose the hours between them for good.
+  // The route serves hourly buckets only inside its trailing 25 h, and where
+  // that window ends moves by up to 2 h from call to call: two captures more
+  // than 23 h apart can lose an hour for good.
   const HOUR = 3_600_000;
   const CAPTURED = Date.parse("2026-08-19T05:01:00.000Z");
 
-  it("is due on the last slot before the window runs out, and not before", () => {
-    // Asked on a slot, the next dispatch is six hours on. Eighteen hours after
-    // a capture that next slot is still in time; twenty-four hours after, not.
-    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 18 * HOUR + 6 * HOUR)).toBe(false);
-    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 24 * HOUR + 6 * HOUR)).toBe(true);
-    // Exactly 25 h still touches; a millisecond more is a hole.
-    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 25 * HOUR)).toBe(false);
-    expect(hourlyCaptureDue(CAPTURED, CAPTURED + 25 * HOUR + 1)).toBe(true);
-    expect(hourlyCaptureDue(null, CAPTURED)).toBe(true);
+  it("is due on the last slot that keeps two captures within 23 h, and not before", () => {
+    // Asked on a slot, the next dispatch is six hours on. Twelve hours after a
+    // capture that next slot is still in time; eighteen hours after, not — so
+    // on 6-hourly slots the window is taken every third slot, 18 h apart.
+    const onSlot = (hoursSince: number) => hourlyCaptureDue(
+      CAPTURED, CAPTURED + hoursSince * HOUR, CAPTURED + (hoursSince + 6) * HOUR,
+    );
+    expect(onSlot(12)).toBe(false);
+    expect(onSlot(18)).toBe(true);
+    // Exactly 23 h is in time; a millisecond more is not.
+    const laterMs = CAPTURED + 17 * HOUR;
+    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR)).toBe(false);
+    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR + 1)).toBe(true);
+    expect(hourlyCaptureDue(null, CAPTURED, CAPTURED)).toBe(true);
+  });
+
+  it("does not take the window again within the hour of the last capture", () => {
+    // A history walk at 00:05, asked against the NEXT 00:05: that is 24 h out
+    // even right after it captured, and its continuations follow seconds apart.
+    const walkMs = Date.parse("2026-08-20T00:05:00.000Z");
+    const nextDayStartMs = Date.parse("2026-08-21T00:05:00.000Z");
+    expect(hourlyCaptureDue(walkMs, walkMs + 20_000, nextDayStartMs)).toBe(false);
+    expect(hourlyCaptureDue(walkMs, walkMs + HOUR - 1, nextDayStartMs)).toBe(false);
+    // An hour on, a capture brings the next 00:05 back within 23 h.
+    expect(hourlyCaptureDue(walkMs, walkMs + HOUR, nextDayStartMs)).toBe(true);
+  });
+
+  it("finds no served hole between captures up to 23 h apart, whatever the end lag does", () => {
+    // Served the way the route serves an hourly window: snapped to the hour,
+    // ending 0–2 h short of the hour asked for, 25 buckets from dateAfter to
+    // dateBefore inclusive.
+    const servedFor = (capturedMs: number, lagHours: number) => {
+      const beforeMs = Math.floor(capturedMs / HOUR) * HOUR - lagHours * HOUR;
+      return { afterMs: beforeMs - 24 * HOUR, beforeMs };
+    };
+    const holesAt = (spacingMs: number) => {
+      const missing: number[] = [];
+      for (let minute = 0; minute < 60; minute += 1) {
+        const olderMs = Date.parse("2026-08-19T05:00:00.000Z") + minute * 60_000;
+        const newerMs = olderMs + spacingMs;
+        for (const olderLag of [0, 1, 2]) {
+          for (const newerLag of [0, 1, 2]) {
+            const hole = hourlyCaptureGap(
+              { capturedMs: olderMs, servedBeforeMs: servedFor(olderMs, olderLag).beforeMs },
+              { capturedMs: newerMs, servedAfterMs: servedFor(newerMs, newerLag).afterMs },
+            );
+            if (hole !== null) missing.push((hole.toMs - hole.fromMs) / HOUR);
+          }
+        }
+      }
+      return missing;
+    };
+    expect(holesAt(18 * HOUR)).toEqual([]);
+    expect(holesAt(23 * HOUR)).toEqual([]);
+    // A day apart, the windows meet with no margin: when the lag drops from
+    // 2 h to 0 h, one bucket is in neither — whatever minute the captures ran.
+    expect(holesAt(24 * HOUR)).toEqual(Array.from({ length: 60 }, () => 1));
   });
 
   it("names the buckets no SERVED window carries, both ends of a window included", () => {

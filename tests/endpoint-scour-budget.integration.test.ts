@@ -1917,15 +1917,13 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       expect(adapter.earningsRequests.every((request) => request.beforeMs <= NOW.getTime())).toBe(true);
       expect((await journaledKinds(page.id)).filter((kind) => kind === "earnings_stats_snapshot"))
         .toHaveLength(adapter.earningsRequests.length);
-      // Steady resumes YESTERDAY's sweep at 00:06, and a sweep that spends
-      // today's cap sleeps until tomorrow's 00:05 — 39 h after the last hourly
-      // capture — so the hourly window goes first. History finished today's
-      // head, the window included, before resuming.
-      const hourlyToday = mode === "steady" ? 1 : 0;
+      // Steady resumes YESTERDAY's sweep at 00:06, 15 h after the last hourly
+      // capture: the next slot is in time, and the sweep ends within the cap,
+      // so the call it holds back for the window is never spent. History
+      // finished today's head, the window included, before resuming.
       expect(adapter.statsRequests.filter((request) => request.periodMs === 3_600_000))
-        .toHaveLength(hourlyToday);
-      expect((await cursor(page.id))!.callsToday)
-        .toBe(adapter.earningsRequests.length - 1 + hourlyToday);
+        .toHaveLength(0);
+      expect((await cursor(page.id))!.callsToday).toBe(adapter.earningsRequests.length - 1);
       expect(telemetry.anomalies).toHaveLength(0);
     },
   );
@@ -2222,7 +2220,9 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
   // PRODUCTION, 31 days to 2026-09-29: lilly-2 lost 123.9 h, lora-2 22.0 h,
   // lora-3 4.5 h, lilly-1 1.7 h — each time a sweep ran EARLY (a 00:05
   // continuation after a cap deferral, a deploy) and the next day's ran on its
-  // slot. These tests drive the lane through whole days of dispatches.
+  // slot. And where a served window ends moves by up to 2 h from call to call,
+  // so even captures 24 h apart can miss one bucket: the lane keeps them within
+  // 23 h. These tests drive the lane through whole days of dispatches.
 
   const HOUR = 3_600_000;
 
@@ -2319,23 +2319,26 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       (Date.parse(capture) - Date.parse(captures[index]!)) / HOUR);
   }
 
-  it("keeps hourly captures within 25 h after an EARLY sweep, at one extra request", async (
+  it("keeps hourly captures within 23 h across an EARLY sweep, at no extra request", async (
     context,
   ) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    // D = 2026-08-20. D−1 sweeps on its 05:01 slot. D's sweep runs at 00:05 —
-    // the continuation a cap deferral leaves behind — and every dispatch after
-    // it is an ordinary slot. The old sweep-bound capture took D+1's hourly at
-    // 05:01, 28.9 h after D's: 3.9 hours no window ever reached.
+    // D = 2026-08-20. D−1 sweeps on its 05:01 slot, then the lane sits out
+    // D−1's other slots — a pending cap deferral — and comes back at D 00:05,
+    // where D's sweep runs early; every dispatch after that is an ordinary
+    // slot. The sweep-bound capture took D+1's hourly at 05:01, 28.9 h after
+    // D's: 3.9 hours no window ever reached.
     const page = await seedSteadyPage("2026-08-18");
-    const adapter = echoStatsAdapter();
+    // The provider's end lag at its worst where the captures are furthest
+    // apart: 2 h at D 00:05, then 0 h at D 23:01, 22.9 h later.
+    const adapter = hourGridStatsAdapter([1, 2, 0, 2, 0]);
     const telemetry = telemetryStub();
     const app = appStub(adapter as never);
     for (const instant of [
-      ...slotsOn("2026-08-19"),
+      at("2026-08-19", "05:01"),
       at("2026-08-20", "00:05"),
       ...slotsOn("2026-08-20", "2026-08-21", "2026-08-22"),
     ]) {
@@ -2343,17 +2346,17 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     }
 
     const captures = hourlyCaptures(adapter);
-    expect(Math.max(...gapHours(captures))).toBeLessThanOrEqual(25);
-    // By D's last slot at the latest; from D+1 on, back with the sweep on its
-    // slot. The shift costs ONE request: D+1's slot capture is the one the
-    // sweep always made, it just comes six hours after D's catch-up.
+    expect(Math.max(...gapHours(captures))).toBeLessThanOrEqual(23);
+    // Caught up on D's last slot, then every third slot, 18 h apart — the
+    // clock is the hourly plane's own, and the early sweep did not move it.
     expect(captures).toEqual([
       "2026-08-19T05:01:00.000Z",
       "2026-08-20T00:05:00.000Z",
       "2026-08-20T23:01:00.000Z",
-      "2026-08-21T05:01:00.000Z",
-      "2026-08-22T05:01:00.000Z",
+      "2026-08-21T17:01:00.000Z",
+      "2026-08-22T11:01:00.000Z",
     ]);
+    // 22.9 h apart with the lag going 2 -> 0: the served windows still meet.
     expect(telemetry.anomalies.filter(
       (anomaly) => anomaly.code === "fansly_stats_hourly_capture_gap",
     )).toHaveLength(0);
@@ -2367,9 +2370,10 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
         "2026-08-21T05:01:00.000Z",
         "2026-08-22T05:01:00.000Z",
       ]);
+    expect(adapter.calls).toHaveLength(4 * 11 + captures.length);
   });
 
-  it("captures hourly ONCE a day on steady slots — no request beyond the old sweep's", async (
+  it("captures hourly every 18 h on steady slots — within 23 h, one extra call in three days", async (
     context,
   ) => {
     if (!testDb) {
@@ -2377,26 +2381,42 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
       return;
     }
     const page = await seedSteadyPage("2026-08-18");
-    const adapter = echoStatsAdapter();
+    // The end lag swinging its full 2 h on every call.
+    const adapter = hourGridStatsAdapter([2, 0, 2, 0, 2, 0, 2, 0]);
     const telemetry = telemetryStub();
     const app = appStub(adapter as never);
-    for (const instant of slotsOn("2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22")) {
+    for (const instant of slotsOn(
+      "2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22", "2026-08-23", "2026-08-24",
+    )) {
       await dispatchAt(app, page.id, telemetry, instant);
     }
 
     const captures = hourlyCaptures(adapter);
+    // Every third 6-hourly slot: the next slot would be 24 h after the capture.
     expect(captures).toEqual([
       "2026-08-19T05:01:00.000Z",
-      "2026-08-20T05:01:00.000Z",
-      "2026-08-21T05:01:00.000Z",
+      "2026-08-19T23:01:00.000Z",
+      "2026-08-20T17:01:00.000Z",
+      "2026-08-21T11:01:00.000Z",
       "2026-08-22T05:01:00.000Z",
+      "2026-08-22T23:01:00.000Z",
+      "2026-08-23T17:01:00.000Z",
+      "2026-08-24T11:01:00.000Z",
     ]);
-    expect(gapHours(captures)).toEqual([24, 24, 24]);
-    // Twelve calls a day, the hourly one included — exactly the old sweep.
-    expect(adapter.calls).toHaveLength(4 * 12);
+    expect(gapHours(captures)).toEqual([18, 18, 18, 18, 18, 18, 18]);
+    const holes = await testDb.pool.query(
+      `select scope_ref from capture_coverage
+        where page_id = $1 and plane = 'stats_account_hourly' and scope_ref like 'gap:%'`,
+      [page.id],
+    );
+    expect(holes.rows).toEqual([]);
+    expect(telemetry.anomalies).toHaveLength(0);
+    // Six sweeps of eleven calls, and eight hourly calls where a once-a-day
+    // capture made six: +1 hourly call per page every three days.
+    expect(adapter.calls).toHaveLength(6 * 11 + 8);
   });
 
-  it("records the hours between two captures more than 25 h apart as a hole", async (
+  it("records the buckets between two captures an outage kept apart as a hole", async (
     context,
   ) => {
     if (!testDb) {
@@ -2456,16 +2476,20 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     });
   });
 
-  it("records a bucket the SERVED windows miss, and none where they meet", async (context) => {
+  it("records a one-bucket hole the SERVED windows leave, and none where they meet", async (
+    context,
+  ) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    // Four captures 24 h apart on one slot: the requested windows always
-    // touch. The provider's lag goes 1, 0, 2, 0 h. A window starting one hour
-    // after the last one's dateBefore has missed nothing — that bucket was
-    // served — but after 2 -> 0 the 08-21 04:00 bucket is in neither window
-    // (production, lilly-1 2026-09-21 -> 22: the 01:00 bucket).
+    // Only the 05:01 slot reaches the lane — the other slots are missed — so
+    // the captures are 24 h apart, past the 23 h the clock keeps on schedule,
+    // and the requested windows always touch. The provider's lag goes 1, 0, 2,
+    // 0 h. A window starting one hour after the last one's dateBefore has
+    // missed nothing — that bucket was served — but after 2 -> 0 the 08-21
+    // 04:00 bucket is in neither window (production, lilly-1 2026-09-21 -> 22,
+    // 24.8 h apart: the 01:00 bucket).
     const page = await seedSteadyPage("2026-08-18");
     const adapter = hourGridStatsAdapter([1, 0, 2, 0]);
     const telemetry = telemetryStub();
@@ -2490,18 +2514,20 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect((await cursor(page.id))!.lastHourlyServedBefore).toBe("2026-08-22T05:00:00.000Z");
   });
 
-  it("captures hourly with the day's sweep, before the sweep can defer it past 25 h", async (
+  it("keeps a call of the cap for the hourly window when the sweep defers the lane", async (
     context,
   ) => {
     if (!testDb) {
       context.skip();
       return;
     }
-    // The last capture sits on the day's LAST slot, 23:01 — where a catch-up
-    // after an early sweep puts it. The next day's sweep spends the cap and
-    // defers the lane to 00:05; no slot dispatches it in between. Asked only
-    // about the next slot (11:01), the 05:01 dispatch skipped the window and
-    // the next capture came 25 h 04 min after the last.
+    // The last capture sits on the day's LAST slot, 23:01 — every fourth day
+    // on 18 h spacing. The next day's sweep spends the cap and defers the lane
+    // to 00:05; no slot dispatches it in between. Asked only about the next
+    // slot (11:01), the 05:01 dispatch skipped the window and the next capture
+    // came 25 h 04 min after the last. Capturing up front whenever a sweep
+    // MIGHT defer would take the window every day's first chunk; the sweep
+    // instead leaves the cap's last call for it and takes it when it defers.
     const page = await seedSteadyPage("2026-08-19");
     const seeded = (await cursor(page.id))!;
     seeded.lastHourlyCapturedAt = "2026-08-19T23:01:00.000Z";
@@ -2518,13 +2544,50 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
 
     const deferredResult = await dispatchAt(app, page.id, telemetry, at("2026-08-20", "05:01"));
     expect(deferredResult.continuationRetryAt?.toISOString()).toBe("2026-08-21T00:05:00.000Z");
-    // First, before the sweep spent the rest of the day's cap.
-    expect(adapter.statsRequests[0]!.periodMs).toBe(HOUR);
+    expect(deferredResult.stats).toMatchObject({ deferred: "daily_call_budget", hourly: "captured" });
+    // The sweep went first and stopped one call short of the cap; that call
+    // was the hourly window, as the lane deferred.
+    expect(adapter.calls).toEqual(["account_stats", "earnings_stats", "account_stats"]);
+    expect(adapter.statsRequests.map((request) => request.periodMs)).toEqual([DAY, HOUR]);
+    expect((await cursor(page.id))!.callsToday).toBe(3);
     await dispatchAt(app, page.id, telemetry, at("2026-08-21", "00:05"));
 
     const captures = ["2026-08-19T23:01:00.000Z", ...hourlyCaptures(adapter)];
-    expect(captures.slice(0, 2)).toEqual(["2026-08-19T23:01:00.000Z", "2026-08-20T05:01:00.000Z"]);
-    expect(Math.max(...gapHours(captures))).toBeLessThanOrEqual(25);
+    expect(captures).toEqual([
+      "2026-08-19T23:01:00.000Z",
+      "2026-08-20T05:01:00.000Z",
+      "2026-08-21T00:05:00.000Z",
+    ]);
+    expect(Math.max(...gapHours(captures))).toBeLessThanOrEqual(23);
+  });
+
+  it("does not hold a call back from a sweep that finishes within the cap", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // The same page, but the day's cap fits the sweep's eleven calls and the
+    // held one: that call is never spent, and the hourly window waits for its
+    // own slot, 17:01, 18 h after the last capture.
+    const page = await seedSteadyPage("2026-08-19");
+    const seeded = (await cursor(page.id))!;
+    seeded.lastHourlyCapturedAt = "2026-08-19T23:01:00.000Z";
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: seeded.lastSweepDay,
+      state: seeded as unknown as Record<string, unknown>,
+    });
+    await capDayAt(12);
+    const adapter = hourGridStatsAdapter();
+    const telemetry = telemetryStub();
+    const app = appStub(adapter as never);
+
+    const result = await dispatchAt(app, page.id, telemetry, at("2026-08-20", "05:01"));
+    expect(result.satisfied).toBe(true);
+    expect(result.stats).toMatchObject({ mode: "steady", hourly: "not_due" });
+    expect(hourlyCaptures(adapter)).toEqual([]);
+    expect(adapter.calls).toHaveLength(11);
   });
 
   it("makes no hourly request at all while fanslyStatsHourlyEnabled is off", async (context) => {
@@ -2554,7 +2617,7 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect((await cursor(page.id))!.lastHourlyCapturedAt).toBeNull();
   });
 
-  it("captures hourly BEFORE a history walk defers the lane past the 25 h window", async (
+  it("captures hourly BEFORE a history walk defers the lane past 23 h", async (
     context,
   ) => {
     if (!testDb) {
@@ -2591,6 +2654,46 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     // First, before the walk spent the rest of the day's cap.
     expect(adapter.statsRequests[0]!.periodMs).toBe(HOUR);
     expect((await cursor(page.id))!.lastHourlyCapturedAt).toBe("2026-08-20T05:01:00.000Z");
+  });
+
+  it("takes the hourly window once, not on every chunk, as a walk resumes at 00:05", async (
+    context,
+  ) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    // A walk that deferred yesterday resumes at 00:05 and chains continuations
+    // seconds apart until the cap. Asked against the next 00:05, the window is
+    // 24 h out even right after it was taken — it must not be taken again.
+    const page = await seedPage();
+    const resume = at("2026-08-20", "00:05");
+    const state = emptyFanslyStatsCursorState(resume);
+    state.lastSweepDay = "2026-08-20";
+    state.backfill!.hourly.done = true;
+    state.lastHourlyCapturedAt = "2026-08-19T05:01:00.000Z";
+    await upsertCheckpointProgress(testDb.db, {
+      platformAccountId: page.id,
+      stream: "stats_snapshot",
+      cursorText: state.lastSweepDay,
+      state: state as unknown as Record<string, unknown>,
+    });
+    await capDayAt(5);
+    const adapter = echoStatsAdapter();
+    const telemetry = telemetryStub();
+    const app = appStub(adapter as never);
+
+    let deferredTo: Date | null | undefined = null;
+    for (let chunk = 0; chunk < 10 && deferredTo == null; chunk += 1) {
+      const result = await fanslyStatsSnapshotChunk(app, input(
+        page.id, telemetry, new SyncChunkBudget(1), new Date(resume.getTime() + chunk * 20_000),
+      ));
+      if (result.stats?.deferred === "daily_call_budget") deferredTo = result.continuationRetryAt;
+    }
+
+    expect(deferredTo?.toISOString()).toBe("2026-08-21T00:05:00.000Z");
+    expect(hourlyCaptures(adapter)).toEqual(["2026-08-20T00:05:00.000Z"]);
+    expect(adapter.calls).toHaveLength(5);
   });
 
   it("defers to the UTC roll when the hourly window is due and the day's cap is spent", async (
