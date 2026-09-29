@@ -41,7 +41,8 @@ describe("sync-state seeding follower reads", () => {
 
   beforeAll(async () => { testDb = await startTestDatabase(); }, 120_000);
   afterAll(async () => { await testDb?.stop(); });
-  beforeEach(async () => { await resetIntegrationDatabase(testDb.pool); });
+  // Physical: cases assert that the executed plan never loops over page_follows.
+  beforeEach(async () => { await resetIntegrationDatabase(testDb.pool, { physical: true }); });
 
   async function seedPage(platform: "fansly" | "onlyfans" = "fansly") {
     const model = await createModel(testDb.db, { slug: "seed-count", name: "Seed Count" });
