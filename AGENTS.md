@@ -22,8 +22,6 @@
   - Jobs queue behind busy PC runners. `ci-pool status` lists a run as stuck
     only when no runner is online or an idle one does not pick it up; then
     tell the owner (they switch pools with `ci-pool`).
-  - A burst of merges to main runs the main run in progress and the newest
-    commit; intermediate pending runs are cancelled. Check CI on the commit
-    you deploy. Never use `[skip ci]`, including in squash messages: the
-    newest main commit must always get a Quality Gate run.
+  - Never use `[skip ci]`, including in squash messages: every main commit
+    must keep a Quality Gate record.
 - Do not create or maintain decision/session logs.
