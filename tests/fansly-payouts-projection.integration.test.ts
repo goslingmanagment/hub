@@ -46,7 +46,6 @@ import {
   rebuildFanslyPayoutsProjection,
   runFanslyPayoutsProjection,
 } from "../apps/runtime/src/services/projections/fansly-payouts.ts";
-import { findProjection } from "../apps/runtime/src/services/projections/registry.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -589,25 +588,5 @@ describe("[sync-critical] WP-F7 payouts projection", () => {
       [FANSLY_PAYOUTS_PROJECTION, page.id],
     );
     expect(Number(watermark[0]!.n)).toBe(1);
-  });
-
-  it("is registered with its tables, its types and a truncate-replay rebuild", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const definition = findProjection(FANSLY_PAYOUTS_PROJECTION);
-    expect(definition).toBeDefined();
-    expect(definition?.stateClass).toBe("fact_projection");
-    expect(definition?.rebuildKind).toBe("truncate_replay");
-    expect([...(definition?.tables ?? [])].sort()).toEqual([
-      "page_payout_methods",
-      "page_payout_requests",
-    ]);
-    expect([...(definition?.eventTypes ?? [])].sort()).toEqual([
-      "payout.method_list_observed",
-      "payout.method_observed",
-      "payout.observed",
-    ]);
   });
 });

@@ -477,3 +477,53 @@ describe("canonicalizer registry dispatch", () => {
     expect(familyForObservation({ source: "operator", kind: "admin.sync_trigger" })).toBeNull();
   });
 });
+
+// Wave 2 — the Fansly 1970 repair's source-bug fix (asFanslyTimestamp), on the
+// pure canonicalizer. The superseding repair itself, end to end against the
+// archive, is fansly-1970-repair.integration.test.ts.
+describe("Fansly 1970 repair (Wave 2, first superseding consumer)", () => {
+  // 2026-07-04T00:26:40Z in epoch SECONDS — the fixture-proven Fansly shape.
+  const EPOCH_SECONDS = 1_782_174_400;
+  const FAN = "fansly-fan-1";
+  const GROUP = "group-77";
+
+  it("the FIXED canonicalizer converts epoch-seconds correctly (new observations never regress)", () => {
+    const drafts = canonicalizeSyncPullObservation({
+      id: 1,
+      source: "pull",
+      producer: "sync",
+      platform: "fansly",
+      accountId: 42,
+      kind: "dm_messages",
+      payload: {
+        messages: [{
+          id: "m-1",
+          senderId: FAN,
+          groupId: GROUP,
+          content: "seconds payload",
+          createdAt: EPOCH_SECONDS,
+        }],
+      },
+      observedAt: null,
+      receivedAt: new Date("2026-07-09T00:00:00Z"),
+    }, { nativeAccountRefByAccountId: new Map([[42, "own-ref"]]) });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]!.occurredAt.getUTCFullYear()).toBe(2026);
+    expect(drafts[0]!.occurredAt.getTime()).toBe(EPOCH_SECONDS * 1000);
+    // Millisecond inputs stay verbatim (the >= 1e12 arm).
+    const msDrafts = canonicalizeSyncPullObservation({
+      id: 2,
+      source: "pull",
+      producer: "sync",
+      platform: "fansly",
+      accountId: 42,
+      kind: "dm_messages",
+      payload: {
+        messages: [{ id: "m-2", senderId: FAN, groupId: GROUP, content: "ms", createdAt: EPOCH_SECONDS * 1000 }],
+      },
+      observedAt: null,
+      receivedAt: new Date("2026-07-09T00:00:00Z"),
+    }, { nativeAccountRefByAccountId: new Map([[42, "own-ref"]]) });
+    expect(msDrafts[0]!.occurredAt.getTime()).toBe(EPOCH_SECONDS * 1000);
+  });
+});

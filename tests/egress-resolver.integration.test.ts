@@ -1,6 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { join } from "node:path";
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel } from "@agency_hub_core/db";
@@ -356,15 +353,4 @@ describe("class-aware pacing properties (Stage 26)", () => {
       { scope: "class:bulk", priority_class: "bulk" },
     ]));
   }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("raw-fetch ratchet (Stage 26)", () => {
-  it("holds its budget", () => {
-    const output = execFileSync(
-      "node",
-      [join(__dirname, "..", "scripts", "check-raw-fetch.mjs")],
-      { encoding: "utf8" },
-    );
-    expect(output).toMatch(/raw fetch\( sites: \d+ \(budget \d+\)/);
-  });
 });

@@ -1,6 +1,17 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
+import { FANSLY_CATALOG_PROJECTION } from "../apps/runtime/src/services/projections/fansly-catalog.ts";
+import { FANSLY_COMMENTS_PROJECTION } from "../apps/runtime/src/services/projections/fansly-comments.ts";
+import {
+  FANSLY_ENGAGEMENT_PROJECTION,
+  FANSLY_ENGAGEMENT_PROJECTION_TABLES,
+} from "../apps/runtime/src/services/projections/fansly-engagement.ts";
+import { FANSLY_PAYOUTS_PROJECTION } from "../apps/runtime/src/services/projections/fansly-payouts.ts";
+import { MEDIA_PLANE_PROJECTION } from "../apps/runtime/src/services/projections/media-plane.ts";
 import {
   findProjection,
   isOperationalStateTable,
@@ -126,5 +137,119 @@ describe("projection registry", () => {
     );
     expect(new Set(names).size).toBe(names.length);
     expect(names).toContain("obs_backlog_pull_stats_v2");
+  });
+});
+
+// Per-projection declarations: each family's own pins on its registry entry
+// (exact tables and event types, rebuild kind, state class). They read only the
+// registry, so they live here rather than in the family's database suite.
+describe("projection registry — per-projection declarations", () => {
+  it("declares subject_refresh_state as operational state, and no projection truncates it", () => {
+    // BY CLASSIFICATION (§3.4), never by a quiet exemption in this file.
+    const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
+    expect(declared.has("subject_refresh_state")).toBe(true);
+    const projected = new Set(PROJECTION_REGISTRY
+      .filter((projection) => projection.rebuildKind !== "none")
+      .flatMap((projection) => projection.tables));
+    expect(projected.has("subject_refresh_state")).toBe(false);
+
+    const engagement = findProjection(FANSLY_ENGAGEMENT_PROJECTION);
+    expect([...(engagement?.tables ?? [])]).toEqual([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]);
+    expect(engagement?.rebuildKind).toBe("truncate_replay");
+    // `post_likes` IS truncated on rebuild: it is a fact projection whose
+    // Fansly half happens to be empty, and "empty because nothing wrote it" has
+    // to stay distinguishable from "empty because it was truncated".
+    expect([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]).toContain("post_likes");
+  });
+
+  it("is registered with a rebuild, and declares creator_media on nobody but the media plane", () => {
+    const projection = findProjection(FANSLY_CATALOG_PROJECTION);
+    expect(projection).not.toBeNull();
+    expect(projection?.rebuildKind).toBe("truncate_replay");
+    expect(projection?.rebuild).not.toBeNull();
+    expect(projection?.tables).not.toContain("creator_media");
+    expect(projection?.tables).not.toContain("creator_media_bundles");
+    // The single-writer rule, stated as an ownership claim rather than a hope.
+    expect(projection?.eventTypes).not.toContain("media.observed");
+  });
+
+  it("declares itself in the registry with a real rebuild and a partition preflight", () => {
+    const definition = findProjection(FANSLY_COMMENTS_PROJECTION);
+    expect(definition?.stateClass).toBe("fact_projection");
+    expect(definition?.rebuildKind).toBe("truncate_replay");
+    expect(definition?.rebuild).toBeTypeOf("function");
+    expect(definition?.eventTypes).toEqual([
+      "post.comment_observed",
+      "post.comment_list_observed",
+    ]);
+    expect(definition?.tables).toEqual(["post_comments"]);
+  });
+
+  it("is registered with its tables, its types and a truncate-replay rebuild", () => {
+    const definition = findProjection(FANSLY_PAYOUTS_PROJECTION);
+    expect(definition).toBeDefined();
+    expect(definition?.stateClass).toBe("fact_projection");
+    expect(definition?.rebuildKind).toBe("truncate_replay");
+    expect([...(definition?.tables ?? [])].sort()).toEqual([
+      "page_payout_methods",
+      "page_payout_requests",
+    ]);
+    expect([...(definition?.eventTypes ?? [])].sort()).toEqual([
+      "payout.method_list_observed",
+      "payout.method_observed",
+      "payout.observed",
+    ]);
+  });
+});
+
+describe("media plane — registration", () => {
+  // Source-level, and deliberately so: a projector that runs but that nobody
+  // can REBUILD is a projection you cannot repair, and a projector registered
+  // nowhere is a table that silently stops filling. Both are the kind of
+  // omission a passing end-to-end test does not notice.
+  //
+  // WP-F1(0) moved the two registration sites INTO the projection registry, so
+  // the property is now checked against the registry itself rather than against
+  // the shape of two hand-written blocks. That is strictly stronger: the old
+  // assertions could only see whether one specific literal was present, and the
+  // registry is what the tick and the CLI now both read.
+  it("is declared in the projection registry, with its rebuild and its tables", () => {
+    const definition = findProjection(MEDIA_PLANE_PROJECTION);
+    expect(definition).not.toBeNull();
+    expect(definition?.rebuildKind).toBe("truncate_replay");
+    expect(definition?.rebuild).not.toBeNull();
+    expect(definition?.stateClass).toBe("fact_projection");
+    expect([...(definition?.eventTypes ?? [])]).toEqual([
+      "media.observed",
+      "media.file_observed",
+      "media.order_observed",
+      "media.offer_location_observed",
+      "message.attachments_observed",
+    ]);
+    expect([...(definition?.tables ?? [])]).toEqual([
+      "creator_media",
+      "creator_raw_media",
+      "creator_media_bundles",
+      "media_orders",
+      "message_media_offers",
+      "media_offer_locations",
+    ]);
+  });
+
+  it("rides the registry-driven worker tick and the registry-driven CLI", () => {
+    const worker = readFileSync(
+      path.resolve("apps/runtime/src/worker-services.ts"),
+      "utf8",
+    );
+    // The tick iterates the registry; nothing about media_plane is named here
+    // any more, which is the point — one call site now covers every projection.
+    expect(worker).toContain("runProjectionTick");
+
+    const cli = readFileSync(path.resolve("apps/runtime/src/cli.ts"), "utf8");
+    expect(cli).toContain("rebuildRegisteredProjection");
+    // The argument help is DERIVED from the registry, so an accepted value
+    // nobody is told about is impossible rather than merely caught.
+    expect(cli).toContain("projectionNames().join(\" | \")");
+    expect(projectionNames()).toContain(MEDIA_PLANE_PROJECTION);
   });
 });

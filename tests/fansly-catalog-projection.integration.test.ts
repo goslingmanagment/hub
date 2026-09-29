@@ -39,7 +39,6 @@ import {
   runCanonicalization,
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
-  FANSLY_CATALOG_PROJECTION,
   FANSLY_CATALOG_PROJECTION_TABLES,
   measureFanslyCatalogMedia,
   rebuildFanslyCatalogProjection,
@@ -49,7 +48,6 @@ import {
   rebuildMediaPlaneProjection,
   runMediaPlaneProjection,
 } from "../apps/runtime/src/services/projections/media-plane.ts";
-import { findProjection } from "../apps/runtime/src/services/projections/registry.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -698,20 +696,5 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
       [page.id],
     );
     expect(gift).toHaveLength(2);
-  });
-
-  it("is registered with a rebuild, and declares creator_media on nobody but the media plane", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const projection = findProjection(FANSLY_CATALOG_PROJECTION);
-    expect(projection).not.toBeNull();
-    expect(projection?.rebuildKind).toBe("truncate_replay");
-    expect(projection?.rebuild).not.toBeNull();
-    expect(projection?.tables).not.toContain("creator_media");
-    expect(projection?.tables).not.toContain("creator_media_bundles");
-    // The single-writer rule, stated as an ownership claim rather than a hope.
-    expect(projection?.eventTypes).not.toContain("media.observed");
   });
 });

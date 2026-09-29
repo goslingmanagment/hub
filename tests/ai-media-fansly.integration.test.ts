@@ -15,11 +15,7 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { renderFanslyMediaNotes, QUICK_FEATURE_MEDIA_NOTE_LIMITS } from "../apps/runtime/src/modules/ai/index.ts";
-import {
-  cloudFrontExpiry,
-  fanslyAiMediaSource,
-  pickFanslyImageLocation,
-} from "../apps/runtime/src/services/ai-media-describe/fansly-source.ts";
+import { fanslyAiMediaSource } from "../apps/runtime/src/services/ai-media-describe/fansly-source.ts";
 import type { MediaDescribeClient } from "../apps/runtime/src/services/ai-media-describe/describer.ts";
 import { runAiMediaDescribeSweep } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
 import { runAiMediaCandidatesProjection } from "../apps/runtime/src/services/projections/ai-media-candidates.ts";
@@ -165,22 +161,6 @@ async function markLive() {
     `update ai_usage_events set user_id = (select id from users where username = 'live-chatter') where client_event_id = 'live-1'`,
   );
 }
-
-describe("Fansly source helpers", () => {
-  it("picks the smallest image variant covering 1024 px and decodes CloudFront expiry", () => {
-    const media = photoMedia("m", 1_900_000_000).media;
-    expect(pickFanslyImageLocation(media)).toContain("m-720");
-    expect(cloudFrontExpiry(pickFanslyImageLocation(media)!)?.getTime()).toBe(1_900_000_000_000);
-    const video = {
-      mimetype: "video/mp4",
-      variants: [
-        { mimetype: "image/jpeg", width: 480, height: 854, locations: [{ location: "https://cdn3.fansly.com/poster.jpeg" }] },
-        { mimetype: "application/vnd.apple.mpegurl", width: 2160, height: 3840, locations: [{ location: "https://cdn3.fansly.com/v.m3u8" }] },
-      ],
-    };
-    expect(pickFanslyImageLocation(video)).toBe("https://cdn3.fansly.com/poster.jpeg");
-  });
-});
 
 describe("Fansly candidates projector", () => {
   it("fast-forwards pages without a policy and never reads their history", async () => {

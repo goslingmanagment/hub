@@ -44,11 +44,6 @@ import {
   runFanslyEngagementProjection,
 } from "../apps/runtime/src/services/projections/fansly-engagement.ts";
 import {
-  findProjection,
-  OPERATIONAL_STATE_TABLES,
-  PROJECTION_REGISTRY,
-} from "../apps/runtime/src/services/projections/registry.ts";
-import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
@@ -840,27 +835,5 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
         [page.id],
       ),
     ).toEqual(stateBefore);
-  });
-
-  it("declares subject_refresh_state as operational state, and no projection truncates it", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    // BY CLASSIFICATION (§3.4), never by a quiet exemption in this file.
-    const declared = new Set(OPERATIONAL_STATE_TABLES.map((entry) => entry.table));
-    expect(declared.has("subject_refresh_state")).toBe(true);
-    const projected = new Set(PROJECTION_REGISTRY
-      .filter((projection) => projection.rebuildKind !== "none")
-      .flatMap((projection) => projection.tables));
-    expect(projected.has("subject_refresh_state")).toBe(false);
-
-    const engagement = findProjection(FANSLY_ENGAGEMENT_PROJECTION);
-    expect([...(engagement?.tables ?? [])]).toEqual([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]);
-    expect(engagement?.rebuildKind).toBe("truncate_replay");
-    // `post_likes` IS truncated on rebuild: it is a fact projection whose
-    // Fansly half happens to be empty, and "empty because nothing wrote it" has
-    // to stay distinguishable from "empty because it was truncated".
-    expect([...FANSLY_ENGAGEMENT_PROJECTION_TABLES]).toContain("post_likes");
   });
 });

@@ -7,7 +7,6 @@ import {
   insertObservation,
 } from "@agency_hub_core/db";
 
-import { canonicalizeSyncPullObservation } from "../apps/runtime/src/services/canonicalize/sync-pull.ts";
 import { runFansly1970Repair } from "../apps/runtime/src/services/fansly-1970-repair.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
@@ -21,7 +20,7 @@ import {
 // healed by a superseding event with the CORRECTED timestamp; the archive
 // projection's superseding merge repairs occurred_at in the serving store.
 // The source-bug fix itself (asFanslyTimestamp) is asserted on the pure
-// canonicalizer.
+// canonicalizer, in canonicalize-sync-pull.test.ts.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -52,46 +51,6 @@ function appStub() {
 }
 
 describe("Fansly 1970 repair (Wave 2, first superseding consumer)", () => {
-  it("the FIXED canonicalizer converts epoch-seconds correctly (new observations never regress)", () => {
-    const drafts = canonicalizeSyncPullObservation({
-      id: 1,
-      source: "pull",
-      producer: "sync",
-      platform: "fansly",
-      accountId: 42,
-      kind: "dm_messages",
-      payload: {
-        messages: [{
-          id: "m-1",
-          senderId: FAN,
-          groupId: GROUP,
-          content: "seconds payload",
-          createdAt: EPOCH_SECONDS,
-        }],
-      },
-      observedAt: null,
-      receivedAt: new Date("2026-07-09T00:00:00Z"),
-    }, { nativeAccountRefByAccountId: new Map([[42, "own-ref"]]) });
-    expect(drafts).toHaveLength(1);
-    expect(drafts[0]!.occurredAt.getUTCFullYear()).toBe(2026);
-    expect(drafts[0]!.occurredAt.getTime()).toBe(EPOCH_SECONDS * 1000);
-    // Millisecond inputs stay verbatim (the >= 1e12 arm).
-    const msDrafts = canonicalizeSyncPullObservation({
-      id: 2,
-      source: "pull",
-      producer: "sync",
-      platform: "fansly",
-      accountId: 42,
-      kind: "dm_messages",
-      payload: {
-        messages: [{ id: "m-2", senderId: FAN, groupId: GROUP, content: "ms", createdAt: EPOCH_SECONDS * 1000 }],
-      },
-      observedAt: null,
-      receivedAt: new Date("2026-07-09T00:00:00Z"),
-    }, { nativeAccountRefByAccountId: new Map([[42, "own-ref"]]) });
-    expect(msDrafts[0]!.occurredAt.getTime()).toBe(EPOCH_SECONDS * 1000);
-  });
-
   it("repairs a 1970 event via a superseding event and the archive merge heals occurred_at; idempotent re-run", async (context) => {
     if (!testDb) {
       context.skip();

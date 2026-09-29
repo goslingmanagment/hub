@@ -10,7 +10,6 @@ import {
   upsertCaptureCoverage,
   upsertCheckpointProgress,
 } from "@agency_hub_core/db";
-import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
@@ -2196,21 +2195,5 @@ describe("[sync-critical] WP-F1 per-lane daily call budget", () => {
     expect(walked.broadcastWalkStop).toBe("empty_page");
     expect(adapter.calls).toContain("broadcast_scheduled");
     expect(walked.lastSweepDay).toBe(utcDayKey(NOW));
-  });
-
-  // THE NEGATIVE PINS. Each names a mechanism that was DELETED by decision, and
-  // a key reappearing is how a deleted mechanism comes back without one.
-  it("holds the A19/A20/A28-4 removals", async () => {
-    const keys = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
-    // [A19]: no global per-page daily request cap.
-    expect(keys.has("fanslyPageDailyRequestCap")).toBe(false);
-    // [A20]: no byte ceiling, and therefore no byte-budget deferral anywhere.
-    expect(keys.has("fanslyUntrimmedCaptureByteCeilingPerDay")).toBe(false);
-    // A28-4: the §3.5 per-egress-key DAY counter and the 2×-of-norm ops signal
-    // were deleted. `syncSharedRateLimitEnabled` is a PRE-EXISTING key and is
-    // deliberately not pinned away — what A28-4 removed is the day-counter key
-    // and the boot/PATCH invariants that would have been added beside it.
-    expect(keys.has("fanslyEgressKeyDailyRequestCap")).toBe(false);
-    expect(keys.has("syncRateLimitDaysRetentionDays")).toBe(false);
   });
 });
