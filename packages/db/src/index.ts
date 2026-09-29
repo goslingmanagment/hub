@@ -127,6 +127,7 @@ export * from "./repositories/message-archive.ts";
 export * from "./repositories/media-plane.ts";
 export * from "./repositories/fansly-engagement.ts";
 export * from "./repositories/fansly-media-stats-foreign-queue.ts";
+export * from "./repositories/fansly-media-stats-dm-only-queue.ts";
 export * from "./repositories/fan-earnings-refresh.ts";
 export * from "./repositories/fan-earnings-receipts.ts";
 export * from "./repositories/fansly-transaction-dirty.ts";

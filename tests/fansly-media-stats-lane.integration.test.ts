@@ -162,7 +162,13 @@ async function seedPage() {
  */
 async function seedMedia(
   pageId: number,
-  rows: Array<{ ref: string; createdAtPlatform: Date | null; firstObservedAt?: Date }>,
+  rows: Array<{
+    ref: string;
+    createdAtPlatform: Date | null;
+    firstObservedAt?: Date;
+    /** Where the head was first seen; `stats_agg` unless a case says otherwise. */
+    firstOrigin?: string;
+  }>,
   options: { queueCursor?: Record<string, unknown> } = {},
 ) {
   for (const [index, row] of rows.entries()) {
@@ -171,7 +177,7 @@ async function seedMedia(
          page_id, platform, media_offer_ref, first_origin, created_at_platform,
          first_observed_at, last_observed_at, content_hash, source_event_id,
          source_observation_id, source_account_seq
-       ) values ($1, 'fansly', $2, 'stats_agg', $3, $4, $4, $5, 1, 1, $6)`,
+       ) values ($1, 'fansly', $2, $7, $3, $4, $4, $5, 1, 1, $6)`,
       [
         pageId,
         row.ref,
@@ -179,6 +185,7 @@ async function seedMedia(
         row.firstObservedAt ?? row.createdAtPlatform ?? NOW,
         "f".repeat(64),
         index + 1,
+        row.firstOrigin ?? "stats_agg",
       ],
     );
     if (options.queueCursor !== undefined) {
@@ -385,6 +392,34 @@ describe("media_stats lane — the queue", () => {
     expect(basisByRef.get(ref(104))).toBe("first_seen");
   });
 
+  it("seeds only media first seen outside a DM — the enqueue's own origins", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const fresh = new Date(NOW.getTime() - 5 * DAY_MS);
+    await seedMedia(page.id, [
+      { ref: ref(111), createdAtPlatform: fresh, firstOrigin: "post" },
+      { ref: ref(112), createdAtPlatform: fresh, firstOrigin: "stats_agg" },
+      // The page's own DM PPV, a fan's DM media, and what the vault and the
+      // purchase history list: `upsertCreatorMedia` queues none of them, and a
+      // first enable must not either — each would be a FRESH never-visited row
+      // ahead of every overdue post item.
+      { ref: ref(113), createdAtPlatform: fresh, firstOrigin: "dm_sidecar" },
+      { ref: ref(114), createdAtPlatform: fresh, firstOrigin: "vault" },
+      { ref: ref(115), createdAtPlatform: fresh, firstOrigin: "account_media_batch" },
+      { ref: ref(116), createdAtPlatform: fresh, firstOrigin: "order_history" },
+    ]);
+
+    await fanslyMediaStatsChunk(
+      appStub(adapterStub()),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
+    );
+
+    const queue = await listSubjectRefreshState(testDb.db, { pageId: page.id, plane: "media_stats" });
+    expect(queue.map((row) => row.subjectRef).sort()).toEqual([ref(111), ref(112)].sort());
+    // The sweep still walked every head: skipped ones do not stall the cursor.
+    expect(await cursor(page.id)).toMatchObject({ seedComplete: true, seedCursor: ref(116) });
+  });
+
   it("visits DIRTY rows first — WP-F2's purchase signals and the top-50", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();
@@ -536,6 +571,113 @@ describe("media_stats lane — the queue", () => {
     // a licence to spend the day's cap on an item that fails every look.
     await backOff();
     expect(await refsAt(NOW)).toEqual([healthy]);
+  });
+
+  it("orders by TIER after the dirty rows: an overdue fresh item before a never-visited long tail", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
+    const freshOverdue = ref(401);
+    const longNever = ref(402);
+    const midNever = ref(403);
+    const midOverdue = ref(404);
+    const freshNever = ref(405);
+    const freshAnswered = ref(406);
+    const longOverdue = ref(407);
+    const dirtyLong = ref(408);
+    await seedMedia(page.id, [
+      { ref: freshOverdue, createdAtPlatform: daysAgo(5) },
+      { ref: longNever, createdAtPlatform: daysAgo(400) },
+      { ref: midNever, createdAtPlatform: daysAgo(90) },
+      { ref: midOverdue, createdAtPlatform: daysAgo(60) },
+      { ref: freshNever, createdAtPlatform: daysAgo(10) },
+      { ref: freshAnswered, createdAtPlatform: daysAgo(3) },
+      { ref: longOverdue, createdAtPlatform: daysAgo(300) },
+      { ref: dirtyLong, createdAtPlatform: daysAgo(500) },
+    ], { queueCursor: BACKFILL_DONE });
+    for (
+      const [subjectRef, visitedAt] of [
+        [freshOverdue, daysAgo(3)],
+        [midOverdue, daysAgo(10)],
+        [freshAnswered, new Date(NOW.getTime() - 60 * 60 * 1000)],
+        [longOverdue, daysAgo(40)],
+      ] as const
+    ) {
+      await testDb.pool.query(
+        `update subject_refresh_state set last_visited_at = $3
+          where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+        [page.id, subjectRef, visitedAt],
+      );
+    }
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: dirtyLong,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 10,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    // Dirty first, whatever its age. Then fresh → mid → long tail, and never
+    // visited ahead of overdue only WITHIN a tier: a fresh item four days late
+    // is a hole in this week's numbers; a first look at a year-old item is not.
+    expect(chunk.map((row) => row.subjectRef)).toEqual([
+      dirtyLong,
+      freshNever,
+      freshOverdue,
+      midNever,
+      midOverdue,
+      longNever,
+      longOverdue,
+    ]);
+    // The band stays on the candidate as a LABEL; it is no longer the sort's
+    // first key outside the dirty rows.
+    expect(chunk.map((row) => row.priorityBand)).toEqual([0, 1, 2, 1, 2, 1, 2]);
+    // The item answered an hour ago is not due, and the backlog the progress
+    // block reports is exactly what the selector admits.
+    const progress = await countMediaStatsRefreshProgress(testDb.db, {
+      pageId: page.id,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(progress.dueNow).toBe(chunk.length);
+  });
+
+  it("reaches an overdue fresh item even when a full chunk of never-visited long tail is waiting", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const freshOverdue = ref(420);
+    // Production 2026-09-29: 16 288 never-visited rows sat in front of 247
+    // overdue fresh items, which waited a median 4.8 days for a daily read.
+    await seedMedia(page.id, [
+      ...Array.from({ length: 12 }, (_unused, index) => ({
+        ref: ref(430 + index),
+        createdAtPlatform: new Date(NOW.getTime() - (200 + index) * DAY_MS),
+      })),
+      { ref: freshOverdue, createdAtPlatform: new Date(NOW.getTime() - 7 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `update subject_refresh_state set last_visited_at = $3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [page.id, freshOverdue, new Date(NOW.getTime() - 2 * DAY_MS)],
+    );
+
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 5,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(chunk[0]?.subjectRef).toBe(freshOverdue);
+    expect(chunk[0]?.tier).toBe("fresh");
+    // The rest of the chunk is the long tail's first looks, newest first.
+    expect(chunk.slice(1).map((row) => row.subjectRef))
+      .toEqual([ref(430), ref(431), ref(432), ref(433)]);
   });
 });
 

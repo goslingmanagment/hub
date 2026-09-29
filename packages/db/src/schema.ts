@@ -5770,6 +5770,9 @@ export const subjectRefreshState = pgTable(
      * covered; an unchanged recheck confirms content revisions up to it. */
     contentBaselineAt: timestamp("content_baseline_at", { withTimezone: true }),
     contentBaselineRevision: bigint("content_baseline_revision", { mode: "number" }),
+    /** media_stats only (0222): the earliest post or account-statistics
+     * observation that queued or re-confirmed the row; null when none did. */
+    mediaShownOutsideDmAt: timestamp("media_shown_outside_dm_at", { withTimezone: true }),
     claimedRevision: bigint("claimed_revision", { mode: "number" }),
     claimToken: uuid("claim_token"),
     claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),

@@ -92,13 +92,31 @@ export interface UpsertCreatorMediaInput {
 }
 
 /**
+ * The observation origins that queue a media item for per-media statistics:
+ * the ones that show it OUTSIDE a DM. `post` is a post's own media and the
+ * members of a bundle on a post (the timeline serves both as `accountMedia`);
+ * `stats_agg` is the account statistics' top-media ranking, which is what names
+ * an item in `stats_top_media`.
+ *
+ * Everything else is left out, and on purpose. `dm_sidecar` is a DM thread, and
+ * the per-media views of media the model sent only in DMs are not wanted (owner
+ * decision 2026-09-29: ~10 k of a 19 k queue, 3 % of the views).
+ * `order_history` shares the DM sidecar shapes and names what fans bought,
+ * mostly DM PPV. `vault` and `account_media_batch` list the whole vault, DM-only
+ * media included. A post's media seen first through any of them is queued the
+ * day a post observation carries it.
+ */
+export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "stats_agg"]);
+
+/**
  * The media head, AND — in the SAME TRANSACTION — the WP-F4 per-media
  * statistics queue row for it.
  *
  * Why the two writes are one transaction. The queue is capture-plane
  * operational state (§3.4) keyed on the media offer ref, and its whole contract
- * is "every media the PAGE OWNS has a refresh row". A media row
- * committed without its queue row is a media item the per-media lane will never
+ * is "every media the PAGE OWNS and shows OUTSIDE A DM has a refresh row" (the
+ * two checks at the end of this comment). Such a media row committed without
+ * its queue row is a media item the per-media lane will never
  * look at, and nothing downstream would notice: its traffic history would simply
  * be missing forever, with a healthy lane and a clean coverage row. Seeding on a
  * timer instead leaves the same hole for however long the timer is — and the
@@ -106,12 +124,13 @@ export interface UpsertCreatorMediaInput {
  * be days. It is exactly the argument WP-F5 made for `creator_posts`, and it is
  * why WP-F4's own first-enable seeding only has to run ONCE.
  *
- * The queue insert is `ON CONFLICT DO NOTHING` and runs on every upsert, not
- * only the applied ones: the head upsert is guarded (a replayed older capture
- * writes nothing), and a media item whose head did not move still needs its
- * queue row to exist. It is a no-op the second time and every time after —
- * which is also what makes a `creator_media` truncate-and-replay leave the queue
- * untouched instead of re-marking the whole catalogue as first-sight.
+ * The queue insert runs on every upsert, not only the applied ones: the head
+ * upsert is guarded (a replayed older capture writes nothing), and a media item
+ * whose head did not move still needs its queue row to exist. On an existing
+ * row it writes one column only, `media_shown_outside_dm_at` (below), and only
+ * when that moves earlier. The visit state is never touched, which is what
+ * makes a `creator_media` truncate-and-replay leave it as it was instead of
+ * re-marking the whole catalogue as first-sight.
  *
  * FANSLY ONLY, decided in SQL rather than in TypeScript — `/it/moie/statsnew`
  * is a Fansly route and an OnlyFans media item has no per-media series to queue.
@@ -125,10 +144,27 @@ export interface UpsertCreatorMediaInput {
  * (prod: ~3.6k queued, none ever answered). The media head is still written —
  * other readers want it — but the queue row is skipped when the media's owner
  * and the page's own account ref are both known and differ; either one unknown
- * fails open. `creator_media` keeps no owner, so neither the chunk query nor
- * `seedMediaStatsQueue` (first enable only) can tell such rows apart; the ones
- * queued before this check are removed by the owner-run one-off
- * `fansly:media-stats-prune-foreign`, which reads the owner from the events.
+ * fails open. `creator_media` keeps no owner, so the chunk query cannot tell
+ * such rows apart, and `seedMediaStatsQueue` (first enable only) skips them only
+ * because a fan's media is first seen in a DM; the ones queued before this check
+ * are removed by the owner-run one-off `fansly:media-stats-prune-foreign`, which
+ * reads the owner from the events.
+ *
+ * AND ONLY FROM AN ORIGIN THAT SHOWS IT OUTSIDE A DM (`MEDIA_STATS_QUEUE_ORIGINS`).
+ * The origin is the observation's, not the head's `first_origin`: a media first
+ * seen in a DM keeps that first origin for good, and is queued by the first
+ * post observation that carries it. A DM-only head with no queue row is this
+ * rule working, not the hole above. The rows queued before this check are
+ * removed by the owner-run one-off `fansly:media-stats-prune-dm-only`.
+ *
+ * AND THE ROW RECORDS THAT IT WAS SHOWN (`media_shown_outside_dm_at`, 0222):
+ * the earliest such observation's instant, set on a new row and on one a DM
+ * sidecar queued before the check. It is the repair's evidence that the media
+ * is not DM-only, and it is written HERE, in the statement that queues, because
+ * the repair's other evidence is not: a post's attachments reach
+ * `creator_posts` through another projector, which may run after this one. On a
+ * row the repair is deleting at the same moment, the upsert waits for it and
+ * then inserts the row again.
  */
 export async function upsertCreatorMedia(
   db: Database,
@@ -137,12 +173,16 @@ export async function upsertCreatorMedia(
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     const head = await upsertCreatorMediaHead(database, input);
+    if (!MEDIA_STATS_QUEUE_ORIGINS.has(input.firstOrigin)) {
+      return head;
+    }
     await database.execute(sql`
       insert into subject_refresh_state (
-        page_id, plane, subject_ref, refresh_class, next_due_at
+        page_id, plane, subject_ref, refresh_class, next_due_at,
+        media_shown_outside_dm_at
       )
       select ${input.pageId}, 'media_stats', ${input.mediaOfferRef}, 'fresh',
-             ${input.observedAt}
+             ${input.observedAt}, ${input.observedAt}
        where ${input.platform} = 'fansly'
          and coalesce(
            ${input.ownerAccountRef ?? null}::text = (
@@ -150,7 +190,12 @@ export async function upsertCreatorMedia(
            ),
            true
          )
-      on conflict (page_id, plane, subject_ref) do nothing
+      on conflict (page_id, plane, subject_ref) do update
+        set media_shown_outside_dm_at = excluded.media_shown_outside_dm_at,
+            updated_at = now()
+        where subject_refresh_state.media_shown_outside_dm_at is null
+           or subject_refresh_state.media_shown_outside_dm_at
+                > excluded.media_shown_outside_dm_at
     `);
     return head;
   });

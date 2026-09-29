@@ -109,7 +109,10 @@
 //
 // Rows are seeded from `creator_media` in bounded keyset batches on first
 // enable AND — for anything projected afterwards — in the SAME TRANSACTION as
-// the `creator_media` upsert (the F5/F6 precedent, `media-plane.ts`).
+// the `creator_media` upsert (the F5/F6 precedent, `media-plane.ts`). Both queue
+// only the page's own media shown OUTSIDE A DM (`MEDIA_STATS_QUEUE_ORIGINS`):
+// the per-media views of media the model sent only in DMs are not wanted (owner
+// decision 2026-09-29), so a DM-only head with no row is by design.
 //
 // ── 4. PRIORITY, AND THE TWO SIGNALS THAT JUMP THE QUEUE ────────────────────
 //
@@ -118,8 +121,9 @@
 //       the consumer. The current top-50 of `stats_top_media` is marked the same
 //       way, once a day, for zero platform calls — an item that just entered the
 //       top-50 is the one whose series is worth having today.
-//   (2) NEVER VISITED, NEWEST FIRST.
-//   (3) DUE BY CLASS, oldest visit first.
+//   (2) BY TIER: fresh, then mid, then the long tail.
+//   (3) WITHIN A TIER, never visited first (newest first), then the oldest
+//       visit. `listMediaStatsRefreshChunk` says why tier outranks first sight.
 //
 // ── 5. BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume ────────────────
 //
@@ -1096,8 +1100,9 @@ export async function fanslyMediaStatsChunk(
   //
   // First enable only, in bounded keyset batches, and it costs ZERO platform
   // calls: `creator_media` is already in the database. Everything projected
-  // AFTER this sweep is queued by the media-plane writer in the same transaction
-  // as its own upsert, so the seeding never has to run twice.
+  // AFTER this sweep that the queue wants is queued by the media-plane writer in
+  // the same transaction as its own upsert, so the seeding never has to run
+  // twice.
   if (!state.seedComplete) {
     for (;;) {
       const seeded = await seedMediaStatsQueue(app.db, {
