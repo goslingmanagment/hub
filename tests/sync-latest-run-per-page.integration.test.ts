@@ -29,7 +29,8 @@ beforeEach(async (context) => {
     context.skip();
     return;
   }
-  await resetIntegrationDatabase(testDb.pool);
+  // Physical: a case asserts plan nodes and buffers after ANALYZE.
+  await resetIntegrationDatabase(testDb.pool, { physical: true });
 });
 
 // The lateral `limit 1` rewrite must return exactly what `distinct on (page_id)

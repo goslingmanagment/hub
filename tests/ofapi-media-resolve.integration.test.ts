@@ -112,7 +112,8 @@ beforeEach(async (context) => {
     context.skip();
     return;
   }
-  await resetIntegrationDatabase(testDb.pool);
+  // Physical: a case asserts which index the update plan uses.
+  await resetIntegrationDatabase(testDb.pool, { physical: true });
   upstreamRequests.length = 0;
   cdnHeads = [];
   cdnLength = 21_821;

@@ -174,11 +174,75 @@ export async function startIntegrationTestDatabase(input?: {
   );
 }
 
-export async function resetIntegrationDatabase(pool: ReturnType<typeof createPool>) {
-  await pool.query("drop schema if exists pgboss cascade");
+/** Empties every table a test can have written, the way
+ * `truncate ... restart identity cascade` does, without giving each of the
+ * ~280 tables and ~850 indexes a new file on every call (~0.1-0.25 s a reset):
+ *
+ * - Every table is first locked in SHARE mode. Like TRUNCATE's lock, it waits
+ *   for a write still in flight from the previous test and then empties its
+ *   rows, instead of letting them commit into the next test.
+ * - `delete` runs only on tables with pages. A table no row has reached
+ *   since the clone was made has none, so it costs no scan.
+ * - `session_replication_role = replica` (local to this transaction) skips
+ *   every user and foreign-key trigger: tables empty in any order, and nothing
+ *   cascades or refuses.
+ * - Only sequences owned by a column restart, as under `restart identity`,
+ *   and only once they have handed out a value. Standalone sequences keep
+ *   theirs, as they always did.
+ *
+ * The rows end up exactly as after TRUNCATE; the storage does not. Deleted rows
+ * stay as dead tuples and index entries (global-setup turns autovacuum off, so
+ * nothing reclaims them mid-file), and pg_class keeps its counts. Query plans
+ * read those, so a file that asserts plans or buffer counts asks for
+ * `physical: true`. */
+const LOGICAL_RESET_SQL = `
+do $reset$
+declare
+  locks text;
+  target regclass;
+begin
+  perform set_config('session_replication_role', 'replica', true);
+  select 'lock table ' || string_agg(c.oid::regclass::text, ', ' order by c.relname) || ' in share mode'
+    into locks
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and c.relname not in ('schema_migrations', 'platforms');
+  if locks is not null then
+    execute locks;
+  end if;
+  for target in
+    select c.oid::regclass
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and c.relname not in ('schema_migrations', 'platforms')
+      and pg_relation_size(c.oid) > 0
+  loop
+    execute format('delete from %s', target);
+  end loop;
+  for target in
+    select distinct q.seqrelid::regclass
+    from pg_depend d
+    join pg_sequence q on q.seqrelid = d.objid
+    join pg_class t on t.oid = d.refobjid
+    join pg_namespace n on n.oid = t.relnamespace
+    where d.classid = 'pg_class'::regclass
+      and d.refclassid = 'pg_class'::regclass
+      and d.deptype in ('a', 'i')
+      and n.nspname = 'public'
+      and t.relkind in ('r', 'p')
+      and t.relname not in ('schema_migrations', 'platforms')
+      and pg_sequence_last_value(q.seqrelid) is not null
+  loop
+    execute format('alter sequence %s restart', target);
+  end loop;
+end
+$reset$`;
 
-  // platforms is reference data seeded by migration 0068 (Stage 18) — pages
-  // rows FK into it, so a reset must keep the vocabulary rows.
+async function truncateIntegrationTables(pool: ReturnType<typeof createPool>) {
   const tableRows = await pool.query<{ quoted_name: string }>(`
     select quote_ident(tablename) as quoted_name
     from pg_tables
@@ -192,11 +256,29 @@ export async function resetIntegrationDatabase(pool: ReturnType<typeof createPoo
     .map((row) => row.quoted_name)
     .filter((name): name is string => typeof name === "string" && name.length > 0);
 
-  if (tableNames.length === 0) {
-    return;
+  if (tableNames.length > 0) {
+    await pool.query(`truncate ${tableNames.join(", ")} restart identity cascade`);
   }
+}
 
-  await pool.query(`truncate ${tableNames.join(", ")} restart identity cascade`);
+export async function resetIntegrationDatabase(
+  pool: ReturnType<typeof createPool>,
+  options?: {
+    /** TRUNCATE every table instead: fresh files, empty indexes and pg_class
+     * reset to "never analyzed". Only for files that assert query plans or
+     * buffer counts; it costs ~20x the default reset. */
+    physical?: boolean;
+  },
+) {
+  await pool.query("drop schema if exists pgboss cascade");
+
+  // platforms is reference data seeded by migration 0068 (Stage 18) — pages
+  // rows FK into it, so a reset must keep the vocabulary rows.
+  if (options?.physical === true) {
+    await truncateIntegrationTables(pool);
+  } else {
+    await pool.query(LOGICAL_RESET_SQL);
+  }
   // Governed OFAPI transports opt into the fail-closed disk gate. Integration
   // fixtures get an explicit fresh healthy sample; tests for missing/stale/
   // breached storage delete or replace this singleton themselves.

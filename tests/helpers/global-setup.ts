@@ -56,11 +56,17 @@ export default async function setup({ provide }: {
       // and dropped it only because stopping a container under a live pool
       // raised FATAL 57P01 into a pool with no listener; createPool absorbs
       // that now, which is the same precondition #239 rests on.
+      //
+      // autovacuum=off: resetIntegrationDatabase empties tables with DELETE,
+      // and a vacuum or analyze fired by its dead tuples would change heap
+      // layout and planner stats at an arbitrary point in a file. Its lock
+      // would also hold the next reset for deadlock_timeout.
       .withCommand([
         "postgres",
         "-c", "fsync=off",
         "-c", "synchronous_commit=off",
         "-c", "full_page_writes=off",
+        "-c", "autovacuum=off",
       ])
       .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
       .withExposedPorts(5432)
