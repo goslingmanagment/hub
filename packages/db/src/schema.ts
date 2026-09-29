@@ -777,6 +777,22 @@ export const pageSyncStates = pgTable("page_sync_states",
   }),
 );
 
+// 0219 (R04): a provider rate limit holds every sync stream of the page until
+// holdUntil, apart from the per-stream retry state that requests rewrite.
+export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
+  pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
+    onDelete: "cascade",
+  }),
+  holdUntil: timestamp("hold_until", { withTimezone: true }).notNull(),
+  reason: text("reason").notNull(),
+  stream: syncStreamEnum("stream").notNull(),
+  syncRunId: bigint("sync_run_id", { mode: "number" }).references(() => syncRuns.id, {
+    onDelete: "set null",
+  }),
+  retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
+  armedAt: timestamp("armed_at", { withTimezone: true }).notNull(),
+});
+
 export const pageSyncCursors = pgTable(
   "page_sync_cursors",
   {

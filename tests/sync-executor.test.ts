@@ -17,6 +17,7 @@ import {
 
 const dbMocks = vi.hoisted(() => ({
   acquirePageSyncLease: vi.fn(),
+  armPageSyncProviderHold: vi.fn(),
   blockPageSync: vi.fn(),
   pausePageSyncForAuth: vi.fn(),
   clearPageSyncLease: vi.fn(),
@@ -58,6 +59,7 @@ const telemetryMocks = vi.hoisted(() => ({
     recordRunStarted: ReturnType<typeof vi.fn>;
     recordWorkerHeartbeat: ReturnType<typeof vi.fn>;
     recordSkipped: ReturnType<typeof vi.fn>;
+    addAnomaly: ReturnType<typeof vi.fn>;
     finish: ReturnType<typeof vi.fn>;
   }>,
 }));
@@ -87,6 +89,7 @@ vi.mock("../apps/runtime/src/services/sync/observability.ts", () => ({
     readonly recordRunStarted = vi.fn(async () => undefined);
     readonly recordWorkerHeartbeat = vi.fn(async () => undefined);
     readonly recordSkipped = vi.fn(async () => undefined);
+    readonly addAnomaly = vi.fn(async () => undefined);
     readonly finish = vi.fn(async () => undefined);
 
     constructor(_app: unknown, metadata: Record<string, unknown>) {
@@ -223,6 +226,8 @@ describe("sync executor", () => {
     });
     dbMocks.ensurePageSyncStates.mockResolvedValue([]);
     dbMocks.acquirePageSyncLease.mockResolvedValue(null);
+    dbMocks.armPageSyncProviderHold.mockImplementation(async (_db: unknown, input: { holdUntil: Date }) =>
+      input.holdUntil);
     dbMocks.blockPageSync.mockResolvedValue({ updated: true, blocked: true });
     dbMocks.completePageSync.mockResolvedValue(true);
     dbMocks.skipPageSync.mockResolvedValue(true);
@@ -1734,6 +1739,92 @@ describe("sync executor", () => {
     expect(call.retryKind).toBe("rate_limit");
     // No `retryAt` key at all — retryPageSync computes the rung itself.
     expect(call).not.toHaveProperty("retryAt");
+  });
+
+  describe("page provider hold (R04)", () => {
+    const now = new Date("2026-03-14T12:00:00.000Z");
+    const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+    });
+
+    it.each([
+      ["the provider's Retry-After", at(600_000), at(600_000), at(600_000)],
+      ["a Retry-After clamped to 30 minutes", at(86_400_000), at(30 * 60_000), at(86_400_000)],
+      ["a fixed 120 s without a Retry-After", null, at(120_000), undefined],
+      ["a fixed 120 s when the Retry-After has already passed", at(-1_000), at(120_000), at(60_000)],
+    ] as const)("holds the page on a first Fansly 429 until %s", async (_name, retryAfterAt, holdUntil, retryAt) => {
+      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+      handlerMocks.executeStreamChunk.mockRejectedValue(
+        new FanslyApiError("rate limited", 429, undefined, undefined, retryAfterAt),
+      );
+
+      const result = await executeNextSyncPageChunk(app, 55);
+
+      expect(result).toMatchObject({ kind: "failed", stream: "followers" });
+      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledWith({}, {
+        pageId: 55, stream: "followers", syncRunId: 777, reason: "rate_limit",
+        holdUntil, retryAfterAt, now,
+      });
+      // The failing stream keeps its own retry exactly as before.
+      const retry = dbMocks.retryPageSync.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(retry).toMatchObject({ retryKind: "rate_limit" });
+      expect(retry.retryAt).toEqual(retryAt);
+      expect(telemetryMocks.instances[0]?.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+        code: "page_provider_hold",
+        severity: "warn",
+        details: expect.objectContaining({ holdUntil: holdUntil.toISOString() }),
+      }));
+    });
+
+    it.each([
+      ["a later 429 of the same failure streak", { consecutiveFailures: 1, retryKind: "rate_limit" },
+        new FanslyApiError("rate limited", 429, undefined, undefined, at(600_000))],
+      ["a 5xx with a Retry-After", {},
+        new FanslyApiError("unavailable", 503, undefined, undefined, at(600_000))],
+      ["an OFAPI 429", {}, new OfapiApiError("rate limited", 429, null)],
+    ] as const)("does not hold the page for %s", async (_name, lease, error) => {
+      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, ...lease });
+      handlerMocks.executeStreamChunk.mockRejectedValue(error);
+
+      await executeNextSyncPageChunk(app, 55);
+
+      expect(dbMocks.retryPageSync).toHaveBeenCalledTimes(1);
+      expect(dbMocks.armPageSyncProviderHold).not.toHaveBeenCalled();
+      expect(telemetryMocks.instances[0]?.addAnomaly).not.toHaveBeenCalled();
+    });
+
+    it("records no anomaly when a longer hold is already in force", async () => {
+      const app = { db: {}, logger: { warn: vi.fn(), error: vi.fn() } } as never;
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+      dbMocks.armPageSyncProviderHold.mockResolvedValueOnce(null);
+      handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
+
+      await executeNextSyncPageChunk(app, 55);
+
+      expect(dbMocks.armPageSyncProviderHold).toHaveBeenCalledTimes(1);
+      expect(telemetryMocks.instances[0]?.addAnomaly).not.toHaveBeenCalled();
+    });
+
+    it("still retries the failing stream when the hold cannot be written", async () => {
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const app = { db: {}, logger } as never;
+      dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
+      dbMocks.armPageSyncProviderHold.mockRejectedValueOnce(new Error("db down"));
+      handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyApiError("rate limited", 429));
+
+      expect(await executeNextSyncPageChunk(app, 55)).toMatchObject({ kind: "failed" });
+
+      expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({ retryKind: "rate_limit" }));
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ platformAccountId: 55, stream: "followers" }),
+        expect.stringContaining("provider hold"),
+      );
+    });
   });
 
   it("blocks an unsafe follower reconcile snapshot without retrying", async () => {

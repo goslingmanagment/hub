@@ -905,7 +905,8 @@ export async function hasUnfinishedFanslySyncAttempt(
 }
 
 /** Whether ordinary sync would hold off this page now: any stream cooling
- * down after a 429/5xx, or the DM stream paused or blocked. */
+ * down after a 429/5xx, the page under a provider hold (0219), or the DM
+ * stream paused or blocked. */
 export async function getFanslyFastLanePageSyncGate(
   db: Database,
   input: { pageId: number; now: Date; peerPageIds?: readonly number[] },
@@ -918,6 +919,9 @@ export async function getFanslyFastLanePageSyncGate(
         select 1 from page_sync_states
         where page_id in (${cooldownIds}) and retry_kind in ('rate_limit', 'provider_5xx')
           and retry_at is not null and retry_at > ${input.now}
+      ) or exists (
+        select 1 from page_sync_provider_holds
+        where page_id in (${cooldownIds}) and hold_until > ${input.now}
       ) as cooldown,
       exists (
         select 1 from page_sync_states

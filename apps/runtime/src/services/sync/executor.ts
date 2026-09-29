@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   acquirePageSyncLease,
+  armPageSyncProviderHold,
   blockPageSync,
   clearPageSyncLease,
   completePageSync,
@@ -76,6 +77,10 @@ const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
 const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
+/** R04: a first Fansly 429 holds the whole page this long when the provider
+ * named no deadline, and at most PAGE_PROVIDER_HOLD_MAX_MS when it did. */
+const PAGE_PROVIDER_HOLD_DEFAULT_MS = 120_000;
+const PAGE_PROVIDER_HOLD_MAX_MS = 30 * 60_000;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
@@ -339,6 +344,86 @@ function resolveProviderRetryAt(
     input.now.getTime() + pageSyncRetryBackoffMs(input.previousConsecutiveFailures + 1),
   );
   return retryAfterAt.getTime() > backoffAt.getTime() ? retryAfterAt : backoffAt;
+}
+
+/**
+ * R04: a Fansly 429 is the provider's rate limit for the page's session, not
+ * for one endpoint, so the page's other streams must not keep calling inside
+ * its window. Only a 429 holds the page: a 5xx `Retry-After` speaks for its
+ * own endpoint (statsnew, #290). And only the first failure of the stream's
+ * streak: a stream that keeps meeting 429s backs off on its own ladder without
+ * starving its siblings, and a sibling that meets one arms its own hold. The
+ * hold ends at the provider's deadline, at most 30 minutes out, else after a
+ * fixed 120 s; the failing stream's own retry is unchanged.
+ */
+function resolvePageProviderHold(
+  error: unknown,
+  input: { previousConsecutiveFailures: number; now: Date },
+): { holdUntil: Date; retryAfterAt: Date | null } | null {
+  if (
+    !(error instanceof FanslyApiError) ||
+    error.status !== 429 ||
+    input.previousConsecutiveFailures !== 0
+  ) {
+    return null;
+  }
+  const nowMs = input.now.getTime();
+  const retryAfterAt = error.retryAfterAt;
+  // A deadline that already passed names no window left to wait out.
+  const holdUntil = retryAfterAt !== null && retryAfterAt.getTime() > nowMs
+    ? new Date(Math.min(retryAfterAt.getTime(), nowMs + PAGE_PROVIDER_HOLD_MAX_MS))
+    : new Date(nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS);
+  return { holdUntil, retryAfterAt };
+}
+
+async function armPageProviderHold(
+  app: Pick<AppContext, "db" | "logger">,
+  telemetry: Pick<SyncRunTelemetry, "addAnomaly">,
+  input: {
+    pageId: number;
+    stream: SyncStream;
+    runId: number | null;
+    hold: { holdUntil: Date; retryAfterAt: Date | null };
+    now: Date;
+  },
+) {
+  let heldUntil: Date | null;
+  try {
+    heldUntil = await armPageSyncProviderHold(app.db, {
+      pageId: input.pageId,
+      stream: input.stream,
+      syncRunId: input.runId,
+      reason: "rate_limit",
+      holdUntil: input.hold.holdUntil,
+      retryAfterAt: input.hold.retryAfterAt,
+      now: input.now,
+    });
+  } catch (error) {
+    // The failing stream still records its own retry below.
+    app.logger.warn(
+      { err: error, platformAccountId: input.pageId, stream: input.stream },
+      "Failed to arm the page provider hold after a Fansly 429",
+    );
+    return;
+  }
+  if (heldUntil === null) {
+    // A longer hold is already in force.
+    return;
+  }
+  const details = {
+    holdUntil: heldUntil.toISOString(),
+    retryAfterAt: input.hold.retryAfterAt?.toISOString() ?? null,
+  };
+  app.logger.warn(
+    { platformAccountId: input.pageId, stream: input.stream, ...details },
+    "Fansly 429: every sync stream of the page is held",
+  );
+  await telemetry.addAnomaly({
+    code: "page_provider_hold",
+    severity: "warn",
+    message: `Fansly rate limit: every sync stream of the page is held until ${details.holdUntil}`,
+    details,
+  });
 }
 
 function classifyTaskFailure(
@@ -985,6 +1070,21 @@ export async function executeNextSyncPageChunk(
         return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
     } else {
+      const pageHold = resolvePageProviderHold(error, {
+        previousConsecutiveFailures: taskLease.consecutiveFailures,
+        now: failedAt,
+      });
+      if (pageHold) {
+        // Before the stream's own retry: the 429 happened even if the lease
+        // turns out to be lost below.
+        await armPageProviderHold(app, telemetry, {
+          pageId: platformAccountId,
+          stream: taskLease.stream,
+          runId: run?.id ?? null,
+          hold: pageHold,
+          now: failedAt,
+        });
+      }
       const retryResult = await retryPageSync(app.db, {
         pageId: platformAccountId,
         stream: taskLease.stream,
