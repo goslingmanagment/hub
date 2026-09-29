@@ -110,7 +110,10 @@ import {
   processSyncPageExecuteJob,
   startSyncPageExecutor,
 } from "../apps/runtime/src/services/sync/executor.ts";
-import { FollowersReconcileConsistencyError } from "../apps/runtime/src/services/sync/errors.ts";
+import {
+  FanslyTransactionsItemContractError,
+  FollowersReconcileConsistencyError,
+} from "../apps/runtime/src/services/sync/errors.ts";
 
 describe("sync executor", () => {
   const taskLease = {
@@ -1623,6 +1626,83 @@ describe("sync executor", () => {
       blockerCode: "provider_404_exhausted",
     }));
     expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      previousConsecutiveFailures: 2,
+      forceOpen: true,
+    }));
+  });
+
+  const transactionItemRejection = () => new FanslyTransactionsItemContractError({ field: "amount" });
+
+  it.each([
+    { consecutiveFailures: 0, lastErrorCode: null, retryKind: null },
+    // The planner cleared retry_kind when it made the retry due.
+    { consecutiveFailures: 1, lastErrorCode: "transaction_item_contract_rejected", retryKind: null },
+    // Two failures, but the one before this chunk was not a rejection.
+    { consecutiveFailures: 2, lastErrorCode: "http_500", retryKind: "provider_5xx" },
+  ])("retries a rejected transaction page item ($consecutiveFailures prior, last $lastErrorCode)", async ({
+    consecutiveFailures,
+    lastErrorCode,
+    retryKind,
+  }) => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "transactions",
+      consecutiveFailures,
+      lastErrorCode,
+      retryKind,
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(transactionItemRejection());
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "transactions",
+      retryKind: "transaction_item_contract_rejected",
+      errorCode: "transaction_item_contract_rejected",
+    }));
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      forceOpen: false,
+    }));
+  });
+
+  it("parks the transactions lane as provider_bad_data on the third rejection in a row", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({
+      ...taskLease,
+      stream: "transactions",
+      consecutiveFailures: 2,
+      lastErrorCode: "transaction_item_contract_rejected",
+      // The streak is read from last_error_code: the planner nulls retry_kind
+      // when it materializes a due retry, so retry_kind is not a counter.
+      retryKind: null,
+      progress: { phase: "transactions", offset: 100 },
+    });
+    handlerMocks.executeStreamChunk.mockRejectedValue(transactionItemRejection());
+
+    await executeNextSyncPageChunk(app, 55);
+
+    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "transactions",
+      blockerKind: "provider_bad_data",
+      blockerCode: "transaction_item_contract_rejected",
+      errorCode: "transaction_item_contract_rejected",
+      progress: { phase: "transactions", offset: 100 },
+    }));
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      stream: "transactions",
       previousConsecutiveFailures: 2,
       forceOpen: true,
     }));

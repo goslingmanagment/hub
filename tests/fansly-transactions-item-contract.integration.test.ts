@@ -3,14 +3,18 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquirePageSyncLease, createFanslyPage, createModel, ensurePageSyncStates, findPageById,
-  getCheckpoint, runWithPageSyncExecutionContext, startSyncRun, upsertCheckpoint, upsertCheckpointProgress,
+  getCheckpoint, getPageSyncState, requestPageSync, runWithPageSyncExecutionContext, scheduleDuePageSync,
+  startSyncRun, upsertCheckpoint, upsertCheckpointProgress,
 } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
+import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { fanslyTransactionsChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncRunTelemetry } from "../apps/runtime/src/services/sync/observability.ts";
 import type { StreamChunkResult } from "../apps/runtime/src/services/sync/executor-types.ts";
-import { resetIntegrationDatabase, startTestDatabase } from "./helpers/db.ts";
+import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 const require = createRequire(new URL("../packages/fansly/src/adapter.ts", import.meta.url));
@@ -92,15 +96,19 @@ describe("Fansly transactions lane item contract", () => {
     try { await adapter?.close(); } finally { await transport?.close(); vi.restoreAllMocks(); }
   });
 
+  async function openTransactionsLane(pageId: number) {
+    await ensurePageSyncStates(db.db, { pageId });
+    await db.pool.query(`update page_sync_states set status = case when stream = 'transactions'
+      then 'pending'::page_sync_status else 'paused'::page_sync_status end,
+      succeeded_at = case when stream = 'transactions' then null else now() end where page_id = $1`, [pageId]);
+  }
+
   async function setUpPage(mode: "incremental" | "backfill") {
     const model = await createModel(db.db, { slug: `tx-contract-${mode}`, name: "Transactions contract" });
     if (!model) throw new Error("Missing test model");
     const page = await createFanslyPage(db.db, { modelId: model.id, label: `tx-contract-${mode}` });
     if (!page) throw new Error("Missing test page");
-    await ensurePageSyncStates(db.db, { pageId: page.id });
-    await db.pool.query(`update page_sync_states set status = case when stream = 'transactions'
-      then 'pending'::page_sync_status else 'paused'::page_sync_status end,
-      succeeded_at = case when stream = 'transactions' then null else now() end where page_id = $1`, [page.id]);
+    await openTransactionsLane(page.id);
     return page;
   }
 
@@ -215,6 +223,12 @@ describe("Fansly transactions lane item contract", () => {
 
       const { run, lease, result } = await runChunk(page);
       await expect(result).rejects.toThrow("Fansly transaction page item failed the item contract");
+      // Typed, so the executor retries it a bounded number of times, then parks the lane.
+      await expect(result).rejects.toMatchObject({
+        name: "FanslyTransactionsItemContractError",
+        code: "transaction_item_contract_rejected",
+        field: "amount",
+      });
 
       // One request, at the saved offset, journaled verbatim before the rejection.
       expect(transactionRequests).toHaveLength(1);
@@ -330,4 +344,130 @@ describe("Fansly transactions lane item contract", () => {
       expect(telemetry.buildStats("success").health).toBe("healthy");
     },
   );
+
+  // Through the real executor: lease, handler, failure classification, and
+  // each due retry made runnable by the planner. Only the transport is mocked.
+  async function setUpExecutorPage(mode: "incremental" | "backfill") {
+    const app = createTestAppContext(db, { adapter, fanslyDefaultDelayMs: 0 });
+    const { page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, `tx-contract-executor-${mode}`);
+    if (!page) throw new Error("Missing test page");
+    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
+    await openTransactionsLane(page.id);
+    await seedResumableProgress(page.id, mode);
+    return {
+      app,
+      page,
+      execute: () => executeNextSyncPageChunk(app, page.id),
+      stream: () => getPageSyncState(app.db, page.id, "transactions"),
+      // The ladder's wait, waited out; the planner then makes the retry due.
+      makeRetryDue: async () => {
+        await db.pool.query(`update page_sync_states set retry_at = now() - interval '1 second'
+          where page_id = $1 and stream = 'transactions' and status = 'retrying'`, [page.id]);
+        await scheduleDuePageSync(app.db, { pageId: page.id });
+      },
+    };
+  }
+
+  const requestedOffsets = () =>
+    transactionRequests.map((path) => new URLSearchParams(path.split("?")[1]).get("offset"));
+
+  async function ledgerRows(pageId: number) {
+    return (await db.pool.query(
+      "select count(*)::int as count from transactions where platform_account_id = $1", [pageId],
+    )).rows[0].count as number;
+  }
+
+  it.each(["incremental", "backfill"] as const)(
+    "%s: the third rejection in a row parks the lane as provider_bad_data, and it reads no more",
+    async (mode) => {
+      const f = await setUpExecutorPage(mode);
+      const before = await getCheckpoint(db.db, f.page.id, "transactions");
+      const raw = { total: 250, data: [transaction({ transactionId: "tx-fractional", amount: 7_500.5 })] };
+      serveTransactions = () => raw;
+
+      // Rejections 1 and 2 retry on the ordinary ladder.
+      for (const failures of [1, 2]) {
+        await expect(f.execute()).resolves.toMatchObject({ kind: "failed", stream: "transactions" });
+        expect(await f.stream()).toMatchObject({
+          status: "retrying",
+          retryKind: "transaction_item_contract_rejected",
+          blockerKind: null,
+          consecutiveFailures: failures,
+          lastErrorCode: "transaction_item_contract_rejected",
+        });
+        await f.makeRetryDue();
+        // Once due, retry_kind is gone: last_error_code carries the streak.
+        expect(await f.stream()).toMatchObject({ status: "pending", retryKind: null });
+      }
+
+      // Rejection 3 parks the lane.
+      await expect(f.execute()).resolves.toMatchObject({ kind: "failed", stream: "transactions" });
+      expect(await f.stream()).toMatchObject({
+        status: "blocked",
+        blockerKind: "provider_bad_data",
+        blockerCode: "transaction_item_contract_rejected",
+        retryKind: null,
+        retryAt: null,
+        consecutiveFailures: 3,
+        lastErrorCode: "transaction_item_contract_rejected",
+      });
+      const key = incidentKey({ kind: "stream_failed_threshold", platformAccountId: f.page.id, stream: "transactions" });
+      expect((await db.pool.query(
+        "select status from notification_incidents where incident_key = $1", [key],
+      )).rows).toEqual([{ status: "open" }]);
+
+      // Each attempt read the saved offset once and journaled the page verbatim;
+      // nothing reached the ledger or hydration, and progress stands.
+      expect(requestedOffsets()).toEqual(["100", "100", "100"]);
+      expect((await db.pool.query(
+        `select response_payload from sync_raw_payloads
+         where page_id = $1 and endpoint = 'earnings_transactions' order by id`, [f.page.id],
+      )).rows).toEqual([raw, raw, raw].map((payload) => ({ response_payload: payload })));
+      expect(accountLookups).toEqual([]);
+      expect(await ledgerRows(f.page.id)).toBe(0);
+      expect(await getCheckpoint(db.db, f.page.id, "transactions")).toEqual(before);
+
+      // Neither the schedule nor an operator's Sync now reads the page again.
+      await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["transactions"], source: "manual" });
+      await scheduleDuePageSync(f.app.db, { pageId: f.page.id });
+      await expect(f.execute()).resolves.toMatchObject({ kind: "idle" });
+      expect(transactionRequests).toHaveLength(3);
+      expect(await f.stream()).toMatchObject({ status: "blocked", blockerKind: "provider_bad_data" });
+      expect(await getCheckpoint(db.db, f.page.id, "transactions")).toEqual(before);
+    },
+  );
+
+  it("incremental: two rejections, then a clean page, recover the lane with no block", async () => {
+    const f = await setUpExecutorPage("incremental");
+    const raw = { total: 250, data: [transaction({ transactionId: "tx-fractional", amount: 7_500.5 })] };
+    serveTransactions = () => raw;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(f.execute()).resolves.toMatchObject({ kind: "failed", stream: "transactions" });
+      await f.makeRetryDue();
+    }
+    expect(await f.stream()).toMatchObject({
+      status: "pending", consecutiveFailures: 2, lastErrorCode: "transaction_item_contract_rejected",
+    });
+
+    serveTransactions = (path) => {
+      const offset = Number(new URLSearchParams(path.split("?")[1]).get("offset"));
+      const count = offset === 100 ? 100 : 50;
+      return {
+        total: 250,
+        data: Array.from({ length: count }, (_, index) =>
+          transaction({ transactionId: `tx-retry-${offset + index}` })),
+      };
+    };
+    await expect(f.execute()).resolves.toMatchObject({ kind: "success", stream: "transactions" });
+
+    expect(await f.stream()).toMatchObject({
+      blockerKind: null, retryKind: null, consecutiveFailures: 0, lastErrorCode: null,
+    });
+    expect(requestedOffsets()).toEqual(["100", "100", "100", "200"]);
+    expect((await db.pool.query(
+      `select count(*)::int as count from sync_raw_payloads
+       where page_id = $1 and endpoint = 'earnings_transactions'`, [f.page.id],
+    )).rows[0].count).toBe(4);
+    expect(await ledgerRows(f.page.id)).toBe(150);
+  });
 });

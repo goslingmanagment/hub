@@ -23,6 +23,10 @@ import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/s
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
+import {
+  FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED,
+  FanslyTransactionsItemContractError,
+} from "./errors.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
@@ -385,9 +389,9 @@ async function recordUnknownFanslyTransactionType(
 
 // A page item that failed the adapter's item contract (a fractional amount, a
 // createdAt in seconds) must not reach the ledger. The page is journaled by
-// now; a plain error keeps the scan's progress, so the retry re-reads this
-// offset instead of re-walking from offset 0. The message carries no ids or
-// offsets: the executor's failure classifier reads digits such as 429 in it.
+// now; the typed error keeps the scan's progress, so a retry re-reads this
+// offset instead of re-walking from offset 0, and the executor parks the lane
+// as provider_bad_data once the rejection repeats (classifyTaskFailure).
 async function rejectFanslyTransactionItemViolation(
   telemetry: SyncRunTelemetry,
   page: FanslyTransactionPage,
@@ -398,7 +402,7 @@ async function rejectFanslyTransactionItemViolation(
   }
 
   await telemetry.addAnomaly({
-    code: "transaction_item_contract_rejected",
+    code: FANSLY_TRANSACTION_ITEM_CONTRACT_REJECTED,
     severity: "error",
     message: "Fansly transaction page carried an item that failed the item contract",
     details: {
@@ -407,9 +411,7 @@ async function rejectFanslyTransactionItemViolation(
       itemViolation: page.itemViolation,
     },
   });
-  throw new Error(
-    `Fansly transaction page item failed the item contract (field ${page.itemViolation.field})`,
-  );
+  throw new FanslyTransactionsItemContractError({ field: page.itemViolation.field });
 }
 
 async function persistFanslyTransactionsPage(
