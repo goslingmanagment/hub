@@ -16,12 +16,19 @@ import { createTestAppContext } from "./runtime.ts";
 
 export async function followersDiagnosticFixture(
   db: StartedTestDatabase,
-  mode: "none" | "count" | "missing" | "unchanged" = "none",
+  mode: "none" | "count" | "missing" | "unchanged" | "crossed" = "none",
 ) {
-  const knownFollowId = mode === "missing" || mode === "unchanged" ? "1001" : null;
+  // Follow ids descend down the list, as Fansly serves them. "missing" and
+  // "crossed" both lost the known follow: the first runs off the end of the
+  // list, the second stops at the first row older than it.
+  const knownFollowId = mode === "missing" || mode === "unchanged" ? "999"
+    : mode === "crossed" ? "1001" : null;
   const items = [{ id: "1000", followerId: "fan-1", lastSeenAt: Date.now() }];
   if (mode === "unchanged") {
-    items.push({ id: "1001", followerId: "fan-2", lastSeenAt: Date.now() });
+    items.push({ id: "999", followerId: "fan-2", lastSeenAt: Date.now() });
+  }
+  if (mode === "crossed") {
+    items.unshift({ id: "1002", followerId: "fan-2", lastSeenAt: Date.now() });
   }
   const accounts = items.map(row => ({
     id: row.followerId,
@@ -30,13 +37,18 @@ export async function followersDiagnosticFixture(
     createdAt: 1_770_000_000_000,
     lastSeenAt: row.lastSeenAt,
   }));
-  const getFollowersPage = vi.fn<AppContext["adapter"]["getFollowersPage"]>(async () => ({
-    items,
-    accounts,
-    offset: 0,
-    done: mode !== "unchanged",
-    raw: { data: items, aggregationData: { accounts } },
-  }));
+  // One page of rows; a walk that reads past it finds the end of the list.
+  const getFollowersPage = vi.fn<AppContext["adapter"]["getFollowersPage"]>(async (_context, _accountId, params) => (
+    (params.offset ?? 0) === 0
+      ? {
+        items,
+        accounts,
+        offset: 0,
+        done: mode !== "unchanged" && mode !== "crossed",
+        raw: { data: items, aggregationData: { accounts } },
+      }
+      : { items: [], accounts: [], offset: params.offset ?? 0, done: true, raw: { data: [], aggregationData: { accounts: [] } } }
+  ));
   const app = createTestAppContext(db);
   app.adapter.getFollowersPage = getFollowersPage;
   const model = await createModel(db.db, { slug: "followers-diagnostic", name: "Followers" });

@@ -1150,6 +1150,260 @@ describe("sync executor handlers", () => {
     }
   });
 
+  describe("an incremental followers walk whose known follow id is gone", () => {
+    // Rows arrive newest first by follow snowflake; K is the head of the last walk.
+    const K = "961321050841313280";
+    const NEWER_2 = "961340000000000000";
+    const NEWER_1 = "961330000000000000";
+    const OLDER_1 = "961291922045943816";
+    const OLDER_2 = "961280000000000000";
+    const OLDER_3 = "961270000000000000";
+
+    type Row = { id: string; followerId: string };
+    const followerPage = (rows: Row[], done: boolean) => {
+      // Recent enough to count as presence.
+      const lastSeenAt = Date.now() - 60_000;
+      return {
+        items: rows.map(row => ({ ...row, lastSeenAt })),
+        accounts: rows.map(row => ({
+          id: row.followerId,
+          username: row.followerId,
+          displayName: row.followerId,
+          createdAt: 1_770_000_000_000,
+          lastSeenAt,
+        })),
+        done,
+        raw: {},
+      };
+    };
+
+    async function runWalk(input: {
+      pages: Array<ReturnType<typeof followerPage>>;
+      state?: Record<string, unknown>;
+      activeFollowerCount?: number;
+    }) {
+      const telemetry = createTelemetry();
+      const tx = {};
+      const getFollowersPage = vi.fn();
+      for (const page of input.pages) {
+        getFollowersPage.mockResolvedValueOnce(page);
+      }
+      const app = {
+        db: { transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)) },
+        config: { followerPageDelayMs: 0, syncSharedRateLimitEnabled: false },
+        adapter: { getFollowersPage },
+      } as never;
+      const state = {
+        revision: 3,
+        knownFollowId: K,
+        newestFollowId: null,
+        offset: 0,
+        pageCount: 0,
+        sourceFollowerCount: 4,
+        ...input.state,
+      };
+      dbMocks.getCheckpoint.mockResolvedValue({ cursorText: state.knownFollowId, state });
+      const fanIds = new Map<string, number>();
+      dbMocks.upsertFans.mockImplementation(async (_db: unknown, rows: Array<{ platformUserId: string }>) => (
+        rows.map(row => {
+          if (!fanIds.has(row.platformUserId)) fanIds.set(row.platformUserId, 100 + fanIds.size);
+          return { id: fanIds.get(row.platformUserId)!, platformUserId: row.platformUserId };
+        })
+      ));
+      dbMocks.countActivePageFollows.mockResolvedValue(input.activeFollowerCount ?? state.sourceFollowerCount);
+      dbMocks.requestPageSync.mockResolvedValue([{
+        stream: "followers_reconcile",
+        requestedSeq: 7,
+        coalesced: false,
+        queueBefore: { requestedSeq: 6, appliedSeq: 6 },
+      }]);
+
+      const result = await executeFollowersChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 12, label: "fansly-page", platformAccountId: "acct-12", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: { requestSeq: 3 },
+        syncRunId: 101,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(),
+      } as never);
+      const storedFollowIds = dbMocks.upsertPageFollows.mock.calls
+        .flatMap(([, rows]) => (rows as Array<{ platformFollowId: string }>).map(row => row.platformFollowId));
+      const decision = (telemetry.addNote.mock.calls as unknown as Array<[string, { followersReconcile: unknown }]>)
+        .find(([message]) => message === "Fansly followers reconcile decision")?.[1].followersReconcile;
+      return { result, getFollowersPage, storedFollowIds, decision };
+    }
+
+    it("stops at the first row older than the cursor instead of walking the rest of the list", async () => {
+      const { result, getFollowersPage, storedFollowIds, decision } = await runWalk({
+        pages: [
+          followerPage([
+            { id: NEWER_2, followerId: "fan-n2" },
+            { id: NEWER_1, followerId: "fan-n1" },
+            { id: OLDER_1, followerId: "fan-o1" },
+            { id: OLDER_2, followerId: "fan-o2" },
+          ], false),
+          followerPage([{ id: OLDER_3, followerId: "fan-o3" }], true),
+        ],
+      });
+
+      expect(result).toMatchObject({
+        satisfied: true,
+        stats: { pageCount: 1, processedThisChunk: 2, sawKnownCheckpoint: false, crossedKnownBoundary: true },
+      });
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([NEWER_2, NEWER_1]);
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        stream: "followers",
+        cursorText: NEWER_2,
+      }));
+      // Presence still covers every row the page returned.
+      expect(dbMocks.upsertFanPageExternalPresences.mock.calls[0]?.[1]).toHaveLength(4);
+      // The vanished cursor still asks the reconcile to sweep what lies below it.
+      expect(decision).toMatchObject({
+        countMismatch: false,
+        exhaustedWithoutKnown: true,
+        unchangedHeadWithRows: false,
+        requested: true,
+        pageDone: false,
+        requestedSeq: 7,
+      });
+      expect(dbMocks.requestPageSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a re-follow at the head, whose new follow id is above the cursor", async () => {
+      // fan-k owned K, unfollowed and followed again under a fresh, larger id.
+      const { getFollowersPage, storedFollowIds } = await runWalk({
+        pages: [
+          followerPage([
+            { id: NEWER_2, followerId: "fan-k" },
+            { id: NEWER_1, followerId: "fan-n1" },
+            { id: OLDER_1, followerId: "fan-o1" },
+          ], false),
+          followerPage([{ id: OLDER_2, followerId: "fan-o2" }], true),
+        ],
+      });
+
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([NEWER_2, NEWER_1]);
+    });
+
+    it("stops on the first page when the newest known followers left and one new follower came", async () => {
+      const { getFollowersPage, storedFollowIds, decision } = await runWalk({
+        pages: [
+          followerPage([
+            { id: NEWER_1, followerId: "fan-n1" },
+            { id: OLDER_2, followerId: "fan-o2" },
+            { id: OLDER_3, followerId: "fan-o3" },
+          ], false),
+          followerPage([], true),
+        ],
+      });
+
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([NEWER_1]);
+      expect(decision).toMatchObject({ exhaustedWithoutKnown: true, requested: true });
+    });
+
+    it("moves the cursor back to the surviving head when nobody new followed", async () => {
+      const { getFollowersPage, storedFollowIds, decision } = await runWalk({
+        pages: [
+          followerPage([
+            { id: OLDER_1, followerId: "fan-o1" },
+            { id: OLDER_2, followerId: "fan-o2" },
+          ], false),
+          followerPage([], true),
+        ],
+      });
+
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([]);
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        cursorText: OLDER_1,
+      }));
+      expect(decision).toMatchObject({ exhaustedWithoutKnown: true, requested: true });
+    });
+
+    it("finishes a deep walk resumed after a deploy on the page it resumes at", async () => {
+      const { result, getFollowersPage, storedFollowIds, decision } = await runWalk({
+        state: { offset: 300, pageCount: 3, newestFollowId: NEWER_1 },
+        pages: [
+          followerPage([
+            { id: OLDER_2, followerId: "fan-o2" },
+            { id: OLDER_3, followerId: "fan-o3" },
+          ], false),
+          followerPage([], true),
+        ],
+      });
+
+      expect(result).toMatchObject({ satisfied: true, stats: { pageCount: 4 } });
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(getFollowersPage).toHaveBeenCalledWith(expect.anything(), "acct-12", expect.objectContaining({
+        offset: 300,
+      }));
+      expect(storedFollowIds).toEqual([]);
+      expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        cursorText: NEWER_1,
+      }));
+      expect(decision).toMatchObject({ exhaustedWithoutKnown: true, requested: true, pageDone: false });
+    });
+
+    it("keeps every row above the cursor on the stopping page even if one older row came out of order", async () => {
+      const { getFollowersPage, storedFollowIds } = await runWalk({
+        pages: [
+          followerPage([
+            { id: NEWER_2, followerId: "fan-n2" },
+            { id: OLDER_1, followerId: "fan-o1" },
+            { id: NEWER_1, followerId: "fan-n1" },
+          ], false),
+          followerPage([], true),
+        ],
+      });
+
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([NEWER_2, NEWER_1]);
+    });
+
+    it("still stops exactly at the known follow when it is present", async () => {
+      const { result, getFollowersPage, storedFollowIds, decision } = await runWalk({
+        pages: [
+          followerPage([
+            { id: NEWER_1, followerId: "fan-n1" },
+            { id: K, followerId: "fan-k" },
+            { id: OLDER_1, followerId: "fan-o1" },
+          ], false),
+          followerPage([], true),
+        ],
+      });
+
+      expect(result).toMatchObject({ stats: { sawKnownCheckpoint: true } });
+      expect(getFollowersPage).toHaveBeenCalledTimes(1);
+      expect(storedFollowIds).toEqual([NEWER_1]);
+      expect(decision).toMatchObject({ exhaustedWithoutKnown: false, requested: false });
+      expect(dbMocks.requestPageSync).not.toHaveBeenCalled();
+    });
+
+    it("walks to the end of the list when the known id has no numeric order", async () => {
+      const { getFollowersPage, storedFollowIds, decision } = await runWalk({
+        state: { knownFollowId: "known-follow" },
+        pages: [
+          followerPage([
+            { id: NEWER_1, followerId: "fan-n1" },
+            { id: OLDER_1, followerId: "fan-o1" },
+          ], false),
+          followerPage([{ id: OLDER_2, followerId: "fan-o2" }], true),
+        ],
+      });
+
+      expect(getFollowersPage).toHaveBeenCalledTimes(2);
+      expect(storedFollowIds).toEqual([NEWER_1, OLDER_1, OLDER_2]);
+      expect(decision).toMatchObject({ exhaustedWithoutKnown: true, pageDone: true });
+    });
+  });
+
 it("guards against empty first-page follower reconcile wipes when active followers already exist", async () => {
   const telemetry = createTelemetry();
   const db = {

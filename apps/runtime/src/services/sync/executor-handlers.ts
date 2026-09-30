@@ -76,6 +76,7 @@ import {
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
 import {
+  compareFanslyFollowIds,
   fanslyFollowIdToDate,
   isFanslyDmMessageSyncExcluded,
   millsFromInteger,
@@ -2197,6 +2198,7 @@ export async function executeFollowersChunk(
 
   let processedThisChunk = 0;
   let sawKnownCheckpoint = false;
+  let crossedKnownBoundary = false;
 
   while (input.budget.hasRequestCapacity() && input.budget.hasWallClockCapacity()) {
     await assertOwnedPageSyncLease(app.db);
@@ -2274,6 +2276,7 @@ export async function executeFollowersChunk(
       const fanPageInputs: UpsertFanPageInput[] = [];
       const fanPagePresenceInputs = [];
       let pageSawKnownCheckpoint = false;
+      let pageCrossedKnownBoundary = false;
       let pageReachedBoundary = false;
 
       for (const follower of page.items) {
@@ -2281,6 +2284,15 @@ export async function executeFollowersChunk(
           pageSawKnownCheckpoint = true;
           pageReachedBoundary = true;
           break;
+        }
+        // Rows descend by follow id and every follow, a re-follow too, gets a
+        // new larger id. A row older than the known one means that row is gone
+        // and the rest of the list predates the last walk; the reconcile owns
+        // it. Skip rather than stop, so a newer row out of order still lands.
+        if (state.knownFollowId && compareFanslyFollowIds(follower.id, state.knownFollowId) === -1) {
+          pageCrossedKnownBoundary = true;
+          pageReachedBoundary = true;
+          continue;
         }
 
         const fanId = fanMap.get(follower.followerId);
@@ -2338,6 +2350,7 @@ export async function executeFollowersChunk(
           }),
           processedThisPage: followInputs.length,
           sawKnownCheckpoint: pageSawKnownCheckpoint,
+          crossedKnownBoundary: pageCrossedKnownBoundary,
           reachedBoundary: pageReachedBoundary,
         };
       }
@@ -2354,6 +2367,7 @@ export async function executeFollowersChunk(
         }),
         processedThisPage: followInputs.length,
         sawKnownCheckpoint: pageSawKnownCheckpoint,
+        crossedKnownBoundary: pageCrossedKnownBoundary,
         reachedBoundary: pageReachedBoundary,
       };
     });
@@ -2368,6 +2382,7 @@ export async function executeFollowersChunk(
 
     processedThisChunk += pageWrite.processedThisPage;
     sawKnownCheckpoint ||= pageWrite.sawKnownCheckpoint;
+    crossedKnownBoundary ||= pageWrite.crossedKnownBoundary;
 
     if (pageWrite.kind === "complete") {
       await input.telemetry.recordCheckpointAdvanced("followers", summarizeCheckpoint(pageWrite.checkpoint));
@@ -2376,7 +2391,7 @@ export async function executeFollowersChunk(
       const decision = followersReconcileDecision({
         activeFollowerCount, sourceFollowerCount: state.sourceFollowerCount,
         knownFollowId: state.knownFollowId, newestFollowId,
-        pageDone: page.done, sawKnownCheckpoint, processedThisChunk,
+        pageDone: page.done, crossedKnownBoundary, sawKnownCheckpoint, processedThisChunk,
       });
       const receipt = decision.requested
         ? await triggerFollowersReconcileAnomaly(app, input.pageContext.page.id)
@@ -2402,6 +2417,7 @@ export async function executeFollowersChunk(
           processedThisChunk,
           sourceFollowerCount: state.sourceFollowerCount,
           sawKnownCheckpoint,
+          crossedKnownBoundary,
         },
       } satisfies StreamChunkResult;
     }
