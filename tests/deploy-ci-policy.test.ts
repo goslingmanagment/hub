@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -392,9 +392,10 @@ describe("CI job admission", () => {
   });
 
   // Every check in the static job runs whenever the job runs. Only the
-  // runner-specific pnpm setup (see "CI self-hosted setup" below), the unit
-  // tests' background start, their join and the cleanup have conditions of
-  // their own; see "CI static job" below for how those behave.
+  // runner-specific pnpm setup (see "CI self-hosted setup" below), the
+  // background starts of the unit tests and the lint, their joins and the
+  // cleanup have conditions of their own; see "CI static job" below for how
+  // those behave.
   it("runs every static check, the image build and all three smoke tests whenever static runs", () => {
     const steps = job("static").steps;
     const conditional = steps.filter(item => item.if !== undefined);
@@ -402,14 +403,16 @@ describe("CI job admission", () => {
       ["Setup pnpm", "runner.environment != 'self-hosted'"],
       ["Setup pnpm (corepack)", "runner.environment == 'self-hosted'"],
       ["Start reliable unit tests in the background", "runner.environment == 'self-hosted'"],
+      ["Start lint in the background", "runner.environment == 'self-hosted'"],
+      ["Lint (family standard + architecture walls)", "!cancelled() && (success() || steps.lint.outputs.started == 'true')"],
       ["Reliable unit tests", "!cancelled() && (success() || steps.unit-tests.outputs.started == 'true')"],
       ["Stop background unit tests", "always()"],
+      ["Stop background lint", "always()"],
       ["Remove this run's image", "always()"],
     ]);
     expect(steps.at(-1)?.name).toBe("Remove this run's image");
     for (const name of [
       "Typecheck",
-      "Lint (family standard + architecture walls)",
       "Contracts are regenerated (routes.ts ↔ committed artifacts)",
       "Exact checkout image metadata",
       "Production Docker image build",
@@ -419,11 +422,14 @@ describe("CI job admission", () => {
     ]) {
       expect(step("static", name).if, name).toBeUndefined();
     }
-    // Hosted, or self-hosted with nothing failed so far: the unit tests' step
-    // runs exactly as an unconditional step would.
+    // Hosted, or self-hosted with nothing failed so far: the lint's and the
+    // unit tests' steps run exactly as unconditional steps would.
     for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
-      const context = { ...eventContext({ runnerEnvironment }), "steps.unit-tests.outputs.started": runnerEnvironment === "self-hosted" ? "true" : "" };
-      expect(stepRuns(step("static", "Reliable unit tests"), context, PASSING), runnerEnvironment).toBe(true);
+      const started = runnerEnvironment === "self-hosted" ? "true" : "";
+      const context = { ...eventContext({ runnerEnvironment }), "steps.unit-tests.outputs.started": started, "steps.lint.outputs.started": started };
+      for (const name of ["Lint (family standard + architecture walls)", "Reliable unit tests"]) {
+        expect(stepRuns(step("static", name), context, PASSING), `${runnerEnvironment}: ${name}`).toBe(true);
+      }
     }
   });
 
@@ -588,6 +594,7 @@ describe("CI runner pool", () => {
           ...eventContext({ runnerEnvironment: "self-hosted" }),
           "env.METADATA_ONLY": metadataOnly,
           "steps.unit-tests.outputs.started": "true",
+          "steps.lint.outputs.started": "true",
           "needs.integration.result": "success",
         };
         let nodeReady = false;
@@ -696,6 +703,20 @@ describe("CI runner pool", () => {
         expect(field(String(node?.with?.cache), eventContext({ runnerEnvironment: environment })), `${name} ${environment}`).toBe(cache);
       }
     }
+  });
+
+  // docker/build-push-action's post step exports the build record from the
+  // daemon's history, uploads it as an artifact and writes a job summary.
+  // The PC skips both; hosted runners get an empty value, which the action
+  // reads as unset, so they keep its defaults — and no job-wide value
+  // overrides that.
+  it("skips the build summary and the build record upload only on self-hosted runners", () => {
+    const pcOnly = "${{ runner.environment == 'self-hosted' && 'false' || '' }}";
+    expect(step("static", "Production Docker image build").env).toEqual({ DOCKER_BUILD_SUMMARY: pcOnly, DOCKER_BUILD_RECORD_UPLOAD: pcOnly });
+    for (const [environment, value] of [["github-hosted", ""], ["self-hosted", "false"]] as const) {
+      expect(field(pcOnly, eventContext({ runnerEnvironment: environment })), environment).toBe(value);
+    }
+    expect(Object.keys(job("static").env ?? {})).toEqual(["NODE_OPTIONS", "IMAGE"]);
   });
 
   // The PC shares one explicitly named store in $HOME (safe for concurrent
@@ -931,19 +952,24 @@ describe("Nightly on the runner pool", () => {
   });
 });
 
-describe("CI static job: unit tests beside the image checks", () => {
+describe("CI static job: unit tests and lint beside the image checks", () => {
   const start = "Start reliable unit tests in the background";
   const unit = "Reliable unit tests";
   const stop = "Stop background unit tests";
+  const lintStart = "Start lint in the background";
+  const lint = "Lint (family standard + architecture walls)";
+  const lintStop = "Stop background lint";
   const contracts = "Contracts are regenerated (routes.ts ↔ committed artifacts)";
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
   // Self-hosted: the unit tests start as soon as the tree is final and run in
   // a process group of their own beside typecheck → smokes; a later step
   // joins them. The contracts generator rewrites tracked sources the unit
-  // tests import, so it runs before they start. Hosted runners (2 vCPUs) keep
-  // running the unit tests in the joining step, after the smokes.
-  it("starts the unit tests after the contracts check and joins them after the smokes", () => {
+  // tests import, so it runs before they start. The lint runs the same way
+  // beside typecheck, and its own step joins it before the image build.
+  // Hosted runners (2 vCPUs) keep linting in that step and running the unit
+  // tests in the joining step, after the smokes.
+  it("starts the unit tests and the lint after the contracts check, joins the lint before the image build and the unit tests after the smokes", () => {
     expect(job("static").steps.map(item => item.name)).toEqual([
       "Checkout",
       "Setup pnpm",
@@ -952,8 +978,9 @@ describe("CI static job: unit tests beside the image checks", () => {
       "Install dependencies",
       contracts,
       start,
+      lintStart,
       "Typecheck",
-      "Lint (family standard + architecture walls)",
+      lint,
       "Exact checkout image metadata",
       "Set up Docker Buildx",
       "Production Docker image build",
@@ -962,6 +989,7 @@ describe("CI static job: unit tests beside the image checks", () => {
       "Startup capability manifest smoke",
       unit,
       stop,
+      lintStop,
       "Remove this run's image",
     ]);
     expect(step("static", start).id).toBe("unit-tests");
@@ -980,20 +1008,41 @@ describe("CI static job: unit tests beside the image checks", () => {
       "",
     ].join("\n"));
     expect(shell(step("static", stop))).toBe("bash scripts/ci-background.sh stop unit-tests");
+    // The lint: the same three steps, and the same command in both places.
+    expect(step("static", lintStart).id).toBe("lint");
+    expect(shell(step("static", lintStart))).toBe([
+      "bash scripts/ci-background.sh start lint pnpm lint",
+      'echo "started=true" >> "$GITHUB_OUTPUT"',
+      "",
+    ].join("\n"));
+    expect(step("static", lint).env).toEqual({ IN_BACKGROUND: "${{ steps.lint.outputs.started }}" });
+    expect(shell(step("static", lint))).toBe([
+      'if [ "$IN_BACKGROUND" = "true" ]; then',
+      "  bash scripts/ci-background.sh join lint",
+      "else",
+      "  pnpm lint",
+      "fi",
+      "",
+    ].join("\n"));
+    expect(shell(step("static", lintStop))).toBe("bash scripts/ci-background.sh stop lint");
   });
 
   type Scenario = {
     environment: "github-hosted" | "self-hosted";
-    /** A check other than the unit tests' own steps that fails. */
+    /** A check other than the background runs' own steps that fails. */
     failAt?: string;
     /** A check during which the job is cancelled. */
     cancelAt?: string;
-    /** When the cancel lands: once the unit tests logged something (default), or after they finished. */
+    /** When the cancel lands: once the background runs logged something (default), or after they finished. */
     cancelWhen?: "logged" | "finished";
     /** The unit tests' exit status, or "killed": they die without recording one. */
     unitExit: number | "killed";
     /** How long the unit tests keep running, in seconds. */
     unitSeconds?: number;
+    /** The lint's exit status (default 0), or "killed". */
+    lintExit?: number | "killed";
+    /** How long the lint keeps running, in seconds. */
+    lintSeconds?: number;
   };
   type Outcome = "success" | "failure" | "cancelled" | "skipped";
 
@@ -1008,34 +1057,42 @@ describe("CI static job: unit tests beside the image checks", () => {
 
   // Walks the static job the way the runner does: each step's `if` (with the
   // implicit success() when it names no status function), step env and
-  // outputs. The unit tests' three steps run their real shells against a stub
-  // pnpm; every other step only passes, fails or is cancelled as told.
+  // outputs. The unit tests' and the lint's three steps each run their real
+  // shells against a stub pnpm; every other step only passes, fails or is
+  // cancelled as told.
   function simulateStatic(scenario: Scenario) {
     const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-static-"));
     const pnpm = path.join(dir, "pnpm");
     writeFileSync(pnpm, [
       "#!/usr/bin/env bash",
       'echo "pnpm $*"',
-      '[ "$1" = test:unit ] || exit 0',
+      'case "$1" in',
+      '  test:unit) seconds="$UNIT_SECONDS" code="$UNIT_EXIT" message="unit tests finished" ;;',
+      '  lint) seconds="$LINT_SECONDS" code="$LINT_EXIT" message="lint finished" ;;',
+      "  *) exit 0 ;;",
+      "esac",
       // A child of its own, so the whole process group has to be reaped.
-      'sleep "$UNIT_SECONDS" & wait "$!"',
-      'if [ "$UNIT_EXIT" = killed ]; then kill -KILL "$PPID"; exit 0; fi',
-      'echo "unit tests finished"',
-      'exit "$UNIT_EXIT"',
+      'sleep "$seconds" & wait "$!"',
+      'if [ "$code" = killed ]; then kill -KILL "$PPID"; exit 0; fi',
+      'echo "$message"',
+      'exit "$code"',
       "",
     ].join("\n"));
     chmodSync(pnpm, 0o755);
     const runnerTemp = path.join(dir, "temp");
-    const pidFile = path.join(runnerTemp, "ci-background", "unit-tests.pid");
-    const outputs: Record<string, string> = {};
+    const pidFile = (name: string) => path.join(runnerTemp, "ci-background", `${name}.pid`);
+    // Step outputs by step id, as `steps.<id>.outputs.<name>` reads them.
+    const outputs: Record<string, Record<string, string>> = {};
     const context = (): Context => ({
       ...eventContext({ runnerEnvironment: scenario.environment }),
-      "steps.unit-tests.outputs.started": outputs.started ?? "",
+      "steps.unit-tests.outputs.started": outputs["unit-tests"]?.started ?? "",
+      "steps.lint.outputs.started": outputs.lint?.started ?? "",
     });
     const status: JobStatus = { ...PASSING };
     const outcomes: Record<string, Outcome> = {};
     const logs: Record<string, string> = {};
     let group: number | null = null;
+    let lintGroup: number | null = null;
     try {
       for (const item of job("static").steps) {
         if (!stepRuns(item, context(), status)) {
@@ -1043,19 +1100,22 @@ describe("CI static job: unit tests beside the image checks", () => {
           continue;
         }
         if (item.name === scenario.cancelAt) {
-          // Cancelled once the unit tests have logged something, as a real
-          // cancel lands well after they started — or after they finished.
+          // Cancelled once every background run has logged something, as a
+          // real cancel lands well after they started — or after they finished.
           const finished = scenario.cancelWhen === "finished";
-          const marker = path.join(runnerTemp, "ci-background", finished ? "unit-tests.status" : "unit-tests.log");
-          const waited = spawnSync("bash", ["-c", 'for _ in $(seq 200); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1', "wait", marker]);
-          expect(waited.status, finished ? "the unit tests never finished" : "the unit tests never logged").toBe(0);
+          for (const name of ["unit-tests", "lint"]) {
+            if (!existsSync(pidFile(name))) continue;
+            const marker = path.join(runnerTemp, "ci-background", `${name}.${finished ? "status" : "log"}`);
+            const waited = spawnSync("bash", ["-c", 'for _ in $(seq 200); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1', "wait", marker]);
+            expect(waited.status, `${name} never ${finished ? "finished" : "logged"}`).toBe(0);
+          }
           outcomes[item.name] = "cancelled";
           status.success = false;
           status.cancelled = true;
           continue;
         }
         let passed = item.name !== scenario.failAt;
-        if ([start, unit, stop].includes(item.name)) {
+        if ([start, unit, stop, lintStart, lint, lintStop].includes(item.name)) {
           const githubOutput = path.join(dir, "github-output");
           writeFileSync(githubOutput, "");
           const env = Object.fromEntries(Object.entries(item.env ?? {}).map(([key, value]) => [key, field(value, context())]));
@@ -1066,12 +1126,13 @@ describe("CI static job: unit tests beside the image checks", () => {
             env: {
               ...process.env, ...env, PATH: `${dir}:${process.env.PATH ?? ""}`, RUNNER_TEMP: runnerTemp,
               GITHUB_OUTPUT: githubOutput, UNIT_EXIT: String(scenario.unitExit), UNIT_SECONDS: String(scenario.unitSeconds ?? 0.1),
+              LINT_EXIT: String(scenario.lintExit ?? 0), LINT_SECONDS: String(scenario.lintSeconds ?? 0.1),
             },
           });
           logs[item.name] = result.stdout + result.stderr;
           for (const line of readFileSync(githubOutput, "utf8").split("\n").filter(Boolean)) {
             const [key = "", ...value] = line.split("=");
-            outputs[key] = value.join("=");
+            if (item.id) (outputs[item.id] ??= {})[key] = value.join("=");
           }
           passed = result.status === 0;
         }
@@ -1081,12 +1142,15 @@ describe("CI static job: unit tests beside the image checks", () => {
           status.failure = true;
         }
       }
-      group = readGroup(pidFile);
+      group = readGroup(pidFile("unit-tests"));
+      lintGroup = readGroup(pidFile("lint"));
       const conclusion: Outcome = status.cancelled ? "cancelled" : status.failure ? "failure" : "success";
-      return { conclusion, outcomes, logs, group, leftovers: group !== null && groupAlive(group) };
+      const leftovers = [group, lintGroup].some(id => id !== null && groupAlive(id));
+      return { conclusion, outcomes, logs, group, lintGroup, leftovers };
     } finally {
-      group ??= readGroup(pidFile);
-      if (group !== null && groupAlive(group)) process.kill(-group, "SIGKILL");
+      group ??= readGroup(pidFile("unit-tests"));
+      lintGroup ??= readGroup(pidFile("lint"));
+      for (const id of [group, lintGroup]) if (id !== null && groupAlive(id)) process.kill(-id, "SIGKILL");
       rmSync(dir, { recursive: true, force: true });
     }
   }
@@ -1099,33 +1163,72 @@ describe("CI static job: unit tests beside the image checks", () => {
     }
   }
 
+  // The lint is not here: it fails by its own exit status (below).
   const checks = [
     "Typecheck",
-    "Lint (family standard + architecture walls)",
     "Production Docker image build",
     "Startup capability manifest smoke",
   ];
 
-  it("passes on the PC only when both branches pass, and reaps the unit tests' process group", () => {
+  it("passes on the PC only when every branch passes, and reaps both process groups", () => {
     const run = simulateStatic({ environment: "self-hosted", unitExit: 0 });
     expect(run.conclusion).toBe("success");
-    expect(run.outcomes).toMatchObject({ [start]: "success", Typecheck: "success", [unit]: "success", [stop]: "success" });
+    expect(run.outcomes).toMatchObject({ [start]: "success", [lintStart]: "success", Typecheck: "success", [lint]: "success",
+      [unit]: "success", [stop]: "success", [lintStop]: "success" });
     expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
+    // The lint step joined the background lint and printed its whole log.
+    expect(run.logs[lint]).toMatch(/^lint ran in the background for \d+s; this step waited \d+s for it\. Its log:\npnpm lint\nlint finished\n$/);
+    expect(run.logs[lintStop]).toBe("");
     expect(run.group).not.toBeNull();
+    expect(run.lintGroup).not.toBeNull();
     expect(run.leftovers).toBe(false);
   });
 
-  it.each(checks)("on the PC, a failed %s fails the job and the unit tests still report", failAt => {
+  it.each(checks)("on the PC, a failed %s fails the job and the lint and the unit tests still report", failAt => {
     for (const unitExit of [0, 1]) {
       const run = simulateStatic({ environment: "self-hosted", failAt, unitExit });
       expect(run.conclusion, `${failAt} unit=${unitExit}`).toBe("failure");
       expect(run.outcomes[failAt]).toBe("failure");
+      expect(run.outcomes[lint]).toBe("success");
+      expect(run.logs[lint]).toContain("Its log:\npnpm lint\nlint finished\n");
       expect(run.outcomes[unit]).toBe(unitExit === 0 ? "success" : "failure");
       expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
       expect(run.outcomes[stop]).toBe("success");
+      expect(run.outcomes[lintStop]).toBe("success");
       expect(run.outcomes["Remove this run's image"]).toBe("success");
       expect(run.leftovers).toBe(false);
     }
+  });
+
+  // ESLint exits 1 on lint errors and 2 when it cannot run (config, crash).
+  it.each([1, 2])("on the PC, a lint exiting %s fails its step with the lint's log before the image build; the unit tests still report", lintExit => {
+    for (const unitExit of [0, 1]) {
+      const run = simulateStatic({ environment: "self-hosted", lintExit, unitExit });
+      expect(run.conclusion, `lint=${lintExit} unit=${unitExit}`).toBe("failure");
+      expect(run.outcomes).toMatchObject({ Typecheck: "success", [lint]: "failure", "Exact checkout image metadata": "skipped",
+        "Production Docker image build": "skipped", [unit]: unitExit === 0 ? "success" : "failure", [stop]: "success",
+        [lintStop]: "success", "Remove this run's image": "success" });
+      expect(run.logs[lint]).toContain("Its log:\npnpm lint\nlint finished\n");
+      expect(run.logs[unit]).toContain("pnpm test:unit --maxWorkers=5\nunit tests finished\n");
+      expect(run.leftovers).toBe(false);
+    }
+  });
+
+  // One push reports both: a failed typecheck still joins the lint.
+  it("on the PC, a failed typecheck still reports a failed lint", () => {
+    const run = simulateStatic({ environment: "self-hosted", failAt: "Typecheck", lintExit: 1, unitExit: 0 });
+    expect(run.conclusion).toBe("failure");
+    expect(run.outcomes).toMatchObject({ Typecheck: "failure", [lint]: "failure", "Production Docker image build": "skipped", [unit]: "success" });
+    expect(run.logs[lint]).toContain("Its log:\npnpm lint\nlint finished\n");
+    expect(run.leftovers).toBe(false);
+  });
+
+  it("on the PC, a lint that dies without an exit status fails its step", () => {
+    const run = simulateStatic({ environment: "self-hosted", lintExit: "killed", unitExit: 0 });
+    expect(run.conclusion).toBe("failure");
+    expect(run.outcomes).toMatchObject({ [lint]: "failure", "Production Docker image build": "skipped", [unit]: "success" });
+    expect(run.logs[lint]).toContain("::error::lint ended without recording an exit status");
+    expect(run.leftovers).toBe(false);
   });
 
   it("on the PC, failed unit tests fail the job with their log in the joining step", () => {
@@ -1144,11 +1247,13 @@ describe("CI static job: unit tests beside the image checks", () => {
     expect(run.leftovers).toBe(false);
   });
 
-  it("a stale contract fails the job before the unit tests start", () => {
+  it("a stale contract fails the job before the unit tests and the lint start", () => {
     const run = simulateStatic({ environment: "self-hosted", failAt: contracts, unitExit: 0 });
     expect(run.conclusion).toBe("failure");
-    expect(run.outcomes).toMatchObject({ [start]: "skipped", Typecheck: "skipped", [unit]: "skipped", [stop]: "success" });
+    expect(run.outcomes).toMatchObject({ [start]: "skipped", [lintStart]: "skipped", Typecheck: "skipped", [lint]: "skipped",
+      [unit]: "skipped", [stop]: "success", [lintStop]: "success" });
     expect(run.group).toBeNull();
+    expect(run.lintGroup).toBeNull();
   });
 
   it("a cancelled job skips the join, prints what the unit tests logged and kills their process group", () => {
@@ -1157,7 +1262,30 @@ describe("CI static job: unit tests beside the image checks", () => {
     expect(run.outcomes).toMatchObject({ "Chromium Headless Shell runtime smoke": "skipped", [unit]: "skipped", [stop]: "success",
       "Remove this run's image": "success" });
     expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=5\n");
+    // The lint was joined before the build: nothing is left to print or kill.
+    expect(run.outcomes).toMatchObject({ [lint]: "success", [lintStop]: "success" });
+    expect(run.logs[lintStop]).toBe("");
     expect(run.group).not.toBeNull();
+    expect(run.leftovers).toBe(false);
+  });
+
+  it("a job cancelled during typecheck skips the lint's join, prints what the lint logged and kills its process group", () => {
+    const run = simulateStatic({ environment: "self-hosted", cancelAt: "Typecheck", unitExit: 0, unitSeconds: 60, lintSeconds: 60 });
+    expect(run.conclusion).toBe("cancelled");
+    expect(run.outcomes).toMatchObject({ [lint]: "skipped", "Production Docker image build": "skipped", [unit]: "skipped",
+      [stop]: "success", [lintStop]: "success", "Remove this run's image": "success" });
+    expect(run.logs[lintStop]).toContain("lint was still running; its log so far:\npnpm lint\n");
+    expect(run.logs[lintStop]).toContain(`Stopped lint (process group ${String(run.lintGroup)}).`);
+    expect(run.logs[stop]).toContain("unit-tests was still running; its log so far:\npnpm test:unit --maxWorkers=5\n");
+    expect(run.lintGroup).not.toBeNull();
+    expect(run.leftovers).toBe(false);
+  });
+
+  it.each([0, 1])("a job cancelled during typecheck after the lint finished with %s still prints its log and status", lintExit => {
+    const run = simulateStatic({ environment: "self-hosted", cancelAt: "Typecheck", cancelWhen: "finished", unitExit: 0, lintExit });
+    expect(run.conclusion).toBe("cancelled");
+    expect(run.outcomes).toMatchObject({ [lint]: "skipped", [lintStop]: "success" });
+    expect(run.logs[lintStop]).toBe(`lint finished with exit status ${lintExit} but was never joined; its log:\npnpm lint\nlint finished\n`);
     expect(run.leftovers).toBe(false);
   });
 
@@ -1175,21 +1303,30 @@ describe("CI static job: unit tests beside the image checks", () => {
   });
 
   it.each([
-    // failAt, unit tests' exit, conclusion, unit tests' step
-    [undefined, 0, "success", "success"],
-    [undefined, 1, "failure", "failure"],
-    // Hosted keeps the old order: a failed check skips the unit tests.
-    ["Typecheck", 0, "failure", "skipped"],
-    ["Startup capability manifest smoke", 0, "failure", "skipped"],
-  ] as const)("hosted: failed check %s, unit tests exit %s → %s, unit tests %s", (failAt, unitExit, conclusion, unitOutcome) => {
-    const run = simulateStatic({ environment: "github-hosted", ...(failAt ? { failAt } : {}), unitExit });
-    expect(run.conclusion).toBe(conclusion);
-    expect(run.outcomes[start]).toBe("skipped");
-    expect(run.outcomes[unit]).toBe(unitOutcome);
-    if (unitOutcome !== "skipped") expect(run.logs[unit]).toBe("pnpm test:unit --maxWorkers=2\nunit tests finished\n");
-    expect(run.outcomes[stop]).toBe("success");
-    expect(run.group).toBeNull();
-  });
+    // failAt, lint's exit, unit tests' exit, conclusion, lint's step, unit tests' step
+    [undefined, 0, 0, "success", "success", "success"],
+    [undefined, 0, 1, "failure", "success", "failure"],
+    // Hosted keeps the old order: a failed check skips the checks after it.
+    [undefined, 1, 0, "failure", "failure", "skipped"],
+    ["Typecheck", 0, 0, "failure", "skipped", "skipped"],
+    ["Startup capability manifest smoke", 0, 0, "failure", "success", "skipped"],
+  ] as const)("hosted: failed check %s, lint exits %s, unit tests exit %s → %s, lint %s, unit tests %s",
+    (failAt, lintExit, unitExit, conclusion, lintOutcome, unitOutcome) => {
+      const run = simulateStatic({ environment: "github-hosted", ...(failAt ? { failAt } : {}), lintExit, unitExit });
+      expect(run.conclusion).toBe(conclusion);
+      expect(run.outcomes[start]).toBe("skipped");
+      expect(run.outcomes[lintStart]).toBe("skipped");
+      // Nothing in the background: the lint step runs the previous command.
+      expect(run.outcomes[lint]).toBe(lintOutcome);
+      if (lintOutcome !== "skipped") expect(run.logs[lint]).toBe("pnpm lint\nlint finished\n");
+      expect(run.outcomes[unit]).toBe(unitOutcome);
+      if (unitOutcome !== "skipped") expect(run.logs[unit]).toBe("pnpm test:unit --maxWorkers=2\nunit tests finished\n");
+      expect(run.outcomes).toMatchObject({ [stop]: "success", [lintStop]: "success" });
+      expect(run.logs[lintStop]).toBe("");
+      expect(run.group).toBeNull();
+      expect(run.lintGroup).toBeNull();
+    },
+  );
 });
 
 describe("CI integration shards", () => {
@@ -1508,10 +1645,14 @@ describe("CI production image checks", () => {
     ].join("\n"));
     expect(step("static", "Exact checkout image metadata").id).toBe("metadata");
     expect(shell(step("static", "Exact checkout image metadata"))).toContain("bash scripts/deploy-metadata.sh");
-    // The typecheck the image build skips must run earlier in the same job.
+    // The typecheck the image build skips must run earlier in the same job,
+    // in the foreground: only the unit tests and the lint start in the background.
     const names = job("static").steps.map(item => item.name);
     expect(names.indexOf("Typecheck")).toBeGreaterThan(-1);
     expect(names.indexOf("Typecheck")).toBeLessThan(names.indexOf("Production Docker image build"));
+    expect(shell(step("static", "Typecheck"))).toBe("pnpm typecheck");
+    expect(job("static").steps.filter(item => item.run?.includes("ci-background.sh start")).map(item => item.name))
+      .toEqual(["Start reliable unit tests in the background", "Start lint in the background"]);
     for (const smoke of ["Chromium Headless Shell runtime smoke", "Native image library smoke", "Startup capability manifest smoke"]) {
       expect(names.indexOf(smoke), smoke).toBeGreaterThan(names.indexOf("Production Docker image build"));
     }
