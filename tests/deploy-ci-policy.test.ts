@@ -495,14 +495,17 @@ describe("CI job admission", () => {
 });
 
 describe("CI runner pool", () => {
-  const selfHosted = ["self-hosted", "ci-pc"];
+  // The PC's runner classes (see the ci-runners README): heavy jobs ask for
+  // ci-pc, the two gate jobs for ci-pc-control.
+  const heavy = ["self-hosted", "ci-pc"];
+  const control = ["self-hosted", "ci-pc-control"];
 
   // Every job of both workflows follows CI_POOL, the gate's own fingerprint
   // and Quality Gate included: with CI_POOL=pc nothing runs on a billed runner
   // on a first attempt.
   it.each([
     // CI_POOL, run attempt, fingerprint + Quality Gate, static, integration, nightly jobs
-    ["pc", "1", selfHosted, selfHosted, selfHosted, selfHosted],
+    ["pc", "1", control, heavy, heavy, heavy],
     // Re-runs always go hosted: the PC may have died mid-run.
     ["pc", "2", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
     ["pc", "3", "ubuntu-slim", "ubuntu-24.04", "ubuntu-24.04-arm", "ubuntu-24.04"],
@@ -523,20 +526,48 @@ describe("CI runner pool", () => {
   );
 
   it("keeps the canonical pool expression and pins every hosted image", () => {
-    const pool = (fallback: string) =>
-      `\${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || '${fallback}' }}`;
-    expect(job("static")["runs-on"]).toBe(pool("ubuntu-24.04"));
-    expect(job("integration")["runs-on"]).toBe(pool("ubuntu-24.04-arm"));
+    const pool = (pcLabel: string, fallback: string) =>
+      `\${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","${pcLabel}"]') || '${fallback}' }}`;
+    expect(job("static")["runs-on"]).toBe(pool("ci-pc", "ubuntu-24.04"));
+    expect(job("integration")["runs-on"]).toBe(pool("ci-pc", "ubuntu-24.04-arm"));
     // Seconds-long jobs without Docker fall back to the cheapest runner.
-    expect(job("fingerprint")["runs-on"]).toBe(pool("ubuntu-slim"));
-    expect(job("quality")["runs-on"]).toBe(pool("ubuntu-slim"));
+    expect(job("fingerprint")["runs-on"]).toBe(pool("ci-pc-control", "ubuntu-slim"));
+    expect(job("quality")["runs-on"]).toBe(pool("ci-pc-control", "ubuntu-slim"));
     expect(job("fingerprint")).toHaveProperty("timeout-minutes", 5);
     expect(job("quality")).toHaveProperty("timeout-minutes", 5);
     // ubuntu-latest moves to a new release on GitHub's schedule, not ours.
     expect(workflowText).not.toContain("ubuntu-latest");
     for (const [name, config] of Object.entries(nightly.jobs)) {
-      expect(config["runs-on"], name).toBe(pool("ubuntu-24.04"));
+      expect(config["runs-on"], name).toBe(pool("ci-pc", "ubuntu-24.04"));
     }
+  });
+
+  // Hub's heavy runners carry ci-pc and ci-pc-control, its light gate runners
+  // only ci-pc-control, and a runner takes a job only when it carries every
+  // label the job asks for. So the heavy runners take every
+  // job (the gates fall back to them while the light ones are busy or down),
+  // and nothing but the two gates ever lands on a light runner.
+  it("lets only the two gate jobs onto the light runners and every job onto the heavy ones", () => {
+    const heavyRunner = ["self-hosted", "Linux", "X64", "ci-pc", "ci-pc-control"];
+    const lightRunner = ["self-hosted", "Linux", "X64", "ci-pc-control"];
+    const takes = (runnerLabels: string[], labels: Value) =>
+      Array.isArray(labels) && labels.every(label => typeof label === "string" && runnerLabels.includes(label));
+    const context = eventContext({ pool: "pc", attempt: "1" });
+    const jobs: [string, Job][] = [
+      ...Object.entries(workflow.jobs).map(([name, config]): [string, Job] => [`ci ${name}`, config]),
+      ...Object.entries(nightly.jobs).map(([name, config]): [string, Job] => [`nightly ${name}`, config]),
+    ];
+    const gates = ["ci fingerprint", "ci quality"];
+    const onLight: string[] = [];
+    for (const [name, config] of jobs) {
+      const labels = runner(config["runs-on"], context);
+      expect(takes(heavyRunner, labels), name).toBe(true);
+      if (takes(lightRunner, labels)) onLight.push(name);
+      else expect(labels, name).toEqual(heavy);
+      // No other job names the control class in any branch of its runs-on.
+      expect(JSON.stringify(config["runs-on"]).includes("ci-pc-control"), name).toBe(gates.includes(name));
+    }
+    expect(onLight).toEqual(gates);
   });
 
   // The PC image has no Node.js on PATH and no GitHub CLI (its WSL distro

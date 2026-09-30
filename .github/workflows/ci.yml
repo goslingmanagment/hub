@@ -53,7 +53,13 @@ jobs:
   fingerprint:
     name: Gate fingerprint
     if: (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base) && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
+    # On the PC both gate jobs (this one and the Quality Gate) ask for the
+    # control class. Hub's light gate runners carry only ci-pc-control, so a
+    # gate need not wait behind a batch's heavy jobs; the heavy runners carry
+    # ci-pc-control beside ci-pc, so the gates fall back to them while the
+    # light ones are busy or down. Every other job asks for ci-pc, which the
+    # light runners lack, so heavy work never lands on them.
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -72,9 +78,9 @@ jobs:
         uses: actions/checkout@v6
 
       # ubuntu-slim ships Node.js; the PC has none on PATH. Node 22 comes from
-      # the runner's tool cache, which the static and integration jobs keep
-      # warm, so this downloads nothing there. No pnpm: these scripts import
-      # nothing outside Node.
+      # the runner's own tool cache: static and integration jobs keep it warm
+      # on the heavy runners, and a light gate runner downloads it once, on
+      # its first gate. No pnpm: these scripts import nothing outside Node.
       - name: Setup Node.js
         if: runner.environment == 'self-hosted'
         uses: actions/setup-node@v6
@@ -432,11 +438,13 @@ jobs:
   # mirrors the verdict an earlier run recorded for the same SHA; it cannot
   # manufacture one, so a red, pending or missing gate stays that way.
   #
-  # On the PC the job queues like any other when the PC is off, metadata-only
-  # runs included; `ci-pool rescue` re-runs it on GitHub (attempt 2).
+  # On the PC the job asks for the gate runner class (ci-pc-control), as the
+  # fingerprint job does. It queues like any other when the PC is off,
+  # metadata-only runs included; `ci-pool rescue` re-runs it on GitHub
+  # (attempt 2).
   quality:
     name: Quality Gate
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
     needs: [fingerprint, static, integration]
     if: always()
     timeout-minutes: 5
