@@ -14,6 +14,7 @@ import {
   parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
+  servedWindowSpansRequest,
   steadyRefreshPlan,
   steadyWindows,
   windowAnsweredBy,
@@ -282,6 +283,28 @@ describe("media_stats — the pure helpers", () => {
     expect(servedWindowCoversRequest(requested, { afterMs: null, beforeMs: null })).toBe(true);
   });
 
+  it("counts a hole window read only when what was served spans it end to end", () => {
+    const now = NOW.getTime();
+    const at = (days: number) => now - days * DAY_MS;
+    // A mid item last refreshed 38 days ago: the hole below its 30 days.
+    const requested = { afterMs: at(39), beforeMs: at(30) };
+    expect(servedWindowSpansRequest(requested, requested)).toBe(true);
+    // Production's shape: each bound snapped to the start of its day, so the
+    // last bucket starts under a day below what was asked.
+    const midnight = (ms: number) => ms - (ms % DAY_MS);
+    expect(servedWindowSpansRequest(requested, {
+      afterMs: midnight(requested.afterMs),
+      beforeMs: midnight(requested.beforeMs),
+    })).toBe(true);
+    // The route's DEFAULT trailing window — what the backfill guard exists for.
+    expect(servedWindowSpansRequest(requested, { afterMs: at(31), beforeMs: now })).toBe(false);
+    // Short at either end: days asked for and not served.
+    expect(servedWindowSpansRequest(requested, { afterMs: at(35), beforeMs: at(30) })).toBe(false);
+    expect(servedWindowSpansRequest(requested, { afterMs: at(39), beforeMs: at(33) })).toBe(false);
+    // No served bounds: no evidence, and no contradiction.
+    expect(servedWindowSpansRequest(requested, { afterMs: null, beforeMs: null })).toBe(true);
+  });
+
   it("covers the whole 90 days when the long tail is split", () => {
     const split = steadyWindows("long_tail", NOW, "split_31");
     expect(split).toHaveLength(3);
@@ -363,6 +386,34 @@ describe("media_stats — the pure helpers", () => {
     // A walk anchored in the past never answers today's trailing window.
     expect(windowAnsweredBy(s0!, [span(33, 2), span(63, 32)])).toBe(false);
     expect(windowAnsweredBy(s0!, [])).toBe(false);
+  });
+
+  it("never takes a window two days wide as answered by the slack alone", () => {
+    const now = NOW.getTime();
+    const span = (afterDays: number, beforeDays: number) => ({
+      afterMs: now - afterDays * DAY_MS,
+      beforeMs: now - beforeDays * DAY_MS,
+    });
+    // A mid item last refreshed 31 days ago: its refresh, and the hole below
+    // it down to a day before that refresh — two days wide.
+    const plan = steadyRefreshPlan("mid", NOW, "split_31", new Date(now - 31 * DAY_MS));
+    const [trailing, hole] = plan.windows;
+    expect(hole).toEqual({ periodMs: DAY_MS, ...span(32, 30) });
+    // The day of slack at the top and the day at the bottom meet inside it:
+    // with nothing read at all, the window read as answered, and the visit
+    // skipped it for good.
+    expect(windowAnsweredBy(hole!, [])).toBe(false);
+    // The refresh above it reads none of its days either — as asked, or as
+    // production serves it, snapped to the day boundary below `now`.
+    const snapped = now - 9 * 60 * 60 * 1000;
+    expect(windowAnsweredBy(hole!, [trailing!])).toBe(false);
+    expect(windowAnsweredBy(hole!, [{ afterMs: snapped - 30 * DAY_MS, beforeMs: snapped }])).toBe(false);
+    // What was read inside it holds it, the slack extending that and no more:
+    // its own answer, as asked or served a day early.
+    expect(windowAnsweredBy(hole!, [span(32, 30)])).toBe(true);
+    expect(windowAnsweredBy(hole!, [span(33, 31)])).toBe(true);
+    // Wide windows are unchanged: the plan's own windows answer themselves.
+    expect(windowAnsweredBy(trailing!, plan.windows)).toBe(true);
   });
 
   it("finds how far down a visit's windows reach, unbroken, from a walk's resume point", () => {

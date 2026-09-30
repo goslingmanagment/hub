@@ -133,7 +133,12 @@
 // steady windows (`steadyRefreshPlan`). What one visit cannot carry is raised
 // as `fansly_media_stats_refresh_hole` rather than skipped in silence. The
 // last refresh, not the last stamp: a visit that only walked history stamps
-// the item too, and the cursor carries `refreshedThroughMs` past it.
+// the item too, and the cursor carries `refreshedThroughMs` past it. A hole
+// window counts only when the route SERVED it, end to end; one it did not —
+// a budget ran out, or it came back as another window — leaves the hole
+// OPEN: the refresh still stamps the item, the cursor keeps its last
+// refresh, the next visit reads the hole again, and
+// `fansly_media_stats_refresh_hole_open` names it.
 //
 // ── 5. BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume ────────────────
 //
@@ -290,7 +295,8 @@ const LONG_TAIL_SPLIT_WINDOWS = 3;
 /** The most windows ONE steady refresh takes, the hole below its span
  *  included (`steadyRefreshPlan`). A refresh that closes a hole is reserved
  *  whole, so it has to fit a five-request chunk, with room for a retry: one
- *  that does not is read, left unstamped and read again, chunk after chunk. */
+ *  that does not is clamped to the chunk, and its hole is left open, visit
+ *  after visit. */
 const REFRESH_WINDOWS_PER_VISIT = 4;
 /**
  * What a FIRST visit costs, per tier: the first-sight walk it starts. A fresh
@@ -755,6 +761,27 @@ export function servedWindowCoversRequest(
   return served.afterMs - requested.afterMs <= DAY_MS;
 }
 
+/**
+ * Did the served window span a HOLE window end to end?
+ *
+ * A hole window is history, like a backfill window, and it is read to close
+ * the days between two refreshes: a day it did not serve is a day still
+ * missing. So both ends are checked, each within the day of slack the route's
+ * snapping needs — it serves each bound as the start of its day, so the last
+ * bucket starts under a day below what was asked. The start as the 90-day
+ * probe checks it (`servedWindowCoversRequest`), and the end, which a window
+ * ending in the past can fall short of too. The route's default trailing
+ * window fails the start by weeks; `windowWasHonoured` fails it as well.
+ * Served bounds we did not get are no evidence and no contradiction.
+ */
+export function servedWindowSpansRequest(
+  requested: { afterMs: number; beforeMs: number },
+  served: { afterMs: number | null; beforeMs: number | null },
+): boolean {
+  return servedWindowCoversRequest(requested, served)
+    && (served.beforeMs === null || requested.beforeMs - served.beforeMs <= DAY_MS);
+}
+
 /** What a failed window was failed WITH: the provider's HTTP status when it
  *  answered at all, and whether it asked us to come back later. */
 interface WindowFailure {
@@ -797,14 +824,22 @@ function windowKey(window: { periodMs: number; afterMs: number; beforeMs: number
  * — the slack `windowWasHonoured` gives the provider's bucket snapping, and no
  * more: the route serves a trailing window to its last day boundary, so a
  * refresh asked a minute later would be served the very same buckets. Inside
- * the window the union must be unbroken; a gap is buckets nobody read. Meant
- * for the steady windows, which are a month wide or more.
+ * the window the union must be unbroken; a gap is buckets nobody read.
+ *
+ * The slack EXTENDS what was read and never stands in for it: a span must
+ * hold the window's top. On a window two days wide or less the day at the top
+ * and the day at the bottom meet, and with nothing read at all the window read
+ * as answered — a mid item's hole of a day or two, skipped for good.
  */
 export function windowAnsweredBy(
   window: { afterMs: number; beforeMs: number },
   answered: ReadonlyArray<{ afterMs: number; beforeMs: number }>,
 ): boolean {
-  return answeredFloor(window.beforeMs - DAY_MS, answered) <= window.afterMs + DAY_MS;
+  const topMs = window.beforeMs - DAY_MS;
+  if (!answered.some((span) => span.afterMs <= topMs && span.beforeMs >= topMs)) {
+    return false;
+  }
+  return answeredFloor(topMs, answered) <= window.afterMs + DAY_MS;
 }
 
 /**
@@ -868,6 +903,18 @@ interface VisitWindows {
    *  reads everything under it anyway. Settled as the visit starts, before the
    *  walk moves the cursor. */
   holeFrom: Date | null;
+  /** Why the refresh read its span and not the whole hole below it, and the
+   *  hole window it stopped at; null while nothing stopped it. */
+  holeLeftOpen: HoleLeftOpen | null;
+}
+
+/** A hole window the refresh did not close: the day's budget or the chunk's
+ *  ran out first, the visit had asked for it already, or the route served
+ *  something other than the window asked for. */
+interface HoleLeftOpen {
+  reason: "daily_call_budget" | "chunk_budget" | "repeat_request" | "window_not_honoured";
+  requested: { afterMs: number; beforeMs: number };
+  served: { afterMs: number | null; beforeMs: number | null } | null;
 }
 
 /** What one window request came back as. `null` means the call was refused
@@ -1302,12 +1349,19 @@ export async function fanslyMediaStatsChunk(
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
   ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
-    const visit: VisitWindows = { issued: new Set(), answered: [], holeFrom: null };
+    const visit: VisitWindows = {
+      issued: new Set(),
+      answered: [],
+      holeFrom: null,
+      holeLeftOpen: null,
+    };
     const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
     const cursorAtEntry = JSON.stringify(backfillCursorJson(cursor));
     let buckets = 0;
     let journaledWindows = 0;
     let steadyComplete = false;
+    // The hole below the refresh, when there is one, was read whole.
+    let holeClosed = true;
     let status: "visited" | "skipped" | "deferred" | "yielded" = "skipped";
     const outOfBudget = () => status === "deferred" || status === "yielded";
 
@@ -1371,8 +1425,8 @@ export async function fanslyMediaStatsChunk(
     ).holeWindows > 0;
     // Both a mark and a hole need windows a walk anchored in the past never
     // reads: it resumes below the last visit. After the walk they would get
-    // whatever calls were left, and a stamp on a hole half read loses the
-    // rest for good — the next visit reads from today's.
+    // whatever calls were left, and a hole left open waits for the item's
+    // next visit.
     const refreshFirst = walkInPast && (dirty || closesHole);
 
     if (refreshFirst) {
@@ -1385,6 +1439,7 @@ export async function fanslyMediaStatsChunk(
       }
       buckets += steady.buckets;
       steadyComplete = steady.complete;
+      holeClosed = steady.holeClosed;
       status = steady.status === "ok" ? "visited" : steady.status;
       // THE WALK RESUMES BELOW WHAT THE REFRESH READ. A walk cut short less
       // than 93 days deep resumes inside it, and would read those buckets
@@ -1435,6 +1490,10 @@ export async function fanslyMediaStatsChunk(
     if (!refreshFirst && outOfBudget()) {
       steadyComplete = journaledWindows > 0
         && refreshAnswered(steadyWindows(candidate.tier, now, state.longTailWindowMode), visit);
+      // Nothing here read a hole. There is none on this path — a hole puts a
+      // walk in the past first, and a walk from today has none — and if there
+      // were, it would stay open.
+      holeClosed = !closesHole;
     } else if (!refreshFirst) {
       // With nothing else durable in this visit a partial refresh is thrown
       // away and re-read whole, and a dirty item's half refresh leaves the mark
@@ -1453,6 +1512,7 @@ export async function fanslyMediaStatsChunk(
       }
       buckets += steady.buckets;
       steadyComplete = steady.complete;
+      holeClosed = steady.holeClosed;
       status = steady.status === "ok" ? "visited" : steady.status;
     }
 
@@ -1471,11 +1531,47 @@ export async function fanslyMediaStatsChunk(
       return status === "visited" ? "skipped" : status;
     }
 
+    // THE REFRESH AND THE HOLE ARE TWO THINGS. The refresh — the tier's span,
+    // down from today — answers the mark and earns the stamp, so an item whose
+    // refresh came back leaves the head of the queue. The hole below it is
+    // read only when every one of its windows came back whole; until then the
+    // item keeps its last refresh, and its next visit reads the hole again.
+    const refreshedWhole = steadyComplete && holeClosed;
+
+    // A HOLE LEFT OPEN: the span was read and the hole was not — the day's cap
+    // is smaller than the refresh and its hole together, a budget ran out
+    // first, or the route served another window. Kept, and named, never
+    // counted as read: a cap of one call a day used to read the refresh, leave
+    // the item unstamped and put it back at the head of the queue, every day.
+    if (steadyComplete && !holeClosed) {
+      const open = visit.holeLeftOpen;
+      await input.telemetry.addAnomaly({
+        code: "fansly_media_stats_refresh_hole_open",
+        severity: open?.reason === "window_not_honoured" ? "warn" : "info",
+        message:
+          "Fansly per-media refresh read the item's span but not the hole below it; the item "
+          + "keeps its last refresh, and its next visit reads the hole again",
+        details: {
+          mediaOfferRef: candidate.subjectRef,
+          tier: candidate.tier,
+          reason: open?.reason ?? null,
+          refreshedThrough: visit.holeFrom?.toISOString() ?? null,
+          requestedAfter: open === null ? null : new Date(open.requested.afterMs).toISOString(),
+          requestedBefore: open === null ? null : new Date(open.requested.beforeMs).toISOString(),
+          servedAfter: open?.served?.afterMs == null
+            ? null
+            : new Date(open.served.afterMs).toISOString(),
+          servedBefore: open?.served?.beforeMs == null
+            ? null
+            : new Date(open.served.beforeMs).toISOString(),
+        },
+      });
+    }
+
     // A HOLE DEEPER THAN ONE VISIT CARRIES: the refresh read its newest part,
-    // and the stamp lets go of the rest. Named, not skipped in silence. A
-    // refresh with a hole to read is reserved whole, so a stamp here means it
-    // was read.
-    const unreadHole = steadyComplete
+    // and the stamp lets go of the rest. Named, not skipped in silence — and
+    // only once the part it did plan was read whole.
+    const unreadHole = refreshedWhole
       ? steadyRefreshPlan(candidate.tier, now, state.longTailWindowMode, visit.holeFrom).unreadHole
       : null;
     if (unreadHole !== null) {
@@ -1496,11 +1592,12 @@ export async function fanslyMediaStatsChunk(
       });
     }
 
-    // WHERE THE NEXT HOLE STARTS. A complete refresh, or a walk that opened at
-    // today, read the series down from now. A visit that only walked history
-    // carries the older instant forward: its stamp is no read of the days
-    // above the walk, and a hole measured from it would skip them unnamed.
-    cursor.refreshedThroughMs = steadyComplete || walkFromToday
+    // WHERE THE NEXT HOLE STARTS. A complete refresh with its hole, or a walk
+    // that opened at today, read the series down from now. A visit that only
+    // walked history, or left its hole open, carries the older instant
+    // forward: its stamp is no read of the days in between, and a hole
+    // measured from it would skip them unnamed.
+    cursor.refreshedThroughMs = refreshedWhole || walkFromToday
       ? now.getTime()
       : visit.holeFrom?.getTime() ?? null;
 
@@ -1709,14 +1806,15 @@ export async function fanslyMediaStatsChunk(
     return { status, windows: journaledWindows, buckets };
   }
 
-  /** What one item's steady refresh did. `complete` means every window the tier
-   *  asks for came back — a half-read tier is not a refresh. `served` counts the
-   *  windows that did. */
+  /** What one item's steady refresh did. `complete` means every window of the
+   *  tier's span came back — a half-read tier is not a refresh. `holeClosed`
+   *  means every window of the hole below it came back too, honoured and whole
+   *  (true when there is no hole). */
   interface SteadyResult {
     status: "ok" | "deferred" | "yielded" | "failed";
     buckets: number;
     complete: boolean;
-    served: number;
+    holeClosed: boolean;
   }
 
   /** The tier's trailing window: one call, except a long tail on a route that
@@ -1724,7 +1822,9 @@ export async function fanslyMediaStatsChunk(
    *  mode as the refresh starts; the discovery and the 90-day fallback re-run
    *  the refresh under the split plan they commit to. `reserveWhole` is set
    *  when a partial refresh would be discarded, or would leave a dirty mark
-   *  standing: the unit then never STARTS without room for all its windows. */
+   *  standing: the unit then never STARTS without room for all its windows —
+   *  or for all a budget smaller than the unit can hold, which reads the span
+   *  and leaves the hole below it open. */
   async function runSteady(
     candidate: MediaStatsRefreshCandidate,
     cursor: MediaBackfillCursor,
@@ -1738,7 +1838,8 @@ export async function fanslyMediaStatsChunk(
     const plan = steadyRefreshPlan(candidate.tier, now, planMode, visit.holeFrom);
     const { windows } = plan;
     const [trailing] = windows;
-    const trailingCount = windows.length - plan.holeWindows;
+    const spanCount = windows.length - plan.holeWindows;
+    const inHole = (window: (typeof windows)[number]) => windows.indexOf(window) >= spanCount;
     let buckets = 0;
 
     // ALREADY ANSWERED THIS VISIT, at no cost. A first visit opens its backfill
@@ -1759,37 +1860,69 @@ export async function fanslyMediaStatsChunk(
     // is one window, held or not; the 90-day discovery below reads its window
     // only when it is not held.
     const toRead = windows.filter((window) => !windowHeld(window, visit));
-    let served = windows.length - toRead.length;
+    // What the plan still lacks, per part. The span is the refresh; the hole
+    // below it closes only when each of its windows has come back whole. The
+    // span's windows come first, so a hole window is reached only once the
+    // refresh is complete.
+    let spanMissing = toRead.filter((window) => !inHole(window)).length;
+    let holeMissing = toRead.length - spanMissing;
+    const result = (status: SteadyResult["status"]): SteadyResult => ({
+      status,
+      buckets,
+      complete: status !== "failed" && spanMissing === 0,
+      holeClosed: status !== "failed" && holeMissing === 0,
+    });
+    /** Name what stopped the hole, the first time something does. */
+    const leaveHoleOpen = (
+      reason: HoleLeftOpen["reason"],
+      window: (typeof windows)[number],
+      served: HoleLeftOpen["served"] = null,
+    ) => {
+      if (inHole(window) && visit.holeLeftOpen === null) {
+        visit.holeLeftOpen = {
+          reason,
+          requested: { afterMs: window.afterMs, beforeMs: window.beforeMs },
+          served,
+        };
+      }
+    };
     if (toRead.length === 0) {
-      return { status: "ok", buckets, complete: true, served };
+      return result("ok");
     }
 
     // THE WHOLE UNIT, RESERVED UP FRONT — the chunk-budget contract every
     // multi-call unit keeps. Three split windows started with two calls left
     // were read, discarded unstamped, and read again next chunk: up to five
     // calls an item for three. The per-window checks below stay: retries count
-    // too.
+    // too. Clamped to the budgets themselves (`unitShortfall`), so a day's cap
+    // smaller than the refresh and its hole together still reads the refresh:
+    // the hole is left open, not the queue stuck behind it.
     if (reserveWhole) {
       const shortfall = unitShortfall(toRead.length);
       if (shortfall !== null) {
-        return { status: shortfall, buckets, complete: false, served };
+        leaveHoleOpen(shortfall === "deferred" ? "daily_call_budget" : "chunk_budget", toRead[0]!);
+        return result(shortfall);
       }
     }
 
     for (const window of toRead) {
+      const hole = inHole(window);
       const ninetyDayProbe = candidate.tier === "long_tail"
         && window === trailing
         && planMode !== "split_31";
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
         // long-tail refresh — retries count against it too. What was fetched is
-        // journaled; the refresh is NOT complete, so an item with nothing else
-        // to show for the visit stays unvisited and tomorrow re-reads it whole
-        // rather than half.
-        return { status: "deferred", buckets, complete: false, served };
+        // journaled. Short of the span, the refresh is NOT complete, so an item
+        // with nothing else to show for the visit stays unvisited and tomorrow
+        // re-reads it whole rather than half. Short of the hole only, the
+        // refresh is complete and the hole stays open.
+        leaveHoleOpen("daily_call_budget", window);
+        return result("deferred");
       }
       if (!hasChunkCapacity()) {
-        return { status: "yielded", buckets, complete: false, served };
+        leaveHoleOpen("chunk_budget", window);
+        return result("yielded");
       }
       const outcome = await requestWindow(candidate.subjectRef, {
         periodMs: window.periodMs,
@@ -1802,16 +1935,31 @@ export async function fanslyMediaStatsChunk(
         if (ninetyDayProbe) {
           return await fallBackFromNinetyDays(candidate, cursor, visit, planMode);
         }
-        return { status: "failed", buckets, complete: false, served };
+        return result("failed");
       }
       if (outcome === "repeat") {
+        leaveHoleOpen("repeat_request", window);
         break;
       }
       buckets += outcome.buckets;
-      served += 1;
-      if (windows.indexOf(window) >= trailingCount) {
+
+      // A HOLE WINDOW IS HISTORY, and it is judged as the backfill judges
+      // history: by what the route SERVED. The route answers a window it does
+      // not like with its own default trailing one, 200 and all; counted as
+      // read, that closed the hole on days nobody read, and the next hole was
+      // measured from today. Not honoured, or short at either end, the hole
+      // stays open from this window down — the older ones are not read on top
+      // of it — and the visit names it.
+      if (hole) {
+        if (!outcome.honoured || !servedWindowSpansRequest(window, outcome.served)) {
+          leaveHoleOpen("window_not_honoured", window, outcome.served);
+          break;
+        }
+        holeMissing -= 1;
         holeWindowsRead += 1;
+        continue;
       }
+      spanMissing -= 1;
 
       // ── THE 90-DAY DISCOVERY, settled by what the route actually served ──
       //
@@ -1882,7 +2030,7 @@ export async function fanslyMediaStatsChunk(
       }
     }
 
-    return { status: "ok", buckets, complete: served === windows.length, served };
+    return result("ok");
   }
 
   /**
@@ -1920,7 +2068,7 @@ export async function fanslyMediaStatsChunk(
     visit: VisitWindows,
     previousMode: LongTailWindowMode,
   ): Promise<SteadyResult> {
-    const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, served: 0 };
+    const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, holeClosed: false };
     const refusal = lastWindowFailure;
     if (refusal === null || !isProviderRefusal(refusal)) return failed;
     const [probeWindow] = steadyWindows(candidate.tier, now, "split_31");
