@@ -2,17 +2,19 @@ import {
   admitFanslyWsHintAttempt, advanceFanslyWsHint, areFanslyWsHintTargetsMaterialized, assertOwnedPageSyncLease,
   claimFanslyWsHint, clearConversationSyncHealth, finalizePageDmConversationMessageSync, getPageSyncExecutionContext,
   listPageDmConversationsByPlatformConversationIds, lockFanslyWsGeneration,
-  listFanslyWsHintRawPages, nextFanslyWsHintBudgetAt,
+  listFanslyWsHintRawPages, listMaterializedFanslyWsHints, nextFanslyWsHintBudgetAt,
   getExistingPageDmMessageIds, hasUnconfirmedFanslyWsHintTargets,
   saveFanslyWsHintWalk, tryAcquireDmArchiveWriterFenceLock, upsertPageDmMessages, isFanslyWsHintClaimEnabled,
-  withOwnedPageSyncTransaction, type Database, type PageDmConversationRow,
+  withOwnedPageSyncTransaction, type Database, type FanslyWsHintClaim, type FanslyWsHintWalk, type PageDmConversationRow,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION, FanslyApiError, isFanslyGroupDetailIdentity, type FanslyMessage } from "@agency_hub_core/fansly";
-import { isFanslyDmMessageSyncExcluded, resolveFanslyWsHintPolicy, type HttpRequestObserver } from "@agency_hub_core/shared";
+import {
+  isFanslyDmMessageSyncExcluded, resolveFanslyWsHintPolicy, type FanslyWsHintPolicy, type HttpRequestObserver,
+} from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { readFanslyPageGeneration } from "../egress/fansly-probe-context.ts";
-import { resolvePageContext } from "../page-context.ts";
+import { resolvePageContext, type ResolvedFanslyPageContext } from "../page-context.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
 import { fetchAndJournalFanslyDmMessagePage, normalizeFanslyDmMessagePage } from "./fansly-dm-messages.ts";
 import { resolveCapturePayloadRow } from "../payload-reader.ts";
@@ -20,6 +22,8 @@ import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 
 class HintDeferred extends Error {}
+/** A claim the step could serve only with a second request. */
+class HintSkipped extends Error {}
 
 const hintPolicyExpired = (expiresAt: string | undefined) =>
   expiresAt !== undefined && Date.now() >= Date.parse(expiresAt);
@@ -29,11 +33,29 @@ const hintEligible = (conversation: Pick<PageDmConversationRow, "isVisible" | "f
 
 /** Zero-request settles of already stored targets per step. */
 const MATERIALIZED_SETTLES_PER_STEP = 50;
+/** Subjects a step defers without a request (spent budget, ineligible
+ * thread, pending membership) before it leaves the rest to the next chunk. */
+const ZERO_REQUEST_DEFERRALS_PER_STEP = 50;
+
+type HintStep = {
+  app: AppContext; input: ExecutorRequestContext & { syncRunId: number };
+  pageId: number; label: string; policy: FanslyWsHintPolicy;
+  owned: <T>(run: (db: Database) => Promise<T>) => Promise<T>;
+  /** Called just before the adapter: the step's one request is spent. */
+  requesting: () => void;
+};
+
+type HintSelection = {
+  claim: FanslyWsHintClaim; context: ResolvedFanslyPageContext;
+  conversation: PageDmConversationRow | undefined; walk: FanslyWsHintWalk;
+};
 
 /** One additional physical request per ordinary DM chunk leaves at least
  * four request slots for the existing live/history policy. No separate job,
  * cursor, membership sweep or dependency priority replaces that policy. */
-export async function runFanslyWsHintStep(app: AppContext, input: ExecutorRequestContext & { syncRunId: number }) {
+export async function runFanslyWsHintStep(
+  app: AppContext, input: ExecutorRequestContext & { syncRunId: number }, options: { settleOnly?: boolean } = {},
+) {
   const pageId = input.pageContext.page.id;
   const label = input.pageContext.page.label;
   const policy = resolveFanslyWsHintPolicy(await loadEffectiveConfig(app.db, app.config), label);
@@ -50,11 +72,20 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
     return run(db);
   });
 
+  // A settle-only step starts as if its one request were already spent.
+  let requested = options.settleOnly === true;
+  // Once the step's one request is spent: due subjects whose targets are
+  // already stored, wherever they sit behind subjects that need REST.
+  let stored: string[] | undefined;
   // Resolve the REST credentials and route under the SAME generation lock.
   // The ordinary executor's earlier context may predate a credential change.
   const select = () => owned(async (db) => {
-    const claim = await claimFanslyWsHint(db, pageId, policy, new Date());
+    if (requested) stored ??= await listMaterializedFanslyWsHints(db, {
+      pageId, policy, now: new Date(), limit: MATERIALIZED_SETTLES_PER_STEP,
+    });
+    const claim = await claimFanslyWsHint(db, pageId, policy, new Date(), requested ? { subjectRefs: stored ?? [] } : {});
     if (!claim) return null;
+    stored = stored?.filter(ref => ref !== claim.groupRef);
     const context = await resolvePageContext({ ...app, db }, label);
     if (context.platform !== "fansly" || !context.page.platformAccountId) throw new Error("fansly_ws_hint_platform_changed");
     const [conversation] = await listPageDmConversationsByPlatformConversationIds(db, {
@@ -78,20 +109,42 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
         settlement: { conversationId: conversation.id, policy } });
       return "settled" as const;
     }
+    // Listed, but it needs a request now (it changed since the listing). Roll
+    // the claim back: the subject stays where it was for a later read.
+    if (requested) throw new HintSkipped();
     return { claim, context, conversation, walk };
   });
-  let selected: Awaited<ReturnType<typeof select>> = "settled";
-  try {
-    // Bounded, so a backlog drains across chunks without holding the lease.
-    for (let settled = 0; selected === "settled"; settled++) {
-      if (settled >= MATERIALIZED_SETTLES_PER_STEP || !input.budget.hasWallClockCapacity()) return;
+  const step: HintStep = { app, input, pageId, label, policy, owned, requesting: () => { requested = true; } };
+  // Bounded, so a backlog drains across chunks without holding the lease. A
+  // subject that needs REST does not end the step: it is deferred without a
+  // request, or gets the step's one read, and the stored targets behind it
+  // still settle.
+  let settled = 0;
+  let deferred = 0;
+  while (settled < MATERIALIZED_SETTLES_PER_STEP && deferred < ZERO_REQUEST_DEFERRALS_PER_STEP
+    && input.budget.hasWallClockCapacity()) {
+    let selected: Awaited<ReturnType<typeof select>>;
+    try {
       selected = await select();
+    } catch (error) {
+      if (error instanceof HintSkipped) continue;
+      if (error instanceof HintDeferred) return;
+      throw error;
     }
-  } catch (error) {
-    if (error instanceof HintDeferred) return;
-    throw error;
+    if (!selected) return;
+    if (selected === "settled") {
+      settled++;
+      continue;
+    }
+    await readFanslyWsHintSubject(step, selected);
+    if (!requested) deferred++;
   }
-  if (!selected) return;
+}
+
+/** One claim that needs REST: a deferral without a request, or at most one
+ * physical request. Its outcome is committed before the step moves on. */
+async function readFanslyWsHintSubject(step: HintStep, selected: HintSelection) {
+  const { app, input, pageId, label, policy, owned } = step;
   const { claim, context, conversation, walk } = selected;
   let admitted = 0;
   let admittedRequestId: string | undefined;
@@ -170,6 +223,7 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
     if (!conversation) {
       if (!walk.groupDetailCaptured) {
         if (await budgetSpent()) return;
+        step.requesting();
         const detail = await app.adapter.getGroupDetail(requestContext, claim.groupRef);
         const contractAccepted = isFanslyGroupDetailIdentity(detail.parsed, claim.groupRef);
         await persistRawPayload(app.db, { platformAccountId: pageId, syncRunId: input.syncRunId,
@@ -197,6 +251,7 @@ export async function runFanslyWsHintStep(app: AppContext, input: ExecutorReques
       pageAccountId: context.page.platformAccountId!, conversation,
     };
     if (await budgetSpent()) return;
+    step.requesting();
     // A walk continued from an older `before` (possibly days later) has not
     // read the current head; only this head fetch's time may certify it.
     // Set before dispatch so the admission save carries it.

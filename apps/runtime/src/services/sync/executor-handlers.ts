@@ -3138,11 +3138,14 @@ export async function fanslyDmMessagesChunk(
 
   assertDmSharedRateLimitEnabled(app);
   await input.telemetry.recordPhaseStarted("dm_messages");
-  await runFanslyWsHintStep(app, input);
+  const hintOnly = input.streamState.dispatchSource === "event" && input.streamState.requestPayload.fanslyWsHintOnly === true;
+  // A spent budget's wake settles already stored targets and makes no request.
+  const settleOnly = hintOnly && input.streamState.requestPayload.fanslyWsHintSettleOnly === true;
+  await runFanslyWsHintStep(app, input, { settleOnly });
   // AI media describer accelerator (default off): at most one addressed head
   // read per chunk under the same lease; journal-only.
-  await runAiMediaAcceleratorStep(app, { ...input, pageContext: input.pageContext });
-  if (input.streamState.dispatchSource === "event" && input.streamState.requestPayload.fanslyWsHintOnly === true) {
+  if (!settleOnly) await runAiMediaAcceleratorStep(app, { ...input, pageContext: input.pageContext });
+  if (hintOnly) {
     // Addressed hint custody cannot certify the ordinary DM stream's
     // freshness or recovery, even when this step applied its target.
     return { satisfied: true, yieldReason: null, qualityHold: "fansly_ws_hint_only", stats: { fanslyWsHintOnly: true } };

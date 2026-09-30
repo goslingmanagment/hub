@@ -3331,7 +3331,9 @@ export async function requestPageSync(
       }
 
       const nextRequestSeq = current.requestSeq + 1;
-      const rawRequestPayload = input.source === "event" ? { fanslyWsHintOnly: true }
+      // An event request is always hint-only; it may narrow that further.
+      const rawRequestPayload = input.source === "event"
+        ? { ...input.requestPayloadByStream?.[stream], fanslyWsHintOnly: true }
         : input.requestPayloadByStream?.[stream] ?? {};
       const requestPayload = Object.keys(rawRequestPayload).length > 0
         ? { ...rawRequestPayload, revision: nextRequestSeq }

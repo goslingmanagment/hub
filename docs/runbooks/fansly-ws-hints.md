@@ -143,6 +143,16 @@ model's own mass message reaches every thread), the claim settles as
 `already_materialized` before any head read or budget check: up to 50 per step,
 with no freshness stamp and no breaker reset. Deletion-only evidence, group
 receipts and walks already past the head keep the REST path.
+A subject that needs REST does not end the step. A spent budget
+(`budget_exhausted`), an ineligible thread or a pending membership defers it
+without a request, and the step claims the next one, up to 50 such deferrals.
+After the step's one read, one scan lists the due subjects whose targets are
+already stored, and the step settles those; it leaves subjects that need REST
+unclaimed for later reads. While the budget is spent, the projector still
+wakes an idle DM stream for a due stored target, once no subject of the page
+has been claimed for five minutes. That run is settle-only
+(`fanslyWsHintSettleOnly`): it settles listed stored targets and makes no
+request of any kind, neither a hint read nor an AI media accelerator read.
 
 An unknown group gets one addressed detail read and stays `membership_pending`
 until ordinary discovery binds it. Neither visibility nor full-sweep generation
