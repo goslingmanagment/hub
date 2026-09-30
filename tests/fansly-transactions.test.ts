@@ -72,7 +72,7 @@ function buildTransaction(transactionId: string, createdAt: string) {
     walletId: null,
     accountId: null,
     correlationId: null,
-    correlationAccountId: null,
+    correlationAccountId: null as string | null,
     type: 20001,
     status: 2,
     destination: null,
@@ -346,26 +346,28 @@ describe("syncTransactions", () => {
   it("early-stops a quiet hour against the local lower bound without warnings", async () => {
     const { checkpoint, telemetry, getTransactionsPage, logger } = await runQuietEarlyStoppedScan(3);
 
-    expect(getTransactionsPage).toHaveBeenCalledTimes(2);
+    // The first page already lies below the bound: the older pages are never read.
+    expect(getTransactionsPage).toHaveBeenCalledTimes(1);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledTimes(1);
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
         after: "2026-03-07T00:00:00.000Z",
-        pageCount: 2,
-        olderThanBoundaryItems: 2,
-        olderThanBoundaryPages: 2,
+        pageCount: 1,
+        olderThanBoundaryItems: 1,
+        olderThanBoundaryPages: 1,
       }),
       "Early-stopping transaction scan beyond the local lower bound",
     );
     expect(logger.warn).not.toHaveBeenCalled();
     expect(telemetry.setBoundarySummary).toHaveBeenCalledWith(expect.objectContaining({
-      olderThanBoundaryItems: 2,
-      olderThanBoundaryPages: 2,
+      olderThanBoundaryItems: 1,
+      olderThanBoundaryPages: 1,
       earlyStoppedBeyondBoundary: true,
       boundarySentToProvider: false,
     }));
     expect(telemetry.setScanSummary).toHaveBeenCalledWith(expect.objectContaining({
-      transactionPages: 2,
-      processedTransactions: 2,
+      transactionPages: 1,
+      processedTransactions: 1,
       earlyStoppedBeyondBoundary: true,
     }));
     // A partial head scan never matches the lifetime total, and a quiet page
@@ -377,7 +379,7 @@ describe("syncTransactions", () => {
         code: "checkpoint_stalled",
         checkpointTimestamp: checkpoint.cursorTimestamp.toISOString(),
         newestSeenAt: checkpoint.cursorTimestamp.toISOString(),
-        processed: 2,
+        processed: 1,
         earlyStoppedBeyondBoundary: true,
       }),
     );
@@ -398,7 +400,7 @@ describe("syncTransactions", () => {
       details: {
         providerReportedTotal: 3,
         ledgerRows: 2,
-        fetchedRows: 2,
+        fetchedRows: 1,
         earlyStoppedBeyondBoundary: true,
       },
     }));
@@ -422,16 +424,16 @@ describe("syncTransactions", () => {
         code: "transactions_ledger_surplus",
         providerReportedTotal: 3,
         ledgerRows: 5,
-        fetchedRows: 2,
+        fetchedRows: 1,
         earlyStoppedBeyondBoundary: true,
       },
     );
   });
 
-  function buildPagedListing(rows: ReturnType<typeof buildTransaction>[]) {
+  function buildPagedListing(rows: ReturnType<typeof buildTransaction>[], total = rows.length) {
     return vi.fn(async (_context: unknown, params: { offset: number; limit: number }) => {
       const items = rows.slice(params.offset, params.offset + params.limit);
-      return { items, total: rows.length, done: items.length < params.limit, raw: {} };
+      return { items, total, done: items.length < params.limit, raw: {} };
     });
   }
 
@@ -484,8 +486,8 @@ describe("syncTransactions", () => {
     expect(rows.filter((row) => row.transactionId.startsWith("tx-gap-") && !written.has(row.transactionId)))
       .toEqual([]);
     expect(result).toMatchObject({ satisfied: true });
-    // Five pages reach the cursor, then two all-older pages stop the scan.
-    expect(getTransactionsPage).toHaveBeenCalledTimes(7);
+    // Five pages reach the cursor; the fifth holds the cursor row and stops the scan.
+    expect(getTransactionsPage).toHaveBeenCalledTimes(5);
     expect(sharedMocks.persistRawPayload.mock.calls[0]?.[1].requestParams).toMatchObject({
       after: null,
       localLowerBound: new Date(cursorTimestamp.getTime() + 1).toISOString(),
@@ -503,7 +505,7 @@ describe("syncTransactions", () => {
     );
   });
 
-  it("still stops a dormant page with a stale cursor after two pages", async () => {
+  it("still stops a dormant page with a stale cursor at the page holding the cursor row", async () => {
     const now = new Date("2026-03-15T00:00:00.000Z").getTime();
     const cursorTimestamp = new Date(now - 40 * sharedMocks.DAY_MS);
     dbMocks.getCheckpoint.mockResolvedValue({ cursorTimestamp, state: {} });
@@ -539,12 +541,264 @@ describe("syncTransactions", () => {
       telemetry: telemetry as never,
     });
 
-    expect(getTransactionsPage).toHaveBeenCalledTimes(2);
+    expect(getTransactionsPage).toHaveBeenCalledTimes(1);
     expect(telemetry.addAnomaly).not.toHaveBeenCalled();
     expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ cursorTimestamp }),
     );
+  });
+
+  // Newest-first listing against the 2026-03-14 cursor: `inWindow` rows from
+  // 2026-03-14T12:00, then `older` rows below the 2026-03-07 local bound. Every
+  // row names its own fan, so a lookup shows which pages were hydrated.
+  function buildBoundaryListing(inWindow: number, older: number) {
+    const newest = new Date("2026-03-14T12:00:00.000Z").getTime();
+    const bound = new Date("2026-03-07T00:00:00.000Z").getTime();
+    const rows: ReturnType<typeof buildTransaction>[] = [];
+    for (let i = 0; i < inWindow; i += 1) {
+      rows.push({
+        ...buildTransaction(`tx-new-${i}`, isoAt(newest - i * 60_000)),
+        correlationAccountId: `fan-new-${i}`,
+      });
+    }
+    for (let i = 0; i < older; i += 1) {
+      rows.push({
+        ...buildTransaction(`tx-old-${i}`, isoAt(bound - 1000 - i * 60_000)),
+        correlationAccountId: `fan-old-${i}`,
+      });
+    }
+    return rows;
+  }
+
+  function createPagedApp(getTransactionsPage: ReturnType<typeof buildPagedListing>) {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: { getTransactionsPage },
+      logger,
+    } as never;
+    return { app, logger };
+  }
+
+  const pagedSyncInput = {
+    pageLabel: "fansly-page",
+    platformAccountId: 1,
+    commissionRate: 0,
+    requestContext: {
+      session: { authorization: "token" },
+      proxy: null,
+      requestObserver: null,
+    } as never,
+    syncRunId: 123,
+  };
+
+  function requestedOffsets(getTransactionsPage: ReturnType<typeof buildPagedListing>) {
+    return getTransactionsPage.mock.calls.map((call) => call[1].offset);
+  }
+
+  function hydratedFanIds() {
+    return fanHydrationMocks.lookupHydratedFans.mock.calls.map((call) => call[1].platformUserIds);
+  }
+
+  it("stops at the page that reaches the local lower bound and hydrates only that page", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+    // Production shape (lora-1): 38 rows in the window, the rest far older.
+    const rows = buildBoundaryListing(38, 262);
+    dbMocks.countTransactionsBySource.mockResolvedValue(rows.length);
+    const getTransactionsPage = buildPagedListing(rows);
+    const { app, logger } = createPagedApp(getTransactionsPage);
+    const telemetry = createTelemetry();
+
+    const result = await syncTransactions(app, { ...pagedSyncInput, telemetry: telemetry as never });
+
+    expect(result).toMatchObject({ satisfied: true, processedTransactions: 100 });
+    expect(requestedOffsets(getTransactionsPage)).toEqual([0]);
+    expect(hydratedFanIds()).toEqual([rows.slice(0, 100).map((row) => row.correlationAccountId)]);
+    expect(sharedMocks.persistRawPayload).toHaveBeenCalledTimes(1);
+    expect(dbMocks.upsertTransaction).toHaveBeenCalledTimes(100);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ pageCount: 1, olderThanBoundaryItems: 62, olderThanBoundaryPages: 0 }),
+      "Early-stopping transaction scan beyond the local lower bound",
+    );
+    expect(telemetry.setBoundarySummary).toHaveBeenLastCalledWith(expect.objectContaining({
+      olderThanBoundaryItems: 62,
+      olderThanBoundaryPages: 0,
+      earlyStoppedBeyondBoundary: true,
+    }));
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    // The rebuild starts at the oldest row actually read, not two pages deeper.
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date(rows[99]!.createdAt),
+    );
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ cursorTimestamp: new Date(rows[0]!.createdAt), lastSuccessfulRunId: 123 }),
+    );
+    expect(dbMocks.countTransactionsBySource).toHaveBeenCalledWith(expect.anything(), {
+      platformAccountId: 1,
+      source: "fansly:rest",
+    });
+  });
+
+  it("reads on while pages lie wholly inside the window and stops at the straddling page", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+    const rows = buildBoundaryListing(120, 280);
+    dbMocks.countTransactionsBySource.mockResolvedValue(rows.length);
+    const getTransactionsPage = buildPagedListing(rows);
+    const { app } = createPagedApp(getTransactionsPage);
+    const telemetry = createTelemetry();
+
+    const result = await syncTransactions(app, { ...pagedSyncInput, telemetry: telemetry as never });
+
+    expect(result).toMatchObject({ satisfied: true, processedTransactions: 200 });
+    expect(requestedOffsets(getTransactionsPage)).toEqual([0, 100]);
+    expect(hydratedFanIds()).toEqual([
+      rows.slice(0, 100).map((row) => row.correlationAccountId),
+      rows.slice(100, 200).map((row) => row.correlationAccountId),
+    ]);
+    expect(telemetry.setBoundarySummary).toHaveBeenLastCalledWith(expect.objectContaining({
+      olderThanBoundaryItems: 80,
+      olderThanBoundaryPages: 0,
+      earlyStoppedBeyondBoundary: true,
+    }));
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    expect(dbMocks.rebuildSpenderProjections).toHaveBeenCalledWith(
+      expect.anything(),
+      1,
+      new Date(rows[199]!.createdAt),
+    );
+  });
+
+  it("reads a short last page that straddles the bound to the end and still checks the total", async () => {
+    const checkpoint = {
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    };
+    dbMocks.getCheckpoint.mockResolvedValue(checkpoint);
+    // The listing ends on the straddling page, so the scan read every row and
+    // the fetched count must equal the total; here the total claims one more.
+    const rows = buildBoundaryListing(120, 30);
+    const getTransactionsPage = buildPagedListing(rows, rows.length + 1);
+    const { app } = createPagedApp(getTransactionsPage);
+    const telemetry = createTelemetry();
+
+    await expect(syncTransactions(app, { ...pagedSyncInput, telemetry: telemetry as never }))
+      .rejects.toThrow("Fansly incremental transaction total differed from fetched rows");
+
+    expect(requestedOffsets(getTransactionsPage)).toEqual([0, 100]);
+    expect(telemetry.setScanSummary).toHaveBeenLastCalledWith(expect.objectContaining({
+      transactionPages: 2,
+      processedTransactions: 150,
+      earlyStoppedBeyondBoundary: false,
+    }));
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "incremental_total_mismatch",
+      details: { providerReportedTotal: 151, fetchedRows: 150, pageCount: 2 },
+    }));
+    expect(dbMocks.upsertCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("finishes a scan persisted under the two-page rule after one more page", async () => {
+    const cursorTimestamp = new Date("2026-03-14T00:00:00.000Z");
+    const rows = buildBoundaryListing(38, 362);
+    dbMocks.countTransactionsBySource.mockResolvedValue(rows.length);
+    // Yielded before a deploy: page 1 straddled the bound, page 2 was wholly
+    // older, and the old rule wanted one more all-older page.
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp,
+      state: {
+        mode: "incremental",
+        completed: false,
+        provider: "fansly",
+        phase: "transactions",
+        cursorTimestamp: cursorTimestamp.toISOString(),
+        snapshotEnd: "2026-03-15T00:00:00.000Z",
+        after: "2026-03-07T00:00:00.000Z",
+        lookbackStart: "2026-03-07T00:00:00.000Z",
+        oldestPendingAt: null,
+        rescanCapStart: "2026-02-13T00:00:00.000Z",
+        providerReportedTotal: rows.length,
+        newestSeenAt: isoAt(rows[0]!.createdAt),
+        oldestSeenAt: isoAt(rows[199]!.createdAt),
+        dirtyFrom: null,
+        processedTransactions: 200,
+        transactionPages: 2,
+        offset: 200,
+        olderThanBoundaryItems: 162,
+        olderThanBoundaryPages: 1,
+        consecutiveAllOlderPages: 1,
+        firstPageOlderThanBoundaryItems: 62,
+        earlyStoppedBeyondBoundary: false,
+        lastPageTransactionIds: rows.slice(100, 200).map((row) => row.transactionId),
+      },
+    });
+    const getTransactionsPage = buildPagedListing(rows);
+    const { app } = createPagedApp(getTransactionsPage);
+    const telemetry = createTelemetry();
+
+    const result = await syncTransactions(app, { ...pagedSyncInput, telemetry: telemetry as never });
+
+    expect(result).toMatchObject({ satisfied: true, processedTransactions: 100 });
+    expect(requestedOffsets(getTransactionsPage)).toEqual([200]);
+    expect(telemetry.setBoundarySummary).toHaveBeenLastCalledWith(expect.objectContaining({
+      olderThanBoundaryItems: 262,
+      olderThanBoundaryPages: 2,
+      earlyStoppedBeyondBoundary: true,
+    }));
+    expect(telemetry.addAnomaly).not.toHaveBeenCalled();
+    expect(dbMocks.upsertCheckpoint).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ cursorTimestamp: new Date(rows[0]!.createdAt) }),
+    );
+  });
+
+  it("flags a row inside the window listed after an older row on the boundary page", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+    const rows = buildBoundaryListing(38, 262);
+    // The stop trusts newest-first order; a late in-window row breaks it.
+    const [late] = rows.splice(37, 1);
+    rows.splice(50, 0, late!);
+    dbMocks.countTransactionsBySource.mockResolvedValue(rows.length);
+    const getTransactionsPage = buildPagedListing(rows);
+    const { app } = createPagedApp(getTransactionsPage);
+    const telemetry = createTelemetry();
+
+    const result = await syncTransactions(app, { ...pagedSyncInput, telemetry: telemetry as never });
+
+    expect(result).toMatchObject({ satisfied: true });
+    expect(requestedOffsets(getTransactionsPage)).toEqual([0]);
+    expect(telemetry.addAnomaly).toHaveBeenCalledTimes(1);
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith({
+      code: "incremental_listing_unordered",
+      severity: "warn",
+      message: "Fansly transaction listing put a row inside the local lower bound after an older row",
+      details: {
+        page: 0,
+        offset: 0,
+        localLowerBound: "2026-03-07T00:00:00.000Z",
+        transactionId: "tx-new-37",
+        createdAt: isoAt(late!.createdAt),
+        inWindowAfterOlderItems: 1,
+      },
+    });
   });
 
   it("refuses to finalize an incremental Fansly scan when the provider total changes mid-scan", async () => {

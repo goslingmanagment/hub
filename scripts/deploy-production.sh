@@ -498,6 +498,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # either value and filters locators by the variant it asks for, so it runs
   # unchanged on rows the new image wrote.
   "0216_ofapi_media_preview_variant.sql"
+  # Two indexes built concurrently (purchase-history captures, DM 5xx streak);
+  # no table, column or query changes, so the previous image runs unchanged
+  # on them.
+  "0223_raw_payload_and_attempt_lookup_indexes.sql"
   # Once-a-day Fansly fan lookup: three nullable columns on page_fans, no
   # default. The previous image never names them and writes page_fans by named
   # columns, so it runs unchanged after a rollback (and simply looks every fan

@@ -7,6 +7,7 @@ const BASE = {
   knownFollowId: "old",
   newestFollowId: "new",
   pageDone: false,
+  crossedKnownBoundary: false,
   sawKnownCheckpoint: true,
   processedThisChunk: 1,
 };
@@ -63,6 +64,28 @@ describe("followers reconcile diagnostic branches", () => {
       unchangedHeadWithRows: false,
       requested: false,
     });
+  });
+
+  it("treats a walk that stopped past a vanished known follow as ending without it", () => {
+    expect(followersReconcileDecision({
+      ...BASE,
+      pageDone: false,
+      crossedKnownBoundary: true,
+      sawKnownCheckpoint: false,
+    })).toEqual({
+      countMismatch: false,
+      exhaustedWithoutKnown: true,
+      unchangedHeadWithRows: false,
+      requested: true,
+    });
+  });
+
+  it("does not report a lost checkpoint when the known follow sits on the crossing page", () => {
+    expect(followersReconcileDecision({
+      ...BASE,
+      crossedKnownBoundary: true,
+      sawKnownCheckpoint: true,
+    }).exhaustedWithoutKnown).toBe(false);
   });
 
   it("does not invent a lost checkpoint or processed row on an initial empty list", () => {

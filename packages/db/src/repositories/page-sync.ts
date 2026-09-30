@@ -211,10 +211,17 @@ export const SYNC_STREAM_POLICY: Record<SyncStream, SyncStreamPolicy> = {
     progressStallThresholdMs: 10 * 60_000,
     freshnessSlaSeconds: null,
   },
+  // Owner decision 2026-09-30: read Fansly top spenders every 6 h, not hourly.
+  // Nothing reads its rankings (page_fan_identities) any more: the spenders
+  // board reads the fan_earnings projection (Stage 32). The lane stays as an
+  // independent cross-check; money still arrives hourly through
+  // `transactions`. A 6 h gap blocks nothing: the DM lanes wait only for its
+  // FIRST success (dependencyMet), and its freshness is never judged. The
+  // OnlyFans lane shares the cadence; it reads local transactions only.
   top_spenders: {
     stream: "top_spenders",
     domain: "financials",
-    cadenceSeconds: 3600,
+    cadenceSeconds: 6 * 3600,
     basePriority: 45,
     streamIndex: 4,
     defaultWorkClass: "maintenance",
@@ -1147,6 +1154,33 @@ export function computeCurrentPageSyncSlot(
   return Math.max(-1, Math.floor((nowSeconds - slotOffsetSeconds) / cadenceSeconds));
 }
 
+/**
+ * Re-expresses `last_scheduled_slot` on a new slot grid (a changed cadence or
+ * slot offset). Slot numbers only mean something on their own grid: an hourly
+ * slot number read on a 6-hour grid lies centuries ahead, so the planner would
+ * never claim the lane again. What carries over is the instant the last
+ * scheduled slot began: the new-grid slot holding it counts as scheduled, so
+ * the next request lands on the first new boundary after it. A longer cadence
+ * gets no catch-up run; a shorter one gets at most one, when a new boundary
+ * has already passed.
+ */
+export function rebasePageSyncLastScheduledSlot(input: {
+  lastScheduledSlot: number;
+  from: { cadenceSeconds: number; slotOffsetSeconds: number };
+  to: { cadenceSeconds: number; slotOffsetSeconds: number };
+}) {
+  if (input.lastScheduledSlot < 0) {
+    return input.lastScheduledSlot;
+  }
+
+  const scheduledAtSeconds = input.lastScheduledSlot * input.from.cadenceSeconds +
+    input.from.slotOffsetSeconds;
+  return Math.max(
+    -1,
+    Math.floor((scheduledAtSeconds - input.to.slotOffsetSeconds) / input.to.cadenceSeconds),
+  );
+}
+
 export function normalizePageSyncRequestStreams(streams: readonly SyncStream[]) {
   return [...new Set(streams)].sort((left, right) =>
     SYNC_STREAM_POLICY[left].streamIndex - SYNC_STREAM_POLICY[right].streamIndex);
@@ -1746,13 +1780,25 @@ export async function ensurePageSyncStates(
         continue;
       }
 
+      // The slot moves with the grid, or a longer cadence would never be
+      // scheduled again. Compare-and-set on the values it was computed from:
+      // if the planner claimed a slot meanwhile, the next call redoes it.
+      const lastScheduledSlot = rebasePageSyncLastScheduledSlot({
+        lastScheduledSlot: row.lastScheduledSlot,
+        from: { cadenceSeconds: row.cadenceSeconds, slotOffsetSeconds: row.slotOffsetSeconds },
+        to: { cadenceSeconds: policy.cadenceSeconds, slotOffsetSeconds },
+      });
       await database.execute(sql`
         update ${pageSyncStates}
         set cadence_seconds = ${policy.cadenceSeconds},
             slot_offset_seconds = ${slotOffsetSeconds},
+            last_scheduled_slot = ${lastScheduledSlot},
             updated_at = ${now}
         where page_id = ${row.pageId}
           and stream = ${row.stream}
+          and cadence_seconds = ${row.cadenceSeconds}
+          and slot_offset_seconds = ${row.slotOffsetSeconds}
+          and last_scheduled_slot = ${row.lastScheduledSlot}
       `);
     }
   });
