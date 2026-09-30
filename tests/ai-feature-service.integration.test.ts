@@ -431,8 +431,8 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Reply features default to Sonnet 5.5 at low effort (owner, 2026-09-28).
-    expect(body.model).toBe("anthropic:claude-sonnet-5-5");
+    // Reply features default to Sonnet 5 at low effort (owner, 2026-09-30).
+    expect(body.model).toBe("anthropic:claude-sonnet-5");
     expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
@@ -1174,7 +1174,7 @@ describe("AI feature registry gates (Stage 30 Task 4)", () => {
     expect(helpMe.statusCode, helpMe.body).toBe(200);
     expect(capture.input!.body).toMatchObject({
       feature: "help-me",
-      model: "anthropic:claude-sonnet-5-5",
+      model: "anthropic:claude-sonnet-5",
       reasoningEffort: "low",
     });
 
@@ -1270,8 +1270,8 @@ describe("voice-script feature (voice notes lane)", () => {
     expect(scripted.statusCode, scripted.body).toBe(200);
     expect(scripted.body).toContain("sure thing");
     expect(capture.input!.body.feature).toBe("voice-script");
-    // Delegates model + reasoning selection to fast-reply (Sonnet 5.5, low).
-    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5-5");
+    // Delegates model + reasoning selection to fast-reply (Sonnet 5, low).
+    expect(capture.input!.body.model).toBe("anthropic:claude-sonnet-5");
     const userText = capture.input!.body.prompt.userBlocks.map((block) => block.text).join("\n");
     expect(userText).toContain("## Current Draft");
     expect(userText).toContain("omg u looked so good today");
@@ -1860,7 +1860,7 @@ describe("coach-chat gates", () => {
     expect(meta).not.toHaveProperty("presetQuestion");
     expect(capture.input!.body).toMatchObject({
       feature: "coach-chat",
-      model: "anthropic:claude-sonnet-5-5",
+      model: "anthropic:claude-sonnet-5",
       reasoningEffort: "low",
     });
     expect(aiFeatureStreamFrameSchema.safeParse(meta).success).toBe(true);

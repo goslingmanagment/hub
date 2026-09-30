@@ -76,9 +76,10 @@ export const HI_GREETING_MAX_TRANSCRIPT = 10;
 
 /** Decision #273 owner follow-up (2026-09-07): Help, Review and Coach join
  * the reply features on Sonnet 5 at low effort without another model comparison.
- * Owner, 2026-09-28: all of them move to Sonnet 5.5, same low effort.
+ * Owner, 2026-09-28: all of them moved to Sonnet 5.5 for a test; owner,
+ * 2026-09-30: back to Sonnet 5, same low effort.
  * Recap retains its separate Opus default. */
-export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-5-5';
+export const DEFAULT_MODEL_ID = 'anthropic:claude-sonnet-5';
 export const DEFAULT_FAN_SUMMARY_MODEL_ID = 'anthropic:claude-opus-4-6';
 /** improve-draft, hi-greeting and voice-script delegate to fast-reply. */
 export const DEFAULT_REPLY_MODEL_ID = DEFAULT_MODEL_ID;
