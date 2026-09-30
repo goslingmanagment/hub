@@ -202,12 +202,13 @@ jobs:
           git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
 
       # Self-hosted: the unit tests run in a process group of their own beside
-      # typecheck → lint → image build → smokes, and "Reliable unit tests"
-      # joins them. The PC's 24 threads are shared with the integration shards
+      # typecheck → image build → smokes, and "Reliable unit tests" joins
+      # them. The PC's 24 threads are shared with the integration shards
       # running at the same time; typecheck (single-threaded tsc) is the long
       # pole of the other branch, and five workers finish the unit tests about
       # when that branch ends (measured on the PC: 6 workers ~70 s, 4 ~97 s,
-      # against ~90 s for the checks) without adding load that buys nothing.
+      # against ~90 s for the checks, lint then included) without adding load
+      # that buys nothing.
       # Hosted runners (2 vCPUs) skip this and run the unit tests in that step
       # instead, after the smokes, as before.
       - name: Start reliable unit tests in the background
@@ -217,13 +218,35 @@ jobs:
           bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5
           echo "started=true" >> "$GITHUB_OUTPUT"
 
+      # Self-hosted: the lint (single-threaded ESLint, ~30 s on the PC) runs
+      # the same way beside typecheck instead of after it, and the Lint step
+      # below joins it. Hosted runners skip this and lint in that step, as
+      # before.
+      - name: Start lint in the background
+        id: lint
+        if: runner.environment == 'self-hosted'
+        run: |
+          bash scripts/ci-background.sh start lint pnpm lint
+          echo "started=true" >> "$GITHUB_OUTPUT"
+
       # Check backend types once. Docker explicitly consumes this successful
       # check; direct Docker builds still check.
       - name: Typecheck
         run: pnpm typecheck
 
+      # Self-hosted: wait for the background lint, print its whole log and
+      # take its exit status, like "Reliable unit tests": it is joined even
+      # when typecheck failed, and the image build waits for its verdict.
       - name: Lint (family standard + architecture walls)
-        run: pnpm lint
+        if: "!cancelled() && (success() || steps.lint.outputs.started == 'true')"
+        env:
+          IN_BACKGROUND: ${{ steps.lint.outputs.started }}
+        run: |
+          if [ "$IN_BACKGROUND" = "true" ]; then
+            bash scripts/ci-background.sh join lint
+          else
+            pnpm lint
+          fi
 
       - name: Exact checkout image metadata
         id: metadata
@@ -243,8 +266,16 @@ jobs:
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
 
+      # Self-hosted: no build summary and no build record artifact. The
+      # action's post step would export the record from the PC daemon's
+      # history and upload it to GitHub (~3 s a run); no check reads either.
+      # Hosted runners keep the action's defaults: it reads an empty value as
+      # unset.
       - name: Production Docker image build
         uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_SUMMARY: ${{ runner.environment == 'self-hosted' && 'false' || '' }}
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ runner.environment == 'self-hosted' && 'false' || '' }}
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -306,6 +337,11 @@ jobs:
       - name: Stop background unit tests
         if: always()
         run: bash scripts/ci-background.sh stop unit-tests
+
+      # The same for the lint (a job cancelled during typecheck).
+      - name: Stop background lint
+        if: always()
+        run: bash scripts/ci-background.sh stop lint
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
