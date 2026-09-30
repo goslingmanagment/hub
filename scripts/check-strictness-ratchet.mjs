@@ -6,7 +6,8 @@
 //   - a file may never have MORE errors than its snapshot budget;
 //   - a file absent from the snapshot must be clean;
 //   - when a file drops below budget, the snapshot must be shrunk in the same
-//     change (run with --update) — the count only ever goes down.
+//     change (run with --update) — the count only ever goes down;
+//   - an error without a file location has no budget and always fails.
 // So new code is held to the full standard while the old debt burns down
 // without blocking. `pnpm typecheck` runs this script; a zero-debt snapshot
 // means this is exactly `tsc --noEmit`.
@@ -36,11 +37,24 @@ try {
 }
 
 const counts = {};
+const unlocated = [];
 for (const line of output.split("\n")) {
   const match = /^(.+?)\(\d+,\d+\): error TS\d+/.exec(line);
   if (match) counts[match[1]] = (counts[match[1]] ?? 0) + 1;
+  else if (/error TS\d+/.test(line)) unlocated.push(line);
 }
 const total = Object.values(counts).reduce((a, b) => a + b, 0);
+
+// A global diagnostic (a missing type library or global type, an unknown
+// option, a root file not found) carries no file(line,col), so no budget can
+// hold it — and tsc skips the per-file check after one, so the counts above
+// come back empty and a partial workspace would pass. Fail, in --update too:
+// the snapshot cannot record it.
+if (unlocated.length > 0) {
+  console.error("strictness-ratchet: tsc reported error(s) without a file location — no budget covers them, fix them:");
+  for (const line of unlocated) console.error(`  ${line}`);
+  process.exit(1);
+}
 
 if (update) {
   const sorted = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
