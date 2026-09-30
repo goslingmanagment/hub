@@ -6,6 +6,7 @@ import {
   getPageSyncExecutionContext,
   insertObservation,
   insertRawPayload,
+  insertSyncRunEvent,
   nextPageSyncObservationSeq,
   recordSyncHttpAttemptResponseBodyBytes,
   updatePageMetadata,
@@ -27,6 +28,11 @@ import {
   fanslyCdnTokenStripApplies,
   stripFanslySignedCdnTokens,
 } from "./fansly-cdn-tokens.ts";
+import {
+  JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
+  JOURNAL_LONE_SURROGATES_REPLACED_NOTE_CODE,
+  replaceJournalLoneSurrogates,
+} from "./journal-lone-surrogates.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 
@@ -113,14 +119,14 @@ export async function persistRawPayload(
   // parity job compares like with like. The served object is never mutated —
   // the lane keeps parsing it after this returns.
   const stripCdnTokens = fanslyCdnTokenStripApplies(options?.platform, served.endpoint);
-  const input: RawPayloadInsertInput = stripCdnTokens
+  const stripped: RawPayloadInsertInput = stripCdnTokens
     ? {
       ...served,
       responsePayload: stripFanslySignedCdnTokens(served.responsePayload),
       mapperVersion: `${served.mapperVersion}${FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX}`,
     }
     : served;
-  let observedPayload = options !== undefined
+  let observedPayload: unknown = options !== undefined
       && Object.hasOwn(options, "observationPayload")
     ? options.observationPayload ?? null
     : served.responsePayload ?? null;
@@ -128,9 +134,26 @@ export async function persistRawPayload(
     // The ordinary path journals the very object the raw row stores; keep it
     // ONE object so the catalog write below still does a single put.
     observedPayload = observedPayload === served.responsePayload
-      ? input.responsePayload ?? null
+      ? stripped.responsePayload ?? null
       : stripFanslySignedCdnTokens(observedPayload);
   }
+  // Production 2026-09-30 (./journal-lone-surrogates.ts): json/jsonb refuse an
+  // unpaired UTF-16 surrogate, so a vendor body holding one is journaled with
+  // each replaced by U+FFFD, in both bodies and the catalog object alike. A
+  // body without one is the same object, with no copy and no marker; the
+  // served object is never mutated.
+  const rawSurrogates = replaceJournalLoneSurrogates(stripped.responsePayload);
+  const observedSurrogates = observedPayload === stripped.responsePayload
+    ? rawSurrogates
+    : replaceJournalLoneSurrogates(observedPayload);
+  observedPayload = observedSurrogates.value;
+  const input: RawPayloadInsertInput = rawSurrogates.replaced === 0
+    ? stripped
+    : {
+      ...stripped,
+      responsePayload: rawSurrogates.value,
+      mapperVersion: `${stripped.mapperVersion}${JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX}`,
+    };
   // Content-addressed copy FIRST, in its own transaction, and it can never
   // throw: on any failure it returns null references and the two inline writes
   // below proceed byte-identically to the pre-slice code. Default-off; a page
@@ -231,6 +254,34 @@ export async function persistRawPayload(
       action: `inserting ${input.endpoint} observation`,
       cause: error,
     });
+  }
+
+  // An info note on the run, never an anomaly: the capture succeeded, and the
+  // mapper suffix on the raw row stays the durable marker for a capture that
+  // ran outside one. Like the measurement below, it can never fail a capture.
+  const replacedSurrogates = rawSurrogates.replaced + observedSurrogates.replaced;
+  if (replacedSurrogates > 0 && input.syncRunId != null && stream !== null && platform) {
+    try {
+      await insertSyncRunEvent(db, {
+        syncRunId: input.syncRunId,
+        platformAccountId: input.platformAccountId,
+        provider: platform,
+        stream,
+        eventType: "note",
+        severity: "info",
+        message: "Unpaired UTF-16 surrogates in the response were journaled as U+FFFD",
+        details: {
+          code: JOURNAL_LONE_SURROGATES_REPLACED_NOTE_CODE,
+          endpoint: input.endpoint,
+          rawPayloadId: rawPayload.id,
+          observationId: journalledObservationId,
+          rawPayloadReplacements: rawSurrogates.replaced,
+          observationReplacements: observedSurrogates.replaced,
+        },
+      });
+    } catch {
+      // A missing note is worth strictly less than the capture it describes.
+    }
   }
 
   // [E2] measurement, F0(a). Byte length of the payload OBJECT this capture
