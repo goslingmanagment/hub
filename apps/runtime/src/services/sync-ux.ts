@@ -78,6 +78,9 @@ export interface SyncUxStreamLike {
   lastCompletionGatedSkipReason?: string | null;
   /** Durable checkpoint hold, independent of the latest run's outcome. */
   lastCompletionQualityHold?: string | null;
+  /** The end of a policy interval an outstanding request waits out (the daily
+   *  followers_reconcile floor). Scheduled work, not a queue or a retry. */
+  intervalFloorUntil?: string | null;
   succeededAt: string | null;
   failedAt: string | null;
   lastErrorCode?: string | null;
@@ -217,6 +220,17 @@ export function buildStreamSyncUx(stream: SyncUxStreamLike): SyncUxSummary {
       detail: "This sync is actively processing new work.",
       progressLabel,
       updatedAt: stream.activeRun.lastActivityAt,
+    });
+  }
+
+  if (stream.intervalFloorUntil) {
+    // The held request would only refresh data that is already current.
+    return buildSummary("healthy", {
+      label: "Up to date",
+      headline: "Up to date",
+      detail: "The next full check is scheduled; it runs at most once a day.",
+      progressLabel,
+      updatedAt,
     });
   }
 

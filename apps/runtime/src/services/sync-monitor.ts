@@ -11,6 +11,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { parseDmBoundedSweepState } from "./sync/dm-bounded-state.ts";
+import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { BadRequestError } from "./errors.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 import {
@@ -750,7 +751,9 @@ function streamItemFor(
   const physicalFailed = row.stalePhysicalAttemptCount > 0 ||
     row.physicalAttemptsSinceLastSuccess >= 3;
   const stalled = isStalled(row, now) || physicalFailed;
-  const pending = isPending(row);
+  // The held run's stats carry the floor marker, as `gatedSkip` does a gate's.
+  const floorUntil = followersReconcileFloorWaitUntil(row, row.lastCompletedStats, now);
+  const pending = isPending(row) && floorUntil === null;
   const retryAt = isRetrying(row, now) ? row.retryAt : null;
   const deepBackfill = buildDmMessagesDeepBackfill(
     row,
@@ -803,6 +806,7 @@ function streamItemFor(
     blockerKind: row.blockerKind,
     lastCompletionGatedSkipReason: gatedSkipReasonFor(row),
     lastCompletionQualityHold: row.stream === "subscribers" ? ofapiAudienceQualityHoldFor(row.checkpointState) : null,
+    intervalFloorUntil: iso(floorUntil),
   };
 
   return {

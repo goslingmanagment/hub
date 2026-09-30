@@ -42,8 +42,9 @@ export type StreamChunkResult = {
   qualityHold?: string | null;
   /** A partial chunk (satisfied: false) whose only outcome was scheduling:
    *  isolated failures deferred behind their own backoff (a Fansly DM
-   *  thread's breaker window) and no accepted read. Settle as a yield, waking
-   *  at continuationRetryAt, without freshness, failure reset, or incident
-   *  recovery — deferral is not progress. */
+   *  thread's breaker window) and no accepted read, or a request held by a
+   *  policy interval (the daily followers_reconcile floor) before any read.
+   *  Settle as a yield, waking at continuationRetryAt, without freshness,
+   *  failure reset, or incident recovery — deferral is not progress. */
   deferral?: string | null;
 };

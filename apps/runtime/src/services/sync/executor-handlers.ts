@@ -1,5 +1,6 @@
 import { readFollowersReconcileCompletion } from "./followers-reconcile-completion.ts";
 import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
+import { FOLLOWERS_RECONCILE_FLOOR_DEFERRAL, followersReconcileFloor } from "./followers-reconcile-floor.ts";
 import {
   aggregateTransactionTopSpenders,
   assertOwnedPageSyncLease,
@@ -2485,6 +2486,30 @@ export async function executeFollowersReconcileChunk(
   if (existingState) {
     state = existingState;
   } else {
+    // A fresh walk waits out the daily floor with no request and no checkpoint
+    // write. The request stays outstanding behind retry_at, where hourly
+    // mismatches fold into it, and is served when the floor ends.
+    const floor = followersReconcileFloor({
+      checkpointState: checkpoint?.state,
+      requestSeq: input.streamState.requestSeq,
+      requestSource: input.streamState.requestSource ?? null,
+      succeededAt: input.streamState.succeededAt ?? null,
+      now: new Date(),
+    });
+    if (floor) {
+      return {
+        satisfied: false,
+        yieldReason: null,
+        continuationRetryAt: floor.until,
+        continuationRequestSource: "scheduled",
+        deferral: FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
+        stats: {
+          followersReconcileFloorUntil: floor.until.toISOString(),
+          followersReconcileFloorAnchor: floor.anchor.toISOString(),
+        },
+      } satisfies StreamChunkResult;
+    }
+
     const fullSweepStartedAt = new Date().toISOString();
     const accountMe = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
     const storedGeneration = await maxPageFollowGeneration(app.db, input.pageContext.page.id);
