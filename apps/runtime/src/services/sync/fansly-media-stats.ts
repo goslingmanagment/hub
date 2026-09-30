@@ -122,8 +122,16 @@
 //       way, once a day, for zero platform calls — an item that just entered the
 //       top-50 is the one whose series is worth having today.
 //   (2) BY TIER: fresh, then mid, then the long tail.
-//   (3) WITHIN A TIER, never visited first (newest first), then the oldest
-//       visit. `listMediaStatsRefreshChunk` says why tier outranks first sight.
+//   (3) WITHIN A TIER, an overdue item at the EDGE of its window (its last
+//       visit a week short of the span its refresh reads), then never visited
+//       (newest first), then the rest by oldest visit.
+//       `listMediaStatsRefreshChunk` says why tier outranks first sight, and
+//       why the edge does.
+//
+// A visit that comes later than its span reads the HOLE too: the refresh
+// reaches back to a day before the last visit, reserved whole with the steady
+// windows (`steadyRefreshPlan`). What one visit cannot carry is raised as
+// `fansly_media_stats_refresh_hole` rather than skipped in silence.
 //
 // ── 5. BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume ────────────────
 //
@@ -147,6 +155,9 @@ import {
   getCheckpoint,
   listMediaStatsRefreshChunk,
   markMediaStatsTopMediaDirty,
+  MEDIA_STATS_FRESH_SPAN_DAYS,
+  MEDIA_STATS_LONG_TAIL_SPAN_DAYS,
+  MEDIA_STATS_MID_SPAN_DAYS,
   mediaStatsIntervalDays,
   recordMediaStatsBackfillCursor,
   recordMediaStatsBackfillProgress,
@@ -221,11 +232,13 @@ const DAILY_PERIOD_MS = 86_400_000;
  * The spans are constants rather than config keys for the reason §6.1 gives:
  * they describe how traffic decays with an item's age, and the one thing an
  * operator should be turning is how much of that decay the lane can afford —
- * the daily cap — plus the long-tail cycle, which A6 names explicitly.
+ * the daily cap — plus the long-tail cycle, which A6 names explicitly. They
+ * live in the repository because the queue orders by them (the window's
+ * edge, `listMediaStatsRefreshChunk`).
  */
-const FRESH_TRAILING_DAYS = 31;
-const MID_TRAILING_DAYS = 30;
-const LONG_TAIL_TRAILING_DAYS = 90;
+const FRESH_TRAILING_DAYS = MEDIA_STATS_FRESH_SPAN_DAYS;
+const MID_TRAILING_DAYS = MEDIA_STATS_MID_SPAN_DAYS;
+const LONG_TAIL_TRAILING_DAYS = MEDIA_STATS_LONG_TAIL_SPAN_DAYS;
 
 /**
  * The span the provider is PROVEN to honour on this route (HAR 2026-08-19: a
@@ -272,6 +285,25 @@ const BACKFILL_WINDOWS_PER_VISIT = 4;
 /** The three 31-day windows a long-tail refresh falls back to when the provider
  *  refuses the 90-day span. 3 × 31 = 93 ≥ 90. */
 const LONG_TAIL_SPLIT_WINDOWS = 3;
+/** The most windows ONE steady refresh takes, the hole below its span
+ *  included (`steadyRefreshPlan`). A refresh that closes a hole is reserved
+ *  whole, so it has to fit a five-request chunk, with room for a retry: one
+ *  that does not is read, left unstamped and read again, chunk after chunk. */
+const REFRESH_WINDOWS_PER_VISIT = 4;
+/**
+ * What a FIRST visit costs, per tier: the first-sight walk it starts. A fresh
+ * item's walk is its trailing window and the one below it, where the item's
+ * creation ends it; a mid or long-tail walk takes the visit's whole allowance,
+ * whose four windows reach 121 days back and so hold any steady plan. An upper
+ * bound on the one visit — production 2026-09-30, a mid visit that walked spent
+ * 2.6 calls on average, the chunk's five requests cutting some short — and the
+ * rest of the walk is spent on the item's next visits anyway.
+ */
+const FIRST_VISIT_REQUESTS = {
+  fresh: 2,
+  mid: BACKFILL_WINDOWS_PER_VISIT,
+  longTail: BACKFILL_WINDOWS_PER_VISIT,
+} as const;
 /** Media visited in ONE dispatch before a jittered continuation. The chunk
  *  budget (5 requests / 45 s) bites long before this; it is the ceiling for a
  *  lane being re-queued aggressively. */
@@ -580,6 +612,12 @@ export interface MediaStatsCycleEstimate {
  * in `split_31` it is THREE, so the long-tail term — wanted and funded alike —
  * is scaled by `longTailRequestsPerVisit`; leaving it at one would report a
  * third of the real cost.
+ *
+ * A NEVER-VISITED item is priced at its FIRST visit (`FIRST_VISIT_REQUESTS`),
+ * which walks its history, for as long as that backlog lasts: counted at one
+ * call, 399 never-visited mid items on lora-1 (2026-09-30) read as 57 calls a
+ * day when their first visits want about 230. Its tier's cadence is still the
+ * horizon — a first visit due in a week is a seventh of its cost a day.
  */
 export function estimateMediaStatsCycle(input: {
   fresh: number;
@@ -590,12 +628,26 @@ export function estimateMediaStatsCycle(input: {
   /** Calls one long-tail visit costs: 1, or `LONG_TAIL_SPLIT_WINDOWS` in
    *  `split_31`. Default 1. */
   longTailRequestsPerVisit?: number;
+  /** Of each tier, the items never visited. Default none. */
+  neverVisited?: { fresh: number; mid: number; longTail: number };
 }): MediaStatsCycleEstimate {
   const cycleDays = Math.max(1, input.longTailCycleDays);
-  const weekly = input.mid / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL;
-  const longTailCalls = input.longTail * Math.max(1, input.longTailRequestsPerVisit ?? 1);
-  const wanted = input.fresh + weekly + longTailCalls / cycleDays;
-  const leftover = input.dailyCap - input.fresh - weekly;
+  const never = input.neverVisited ?? { fresh: 0, mid: 0, longTail: 0 };
+  // Each tier's calls per visit round: a visited item at its steady cost, a
+  // never-visited one at its first visit's.
+  const calls = (count: number, neverVisited: number, steady: number, first: number) =>
+    (count - neverVisited) * steady + neverVisited * first;
+  const daily = calls(input.fresh, never.fresh, 1, FIRST_VISIT_REQUESTS.fresh);
+  const weekly = calls(input.mid, never.mid, 1, FIRST_VISIT_REQUESTS.mid)
+    / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL;
+  const longTailCalls = calls(
+    input.longTail,
+    never.longTail,
+    Math.max(1, input.longTailRequestsPerVisit ?? 1),
+    FIRST_VISIT_REQUESTS.longTail,
+  );
+  const wanted = daily + weekly + longTailCalls / cycleDays;
+  const leftover = input.dailyCap - daily - weekly;
   const estimatedCycleDays = input.longTail === 0
     ? cycleDays
     : Math.round(longTailCalls / Math.max(1, leftover));
@@ -787,6 +839,11 @@ function skip(reason: string): StreamChunkResult {
 interface VisitWindows {
   issued: Set<string>;
   answered: Array<{ afterMs: number; beforeMs: number }>;
+  /** The last visit this visit's refresh reaches back to (`steadyRefreshPlan`),
+   *  or null: never visited, or an open walk anchored at today, which reads
+   *  everything under it anyway. Settled as the visit starts, before the walk
+   *  moves the cursor. */
+  holeFrom: Date | null;
 }
 
 /** What one window request came back as. `null` means the call was refused
@@ -855,6 +912,7 @@ export async function fanslyMediaStatsChunk(
   let visited = 0;
   let bucketsSeen = 0;
   let backfillWindows = 0;
+  let holeWindowsRead = 0;
   let topMarked = 0;
   let invalidResponses = 0;
   let deferred: string | null = null;
@@ -1220,7 +1278,7 @@ export async function fanslyMediaStatsChunk(
   async function visitCandidate(
     candidate: MediaStatsRefreshCandidate,
   ): Promise<"visited" | "skipped" | "deferred" | "yielded"> {
-    const visit: VisitWindows = { issued: new Set(), answered: [] };
+    const visit: VisitWindows = { issued: new Set(), answered: [], holeFrom: null };
     const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
     const cursorAtEntry = JSON.stringify(backfillCursorJson(cursor));
     let buckets = 0;
@@ -1269,11 +1327,25 @@ export async function fanslyMediaStatsChunk(
     // of its windows can answer today's refresh. An open walk anchored at today
     // is a first visit: its opening window is the trailing one.
     const walkInPast = !cursor.done && cursor.nextBeforeMs < now.getTime() - DAY_MS;
-    const refreshFirst = dirty && walkInPast;
+    // A LATE ITEM'S HOLE — the days between its last visit and the far end of
+    // its tier's span — is read with its refresh (`steadyRefreshPlan`). Only an
+    // open walk anchored at today reaches it by itself.
+    visit.holeFrom = !cursor.done && !walkInPast ? null : candidate.lastVisitedAt;
+    const closesHole = steadyRefreshPlan(
+      candidate.tier,
+      now,
+      state.longTailWindowMode,
+      visit.holeFrom,
+    ).holeWindows > 0;
+    // Both a mark and a hole need windows a walk anchored in the past never
+    // reads: it resumes below the last visit. After the walk they would get
+    // whatever calls were left, and a stamp on a hole half read loses the
+    // rest for good — the next visit reads from today's.
+    const refreshFirst = walkInPast && (dirty || closesHole);
 
     if (refreshFirst) {
-      // The mark is what put the item here, and old windows do not answer it:
-      // read today's numbers whole, and leave the history what is left.
+      // The mark or the hole is what this visit is for, and old windows answer
+      // neither: read them whole, and leave the history what is left.
       const steady = await runSteady(candidate, cursor, visit, state.longTailWindowMode, true);
       if (steady.status === "failed") {
         await keepFailedVisitProgress();
@@ -1365,6 +1437,30 @@ export async function fanslyMediaStatsChunk(
       }
       await saveProgress();
       return status === "visited" ? "skipped" : status;
+    }
+
+    // A HOLE DEEPER THAN ONE VISIT CARRIES: the refresh read its newest part,
+    // and the stamp lets go of the rest. Named, not skipped in silence. A
+    // refresh with a hole to read is reserved whole, so a stamp here means it
+    // was read.
+    const unreadHole = steadyComplete
+      ? steadyRefreshPlan(candidate.tier, now, state.longTailWindowMode, visit.holeFrom).unreadHole
+      : null;
+    if (unreadHole !== null) {
+      await input.telemetry.addAnomaly({
+        code: "fansly_media_stats_refresh_hole",
+        severity: "warn",
+        message:
+          "Fansly per-media refresh could not reach back to the item's last visit in one visit; "
+          + "the oldest days in between stay unread",
+        details: {
+          mediaOfferRef: candidate.subjectRef,
+          tier: candidate.tier,
+          lastVisitedAt: candidate.lastVisitedAt?.toISOString() ?? null,
+          unreadAfter: new Date(unreadHole.afterMs).toISOString(),
+          unreadBefore: new Date(unreadHole.beforeMs).toISOString(),
+        },
+      });
     }
 
     visited += 1;
@@ -1595,7 +1691,13 @@ export async function fanslyMediaStatsChunk(
     planMode: LongTailWindowMode = state.longTailWindowMode,
     reserveWhole = false,
   ): Promise<SteadyResult> {
-    const windows = steadyWindows(candidate.tier, now, planMode);
+    // The tier's trailing windows, then — for a late item — the hole below
+    // them, back to its last visit. The 90-day discovery and its fallback read
+    // the TRAILING window only, never a hole window.
+    const plan = steadyRefreshPlan(candidate.tier, now, planMode, visit.holeFrom);
+    const { windows } = plan;
+    const [trailing] = windows;
+    const trailingCount = windows.length - plan.holeWindows;
     let buckets = 0;
 
     // ALREADY ANSWERED THIS VISIT, at no cost. A first visit opens its backfill
@@ -1633,7 +1735,10 @@ export async function fanslyMediaStatsChunk(
       }
     }
 
-    for (const [index, window] of toRead.entries()) {
+    for (const window of toRead) {
+      const ninetyDayProbe = candidate.tier === "long_tail"
+        && window === trailing
+        && planMode !== "split_31";
       if (!hasDayCapacity()) {
         // Out of the day's budget, possibly part way through a multi-window
         // long-tail refresh — retries count against it too. What was fetched is
@@ -1653,7 +1758,7 @@ export async function fanslyMediaStatsChunk(
         tier: candidate.tier,
       }, visit);
       if (outcome === "failed") {
-        if (candidate.tier === "long_tail" && index === 0 && planMode !== "split_31") {
+        if (ninetyDayProbe) {
           return await fallBackFromNinetyDays(candidate, cursor, visit, planMode);
         }
         return { status: "failed", buckets, complete: false, served };
@@ -1663,14 +1768,18 @@ export async function fanslyMediaStatsChunk(
       }
       buckets += outcome.buckets;
       served += 1;
+      if (windows.indexOf(window) >= trailingCount) {
+        holeWindowsRead += 1;
+      }
 
       // ── THE 90-DAY DISCOVERY, settled by what the route actually served ──
       //
-      // It runs on the FIRST long-tail window only, and it is durable and
-      // page-scoped: the answer is a property of the route, not of one item.
-      // It reads the plan IN USE, never the page's mode: a split-plan probe's
-      // honoured 31-day window proves nothing about 90 days.
-      if (candidate.tier === "long_tail" && index === 0 && planMode !== "split_31") {
+      // It runs on the TRAILING long-tail window only — the 90 days, never a
+      // hole window below them — and it is durable and page-scoped: the
+      // answer is a property of the route, not of one item. It reads the plan
+      // IN USE, never the page's mode: a split-plan probe's honoured 31-day
+      // window proves nothing about 90 days.
+      if (ninetyDayProbe) {
         // BOTH checks. `windowWasHonoured` is the loop guard every call carries;
         // the coverage check is what sees a same-end, narrower answer, which is
         // the only shape a refused TRAILING window can take.
@@ -1855,6 +1964,7 @@ export async function fanslyMediaStatsChunk(
       dailyCap,
       longTailCycleDays,
       longTailRequestsPerVisit: state.longTailWindowMode === "split_31" ? LONG_TAIL_SPLIT_WINDOWS : 1,
+      neverVisited: progress.neverVisitedByTier,
     });
     // Due work this dispatch could not reach today. Reported, never acted on:
     // these are simply first in tomorrow's queue.
@@ -1878,7 +1988,11 @@ export async function fanslyMediaStatsChunk(
         dirty: progress.dirty,
       },
       neverVisited: progress.neverVisited,
+      neverVisitedByTier: progress.neverVisitedByTier,
       dueToday: progress.dueNow,
+      // Due items whose last visit is at the edge of their window: they go
+      // ahead of the first looks, and a lane that keeps up keeps this small.
+      dueAtWindowEdge: progress.dueAtWindowEdge,
       deferredToday,
       backfillComplete: progress.backfillComplete,
       // Items whose backfill STOPPED on a window the provider would not
@@ -1896,6 +2010,8 @@ export async function fanslyMediaStatsChunk(
       visitedThisChunk: visited,
       bucketsSeenThisChunk: bucketsSeen,
       backfillWindowsThisChunk: backfillWindows,
+      // Windows read below a late item's span, back to its last visit.
+      holeWindowsThisChunk: holeWindowsRead,
       topMediaMarkedDirty: topMarked,
       seedComplete: state.seedComplete,
       ...(deferred === null ? {} : { deferred }),
@@ -1913,7 +2029,9 @@ export async function fanslyMediaStatsChunk(
         mid: progress.mid,
         longTail: progress.longTail,
         dirty: progress.dirty,
+        neverVisited: progress.neverVisited,
         dueToday: progress.dueNow,
+        dueAtWindowEdge: progress.dueAtWindowEdge,
         callsToday: state.callsToday,
         dailyCap,
         requestsPerDayWanted: cycle.requestsPerDayWanted,
@@ -2067,4 +2185,62 @@ export function steadyWindows(
     beforeMs: end,
     afterMs: end - LONG_TAIL_TRAILING_DAYS * DAY_MS,
   }];
+}
+
+export interface SteadyRefreshPlan {
+  /** The tier's steady windows, then any hole windows below them. */
+  windows: Array<{ periodMs: number; afterMs: number; beforeMs: number }>;
+  /** Of `windows`, the ones below the tier's span: the hole being read. */
+  holeWindows: number;
+  /** The oldest part of the hole, which one visit cannot carry; null when the
+   *  plan reaches the last visit. */
+  unreadHole: { afterMs: number; beforeMs: number } | null;
+}
+
+/**
+ * THE REFRESH ONE VISIT READS: the tier's steady windows and, when the item's
+ * last visit is OLDER than their far end, the hole between the two.
+ *
+ * The steady span is fixed — 30 days for mid — so an item revisited later
+ * than that skips the days between its last visit and the span's far end, and
+ * skips them for good: the stamp moves to today, and the next visit reads from
+ * there (production 2026-09-30: 56 mid items on lora-1 and 68 on lora-2 already
+ * past their 30 days). So the plan reaches on down to a day before the last
+ * visit — the backfill's own overlap, which also restates that visit's partial
+ * last day — in 31-day windows, contiguous with the steady ones, newest first.
+ *
+ * `REFRESH_WINDOWS_PER_VISIT` in all: mid closes a hole of 93 days, a split
+ * long tail one of 31. What does not fit is `unreadHole`, the oldest part, which
+ * the visit names rather than skips in silence. The queue visits an item at the
+ * edge of its window before any first look (`listMediaStatsRefreshChunk`), so a
+ * hole at all means the lane has fallen behind its tier's cadence.
+ *
+ * `lastVisitedAt` null — never visited, or a walk that reads everything under
+ * today anyway — is the tier's plan as it is.
+ */
+export function steadyRefreshPlan(
+  tier: MediaStatsTier,
+  now: Date,
+  longTailMode: LongTailWindowMode,
+  lastVisitedAt: Date | null,
+): SteadyRefreshPlan {
+  const windows = steadyWindows(tier, now, longTailMode);
+  const spanFloorMs = Math.min(...windows.map((window) => window.afterMs));
+  if (lastVisitedAt === null || lastVisitedAt.getTime() >= spanFloorMs) {
+    return { windows, holeWindows: 0, unreadHole: null };
+  }
+  const reachMs = lastVisitedAt.getTime() - BACKFILL_OVERLAP_DAYS * DAY_MS;
+  let beforeMs = spanFloorMs;
+  let holeWindows = 0;
+  while (beforeMs > reachMs && windows.length < REFRESH_WINDOWS_PER_VISIT) {
+    const afterMs = Math.max(reachMs, beforeMs - BACKFILL_WINDOW_DAYS * DAY_MS);
+    windows.push({ periodMs: DAILY_PERIOD_MS, afterMs, beforeMs });
+    holeWindows += 1;
+    beforeMs = afterMs;
+  }
+  return {
+    windows,
+    holeWindows,
+    unreadHole: beforeMs > reachMs ? { afterMs: reachMs, beforeMs } : null,
+  };
 }

@@ -14,6 +14,7 @@ import {
   parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
+  steadyRefreshPlan,
   steadyWindows,
   windowAnsweredBy,
 } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
@@ -129,6 +130,34 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
     expect(estimate.estimatedCycleDays).toBe(Math.round((3 * 1_100) / (300 - 150 - 750 / 7)));
     expect(estimate.saturating).toBe(true);
   });
+
+  it("counts a never-visited item at its FIRST visit's cost while that backlog lasts", () => {
+    const census = {
+      fresh: 20,
+      mid: 350,
+      longTail: 1_000,
+      dailyCap: 300,
+      longTailCycleDays: 30,
+      longTailRequestsPerVisit: 3,
+    };
+    const backlog = estimateMediaStatsCycle({
+      ...census,
+      neverVisited: { fresh: 5, mid: 70, longTail: 300 },
+    });
+    // A first visit walks the item's history: two windows for a fresh item —
+    // its trailing window and the one below it, where its creation ends the
+    // walk — and the visit's whole four for mid and the long tail.
+    const fresh = 15 + 5 * 2;
+    const weekly = (280 + 70 * 4) / 7;
+    const longTail = 700 * 3 + 300 * 4;
+    expect(backlog.requestsPerDayWanted).toBe(Math.round(fresh + weekly + longTail / 30));
+    expect(backlog.estimatedCycleDays).toBe(Math.round(longTail / (300 - fresh - weekly)));
+    // No backlog, no change: the steady arithmetic above still holds.
+    expect(estimateMediaStatsCycle({
+      ...census,
+      neverVisited: { fresh: 0, mid: 0, longTail: 0 },
+    })).toEqual(estimateMediaStatsCycle(census));
+  });
 });
 
 describe("media_stats — the pure helpers", () => {
@@ -231,6 +260,43 @@ describe("media_stats — the pure helpers", () => {
       expect((window.beforeMs - window.afterMs) / DAY_MS).toBe(31);
       expect(window.periodMs).toBe(86_400_000);
     }
+  });
+
+  it("reaches a refresh back to the day before a last visit its window no longer holds", () => {
+    const now = NOW.getTime();
+    const daysBack = (windows: ReadonlyArray<{ afterMs: number; beforeMs: number }>) =>
+      windows.map((window) => [(now - window.afterMs) / DAY_MS, (now - window.beforeMs) / DAY_MS]);
+    const visited = (days: number) => new Date(now - days * DAY_MS);
+
+    // Visited 38 days ago: the 30-day read alone would skip eight days for
+    // good. The plan reads them, contiguous with the refresh, to a day below
+    // the visit — the walk's own overlap.
+    const late = steadyRefreshPlan("mid", NOW, "split_31", visited(38));
+    expect(daysBack(late.windows)).toEqual([[30, 0], [39, 30]]);
+    expect(windowAnsweredBy({ afterMs: now - 39 * DAY_MS, beforeMs: now }, late.windows)).toBe(true);
+    expect(late).toMatchObject({ holeWindows: 1, unreadHole: null });
+
+    // Inside the window, or never visited: the tier's plan, untouched.
+    for (const lastVisitedAt of [visited(25), visited(30), null]) {
+      expect(steadyRefreshPlan("mid", NOW, "split_31", lastVisitedAt)).toEqual({
+        windows: steadyWindows("mid", NOW, "split_31"),
+        holeWindows: 0,
+        unreadHole: null,
+      });
+    }
+
+    // 31-day steps, four windows at most — one unit that fits a chunk — and
+    // what does not fit is named, not skipped in silence.
+    const deep = steadyRefreshPlan("mid", NOW, "split_31", visited(170));
+    expect(daysBack(deep.windows)).toEqual([[30, 0], [61, 30], [92, 61], [123, 92]]);
+    expect(deep.unreadHole).toEqual({ afterMs: now - 171 * DAY_MS, beforeMs: now - 123 * DAY_MS });
+
+    // The long tail measures from its own span: 93 days split, 90 whole.
+    expect(daysBack(steadyRefreshPlan("long_tail", NOW, "split_31", visited(100)).windows))
+      .toEqual([[31, 0], [62, 31], [93, 62], [101, 93]]);
+    expect(daysBack(steadyRefreshPlan("long_tail", NOW, "ninety", visited(100)).windows))
+      .toEqual([[90, 0], [101, 90]]);
+    expect(steadyRefreshPlan("long_tail", NOW, "ninety", visited(85)).holeWindows).toBe(0);
   });
 
   it("takes a refresh from a visit's windows only when they cover it end to end", () => {

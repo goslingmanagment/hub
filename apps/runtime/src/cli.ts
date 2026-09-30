@@ -2267,9 +2267,10 @@ export function buildProgram() {
     .command("fansly:media-stats-prune-dm-only")
     .description(
       "Delete the media_stats queue rows of media the page showed only in DMs: not queued "
-        + "from a post or the account statistics, not attached to a post, not in a bundle on "
-        + "a post, not named by stats_top_media, and not first seen on a post or in the "
-        + "account statistics. Heads, buckets and journal stay. Dry-run default; idempotent; "
+        + "from a post or the account statistics, not attached to a post as media (a bundle "
+        + "ref is not media), not in a bundle on a post, not named by stats_top_media, and not "
+        + "first seen on a post or in the account statistics. Heads, buckets and journal stay. "
+        + "Dry-run default; idempotent; "
         + "--execute refuses while its projectors are behind the journal head",
     )
     .option("--execute", "actually delete (default is a read-only dry-run count)")
