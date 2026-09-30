@@ -498,6 +498,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # either value and filters locators by the variant it asks for, so it runs
   # unchanged on rows the new image wrote.
   "0216_ofapi_media_preview_variant.sql"
+  # Two indexes built concurrently (purchase-history captures, DM 5xx streak);
+  # no table, column or query changes, so the previous image runs unchanged
+  # on them.
+  "0223_raw_payload_and_attempt_lookup_indexes.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
