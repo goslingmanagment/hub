@@ -37,7 +37,12 @@ export interface DmOnlyMediaStatsQueueCount {
  *     queues — so it keeps a DM-first media the media plane has seen on a post
  *     before `creator_posts` has projected that post;
  *   - a post names it as an attachment — which also keeps the headless mark of
- *     a post's media bought before its head was projected;
+ *     a post's media bought before its head was projected. NOT a post's
+ *     BUNDLE (`contentType` 2, or a ref `creator_media_bundles` knows as a
+ *     bundle): the route reads media offers, and a bundle is not one, so its
+ *     row has no head, the chunk never admits it, and a purchase mark on it
+ *     stays dirty for good (production 2026-09-30: 93 such rows, every one of
+ *     them a bundle on a post). Its members are kept by the next rule;
  *   - it is a member of a bundle a post names, by the bundle's `member_refs` or
  *     by the media's own `bundle_refs`;
  *   - `stats_top_media` names it, in any window;
@@ -62,7 +67,9 @@ function dmOnlyMediaStatsRows(pageId: number | null): SQL {
   );
   return sql`
     with post_refs as (
-      select p.account_id as page_id, a.attachment ->> 'contentId' as content_ref
+      select p.account_id as page_id,
+             a.attachment ->> 'contentId' as content_ref,
+             a.attachment ->> 'contentType' as content_type
         from creator_posts p
         cross join lateral jsonb_array_elements(
           case when jsonb_typeof(p.attachment_refs) = 'array'
@@ -75,6 +82,12 @@ function dmOnlyMediaStatsRows(pageId: number | null): SQL {
       select r.page_id, r.content_ref as subject_ref
         from post_refs r
        where r.content_ref is not null
+         and r.content_type is distinct from '2'
+         and not exists (
+           select 1 from creator_media_bundles b
+            where b.page_id = r.page_id
+              and b.bundle_ref = r.content_ref
+         )
       union
       select b.page_id, member.ref
         from creator_media_bundles b

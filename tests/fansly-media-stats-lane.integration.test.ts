@@ -679,6 +679,444 @@ describe("media_stats lane — the queue", () => {
     expect(chunk.slice(1).map((row) => row.subjectRef))
       .toEqual([ref(430), ref(431), ref(432), ref(433)]);
   });
+
+  it("puts an overdue item at the EDGE of its tier's window ahead of the never-visited ones", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY_MS);
+    // Production 2026-09-30: 399 never-visited mid items on lora-1 sat in front
+    // of 140 overdue ones, 56 of them already past the 30 days their next read
+    // covers. A never-visited item loses nothing by waiting — its first visit
+    // walks its history back from that day — while an overdue one past its
+    // window loses the days in between.
+    const freshEdge = ref(441);
+    const freshNever = ref(442);
+    const midEdge = ref(443);
+    const midNever = ref(444);
+    const midRecent = ref(445);
+    const longEdge = ref(446);
+    const longNever = ref(447);
+    const longRecent = ref(448);
+    await seedMedia(page.id, [
+      { ref: freshEdge, createdAtPlatform: daysAgo(28) },
+      { ref: freshNever, createdAtPlatform: daysAgo(5) },
+      { ref: midEdge, createdAtPlatform: daysAgo(90) },
+      { ref: midNever, createdAtPlatform: daysAgo(100) },
+      { ref: midRecent, createdAtPlatform: daysAgo(110) },
+      { ref: longEdge, createdAtPlatform: daysAgo(400) },
+      { ref: longNever, createdAtPlatform: daysAgo(410) },
+      { ref: longRecent, createdAtPlatform: daysAgo(420) },
+    ], { queueCursor: BACKFILL_DONE });
+    for (
+      const [subjectRef, visitedAt] of [
+        // Fresh reads 31 days, mid 30, the long tail at least 90: seven days
+        // short of each is the edge.
+        [freshEdge, daysAgo(25)],
+        [midEdge, daysAgo(25)],
+        [midRecent, daysAgo(10)],
+        [longEdge, daysAgo(85)],
+        [longRecent, daysAgo(40)],
+      ] as const
+    ) {
+      await testDb.pool.query(
+        `update subject_refresh_state set last_visited_at = $3
+          where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+        [page.id, subjectRef, visitedAt],
+      );
+    }
+
+    const chunk = await listMediaStatsRefreshChunk(testDb.db, {
+      pageId: page.id,
+      limit: 10,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    // Within each tier: at the edge, then never visited, then the rest of the
+    // overdue — a mid item ten days late still has twenty days before its
+    // window lets go of its last visit.
+    expect(chunk.map((row) => row.subjectRef)).toEqual([
+      freshEdge,
+      freshNever,
+      midEdge,
+      midNever,
+      midRecent,
+      longEdge,
+      longNever,
+      longRecent,
+    ]);
+    // Who is admitted does not change, only the order: the census still
+    // reports exactly the chunk, and names the items at the edge.
+    const progress = await countMediaStatsRefreshProgress(testDb.db, {
+      pageId: page.id,
+      now: NOW,
+      longTailCycleDays: 30,
+    });
+    expect(progress.dueNow).toBe(chunk.length);
+    expect(progress.dueAtWindowEdge).toBe(3);
+    expect(progress.neverVisitedByTier).toEqual({ fresh: 1, mid: 1, longTail: 1 });
+  });
+});
+
+describe("media_stats lane — a visit past its window closes the hole", () => {
+  /** Put a queued item's last visit `days` back. */
+  async function visitedDaysAgo(pageId: number, subjectRef: string, days: number) {
+    await testDb!.pool.query(
+      `update subject_refresh_state set last_visited_at = $3
+        where page_id = $1 and plane = 'media_stats' and subject_ref = $2`,
+      [pageId, subjectRef, new Date(NOW.getTime() - days * DAY_MS)],
+    );
+  }
+
+  /** Each call as [after, before] in days before `from` (NOW by default). */
+  function daysBack(calls: AdapterCall[], from = NOW): Array<[number, number]> {
+    return calls.map((call) => [
+      (from.getTime() - call.afterDate.getTime()) / DAY_MS,
+      (from.getTime() - call.beforeDate.getTime()) / DAY_MS,
+    ]);
+  }
+
+  /** Where the item's next hole starts: its cursor's last refresh. */
+  async function refreshedThrough(pageId: number, subjectRef: string): Promise<number | null> {
+    const row = await queueRow(pageId, subjectRef);
+    return parseMediaBackfillCursor(row.backfillCursor, NOW).refreshedThroughMs;
+  }
+
+  function holesLeftOpen(telemetry: ReturnType<typeof telemetryStub>) {
+    return telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole_open"
+    );
+  }
+
+  it("reads a mid item last visited 38 days ago back to the day before that visit, whole", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1601);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 90 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    await visitedDaysAgo(page.id, mediaRef, 38);
+
+    // A chunk with one request left cannot carry the two windows: it starts
+    // neither, and the item stays as it was.
+    const adapter = adapterStub();
+    const spent = new SyncChunkBudget();
+    for (let index = 0; index < 4; index += 1) {
+      await spent.onRequestEvent({ state: "started" } as never);
+    }
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub(), spent));
+    expect(adapter.calls).toHaveLength(0);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString())
+      .toBe(new Date(NOW.getTime() - 38 * DAY_MS).toISOString());
+
+    const telemetry = telemetryStub();
+    const results = await drain(page.id, adapter, telemetry);
+    // The 30-day refresh, then the eight days below it that the last visit
+    // did not reach — to a day before it, the walk's own overlap — so the
+    // daily series has no hole.
+    expect(daysBack(adapter.calls)).toEqual([[30, 0], [39, 30]]);
+    expect(results[0]?.stats).toMatchObject({ holeWindowsThisChunk: 1, visitedThisChunk: 1 });
+    expect((await journaled(page.id)).map((row) => row.request_params.mode))
+      .toEqual(["steady", "steady"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+    // Closed in the one visit: the next hole starts from today.
+    expect(await refreshedThrough(page.id, mediaRef)).toBe(NOW.getTime());
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole"
+    )).toEqual([]);
+    expect(holesLeftOpen(telemetry)).toEqual([]);
+  });
+
+  it("reads a hole two days wide, which the slack at either end took for answered", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1606);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 90 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    await visitedDaysAgo(page.id, mediaRef, 31);
+
+    const adapter = adapterStub();
+    const results = await drain(page.id, adapter, telemetryStub());
+
+    // The 30-day refresh, then the two days below it, down to a day before the
+    // last refresh. Skipped, the item read as refreshed through today and the
+    // two days were gone for good, without a word.
+    expect(daysBack(adapter.calls)).toEqual([[30, 0], [32, 30]]);
+    expect(results[0]?.stats).toMatchObject({ holeWindowsThisChunk: 1, visitedThisChunk: 1 });
+    expect(await refreshedThrough(page.id, mediaRef)).toBe(NOW.getTime());
+  });
+
+  it("keeps a hole OPEN when the route answers it with another window, and says so", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1607);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 90 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    await visitedDaysAgo(page.id, mediaRef, 38);
+    await markSubjectRefreshDirty(testDb.db, {
+      pageId: page.id,
+      plane: "media_stats",
+      subjectRef: mediaRef,
+      dirtyReason: "purchase_notification",
+      nextDueAt: NOW,
+    });
+    // A historical window comes back as the route's DEFAULT trailing 31 days —
+    // the shape the backfill guard stops a walk on.
+    const refusing = adapterStub({
+      body: (params) => statsBody({
+        mediaOfferRef: params.mediaOfferId,
+        afterMs: params.afterDate.getTime(),
+        beforeMs: params.beforeDate.getTime(),
+        periodMs: params.periodMs,
+        ...(params.beforeDate.getTime() < NOW.getTime() - DAY_MS
+          ? { servedAfterMs: NOW.getTime() - 31 * DAY_MS, servedBeforeMs: NOW.getTime() }
+          : {}),
+      }),
+    });
+    const telemetry = telemetryStub();
+    const results = await drain(page.id, refusing, telemetry);
+
+    expect(daysBack(refusing.calls)).toEqual([[30, 0], [39, 30]]);
+    // The refresh was read: the mark is answered, the item stamped, and the
+    // queue moves on.
+    const row = await queueRow(page.id, mediaRef);
+    expect(row.lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+    expect(row.dirtyReason).toBeNull();
+    // The hole was not. The item keeps its last refresh, so its next visit
+    // reads the hole again — kept, and named, never counted as read.
+    expect(results[0]?.stats).toMatchObject({ holeWindowsThisChunk: 0 });
+    expect(await refreshedThrough(page.id, mediaRef)).toBe(NOW.getTime() - 38 * DAY_MS);
+    const open = holesLeftOpen(telemetry);
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatchObject({
+      severity: "warn",
+      details: {
+        mediaOfferRef: mediaRef,
+        tier: "mid",
+        reason: "window_not_honoured",
+        refreshedThrough: new Date(NOW.getTime() - 38 * DAY_MS).toISOString(),
+        requestedAfter: new Date(NOW.getTime() - 39 * DAY_MS).toISOString(),
+        requestedBefore: new Date(NOW.getTime() - 30 * DAY_MS).toISOString(),
+        servedAfter: new Date(NOW.getTime() - 31 * DAY_MS).toISOString(),
+        servedBefore: NOW.toISOString(),
+      },
+    });
+
+    // Its next visit, with a route that answers: the hole is read from the
+    // same last refresh, and closes.
+    const later = new Date(NOW.getTime() + 8 * DAY_MS);
+    const answering = adapterStub();
+    const laterTelemetry = telemetryStub();
+    await drain(page.id, answering, laterTelemetry, { now: later });
+    expect(daysBack(answering.calls, later)).toEqual([[30, 0], [47, 30]]);
+    expect(await refreshedThrough(page.id, mediaRef)).toBe(later.getTime());
+    expect(holesLeftOpen(laterTelemetry)).toEqual([]);
+  });
+
+  it("lets a daily cap too small for the refresh AND its hole move the queue on", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const late = ref(1608);
+    const next = ref(1609);
+    await seedMedia(page.id, [
+      { ref: late, createdAtPlatform: new Date(NOW.getTime() - 90 * DAY_MS) },
+      { ref: next, createdAtPlatform: new Date(NOW.getTime() - 100 * DAY_MS) },
+    ], { queueCursor: BACKFILL_DONE });
+    // The late item is past its window, so it leads; the other is merely due.
+    await visitedDaysAgo(page.id, late, 38);
+    await visitedDaysAgo(page.id, next, 10);
+
+    // One call a day — the registry allows it. The refresh and the hole are
+    // two, so the unit never fits a day: read whole or not at all, the item
+    // read its refresh, was left unstamped, and led the queue every day after.
+    const capped = adapterStub();
+    const telemetry = telemetryStub();
+    const days = [0, 1, 2].map((day) => new Date(NOW.getTime() + day * DAY_MS));
+    for (const day of days) {
+      await drain(page.id, capped, telemetry, {
+        now: day,
+        maxChunks: 3,
+        config: { fanslyMediaStatsDailyCallBudget: 1 },
+      });
+    }
+
+    // Day one reads the late item's refresh and stamps it, day two is the next
+    // item's, and on day three nothing is due.
+    expect(capped.calls.map((call) => call.mediaOfferId)).toEqual([late, next]);
+    expect(daysBack(capped.calls.slice(0, 1))).toEqual([[30, 0]]);
+    expect((await queueRow(page.id, late)).lastVisitedAt?.toISOString()).toBe(days[0]!.toISOString());
+    expect((await queueRow(page.id, next)).lastVisitedAt?.toISOString()).toBe(days[1]!.toISOString());
+    // The hole is kept, not lost: the late item's last refresh stays where it
+    // was, and the visit says so.
+    expect(await refreshedThrough(page.id, late)).toBe(NOW.getTime() - 38 * DAY_MS);
+    const open = holesLeftOpen(telemetry);
+    expect(open).toHaveLength(1);
+    expect(open[0]).toMatchObject({
+      severity: "info",
+      details: { mediaOfferRef: late, reason: "daily_call_budget" },
+    });
+
+    // The late item's next visit, under the ordinary cap, reads the hole from
+    // that same last refresh.
+    const later = new Date(NOW.getTime() + 8 * DAY_MS);
+    const ordinary = adapterStub();
+    await drain(page.id, ordinary, telemetryStub(), { now: later });
+    expect(ordinary.calls.map((call) => call.mediaOfferId)).toEqual([late, late]);
+    expect(daysBack(ordinary.calls, later)).toEqual([[30, 0], [47, 30]]);
+    expect(await refreshedThrough(page.id, late)).toBe(later.getTime());
+  });
+
+  it("closes the hole FIRST when the item's walk is still open in the past", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1602);
+    const firstVisit = NOW.getTime() - 40 * DAY_MS;
+    // Visited once, 40 days ago; that visit's walk read one window and stops
+    // 30 days below it. It resumes below the visit, so it can never reach the
+    // days between the visit and the 30-day refresh.
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 170 * DAY_MS),
+    }], {
+      queueCursor: {
+        ...BACKFILL_DONE,
+        nextBeforeMs: firstVisit - 30 * DAY_MS,
+        emptyStreak: 0,
+        done: false,
+        stopReason: null,
+      },
+    });
+    await visitedDaysAgo(page.id, mediaRef, 40);
+
+    const adapter = adapterStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetryStub()));
+
+    // The refresh and the hole under it, whole, then the walk on what is left.
+    expect(daysBack(adapter.calls)).toEqual([[30, 0], [41, 30], [101, 70], [131, 100], [161, 130]]);
+    expect((await journaled(page.id)).map((row) => row.request_params.mode))
+      .toEqual(["steady", "steady", "backfill", "backfill", "backfill"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+  });
+
+  it("measures the hole from the last REFRESH, not from a stamp that only walked history", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1605);
+    // Refreshed 35 days ago; its walk is still open, 30 days below that.
+    const refreshedAt = NOW.getTime() - 35 * DAY_MS;
+    const walkOnly = new Date(NOW.getTime() - 25 * DAY_MS);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 170 * DAY_MS),
+    }], {
+      queueCursor: {
+        ...BACKFILL_DONE,
+        nextBeforeMs: refreshedAt - 30 * DAY_MS,
+        emptyStreak: 0,
+        done: false,
+        stopReason: null,
+      },
+    });
+    await visitedDaysAgo(page.id, mediaRef, 35);
+
+    // Ten days later, with three requests left: nothing is past its window
+    // yet, so the walk goes first and takes all three. The 30-day refresh
+    // gets none, and the item is stamped all the same — its walk moved.
+    const walked = adapterStub();
+    const spent = new SyncChunkBudget();
+    for (let index = 0; index < 2; index += 1) {
+      await spent.onRequestEvent({ state: "started" } as never);
+    }
+    await fanslyMediaStatsChunk(appStub(walked), input(page.id, telemetryStub(), spent, walkOnly));
+    expect((await journaled(page.id)).map((row) => row.request_params.mode))
+      .toEqual(["backfill", "backfill", "backfill"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString())
+      .toBe(walkOnly.toISOString());
+
+    // 25 days on, the 30-day refresh reaches only 5 days above that stamp —
+    // and 5 days BELOW it the series was last read. Measured from the stamp
+    // there is no hole, and the days in between are lost without a word.
+    // Measured from the refresh, they are read first, whole.
+    const adapter = adapterStub();
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+    expect(daysBack(adapter.calls).slice(0, 2)).toEqual([[30, 0], [36, 30]]);
+    expect((await journaled(page.id)).slice(3, 5).map((row) => row.request_params.mode))
+      .toEqual(["steady", "steady"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole"
+    )).toEqual([]);
+  });
+
+  it("measures a long-tail hole from the plan the 90-day discovery settles on", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1604);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 400 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    await visitedDaysAgo(page.id, mediaRef, 100);
+    // The route answers anything wider than 31 days with its trailing 31.
+    const adapter = adapterStub({
+      body: (params) => statsBody({
+        mediaOfferRef: params.mediaOfferId,
+        afterMs: params.afterDate.getTime(),
+        beforeMs: params.beforeDate.getTime(),
+        periodMs: params.periodMs,
+        ...(spanDays(params) > 31
+          ? { servedAfterMs: params.beforeDate.getTime() - 31 * DAY_MS }
+          : {}),
+      }),
+    });
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // The trailing 90 days are the discovery's probe — never a hole window.
+    // Answered with 31 days, which is the split plan's first window, it moves
+    // the page to split: the plan reads its other two windows, then the hole
+    // below ITS 93 days.
+    expect(daysBack(adapter.calls)).toEqual([[90, 0], [62, 31], [93, 62], [101, 93]]);
+    expect(await cursor(page.id)).toMatchObject({ longTailWindowMode: "split_31" });
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole"
+    )).toEqual([]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+  });
+
+  it("reads at most four windows, the newest, and names the hole it cannot close", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1603);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 175 * DAY_MS),
+    }], { queueCursor: BACKFILL_DONE });
+    await visitedDaysAgo(page.id, mediaRef, 170);
+
+    const adapter = adapterStub();
+    const telemetry = telemetryStub();
+    await drain(page.id, adapter, telemetry);
+
+    // One unit, reserved whole, that still fits a five-request chunk.
+    expect(daysBack(adapter.calls)).toEqual([[30, 0], [61, 30], [92, 61], [123, 92]]);
+    const holes = telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole"
+    );
+    expect(holes).toHaveLength(1);
+    expect(holes[0]?.details).toMatchObject({
+      mediaOfferRef: mediaRef,
+      tier: "mid",
+      unreadAfter: new Date(NOW.getTime() - 171 * DAY_MS).toISOString(),
+      unreadBefore: new Date(NOW.getTime() - 123 * DAY_MS).toISOString(),
+    });
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+  });
 });
 
 describe("media_stats lane — the windows and their guards", () => {
@@ -1243,14 +1681,19 @@ describe("media_stats lane — the windows and their guards", () => {
       stopReason: "empty_window_streak",
     });
 
-    // ONCE: the next turn of either item asks for no history at all.
+    // ONCE: the next turn of either item asks for no history at all — its
+    // refresh and, for the mid item, whose 30 days 31 days on no longer reach
+    // its last refresh, the hole below them to a day before it.
     const before = adapter.calls.length;
-    await drain(page.id, adapter, telemetry, { now: new Date(NOW.getTime() + 31 * DAY_MS) });
+    const laterMs = NOW.getTime() + 31 * DAY_MS;
+    await drain(page.id, adapter, telemetry, { now: new Date(laterMs) });
     const later = adapter.calls.slice(before);
     expect(later.length).toBeGreaterThan(0);
-    for (const call of later) {
-      expect(call.beforeDate.getTime()).toBe(NOW.getTime() + 31 * DAY_MS);
-    }
+    expect(later.filter((call) => call.beforeDate.getTime() !== laterMs).map((call) => [
+      call.mediaOfferId,
+      call.afterDate.getTime(),
+      call.beforeDate.getTime(),
+    ])).toEqual([[ref(443), NOW.getTime() - DAY_MS, NOW.getTime() + DAY_MS]]);
   });
 
   it("stops at the item's own CREATION, and repairs a cursor already past it", async (ctx) => {
@@ -2644,6 +3087,28 @@ describe("media_stats lane — the honesty block", () => {
     const line = LOG_LINES.find((entry) => entry.message.includes("QUARTERLY"));
     expect(line, "the cycle must be stated in words, not left as a number").toBeDefined();
     expect(Number(line?.fields.estimatedCycleDays)).toBeGreaterThan(90);
+  });
+
+  it("counts a never-visited item at what its FIRST visit costs, not one call", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    // Fourteen mid items nobody has looked at. Each first visit walks four
+    // windows of history; weekly, that is eight calls a day, not two.
+    await seedMedia(page.id, Array.from({ length: 14 }, (_unused, index) => ({
+      ref: ref(1650 + index),
+      createdAtPlatform: new Date(NOW.getTime() - (60 + index) * DAY_MS),
+    })));
+
+    const result = await fanslyMediaStatsChunk(
+      appStub(adapterStub()),
+      input(page.id, telemetryStub(), new SyncChunkBudget(0)),
+    );
+
+    expect(result.stats).toMatchObject({
+      neverVisited: 14,
+      neverVisitedByTier: { fresh: 0, mid: 14, longTail: 0 },
+      requestsPerDayWanted: 8,
+    });
   });
 });
 

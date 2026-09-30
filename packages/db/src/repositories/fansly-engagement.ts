@@ -1039,8 +1039,34 @@ export const MEDIA_STATS_MID_INTERVAL_DAYS = 7;
  *  argument — a stored cadence would freeze each row at whatever the cycle was
  *  when it was last visited. */
 export const MEDIA_STATS_DEFAULT_LONG_TAIL_CYCLE_DAYS = 30;
+/** How far back each tier's steady refresh reads: the lane's trailing windows
+ *  (`steadyWindows`), stated here because the queue orders by them. A split
+ *  long tail reads 3 × 31 = 93 days, never less than these 90. */
+export const MEDIA_STATS_FRESH_SPAN_DAYS = 31;
+export const MEDIA_STATS_MID_SPAN_DAYS = 30;
+export const MEDIA_STATS_LONG_TAIL_SPAN_DAYS = 90;
+/** An overdue item whose last visit is within this many days of its span's far
+ *  end is AT THE EDGE of its window, and goes ahead of the never-visited ones. */
+export const MEDIA_STATS_WINDOW_EDGE_MARGIN_DAYS = 7;
 
 export type MediaStatsTier = "fresh" | "mid" | "long_tail";
+
+/**
+ * The instant before which an item's last visit is at the EDGE of its tier's
+ * window: seven days short of the span its next refresh reads. `tier` is the
+ * item's tier as the calling query computes it.
+ */
+function mediaStatsWindowEdge(tier: SQL, now: Date): SQL {
+  const edge = (spanDays: number) =>
+    new Date(now.getTime() - Math.max(0, spanDays - MEDIA_STATS_WINDOW_EDGE_MARGIN_DAYS) * DAY_MS);
+  return sql`
+    case ${tier}
+      when 'fresh' then ${edge(MEDIA_STATS_FRESH_SPAN_DAYS)}::timestamptz
+      when 'mid' then ${edge(MEDIA_STATS_MID_SPAN_DAYS)}::timestamptz
+      else ${edge(MEDIA_STATS_LONG_TAIL_SPAN_DAYS)}::timestamptz
+    end
+  `;
+}
 
 /**
  * Where the age came from, carried through to the handler and its journal.
@@ -1300,7 +1326,8 @@ export interface MediaStatsRefreshCandidate {
   knownCount: number | null;
   backfillCursor: Record<string, unknown>;
   /** 0 dirty, 1 never visited, 2 due by its tier's decay. A label for the
-   *  journal: outside the dirty rows the TIER orders the chunk, not this. */
+   *  journal: outside the dirty rows the TIER orders the chunk, not this, and
+   *  within a tier a band-2 item at the edge of its window goes before band 1. */
   priorityBand: number;
 }
 
@@ -1313,8 +1340,22 @@ export interface MediaStatsRefreshCandidate {
  *   (2) BY TIER — fresh, then mid, then the long tail. What the creator asks
  *       about is this month's content, and a fresh item's daily read is the
  *       one a late visit turns into a hole.
- *   (3) WITHIN A TIER, NEVER VISITED FIRST, then the OLDEST VISIT — the
+ *   (3) WITHIN A TIER, AN OVERDUE ITEM AT THE EDGE OF ITS WINDOW, then NEVER
+ *       VISITED, then the rest of the overdue — each by the OLDEST VISIT, the
  *       round-robin — and among first looks the NEWEST publication first.
+ *
+ * THE EDGE is a last visit within `MEDIA_STATS_WINDOW_EDGE_MARGIN_DAYS` of the
+ * far end of the span the tier's refresh reads: 23 days for mid's 30, 24 for
+ * fresh's 31, 83 for the long tail's 90 (the split plan's 93 is never less).
+ * Past that span the next visit either reads the days between — more calls —
+ * or, when they do not fit one visit, loses them. A never-visited item loses
+ * nothing by waiting: its first visit walks its history back from that day.
+ * The rest of the overdue stay BEHIND the first looks, as they were: their
+ * next read still reaches their last visit, and putting every overdue item
+ * first would leave a first look waiting for as long as the tier stays late —
+ * production 2026-09-30 had 399 never-visited mid items on lora-1, 140 overdue
+ * and 56 of those already past their 30 days. For the fresh tier the rule is
+ * symmetry only: its 31 days span an item's whole life.
  *
  * Tier used to rank BELOW first sight: every never-visited item came before
  * every overdue one, whatever their ages. Production 2026-09-29 is what that
@@ -1386,6 +1427,7 @@ export async function listMediaStatsRefreshChunk(
       else 2
     end
   `;
+  const windowEdge = mediaStatsWindowEdge(tier, input.now);
   const result = await db.execute<{
     subject_ref: string;
     created_at_platform: Date | string | null;
@@ -1428,6 +1470,11 @@ export async function listMediaStatsRefreshChunk(
        )
      order by case when s.dirty_reason is not null then 0 else 1 end asc,
               case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
+              case
+                when s.last_visited_at < ${windowEdge} then 0
+                when s.last_visited_at is null then 1
+                else 2
+              end asc,
               s.last_visited_at asc nulls first,
               ${publicationAt} desc nulls last,
               s.subject_ref desc
@@ -1615,9 +1662,15 @@ export interface MediaStatsRefreshProgress {
   longTail: number;
   dirty: number;
   neverVisited: number;
+  /** `neverVisited` by tier, from the item's age like the classes above: what
+   *  the cycle estimate prices at a first visit's cost. */
+  neverVisitedByTier: { fresh: number; mid: number; longTail: number };
   /** Items whose class says they are due right now (dirty included) and that
    *  are not waiting out a failure backoff — what the chunk query admits. */
   dueNow: number;
+  /** Of `dueNow`, the items whose last visit is at the edge of their tier's
+   *  window — the ones the chunk puts ahead of the never-visited. */
+  dueAtWindowEdge: number;
   /** Items whose first-sight backfill has reached its floor or stopped. */
   backfillComplete: number;
   /** Items whose backfill stopped because the provider would not honour the
@@ -1654,6 +1707,17 @@ export async function countMediaStatsRefreshProgress(
       else 'long_tail'
     end
   `;
+  const dueNow = sql`
+    (q.consecutive_failures = 0 or q.next_due_at <= ${input.now})
+    and (
+      q.dirty_reason is not null
+      or q.last_visited_at is null
+      or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
+      or (q.tier = 'mid' and q.last_visited_at < ${midDue})
+      or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
+    )
+  `;
+  const windowEdge = mediaStatsWindowEdge(sql`q.tier`, input.now);
   const result = await db.execute<{
     queue_size: string;
     fresh: string;
@@ -1661,7 +1725,11 @@ export async function countMediaStatsRefreshProgress(
     long_tail: string;
     dirty: string;
     never_visited: string;
+    never_visited_fresh: string;
+    never_visited_mid: string;
+    never_visited_long_tail: string;
     due_now: string;
+    due_at_window_edge: string;
     backfill_complete: string;
     backfill_stopped: string;
     media_known: string;
@@ -1688,16 +1756,16 @@ export async function countMediaStatsRefreshProgress(
            count(*) filter (where q.tier = 'long_tail')::text as long_tail,
            count(*) filter (where q.dirty_reason is not null)::text as dirty,
            count(*) filter (where q.last_visited_at is null)::text as never_visited,
+           count(*) filter (where q.last_visited_at is null and q.tier = 'fresh')::text
+             as never_visited_fresh,
+           count(*) filter (where q.last_visited_at is null and q.tier = 'mid')::text
+             as never_visited_mid,
+           count(*) filter (where q.last_visited_at is null and q.tier = 'long_tail')::text
+             as never_visited_long_tail,
+           count(*) filter (where ${dueNow})::text as due_now,
            count(*) filter (
-             where (q.consecutive_failures = 0 or q.next_due_at <= ${input.now})
-               and (
-                 q.dirty_reason is not null
-                 or q.last_visited_at is null
-                 or (q.tier = 'fresh' and q.last_visited_at < ${freshDue})
-                 or (q.tier = 'mid' and q.last_visited_at < ${midDue})
-                 or (q.tier = 'long_tail' and q.last_visited_at < ${longDue})
-               )
-           )::text as due_now,
+             where ${dueNow} and q.last_visited_at < ${windowEdge}
+           )::text as due_at_window_edge,
            count(*) filter (where q.backfill_cursor ->> 'done' = 'true')::text
              as backfill_complete,
            count(*) filter (
@@ -1716,7 +1784,13 @@ export async function countMediaStatsRefreshProgress(
     longTail: Number(row?.long_tail ?? 0),
     dirty: Number(row?.dirty ?? 0),
     neverVisited: Number(row?.never_visited ?? 0),
+    neverVisitedByTier: {
+      fresh: Number(row?.never_visited_fresh ?? 0),
+      mid: Number(row?.never_visited_mid ?? 0),
+      longTail: Number(row?.never_visited_long_tail ?? 0),
+    },
     dueNow: Number(row?.due_now ?? 0),
+    dueAtWindowEdge: Number(row?.due_at_window_edge ?? 0),
     backfillComplete: Number(row?.backfill_complete ?? 0),
     backfillStopped: Number(row?.backfill_stopped ?? 0),
   };

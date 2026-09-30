@@ -937,6 +937,50 @@ describe("media plane — one paid DM page, end to end", () => {
     });
   });
 
+  it("prunes a purchase mark on a post's BUNDLE, and keeps the post's media", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage();
+    const own = paidVideoPayload({
+      messageId: "message-1",
+      messageAt: new Date("2026-08-19T12:00:00Z"),
+      withOrder: false,
+    }).accountMedia[0]!;
+    const posted = { ...own, id: "offer-post-media", mediaId: "raw-post-media" };
+    // A post that shows one media of its own and a bundle of another.
+    await seedPostsObservation(page.id, "bundle-mark", [posted, own], {
+      bundles: [{ id: "bundle-on-post", accountMediaIds: ["offer-message-1"] }],
+    });
+    await projectPosts(page.id);
+    await projectPruneEvidence(page.id);
+    // The queue as it stood before 0222 carried no stamp, and a purchase of
+    // the bundle, before the mark learned to leave bundles alone, queued the
+    // bundle's ref. No head names it — a bundle is not a media offer — so the
+    // chunk never admits it and it stays dirty for good (production
+    // 2026-09-30: 93 such rows, every one of them on a post).
+    await testDb.pool.query(
+      `update subject_refresh_state set media_shown_outside_dm_at = null
+        where page_id = $1 and plane = 'media_stats'`,
+      [page.id],
+    );
+    await testDb.pool.query(
+      `insert into subject_refresh_state (
+         page_id, plane, subject_ref, refresh_class, next_due_at, dirty_reason
+       ) values ($1, 'media_stats', 'bundle-on-post', 'dirty', now(), 'purchase_notification')`,
+      [page.id],
+    );
+    expect(await mediaStatsQueue(page.id))
+      .toEqual(["bundle-on-post", "offer-message-1", "offer-post-media"]);
+
+    const pages = [{ pageId: page.id, pageLabel: "plane-page", rows: 1, visited: 0, dirty: 1, headless: 1 }];
+    expect(await runFanslyMediaStatsDmOnlyPrune(appStub())).toMatchObject({ pages, rows: 1 });
+    expect(await runFanslyMediaStatsDmOnlyPrune(appStub(), { dryRun: false, waitMs: 0 }))
+      .toMatchObject({ refused: false, pages, rows: 1 });
+    expect(await mediaStatsQueue(page.id)).toEqual(["offer-message-1", "offer-post-media"]);
+  });
+
   it("keeps a DM-first media's row once media_plane projects its post, before creator_posts has", async (context) => {
     if (!testDb) {
       context.skip();

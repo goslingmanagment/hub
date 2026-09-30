@@ -14,6 +14,8 @@ import {
   parseMediaBackfillCursor,
   servedMediaOfferRef,
   servedWindowCoversRequest,
+  servedWindowSpansRequest,
+  steadyRefreshPlan,
   steadyWindows,
   windowAnsweredBy,
 } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
@@ -129,6 +131,67 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
     expect(estimate.estimatedCycleDays).toBe(Math.round((3 * 1_100) / (300 - 150 - 750 / 7)));
     expect(estimate.saturating).toBe(true);
   });
+
+  it("counts a never-visited item at its FIRST visit's cost while that backlog lasts", () => {
+    const census = {
+      fresh: 20,
+      mid: 350,
+      longTail: 1_000,
+      dailyCap: 300,
+      longTailCycleDays: 30,
+      longTailRequestsPerVisit: 3,
+    };
+    const backlog = estimateMediaStatsCycle({
+      ...census,
+      neverVisited: { fresh: 5, mid: 70, longTail: 300 },
+    });
+    // A first visit walks the item's history: two windows for a fresh item —
+    // its trailing window and the one below it, where its creation ends the
+    // walk — and the visit's whole four for mid and the long tail.
+    const fresh = 15 + 5 * 2;
+    const weekly = (280 + 70 * 4) / 7;
+    const longTail = 700 * 3 + 300 * 4;
+    expect(backlog.requestsPerDayWanted).toBe(Math.round(fresh + weekly + longTail / 30));
+    // The long tail waits for the first looks ahead of it — what they cost
+    // over a steady visit, paid ONCE — then takes what the steady fresh and
+    // mid visits leave. Its own first looks are part of its cycle.
+    const firstLooksAhead = 5 * (2 - 1) + 70 * (4 - 1);
+    expect(backlog.estimatedCycleDays)
+      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 20 - 350 / 7)));
+    // No backlog, no change: the steady arithmetic above still holds.
+    expect(estimateMediaStatsCycle({
+      ...census,
+      neverVisited: { fresh: 0, mid: 0, longTail: 0 },
+    })).toEqual(estimateMediaStatsCycle(census));
+  });
+
+  it("prices the first-look backlog ONCE, so the long tail's cycle does not collapse to the clamp", () => {
+    // lora-1's census, production 2026-09-30: the steady fresh and mid visits
+    // leave 14 calls a day. Charged every week, 399 never-visited mid items at
+    // four calls each would take 171 of the cap a day, drive that leftover
+    // below zero and report the clamp — the long tail's whole cost in days,
+    // 7 874 of them — although the backlog clears once and the long tail is
+    // funded again after it.
+    const estimate = estimateMediaStatsCycle({
+      fresh: 199,
+      mid: 608,
+      longTail: 1_984,
+      dailyCap: 300,
+      longTailCycleDays: 30,
+      longTailRequestsPerVisit: 3,
+      neverVisited: { fresh: 14, mid: 399, longTail: 1_922 },
+    });
+    const firstLooksAhead = 14 * (2 - 1) + 399 * (4 - 1);
+    const longTail = 62 * 3 + 1_922 * 4;
+    expect(estimate.estimatedCycleDays)
+      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 199 - 608 / 7)));
+    expect(estimate.estimatedCycleDays).toBe(642);
+    // What the tiers WANT still prices each first look within its tier's
+    // cadence: that is the rate that would keep every tier on time.
+    expect(estimate.requestsPerDayWanted)
+      .toBe(Math.round(199 + 14 + (608 + 399 * 3) / 7 + longTail / 30));
+    expect(estimate.saturating).toBe(true);
+  });
 });
 
 describe("media_stats — the pure helpers", () => {
@@ -220,6 +283,28 @@ describe("media_stats — the pure helpers", () => {
     expect(servedWindowCoversRequest(requested, { afterMs: null, beforeMs: null })).toBe(true);
   });
 
+  it("counts a hole window read only when what was served spans it end to end", () => {
+    const now = NOW.getTime();
+    const at = (days: number) => now - days * DAY_MS;
+    // A mid item last refreshed 38 days ago: the hole below its 30 days.
+    const requested = { afterMs: at(39), beforeMs: at(30) };
+    expect(servedWindowSpansRequest(requested, requested)).toBe(true);
+    // Production's shape: each bound snapped to the start of its day, so the
+    // last bucket starts under a day below what was asked.
+    const midnight = (ms: number) => ms - (ms % DAY_MS);
+    expect(servedWindowSpansRequest(requested, {
+      afterMs: midnight(requested.afterMs),
+      beforeMs: midnight(requested.beforeMs),
+    })).toBe(true);
+    // The route's DEFAULT trailing window — what the backfill guard exists for.
+    expect(servedWindowSpansRequest(requested, { afterMs: at(31), beforeMs: now })).toBe(false);
+    // Short at either end: days asked for and not served.
+    expect(servedWindowSpansRequest(requested, { afterMs: at(35), beforeMs: at(30) })).toBe(false);
+    expect(servedWindowSpansRequest(requested, { afterMs: at(39), beforeMs: at(33) })).toBe(false);
+    // No served bounds: no evidence, and no contradiction.
+    expect(servedWindowSpansRequest(requested, { afterMs: null, beforeMs: null })).toBe(true);
+  });
+
   it("covers the whole 90 days when the long tail is split", () => {
     const split = steadyWindows("long_tail", NOW, "split_31");
     expect(split).toHaveLength(3);
@@ -231,6 +316,43 @@ describe("media_stats — the pure helpers", () => {
       expect((window.beforeMs - window.afterMs) / DAY_MS).toBe(31);
       expect(window.periodMs).toBe(86_400_000);
     }
+  });
+
+  it("reaches a refresh back to the day before a last visit its window no longer holds", () => {
+    const now = NOW.getTime();
+    const daysBack = (windows: ReadonlyArray<{ afterMs: number; beforeMs: number }>) =>
+      windows.map((window) => [(now - window.afterMs) / DAY_MS, (now - window.beforeMs) / DAY_MS]);
+    const visited = (days: number) => new Date(now - days * DAY_MS);
+
+    // Visited 38 days ago: the 30-day read alone would skip eight days for
+    // good. The plan reads them, contiguous with the refresh, to a day below
+    // the visit — the walk's own overlap.
+    const late = steadyRefreshPlan("mid", NOW, "split_31", visited(38));
+    expect(daysBack(late.windows)).toEqual([[30, 0], [39, 30]]);
+    expect(windowAnsweredBy({ afterMs: now - 39 * DAY_MS, beforeMs: now }, late.windows)).toBe(true);
+    expect(late).toMatchObject({ holeWindows: 1, unreadHole: null });
+
+    // Inside the window, or never visited: the tier's plan, untouched.
+    for (const lastVisitedAt of [visited(25), visited(30), null]) {
+      expect(steadyRefreshPlan("mid", NOW, "split_31", lastVisitedAt)).toEqual({
+        windows: steadyWindows("mid", NOW, "split_31"),
+        holeWindows: 0,
+        unreadHole: null,
+      });
+    }
+
+    // 31-day steps, four windows at most — one unit that fits a chunk — and
+    // what does not fit is named, not skipped in silence.
+    const deep = steadyRefreshPlan("mid", NOW, "split_31", visited(170));
+    expect(daysBack(deep.windows)).toEqual([[30, 0], [61, 30], [92, 61], [123, 92]]);
+    expect(deep.unreadHole).toEqual({ afterMs: now - 171 * DAY_MS, beforeMs: now - 123 * DAY_MS });
+
+    // The long tail measures from its own span: 93 days split, 90 whole.
+    expect(daysBack(steadyRefreshPlan("long_tail", NOW, "split_31", visited(100)).windows))
+      .toEqual([[31, 0], [62, 31], [93, 62], [101, 93]]);
+    expect(daysBack(steadyRefreshPlan("long_tail", NOW, "ninety", visited(100)).windows))
+      .toEqual([[90, 0], [101, 90]]);
+    expect(steadyRefreshPlan("long_tail", NOW, "ninety", visited(85)).holeWindows).toBe(0);
   });
 
   it("takes a refresh from a visit's windows only when they cover it end to end", () => {
@@ -264,6 +386,34 @@ describe("media_stats — the pure helpers", () => {
     // A walk anchored in the past never answers today's trailing window.
     expect(windowAnsweredBy(s0!, [span(33, 2), span(63, 32)])).toBe(false);
     expect(windowAnsweredBy(s0!, [])).toBe(false);
+  });
+
+  it("never takes a window two days wide as answered by the slack alone", () => {
+    const now = NOW.getTime();
+    const span = (afterDays: number, beforeDays: number) => ({
+      afterMs: now - afterDays * DAY_MS,
+      beforeMs: now - beforeDays * DAY_MS,
+    });
+    // A mid item last refreshed 31 days ago: its refresh, and the hole below
+    // it down to a day before that refresh — two days wide.
+    const plan = steadyRefreshPlan("mid", NOW, "split_31", new Date(now - 31 * DAY_MS));
+    const [trailing, hole] = plan.windows;
+    expect(hole).toEqual({ periodMs: DAY_MS, ...span(32, 30) });
+    // The day of slack at the top and the day at the bottom meet inside it:
+    // with nothing read at all, the window read as answered, and the visit
+    // skipped it for good.
+    expect(windowAnsweredBy(hole!, [])).toBe(false);
+    // The refresh above it reads none of its days either — as asked, or as
+    // production serves it, snapped to the day boundary below `now`.
+    const snapped = now - 9 * 60 * 60 * 1000;
+    expect(windowAnsweredBy(hole!, [trailing!])).toBe(false);
+    expect(windowAnsweredBy(hole!, [{ afterMs: snapped - 30 * DAY_MS, beforeMs: snapped }])).toBe(false);
+    // What was read inside it holds it, the slack extending that and no more:
+    // its own answer, as asked or served a day early.
+    expect(windowAnsweredBy(hole!, [span(32, 30)])).toBe(true);
+    expect(windowAnsweredBy(hole!, [span(33, 31)])).toBe(true);
+    // Wide windows are unchanged: the plan's own windows answer themselves.
+    expect(windowAnsweredBy(trailing!, plan.windows)).toBe(true);
   });
 
   it("finds how far down a visit's windows reach, unbroken, from a walk's resume point", () => {
