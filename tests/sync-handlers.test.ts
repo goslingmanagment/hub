@@ -73,6 +73,9 @@ const dbMocks = vi.hoisted(() => ({
   upsertPageSubscriptions: vi.fn(),
   refreshFanPageFollowerState: vi.fn(),
   refreshFanPageSubscriberState: vi.fn(),
+  // No DM partner probe answered within a day unless a test says so.
+  readFanslyAccountProbe: vi.fn<typeof DbModule.readFanslyAccountProbe>(async () => null),
+  recordFanslyAccountProbe: vi.fn<typeof DbModule.recordFanslyAccountProbe>(async () => undefined),
 }));
 
 
@@ -377,6 +380,8 @@ describe("sync executor handlers", () => {
         return {
           accounts,
           fallbackIds: uniqueIds.filter((id) => !accounts.some((account) => account.id === id)),
+          reusedIds: [],
+          lookup: null,
         };
       }
 
@@ -388,6 +393,8 @@ describe("sync executor handlers", () => {
           createdAt: 1_770_000_000_000,
         })),
         fallbackIds: [],
+        reusedIds: [],
+        lookup: null,
       };
     });
     fanHydrationMocks.upsertHydratedFansForPage.mockImplementation(async (
@@ -2359,6 +2366,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
       accounts: [],
       fallbackIds: ["fan-1"],
+      reusedIds: [],
+      lookup: null,
     });
     dbMocks.upsertFans.mockResolvedValue([{ id: 91, platformUserId: "fan-1" }]);
     dbMocks.countActivePageFollows.mockResolvedValue(1);
@@ -2391,6 +2400,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       platformAccountId: 12,
       accounts: [],
       fallbackIds: ["fan-1"],
+      reusedIds: [],
+      lookup: null,
     });
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, [
       expect.objectContaining({
@@ -2455,6 +2466,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
       accounts: [],
       fallbackIds: ["fan-2"],
+      reusedIds: [],
+      lookup: null,
     });
     dbMocks.upsertFans.mockResolvedValue([
       { id: 91, platformUserId: "fan-1" },
@@ -2490,6 +2503,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       platformAccountId: 13,
       accounts: [expect.objectContaining({ id: "fan-1" })],
       fallbackIds: ["fan-2"],
+      reusedIds: [],
+      lookup: null,
     });
     expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, [
       expect.objectContaining({
@@ -2511,6 +2526,199 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
       generation: 1,
       lastSeenBefore: expect.any(Date),
     });
+  });
+
+  it.for([
+    { stream: "followers", pageId: 12 },
+    { stream: "followers_reconcile", pageId: 13 },
+  ] as const)("maps a $stream row whose fallback lookup ran within a day from its stored fan row", async ({ stream, pageId }) => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      db,
+      config: {
+        followerPageDelayMs: 0,
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getFollowersPage: vi.fn(async () => ({
+          items: [{
+            id: "1000",
+            followerId: "fan-gone",
+            lastSeenAt: 1_775_782_500_000,
+          }],
+          accounts: [],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    sharedMocks.refreshPageMetadata.mockResolvedValue({
+      parsed: {
+        account: {
+          followCount: 1,
+        },
+      },
+    });
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [],
+      fallbackIds: [],
+      reusedIds: ["fan-gone"],
+      lookup: null,
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map([["fan-gone", 93]]));
+    dbMocks.countActivePageFollows.mockResolvedValue(1);
+    dbMocks.countPageFollowsByGeneration.mockResolvedValue(1);
+
+    const execute = stream === "followers" ? executeFollowersChunk : executeFollowersReconcileChunk;
+    const result = await execute(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: pageId,
+          label: "fansly-page",
+          platformAccountId: `acct-${pageId}`,
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 3,
+      },
+      syncRunId: 101,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: pageId,
+      platformUserIds: ["fan-gone"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(tx, {
+      platformAccountId: pageId,
+      accounts: [],
+      fallbackIds: [],
+      reusedIds: ["fan-gone"],
+      lookup: null,
+    });
+    expect(dbMocks.upsertPageFollows).toHaveBeenCalledWith(tx, [
+      expect.objectContaining({
+        platformAccountId: pageId,
+        fanId: 93,
+        platformFollowId: "1000",
+      }),
+    ]);
+    // The page still omitted the account: the warn stays, and says the
+    // fallback answer came from the stored lookup.
+    expect(telemetry.addAnomaly).toHaveBeenCalledWith(expect.objectContaining({
+      code: "followers_missing_aggregation_accounts",
+      severity: "warn",
+      details: expect.objectContaining({
+        missingAggregationAccountCount: 1,
+        fallbackHydrationMisses: 0,
+        fallbackLookupsReused: 1,
+      }),
+    }));
+  });
+
+  it("keys the daily subscriber lookup on the page and maps reused subscribers from their stored rows", async () => {
+    const telemetry = createTelemetry();
+    const tx = {};
+    const db = {
+      transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback(tx)),
+    };
+    const subscription = (id: string, subscriberId: string) => ({
+      id,
+      subscriberId,
+      historyId: null,
+      subscriptionTierId: null,
+      subscriptionTierName: null,
+      subscriptionTierColor: null,
+      planId: null,
+      status: 3,
+      price: 5000,
+      renewPrice: 5000,
+      autoRenew: 1,
+      billingCycle: 30,
+      duration: 30,
+      renewDate: null,
+      createdAt: new Date("2026-03-10T00:00:00.000Z").toISOString(),
+      updatedAt: null,
+      endsAt: new Date("2026-04-09T00:00:00.000Z").toISOString(),
+    });
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: false,
+      },
+      adapter: {
+        getSubscribersPage: vi.fn(async () => ({
+          total: 2,
+          items: [subscription("sub-1", "fan-known"), subscription("sub-2", "fan-new")],
+          done: true,
+          raw: {},
+        })),
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue({
+      state: {
+        revision: 5,
+        generation: 0,
+        historyBackfilledAt: "2026-07-01T00:00:00.000Z",
+      },
+    });
+    const lookup = { lookedUpAt: new Date("2026-03-14T01:00:00.000Z"), platformUserIds: ["fan-new"] };
+    const newAccount = { id: "fan-new", username: "fan_new", displayName: null, createdAt: 1_770_000_000_000 };
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [newAccount],
+      fallbackIds: [],
+      reusedIds: ["fan-known"],
+      lookup,
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map([["fan-known", 91], ["fan-new", 92]]));
+
+    const result = await fanslySubscribersChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 14,
+          label: "fansly-page",
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 6,
+      },
+      syncRunId: 103,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 14,
+      platformUserIds: ["fan-known", "fan-new"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(tx, {
+      platformAccountId: 14,
+      accounts: [newAccount],
+      fallbackIds: [],
+      reusedIds: ["fan-known"],
+      lookup,
+    });
+    expect(dbMocks.upsertPageSubscriptions).toHaveBeenCalledWith(tx, [
+      expect.objectContaining({ platformSubscriptionId: "sub-1", fanId: 91 }),
+      expect.objectContaining({ platformSubscriptionId: "sub-2", fanId: 92 }),
+    ]);
   });
 
   it("blocks follower reconcile finalization when fallback hydration still leaves source rows unmapped", async () => {
@@ -2550,6 +2758,8 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
       accounts: [],
       fallbackIds: ["fan-1"],
+      reusedIds: [],
+      lookup: null,
     });
     fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValueOnce(new Map());
 
@@ -6116,6 +6326,137 @@ it("finalizes follower reconcile when offset drift duplicates raw rows but the u
     expect(getAccountsByIdsPage).toHaveBeenCalledWith(expect.anything(), ["fan-stale-aggregation"]);
     expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
       platformConversationId: "group-stale-aggregation",
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    }));
+    expect(dbMocks.recordFanslyAccountProbe).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      platformUserId: "fan-stale-aggregation",
+      probedAt: expect.any(Date),
+      resolved: false,
+    });
+  });
+
+  it("keeps the unresolvable exclusion without asking Fansly while the partner probe's answer is under a day old", async () => {
+    const telemetry = createTelemetry();
+    const getMessagingGroupsPage = vi.fn(async () => ({
+      total: 1,
+      items: [{
+        groupId: "group-probed",
+        partnerAccountId: "fan-probed",
+        partnerUsername: "fan_probed",
+        flags: 0,
+        unreadCount: 0,
+        subscriptionTierId: null,
+        lastMessageId: "msg-81",
+        lastUnreadMessageId: null,
+      }],
+      accounts: [],
+      groups: [{
+        id: "group-probed",
+        users: [
+          { groupId: "group-probed", userId: "acct-dm", type: 1, permissionFlags: 0 },
+          { groupId: "group-probed", userId: "fan-probed", type: 1, permissionFlags: 0 },
+        ],
+        lastMessage: {
+          id: "msg-81",
+          type: 1,
+          dataVersion: 1,
+          content: "still there?",
+          groupId: "group-probed",
+          senderId: "fan-probed",
+          correlationId: null,
+          inReplyTo: null,
+          inReplyToRoot: null,
+          createdAt: 1_770_000_000,
+          attachments: [],
+          embeds: [],
+          interactions: [],
+          likes: [],
+          totalTipAmount: 0,
+        },
+      }],
+      offset: 0,
+      done: true,
+      raw: {
+        data: [],
+        aggregationData: {
+          total: 1,
+          accounts: [],
+          groups: [],
+        },
+      },
+    }));
+    // Asked now, Fansly would resolve the partner and clear the exclusion.
+    const getAccountsByIdsPage = vi.fn(async () => ({
+      parsed: [{ id: "fan-probed", username: "fan_probed", displayName: null, createdAt: 1_770_000_000_000 }],
+      raw: {},
+    }));
+    const db = {};
+    const app = {
+      db,
+      config: {
+        syncSharedRateLimitEnabled: true,
+      },
+      adapter: {
+        getMessagingGroupsPage,
+        getAccountsByIdsPage,
+      },
+    } as never;
+
+    dbMocks.getCheckpoint.mockResolvedValue(null);
+    stubGenerationSetCount(1);
+    dbMocks.listPageDmConversationsByPlatformConversationIds.mockResolvedValue([buildDmConversation({
+      id: 781,
+      platformConversationId: "group-probed",
+      partnerPlatformUserId: "fan-probed",
+      partnerUsername: "fan_probed",
+      partnerDisplayName: null,
+      metadata: {
+        [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
+          FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+      },
+    })]);
+    dbMocks.upsertFans.mockResolvedValue([{ id: 102, platformUserId: "fan-probed" }]);
+    dbMocks.readFanslyAccountProbe.mockResolvedValue({
+      probedAt: new Date(Date.now() - 23 * 60 * 60_000),
+      resolved: false,
+    });
+
+    const result = await fanslyDmConversationsChunk(app, {
+      pageContext: {
+        platform: "fansly",
+        page: {
+          id: 55,
+          label: "dm-page",
+          platformAccountId: "acct-dm",
+          metadata: {},
+        },
+        session: { authorization: "token" },
+        proxy: null,
+      },
+      streamState: {
+        requestSeq: 1,
+      },
+      syncRunId: 9053,
+      telemetry: telemetry as never,
+      budget: new SyncChunkBudget(2),
+    } as never);
+
+    expect(result.satisfied).toBe(true);
+    expect(dbMocks.readFanslyAccountProbe).toHaveBeenCalledWith(db, {
+      platformAccountId: 55,
+      platformUserId: "fan-probed",
+    });
+    expect(getAccountsByIdsPage).not.toHaveBeenCalled();
+    expect(sharedMocks.persistRawPayload).not.toHaveBeenCalledWith(db, expect.objectContaining({
+      endpoint: "account_lookup",
+    }), expect.anything());
+    expect(dbMocks.recordFanslyAccountProbe).not.toHaveBeenCalled();
+    expect(dbMocks.upsertPageDmConversation).toHaveBeenCalledWith(db, expect.objectContaining({
+      platformConversationId: "group-probed",
       metadata: {
         [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]:
           FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,

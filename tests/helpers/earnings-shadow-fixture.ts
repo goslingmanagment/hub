@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   createModel, createFanslyPage, ensurePageSyncStates, findPageById,
-  startSyncRun, upsertFans, upsertFanPages, insertObservation,
+  startSyncRun, upsertFans, insertObservation,
   type UpsertTransactionInput,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
@@ -20,8 +20,11 @@ export async function earningsShadowFixture(testDb: StartedTestDatabase, shadow 
   const fans = await upsertFans(testDb.db, ["fan-a", "fan-b"].map((platformUserId) => ({
     platform: "fansly" as const, platformUserId, username: platformUserId,
   })));
-  await upsertFanPages(testDb.db, fans.map((fan) => ({ fanId: fan.id, platformAccountId: page.id })));
-  await testDb.pool.query("update page_fans set total_creator_net_mills = 100 where platform_account_id = $1", [page.id]);
+  // Plain SQL, not upsertFanPages: the migration tests run this fixture on a
+  // schema stopped before later page_fans columns, which the Drizzle insert
+  // would name.
+  await testDb.pool.query(`insert into page_fans (fan_id, platform_account_id, total_creator_net_mills)
+    select unnest($1::bigint[]), $2, 100`, [fans.map((fan) => fan.id), page.id]);
   const app = createTestAppContext(testDb, {
     fanslyFanEarningsSyncEnabled: true,
     fanslyFanEarningsShadowPageAllowlist: shadow ? page.label : "none",

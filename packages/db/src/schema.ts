@@ -1121,6 +1121,12 @@ export const pageFans = pgTable(
     externalPresenceObservedAt: timestamp("external_presence_observed_at", { withTimezone: true }),
     externalPresenceSource: text("external_presence_source"),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    // 0224: the Fansly account lookup through this page whose result Hub
+    // stored, and the DM partner probe's own answer (fan-hydration.ts,
+    // fansly-account-probe.ts). Neither is asked again within a day.
+    accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
+    accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
+    accountProbeResolved: boolean("account_probe_resolved"),
   },
   (table) => ({
     uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),

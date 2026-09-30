@@ -1,4 +1,6 @@
 import {
+  listFanslyFansLookedUpSince,
+  markFanPageAccountLookups,
   reconcileFanslyFanPageIdentity,
   upsertFanPages,
   upsertFans,
@@ -12,9 +14,31 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 
+/**
+ * Owner decision 2026-09-30: a fan's Fansly profile (username, display name,
+ * the creator's notes and custom name on the fan) is read at most once a day
+ * per page, an absent account included; a fan never looked up through the page
+ * is looked up at once. Accepted cost: a note or custom name edited in Fansly
+ * reaches Hub up to a day later. Per page because the notes a lookup returns
+ * belong to the page whose session asked.
+ */
+export const FANSLY_ACCOUNT_LOOKUP_REUSE_MS = 24 * 60 * 60_000;
+
+/** What one lookupHydratedFans call sent. upsertHydratedFansForPage stamps
+ * these ids in the transaction that stores the result, never before. */
+export type FanslyAccountLookupStamp = {
+  lookedUpAt: Date;
+  platformUserIds: string[];
+};
+
 type HydratedLookupResult = {
   accounts: FanslyAccount[];
   fallbackIds: string[];
+  /** Ids looked up through this page within the day: not sent again, their
+   * stored fan row is kept as it is. */
+  reusedIds: string[];
+  /** Null when the call sent no request. */
+  lookup: FanslyAccountLookupStamp | null;
 };
 
 /** Stage 7 producer 2: callers with a page + run in hand pass this so every
@@ -58,6 +82,8 @@ export async function lookupHydratedFans(
   app: AppContext,
   input: {
     requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
+    /** The page whose session asks: keys the once-a-day reuse. */
+    platformAccountId: number;
     platformUserIds: string[];
     telemetry?: SyncRunTelemetry;
     capture?: HydrationCaptureContext;
@@ -67,14 +93,23 @@ export async function lookupHydratedFans(
     return {
       accounts: [],
       fallbackIds: [],
+      reusedIds: [],
+      lookup: null,
     } satisfies HydratedLookupResult;
   }
 
   const uniqueIds = Array.from(new Set(input.platformUserIds.filter(Boolean)));
+  const lookedUpToday = new Set(await listFanslyFansLookedUpSince(app.db, {
+    platformAccountId: input.platformAccountId,
+    platformUserIds: uniqueIds,
+    since: new Date(Date.now() - FANSLY_ACCOUNT_LOOKUP_REUSE_MS),
+  }));
+  const reusedIds = uniqueIds.filter((id) => lookedUpToday.has(id));
+  const dueIds = uniqueIds.filter((id) => !lookedUpToday.has(id));
   const accounts: FanslyAccount[] = [];
 
-  for (let index = 0; index < uniqueIds.length; index += 100) {
-    const chunk = uniqueIds.slice(index, index + 100);
+  for (let index = 0; index < dueIds.length; index += 100) {
+    const chunk = dueIds.slice(index, index + 100);
     const response = await app.adapter.getAccountsByIdsPage(input.requestContext, chunk);
     if (input.capture) {
       await persistRawPayload(app.db, {
@@ -94,42 +129,23 @@ export async function lookupHydratedFans(
     accounts.push(...response.parsed);
   }
 
-  const fallbackIds = uniqueIds.filter(
+  const fallbackIds = dueIds.filter(
     (id) => !accounts.some((account) => account.id === id),
   );
   input.telemetry?.mergeHydrationSummary({
     uniqueFanIds: uniqueIds.length,
-    lookupBatches: Math.ceil(uniqueIds.length / 100),
+    reusedFanIds: reusedIds.length,
+    lookupBatches: Math.ceil(dueIds.length / 100),
     fallbackMisses: fallbackIds.length,
-    requestCount: Math.ceil(uniqueIds.length / 100),
+    requestCount: Math.ceil(dueIds.length / 100),
   });
 
   return {
     accounts,
     fallbackIds,
+    reusedIds,
+    lookup: dueIds.length > 0 ? { lookedUpAt: new Date(), platformUserIds: dueIds } : null,
   } satisfies HydratedLookupResult;
-}
-
-export async function prepareHydratedFans(
-  app: AppContext,
-  input: {
-    requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
-    platformUserIds: string[];
-    telemetry?: SyncRunTelemetry;
-  },
-) {
-  const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
-  const deletedDetectedAt = new Date();
-
-  return [
-    ...accounts.map(normalizeHydratedFan),
-    ...fallbackIds.map((id) => ({
-      platform: "fansly" as const,
-      platformUserId: id,
-      metadata: {},
-      deletedDetectedAt,
-    })),
-  ] satisfies UpsertFanInput[];
 }
 
 type HydratedFansForPageInput = {
@@ -140,6 +156,12 @@ type HydratedFansForPageInput = {
   /** Ids seen without an account snapshot and never looked up: the fan row is
    * ensured and linked, but nothing about the account is inferred. */
   unverifiedIds?: string[];
+  /** Ids lookupHydratedFans did not send because their lookup through this
+   * page ran within the day: linked like unverifiedIds, row kept as it is. */
+  reusedIds?: string[];
+  /** The lookup that produced `accounts` and `fallbackIds`: its ids are
+   * stamped with the result, so a rolled-back write leaves no stamp. */
+  lookup?: FanslyAccountLookupStamp | null;
 };
 
 export async function upsertHydratedFansForPage(
@@ -163,7 +185,7 @@ export async function upsertHydratedFansForPageDetailed(
       metadata: {},
       deletedDetectedAt,
     })),
-    ...(input.unverifiedIds ?? []).map((platformUserId) => ({
+    ...[...(input.unverifiedIds ?? []), ...(input.reusedIds ?? [])].map((platformUserId) => ({
       platform: "fansly" as const,
       platformUserId,
     })),
@@ -175,6 +197,13 @@ export async function upsertHydratedFansForPageDetailed(
       fanId: fan.id,
       platformAccountId: input.platformAccountId,
     })));
+  }
+  if (input.lookup) {
+    await markFanPageAccountLookups(db, {
+      platformAccountId: input.platformAccountId,
+      fanIds: input.lookup.platformUserIds.flatMap((id) => fanMap.get(id) ?? []),
+      lookedUpAt: input.lookup.lookedUpAt,
+    });
   }
 
   let reconciledAccountCount = 0;
@@ -214,38 +243,4 @@ export async function upsertHydratedFansForPageDetailed(
     aliasesSet,
     aliasesCleared,
   };
-}
-
-export async function hydrateFans(
-  app: AppContext,
-  input: {
-    db?: Database;
-    platformAccountId?: number;
-    requestContext: Parameters<AppContext["adapter"]["getAccountsByIdsPage"]>[0];
-    platformUserIds: string[];
-    telemetry?: SyncRunTelemetry;
-  },
-) {
-  const { accounts, fallbackIds } = await lookupHydratedFans(app, input);
-  const db = input.db ?? app.db;
-  const deletedDetectedAt = new Date();
-
-  if (input.platformAccountId !== undefined) {
-    return upsertHydratedFansForPage(db, {
-      platformAccountId: input.platformAccountId,
-      accounts,
-      fallbackIds,
-    });
-  }
-
-  const fans = await upsertFans(db, [
-    ...accounts.map(normalizeHydratedFan),
-    ...fallbackIds.map((platformUserId) => ({
-      platform: "fansly" as const,
-      platformUserId,
-      metadata: {},
-      deletedDetectedAt,
-    })),
-  ]);
-  return new Map(fans.map((fan) => [fan.platformUserId, fan.id]));
 }

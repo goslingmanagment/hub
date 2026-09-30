@@ -502,6 +502,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # no table, column or query changes, so the previous image runs unchanged
   # on them.
   "0223_raw_payload_and_attempt_lookup_indexes.sql"
+  # Once-a-day Fansly fan lookup: three nullable columns on page_fans, no
+  # default. The previous image never names them and writes page_fans by named
+  # columns, so it runs unchanged after a rollback (and simply looks every fan
+  # up again, as it always did).
+  "0224_page_fan_account_lookup_stamps.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
