@@ -1,4 +1,4 @@
-import { requestPageSync } from "@agency_hub_core/db";
+import { getCheckpoint, requestPageSync } from "@agency_hub_core/db";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resetIntegrationDatabase, startTestDatabase } from "./helpers/db.ts";
 import { followersDiagnosticFixture } from "./helpers/followers-diagnostic-fixture.ts";
@@ -25,7 +25,7 @@ describe("C1 followers decision receipts", () => {
     "update page_sync_states set applied_seq = request_seq where page_id = $1", [pageId],
   );
 
-  it.each(["none", "count", "missing", "unchanged"] as const)(
+  it.each(["none", "count", "missing", "unchanged", "crossed"] as const)(
     "records %s while preserving requests, presence and the real queue decision", async mode => {
       const fixture = await followersDiagnosticFixture(db, mode);
       await settleQueue(fixture.page.id);
@@ -38,7 +38,7 @@ describe("C1 followers decision receipts", () => {
         runs: 1, decisions: 1, missing_decisions: 0, invalid_decisions: 0, duplicate_decisions: 0,
       })]);
       expect(output.decisions).toEqual([expect.objectContaining({
-        count_mismatch: mode === "count", exhausted_without_known: mode === "missing",
+        count_mismatch: mode === "count", exhausted_without_known: mode === "missing" || mode === "crossed",
         unchanged_head_with_rows: mode === "unchanged", requested: mode !== "none", decisions: 1,
       })]);
       expect(output.queue).toEqual([expect.objectContaining({
@@ -51,10 +51,32 @@ describe("C1 followers decision receipts", () => {
         "select count(*)::int as n from page_fans where platform_account_id = $1 and external_presence_at is not null",
         [fixture.page.id],
       );
-      expect(presence.rows[0].n).toBe(mode === "unchanged" ? 2 : 1);
+      expect(presence.rows[0].n).toBe(mode === "unchanged" || mode === "crossed" ? 2 : 1);
       expect(JSON.stringify(output)).not.toMatch(/test-token|fan-1|authorization/);
     },
   );
+
+  it("stops a walk at the first row older than its vanished known follow and still requests a reconcile", async () => {
+    const fixture = await followersDiagnosticFixture(db, "crossed");
+    await settleQueue(fixture.page.id);
+    const result = await fixture.runHandlerAndFinishTelemetry();
+    expect(result).toMatchObject({ satisfied: true, stats: { crossedKnownBoundary: true, sawKnownCheckpoint: false } });
+    expect(fixture.getFollowersPage).toHaveBeenCalledTimes(1);
+    // The row older than the cursor is the reconcile's to confirm, not this walk's.
+    const follows = await db.pool.query(
+      "select platform_follow_id from page_follows where platform_account_id = $1", [fixture.page.id],
+    );
+    expect(follows.rows).toEqual([{ platform_follow_id: "1002" }]);
+    expect((await getCheckpoint(db.db, fixture.page.id, "followers"))?.cursorText).toBe("1002");
+    const note = await db.pool.query(
+      "select details -> 'followersReconcile' as d from sync_run_events where sync_run_id = $1 and details ? 'followersReconcile'",
+      [fixture.run.id],
+    );
+    expect(note.rows).toEqual([{ d: expect.objectContaining({
+      countMismatch: false, exhaustedWithoutKnown: true, unchangedHeadWithRows: false,
+      requested: true, knownCheckpoint: true, pageDone: false,
+    }) }]);
+  });
 
   it("coalesces a decision into outstanding reconcile work without touching its queue row", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");

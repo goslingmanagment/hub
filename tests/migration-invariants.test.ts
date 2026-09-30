@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import { OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
 import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
 
+import {
+  FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+  FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
+} from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
+
 describe("database migration invariants", () => {
   it("ties sync observability rows to their run page and stream", async () => {
     const migration = await readFile(
@@ -329,5 +334,51 @@ describe("database migration invariants", () => {
     // spells the same clauses as constants, so it implies the predicate.
     expect(index).toContain("where not succeeded and idempotency_key is not null;");
     expect(recovery).toContain("not a.succeeded and a.idempotency_key is not null");
+  });
+
+  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, on the readers' own clauses", async () => {
+    const index = await readFile(
+      "packages/db/migrations/0223_raw_payload_and_attempt_lookup_indexes.sql",
+      "utf8",
+    );
+    const sync = await readFile("packages/db/src/repositories/sync.ts", "utf8");
+
+    // Both tables are written by every lane; a plain build would block that.
+    expect(index.startsWith("-- agency-hub:no-transaction")).toBe(true);
+    expect(index).toContain("drop index concurrently if exists %I.%I");
+    expect(index).toContain(
+      "where i.relname in ('sync_raw_payloads_purchase_history_idx', 'sync_http_attempts_dm_group_idx')",
+    );
+    expect(index).toContain(
+      "create index concurrently if not exists sync_raw_payloads_purchase_history_idx",
+    );
+    expect(index).toContain("on sync_raw_payloads (page_id, endpoint, id)");
+    expect(index).toContain("create index concurrently if not exists sync_http_attempts_dm_group_idx");
+    expect(index).toContain("on sync_http_attempts (page_id, (request_shape ->> 'groupId'))");
+    expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
+
+    // The raw-payload index is partial on the endpoints the purchase-history
+    // chunk reads back. An endpoint renamed or added without this list goes
+    // back to a whole-table scan with no error, so the list is pinned to the
+    // lane's own constants.
+    const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
+    expect(predicate).toBeDefined();
+    expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([
+      "purchase_history",
+      FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
+      FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
+    ]);
+    expect(sync).toContain(`rp.endpoint = '${FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT}'`);
+
+    // The attempt index predicate is a contract with the streak query: the
+    // query spells the same clauses as constants, so it implies it.
+    expect(index).toContain("where stream = 'dm_messages' and operation = 'messages';");
+    expect(sync).toContain("and a.stream = 'dm_messages'\n        and a.operation = 'messages'\n"
+      + "        and a.request_shape ->> 'groupId' = ");
+
+    // Index-only, so a failed deploy may still restore the previous image.
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+      .toContain('"0223_raw_payload_and_attempt_lookup_indexes.sql"');
   });
 });
