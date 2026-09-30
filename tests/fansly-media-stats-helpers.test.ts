@@ -151,12 +151,45 @@ describe("media_stats — the cycle arithmetic (A16)", () => {
     const weekly = (280 + 70 * 4) / 7;
     const longTail = 700 * 3 + 300 * 4;
     expect(backlog.requestsPerDayWanted).toBe(Math.round(fresh + weekly + longTail / 30));
-    expect(backlog.estimatedCycleDays).toBe(Math.round(longTail / (300 - fresh - weekly)));
+    // The long tail waits for the first looks ahead of it — what they cost
+    // over a steady visit, paid ONCE — then takes what the steady fresh and
+    // mid visits leave. Its own first looks are part of its cycle.
+    const firstLooksAhead = 5 * (2 - 1) + 70 * (4 - 1);
+    expect(backlog.estimatedCycleDays)
+      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 20 - 350 / 7)));
     // No backlog, no change: the steady arithmetic above still holds.
     expect(estimateMediaStatsCycle({
       ...census,
       neverVisited: { fresh: 0, mid: 0, longTail: 0 },
     })).toEqual(estimateMediaStatsCycle(census));
+  });
+
+  it("prices the first-look backlog ONCE, so the long tail's cycle does not collapse to the clamp", () => {
+    // lora-1's census, production 2026-09-30: the steady fresh and mid visits
+    // leave 14 calls a day. Charged every week, 399 never-visited mid items at
+    // four calls each would take 171 of the cap a day, drive that leftover
+    // below zero and report the clamp — the long tail's whole cost in days,
+    // 7 874 of them — although the backlog clears once and the long tail is
+    // funded again after it.
+    const estimate = estimateMediaStatsCycle({
+      fresh: 199,
+      mid: 608,
+      longTail: 1_984,
+      dailyCap: 300,
+      longTailCycleDays: 30,
+      longTailRequestsPerVisit: 3,
+      neverVisited: { fresh: 14, mid: 399, longTail: 1_922 },
+    });
+    const firstLooksAhead = 14 * (2 - 1) + 399 * (4 - 1);
+    const longTail = 62 * 3 + 1_922 * 4;
+    expect(estimate.estimatedCycleDays)
+      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 199 - 608 / 7)));
+    expect(estimate.estimatedCycleDays).toBe(642);
+    // What the tiers WANT still prices each first look within its tier's
+    // cadence: that is the rate that would keep every tier on time.
+    expect(estimate.requestsPerDayWanted)
+      .toBe(Math.round(199 + 14 + (608 + 399 * 3) / 7 + longTail / 30));
+    expect(estimate.saturating).toBe(true);
   });
 });
 

@@ -844,6 +844,57 @@ describe("media_stats lane — a visit past its window closes the hole", () => {
     expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
   });
 
+  it("measures the hole from the last REFRESH, not from a stamp that only walked history", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const page = await seedPage();
+    const mediaRef = ref(1605);
+    // Refreshed 35 days ago; its walk is still open, 30 days below that.
+    const refreshedAt = NOW.getTime() - 35 * DAY_MS;
+    const walkOnly = new Date(NOW.getTime() - 25 * DAY_MS);
+    await seedMedia(page.id, [{
+      ref: mediaRef,
+      createdAtPlatform: new Date(NOW.getTime() - 170 * DAY_MS),
+    }], {
+      queueCursor: {
+        ...BACKFILL_DONE,
+        nextBeforeMs: refreshedAt - 30 * DAY_MS,
+        emptyStreak: 0,
+        done: false,
+        stopReason: null,
+      },
+    });
+    await visitedDaysAgo(page.id, mediaRef, 35);
+
+    // Ten days later, with three requests left: nothing is past its window
+    // yet, so the walk goes first and takes all three. The 30-day refresh
+    // gets none, and the item is stamped all the same — its walk moved.
+    const walked = adapterStub();
+    const spent = new SyncChunkBudget();
+    for (let index = 0; index < 2; index += 1) {
+      await spent.onRequestEvent({ state: "started" } as never);
+    }
+    await fanslyMediaStatsChunk(appStub(walked), input(page.id, telemetryStub(), spent, walkOnly));
+    expect((await journaled(page.id)).map((row) => row.request_params.mode))
+      .toEqual(["backfill", "backfill", "backfill"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString())
+      .toBe(walkOnly.toISOString());
+
+    // 25 days on, the 30-day refresh reaches only 5 days above that stamp —
+    // and 5 days BELOW it the series was last read. Measured from the stamp
+    // there is no hole, and the days in between are lost without a word.
+    // Measured from the refresh, they are read first, whole.
+    const adapter = adapterStub();
+    const telemetry = telemetryStub();
+    await fanslyMediaStatsChunk(appStub(adapter), input(page.id, telemetry));
+    expect(daysBack(adapter.calls).slice(0, 2)).toEqual([[30, 0], [36, 30]]);
+    expect((await journaled(page.id)).slice(3, 5).map((row) => row.request_params.mode))
+      .toEqual(["steady", "steady"]);
+    expect((await queueRow(page.id, mediaRef)).lastVisitedAt?.toISOString()).toBe(NOW.toISOString());
+    expect(telemetry.anomalies.filter((anomaly) =>
+      anomaly.code === "fansly_media_stats_refresh_hole"
+    )).toEqual([]);
+  });
+
   it("measures a long-tail hole from the plan the 90-day discovery settles on", async (ctx) => {
     if (!testDb) return ctx.skip();
     const page = await seedPage();

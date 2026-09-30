@@ -129,9 +129,11 @@
 //       why the edge does.
 //
 // A visit that comes later than its span reads the HOLE too: the refresh
-// reaches back to a day before the last visit, reserved whole with the steady
-// windows (`steadyRefreshPlan`). What one visit cannot carry is raised as
-// `fansly_media_stats_refresh_hole` rather than skipped in silence.
+// reaches back to a day before the last refresh, reserved whole with the
+// steady windows (`steadyRefreshPlan`). What one visit cannot carry is raised
+// as `fansly_media_stats_refresh_hole` rather than skipped in silence. The
+// last refresh, not the last stamp: a visit that only walked history stamps
+// the item too, and the cursor carries `refreshedThroughMs` past it.
 //
 // ── 5. BURST SHAPE IS THE BAN-RISK SURFACE, not daily volume ────────────────
 //
@@ -382,6 +384,13 @@ interface MediaBackfillCursor {
    *  walk at `created_at` — the probe window already covers the rest. */
   probeHitBeforeMs: number | null;
   guard: BackfillWindowGuard;
+  /** The instant the item's series was last read DOWN FROM TODAY, epoch ms: a
+   *  complete steady refresh, or a first walk's opening windows. Where the
+   *  next refresh's hole starts (`steadyRefreshPlan`). `last_visited_at` is
+   *  not that: a visit that only walked history, below it, stamps the item
+   *  too. Kept here, beside the walk it outlives, so it needs no column. Null
+   *  on a cursor from before it, and `last_visited_at` stands in. */
+  refreshedThroughMs: number | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -478,6 +487,7 @@ export function parseMediaBackfillCursor(
     probeResumeBeforeMs: asNullableSafeInt(record?.probeResumeBeforeMs),
     probeHitBeforeMs: asNullableSafeInt(record?.probeHitBeforeMs),
     guard: parseWindowGuard(record?.guard, BACKFILL_WINDOW_DAYS),
+    refreshedThroughMs: asNullableSafeInt(record?.refreshedThroughMs),
   };
 }
 
@@ -616,8 +626,21 @@ export interface MediaStatsCycleEstimate {
  * A NEVER-VISITED item is priced at its FIRST visit (`FIRST_VISIT_REQUESTS`),
  * which walks its history, for as long as that backlog lasts: counted at one
  * call, 399 never-visited mid items on lora-1 (2026-09-30) read as 57 calls a
- * day when their first visits want about 230. Its tier's cadence is still the
- * horizon — a first visit due in a week is a seventh of its cost a day.
+ * day when their first visits want about 230. What the tiers WANT puts each
+ * first visit inside its tier's cadence — one due in a week is a seventh of
+ * its cost a day — because that is the rate that keeps every tier on time.
+ *
+ * What the long tail GETS pays that backlog ONCE. A first look costs more than
+ * a steady visit only the one time, so the leftover stays the steady one, and
+ * the first looks queued ahead of the long tail — fresh and mid, which go
+ * first — are what it waits out before it is funded again:
+ *
+ *     estimatedCycleDays = (firstLooksAhead + L) / (cap − H − Mid/7)
+ *
+ * Charged every week instead, lora-1's 399 would take 171 calls of a day whose
+ * steady leftover is 14, and the estimate would report the clamp — 7 874 days
+ * — for a backlog that clears once. The long tail's own first looks are part
+ * of its cycle, in `L`.
  */
 export function estimateMediaStatsCycle(input: {
   fresh: number;
@@ -633,24 +656,24 @@ export function estimateMediaStatsCycle(input: {
 }): MediaStatsCycleEstimate {
   const cycleDays = Math.max(1, input.longTailCycleDays);
   const never = input.neverVisited ?? { fresh: 0, mid: 0, longTail: 0 };
-  // Each tier's calls per visit round: a visited item at its steady cost, a
+  // The steady visits of the fresh and mid tiers, a call an item a visit.
+  const daily = input.fresh;
+  const weekly = input.mid / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL;
+  // What their first looks cost OVER a steady visit, once.
+  const freshFirstLooks = never.fresh * (FIRST_VISIT_REQUESTS.fresh - 1);
+  const midFirstLooks = never.mid * (FIRST_VISIT_REQUESTS.mid - 1);
+  // The long tail's calls per round: a visited item at its steady cost, a
   // never-visited one at its first visit's.
-  const calls = (count: number, neverVisited: number, steady: number, first: number) =>
-    (count - neverVisited) * steady + neverVisited * first;
-  const daily = calls(input.fresh, never.fresh, 1, FIRST_VISIT_REQUESTS.fresh);
-  const weekly = calls(input.mid, never.mid, 1, FIRST_VISIT_REQUESTS.mid)
-    / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL;
-  const longTailCalls = calls(
-    input.longTail,
-    never.longTail,
-    Math.max(1, input.longTailRequestsPerVisit ?? 1),
-    FIRST_VISIT_REQUESTS.longTail,
-  );
-  const wanted = daily + weekly + longTailCalls / cycleDays;
+  const longTailCalls = (input.longTail - never.longTail)
+      * Math.max(1, input.longTailRequestsPerVisit ?? 1)
+    + never.longTail * FIRST_VISIT_REQUESTS.longTail;
+  const wanted = daily + freshFirstLooks
+    + (input.mid + midFirstLooks) / MEDIA_STATS_MID_INTERVAL_DAYS_LOCAL
+    + longTailCalls / cycleDays;
   const leftover = input.dailyCap - daily - weekly;
   const estimatedCycleDays = input.longTail === 0
     ? cycleDays
-    : Math.round(longTailCalls / Math.max(1, leftover));
+    : Math.round((freshFirstLooks + midFirstLooks + longTailCalls) / Math.max(1, leftover));
   return {
     requestsPerDayWanted: Math.round(wanted),
     estimatedCycleDays,
@@ -839,10 +862,11 @@ function skip(reason: string): StreamChunkResult {
 interface VisitWindows {
   issued: Set<string>;
   answered: Array<{ afterMs: number; beforeMs: number }>;
-  /** The last visit this visit's refresh reaches back to (`steadyRefreshPlan`),
-   *  or null: never visited, or an open walk anchored at today, which reads
-   *  everything under it anyway. Settled as the visit starts, before the walk
-   *  moves the cursor. */
+  /** The last read down from today this visit's refresh reaches back to
+   *  (`steadyRefreshPlan`; the cursor's `refreshedThroughMs`, else the last
+   *  visit), or null: never visited, or an open walk anchored at today, which
+   *  reads everything under it anyway. Settled as the visit starts, before the
+   *  walk moves the cursor. */
   holeFrom: Date | null;
 }
 
@@ -1327,10 +1351,18 @@ export async function fanslyMediaStatsChunk(
     // of its windows can answer today's refresh. An open walk anchored at today
     // is a first visit: its opening window is the trailing one.
     const walkInPast = !cursor.done && cursor.nextBeforeMs < now.getTime() - DAY_MS;
-    // A LATE ITEM'S HOLE — the days between its last visit and the far end of
-    // its tier's span — is read with its refresh (`steadyRefreshPlan`). Only an
-    // open walk anchored at today reaches it by itself.
-    visit.holeFrom = !cursor.done && !walkInPast ? null : candidate.lastVisitedAt;
+    const walkFromToday = !cursor.done && !walkInPast;
+    // A LATE ITEM'S HOLE — the days between its last refresh and the far end
+    // of its tier's span — is read with its refresh (`steadyRefreshPlan`). Only
+    // an open walk anchored at today reaches it by itself. Measured from the
+    // last read down from today, not the stamp: a visit that only walked
+    // history moved `last_visited_at` without reading the days above its walk.
+    const refreshedThroughMs = cursor.refreshedThroughMs
+      ?? candidate.lastVisitedAt?.getTime()
+      ?? null;
+    visit.holeFrom = walkFromToday || refreshedThroughMs === null
+      ? null
+      : new Date(refreshedThroughMs);
     const closesHole = steadyRefreshPlan(
       candidate.tier,
       now,
@@ -1457,11 +1489,20 @@ export async function fanslyMediaStatsChunk(
           mediaOfferRef: candidate.subjectRef,
           tier: candidate.tier,
           lastVisitedAt: candidate.lastVisitedAt?.toISOString() ?? null,
+          refreshedThrough: visit.holeFrom?.toISOString() ?? null,
           unreadAfter: new Date(unreadHole.afterMs).toISOString(),
           unreadBefore: new Date(unreadHole.beforeMs).toISOString(),
         },
       });
     }
+
+    // WHERE THE NEXT HOLE STARTS. A complete refresh, or a walk that opened at
+    // today, read the series down from now. A visit that only walked history
+    // carries the older instant forward: its stamp is no read of the days
+    // above the walk, and a hole measured from it would skip them unnamed.
+    cursor.refreshedThroughMs = steadyComplete || walkFromToday
+      ? now.getTime()
+      : visit.holeFrom?.getTime() ?? null;
 
     visited += 1;
     const intervalDays = mediaStatsIntervalDays(candidate.tier, longTailCycleDays);
@@ -2214,6 +2255,10 @@ export interface SteadyRefreshPlan {
  * the visit names rather than skips in silence. The queue visits an item at the
  * edge of its window before any first look (`listMediaStatsRefreshChunk`), so a
  * hole at all means the lane has fallen behind its tier's cadence.
+ *
+ * The last visit is the last one that read the series DOWN FROM TODAY — the
+ * cursor's `refreshedThroughMs`, which a visit that only walked history
+ * carries forward — so that is what the caller passes.
  *
  * `lastVisitedAt` null — never visited, or a walk that reads everything under
  * today anyway — is the tier's plan as it is.
