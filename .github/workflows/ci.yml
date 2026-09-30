@@ -444,15 +444,26 @@ jobs:
       # still clones its own database from the shard's one cluster, and
       # anything cluster-wide in those files is scoped or created once in
       # tests/helpers/global-setup.ts. Hosted runners keep the default.
+      #
+      # On the PC the shard's test cluster keeps PGDATA in a tmpfs
+      # (HUB_TEST_PG_TMPFS, tests/helpers/global-setup.ts): the cluster is thrown
+      # away with the run, fsync is already off, and on disk its WAL and cloned
+      # databases were ~8 GiB of writes a full run, most of the PC's SSD wear
+      # (measured 01.10: 8.1-8.4 GiB a run on disk, 2.1 GiB with the tmpfs, no
+      # slower, peak cluster ~270 MiB a shard). Hosted runners and the Nightly
+      # full suite keep it on disk.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
         env:
           SYNC_CRITICAL_DB_PARALLELISM: ${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}
+          HUB_TEST_PG_TMPFS: ${{ runner.environment == 'self-hosted' && '1' || '' }}
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
       # One file, ~20s on the PC — it resolves to a single spec so it cannot
       # be sharded; the weights' firstShardExtraSeconds accounts for it.
       - name: Sync-critical API tests
         if: matrix.shard == 1
+        env:
+          HUB_TEST_PG_TMPFS: ${{ runner.environment == 'self-hosted' && '1' || '' }}
         run: pnpm test:sync-critical:api
 
   # Branch protection requires a check named exactly "Quality Gate". A matrix
