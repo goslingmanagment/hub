@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +9,7 @@ import type { TestSpecification, Vitest } from "vitest/node";
 import {
   SHARD_WEIGHTS_PATH,
   defaultShardWeight,
+  orderShardFiles,
   parseShardWeights,
   planWeightedShards,
   validateShardWeights,
@@ -34,13 +35,23 @@ function expectPartition(shards: readonly (readonly string[])[], files: readonly
   expect([...placed].sort()).toEqual([...new Set(files)].sort());
 }
 
-function sequencer(shard: { index: number; count: number } | undefined, log = vi.fn()) {
-  const ctx = { config: { root: repoRoot, shard }, logger: { log } };
-  return new WeightedShardSequencer(ctx as unknown as Vitest);
+// No results cache, as in CI: BaseSequencer.sort runs the largest file first.
+const cache = {
+  getFileTestResults: () => undefined,
+  getFileStats: (key: string) => ({ size: statSync(path.join(repoRoot, key.slice(key.indexOf(":") + 1))).size }),
+};
+
+function context(shard: { index: number; count: number } | undefined, log = vi.fn()) {
+  return { config: { root: repoRoot, shard }, logger: { log }, cache } as unknown as Vitest;
 }
 
+function sequencer(shard: { index: number; count: number } | undefined, log = vi.fn()) {
+  return new WeightedShardSequencer(context(shard, log));
+}
+
+const project = { name: "", config: { sequence: { groupOrder: 0 }, isolate: true } };
 const specs = (files: readonly string[]) =>
-  files.map(file => ({ moduleId: path.join(repoRoot, file) }) as unknown as TestSpecification);
+  files.map(file => ({ moduleId: path.join(repoRoot, file), project }) as unknown as TestSpecification);
 
 describe("weighted shard plan", () => {
   it.each(SHARD_COUNTS)("puts every sync-critical DB file in exactly one of %i shards", count => {
@@ -117,6 +128,19 @@ describe("weighted shard plan", () => {
     expect(() => planWeightedShards(suite, committed, 0)).toThrow("Shard count");
     expect(() => planWeightedShards(suite, committed, 1.5)).toThrow("Shard count");
   });
+
+  it("orders a shard's files heaviest first, equal weights in path order, a new file at the median", () => {
+    // The median of 1, 3, 3 and 10 is 3: the newcomer sorts with b and d, by path.
+    const recorded = weights({ "tests/a.test.ts": 1, "tests/b.test.ts": 3, "tests/c.test.ts": 10, "tests/d.test.ts": 3 });
+    const expected = ["tests/c.test.ts", "tests/b.test.ts", "tests/d.test.ts", "tests/new.test.ts", "tests/a.test.ts"];
+    expect(orderShardFiles(["tests/a.test.ts", "tests/new.test.ts", "tests/d.test.ts", "tests/b.test.ts", "tests/c.test.ts"], recorded)).toEqual(expected);
+    expect(orderShardFiles([...expected].reverse(), recorded)).toEqual(expected);
+    // Any item type, keyed by its path; the items themselves come back.
+    const items = expected.map(file => ({ file }));
+    const ordered = orderShardFiles([...items].reverse(), recorded, item => item.file);
+    expect(ordered).toEqual(items);
+    ordered.forEach((item, index) => expect(item).toBe(items[index]));
+  });
 });
 
 describe("shard weights file", () => {
@@ -167,13 +191,35 @@ describe("WeightedShardSequencer", () => {
     expect(log.mock.calls[0]?.[0]).toMatch(new RegExp(`^Weighted shard 2/2: ${chosen.length} of 6 files, ~\\d+s of file work predicted; 1 without a recorded weight \\(median used\\) \\(tests/ci/shard-weights\\.json\\)$`));
   });
 
+  it.each(SHARD_COUNTS)("starts the files of each of %i shards heaviest first, equal weights in path order", async count => {
+    const input = specs(suite);
+    for (let index = 1; index <= count; index += 1) {
+      const chosen = await sequencer({ index, count }).shard(input);
+      const sorted = await sequencer({ index, count }).sort(chosen);
+      // Only the order changes: the same specs shard() chose, each once.
+      expect(sorted).toHaveLength(chosen.length);
+      expect(new Set(sorted)).toEqual(new Set(chosen));
+      const keys = sorted.map(spec => shardKey(repoRoot, spec.moduleId));
+      const weight = (key: string) => committed.files[key] ?? defaultShardWeight(committed);
+      for (let at = 1; at < keys.length; at += 1) {
+        const [before, after] = [keys[at - 1] ?? "", keys[at] ?? ""];
+        expect(weight(after)).toBeLessThanOrEqual(weight(before));
+        if (weight(after) === weight(before)) expect(before < after).toBe(true);
+      }
+      expect(keys).toEqual(orderShardFiles([...keys].sort(), committed));
+    }
+  });
+
   it("leaves an unsharded run alone: no shard() filtering and BaseSequencer's order", async () => {
     const input = specs(suite);
     const log = vi.fn();
     expect(await sequencer(undefined, log).shard(input)).toBe(input);
     expect(log).not.toHaveBeenCalled();
-    expect(Object.hasOwn(WeightedShardSequencer.prototype, "sort")).toBe(false);
-    expect(WeightedShardSequencer.prototype.sort).toBe(BaseSequencer.prototype.sort);
+    const base = await new BaseSequencer(context(undefined)).sort(input);
+    expect(await sequencer(undefined).sort(input)).toEqual(base);
+    // That order is BaseSequencer's own: the largest file first.
+    const sizes = base.map(spec => statSync(spec.moduleId).size);
+    expect(sizes).toEqual([...sizes].sort((a, b) => b - a));
   });
 
   it("keys specs by repo-relative path with forward slashes", () => {
@@ -182,39 +228,65 @@ describe("WeightedShardSequencer", () => {
 });
 
 // A trimmed PC job log: GitHub timestamps every line; vitest colours its output.
+const PC_PARALLELISM = "  SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=2";
+const SECOND_DONE = "2026-09-28T23:03:14.0000000Z  ✓ tests/second";
 const esc = "\u001b";
 const jobLog = [
   "\uFEFF2026-09-28T23:02:35.0000000Z ##[group]Run actions/checkout@v6",
   "2026-09-28T23:02:57.0000000Z ##[group]Run pnpm test:sync-critical:db --shard=1/6",
-  "2026-09-28T23:02:57.1000000Z > vitest run --no-file-parallelism tests/*.integration.test.ts --shard=1/6",
+  "2026-09-28T23:02:57.0010000Z env:",
+  `2026-09-28T23:02:57.0020000Z ${PC_PARALLELISM}`,
+  "2026-09-28T23:02:57.0030000Z ##[endgroup]",
+  "2026-09-28T23:02:57.1000000Z > vitest run ${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism} tests/*.integration.test.ts --shard=1/6",
   "2026-09-28T23:02:58.0000000Z  RUN  v4.1.10 /home/runner/work/hub/hub",
   `2026-09-28T23:03:10.0000000Z  ${esc}[32m✓${esc}[39m tests/first.integration.test.ts ${esc}[2m(${esc}[22m${esc}[2m3 tests${esc}[22m${esc}[2m)${esc}[22m${esc}[33m 2000${esc}[2mms${esc}[22m${esc}[39m`,
   "2026-09-28T23:03:11.0000000Z stderr | tests/second.integration.test.ts > noisy",
-  "2026-09-28T23:03:14.0000000Z  ✓ tests/second.integration.test.ts (4 tests) 3000ms",
+  `${SECOND_DONE}.integration.test.ts (4 tests) 3000ms`,
   "2026-09-28T23:03:14.1000000Z      ✓ a slow test inside it  2900ms",
   "2026-09-28T23:03:20.5000000Z  ❯ tests/third.integration.test.ts (2 tests | 1 failed) 6000ms",
   "2026-09-28T23:03:20.6000000Z  Test Files  1 failed | 2 passed (3)",
+  `2026-09-28T23:03:20.7000000Z ${esc}[2m   Duration ${esc}[22m 22.70s${esc}[2m (transform 1.20s, setup 0ms, import 2.50s, tests 11.00s, environment 500ms)${esc}[22m`,
   "2026-09-28T23:03:21.0000000Z ##[group]Run pnpm test:sync-critical:api",
   "2026-09-28T23:03:30.0000000Z  ✓ tests/api.integration.test.ts (103 tests | 76 skipped) 5000ms",
   "2026-09-28T23:03:41.5000000Z Post job cleanup.",
 ].join("\r\n");
 
 describe("shard weight regeneration", () => {
-  it("measures each file's wall time between vitest reports, and the API step", () => {
-    // second: 4 s wall for 3 s reported, third: 6.5 s for 6 s; the first file
-    // also waited for global setup, so it gets 2 s plus the median overhead.
+  it("measures each file's own time as seconds of shard wall time, and the API step", () => {
+    // Own time: the reported duration plus the job's (setup + import +
+    // environment) / files = 3 s / 3 = 1 s; the PC ran two files at once.
     expect(parseJobLog(jobLog)).toEqual({
       files: [
-        { file: "tests/first.integration.test.ts", seconds: 2.75 },
-        { file: "tests/second.integration.test.ts", seconds: 4 },
-        { file: "tests/third.integration.test.ts", seconds: 6.5 },
+        { file: "tests/first.integration.test.ts", seconds: 1.5 },
+        { file: "tests/second.integration.test.ts", seconds: 2 },
+        { file: "tests/third.integration.test.ts", seconds: 3.5 },
       ],
       apiSeconds: 20.5,
     });
   });
 
+  it("does not depend on when the files finished", () => {
+    // The slow third file now finishes 0.1 s after the second: the time
+    // between completions would have weighed it at 0.1 s.
+    const late = jobLog.replace(SECOND_DONE, "2026-09-28T23:03:20.4000000Z  ✓ tests/second");
+    expect(late).not.toBe(jobLog);
+    expect(parseJobLog(late)).toEqual(parseJobLog(jobLog));
+  });
+
+  it("counts one file at a time when the DB step ran without file parallelism", () => {
+    const hosted = jobLog.replace(PC_PARALLELISM, "  SYNC_CRITICAL_DB_PARALLELISM: ");
+    expect(parseJobLog(hosted).files.map(entry => entry.seconds)).toEqual([3, 4, 7]);
+  });
+
   it("refuses a log without sync-critical DB results", () => {
     expect(() => parseJobLog("2026-09-28T23:02:35.0000000Z ##[group]Run pnpm lint\n")).toThrow("No sync-critical DB file results");
+  });
+
+  it("refuses a DB step that does not say how many files ran at once or how long they imported", () => {
+    const without = (text: string) => jobLog.split("\r\n").filter(line => !line.includes(text)).join("\r\n");
+    expect(() => parseJobLog(without("SYNC_CRITICAL_DB_PARALLELISM:"))).toThrow("SYNC_CRITICAL_DB_PARALLELISM");
+    expect(() => parseJobLog(without("Duration"))).toThrow("Duration");
+    expect(() => parseJobLog(jobLog.replace(PC_PARALLELISM, "  SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism"))).toThrow("how many files ran at once");
   });
 
   it("takes the median across runs, keeps unmeasured files that still exist and drops deleted ones", () => {

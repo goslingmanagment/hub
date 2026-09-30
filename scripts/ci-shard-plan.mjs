@@ -10,7 +10,8 @@
 //
 // Every shard computes the whole plan from the same checkout, so the shards
 // partition the files: each file lands in exactly one shard. A file without a
-// recorded weight (a new test) gets the median weight and still runs.
+// recorded weight (a new test) gets the median weight and still runs. Inside
+// a shard the files start heaviest first (orderShardFiles).
 
 export const SHARD_WEIGHTS_PATH = "tests/ci/shard-weights.json";
 export const SHARD_WEIGHTS_VERSION = 1;
@@ -65,6 +66,21 @@ export function defaultShardWeight(weights) {
 }
 
 const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The order a shard starts its files in: heaviest first, equal weights in
+ * path order, a file without a recorded weight at the median. The files a
+ * shard runs at once then finish close together instead of a slow file
+ * starting last and running alone. `keyOf` gives an item's repo-relative path.
+ */
+export function orderShardFiles(items, weights, keyOf = item => item) {
+  const fallbackMs = toMs(defaultShardWeight(weights));
+  const weightMs = key => (Object.hasOwn(weights.files, key) ? toMs(weights.files[key]) : fallbackMs);
+  return items
+    .map(item => ({ item, key: keyOf(item) }))
+    .sort((a, b) => weightMs(b.key) - weightMs(a.key) || byCodeUnit(a.key, b.key))
+    .map(({ item }) => item);
+}
 
 /**
  * Packs `files` into `count` shards. Returns every shard's files (sorted) and
