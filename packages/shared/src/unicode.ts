@@ -25,9 +25,20 @@ export function truncateUtf16Safe(text: string, max: number): string {
 // A high surrogate not followed by a low one, or a low surrogate not
 // preceded by a high one (lookbehind is fine on Node 22).
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// The same pattern without the global flag, for `test`: a global regex keeps
+// `lastIndex` between calls. The plain class is the cheap precheck: a string
+// with no surrogate code unit at all, the ordinary case, skips the lookarounds.
+const HAS_LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const HAS_SURROGATE_RE = /[\uD800-\uDFFF]/;
 
 function sanitizeString(text: string): string {
   return text.replace(LONE_SURROGATE_RE, "�");
+}
+
+function countInString(text: string): number {
+  return HAS_SURROGATE_RE.test(text) && HAS_LONE_SURROGATE_RE.test(text)
+    ? text.match(LONE_SURROGATE_RE)!.length
+    : 0;
 }
 
 /** Deep-copy `value` with every unpaired surrogate in every string replaced
@@ -42,9 +53,37 @@ export function sanitizeLoneSurrogatesDeep<T>(value: T): T {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      out[sanitizeString(key)] = sanitizeLoneSurrogatesDeep(item);
+      // A parsed `__proto__` key is data; plain assignment would set the
+      // copy's prototype instead and drop the key from the body.
+      Object.defineProperty(out, sanitizeString(key), {
+        value: sanitizeLoneSurrogatesDeep(item),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return out as T;
   }
   return value;
+}
+
+/** How many unpaired surrogates `sanitizeLoneSurrogatesDeep` would replace in
+ * `value` (object keys included). Walks the same tree and copies nothing, so a
+ * caller can keep the value itself when the answer is 0. */
+export function countLoneSurrogatesDeep(value: unknown): number {
+  if (typeof value === "string") {
+    return countInString(value);
+  }
+  let count = 0;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      count += countLoneSurrogatesDeep(item);
+    }
+  } else if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      count += countInString(key) + countLoneSurrogatesDeep(record[key]);
+    }
+  }
+  return count;
 }

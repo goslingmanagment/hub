@@ -6,6 +6,7 @@ import {
   type UpsertFanInput,
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION, type FanslyAccount, type FanslyAccountNote } from "@agency_hub_core/fansly";
+import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
@@ -34,7 +35,13 @@ function normalizeHydratedFan(account: FanslyAccount): UpsertFanInput {
   };
 }
 
-function normalizeFanslyNote(note: FanslyAccountNote) {
+function normalizeFanslyNote(served: FanslyAccountNote) {
+  // The note is served text (a creator's free-form note, a custom username)
+  // and `raw` is jsonb, which refuses an unpaired UTF-16 surrogate: one broken
+  // emoji would fail the page transaction on every retry
+  // (./journal-lone-surrogates.ts). Every field comes from ONE copy so the
+  // alias compared and deduplicated here is the text the columns store.
+  const note = sanitizeLoneSurrogatesDeep(served);
   return {
     externalNoteId: note.id,
     contentType: note.contentType ?? null,

@@ -390,6 +390,21 @@ read and would defeat content-address dedup. The allowlist fails closed, and
 `dm_messages` and `purchase_history` are never stripped because the AI media
 describer downloads from their signed URLs. Earlier captures stay verbatim.
 
+Pull capture never fails on an unpaired UTF-16 surrogate in a provider body
+(production 2026-09-30, `services/sync/journal-lone-surrogates.ts`). json and
+jsonb refuse one (22P02, "Unicode low surrogate must follow a high
+surrogate"), so a body that holds one is journaled as a copy with each
+replaced by U+FFFD, in the catalog object and both inline bodies alike, for
+every kind and platform. Whole emoji are never touched, and a body without an
+unpaired surrogate is written as the served object itself. The raw row's
+`mapper_version` gains `+lone-surrogates-replaced-v1` (after
+`+cdn-tokens-stripped-v1` when both apply), and a capture inside a sync run
+adds an info note `journal_lone_surrogates_replaced` with both counts. The lane
+keeps parsing its unmodified response; text columns receive U+FFFD from the
+driver's UTF-8 encoding, and `pages.metadata` takes sanitized Fansly walls and
+tiers, as `page_fan_external_notes` takes sanitized fan notes. The capture
+returns the body it journaled, and the DM shadow witness hashes that body.
+
 OFAPI governed transport diagnostics (#259) expose only known machine
 class/name/code values, header/body stage, elapsed/timeout values, status and
 byte counts. They reach structured logs and existing credit-ledger details;

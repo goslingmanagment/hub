@@ -312,6 +312,38 @@ describe("A0 shadow against the real sweep", () => {
     },
   );
 
+  it("binds a witness to the journaled body when fan text had unpaired surrogates", async () => {
+    const pages = [0, 1, 2, 3].map((n) => groupsPage({
+      conversations: [{ groupId: `g${n}`, flags: n === 3 ? 1 : 0 }],
+      total: 4, offset: n * 100, done: n === 3,
+    }));
+    // Production 2026-09-30: Fansly text can carry an emoji cut in half. The
+    // journal stores U+FFFD in its place, so the served body and the stored
+    // one no longer hash alike; the fan's note reaches jsonb as well.
+    Object.assign(pages[3]!.accounts[0]!, {
+      displayName: "Fan g3 \ud83d",
+      notes: [{ id: "note-g3", contentType: 0, title: "vip \udc4b", note: "tips \ud83d", createdAt: HEAD_CREATED_AT_MS }],
+    });
+    const source = await fixture(true, pages);
+    await db.pool.query("update page_dm_threads set last_message_id = 'previous' where platform_conversation_id = 'g3'");
+    await source.chunk(4);
+    const counters = (await report()).sweeps[0].diagnostics;
+    expect(counters.readerWitnesses).toHaveLength(1);
+    const witness = counters.readerWitnesses[0];
+    const observation = (await db.pool.query(`select o.id, o.account_id as "accountId", o.platform, o.kind,
+      coalesce(o.payload, b.body) as payload from observations o
+      left join capture_json_hot_bodies b on b.bucket_month = o.payload_bucket_month
+        and b.object_id = o.payload_object_id where o.id = $1`, [witness.observationId])).rows[0];
+    expect(observation.payload.aggregationData.accounts[0].displayName).toBe("Fan g3 \ufffd");
+    expect(resolveDmShadowWitness(witness, Number(observation.accountId), {
+      ...observation, id: Number(observation.id), accountId: Number(observation.accountId),
+    })).toEqual({ conversationRef: "g3", messageId: "msg-g3" });
+    expect((await db.pool.query("select title, body, raw from page_fan_external_notes")).rows).toEqual([{
+      title: "vip \ufffd", body: "tips \ufffd",
+      raw: { id: "note-g3", contentType: 0, title: "vip \ufffd", note: "tips \ufffd", createdAt: HEAD_CREATED_AT_MS },
+    }]);
+  });
+
   it("keeps a rejected full sweep incomplete rather than reporting zero misses", async () => {
     const source = await fixture(true, [groupsPage({
       conversations: ["g0", "g0"], total: 2, offset: 0, done: true,

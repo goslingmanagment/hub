@@ -672,8 +672,11 @@ export async function fanslyDmConversationsChunk(
     });
     const witnessPointer = shadow?.readerWitnesses != null && shadow.stopPage !== null &&
       shadow.readerWitnesses.length < DM_SHADOW_WITNESS_LIMIT
+      // The witness hashes the body the observation holds, which is a copy
+      // when unpaired surrogates were replaced (./journal-lone-surrogates.ts).
       ? createDmShadowWitnessPointers({ observationId: listCapture.observationId,
-        payload: capturedPayload, readStartedAtMs: readerReadStartedAtMs, readFinishedAtMs: Date.now() })
+        payload: listCapture.observationPayload as typeof capturedPayload,
+        readStartedAtMs: readerReadStartedAtMs, readFinishedAtMs: Date.now() })
       : null;
     let unchangedPage = true;
     const shadowConversations: DmShadowConversation[] = [];
