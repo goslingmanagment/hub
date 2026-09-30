@@ -101,7 +101,7 @@ function publishCaptureCasSettings(effectiveConfig: AppConfig): void {
  *  worker starts its heartbeat only after its queue services: a job picked up
  *  in that window captured with the empty defaults, which fail closed to
  *  inline bodies with no catalog reference (prod 2026-09-30, raw row 3238568,
- *  0.7 s after process start).
+ *  ~2.2 s after process start, just before "Worker started").
  *
  *  Never throws. A failed read leaves the fail-closed defaults in place —
  *  inline bodies, no catalog reference, inline reads — which is valid capture,

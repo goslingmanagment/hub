@@ -4,6 +4,16 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  getCaptureCasDualWritePages,
+  getCaptureCasPointerOnlyPages,
+  resetCaptureCasDualWriteForTests,
+} from "../apps/runtime/src/services/capture-cas-dual-write.ts";
+import {
+  getCaptureCasReadMode,
+  resetCaptureCasReadForTests,
+} from "../apps/runtime/src/services/payload-reader.ts";
+
 // Shared, hoisted mock state so the vi.mock factories (hoisted above imports) can reference it.
 const h = vi.hoisted(() => {
   const calls: string[] = [];
@@ -52,6 +62,51 @@ describe("startRuntimeHeartbeat", () => {
     h.calls.length = 0;
     h.setReleaseUpsert(null);
     vi.clearAllMocks();
+    resetCaptureCasDualWriteForTests();
+    resetCaptureCasReadForTests();
+  });
+
+  // Review finding (PR #325): every role now publishes the capture CAS
+  // settings once at startup, so a beat that stopped republishing them would
+  // go unnoticed — each process would still boot with the right values. A live
+  // flip must still reach a running process within one beat, above all the
+  // owner's rollback of the pointer-only flag or the read mode.
+  it.each([
+    {
+      flip: "a rollback",
+      running: { dualWrite: "*", pointerOnly: "*", readMode: "serve" },
+      effective: { dualWrite: "", pointerOnly: "", readMode: "inline" },
+    },
+    {
+      flip: "a ramp",
+      running: { dualWrite: "", pointerOnly: "", readMode: "inline" },
+      effective: { dualWrite: "*", pointerOnly: "*", readMode: "serve" },
+    },
+  ] as const)("republishes the capture CAS settings every beat, so $flip reaches a running process", async ({ running, effective }) => {
+    // What the process is acting on (its startup publish or an earlier beat).
+    resetCaptureCasDualWriteForTests(running.dualWrite, running.pointerOnly);
+    resetCaptureCasReadForTests(running.readMode);
+    // The owner has since flipped the live overrides.
+    h.loadEffectiveConfig.mockImplementationOnce(async (_db: unknown, config: unknown) => ({
+      ...(config as object),
+      captureCasDualWritePages: effective.dualWrite,
+      captureCasPointerOnlyPages: effective.pointerOnly,
+      captureCasReadMode: effective.readMode,
+    }));
+
+    const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+    const hb = startRuntimeHeartbeat(makeApp(), "worker");
+
+    // The immediate beat is parked inside the upsert, after its publish.
+    await vi.waitFor(() => expect(h.calls).toContain("upsert:start"));
+    expect({
+      dualWrite: getCaptureCasDualWritePages(),
+      pointerOnly: getCaptureCasPointerOnlyPages(),
+      readMode: getCaptureCasReadMode(),
+    }).toEqual(effective);
+
+    h.getReleaseUpsert()!();
+    await hb.stop();
   });
 
   it("awaits an in-flight beat before removing the instance, so a late upsert can't resurrect the row", async () => {

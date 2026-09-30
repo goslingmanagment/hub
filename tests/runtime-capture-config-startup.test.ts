@@ -16,7 +16,8 @@ import {
 // Post-deploy finding 2026-09-30: the capture seam's CAS settings were
 // published only by the runtime heartbeat, which the worker starts AFTER its
 // job handlers. A targeted backfill picked up in that window (raw row 3238568,
-// 0.7 s after process start) was journaled inline with no catalog reference.
+// ~2.2 s after process start, just before "Worker started") was journaled
+// inline with no catalog reference.
 // These cases pin that every role that captures publishes the settings before
 // it can consume work: the worker before startWorkerServices registers a
 // handler, the api before it accepts a request.
