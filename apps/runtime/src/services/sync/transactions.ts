@@ -339,6 +339,23 @@ function findPageOverlap(
     .filter((transactionId) => previous.has(transactionId));
 }
 
+// The early stop trusts the listing's newest-first order. A row inside the
+// window listed after an older one breaks that premise: later pages could
+// hold in-window rows the stop never reads.
+function inWindowItemsAfterOlder(items: FanslyTransactionItem[], after: Date) {
+  const bound = after.getTime();
+  let seenOlder = false;
+  const late: FanslyTransactionItem[] = [];
+  for (const item of items) {
+    if (item.createdAt < bound) {
+      seenOlder = true;
+    } else if (seenOlder) {
+      late.push(item);
+    }
+  }
+  return late;
+}
+
 async function flushFanslyDirtyRange(
   app: AppContext,
   platformAccountId: number,
@@ -700,7 +717,7 @@ async function syncTransactionsIncremental(
     // bound above the cursor. After an outage longer than the cap, rows between
     // the cursor and the cap start are unseen, and the early stop would count
     // them as older and skip them for good. cursor+1ms keeps the cursor row
-    // itself older, so a dormant page still stops after two pages.
+    // itself older, so a dormant page still stops at the page holding it.
     if (after && checkpoint?.cursorTimestamp && after > checkpoint.cursorTimestamp) {
       after = new Date(checkpoint.cursorTimestamp.getTime() + 1);
       await input.telemetry.addNote("Transaction lower bound floored at the checkpoint cursor", {
@@ -929,11 +946,13 @@ async function syncTransactionsIncremental(
 
       let olderThanBoundaryItems = state.olderThanBoundaryItems;
       let olderThanBoundaryPages = state.olderThanBoundaryPages;
+      // No longer decides the stop; kept so the persisted state keeps its shape.
       let consecutiveAllOlderPages = state.consecutiveAllOlderPages;
       let firstPageOlderThanBoundaryItems = state.firstPageOlderThanBoundaryItems;
+      let olderItemsInPage = 0;
       const nextPageCount = state.transactionPages + 1;
       if (after) {
-        const olderItemsInPage = page.items.filter((item) => item.createdAt < after.getTime()).length;
+        olderItemsInPage = page.items.filter((item) => item.createdAt < after.getTime()).length;
         olderThanBoundaryItems += olderItemsInPage;
         if (nextPageCount === 1) {
           firstPageOlderThanBoundaryItems = olderItemsInPage;
@@ -944,10 +963,30 @@ async function syncTransactionsIncremental(
         } else {
           consecutiveAllOlderPages = 0;
         }
+
+        const lateInWindowItems = inWindowItemsAfterOlder(page.items, after);
+        const [firstLateItem] = lateInWindowItems;
+        if (firstLateItem) {
+          await input.telemetry.addAnomaly({
+            code: "incremental_listing_unordered",
+            severity: "warn",
+            message: "Fansly transaction listing put a row inside the local lower bound after an older row",
+            details: {
+              page: state.transactionPages,
+              offset: requestOffset,
+              localLowerBound: after.toISOString(),
+              transactionId: firstLateItem.transactionId,
+              createdAt: new Date(firstLateItem.createdAt).toISOString(),
+              inWindowAfterOlderItems: lateInWindowItems.length,
+            },
+          });
+        }
       }
 
+      // A short last page that reaches the bound is a full read, not an early
+      // stop: the fetched==total check below still applies to it.
       const earlyStoppedBeyondBoundary = state.earlyStoppedBeyondBoundary ||
-        Boolean(after && consecutiveAllOlderPages >= 2);
+        (olderItemsInPage > 0 && !page.done);
       const nextState: FanslyTransactionIncrementalState = {
         ...state,
         providerReportedTotal: state.providerReportedTotal ?? pageTotal,
@@ -996,10 +1035,10 @@ async function syncTransactionsIncremental(
         break;
       }
 
-      // The upstream API returns transactions newest-first. If we see two
-      // consecutive full pages where every item is older than our LOCAL lower
-      // bound, all subsequent pages will only contain even older data. Stop
-      // early to avoid exhaustively scanning the full transaction history.
+      // The upstream API returns transactions newest-first, so once a page
+      // reaches below our LOCAL lower bound every later page lies wholly below
+      // it. Stop here: reading those pages would only fetch, hydrate and
+      // re-upsert rows the rescan window no longer covers.
       if (earlyStoppedBeyondBoundary) {
         app.logger.info(
           {
@@ -1166,7 +1205,8 @@ async function syncTransactionsIncremental(
   }
 
   // A quiet page is normal: the local bound always walks past the cursor and
-  // stops two all-older pages later (the boundary summary carries the counts).
+  // stops at the page that reaches below it (the boundary summary carries the
+  // counts).
   if (
     checkpoint?.cursorTimestamp &&
     newestSeenAt &&
