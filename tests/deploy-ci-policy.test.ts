@@ -1397,7 +1397,7 @@ describe("CI integration shards", () => {
     // The API suite is one file: it runs on the first shard only.
     const api = step("integration", "Sync-critical API tests");
     expect(api.if).toBe("matrix.shard == 1");
-    expect(api.env).toBeUndefined();
+    expect(api.env).toEqual({ HUB_TEST_PG_TMPFS: "${{ runner.environment == 'self-hosted' && '1' || '' }}" });
     expect(shell(api)).toBe("pnpm test:sync-critical:api");
   });
 
@@ -1425,7 +1425,10 @@ describe("CI integration shards", () => {
   ] as const)("runs the DB files on %s with %j", (environment, value, flags) => {
     const db = step("integration", dbStepName);
     expect(db.if).toBeUndefined();
-    expect(db.env).toEqual({ SYNC_CRITICAL_DB_PARALLELISM: "${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}" });
+    expect(db.env).toEqual({
+      SYNC_CRITICAL_DB_PARALLELISM: "${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}",
+      HUB_TEST_PG_TMPFS: "${{ runner.environment == 'self-hosted' && '1' || '' }}",
+    });
     expect(packageScripts["test:sync-critical:db"]).toBe(hostedDbCommand.replace("--no-file-parallelism", "${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism}"));
     const env = field(db.env?.SYNC_CRITICAL_DB_PARALLELISM ?? "", eventContext({ runnerEnvironment: environment }));
     expect(env).toBe(value);
@@ -1437,6 +1440,23 @@ describe("CI integration shards", () => {
     expect(baseline.at(-1)).toBe("--shard=2/6");
     expect(vitestArgv(packageScripts["test:sync-critical:db"] ?? "", { SYNC_CRITICAL_DB_PARALLELISM: env }))
       .toEqual([...baseline.slice(0, 2), ...flags, ...baseline.slice(3)]);
+  });
+
+  // The PC's shard clusters keep PGDATA in a tmpfs; hosted runners keep it on
+  // disk, so the hosted run is unchanged. The flag is in the tracked workflow,
+  // so the gate fingerprint covers it.
+  it.each([
+    ["github-hosted", ""],
+    ["self-hosted", "1"],
+  ] as const)("keeps the shard's test Postgres on %s with HUB_TEST_PG_TMPFS=%j", (environment, value) => {
+    for (const name of [dbStepName, "Sync-critical API tests"]) {
+      const expression = step("integration", name).env?.HUB_TEST_PG_TMPFS ?? "";
+      expect(expression).toBe("${{ runner.environment == 'self-hosted' && '1' || '' }}");
+      expect(field(expression, eventContext({ runnerEnvironment: environment }))).toBe(value);
+    }
+    const setup = readFileSync(new URL("./helpers/global-setup.ts", import.meta.url), "utf8");
+    expect(setup).toContain('if (process.env.HUB_TEST_PG_TMPFS === "1") {');
+    expect(setup).toContain('postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });');
   });
 
   it.each([

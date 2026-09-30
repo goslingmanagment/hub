@@ -42,7 +42,7 @@ export default async function setup({ provide }: {
   provide("testDbContainerId", null);
 
   try {
-    container = await new GenericContainer("postgres:16")
+    const postgres = new GenericContainer("postgres:16")
       .withEnvironment({
         POSTGRES_DB: "postgres",
         POSTGRES_USER: "postgres",
@@ -69,8 +69,16 @@ export default async function setup({ provide }: {
         "-c", "autovacuum=off",
       ])
       .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
-      .withExposedPorts(5432)
-      .start();
+      .withExposedPorts(5432);
+    // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on the PC's shard steps): PGDATA, pg_wal
+    // included, lives in a tmpfs instead of the image's volume on disk. Same
+    // cluster, same settings, same tests; only where its files are written.
+    // The size only caps it: a shard's cluster peaked at ~270 MiB, and the
+    // memory counts against the CI slice as shmem while it is used.
+    if (process.env.HUB_TEST_PG_TMPFS === "1") {
+      postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });
+    }
+    container = await postgres.start();
   } catch (error) {
     // Not fatal: helpers/prerequisites.ts turns a missing cluster into the same
     // skip-or-throw it always did. Logged so a real Docker fault is visible
