@@ -402,7 +402,8 @@ unpaired surrogate is written as the served object itself. The raw row's
 adds an info note `journal_lone_surrogates_replaced` with both counts. The lane
 keeps parsing its unmodified response; text columns receive U+FFFD from the
 driver's UTF-8 encoding, and `pages.metadata` takes sanitized Fansly walls and
-tiers.
+tiers, as `page_fan_external_notes` takes sanitized fan notes. The capture
+returns the body it journaled, and the DM shadow witness hashes that body.
 
 OFAPI governed transport diagnostics (#259) expose only known machine
 class/name/code values, header/body stage, elapsed/timeout values, status and

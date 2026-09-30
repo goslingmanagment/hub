@@ -25,6 +25,7 @@ import {
   verifyCapturePayloadParity,
   type SyncStream,
 } from "@agency_hub_core/db";
+import type { FanslyAccount } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
@@ -33,6 +34,7 @@ import {
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { buildFanslyMetadata } from "../apps/runtime/src/services/fansly.ts";
+import { upsertHydratedFansForPageDetailed } from "../apps/runtime/src/services/sync/fan-hydration.ts";
 import { createFanslyLaneJournal } from "../apps/runtime/src/services/sync/fansly-lane.ts";
 import { fetchAndJournalFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
@@ -311,5 +313,48 @@ describe("a Fansly body with unpaired surrogates is journaled, not refused", () 
     );
     expect(page!.metadata.walls[0]!.description).toBe(`night owl, dm me ${REPLACEMENT}`);
     expect(page!.metadata.subscriptionTiers[0]!.name).toBe(`VIP ${REPLACEMENT}`);
+  });
+
+  it("a fan's notes reach page_fan_external_notes.raw (jsonb) and the alias stays stable", async () => {
+    // The accounts come from the served object (`response.parsed`, a lane's
+    // `page.accounts`), never from the journaled copy, and every Fansly lane
+    // that sees fans reconciles their notes inside its page transaction.
+    const noteAt = Date.UTC(2026, 8, 1);
+    const account: FanslyAccount = {
+      id: "700000000000000004",
+      username: "fan_notes",
+      displayName: "Fan Notes",
+      notes: [
+        { id: "930000000000000001", contentType: 0, title: `likes ${LONE_HIGH}`,
+          note: `${LONE_LOW} tips on fridays`, createdAt: noteAt, updatedAt: noteAt },
+        { id: "930000000000000002", contentType: 12002, title: "Custom Username",
+          note: `Lily ${LONE_HIGH}`, createdAt: noteAt, updatedAt: noteAt },
+      ],
+    };
+    const snapshot = JSON.stringify(account);
+
+    const first = await upsertHydratedFansForPageDetailed(testDb!.db, { platformAccountId: pageId, accounts: [account] });
+    expect(first).toMatchObject({ reconciledAccountCount: 1, noteCount: 2, upsertedNoteCount: 2, aliasesSet: 1 });
+    // The served account is untouched.
+    expect(JSON.stringify(account)).toBe(snapshot);
+
+    const stored = await rows<{ external_note_id: string; title: string; body: string; raw: Record<string, unknown> }>(
+      "select external_note_id, title, body, raw from page_fan_external_notes order by external_note_id",
+    );
+    expect(stored).toEqual([
+      { external_note_id: "930000000000000001", title: `likes ${REPLACEMENT}`, body: `${REPLACEMENT} tips on fridays`,
+        raw: { id: "930000000000000001", contentType: 0, title: `likes ${REPLACEMENT}`,
+          note: `${REPLACEMENT} tips on fridays`, createdAt: noteAt, updatedAt: noteAt } },
+      { external_note_id: "930000000000000002", title: "Custom Username", body: `Lily ${REPLACEMENT}`,
+        raw: { id: "930000000000000002", contentType: 12002, title: "Custom Username",
+          note: `Lily ${REPLACEMENT}`, createdAt: noteAt, updatedAt: noteAt } },
+    ]);
+    expect(await rows("select page_alias from page_fans")).toEqual([{ page_alias: `Lily ${REPLACEMENT}` }]);
+    expect(await rows("select alias from page_fan_aliases")).toEqual([{ alias: `Lily ${REPLACEMENT}` }]);
+
+    // The next read of the same notes compares what it stored with what it
+    // sees, so the alias it already set is not reported as set again.
+    const second = await upsertHydratedFansForPageDetailed(testDb!.db, { platformAccountId: pageId, accounts: [account] });
+    expect(second).toMatchObject({ noteCount: 2, deactivatedNoteCount: 0, aliasesSet: 0, aliasesCleared: 0 });
   });
 });

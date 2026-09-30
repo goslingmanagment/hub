@@ -132,11 +132,12 @@ describe("persistRawPayload and unpaired surrogates", () => {
       reset();
       const input = cleanBody();
       const snapshot = JSON.stringify(input);
-      await inRun(() => persistRawPayload({} as never, row(endpoint, input, 5), { platform: "fansly" }));
+      const result = await inRun(() => persistRawPayload({} as never, row(endpoint, input, 5), { platform: "fansly" }));
       // discovery_feed is a CDN-stripped kind, and a body with no signed URL
       // comes back from the strip as the same object too.
       expect(captured.raws[0]!.responsePayload, endpoint).toBe(input);
       expect(captured.observations[0]!.payload, endpoint).toBe(input);
+      expect(result.observationPayload, endpoint).toBe(input);
       expect(captured.raws[0]!.mapperVersion, endpoint)
         .not.toContain(JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX);
       expect(JSON.stringify(input), endpoint).toBe(snapshot);
@@ -150,7 +151,7 @@ describe("persistRawPayload and unpaired surrogates", () => {
     input.response.messages[0]!.content = `so cute ${LONE_HIGH}`;
     input.response.messages[1]!.content = `${LONE_LOW} 😊`;
     const snapshot = JSON.stringify(input);
-    const { observationId } = await inRun(() => persistRawPayload(
+    const { observationId, observationPayload } = await inRun(() => persistRawPayload(
       {} as never,
       row("dm_messages", input, 5),
       { platform: "fansly" },
@@ -166,6 +167,9 @@ describe("persistRawPayload and unpaired surrogates", () => {
     // One object for both envelopes, so the catalog still does a single put,
     // and the hash is over the body actually stored.
     expect(observation!.payload).toBe(raw!.responsePayload);
+    // The caller gets the journaled body back, so a hash it takes over it
+    // (the DM shadow witness) matches what the observation holds.
+    expect(observationPayload).toBe(observation!.payload);
     expect(JSON.stringify(input)).toBe(snapshot);
     expect(input.response.messages[0]!.content).toBe(`so cute ${LONE_HIGH}`);
 

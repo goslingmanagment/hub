@@ -305,7 +305,11 @@ export async function persistRawPayload(
     }
   }
 
-  return { ...rawPayload, observationId: journalledObservationId };
+  // `observationPayload` is the body the observation holds, by reference: the
+  // served object itself, unless the CDN strip or the surrogate replacement
+  // above made a copy. A caller that hashes or points into the journaled body
+  // (the DM shadow witness) takes it from here, not from what it served.
+  return { ...rawPayload, observationId: journalledObservationId, observationPayload: observedPayload };
 }
 
 /**
