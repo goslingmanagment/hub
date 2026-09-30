@@ -16,11 +16,13 @@ import type { AppContext } from "../bootstrap.ts";
  * Decision #202 — the hydration auto-approve policy.
  *
  * The owner delegated ONE narrow act to this module: authorizing a single
- * bounded Fansly `thread_backfill_before` attempt, within a daily reserved-call
- * budget. Everything else about a decision — mark-read consent, other
- * platforms, other targets, anything over the per-request cap — stays the
- * owner's, and a request the policy may not decide is LEFT `requested` for a
- * human, never rejected on the policy's behalf.
+ * bounded Fansly `thread_backfill_before` attempt, within a daily call budget.
+ * An approval reserves its cap until its run settles, then counts the calls
+ * the run actually made (`sumAutoApprovedCallsSince`), so a day's unused
+ * reservations are approvable again the same day. Everything else about a
+ * decision — mark-read consent, other platforms, other targets, anything over
+ * the per-request cap — stays the owner's, and a request the policy may not
+ * decide is LEFT `requested` for a human, never rejected on the policy's behalf.
  *
  * Runs strictly inside the exclusive hydration cycle, so its sum-then-decide
  * budget arithmetic is single-writer by construction: there is no concurrent
@@ -92,8 +94,10 @@ export async function runAgentHydrationAutoApprove(
   }
 
   const dayStart = utcDayStart(now);
-  const alreadyReserved = await sumAutoApprovedCallsSince(app.db, dayStart);
-  let remaining = Math.max(0, budget - alreadyReserved);
+  // Runs settled since the last pass have returned what they did not use; the
+  // cycle runs every two minutes, so returned calls are approvable within one.
+  const alreadyCounted = await sumAutoApprovedCallsSince(app.db, dayStart);
+  let remaining = Math.max(0, budget - alreadyCounted);
   result.budgetRemaining = remaining;
   if (remaining <= 0) {
     return result;

@@ -634,7 +634,7 @@ async function dispatchAgentHydrationRequest(
       // DETERMINATE and FREE: the page's slot was taken between the probe and
       // the send, so no job exists and no vendor was asked. The approval goes
       // back to wait for the slot instead of losing its attempt to the race.
-      await rearmOrFailRefusedRun(app, claimed.request ?? request, "page_slot_taken");
+      await rearmOrFailRefusedRun(app, claimed.request ?? request, "page_slot_taken", 0);
       return "claimed";
     }
     if (enqueued.kind === "already_done") {
@@ -984,6 +984,8 @@ async function rearmOrFailRefusedRun(
   app: AppContext,
   request: AgentHydrationRequestRecord,
   cause: string,
+  /** What the refused run sent; the callers only get here when it sent none. */
+  vendorCalls: number | undefined,
 ): Promise<void> {
   const rearmed = await rearmAgentHydrationRequest(app.db, {
     id: request.id,
@@ -1008,6 +1010,7 @@ async function rearmOrFailRefusedRun(
     toState: "failed",
     lastError: "timeout",
     cause,
+    ...(vendorCalls === undefined ? {} : { vendorCalls }),
   });
   if (outcome === "applied") {
     app.logger.warn(
@@ -1065,10 +1068,16 @@ export async function settleAgentHydrationFromBackfill(
   if (!request || request.state !== "dispatching") {
     return;
   }
+  // The run's own count of the requests it sent, which is what the autopilot's
+  // daily budget is charged once the request settles. Not `requests`: that
+  // counts accepted pages, and misses retries and a page fetched but not kept.
+  const vendorCalls = Number.isSafeInteger(result.requestAttempts) && result.requestAttempts >= 0
+    ? result.requestAttempts
+    : undefined;
   // `requests === 0` is the evidence, not the outcome name: only a run that
   // provably never reached the vendor may hand its approval back.
   if (REARMABLE_OUTCOMES.has(result.outcome) && result.requests === 0) {
-    await rearmOrFailRefusedRun(app, request, result.outcome);
+    await rearmOrFailRefusedRun(app, request, result.outcome, vendorCalls);
     return;
   }
   const mapped = BACKFILL_OUTCOME_STATES[result.outcome];
@@ -1078,5 +1087,6 @@ export async function settleAgentHydrationFromBackfill(
     lastError: mapped.lastError,
     acceptedItems: result.insertedMessages,
     acceptedPages: result.requests,
+    ...(vendorCalls === undefined ? {} : { vendorCalls }),
   });
 }

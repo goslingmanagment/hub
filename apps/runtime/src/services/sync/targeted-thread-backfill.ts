@@ -181,7 +181,16 @@ export interface TargetedThreadBackfillResult {
   threadId: number;
   platformAccountId: number | null;
   syncRunId: number | null;
+  /** Message pages the walk accepted and stored. */
   requests: number;
+  /**
+   * HTTP attempts the run STARTED against Fansly: retries, failed attempts and
+   * a page that was fetched but never accepted all count. This is what the run
+   * spent, and what a hydration request settles against the autopilot's daily
+   * budget; `requests` undercounts it whenever an attempt did not end in an
+   * accepted page. Zero for every refusal: they return before the first request.
+   */
+  requestAttempts: number;
   insertedMessages: number;
   journaledMessages: number;
   overlapFound: boolean;
@@ -302,6 +311,7 @@ function emptyResult(
     platformAccountId: null,
     syncRunId: null,
     requests: 0,
+    requestAttempts: 0,
     insertedMessages: 0,
     journaledMessages: 0,
     overlapFound: false,
@@ -977,6 +987,9 @@ async function runTargetedThreadBackfillOnce(
     // hand the row to the reclaimer while this run is still writing.
     clearInterval(leaseHeartbeat);
   }
+  // The budget sees every attempt's `started` event, retries included: the
+  // same count the run's request ceiling was enforced against.
+  result.requestAttempts = budget.totalRequests;
 
   await telemetry.recordDmMessagesChunkSummary(
     requestObserver.buildSummary(Date.now() - startedAtMs),
@@ -1017,6 +1030,7 @@ function targetedStats(result: TargetedThreadBackfillResult) {
   return {
     outcome: result.outcome,
     requests: result.requests,
+    requestAttempts: result.requestAttempts,
     insertedMessages: result.insertedMessages,
     journaledMessages: result.journaledMessages,
     overlapFound: result.overlapFound,
