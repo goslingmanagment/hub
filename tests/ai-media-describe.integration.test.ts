@@ -30,6 +30,10 @@ import {
   createAiMediaDescribeLoopState,
   runAiMediaDescribeLoopTick,
 } from "../apps/runtime/src/services/ai-media-describe/loop.ts";
+import {
+  AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
+  openCriticalNotificationIncident,
+} from "../apps/runtime/src/services/notification-incidents.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   resetIntegrationDatabase,
@@ -322,9 +326,10 @@ describe("AI media describer sweep", () => {
     expect(usage.rows[0].n).toBe(3);
   });
 
-  it("trips the refusal breaker for the UTC day and opens a console incident", async () => {
-    // Clearly distinct colours: identical bytes would be (correctly) refused
-    // from memory without a send.
+  it("keeps describing through a run of refusals; an older build's latch and incident clear", async () => {
+    // Owner, 2026-09-30: refusals of explicit images are a normal outcome, so
+    // no share of them pauses the lane. Clearly distinct colours: identical
+    // bytes would be (correctly) refused from memory without a send.
     const images = await Promise.all(Array.from({ length: 10 }, (_, index) => {
       const hex = (value: number) => value.toString(16).padStart(2, "0");
       return jpeg(`#${hex(index * 25)}${hex(255 - index * 25)}${hex((index * 90) % 256)}`);
@@ -334,21 +339,37 @@ describe("AI media describer sweep", () => {
       bytesByRef[`r${index}`] = images[index]!;
       await candidate({ mediaRef: `r${index}` });
     }
-    const { calls, deps } = harness({ bytesByRef, respond: refusalMessage });
+    let refuse = true;
+    const { calls, deps } = harness({ bytesByRef, respond: () => (refuse ? refusalMessage() : describedMessage()) });
     await runAiMediaDescribeSweep(app, deps);
     expect(calls.provider).toBe(10);
     const day = await testDb!.pool.query(`select refusals, breaker_tripped_at from ai_media_describe_days`);
     expect(day.rows[0].refusals).toBe(10);
-    expect(day.rows[0].breaker_tripped_at).not.toBeNull();
+    expect(day.rows[0].breaker_tripped_at).toBeNull();
+
+    // A build with the breaker latched the day and opened its incident.
+    await testDb!.pool.query(`update ai_media_describe_days set breaker_tripped_at = now(), breaker_reason = 'legacy'`);
+    await openCriticalNotificationIncident(app, {
+      kind: "ai_provider_failed",
+      platformAccountId: null,
+      pageLabel: null,
+      platform: null,
+      subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
+      errorCode: "media_describe_refusals",
+      errorSummary: "legacy latch",
+      occurredAt: NOW,
+    });
+
+    refuse = false;
+    const after = await candidate({ mediaRef: "after-refusals" });
+    const next = await runAiMediaDescribeSweep(app, deps);
+    expect(next.skipped).toBeUndefined();
+    expect(calls.provider).toBe(11);
+    expect((await row(after)).status).toBe("described");
     const incident = await testDb!.pool.query(
       `select status from notification_incidents where incident_key = 'ai_provider_failed:global:media_describe_breaker'`,
     );
-    expect(incident.rows[0]?.status).toBe("open");
-
-    await candidate({ mediaRef: "after-trip" });
-    const next = await runAiMediaDescribeSweep(app, deps);
-    expect(next.skipped).toBe("breaker");
-    expect(calls.provider).toBe(10);
+    expect(incident.rows[0]?.status).not.toBe("open");
   });
 
   it("stops the lane on 401 until the owner resolves the incident", async () => {
