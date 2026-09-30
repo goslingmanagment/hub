@@ -19,7 +19,8 @@
   - With `CI_POOL` not `pc`, a push to a Ready PR runs static checks only and
     the Quality Gate stays red until integration runs. When the PR is final,
     add the label: `gh pr edit <number> --add-label ci:full`.
-  - A job queued over 10 minutes on the self-hosted pool means the PC is down;
+  - Jobs queue behind busy PC runners. `ci-pool status` lists a run as stuck
+    only when no runner is online or an idle one does not pick it up; then
     tell the owner (they switch pools with `ci-pool`).
   - Never use `[skip ci]`, including in squash messages: every main commit
     must keep a Quality Gate record.
