@@ -734,30 +734,58 @@ export async function listAutoApprovableAgentHydrationRequests(
 }
 
 /**
- * What the policy has RESERVED so far today: the sum of maxCalls it approved
- * since the UTC day start. Counted at decision time — an approval that later
- * under-spends does not return the difference (v1, documented).
+ * What today's auto-approvals count against the policy's daily budget, since
+ * the UTC day start. Owner decision 2026-09-30: the budget is ACTUAL calls — a
+ * settled approval returns whatever it did not use. Per approval:
  *
- * The one exception is an approval KNOWN to have made no vendor request: it
- * ended `expired` (an approval only returns to `approved` after a run that made
- * none, so an expired one never spent), or `failed` with nothing accepted and a
- * cause other than `timeout`. `timeout` stays counted because the stuck sweeper
- * writes it without knowing what the dead run spent.
+ *   - in flight (`approved`, `dispatching`): its full `decision_max_calls`,
+ *     because the run may still spend all of it;
+ *   - `expired`: nothing — an approval only returns to `approved` after a run
+ *     that made no vendor request, so an expired one never spent;
+ *   - settled with a known count: the `vendorCalls` its settle event journaled
+ *     (HTTP attempts, retries included — it may exceed the reservation, and
+ *     then that is what counts);
+ *   - settled WITHOUT one — the stuck sweeper's `timeout` (a dead run's spend
+ *     is unknown), any settle written before the count existed, any other
+ *     state: FAIL CLOSED to the full reservation. The one exception is the
+ *     earlier rule for such rows: `failed` with nothing accepted and a cause
+ *     other than `timeout` was refused before any vendor request, so it is 0.
  */
 export async function sumAutoApprovedCallsSince(
   db: Database,
   since: Date,
 ): Promise<number> {
-  const result = await db.execute<{ reserved: string | null }>(sql`
-    select sum(decision_max_calls)::text as reserved
-    from agent_hydration_requests
-    where decision_source = 'auto_policy'
-      and decision_approved = true
-      and decided_at >= ${since}
-      and state <> 'expired'
-      and not (state = 'failed' and last_error <> 'timeout' and accepted_pages = 0)
+  const result = await db.execute<{ counted: string | null }>(sql`
+    select sum(
+      case
+        when r.state in ('approved', 'dispatching') then r.decision_max_calls
+        when r.state = 'expired' then 0
+        when r.state in ('completed', 'partially_completed', 'failed')
+          and settle.vendor_calls is not null then settle.vendor_calls
+        when r.state = 'failed' and r.last_error <> 'timeout' and r.accepted_pages = 0 then 0
+        else r.decision_max_calls
+      end
+    )::text as counted
+    from agent_hydration_requests r
+    left join lateral (
+      -- A request settles once (the CAS demands 'dispatching'), so this is its
+      -- one settle event. Anything but a non-negative number is no count.
+      select case
+          when jsonb_typeof(e.detail -> 'vendorCalls') = 'number'
+            and (e.detail ->> 'vendorCalls')::numeric >= 0
+          then (e.detail ->> 'vendorCalls')::numeric
+        end as vendor_calls
+      from agent_hydration_events e
+      where e.request_id = r.id
+        and e.kind in ('settled', 'failed')
+      order by e.seq desc
+      limit 1
+    ) settle on true
+    where r.decision_source = 'auto_policy'
+      and r.decision_approved = true
+      and r.decided_at >= ${since}
   `);
-  const raw = result.rows[0]?.reserved;
+  const raw = result.rows[0]?.counted;
   return raw == null ? 0 : Number(raw);
 }
 
@@ -991,6 +1019,13 @@ export interface SettleAgentHydrationRequestInput {
   acceptedItems?: number;
   acceptedPages?: number;
   spentCredits?: number;
+  /**
+   * Journal-only: the vendor requests the run actually made (HTTP attempts,
+   * retries included), when the settling party KNOWS them. The autopilot's
+   * daily budget counts a settled approval by this number; omitted, it keeps
+   * counting the approval's full reservation.
+   */
+  vendorCalls?: number;
   actor?: AgentHydrationActor;
   /** Journal-only: the executor's own code for why it settled (bounded). */
   cause?: string;
@@ -1039,6 +1074,7 @@ export async function settleAgentHydrationRequest(
         lastError: input.lastError ?? "none",
         acceptedItems: input.acceptedItems ?? 0,
         acceptedPages: input.acceptedPages ?? 0,
+        ...(input.vendorCalls === undefined ? {} : { vendorCalls: input.vendorCalls }),
         ...(input.cause === undefined ? {} : { cause: input.cause }),
       },
     });

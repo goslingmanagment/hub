@@ -12,6 +12,7 @@ import {
   insertAgentKey,
   listAgentHydrationEvents,
   setConfigOverride,
+  settleAgentHydrationRequest,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -360,6 +361,7 @@ function refusedRun(outcome: TargetedThreadBackfillResult["outcome"]): TargetedT
     platformAccountId: fanslyPageId,
     syncRunId: null,
     requests: 0,
+    requestAttempts: 0,
     insertedMessages: 0,
     journaledMessages: 0,
     overlapFound: false,
@@ -369,6 +371,24 @@ function refusedRun(outcome: TargetedThreadBackfillResult["outcome"]): TargetedT
     messageCoverageStatus: null,
     retentionLimit: null,
     projectionDebtRecorded: false,
+  };
+}
+
+/** A targeted run that reached Fansly: `requests` pages accepted out of
+ *  `requestAttempts` HTTP attempts (retries and unaccepted pages included). */
+function vendorRun(
+  outcome: TargetedThreadBackfillResult["outcome"],
+  requests: number,
+  requestAttempts: number,
+): TargetedThreadBackfillResult {
+  return {
+    ...refusedRun(outcome),
+    syncRunId: 1,
+    requests,
+    requestAttempts,
+    insertedMessages: requests * 25,
+    journaledMessages: requests * 25,
+    providerHistoryExhausted: outcome === "completed",
   };
 }
 
@@ -1326,6 +1346,7 @@ describe("[sync-critical] agent hydration requests", () => {
       platformAccountId: fanslyPageId,
       syncRunId: 1,
       requests: 3,
+      requestAttempts: 4,
       insertedMessages: 61,
       journaledMessages: 75,
       overlapFound: true,
@@ -1350,6 +1371,8 @@ describe("[sync-critical] agent hydration requests", () => {
       "settled",
     ]);
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
+    // The settle records what the run SPENT: every HTTP attempt, not the pages.
+    expect(events.at(-1)?.detail.vendorCalls).toBe(4);
   });
 
   it("an expired approval is never dispatched", async () => {
@@ -1739,6 +1762,128 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
     expect(next.autoApprove?.approved).toBe(1);
     expect(next.autoApprove?.budgetRemaining).toBe(0);
     expect(next.dispatched).toBe(1);
+  });
+
+  it("a settled run counts the calls it made: 17 of 40 leave 2000 - 17, and approvals go on", async () => {
+    // Production 2026-09-30: sixty approvals reserved 40 calls each by 01:48
+    // UTC, the 49 runs used 839 calls in all, and nothing was approved for the
+    // rest of the day. Owner's decision: a settled request returns what it did
+    // not use; the 2,000 a day stays.
+    await seedFanslyThread("second-thread-ref");
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 2000);
+    const approving = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(approving.autoApprove?.approved).toBe(1);
+    expect(approving.dispatched).toBe(1);
+
+    // The walk met the start of the thread: 15 pages accepted after 17 HTTP
+    // attempts (two were retried). Every attempt reached Fansly, so 17 count.
+    await settleAgentHydrationFromBackfill(appContext, first.requestRef, vendorRun("completed", 15, 17));
+
+    const idle = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(idle.autoApprove?.considered).toBe(0);
+    expect(idle.autoApprove?.budgetRemaining).toBe(2000 - 17);
+
+    await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 });
+    const next = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(next.autoApprove?.approved).toBe(1);
+    expect(next.autoApprove?.budgetRemaining).toBe(2000 - 17 - 40);
+  });
+
+  it("calls a settled run did not use are approvable again the same day", async () => {
+    // The stall itself, in small: 60 a day, a 40-call approval, 17 used. Under
+    // reservation accounting 20 would remain and the next request would wait
+    // for tomorrow; 43 remain, and it is approved now.
+    await seedFanslyThread("second-thread-ref");
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 60);
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.approved).toBe(1);
+    await settleAgentHydrationFromBackfill(appContext, first.requestRef, vendorRun("completed", 17, 17));
+
+    await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 });
+    const next = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(next.autoApprove?.skippedBudget).toBe(0);
+    expect(next.autoApprove?.approved).toBe(1);
+    expect(next.autoApprove?.budgetRemaining).toBe(60 - 17 - 40);
+    expect(next.dispatched).toBe(1);
+  });
+
+  it("an approval still in flight holds its whole reservation", async () => {
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 2000);
+    // Approved, but its page's slot is taken: it waits `approved`, unstarted.
+    const busy = {
+      send: vi.fn(async () => "never"),
+      findJobs: vi.fn(async () => [{ state: "created" }]),
+    } as unknown as HydrationBoss;
+    const waiting = await runAgentHydrationCycle(appContext, busy);
+    expect(waiting.autoApprove?.approved).toBe(1);
+    expect(waiting.pageBusy).toBe(1);
+    expect((await runAgentHydrationCycle(appContext, busy)).autoApprove?.budgetRemaining)
+      .toBe(2000 - 40);
+
+    // Dispatched and running: it may still spend all 40.
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    expect((await findAgentHydrationRequestByRef(testDb!.db, first.requestRef)).request?.state)
+      .toBe("dispatching");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.budgetRemaining)
+      .toBe(2000 - 40);
+  });
+
+  it("a failed run counts the calls it made, and one that made none counts nothing", async () => {
+    await seedFanslyThread("second-thread-ref");
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 2000);
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    // The page lease was lost mid-walk: 5 pages accepted, 6 requests sent.
+    await settleAgentHydrationFromBackfill(appContext, first.requestRef, vendorRun("lease_lost", 5, 6));
+    const lost = await findAgentHydrationRequestByRef(testDb!.db, first.requestRef);
+    expect(lost.request?.state).toBe("failed");
+    expect(lost.request?.lastError).toBe("timeout");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.budgetRemaining)
+      .toBe(2000 - 6);
+
+    // The lease was fenced before the first request: failed, nothing spent.
+    const second = (await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 })).request;
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    await settleAgentHydrationFromBackfill(appContext, second.requestRef, refusedRun("lease_lost"));
+    const fenced = await findAgentHydrationRequestByRef(testDb!.db, second.requestRef);
+    expect(fenced.request?.state).toBe("failed");
+    expect(fenced.request?.lastError).toBe("timeout");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.budgetRemaining)
+      .toBe(2000 - 6);
+  });
+
+  it("a settled run whose call count is unknown keeps its whole reservation", async () => {
+    await seedFanslyThread("second-thread-ref");
+    const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
+    await autopilot("enforce", 2000);
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    // The worker died mid-run (2026-09-30: a restart killed one): the sweeper
+    // settles `timeout` without knowing what the run spent.
+    await testDb!.pool.query(
+      `update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'
+       where state = 'dispatching'`,
+    );
+    const swept = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(swept.swept).toBe(1);
+    expect(swept.autoApprove?.budgetRemaining).toBe(2000 - 40);
+    expect((await findAgentHydrationRequestByRef(testDb!.db, first.requestRef)).request?.state)
+      .toBe("failed");
+
+    // A run settled without a count (as every settle before this change was)
+    // keeps its reservation too, however few pages it accepted.
+    const second = (await fileRequest("lora-2", "second-thread-ref", { maxCalls: 40 })).request;
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+    const running = await findAgentHydrationRequestByRef(testDb!.db, second.requestRef);
+    await settleAgentHydrationRequest(testDb!.db, {
+      id: running.request!.id,
+      toState: "completed",
+      acceptedItems: 50,
+      acceptedPages: 2,
+    });
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).autoApprove?.budgetRemaining)
+      .toBe(2000 - 80);
   });
 
   it("leaving enforce PARKS approvals the policy already made", async () => {

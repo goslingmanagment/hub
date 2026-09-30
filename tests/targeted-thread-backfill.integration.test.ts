@@ -82,6 +82,8 @@ type ScriptedThread = ScriptedPage[] | ((callIndex: number) => ScriptedPage);
 interface AdapterHooks {
   /** Fires inside the vendor call, before it returns. Throw to fail the fetch. */
   beforeReturn?: (input: { groupId: string; callIndex: number }) => Promise<void>;
+  /** Attempts the HTTP layer retried before this call's successful one. */
+  retriesBefore?: (callIndex: number) => number;
 }
 
 /** Endless history: every call returns 25 fresh older ids and `done:false`. */
@@ -110,17 +112,33 @@ function messagesAdapter(
         before: params.before ?? null,
         limit: params.limit,
       });
-      await requestContext.requestObserver?.onRequestEvent({
-        state: "started",
-        requestId: `req-${calls.length}`,
-        operation: "messages",
-        endpointTemplate: "/message",
-        method: "GET",
-        attemptNumber: 1,
-        timestamp: new Date(),
-      });
       const callIndex = cursors.get(params.groupId) ?? 0;
       cursors.set(params.groupId, callIndex + 1);
+      // One logical request, every attempt announced the way executeObservedRequest
+      // announces it: each retried attempt is started and closed as a retry.
+      const requestId = `req-${calls.length}`;
+      const retries = hooks?.retriesBefore?.(callIndex) ?? 0;
+      for (let attemptNumber = 1; attemptNumber <= retries + 1; attemptNumber += 1) {
+        const attempt = {
+          requestId,
+          operation: "messages",
+          endpointTemplate: "/message",
+          method: "GET",
+          attemptNumber,
+          timestamp: new Date(),
+        };
+        await requestContext.requestObserver?.onRequestEvent({ ...attempt, state: "started" });
+        if (attemptNumber <= retries) {
+          await requestContext.requestObserver?.onRequestEvent({
+            ...attempt,
+            state: "retry",
+            httpStatus: 503,
+            failureKind: "http",
+            retryDelayMs: 0,
+            durationMs: 1,
+          });
+        }
+      }
       const scripted = script[params.groupId];
       const page = typeof scripted === "function"
         ? scripted(callIndex)
@@ -357,6 +375,41 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(thread.rows[0]).toMatchObject({ status: "complete", stored: 3, syncAt: null });
   }, 120_000);
 
+  it("reports every HTTP attempt it started as its spend, retries included", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const { targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({
+        [TARGET_GROUP_ID]: [
+          { ids: ["a09", "a08"], done: false },
+          { ids: ["a07"], done: true },
+        ],
+      }, calls, {
+        // The first page answered on its third attempt.
+        retriesBefore: (callIndex) => (callIndex === 0 ? 2 : 0),
+      }) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("completed");
+    // Two pages accepted, four requests sent: the hydration budget is charged
+    // the four (#202 settles by actual calls).
+    expect(result.requests).toBe(2);
+    expect(result.requestAttempts).toBe(4);
+    // ... which is exactly what the run journaled, attempt by attempt.
+    const journaled = await testDb.pool.query<{ n: string }>(
+      "select count(*)::text as n from sync_http_attempts where sync_run_id = $1",
+      [result.syncRunId],
+    );
+    expect(Number(journaled.rows[0]!.n)).toBe(4);
+  }, 120_000);
+
   it("keeps a walk that left a message without createdAt unstored out of complete", async (context) => {
     if (!testDb) {
       context.skip();
@@ -468,6 +521,7 @@ describe("targeted thread backfill (slice C′)", () => {
 
     expect(result.outcome).toBe("breaker_open");
     expect(calls).toHaveLength(0);
+    expect(result.requestAttempts).toBe(0);
     expect(await countMessages(targetThreadId)).toBe(0);
     // No lease was taken and no sync run was opened for a refused thread.
     expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null });
@@ -635,6 +689,9 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(result.outcome).toBe("lease_lost");
     expect(result.projectionDebtRecorded).toBe(true);
     expect(result.requests).toBe(1);
+    // The second call reached Fansly; only its page was never accepted. The
+    // spend is the attempts, not the accepted pages.
+    expect(result.requestAttempts).toBe(2);
 
     // The summary is stale (only finalize writes it) — so the debt row MUST
     // exist, otherwise the next deep backfill would ask before=<stale oldest>,
