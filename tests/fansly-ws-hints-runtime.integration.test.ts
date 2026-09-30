@@ -4,7 +4,7 @@ import {
   acquireTargetedPageSyncLease, countConversationSyncFailuresByAccount, ensurePageSyncStates,
   getConversationSyncHealth, getPageDmConversationById, getPageSyncState, recordConversationSyncFailure,
   requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, selectNextPageDmMessageSyncCandidate, startSyncRun,
-  upsertFans, upsertPageDmConversation, upsertPageDmMessages, type Database,
+  upsertFans, upsertPageDmConversation, upsertPageDmMessages, requestAiMediaAcceleratorRead, skipPageSync, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
 import { executeObservedRequest, resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND,
@@ -503,7 +503,8 @@ describe("B1 REST execution and rollback", () => {
     content: "mass message", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
   }]);
   // Another visible thread whose announced message ordinary polling already stored.
-  async function storedTarget(f: Awaited<ReturnType<typeof fixture>>, groupRef: string, eventId: number) {
+  async function storedTarget(f: Awaited<ReturnType<typeof fixture>>, groupRef: string, eventId: number,
+    { stored = true, visible = true } = {}) {
     const [fan] = await upsertFans(db.db, [{ platform: "fansly", platformUserId: `7${groupRef}` }]);
     const thread = await upsertPageDmConversation(db.db, {
       platformAccountId: f.page.id, fanId: fan!.id, platformConversationId: groupRef,
@@ -512,9 +513,9 @@ describe("B1 REST execution and rollback", () => {
       lastMessageId: `${groupRef}1`, lastUnreadMessageId: null, lastMessageAt: new Date("2026-09-27T19:32:00Z"),
       lastMessageSenderId: "999", lastMessageSenderRole: "model", lastMessagePreview: "mass message",
       messageCoverageStatus: "complete", newestStoredMessageId: `${groupRef}1`, oldestStoredMessageId: `${groupRef}1`,
-      storedMessageCount: 1, lastMessageSyncAt: new Date("2026-09-27T20:00:00Z"), isVisible: true, lastSeenGeneration: 1, metadata: {},
+      storedMessageCount: 1, lastMessageSyncAt: new Date("2026-09-27T20:00:00Z"), isVisible: visible, lastSeenGeneration: 1, metadata: {},
     });
-    await storeMessage(f, thread!.id, `${groupRef}1`);
+    if (stored) await storeMessage(f, thread!.id, `${groupRef}1`);
     await routeFanslyWsHintEvent(db.db, {
       id: eventId, pageId: f.page.id, observationId: eventId, receivedAt: new Date(), generation: f.policy.generation,
       node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef: `${groupRef}1` } },
@@ -569,6 +570,188 @@ describe("B1 REST execution and rollback", () => {
     expect(await dirty()).toBe(0);
     expect(f.calls).toEqual([]);
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+  });
+  // The claim FIFO in the given order, oldest first.
+  const inOrder = (f: Awaited<ReturnType<typeof fixture>>, refs: string[]) => db.pool.query(`update subject_refresh_state
+    set next_due_at = now() - interval '1 hour' + array_position($2::text[], subject_ref) * interval '1 second'
+    where page_id = $1 and plane = 'fansly_ws_dm'`, [f.page.id, refs]);
+  const subjects = async () => (await db.pool.query(`select subject_ref, applied_revision, last_refresh_outcome, refresh_visits
+    from subject_refresh_state where plane='fansly_ws_dm' order by subject_ref`)).rows;
+  const settled = (ref: string) => ({ subject_ref: ref, applied_revision: 1n, last_refresh_outcome: "already_materialized", refresh_visits: 1n });
+  // Prod 30.09 (d2d75ff4): the due FIFO interleaves subjects that need REST
+  // (lilly-1 70 of 1,289, ari-1 39 of 403). Each step stopped at the first,
+  // so settling stalled while ari-1's spent budget deferred one per chunk.
+  it("defers every REST subject of a spent budget and settles the stored targets between them", async () => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    const refs = Array.from({ length: 12 }, (_, n) => String(300 + n));
+    for (const [n, ref] of refs.entries()) await storedTarget(f, ref, 10 + n, { stored: n % 3 !== 2 });
+    await inOrder(f, refs);
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect(await subjects()).toEqual(refs.map((ref, n) => n % 3 === 2
+      ? { subject_ref: ref, applied_revision: 0n, last_refresh_outcome: "budget_exhausted", refresh_visits: 1n }
+      : settled(ref)));
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+  });
+  // A spent-budget deferral shares the budget's reopen time, so they cluster
+  // at the head of the queue. The bound keeps the chunk's wall clock for
+  // ordinary polling; the stored targets behind them still settle.
+  it("bounds the zero-request deferrals of one step and still settles the stored targets behind them", async () => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    const rest = Array.from({ length: 51 }, (_, n) => String(400 + n));
+    for (const [n, ref] of rest.entries()) await storedTarget(f, ref, 10 + n, { stored: false });
+    await storedTarget(f, "300", 100);
+    await storedTarget(f, "301", 101);
+    await inOrder(f, [...rest, "300", "301"]);
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect(await subjects()).toEqual([
+      settled("300"), settled("301"),
+      ...rest.slice(0, 50).map(ref => ({ subject_ref: ref, applied_revision: 0n, last_refresh_outcome: "budget_exhausted", refresh_visits: 1n })),
+      // Past the bound: not claimed, still first in line.
+      { subject_ref: "450", applied_revision: 0n, last_refresh_outcome: null, refresh_visits: 0n },
+    ]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+  });
+  it("keeps settling stored targets after the step's one head read and leaves later reads queued", async () => {
+    const f = await fixture();
+    await storedTarget(f, "200", 2);
+    await storedTarget(f, "201", 3);
+    await storedTarget(f, "400", 4, { stored: false });
+    await storedTarget(f, "202", 5);
+    await inOrder(f, ["200", "100", "201", "400", "202"]);
+    await f.step();
+    expect(f.calls).toEqual(["messages"]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
+    expect(await subjects()).toEqual([
+      { subject_ref: "100", applied_revision: 0n, last_refresh_outcome: "walk_pending", refresh_visits: 1n },
+      settled("200"), settled("201"), settled("202"),
+      // Not claimed: still first in line for the next step's read.
+      { subject_ref: "400", applied_revision: 0n, last_refresh_outcome: null, refresh_visits: 0n },
+    ]);
+  });
+  it("rolls back a listed subject whose target is gone by its claim and settles the rest", async () => {
+    const f = await fixture();
+    await storedTarget(f, "201", 3);
+    await storedTarget(f, "202", 5);
+    await inOrder(f, ["100", "201", "202"]);
+    // Listed after the read, then its target is deleted inside its own claim.
+    await db.pool.query(`create function b1_drop_target() returns trigger language plpgsql as $$
+      begin update page_dm_messages set deleted_at = now() where platform_message_id = '2011'; return new; end $$;
+      create trigger b1_drop_target after update of claim_token on subject_refresh_state for each row
+      when (new.subject_ref = '201' and new.claim_token is not null) execute function b1_drop_target()`);
+    try {
+      await f.step();
+    } finally {
+      await db.pool.query("drop trigger b1_drop_target on subject_refresh_state; drop function b1_drop_target()");
+    }
+    expect(f.calls).toEqual(["messages"]);
+    expect(await subjects()).toEqual([
+      { subject_ref: "100", applied_revision: 0n, last_refresh_outcome: "walk_pending", refresh_visits: 1n },
+      { subject_ref: "201", applied_revision: 0n, last_refresh_outcome: null, refresh_visits: 0n },
+      settled("202"),
+    ]);
+    // The claim rolled back together with the trigger's write.
+    expect((await db.pool.query("select deleted_at from page_dm_messages where platform_message_id='2011'")).rows[0].deleted_at)
+      .toBeNull();
+  });
+  it("defers an ineligible conversation and keeps settling behind it", async () => {
+    const f = await fixture(false);
+    await storedTarget(f, "300", 10, { visible: false });
+    await storedTarget(f, "301", 11);
+    await inOrder(f, ["300", "301"]);
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect(await subjects()).toEqual([
+      { subject_ref: "300", applied_revision: 0n, last_refresh_outcome: "conversation_ineligible", refresh_visits: 1n },
+      settled("301"),
+    ]);
+    expect((await db.pool.query("select consecutive_failures from subject_refresh_state where subject_ref='300'")).rows[0])
+      .toEqual({ consecutive_failures: 1 });
+  });
+  it("wakes a spent-budget page at most every five minutes to settle stored targets without any request", async () => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    for (let n = 0; n < 3; n++) await storedTarget(f, String(300 + n), 10 + n);
+    await storedTarget(f, "400", 20, { stored: false });
+    await inOrder(f, ["300", "301", "302", "400"]);
+    // An armed AI media accelerator read: an ordinary DM chunk would spend it.
+    Object.assign(f.app.config, { aiMediaDescribeEnabled: true, aiMediaDescribeFanslyAcceleratorEnabled: true,
+      aiMediaDescribePagePolicies: JSON.stringify({ [f.page.label]: { since: "2026-01-01T00:00:00Z" } }) });
+    await requestAiMediaAcceleratorRead(db.db, { pageId: f.page.id, groupRef: "301", messageRef: "3011",
+      now: new Date(Date.now() - 60_000) });
+    const idle = () => db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null where page_id=$1`, [f.page.id]);
+    const state = () => getPageSyncState(db.db, f.page.id, "dm_messages");
+    await idle();
+    const before = await state();
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    expect(await state()).toMatchObject({ requestSeq: before!.requestSeq + 1, dispatchSource: "event",
+      requestPayload: { fanslyWsHintOnly: true, fanslyWsHintSettleOnly: true } });
+    // Settle-only holds even if the budget reopens before the run starts.
+    await db.pool.query("delete from fansly_ws_hint_attempts");
+    expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "skipped", stream: "dm_messages" });
+    expect(f.calls).toEqual([]);
+    expect(f.app.adapter.getMessagesPage).not.toHaveBeenCalled();
+    expect(await subjects()).toEqual([
+      settled("300"), settled("301"), settled("302"),
+      { subject_ref: "400", applied_revision: 0n, last_refresh_outcome: null, refresh_visits: 0n },
+    ]);
+    expect((await db.pool.query("select status from ai_media_accelerator_reads")).rows).toEqual([{ status: "pending" }]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(0);
+    // The queue was served just now: a new stored target waits for the interval.
+    await spendBudget(f);
+    await storedTarget(f, "303", 30);
+    await db.pool.query("update subject_refresh_state set next_due_at = now() - interval '1 minute' where subject_ref = '303'");
+    await idle();
+    const served = await state();
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    expect(await state()).toEqual(served);
+    await db.pool.query("update subject_refresh_state set last_visited_at = last_visited_at - interval '6 minutes'");
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    expect(await state()).toMatchObject({ requestSeq: served!.requestSeq + 1, dispatchSource: "event" });
+  });
+  // An event wake reaches only an idle stream, and the AI media wakes rely on
+  // the queued run's accelerator step. A settle-only run has none, so it must
+  // not swallow their wake.
+  it.each(["queued", "running"])("a plain event wake replaces a %s settle-only wake, so an AI media read still runs", async when => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    await storedTarget(f, "300", 10);
+    await storedTarget(f, "400", 20, { stored: false });
+    await inOrder(f, ["300", "400"]);
+    Object.assign(f.app.config, { aiMediaDescribeEnabled: true, aiMediaDescribeFanslyAcceleratorEnabled: true,
+      aiMediaDescribePagePolicies: JSON.stringify({ [f.page.label]: { since: "2026-01-01T00:00:00Z" } }) });
+    await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null where page_id=$1`, [f.page.id]);
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    const settleOnly = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(settleOnly).toMatchObject({ requestPayload: { fanslyWsHintOnly: true, fanslyWsHintSettleOnly: true } });
+    const lease = when === "running" ? await acquireTargetedPageSyncLease(db.db, {
+      pageId: f.page.id, stream: "dm_messages", workerId: "settle-only", leaseToken: randomUUID(), leaseTtlMs: 120_000,
+    }) : null;
+    // What the AI candidates projector does for a fan's new media.
+    await requestAiMediaAcceleratorRead(db.db, { pageId: f.page.id, groupRef: "100", messageRef: "150",
+      now: new Date(Date.now() - 60_000) });
+    await requestPageSync(db.db, { pageId: f.page.id, streams: ["dm_messages"], source: "event" });
+    const woken = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(woken).toMatchObject({ requestSeq: settleOnly!.requestSeq + 1, dispatchSource: "event",
+      status: lease ? "running" : "pending", requestPayload: { fanslyWsHintOnly: true } });
+    expect(woken!.requestPayload).not.toHaveProperty("fanslyWsHintSettleOnly");
+    // The running settle-only chunk ends as a hold; the plain wake is next.
+    if (lease) expect(await skipPageSync(db.db, { pageId: f.page.id, stream: "dm_messages",
+      requestSeq: lease.leasedSeq, leaseToken: lease.leaseToken })).toBe(true);
+    expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "skipped", stream: "dm_messages" });
+    // The accelerator read the head; B1 made no request on its spent budget.
+    expect(f.calls).toEqual(["messages"]);
+    expect((await db.pool.query("select status, outcome from ai_media_accelerator_reads")).rows)
+      .toEqual([{ status: "done", outcome: "head_read" }]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+    expect(await subjects()).toEqual([settled("300"),
+      { subject_ref: "400", applied_revision: 0n, last_refresh_outcome: "budget_exhausted", refresh_visits: 1n }]);
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toMatchObject({ status: "idle" });
   });
   it.each(["group_created", "mid_walk"])("still reads the head for a stored target with %s", async kind => {
     const f = await fixture();

@@ -3249,6 +3249,14 @@ export async function resetPageSync(
   });
 }
 
+/** A settle-only B1 wake skips the AI media accelerator step that the other
+ * event wakes rely on. A plain event wake takes its place while it is queued,
+ * or queues behind it while it runs, instead of being dropped. */
+function supersedesSettleOnlyWake(current: PageSyncState, payload: Record<string, unknown> | null | undefined) {
+  return current.requestSource === "event" && current.requestPayload.fanslyWsHintSettleOnly === true
+    && payload?.fanslyWsHintSettleOnly !== true && (current.status === "pending" || current.status === "running");
+}
+
 export async function requestPageSync(
   db: Database,
   input: {
@@ -3313,8 +3321,9 @@ export async function requestPageSync(
       // B1 can wake an idle DM stream for one budgeted target. Never replace
       // queued ordinary work with an event-only request; the ordinary chunk
       // can consume the same durable subject queue itself.
-      if (input.source === "event" && (stream !== "dm_messages" || current.status !== "idle"
-        || current.requestSeq > current.appliedSeq)) continue;
+      if (input.source === "event" && !(stream === "dm_messages" && (current.requestSeq > current.appliedSeq
+        ? supersedesSettleOnlyWake(current, input.requestPayloadByStream?.[stream])
+        : current.status === "idle"))) continue;
 
       // The outstanding revision already carries this request. Leave the row
       // untouched, so its lease, backoff and cursor revision stay valid.
@@ -3331,7 +3340,9 @@ export async function requestPageSync(
       }
 
       const nextRequestSeq = current.requestSeq + 1;
-      const rawRequestPayload = input.source === "event" ? { fanslyWsHintOnly: true }
+      // An event request is always hint-only; it may narrow that further.
+      const rawRequestPayload = input.source === "event"
+        ? { ...input.requestPayloadByStream?.[stream], fanslyWsHintOnly: true }
         : input.requestPayloadByStream?.[stream] ?? {};
       const requestPayload = Object.keys(rawRequestPayload).length > 0
         ? { ...rawRequestPayload, revision: nextRequestSeq }

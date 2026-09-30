@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { sql } from "drizzle-orm";
-import type { FanslyWsHintNode, FanslyWsHintPolicy } from "@agency_hub_core/shared";
+import { sql, type SQL } from "drizzle-orm";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type FanslyWsHintNode, type FanslyWsHintPolicy } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
 import { capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -106,9 +106,13 @@ export async function saveFanslyWsHintWalk(db: Database, claim: FanslyWsHintClai
 }
 
 /** Reuses subject_refresh_state's claim/CAS protocol. The caller owns the
- * page sync lease; this token protects the cursor across expiry and erasure. */
-export async function claimFanslyWsHint(db: Database, pageId: number, policy: FanslyWsHintPolicy, now: Date): Promise<FanslyWsHintClaim | null> {
-  if (!policy.enabledTypes.size) return null;
+ * page sync lease; this token protects the cursor across expiry and erasure.
+ * `subjectRefs` limits the claim to those subjects, still in claim order. */
+export async function claimFanslyWsHint(
+  db: Database, pageId: number, policy: FanslyWsHintPolicy, now: Date,
+  options: { subjectRefs?: string[] } = {},
+): Promise<FanslyWsHintClaim | null> {
+  if (!policy.enabledTypes.size || options.subjectRefs?.length === 0) return null;
   if (!await tryAcquireDmArchiveWriterFenceLock(db, pageId)) throw new Error("fansly_ws_hint_erasure_busy");
   const token = randomUUID();
   const result = await db.execute<{
@@ -134,6 +138,7 @@ export async function claimFanslyWsHint(db: Database, pageId: number, policy: Fa
           and r.routed_revision <= subject_refresh_state.requested_revision
           and r.received_at >= ${new Date(policy.activationAt)} and r.generation = ${policy.generation}
           and r.hint_type in ${[...policy.enabledTypes]})
+        ${options.subjectRefs ? sql`and subject_ref in ${options.subjectRefs}` : sql``}
       -- A spent budget defers every refused subject to the same reopen time.
       -- Among ties the earliest visit goes first (FIFO by deferral), not the
       -- lowest group id, which would starve the newest conversations.
@@ -177,7 +182,7 @@ function deletedTargetObservation() {
     order by d.received_at, d.event_id limit 1)`;
 }
 
-function liveTarget(conversationId: number) {
+function liveTarget(conversationId: number | SQL) {
   return sql`exists (select 1 from page_dm_messages m join page_dm_threads t on t.id = m.conversation_id
     where m.platform_account_id = r.page_id and t.platform_account_id = r.page_id
       and t.platform_conversation_id = r.group_ref and m.conversation_id = ${conversationId}
@@ -221,6 +226,58 @@ export async function areFanslyWsHintTargetsMaterialized(
       and r.hint_type in ${[...policy.enabledTypes]} and r.received_at >= ${new Date(policy.activationAt)}
       and r.routed_revision > s.applied_revision and r.routed_revision <= ${claim.revision}`);
   return result.rows[0]?.materialized === true;
+}
+
+/** The same gate over an unclaimed subject row, before any claim: its walk is
+ * at the head of an eligible thread and every enabled receipt up to the
+ * requested revision (a superset of any claimed one) names a live message.
+ * Stricter than the step's check (any exclusion reason counts), which stays
+ * authoritative under the claim. */
+function materializedAtHead(policy: FanslyWsHintPolicy) {
+  return sql`subject_refresh_state.backfill_cursor->>'before' is null and exists (
+    select 1 from page_dm_threads c
+    where c.platform_account_id = subject_refresh_state.page_id
+      and c.platform_conversation_id = subject_refresh_state.subject_ref
+      and c.is_visible and c.fan_id is not null
+      and coalesce(c.metadata->>${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}, '') = ''
+      and coalesce((subject_refresh_state.backfill_cursor->>'conversationId')::bigint, c.id) = c.id
+      and (select bool_and(r.hint_type = 'message_created' and ${liveTarget(sql`c.id`)})
+        from fansly_ws_hint_receipts r
+        where r.page_id = subject_refresh_state.page_id and r.group_ref = subject_refresh_state.subject_ref
+          and r.generation = ${policy.generation} and r.outcome = 'routed'
+          and r.hint_type in ${[...policy.enabledTypes]} and r.received_at >= ${new Date(policy.activationAt)}
+          and r.routed_revision > subject_refresh_state.applied_revision
+          and r.routed_revision <= subject_refresh_state.requested_revision))`;
+}
+
+/** Due subjects that pass the zero-request gate, in claim order: what a step
+ * can still settle once its one request is spent, whatever needs REST ahead
+ * of them in the queue. One scan; the caller claims them by reference. */
+export async function listMaterializedFanslyWsHints(db: Database, input: {
+  pageId: number; policy: FanslyWsHintPolicy; now: Date; limit: number;
+}) {
+  const { pageId, policy, now } = input;
+  if (!policy.enabledTypes.has("message_created")) return [];
+  const result = await db.execute<{ subject_ref: string }>(sql`select subject_ref from subject_refresh_state
+    where page_id = ${pageId} and plane = ${FANSLY_WS_DM_PLANE}
+      and requested_revision > applied_revision and next_due_at <= ${now}
+      and (retry_after_at is null or retry_after_at <= ${now})
+      and (claim_token is null or claim_expires_at <= ${now})
+      and backfill_cursor->>'generation' = ${policy.generation}
+      and ${materializedAtHead(policy)}
+    order by next_due_at, last_visited_at, subject_ref limit ${input.limit}`);
+  return result.rows.map(row => row.subject_ref);
+}
+
+/** While the 24h budget is spent the projector wakes a step only to settle
+ * stored targets: when no subject of the page was claimed since `quietSince`
+ * and a due one passes the zero-request gate. */
+export async function isFanslyWsHintDrainDue(db: Database, input: {
+  pageId: number; policy: FanslyWsHintPolicy; now: Date; quietSince: Date;
+}) {
+  const served = await db.execute(sql`select 1 from subject_refresh_state
+    where page_id = ${input.pageId} and plane = ${FANSLY_WS_DM_PLANE} and last_visited_at > ${input.quietSince} limit 1`);
+  return !served.rows.length && (await listMaterializedFanslyWsHints(db, { ...input, limit: 1 })).length > 0;
 }
 
 /** Called in the SAME owned transaction as the REST-derived message writes.

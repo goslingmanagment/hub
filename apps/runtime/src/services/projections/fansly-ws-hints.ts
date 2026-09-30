@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import {
-  getProjectionWatermark, listEventAccounts, listEventsSince, setProjectionWatermark,
+  getProjectionWatermark, listEventAccounts, listEventsSince, setProjectionWatermark, isFanslyWsHintDrainDue,
   lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent, requestPageSync,
   tryAcquireDmArchiveWriterFenceLock, type Database,
 } from "@agency_hub_core/db";
@@ -22,6 +22,9 @@ const signalSchema = z.object({
 });
 
 export const FANSLY_WS_HINT_PROJECTION = "fansly_ws_hints";
+
+/** A spent budget's zero-request wake: at most one per page per interval. */
+const DRAIN_WAKE_INTERVAL_MS = 5 * 60_000;
 
 /** Existing minutely projector: events -> operational receipts/dirty queue.
  * No HTTP. One bounded ledger page per account/tick, including when disabled.
@@ -81,11 +84,20 @@ export async function runFanslyWsHintProjection(
       const due = await app.db.execute(sql`select 1 from subject_refresh_state where page_id = ${accountId}
         and plane = 'fansly_ws_dm' and requested_revision > applied_revision and next_due_at <= now()
         and backfill_cursor->>'generation' = ${policy.generation} limit 1`);
-      // A wake exists to spend B1's budget; while it is spent the run would
-      // only defer a subject. Ordinary DM chunks still visit the queue.
-      if (due.rows.length && !await nextFanslyWsHintBudgetAt(app.db, {
-        pageId: accountId, maxAttempts24h: policy.maxAttempts24h, now: new Date(),
-      })) await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
+      if (due.rows.length) {
+        const now = new Date();
+        // A wake exists to spend B1's budget. While it is spent, wake only to
+        // settle targets ordinary polling already stored: a settle-only run
+        // that makes no request, once the queue has gone unserved a while.
+        if (!await nextFanslyWsHintBudgetAt(app.db, { pageId: accountId, maxAttempts24h: policy.maxAttempts24h, now })) {
+          await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
+        } else if (await isFanslyWsHintDrainDue(app.db, {
+          pageId: accountId, policy, now, quietSince: new Date(now.getTime() - DRAIN_WAKE_INTERVAL_MS),
+        })) {
+          await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event",
+            requestPayloadByStream: { dm_messages: { fanslyWsHintSettleOnly: true } } });
+        }
+      }
     }
   }
   return totals;
