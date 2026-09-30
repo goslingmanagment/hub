@@ -5,4 +5,6 @@ export const SHARD_WEIGHTS_VERSION: number;
 export function validateShardWeights(document: unknown): ShardWeights;
 export function parseShardWeights(text: string): ShardWeights;
 export function defaultShardWeight(weights: ShardWeights): number;
+export function orderShardFiles(files: readonly string[], weights: ShardWeights): string[];
+export function orderShardFiles<T>(items: readonly T[], weights: ShardWeights, keyOf: (item: T) => string): T[];
 export function planWeightedShards(files: readonly string[], weights: ShardWeights, count: number): WeightedShardPlan;

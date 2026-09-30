@@ -6,13 +6,17 @@
 //   node scripts/ci-shard-weights.mjs --log <job.log>...    # saved job logs
 //
 // Pick recent green runs on the PC pool (`workflow_dispatch` with full=true
-// runs every shard). A file's weight is its wall time inside the shard: the
-// time between vitest reporting the previous file and reporting this one, so
-// module import and database acquisition count, not only the tests. The first
-// file of a run also waits for global setup; it gets its own reported
-// duration plus the median per-file overhead instead. Several runs give the
-// median per file. firstShardExtraSeconds is the wall time of the
-// "Sync-critical API tests" step shard 1 runs afterwards.
+// runs every shard) while nothing else ran on the PC. A file's weight is its
+// own time: the duration vitest reports for it, plus the job's setup, import
+// and environment time per file (vitest's "Duration (…)" line sums them),
+// divided by the files the job ran at once (--maxWorkers of the DB step's
+// SYNC_CRITICAL_DB_PARALLELISM, 2 on the PC; 1 without --fileParallelism).
+// So weights are seconds of shard wall time, as firstShardExtraSeconds is,
+// whatever order the files ran in. Not the time between two completions:
+// with two files at a time, a slow file that finishes just after its
+// neighbour would measure almost nothing. Several runs give the median per
+// file. firstShardExtraSeconds is the wall time of the "Sync-critical API
+// tests" step shard 1 runs afterwards.
 //
 // Files the given runs did not measure keep their earlier weight while they
 // still exist; deleted files drop out. The summary on stderr shows the
@@ -29,6 +33,11 @@ const API_STEP = "##[group]Run pnpm test:sync-critical:api";
 const LINE = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) ?(.*)$/;
 // " ✓ tests/x.integration.test.ts (32 tests) 8718ms"; a failed file is ❯ or ×.
 const FILE_RESULT = /^\s*[✓✗×❯↓]\s+(tests\/\S+?\.test\.ts)\s+\([^)]*\)(?:\s+(\d+)\s*ms)?/;
+// The step's env block: "--fileParallelism --maxWorkers=2" on the PC, empty on GitHub.
+const PARALLELISM = /^\s*SYNC_CRITICAL_DB_PARALLELISM:(.*)$/;
+// "   Duration  112.01s (transform 8.95s, setup 0ms, import 67.94s, tests 123.46s, environment 5ms)"
+const SUMMARY = /^\s*Duration\s+\S+\s+\((.+)\)\s*$/;
+const TIMER = /\b(\w+) (\d+(?:\.\d+)?)(ms|s)\b/g;
 const ANSI = new RegExp(String.raw`\u001b\[[0-9;]*[A-Za-z]`, "g");
 
 function median(values) {
@@ -39,15 +48,26 @@ function median(values) {
 
 const seconds = value => Math.max(0.1, Math.round(value * 10) / 10);
 
+/** Files the DB step ran at once, from its SYNC_CRITICAL_DB_PARALLELISM flags. */
+function filesAtOnce(flags) {
+  if (!/--fileParallelism\b/.test(flags)) return 1;
+  const workers = /--maxWorkers[= ](\d+)(?:\s|$)/.exec(flags);
+  if (!workers) throw new Error(`Cannot tell how many files ran at once from SYNC_CRITICAL_DB_PARALLELISM:${flags}`);
+  return Number(workers[1]);
+}
+
 /**
- * One integration job's log: the wall seconds of every file the DB step
- * reported, and the API step's wall seconds (null when the job has none).
+ * One integration job's log: every file the DB step reported with its share
+ * of the shard's wall seconds (see the header), and the API step's wall
+ * seconds (null when the job has none).
  */
 export function parseJobLog(text) {
   const reported = [];
   let section = null;
   let apiStart = null;
   let apiEnd = null;
+  let atOnce = null;
+  let timers = null;
   for (const raw of text.split(/\r?\n/)) {
     const match = LINE.exec(raw.replace(ANSI, "").replace(/^\uFEFF/, ""));
     if (!match) continue;
@@ -69,15 +89,21 @@ export function parseJobLog(text) {
     }
     if (section === "api") apiEnd = at;
     if (section !== "db") continue;
+    const parallelism = PARALLELISM.exec(body);
+    if (parallelism) atOnce = filesAtOnce(parallelism[1]);
+    const summary = SUMMARY.exec(body);
+    if (summary) {
+      timers = Object.fromEntries([...summary[1].matchAll(TIMER)].map(([, name, value, unit]) => [name, Number(value) / (unit === "ms" ? 1000 : 1)]));
+    }
     const result = FILE_RESULT.exec(body);
-    if (result) reported.push({ file: result[1], at, ms: result[2] === undefined ? 0 : Number(result[2]) });
+    if (result) reported.push({ file: result[1], ms: result[2] === undefined ? 0 : Number(result[2]) });
   }
   if (reported.length === 0) throw new Error("No sync-critical DB file results in this log");
-  const walls = reported.map((entry, index) => (index === 0 ? null : (entry.at - reported[index - 1].at) / 1000));
-  const overheads = reported.slice(1).map((entry, index) => Math.max(0, (walls[index + 1] ?? 0) - entry.ms / 1000));
-  const firstOverhead = overheads.length === 0 ? 0 : median(overheads);
+  if (atOnce === null) throw new Error("No SYNC_CRITICAL_DB_PARALLELISM in the DB step: cannot tell how many files ran at once");
+  if (timers?.import === undefined) throw new Error("No vitest Duration summary with import time in the DB step");
+  const overhead = ((timers.setup ?? 0) + timers.import + (timers.environment ?? 0)) / reported.length;
   return {
-    files: reported.map((entry, index) => ({ file: entry.file, seconds: walls[index] ?? entry.ms / 1000 + firstOverhead })),
+    files: reported.map(entry => ({ file: entry.file, seconds: (entry.ms / 1000 + overhead) / atOnce })),
     apiSeconds: apiStart !== null && apiEnd !== null ? (apiEnd - apiStart) / 1000 : null,
   };
 }
