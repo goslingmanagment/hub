@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   claimNextDueAiMediaDescription,
-  countRecentAiMediaDescribeOutcomes,
   expireAwaitingSourceAiMediaDescriptions,
   finalizeAiGatewayUsageEvent,
   findDescribedAiMediaByContent,
@@ -18,7 +17,6 @@ import {
   reserveAiGatewayUsageEvent,
   reserveAiMediaDescribeBudget,
   settleAiMediaDescribeBudget,
-  tripAiMediaDescribeBreaker,
   upsertAiMediaDescriptionCandidate,
   type AiMediaDescriptionRow,
   type AiMediaKind,
@@ -73,9 +71,6 @@ export const AI_MEDIA_DESCRIBE_SWEEP_LIMIT = 10;
 export const AI_MEDIA_DESCRIBE_FRESH_MS = 15 * 60 * 1000;
 /** A row waiting for a free source this long becomes unavailable. */
 export const AI_MEDIA_AWAITING_SOURCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-export const AI_MEDIA_BREAKER_DAILY_REFUSALS = 25;
-export const AI_MEDIA_BREAKER_WINDOW = 40;
-export const AI_MEDIA_BREAKER_MIN_SAMPLES = 10;
 const MAX_TRANSIENT_ATTEMPTS = 4;
 const TRANSIENT_RETRY_MS = 10 * 60 * 1000;
 
@@ -113,7 +108,7 @@ export interface AiMediaDescribeDeps {
 }
 
 export interface AiMediaDescribeSweepResult extends Record<string, unknown> {
-  skipped?: "disabled" | "no_pages" | "no_client" | "account_stopped" | "breaker";
+  skipped?: "disabled" | "no_pages" | "no_client" | "account_stopped";
   /** Rows whose claim was taken over by another worker before a settle. */
   leaseLost?: number;
   claimed: number;
@@ -127,10 +122,6 @@ export function utcDay(now: Date) {
 
 function nextUtcMidnight(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-}
-
-function utcDayStart(now: Date) {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
 async function defaultDownload(app: AppContext, input: { url: string; pageId: number }) {
@@ -186,12 +177,10 @@ async function isAccountStopped(app: AppContext) {
   return incident?.status === "open";
 }
 
-/** The breaker latches for the UTC day; a new day resolves the latch. */
-async function reconcileBreakerLatch(app: AppContext, now: Date): Promise<boolean> {
-  const today = await getAiMediaDescribeDay(app.db, utcDay(now));
-  if (today?.breakerTrippedAt) {
-    return true;
-  }
+/** Owner, 2026-09-30: the refusal breaker is removed (refusals of explicit
+ * images are a normal outcome, not a provider fault). A breaker incident left
+ * open by an older build resolves on the next sweep. */
+async function resolveRetiredBreakerIncident(app: AppContext, now: Date): Promise<void> {
   const incident = await getNotificationIncidentByKey(app.db, incidentKey({
     kind: "ai_provider_failed",
     platformAccountId: null,
@@ -207,40 +196,11 @@ async function reconcileBreakerLatch(app: AppContext, now: Date): Promise<boolea
       recoveredAt: now,
     });
   }
-  return false;
 }
 
-async function evaluateBreakerAfterRefusal(app: AppContext, now: Date) {
-  const day = utcDay(now);
-  const refusals = await incrementAiMediaDescribeRefusals(app.db, { day, now });
-  let reason: string | null = null;
-  if (refusals >= AI_MEDIA_BREAKER_DAILY_REFUSALS) {
-    reason = `${refusals} refusals today`;
-  } else {
-    const recent = await countRecentAiMediaDescribeOutcomes(app.db, {
-      since: utcDayStart(now),
-      limit: AI_MEDIA_BREAKER_WINDOW,
-    });
-    if (recent.total >= AI_MEDIA_BREAKER_MIN_SAMPLES && recent.refused * 2 >= recent.total) {
-      reason = `${recent.refused} of the last ${recent.total} images refused`;
-    }
-  }
-  if (reason === null) {
-    return;
-  }
-  if (await tripAiMediaDescribeBreaker(app.db, { day, reason, now })) {
-    app.logger.warn({ reason }, "ai media describer breaker tripped for the UTC day");
-    await openCriticalNotificationIncident(app, {
-      kind: "ai_provider_failed",
-      platformAccountId: null,
-      pageLabel: null,
-      platform: null,
-      subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-      errorCode: "media_describe_refusals",
-      errorSummary: `Paused until the next UTC day: ${reason}. Ready descriptions keep working.`,
-      occurredAt: now,
-    });
-  }
+/** Refusals are counted per UTC day for the runbook queries; they never pause the lane. */
+async function recordRefusal(app: AppContext, now: Date) {
+  await incrementAiMediaDescribeRefusals(app.db, { day: utcDay(now), now });
 }
 
 function sha256Hex(bytes: Uint8Array) {
@@ -273,9 +233,7 @@ export async function runAiMediaDescribeSweep(
   if (await isAccountStopped(app)) {
     return { ...result, skipped: "account_stopped" };
   }
-  if (await reconcileBreakerLatch(app, startedAt)) {
-    return { ...result, skipped: "breaker" };
-  }
+  await resolveRetiredBreakerIncident(app, startedAt);
 
   const pagesById = new Map(pages.map((page) => [page.id, page]));
   const model = effective.aiMediaDescribeModel ?? MEDIA_DESCRIBE_DEFAULT_MODEL;
@@ -451,13 +409,12 @@ async function processRow(
       break;
   }
 
-  // Cheap pre-check before any network: a latched breaker or an exhausted
-  // day defers without touching the CDN.
+  // Cheap pre-check before any network: an exhausted day defers without
+  // touching the CDN.
   const checkedAt = clock();
   const today = await getAiMediaDescribeDay(app.db, utcDay(checkedAt));
   if (
-    today?.breakerTrippedAt
-    || (today && (today.imagesReserved >= input.limits.images || today.microUsdReserved >= input.limits.microUsd))
+    (today && (today.imagesReserved >= input.limits.images || today.microUsdReserved >= input.limits.microUsd))
     || input.limits.images === 0
     || input.limits.microUsd === 0
   ) {
@@ -688,11 +645,11 @@ async function processRow(
         errorCode: outcome.reason,
       });
       try {
-        await evaluateBreakerAfterRefusal(app, completedAt);
+        await recordRefusal(app, completedAt);
       } catch (error) {
-        // The refusal is recorded; a breaker/incident hiccup must not undo it.
+        // The refusal is recorded on the row; a counter hiccup must not undo it.
         app.logger.warn({ descriptionId: row.id, err: error instanceof Error ? error.name : "error" },
-          "ai media describer breaker evaluation failed");
+          "ai media describer refusal count failed");
       }
       return { status: "refused", sent: true };
     }

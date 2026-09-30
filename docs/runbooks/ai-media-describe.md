@@ -52,7 +52,7 @@ described; caps $1 and 150 images per UTC day for the agency.
 | Provider outcome | Row status | Retry | Budget |
 |---|---|---|---|
 | Description | `described` | — | real cost |
-| `stop_reason: refusal`, `UNAVAILABLE`, empty | `refused` | never (any variant, same bytes anywhere) | real cost; counts toward the breaker |
+| `stop_reason: refusal`, `UNAVAILABLE`, empty | `refused` | never (any variant, same bytes anywhere) | real cost; counted per day |
 | Timeout, drop after send | `outcome_unknown` | never | reservation kept |
 | 429 / 5xx / 529 / connect failure before send | `failed` after ≤2 retries in the call | never after that | released |
 | 401 / 403 | `pending` | lane stops (incident) | released |
@@ -195,10 +195,11 @@ first generation or a replayed projection never starts a historical pass.
 
 ## Stops
 
-- **Refusal breaker:** ≥25 provider refusals in the UTC day, or ≥50% of the
-  day's last 40 provider outcomes (at least 10) → no sends until the next UTC
-  day; incident `ai_provider_failed` / `media_describe_breaker` (resolves by
-  itself on the new day).
+- **No refusal breaker** (owner, 2026-09-30): most refusals are explicit fan
+  photos, a normal outcome, and a day with many of them paused every image.
+  Refusals are only counted (`ai_media_describe_days.refusals`); the daily
+  caps bound the spend. `breaker_tripped_at` is no longer read, and an old
+  `media_describe_breaker` incident resolves on the next sweep.
 - **Account stop:** Anthropic 401/403 → incident `ai_provider_failed` /
   `media_describe_account_stop`; nothing is sent until the owner resolves the
   incident in the console (Notifications → Incidents → Resolve).

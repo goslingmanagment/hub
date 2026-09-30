@@ -451,7 +451,7 @@ export async function listAiMediaDescriptionsByRefs(
   });
 }
 
-// ── Daily budget and refusal breaker (agency-wide, UTC day) ─────────────────
+// ── Daily budget and refusal count (agency-wide, UTC day) ───────────────────
 
 export interface AiMediaDescribeDayRow {
   day: string;
@@ -482,8 +482,7 @@ export async function getAiMediaDescribeDay(db: Database, day: string): Promise<
 
 /**
  * Atomic reservation of one image and its worst-case cost against the day's
- * caps. Returns false (nothing reserved) when either cap would be crossed or
- * the refusal breaker has latched for the day.
+ * caps. Returns false (nothing reserved) when either cap would be crossed.
  */
 export async function reserveAiMediaDescribeBudget(
   db: Database,
@@ -499,7 +498,6 @@ export async function reserveAiMediaDescribeBudget(
       micro_usd_reserved = micro_usd_reserved + ${Math.max(0, Math.ceil(input.microUsd))},
       updated_at = ${input.now}
     where day = ${input.day}::date
-      and breaker_tripped_at is null
       and images_reserved + 1 <= ${input.imageLimit}
       and micro_usd_reserved + ${Math.max(0, Math.ceil(input.microUsd))} <= ${input.microUsdLimit}
     returning day
@@ -535,45 +533,6 @@ export async function incrementAiMediaDescribeRefusals(
     returning refusals
   `);
   return Number(result.rows[0]?.refusals ?? 0);
-}
-
-/** Latches the breaker for the day; true only for the first trip. */
-export async function tripAiMediaDescribeBreaker(
-  db: Database,
-  input: { day: string; reason: string; now: Date },
-): Promise<boolean> {
-  await db.execute(sql`
-    insert into ai_media_describe_days (day, updated_at) values (${input.day}::date, ${input.now})
-    on conflict (day) do nothing
-  `);
-  const tripped = await db.execute(sql`
-    update ai_media_describe_days set breaker_tripped_at = ${input.now}, breaker_reason = ${input.reason},
-      updated_at = ${input.now}
-    where day = ${input.day}::date and breaker_tripped_at is null
-    returning day
-  `);
-  return tripped.rows.length === 1;
-}
-
-/** Terminal provider outcomes since `since`, newest first, at most `limit`:
- * the refusal-share window of the breaker. */
-export async function countRecentAiMediaDescribeOutcomes(
-  db: Database,
-  input: { since: Date; limit: number },
-): Promise<{ total: number; refused: number }> {
-  const result = await db.execute<{ total: string; refused: string }>(sql`
-    select count(*)::text as total, count(*) filter (where status = 'refused')::text as refused
-    from (
-      select status from ai_media_descriptions
-      where described_at >= ${input.since}
-        and status in ('described', 'refused')
-        and usage_event_id is not null
-      order by described_at desc
-      limit ${input.limit}
-    ) recent
-  `);
-  const row = result.rows[0];
-  return { total: Number(row?.total ?? 0), refused: Number(row?.refused ?? 0) };
 }
 
 // ── Fansly source helpers ────────────────────────────────────────────────────

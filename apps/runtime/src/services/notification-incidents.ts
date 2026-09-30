@@ -253,7 +253,7 @@ function resolveDetailForIncident(
       return "AI provider billing recovered";
     case "ai_provider_failed":
       if (input.subKey === AI_MEDIA_DESCRIBE_BREAKER_SUBKEY) {
-        return "AI image describer resumed for the new UTC day";
+        return "AI image describer resumed";
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
         return "AI image describer re-enabled by the owner";
