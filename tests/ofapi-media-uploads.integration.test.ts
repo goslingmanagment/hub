@@ -719,6 +719,38 @@ describe("owned OFAPI uploads and vault catalog", () => {
     await runOfapiMediaUploadSweep(app);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    ["https://api.onlyfansapi.com", true],
+    ["https://evil.example", false],
+    ["http://api.onlyfansapi.com", false],
+  ] as const)("checks a %s polling_url as a vendor contract only, never as transport", async (origin, accepted) => {
+    const job = await upload();
+    responses.push({
+      status: "pending",
+      prefixed_id: token,
+      polling_url: `${origin}/api/${account}/media/uploads/${token}/status`,
+    });
+    await runOfapiMediaUploadSweep(app);
+    await runOfapiMediaUploadSweep(app);
+    if (!accepted) {
+      expect(await getOfapiCaptureJob(app.db, job.id)).toMatchObject({
+        state: "blocked",
+        reasonCode: "upload_start_contract_rejected",
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      return;
+    }
+    const started = (await getOfapiCaptureJob(app.db, job.id))!;
+    expect(started.reasonCode).not.toBe("upload_start_contract_rejected");
+    expect(started.cursor).toMatchObject({ phase: "poll", uploadId: token });
+    await status(job.id, {});
+    expect((await getOfapiCaptureJob(app.db, job.id))?.state).toBe("complete");
+    // The status poll goes to the configured base, not the provider's host.
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `https://app.onlyfansapi.com/api/${account}/media/vault`,
+      `https://app.onlyfansapi.com/api/${account}/media/uploads/${token}/status`,
+    ]);
+  });
   it("keeps one-use CDN tokens out of local lists and canonical facts and refuses custody already reserved by a send", async () => {
     const job = await pending("cdn");
     await status(job.id, { media: { file_name: "own.png" } });

@@ -1,4 +1,4 @@
-import { OFAPI_DEFAULT_BASE_URL } from "../ofapi.ts";
+import { isOfapiProviderLinkOrigin, OFAPI_DEFAULT_BASE_URL } from "../ofapi.ts";
 // OFAPI-backed OnlyFans audience sync (Phase 3 of docs/ofapi-parity-plan.md,
 // D6/D8): the subscribers executor stream for OnlyFans pages mapped to an OFAPI
 // account, behind OFAPI_AUDIENCE_SYNC_ENABLED. A budgeted fans/active offset
@@ -632,7 +632,7 @@ export function resolveOfapiAudienceNextOffset(
     const expected = `${base.pathname.replace(/\/$/, "")}/${encodeURIComponent(input.accountId)}/fans/active`;
     const next = new URL(page.nextPageUrl, base);
     const offset = next.searchParams.get("offset");
-    if (next.origin !== base.origin || next.pathname !== expected || next.username || next.password || next.hash ||
+    if (!isOfapiProviderLinkOrigin(next, base) || next.pathname !== expected || next.username || next.password || next.hash ||
         next.searchParams.getAll("offset").length !== 1 || !offset || !/^\d+$/.test(offset) ||
         !Number.isSafeInteger(Number(offset)) || Number(offset) <= input.offset ||
         [...next.searchParams.keys()].some(key => !["limit", "offset"].includes(key)) ||

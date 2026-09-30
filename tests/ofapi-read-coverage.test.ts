@@ -158,6 +158,43 @@ describe("closed OFAPI read coverage catalog", () => {
       ),
     ).toMatchObject({ state: "complete", nextQuery: null });
   });
+  it("follows a next_page on either OFAPI vendor host and nothing else", () => {
+    const row = def("following_expired"),
+      path = "/acct_test/following/expired",
+      query = { limit: "50", offset: "0" };
+    const coverage = (next_page: string) =>
+      ofapiReadCoverage(
+        row,
+        { data: { list: [], hasMore: true }, _pagination: { next_page } },
+        path,
+        query,
+      );
+    // Since 2026-09-29 OFAPI names api.onlyfansapi.com in next_page.
+    expect(
+      coverage(
+        "https://api.onlyfansapi.com/api/acct_test/following/expired?limit=50&offset=50",
+      ),
+    ).toMatchObject({
+      state: "partial",
+      reason: "next_page",
+      nextQuery: { offset: "50", limit: "50" },
+    });
+    for (const url of [
+      "http://api.onlyfansapi.com/api/acct_test/following/expired?offset=50",
+      "https://api.onlyfansapi.com:8443/api/acct_test/following/expired?offset=50",
+      "https://evil.onlyfansapi.com/api/acct_test/following/expired?offset=50",
+      "https://user:pw@api.onlyfansapi.com/api/acct_test/following/expired?offset=50",
+      "https://api.onlyfansapi.com/v2/acct_test/following/expired?offset=50",
+      "https://api.onlyfansapi.com/api/acct_test/following/expired?offset=50#x",
+      "https://api.onlyfansapi.com/api/acct_test/following/expired?offset=50&query=changed",
+      "https://api.onlyfansapi.com/api/acct_test/following/expired?offset=0",
+    ])
+      expect(coverage(url)).toMatchObject({
+        state: "partial",
+        reason: "invalid_provider_continuation",
+        nextQuery: null,
+      });
+  });
   it("does not call filtered or indexed fan results a complete audience", () => {
     const body = {
       data: {

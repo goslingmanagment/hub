@@ -1,4 +1,4 @@
-import { OFAPI_DEFAULT_BASE_URL, OfapiApiError, type OfapiListPage } from "./ofapi.ts";
+import { isOfapiProviderLinkOrigin, OFAPI_DEFAULT_BASE_URL, OfapiApiError, type OfapiListPage } from "./ofapi.ts";
 
 /** Extract only a verified offset; never follow a provider URL as transport. */
 export function resolveOfapiListNextOffset(
@@ -12,7 +12,7 @@ export function resolveOfapiListNextOffset(
   try { next = new URL(page.nextPageUrl, base); }
   catch { throw new OfapiApiError("OFAPI list pagination invalid", 200, null); }
   const offset = next.searchParams.get("offset");
-  if (next.origin !== base.origin || next.pathname !== expected || next.username || next.password || next.hash ||
+  if (!isOfapiProviderLinkOrigin(next, base) || next.pathname !== expected || next.username || next.password || next.hash ||
       next.searchParams.getAll("offset").length !== 1 || !offset || !/^\d+$/.test(offset) ||
       !Number.isSafeInteger(Number(offset)) || Number(offset) <= input.offset ||
       [...next.searchParams.keys()].some(key => !["limit", "offset"].includes(key)) ||

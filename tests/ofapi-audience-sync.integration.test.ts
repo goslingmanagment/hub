@@ -582,6 +582,54 @@ describe("OFAPI audience sweep", () => {
     expect(await listSubscriptions(page.id)).toHaveLength(3);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("walks the api.onlyfansapi.com continuation and closes the stream incident on the first advancing chunk", async () => {
+    appContext = createTestAppContext(testDb!, {
+      ofapiAudienceSyncEnabled: true,
+      ofapiAudienceMaxRequestsPerRun: 1,
+    });
+    const page = (await seedMappedPage())!;
+    // Prod shape since 2026-09-30 (lora-of, lora-vip-of): 19 fans and an
+    // absolute next_page on api. while the configured base stays on app.
+    const firstPage: OfapiListPage = {
+      ...fansPage(Array.from({ length: 19 }, (_, index) => activeFanItem({ id: 101 + index })), true),
+      nextPageUrl: `https://api.onlyfansapi.com/api/${OFAPI_ACCOUNT}/fans/active?limit=20&offset=20`,
+    };
+    const { client, listActiveFans } = fakeAudienceClient(new Map([
+      [0, firstPage],
+      [20, { ...fansPage([activeFanItem({ id: 200 })], false), nextPageUrl: null }],
+    ]));
+    appContext = { ...appContext, ofapi: client };
+    await testDb!.pool.query("update page_sync_states set applied_seq=request_seq, status='idle' where page_id=$1", [page.id]);
+    await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
+    await testDb!.pool.query(`update page_sync_states set consecutive_failures=12,
+      last_error_summary='OFAPI audience pagination invalid or not advancing'
+      where page_id=$1 and stream='subscribers'`, [page.id]);
+    const key = incidentKey({ kind: "stream_failed_threshold", platformAccountId: page.id, stream: "subscribers" });
+    await openNotificationIncidentWithRecoveryGuard(appContext.db, {
+      incidentKey: key, kind: "stream_failed_threshold", platformAccountId: page.id, stream: "subscribers",
+      occurredAt: new Date(Date.now() - 60_000),
+    });
+    const incidentStatus = async () =>
+      (await testDb!.pool.query("select status from notification_incidents where incident_key=$1", [key])).rows[0]?.status;
+
+    const first = await executeNextSyncPageChunk(appContext, page.id);
+    expect(await getPageSyncState(appContext.db, page.id, "subscribers")).toMatchObject({
+      consecutiveFailures: 0, lastErrorSummary: null,
+    });
+    expect(first).toMatchObject({ kind: "yielded", stream: "subscribers" });
+    expect(listActiveFans).toHaveBeenCalledTimes(1);
+    expect((await getCheckpoint(appContext.db, page.id, "subscribers"))?.state).toMatchObject({ offset: 20, observedFans: 19 });
+    // The first chunk that advances is the recovery: no need to finish the sweep.
+    expect(await incidentStatus()).toBe("resolved");
+
+    await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
+    const second = await executeNextSyncPageChunk(appContext, page.id);
+    expect(second).toMatchObject({ kind: "success", stream: "subscribers" });
+    expect(listActiveFans).toHaveBeenCalledTimes(2);
+    expect(listActiveFans.mock.calls.map(([, , params]) => params.offset)).toEqual([0, 20]);
+    expect((await listSubscriptions(page.id)).filter((row) => row.is_current)).toHaveLength(20);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("parks the stream when the audience daily credit budget is exhausted", async (context) => {
     if (!testDb) {
       context.skip();
