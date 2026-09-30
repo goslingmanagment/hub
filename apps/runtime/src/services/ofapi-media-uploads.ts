@@ -23,7 +23,7 @@ import {
   recordOfapiMediaFacts,
 } from "./projections/ofapi-media.ts";
 import { getOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
-import { OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
+import { isOfapiProviderLinkOrigin, OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
 export interface OfapiMediaRequestPlan {
   operation: "ofapi_upload_vault" | "ofapi_upload_cdn" | "ofapi_upload_status";
   endpointClass: "media_upload";
@@ -377,7 +377,7 @@ export async function parseCapturedOfapiMediaUpload(
       const base = new URL(OFAPI_DEFAULT_BASE_URL);
       pollingValid =
         url.protocol === "https:" &&
-        url.origin === base.origin &&
+        isOfapiProviderLinkOrigin(url, base) &&
         !url.username &&
         !url.password &&
         !url.search &&

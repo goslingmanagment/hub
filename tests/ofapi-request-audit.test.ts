@@ -43,6 +43,33 @@ describe("OFAPI request audit regressions", () => {
     ]) expect(() => resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl }, input)).toThrow();
   });
 
+  it("R1 treats both OFAPI vendor hosts as the default base origin and keeps every other check", () => {
+    const input = { pathname: `/${ACCOUNT}/tracking-links/1/subscribers`, offset: 0, limit: 100 };
+    const path = `/api/${ACCOUNT}/tracking-links/1/subscribers`;
+    for (const origin of ["https://api.onlyfansapi.com", "https://app.onlyfansapi.com"]) {
+      expect(resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl: `${origin}${path}?limit=100&offset=100` }, input)).toBe(100);
+      expect(resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl: `${origin}${path}?offset=100` },
+        { ...input, baseUrl: "https://app.onlyfansapi.com/api" })).toBe(100);
+    }
+    for (const nextPageUrl of [
+      `https://evil.example${path}?offset=100`,
+      `http://api.onlyfansapi.com${path}?offset=100`,
+      `https://api.onlyfansapi.com:8443${path}?offset=100`,
+      `https://www.onlyfansapi.com${path}?offset=100`,
+      `https://user@api.onlyfansapi.com${path}?offset=100`,
+      `https://api.onlyfansapi.com/api/${ACCOUNT}/tracking-links/2/subscribers?offset=100`,
+      `https://api.onlyfansapi.com${path}?offset=100&sort=desc`,
+      `https://api.onlyfansapi.com${path}?offset=100&limit=100&limit=100`,
+      `https://api.onlyfansapi.com${path}?offset=100#x`,
+      `https://api.onlyfansapi.com${path}?offset=0`,
+    ]) expect(() => resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl }, input))
+      .toThrow("OFAPI list pagination invalid or not advancing");
+    // A custom (test/proxy) base keeps the exact-origin rule.
+    const custom = { ...input, baseUrl: "https://ofapi.test/api" };
+    expect(resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl: `https://ofapi.test${path}?offset=100` }, custom)).toBe(100);
+    expect(() => resolveOfapiListNextOffset({ hasNextPage: true, nextPageUrl: `https://api.onlyfansapi.com${path}?offset=100` }, custom)).toThrow();
+  });
+
   it.each([
     { data: {} }, { data: { lst: [] } }, { data: { list: [] } },
     { data: { list: [null], hasMore: false } }, { data: { list: [], hasMore: "false" } },

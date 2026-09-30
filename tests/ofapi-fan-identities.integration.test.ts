@@ -140,7 +140,11 @@ async function buildInput(page: { id: number }) {
 }
 
 describe("OFAPI fan identities (tracking/trial links)", () => {
-  it("R1 persists a short subscriber continuation and resumes without completing or rebuying its prefix", async () => {
+  // Since 2026-09-29 OFAPI answers absolute next_page links on api.onlyfansapi.com.
+  it.each([
+    ["a relative", ""],
+    ["an api.onlyfansapi.com", "https://api.onlyfansapi.com"],
+  ])("R1 persists a short subscriber continuation from %s link and resumes without completing or rebuying its prefix", async (_label, origin) => {
     appContext = createTestAppContext(testDb!, {
       ofapiFanIdentitiesSyncEnabled: true, ofapiCreditLedgerEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 4,
@@ -151,7 +155,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       listTrackingLinks: async (_context: unknown, _account: string, params: { offset: number }) => {
         calls.push(`links:${params.offset}`);
         return params.offset === 0 ? { ...listPage([{ id: 42 }], true),
-          nextPageUrl: `/api/${OFAPI_ACCOUNT}/tracking-links?offset=10&limit=100` } : listPage([]);
+          nextPageUrl: `${origin}/api/${OFAPI_ACCOUNT}/tracking-links?offset=10&limit=100` } : listPage([]);
       },
       listTrialLinks: async () => { calls.push("trial"); return listPage([]); },
       listTrackingLinkUsers: async (_context: unknown, _account: string, _id: string,
@@ -159,7 +163,7 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
         calls.push(`${kind}:${params.offset}`);
         if (kind === "spenders") return listPage([]);
         return { ...listPage([linkUser(700000 + params.offset, "user", "User")], params.offset === 0),
-          nextPageUrl: params.offset === 0 ? `/api/${OFAPI_ACCOUNT}/tracking-links/42/subscribers?offset=10&limit=100` : null };
+          nextPageUrl: params.offset === 0 ? `${origin}/api/${OFAPI_ACCOUNT}/tracking-links/42/subscribers?offset=10&limit=100` : null };
       },
       listTrialLinkSubscribers: async () => listPage([]),
     } as unknown as OfapiClient };

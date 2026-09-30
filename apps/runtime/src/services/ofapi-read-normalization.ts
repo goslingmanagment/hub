@@ -1,5 +1,5 @@
 import { normalizeOfapiMarketingAnalytics, normalizeOfapiMarketingResource } from "./ofapi-marketing-normalization.ts";
-import { OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
+import { isOfapiProviderLinkOrigin, OFAPI_DEFAULT_BASE_URL } from "./ofapi.ts";
 import { createHash } from "node:crypto";
 import {
   findOfapiReadDefinition,
@@ -157,7 +157,7 @@ export function ofapiReadCoverage(
     try {
       const url = new URL(next, `${OFAPI_DEFAULT_BASE_URL}/`);
       if (
-        url.origin !== new URL(OFAPI_DEFAULT_BASE_URL).origin ||
+        !isOfapiProviderLinkOrigin(url, new URL(OFAPI_DEFAULT_BASE_URL)) ||
         url.pathname !== `/api${pathname}` ||
         url.username ||
         url.password ||

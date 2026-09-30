@@ -45,6 +45,49 @@ describe("OFAPI release compatibility boundaries", () => {
     expect(() => resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true, nextPageUrl },
       { accountId: ACCOUNT, offset: 0, limit: 20 })).toThrow();
   });
+  // Prod 2026-09-30: OFAPI moved absolute next_page links to api.onlyfansapi.com
+  // while the configured base (and vendor docs) stay on app.onlyfansapi.com.
+  it.each([
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?limit=20&offset=20`,
+    `https://app.onlyfansapi.com/api/${ACCOUNT}/fans/active?limit=20&offset=20`,
+    `https://API.onlyfansapi.com:443/api/${ACCOUNT}/fans/active?offset=20`,
+  ])("accepts the vendor's own hosts as the default base origin %s", nextPageUrl => {
+    expect(resolveOfapiAudienceNextOffset({ items: Array(19).fill({}), hasNextPage: true, nextPageUrl },
+      { accountId: ACCOUNT, offset: 0, limit: 20 })).toBe(20);
+    expect(resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true, nextPageUrl },
+      { accountId: ACCOUNT, offset: 0, limit: 20, baseUrl: "https://app.onlyfansapi.com/api" })).toBe(20);
+    expect(resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true, nextPageUrl },
+      { accountId: ACCOUNT, offset: 0, limit: 20, baseUrl: "https://api.onlyfansapi.com/api" })).toBe(20);
+  });
+  it.each([
+    `http://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20`,
+    `https://api.onlyfansapi.com:8443/api/${ACCOUNT}/fans/active?offset=20`,
+    `https://evil.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20`,
+    `https://api.onlyfansapi.com.evil.example/api/${ACCOUNT}/fans/active?offset=20`,
+    `https://user:pw@api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20`,
+    `https://api.onlyfansapi.com/v2/${ACCOUNT}/fans/active?offset=20`,
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/expired?offset=20`,
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20&filter=x`,
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20&limit=10`,
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20#frag`,
+    `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=0`,
+  ])("keeps every other continuation check on the vendor host %s", nextPageUrl => {
+    expect(() => resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true, nextPageUrl },
+      { accountId: ACCOUNT, offset: 0, limit: 20 })).toThrow("OFAPI audience pagination invalid or not advancing");
+  });
+  it("keeps the exact-origin rule for a custom base", () => {
+    const input = { accountId: ACCOUNT, offset: 0, limit: 20, baseUrl: "https://ofapi.test/api" };
+    expect(resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true,
+      nextPageUrl: `https://ofapi.test/api/${ACCOUNT}/fans/active?offset=20` }, input)).toBe(20);
+    for (const host of ["https://api.onlyfansapi.com", "https://app.onlyfansapi.com"]) {
+      expect(() => resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true,
+        nextPageUrl: `${host}/api/${ACCOUNT}/fans/active?offset=20` }, input)).toThrow();
+    }
+    // A plain-http vendor base is not the vendor origin either: exact match only.
+    expect(() => resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true,
+      nextPageUrl: `https://api.onlyfansapi.com/api/${ACCOUNT}/fans/active?offset=20` },
+    { ...input, baseUrl: "http://app.onlyfansapi.com/api" })).toThrow();
+  });
   it("advances an empty hasMore page and ends only on explicit terminal evidence", () => {
     expect(resolveOfapiAudienceNextOffset({ items: [], hasNextPage: true }, { accountId: ACCOUNT, offset: 20, limit: 20 })).toBe(40);
     expect(resolveOfapiAudienceNextOffset({ items: [], hasNextPage: false }, { accountId: ACCOUNT, offset: 20, limit: 20 })).toBeNull();

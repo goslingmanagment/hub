@@ -55,6 +55,21 @@ const OFAPI_FREE_READ_OPERATIONS: ReadonlySet<string> = new Set([
 // docs/ofapi-parity-plan.md, enforced by a gate test): every OFAPI HTTP call
 // goes through this client, which is also the single _meta/credit-spend tap.
 export const OFAPI_DEFAULT_BASE_URL = "https://app.onlyfansapi.com/api";
+// One vendor, two hosts: since 2026-09-29 OFAPI writes its provider links
+// (next_page) on api. while the docs and our default base stay on app.
+const OFAPI_VENDOR_ORIGINS: ReadonlySet<string> = new Set([
+  "https://app.onlyfansapi.com",
+  "https://api.onlyfansapi.com",
+]);
+
+/** Origin check for a provider-issued link that Hub validates but never
+ * fetches (only its query is read). Exact origin, except that the vendor's
+ * hosts stand in for each other when the configured base is one of them; a
+ * custom base stays exact. Callers still check path, userinfo and params. */
+export function isOfapiProviderLinkOrigin(link: URL, base: URL): boolean {
+  if (link.origin === base.origin) return true;
+  return OFAPI_VENDOR_ORIGINS.has(base.origin) && OFAPI_VENDOR_ORIGINS.has(link.origin);
+}
 
 export class OfapiApiError extends Error {
   declare readonly validationResponse?: string;
