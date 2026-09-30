@@ -498,6 +498,11 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # either value and filters locators by the variant it asks for, so it runs
   # unchanged on rows the new image wrote.
   "0216_ofapi_media_preview_variant.sql"
+  # Once-a-day Fansly fan lookup: three nullable columns on page_fans, no
+  # default. The previous image never names them and writes page_fans by named
+  # columns, so it runs unchanged after a rollback (and simply looks every fan
+  # up again, as it always did).
+  "0224_page_fan_account_lookup_stamps.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

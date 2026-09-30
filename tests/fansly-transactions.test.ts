@@ -1198,6 +1198,80 @@ describe("syncTransactions", () => {
     );
   });
 
+  it("keys the daily fan lookup on the page and maps fans it reused from their stored rows", async () => {
+    dbMocks.getCheckpoint.mockResolvedValue({
+      cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),
+      state: {},
+    });
+    const tx = {};
+    const lookup = { lookedUpAt: new Date("2026-03-14T01:00:00.000Z"), platformUserIds: ["fan-new"] };
+    fanHydrationMocks.lookupHydratedFans.mockResolvedValue({
+      accounts: [{ id: "fan-new", username: "fan_new", displayName: null }],
+      fallbackIds: [],
+      reusedIds: ["fan-known"],
+      lookup,
+    });
+    fanHydrationMocks.upsertHydratedFansForPage.mockResolvedValue(new Map([["fan-new", 98], ["fan-known", 99]]));
+
+    const app = {
+      db: {
+        transaction: vi.fn(async (callback: (transactionDb: object) => Promise<unknown>) => callback(tx)),
+      },
+      config: {
+        transactionLookbackDays: 7,
+        transactionRescanCapDays: 30,
+      },
+      adapter: {
+        getTransactionsPage: vi.fn(async () => ({
+          items: [
+            { ...buildTransaction("tx-1", "2026-03-10T00:00:00.000Z"), correlationAccountId: "fan-known" },
+            { ...buildTransaction("tx-2", "2026-03-10T00:00:00.000Z"), correlationAccountId: "fan-new" },
+          ],
+          total: 2,
+          done: true,
+          raw: {},
+        })),
+      },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    } as never;
+
+    await syncTransactions(app, {
+      pageLabel: "fansly-page",
+      platformAccountId: 1,
+      commissionRate: 0,
+      requestContext: {
+        session: { authorization: "token" },
+        proxy: null,
+        requestObserver: null,
+      } as never,
+      syncRunId: 123,
+      telemetry: createTelemetry() as never,
+    });
+
+    expect(fanHydrationMocks.lookupHydratedFans).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      platformAccountId: 1,
+      platformUserIds: ["fan-known", "fan-new"],
+    }));
+    expect(fanHydrationMocks.upsertHydratedFansForPage).toHaveBeenCalledWith(tx, {
+      platformAccountId: 1,
+      accounts: [{ id: "fan-new", username: "fan_new", displayName: null }],
+      fallbackIds: [],
+      reusedIds: ["fan-known"],
+      lookup,
+    });
+    expect(dbMocks.upsertTransaction).toHaveBeenCalledWith(tx, expect.objectContaining({
+      transactionId: "tx-1",
+      fanId: 99,
+    }));
+    expect(dbMocks.upsertTransaction).toHaveBeenCalledWith(tx, expect.objectContaining({
+      transactionId: "tx-2",
+      fanId: 98,
+    }));
+  });
+
   it("yields and resumes multi-page incremental Fansly scans from durable page progress", async () => {
     const checkpoint = {
       cursorTimestamp: new Date("2026-03-14T00:00:00.000Z"),

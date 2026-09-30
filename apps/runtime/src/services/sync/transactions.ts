@@ -439,8 +439,11 @@ async function persistFanslyTransactionsPage(
     await recordUnknownFanslyTransactionType(app, input, item.type, seenUnknownRawTypes);
   }
 
+  // A fan looked up through this page within the day (an earlier page of this
+  // walk, or an earlier run) is not sent again; its stored row gives fan_id.
   const hydratedFans = await lookupHydratedFans(app, {
     requestContext: input.requestContext,
+    platformAccountId: input.platformAccountId,
     platformUserIds: items
       .map((item) => item.correlationAccountId)
       .filter((value): value is string => Boolean(value)),
@@ -454,6 +457,8 @@ async function persistFanslyTransactionsPage(
       platformAccountId: input.platformAccountId,
       accounts: hydratedFans.accounts,
       fallbackIds: hydratedFans.fallbackIds,
+      reusedIds: hydratedFans.reusedIds,
+      lookup: hydratedFans.lookup,
     });
 
     for (const item of items) {

@@ -448,9 +448,12 @@ async function hydrateFanslyFollowerRows(
   }
 
   const missingAggregationIds = sourceFollowerIds.filter((id) => !hydratedAccountsById.has(id));
+  // A missing id looked up through the page within the day is not asked
+  // again; the caller maps it from its stored fan row.
   const fallbackHydration = missingAggregationIds.length > 0
     ? await lookupHydratedFans(app, {
       requestContext: input.requestContext,
+      platformAccountId: input.capture.platformAccountId,
       platformUserIds: missingAggregationIds,
       telemetry: input.telemetry,
       capture: input.capture,
@@ -458,6 +461,8 @@ async function hydrateFanslyFollowerRows(
     : {
       accounts: [] satisfies FanslyAccount[],
       fallbackIds: [] as string[],
+      reusedIds: [] as string[],
+      lookup: null,
     };
 
   for (const account of fallbackHydration.accounts) {
@@ -481,6 +486,7 @@ async function hydrateFanslyFollowerRows(
         sourceFollowerCount: sourceFollowerIds.length,
         missingAggregationAccountCount: missingAggregationIds.length,
         fallbackHydrationMisses: fallbackIds.length,
+        fallbackLookupsReused: fallbackHydration.reusedIds.length,
         examples: missingAggregationIds.slice(0, 5),
       },
     });
@@ -490,6 +496,8 @@ async function hydrateFanslyFollowerRows(
     sourceFollowerIds,
     accounts: Array.from(hydratedAccountsById.values()),
     fallbackIds,
+    reusedIds: fallbackHydration.reusedIds,
+    lookup: fallbackHydration.lookup,
   };
 }
 
@@ -1829,6 +1837,7 @@ export async function fanslySubscribersChunk(
 
     const hydratedFans = await lookupHydratedFans(app, {
       requestContext,
+      platformAccountId: input.pageContext.page.id,
       platformUserIds: page.items.map((item) => item.subscriberId),
       telemetry: input.telemetry,
       capture: { platformAccountId: input.pageContext.page.id, syncRunId: input.syncRunId },
@@ -1867,6 +1876,8 @@ export async function fanslySubscribersChunk(
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFans.accounts,
         fallbackIds: hydratedFans.fallbackIds,
+        reusedIds: hydratedFans.reusedIds,
+        lookup: hydratedFans.lookup,
       });
 
       const subscriptionInputs: UpsertPageSubscriptionInput[] = [];
@@ -2253,6 +2264,8 @@ export async function executeFollowersChunk(
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFollowers.accounts,
         fallbackIds: hydratedFollowers.fallbackIds,
+        reusedIds: hydratedFollowers.reusedIds,
+        lookup: hydratedFollowers.lookup,
       });
       const unmappedFollowerIds = findUnmappedFollowerIds(
         hydratedFollowers.sourceFollowerIds,
@@ -2961,6 +2974,8 @@ export async function executeFollowersReconcileChunk(
         platformAccountId: input.pageContext.page.id,
         accounts: hydratedFollowers.accounts,
         fallbackIds: hydratedFollowers.fallbackIds,
+        reusedIds: hydratedFollowers.reusedIds,
+        lookup: hydratedFollowers.lookup,
       });
       const unmappedFollowerIds = findUnmappedFollowerIds(
         hydratedFollowers.sourceFollowerIds,

@@ -1,4 +1,4 @@
-import { and, eq, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, notInArray, or, sql } from "drizzle-orm";
 
 import {
   FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN,
@@ -560,6 +560,102 @@ export async function upsertFanPageExternalPresences(
         lastSeenAt,
       },
     });
+}
+
+/**
+ * Owner decision 2026-09-30: a fan's Fansly profile is read at most once a day
+ * per page. Returns the ids linked to this page whose account lookup through
+ * the page returned at or after `since` and was stored (0224). An id with no
+ * fan row or no link to the page was never looked up here, so it never comes
+ * back and its caller looks it up.
+ */
+export async function listFanslyFansLookedUpSince(
+  db: Database,
+  input: { platformAccountId: number; platformUserIds: string[]; since: Date },
+) {
+  if (input.platformUserIds.length === 0) {
+    return [] as string[];
+  }
+
+  const rows = await db
+    .select({ platformUserId: fans.platformUserId })
+    .from(fans)
+    .innerJoin(fanPages, and(
+      eq(fanPages.fanId, fans.id),
+      eq(fanPages.platformAccountId, input.platformAccountId),
+    ))
+    .where(and(
+      eq(fans.platform, "fansly"),
+      inArray(fans.platformUserId, input.platformUserIds),
+      gte(fanPages.accountLookupAt, input.since),
+    ));
+  return rows.map((row) => row.platformUserId);
+}
+
+/** Stamps the page links of fans whose lookup result the caller's transaction
+ * stores, so the stamp commits (or rolls back) with that result. */
+export async function markFanPageAccountLookups(
+  db: Database,
+  input: { platformAccountId: number; fanIds: number[]; lookedUpAt: Date },
+) {
+  if (input.fanIds.length === 0) {
+    return;
+  }
+
+  await db
+    .update(fanPages)
+    .set({ accountLookupAt: input.lookedUpAt })
+    .where(and(
+      eq(fanPages.platformAccountId, input.platformAccountId),
+      inArray(fanPages.fanId, input.fanIds),
+    ));
+}
+
+export interface FanslyAccountProbeAnswer {
+  probedAt: Date;
+  resolved: boolean;
+}
+
+/** The DM partner probe's last answer through this page, or null when the
+ * partner is not linked to the page or was never probed there. */
+export async function readFanslyAccountProbe(
+  db: Database,
+  input: { platformAccountId: number; platformUserId: string },
+): Promise<FanslyAccountProbeAnswer | null> {
+  const [row] = await db
+    .select({ probedAt: fanPages.accountProbeAt, resolved: fanPages.accountProbeResolved })
+    .from(fanPages)
+    .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .where(and(
+      eq(fanPages.platformAccountId, input.platformAccountId),
+      eq(fans.platform, "fansly"),
+      eq(fans.platformUserId, input.platformUserId),
+    ))
+    .limit(1);
+  return row?.probedAt && row.resolved !== null
+    ? { probedAt: row.probedAt, resolved: row.resolved }
+    : null;
+}
+
+/** Records the probe's answer on the partner's page link. A partner not linked
+ * to the page keeps no answer, and the next probe asks again. */
+export async function recordFanslyAccountProbe(
+  db: Database,
+  input: { platformAccountId: number; platformUserId: string; probedAt: Date; resolved: boolean },
+) {
+  await db
+    .update(fanPages)
+    .set({ accountProbeAt: input.probedAt, accountProbeResolved: input.resolved })
+    .where(and(
+      eq(fanPages.platformAccountId, input.platformAccountId),
+      inArray(
+        fanPages.fanId,
+        db.select({ id: fans.id }).from(fans).where(and(
+          eq(fans.platform, "fansly"),
+          eq(fans.platformUserId, input.platformUserId),
+        )),
+      ),
+    ));
 }
 
 export interface UpsertPageFollowInput {
