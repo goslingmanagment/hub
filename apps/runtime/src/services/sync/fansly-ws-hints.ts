@@ -34,7 +34,8 @@ const hintEligible = (conversation: Pick<PageDmConversationRow, "isVisible" | "f
 /** Zero-request settles of already stored targets per step. */
 const MATERIALIZED_SETTLES_PER_STEP = 50;
 /** Subjects a step defers without a request (spent budget, ineligible
- * thread, pending membership) before it leaves the rest to the next chunk. */
+ * thread, pending membership) before it leaves the rest that need REST to
+ * the next chunk. The stored targets behind them still settle. */
 const ZERO_REQUEST_DEFERRALS_PER_STEP = 50;
 
 type HintStep = {
@@ -74,8 +75,9 @@ export async function runFanslyWsHintStep(
 
   // A settle-only step starts as if its one request were already spent.
   let requested = options.settleOnly === true;
-  // Once the step's one request is spent: due subjects whose targets are
-  // already stored, wherever they sit behind subjects that need REST.
+  // Once the step reads nothing more (its one request spent, or its deferral
+  // bound reached): due subjects whose targets are already stored, wherever
+  // they sit behind subjects that need REST.
   let stored: string[] | undefined;
   // Resolve the REST credentials and route under the SAME generation lock.
   // The ordinary executor's earlier context may predate a credential change.
@@ -121,8 +123,7 @@ export async function runFanslyWsHintStep(
   // still settle.
   let settled = 0;
   let deferred = 0;
-  while (settled < MATERIALIZED_SETTLES_PER_STEP && deferred < ZERO_REQUEST_DEFERRALS_PER_STEP
-    && input.budget.hasWallClockCapacity()) {
+  while (settled < MATERIALIZED_SETTLES_PER_STEP && input.budget.hasWallClockCapacity()) {
     let selected: Awaited<ReturnType<typeof select>>;
     try {
       selected = await select();
@@ -137,7 +138,9 @@ export async function runFanslyWsHintStep(
       continue;
     }
     await readFanslyWsHintSubject(step, selected);
-    if (!requested) deferred++;
+    // At the deferral bound the step reads nothing more, as after its one
+    // request: it only settles the listed stored targets.
+    if (!requested && ++deferred >= ZERO_REQUEST_DEFERRALS_PER_STEP) requested = true;
   }
 }
 

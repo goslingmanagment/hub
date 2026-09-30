@@ -4,7 +4,7 @@ import {
   acquireTargetedPageSyncLease, countConversationSyncFailuresByAccount, ensurePageSyncStates,
   getConversationSyncHealth, getPageDmConversationById, getPageSyncState, recordConversationSyncFailure,
   requestPageSync, routeFanslyWsHintEvent, runWithPageSyncExecutionContext, selectNextPageDmMessageSyncCandidate, startSyncRun,
-  upsertFans, upsertPageDmConversation, upsertPageDmMessages, requestAiMediaAcceleratorRead, type Database,
+  upsertFans, upsertPageDmConversation, upsertPageDmMessages, requestAiMediaAcceleratorRead, skipPageSync, type Database,
   beginFanslyWsConnection, captureFanslyWsFrame, openNotificationIncidentWithRecoveryGuard,
 } from "@agency_hub_core/db";
 import { executeObservedRequest, resolveFanslyWsHintPolicy, FANSLY_WS_CAPTURE_KIND,
@@ -594,6 +594,27 @@ describe("B1 REST execution and rollback", () => {
       : settled(ref)));
     expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
   });
+  // A spent-budget deferral shares the budget's reopen time, so they cluster
+  // at the head of the queue. The bound keeps the chunk's wall clock for
+  // ordinary polling; the stored targets behind them still settle.
+  it("bounds the zero-request deferrals of one step and still settles the stored targets behind them", async () => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    const rest = Array.from({ length: 51 }, (_, n) => String(400 + n));
+    for (const [n, ref] of rest.entries()) await storedTarget(f, ref, 10 + n, { stored: false });
+    await storedTarget(f, "300", 100);
+    await storedTarget(f, "301", 101);
+    await inOrder(f, [...rest, "300", "301"]);
+    await f.step();
+    expect(f.calls).toEqual([]);
+    expect(await subjects()).toEqual([
+      settled("300"), settled("301"),
+      ...rest.slice(0, 50).map(ref => ({ subject_ref: ref, applied_revision: 0n, last_refresh_outcome: "budget_exhausted", refresh_visits: 1n })),
+      // Past the bound: not claimed, still first in line.
+      { subject_ref: "450", applied_revision: 0n, last_refresh_outcome: null, refresh_visits: 0n },
+    ]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+  });
   it("keeps settling stored targets after the step's one head read and leaves later reads queued", async () => {
     const f = await fixture();
     await storedTarget(f, "200", 2);
@@ -691,6 +712,46 @@ describe("B1 REST execution and rollback", () => {
     await db.pool.query("update subject_refresh_state set last_visited_at = last_visited_at - interval '6 minutes'");
     await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
     expect(await state()).toMatchObject({ requestSeq: served!.requestSeq + 1, dispatchSource: "event" });
+  });
+  // An event wake reaches only an idle stream, and the AI media wakes rely on
+  // the queued run's accelerator step. A settle-only run has none, so it must
+  // not swallow their wake.
+  it.each(["queued", "running"])("a plain event wake replaces a %s settle-only wake, so an AI media read still runs", async when => {
+    const f = await fixture(false);
+    await spendBudget(f);
+    await storedTarget(f, "300", 10);
+    await storedTarget(f, "400", 20, { stored: false });
+    await inOrder(f, ["300", "400"]);
+    Object.assign(f.app.config, { aiMediaDescribeEnabled: true, aiMediaDescribeFanslyAcceleratorEnabled: true,
+      aiMediaDescribePagePolicies: JSON.stringify({ [f.page.label]: { since: "2026-01-01T00:00:00Z" } }) });
+    await db.pool.query(`update page_sync_states set status='idle',applied_seq=request_seq,
+      leased_seq=null,lease_token=null,lease_expires_at=null where page_id=$1`, [f.page.id]);
+    await runFanslyWsHintProjection(f.app, { accountId: f.page.id });
+    const settleOnly = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(settleOnly).toMatchObject({ requestPayload: { fanslyWsHintOnly: true, fanslyWsHintSettleOnly: true } });
+    const lease = when === "running" ? await acquireTargetedPageSyncLease(db.db, {
+      pageId: f.page.id, stream: "dm_messages", workerId: "settle-only", leaseToken: randomUUID(), leaseTtlMs: 120_000,
+    }) : null;
+    // What the AI candidates projector does for a fan's new media.
+    await requestAiMediaAcceleratorRead(db.db, { pageId: f.page.id, groupRef: "100", messageRef: "150",
+      now: new Date(Date.now() - 60_000) });
+    await requestPageSync(db.db, { pageId: f.page.id, streams: ["dm_messages"], source: "event" });
+    const woken = await getPageSyncState(db.db, f.page.id, "dm_messages");
+    expect(woken).toMatchObject({ requestSeq: settleOnly!.requestSeq + 1, dispatchSource: "event",
+      status: lease ? "running" : "pending", requestPayload: { fanslyWsHintOnly: true } });
+    expect(woken!.requestPayload).not.toHaveProperty("fanslyWsHintSettleOnly");
+    // The running settle-only chunk ends as a hold; the plain wake is next.
+    if (lease) expect(await skipPageSync(db.db, { pageId: f.page.id, stream: "dm_messages",
+      requestSeq: lease.leasedSeq, leaseToken: lease.leaseToken })).toBe(true);
+    expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "skipped", stream: "dm_messages" });
+    // The accelerator read the head; B1 made no request on its spent budget.
+    expect(f.calls).toEqual(["messages"]);
+    expect((await db.pool.query("select status, outcome from ai_media_accelerator_reads")).rows)
+      .toEqual([{ status: "done", outcome: "head_read" }]);
+    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(50);
+    expect(await subjects()).toEqual([settled("300"),
+      { subject_ref: "400", applied_revision: 0n, last_refresh_outcome: "budget_exhausted", refresh_visits: 1n }]);
+    expect(await getPageSyncState(db.db, f.page.id, "dm_messages")).toMatchObject({ status: "idle" });
   });
   it.each(["group_created", "mid_walk"])("still reads the head for a stored target with %s", async kind => {
     const f = await fixture();
