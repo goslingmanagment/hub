@@ -36,6 +36,11 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   dmFullSweepCompletedAt, dmFullSweepFreshnessSlaSeconds, parseDmBoundedSweepState, resolveDmBoundedPolicy,
 } from "./sync/dm-bounded-state.ts";
+import {
+  FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
+  followersReconcileFloorWaitUntil,
+  followersReconcileQueuedSince,
+} from "./sync/followers-reconcile-floor.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
@@ -436,6 +441,10 @@ function firstAttentionTask(tasks: SyncTaskReadStatus[]) {
 }
 
 function hasPendingWork(task: SyncTaskReadStatus) {
+  // A walk the daily floor holds is scheduled for later, not queued now.
+  if (task.statusReason?.code === FOLLOWERS_RECONCILE_FLOOR_DEFERRAL) {
+    return false;
+  }
   return task.requestedSeq > task.appliedSeq ||
     task.runtimeState === "pending" ||
     task.runtimeState === "retrying";
@@ -971,8 +980,13 @@ function deriveTaskState(
   // certified A1 proof earns it; a legacy full cursor keeps the stream target.
   const freshnessSlaSeconds = task.stream === "dm_conversations" && fullCompletedAt !== undefined
     && dmFullSweepSlaSeconds !== undefined ? dmFullSweepSlaSeconds : policy.freshnessSlaSeconds;
-  const queueAgeSeconds = task.requestSeq > task.appliedSeq && task.requestedAt
-    ? ageSeconds(task.requestedAt, now)
+  const floorUntil = followersReconcileFloorWaitUntil(task, task.progress, now);
+  // A floored walk's request can be a day old by the time the walk runs.
+  const queuedSince = task.stream === "followers_reconcile"
+    ? followersReconcileQueuedSince(task)
+    : task.requestedAt;
+  const queueAgeSeconds = task.requestSeq > task.appliedSeq && queuedSince
+    ? ageSeconds(queuedSince, now)
     : null;
   const freshnessAgeSeconds = ageSeconds(task.succeededAt, now);
   const lastActiveAt = latestDate([task.progressedAt, task.startedAt]);
@@ -1027,7 +1041,13 @@ function deriveTaskState(
     }
   } else if (task.requestSeq > task.appliedSeq || task.status === "pending") {
     const budgetReason = buildOfapiBudgetStatusReason(task.progress, activePageSyncRetryAt(task.retryAt, now));
-    if (budgetReason) {
+    if (floorUntil) {
+      state = "scheduled";
+      statusReason = buildStatusReason(
+        FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
+        "The full follower check runs at most once a day; the next one is scheduled.",
+      );
+    } else if (budgetReason) {
       state = budgetReason.code === "ofapi_request_budget" ? "scheduled" : "delayed";
       statusReason = budgetReason;
     } else if ((queueContext?.activeSiblingStreams.length ?? 0) > 0) {
@@ -1084,8 +1104,9 @@ function deriveTaskState(
     ...(fullCompletedAt === undefined ? {} : { lastFullSweepCompletedAt: fullCompletedAt }),
     progressedAt: iso(task.progressedAt),
     failedAt: iso(task.failedAt),
-    nextDueAt: iso(nextDueAt),
-    nextRetryAt: iso(activePageSyncRetryAt(task.retryAt, now)),
+    // The floor's end is when the walk is due, not a retry of a failure.
+    nextDueAt: iso(floorUntil ?? nextDueAt),
+    nextRetryAt: floorUntil ? null : iso(activePageSyncRetryAt(task.retryAt, now)),
     queueAgeSeconds,
     freshnessAgeSeconds,
     isFresh,

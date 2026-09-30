@@ -1150,6 +1150,129 @@ describe("sync executor handlers", () => {
     }
   });
 
+  describe("the daily floor on a fresh follower walk", () => {
+    const HOUR_MS = 60 * 60 * 1000;
+    const walked = new Error("the walk began");
+
+    function floorFixture(input: {
+      checkpointState: Record<string, unknown> | null;
+      requestSeq: number;
+      requestSource: DbModule.SyncRequestSource | null;
+      succeededAt?: Date | null;
+    }) {
+      const telemetry = createTelemetry();
+      const getFollowersPage = vi.fn(async () => {
+        throw walked;
+      });
+      const app = {
+        db: { transaction: vi.fn(async (callback: (dbTx: object) => Promise<unknown>) => callback({})) },
+        config: { followerPageDelayMs: 0, syncSharedRateLimitEnabled: false },
+        adapter: { getFollowersPage },
+      } as never;
+      dbMocks.getCheckpoint.mockResolvedValue(input.checkpointState ? { state: input.checkpointState } : null);
+      dbMocks.maxPageFollowGeneration.mockResolvedValue(40);
+      sharedMocks.refreshPageMetadata.mockResolvedValue({ parsed: { account: { followCount: 10 } } });
+      const run = () => executeFollowersReconcileChunk(app, {
+        pageContext: {
+          platform: "fansly",
+          page: { id: 13, label: "fansly-page", platformAccountId: "acct-13", metadata: {} },
+          session: { authorization: "token" },
+          proxy: null,
+        },
+        streamState: {
+          stream: "followers_reconcile",
+          requestSeq: input.requestSeq,
+          requestSource: input.requestSource,
+          succeededAt: input.succeededAt ?? null,
+        },
+        syncRunId: 102,
+        telemetry: telemetry as never,
+        budget: new SyncChunkBudget(),
+      } as never);
+      return { run, getFollowersPage, telemetry };
+    }
+
+    const completedWalk = (revision: number, startedAt: Date) => ({
+      revision, generation: 40, fullSweepStartedAt: startedAt.toISOString(), offset: 0,
+      observedCount: 10, pageCount: 1, sourceFollowerCount: 10, snapshotRestartCount: 0,
+      restartReason: null, verificationPending: false,
+    });
+
+    it.each(["anomaly", "scheduled", "recovery"] as const)(
+      "holds a %s request a day from the start of the last walk without a request or a checkpoint write",
+      async (requestSource) => {
+        const startedAt = new Date(Date.now() - 2 * HOUR_MS);
+        const until = new Date(startedAt.getTime() + 24 * HOUR_MS);
+        const fixture = floorFixture({
+          checkpointState: completedWalk(4, startedAt), requestSeq: 5, requestSource,
+          succeededAt: new Date(startedAt.getTime() + 10 * 60_000),
+        });
+
+        await expect(fixture.run()).resolves.toEqual({
+          satisfied: false,
+          yieldReason: null,
+          continuationRetryAt: until,
+          continuationRequestSource: "scheduled",
+          deferral: "followers_reconcile_min_interval",
+          stats: {
+            followersReconcileFloorUntil: until.toISOString(),
+            followersReconcileFloorAnchor: startedAt.toISOString(),
+          },
+        });
+        expect(sharedMocks.refreshPageMetadata).not.toHaveBeenCalled();
+        expect(fixture.getFollowersPage).not.toHaveBeenCalled();
+        expect(dbMocks.upsertCheckpointProgress).not.toHaveBeenCalled();
+        expect(dbMocks.maxPageFollowGeneration).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["a manual request", "manual", 2],
+      ["a reset", "reset", 2],
+      ["an onboarding request", "onboarding", 2],
+      ["an anomaly a day and an hour after the last walk began", "anomaly", 25],
+    ] as const)("starts a new generation for %s", async (_name, requestSource, hoursSinceWalk) => {
+      const startedAt = new Date(Date.now() - hoursSinceWalk * HOUR_MS);
+      const fixture = floorFixture({
+        checkpointState: completedWalk(4, startedAt), requestSeq: 5, requestSource, succeededAt: startedAt,
+      });
+
+      await expect(fixture.run()).rejects.toBe(walked);
+      expect(sharedMocks.refreshPageMetadata).toHaveBeenCalledTimes(1);
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(expect.anything(), {
+        platformAccountId: 13,
+        stream: "followers_reconcile",
+        state: expect.objectContaining({ revision: 5, generation: 41, offset: 0 }),
+      });
+      expect(fixture.getFollowersPage).toHaveBeenCalledTimes(1);
+    });
+
+    it("restarts this request's own walk after a snapshot mismatch, however recent the last success", async () => {
+      const fixture = floorFixture({
+        checkpointState: { revision: 5, generation: 41, snapshotRestartCount: 1, restartReason: "snapshot_mismatch" },
+        requestSeq: 5, requestSource: "anomaly", succeededAt: new Date(Date.now() - HOUR_MS),
+      });
+
+      await expect(fixture.run()).rejects.toBe(walked);
+      expect(dbMocks.upsertCheckpointProgress).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        state: expect.objectContaining({ revision: 5, generation: 42, restartReason: "snapshot_mismatch" }),
+      }));
+    });
+
+    it("continues a walk already under way for this request", async () => {
+      const fixture = floorFixture({
+        checkpointState: { ...completedWalk(5, new Date(Date.now() - HOUR_MS)), offset: 300, pageCount: 3 },
+        requestSeq: 5, requestSource: "anomaly", succeededAt: new Date(Date.now() - 2 * HOUR_MS),
+      });
+
+      await expect(fixture.run()).rejects.toBe(walked);
+      expect(sharedMocks.refreshPageMetadata).not.toHaveBeenCalled();
+      expect(fixture.getFollowersPage).toHaveBeenCalledWith(expect.anything(), "acct-13", expect.objectContaining({
+        offset: 300,
+      }));
+    });
+  });
+
   describe("an incremental followers walk whose known follow id is gone", () => {
     // Rows arrive newest first by follow snowflake; K is the head of the last walk.
     const K = "961321050841313280";

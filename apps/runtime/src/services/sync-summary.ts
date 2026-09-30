@@ -19,6 +19,7 @@ import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { dmFullSweepCompletedAt, dmFullSweepFreshnessSlaSeconds, resolveDmBoundedPolicy } from "./sync/dm-bounded-state.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
+import { followersReconcileFloorWaitUntil } from "./sync/followers-reconcile-floor.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
 import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.ts";
@@ -134,6 +135,7 @@ function toStreamSyncUx(
       : null,
     succeededAt: iso(task.succeededAt),
     lastCompletionQualityHold: qualityHold,
+    intervalFloorUntil: iso(followersReconcileFloorWaitUntil(task, task.progress, now)),
     failedAt: iso(task.failedAt),
     lastErrorCode: task.lastErrorCode,
     blockerKind: task.blockerKind,
