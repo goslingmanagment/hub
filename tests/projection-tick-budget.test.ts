@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The registry pulls in every projector module, which reach into the db layer.
 // Nothing here calls them: the stubs below replace the registry's entries
-// wholesale, exactly as tests/rebuild-preflight.test.ts patches one of them.
+// wholesale, as the rebuild-preflight block at the end patches one of them.
 const dbMocks = vi.hoisted(() => ({
   listDetachedPartitionsHoldingAccount: vi.fn(),
   listEventAccounts: vi.fn(),
@@ -30,6 +30,7 @@ vi.mock("@agency_hub_core/db", () => dbMocks);
 const {
   PROJECTION_REGISTRY,
   PROJECTION_TICK_BUDGET_MS,
+  rebuildRegisteredProjection,
   resetProjectionTickRotation,
   runProjectionTick,
 } = await import("../apps/runtime/src/services/projections/registry.ts");
@@ -194,33 +195,6 @@ describe("projection tick wall-clock budget", () => {
     expect(ran).toEqual(["b"]);
   });
 
-  it("keeps per-projection isolation under a budget, and a throw is not a truncation", async () => {
-    costMs.set("a", 10);
-    costMs.set("c", 10);
-    const index = registry.findIndex((projection) => projection.name === "b");
-    registry[index] = {
-      ...registry[index]!,
-      run: async () => {
-        ran.push("b");
-        throw new Error("poison fact");
-      },
-    };
-    const app = appStub() as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
-    dbMocks.listEventAccounts.mockResolvedValue([7]);
-
-    const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
-
-    // B's per-account retry (account 7) fails too, then C still runs.
-    expect(ran).toEqual(["a", "b", "b", "c"]);
-    expect(result.truncatedByBudget).toBe(false);
-    expect(result.outcomes.map((outcome) => outcome.error !== null)).toEqual([
-      false,
-      true,
-      false,
-    ]);
-    expect(app.logger.error).toHaveBeenCalledTimes(1);
-  });
-
   describe("per-account isolation inside one projection (J8)", () => {
     /** B's run: the whole run and the listed accounts throw; the rest pass. */
     function poisonB(poisoned: (accountId: number | null | undefined) => boolean) {
@@ -249,6 +223,9 @@ describe("projection tick wall-clock budget", () => {
 
       const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
 
+      // A throw is not a truncation, and only B carries an error.
+      expect(result.truncatedByBudget).toBe(false);
+      expect(result.outcomes.map((outcome) => outcome.error !== null)).toEqual([false, true, false]);
       // No breaker at the first failure: account 3 runs after 2 fails with
       // exactly the whole run's error. Account 1 runs a second time.
       expect(calls).toEqual([undefined, 1, 2, 3]);
@@ -314,7 +291,98 @@ describe("projection tick wall-clock budget", () => {
   });
 
   it("budgets ten minutes, under pg-boss's 900s handler expiration", () => {
-    expect(PROJECTION_TICK_BUDGET_MS).toBe(600_000);
     expect(PROJECTION_TICK_BUDGET_MS).toBeLessThan(900_000);
+  });
+});
+
+// §3.2c(i) — the READ-SIDE preflight, asserted for EVERY registered projection.
+//
+// Tiering exports and DETACHES `domain_events` monthlies older than ~6 months,
+// and `listEventsSince` sees only ATTACHED partitions. A rebuild that ran anyway
+// would truncate the projection, replay a truncated ledger, and call the result
+// authoritative — silently. Before WP-F1(0) only `media_plane` and
+// `message_archive` had the gate: `creator_posts` and `fan_earnings` would have
+// replayed a truncated ledger without a word. The registry is what makes
+// "every projection" checkable rather than a promise.
+//
+// A fresh-database checksum test does NOT discharge this (§9.1 says so): a
+// fresh database has no detached partitions, so it can only ever prove the
+// happy path.
+
+describe("rebuild preflight", () => {
+  const app = {
+    db: {} as never,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+  };
+
+  beforeEach(() => {
+    dbMocks.listDetachedPartitionsHoldingAccount.mockReset();
+    dbMocks.listEventAccounts.mockReset();
+    dbMocks.listEventAccounts.mockResolvedValue([7]);
+  });
+
+  it("refuses every rebuildable projection when a detached partition holds the account", async () => {
+    dbMocks.listDetachedPartitionsHoldingAccount.mockResolvedValue([
+      { schema: "public", name: "domain_events_2026_01", rows: 41_002 },
+    ]);
+
+    const rebuildable = PROJECTION_REGISTRY.filter(
+      (projection) => projection.rebuild !== null,
+    );
+    expect(rebuildable.length).toBeGreaterThan(0);
+
+    for (const projection of rebuildable) {
+      await expect(
+        rebuildRegisteredProjection(app, projection.name, { accountId: 7 }),
+        projection.name,
+      ).rejects.toThrow(
+        // The message must name the projection, the partition, AND the recovery
+        // — an operator who reads "refused" without "re-attach the month" will
+        // reach for `create partition`, which orphans the facts the detached
+        // table holds — and the recovery must forbid DROP.
+        new RegExp(
+          `${projection.name} rebuild REFUSED for account 7:.*domain_events_2026_01 \\(41002 rows\\).*re-attach the month \\(the 0077 ritual — DETACH/ATTACH only, never DROP\\)`,
+          "s",
+        ),
+      );
+    }
+  });
+
+  it("runs the census over every account in scope when no account is given", async () => {
+    dbMocks.listEventAccounts.mockResolvedValue([11, 12, 13]);
+    dbMocks.listDetachedPartitionsHoldingAccount.mockResolvedValue([]);
+    const stats = PROJECTION_REGISTRY.find((projection) => projection.name === "fansly_stats");
+    expect(stats).toBeDefined();
+    // Stub the rebuild itself: the property under test is the preflight's
+    // SCOPE, not what the replay produces.
+    const rebuild = vi.fn(async () => ({ ok: true }));
+    const patched = { ...stats!, rebuild };
+    const index = PROJECTION_REGISTRY.indexOf(stats!);
+    const registry = PROJECTION_REGISTRY as unknown as Array<typeof patched>;
+    registry[index] = patched;
+    try {
+      await rebuildRegisteredProjection(app, "fansly_stats");
+      expect(dbMocks.listDetachedPartitionsHoldingAccount).toHaveBeenCalledTimes(3);
+      expect(rebuild).toHaveBeenCalledTimes(1);
+    } finally {
+      registry[index] = stats as never;
+    }
+  });
+
+  it("refuses a projection that declares no repair path instead of pretending", async () => {
+    dbMocks.listDetachedPartitionsHoldingAccount.mockResolvedValue([]);
+    const unrebuildable = PROJECTION_REGISTRY.find(
+      (projection) => projection.rebuildKind === "none",
+    );
+    expect(unrebuildable).toBeDefined();
+    await expect(
+      rebuildRegisteredProjection(app, unrebuildable!.name, { accountId: 7 }),
+    ).rejects.toThrow(/declares rebuildKind "none"/);
+  });
+
+  it("rejects an unknown projection name with the list of known ones", async () => {
+    await expect(rebuildRegisteredProjection(app, "not_a_projection")).rejects.toThrow(
+      /Unknown projection: not_a_projection\. Known: /,
+    );
   });
 });

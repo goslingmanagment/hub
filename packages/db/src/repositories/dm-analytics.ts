@@ -108,20 +108,3 @@ export async function rebuildDmMessageDailyAggregates(
     };
   });
 }
-
-export async function listDmMessageDailyAggregates(
-  db: Database,
-  input: {
-    fromBusinessDate: string;
-    throughBusinessDate: string;
-  },
-) {
-  assertBusinessDateRange(input.fromBusinessDate, input.throughBusinessDate);
-  return db.query.dmMessageDailyAggregates.findMany({
-    where: and(
-      gte(dmMessageDailyAggregates.businessDate, input.fromBusinessDate),
-      lte(dmMessageDailyAggregates.businessDate, input.throughBusinessDate),
-    ),
-    orderBy: (table, { asc }) => [asc(table.businessDate), asc(table.platformAccountId)],
-  });
-}

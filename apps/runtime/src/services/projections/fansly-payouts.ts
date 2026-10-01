@@ -48,7 +48,6 @@
 // 3. `applied` counts real writes, so an idle tick logs nothing.
 
 import {
-  countPagePayouts,
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
   listDetachedPartitionsHoldingAccount,
@@ -294,12 +293,6 @@ export async function runFanslyPayoutsProjection(
   }
 
   return totals;
-}
-
-/** The lane's public census: how much of the money-out surface this page has
- *  stored, and how far back the walk has reached. */
-export async function measureFanslyPayouts(db: AppContext["db"], pageId: number) {
-  return await countPagePayouts(db, pageId);
 }
 
 /**

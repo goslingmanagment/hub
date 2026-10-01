@@ -55,7 +55,6 @@
 // 3. `applied` counts real writes, so an idle tick logs nothing.
 
 import {
-  countPostComments,
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
   listDetachedPartitionsHoldingAccount,
@@ -276,14 +275,6 @@ export async function runFanslyCommentsProjection(
   }
 
   return totals;
-}
-
-/** The archive census the lane reports in its progress block. */
-export async function measureFanslyComments(
-  db: AppContext["db"],
-  pageId: number,
-): Promise<{ total: number; missing: number; possiblyTruncated: number }> {
-  return countPostComments(db, pageId);
 }
 
 /**

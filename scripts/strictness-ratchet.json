@@ -72,7 +72,6 @@
   "tests/cli.test.ts": 13,
   "tests/config-settings.integration.test.ts": 1,
   "tests/db-write.integration.test.ts": 216,
-  "tests/dm-analytics.integration.test.ts": 5,
   "tests/domain-events-v2.integration.test.ts": 14,
   "tests/fan-earnings-projection.integration.test.ts": 14,
   "tests/fan-page-identity.repository.integration.test.ts": 32,

@@ -5,6 +5,7 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  getProjectionWatermark,
   searchArchiveMessages,
   setPageOfapiAccountId,
   upsertFans,
@@ -409,6 +410,9 @@ describe("message archive projection (Stage 10)", () => {
     expect(result.inserted).toBe(0);
     const rows = await testDb.pool.query("select 1 from message_archive");
     expect(rows.rows).toHaveLength(0);
+    // Parked, not advanced: once the catalog resolves the account again, its
+    // events are still ahead of the watermark.
+    expect(await getProjectionWatermark(testDb.db, "message_archive", 999_999)).toBe(0);
   });
 
   it("searches archive text literally: % and _ are characters, not wildcards", async (context) => {

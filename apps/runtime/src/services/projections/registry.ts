@@ -490,7 +490,7 @@ export function projectionNames(): string[] {
  * without a word. Putting it in the one function every rebuild goes through is
  * why that class of omission stops being possible.
  */
-export async function assertProjectionRebuildable(
+async function assertProjectionRebuildable(
   app: Pick<AppContext, "db">,
   projectionName: string,
   accountIds: readonly number[],

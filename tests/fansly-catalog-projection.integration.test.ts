@@ -28,10 +28,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendProjectionOnlyDomainEvents,
+  countCreatorVaultUniqueMembers,
+  countPageUniqueCreatorMedia,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
   insertObservation,
+  sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 
 import {
@@ -40,7 +43,6 @@ import {
 } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   FANSLY_CATALOG_PROJECTION_TABLES,
-  measureFanslyCatalogMedia,
   rebuildFanslyCatalogProjection,
   runFanslyCatalogProjection,
 } from "../apps/runtime/src/services/projections/fansly-catalog.ts";
@@ -566,7 +568,13 @@ describe("[sync-critical] WP-F3 catalog projection", () => {
     await seedAll(page.id);
     await project(page.id);
 
-    const census = await measureFanslyCatalogMedia(testDb!.db, page.id);
+    // Three separate identities: one raw file can back several offers, and the
+    // album sum double-counts by construction — it is never M.
+    const census = {
+      uniqueMediaCount: await countPageUniqueCreatorMedia(testDb!.db, page.id),
+      vaultMemberUniqueCount: await countCreatorVaultUniqueMembers(testDb!.db, page.id),
+      albumMembershipSum: await sumCreatorVaultAlbumItemCounts(testDb!.db, page.id),
+    };
 
     // Σ item_count over the CREATOR vault, exactly as served. It double-counts:
     // the system albums 38000 and 5000 share a lastItemId because they are

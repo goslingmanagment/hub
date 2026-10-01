@@ -26,6 +26,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendProjectionOnlyDomainEvents,
+  countPostComments,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -40,7 +41,6 @@ import {
 import {
   FANSLY_COMMENTS_PROJECTION,
   FANSLY_COMMENTS_PROJECTION_TABLES,
-  measureFanslyComments,
   rebuildFanslyCommentsProjection,
   runFanslyCommentsProjection,
 } from "../apps/runtime/src/services/projections/fansly-comments.ts";
@@ -353,7 +353,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     const page = await seedPage();
     await seedObservation(page.id, "four", fixture("replies-four-with-accounts"));
     await project(page.id);
-    expect((await measureFanslyComments(testDb.db, page.id)).total).toBe(4);
+    expect((await countPostComments(testDb.db, page.id)).total).toBe(4);
 
     // The same post, walked again, with every comment gone. No row events at
     // all — which is exactly why the roster exists.
@@ -368,7 +368,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     // reconcile UNDER-marks rather than guessing.
     expect(result.markedMissing).toBe(3);
 
-    const archive = await measureFanslyComments(testDb.db, page.id);
+    const archive = await countPostComments(testDb.db, page.id);
     // NOTHING DELETED (DP 7). The rows are still here; they are marked.
     expect(archive.total).toBe(4);
     expect(archive.missing).toBe(3);
@@ -401,7 +401,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     await project(page.id);
     // Three: the nested reply hangs off a comment, so the post's walk never
     // marked it (see the test above).
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
+    expect((await countPostComments(testDb.db, page.id)).missing).toBe(3);
 
     // The comments return UNCHANGED. Their row events are keyed per LOOK, so
     // each one reaches the projector and its own upsert clears the mark; the
@@ -412,7 +412,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     const result = await project(page.id);
     expect(result.comments).toBe(4);
     expect(result.clearedMissing).toBe(0);
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+    expect((await countPostComments(testDb.db, page.id)).missing).toBe(0);
   });
 
   it("CLEARS the mark from the roster alone, as hash-keyed row events replay", async (context) => {
@@ -425,7 +425,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     await project(page.id);
     await seedObservation(page.id, "empty", fixture("replies-empty"));
     await project(page.id);
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(3);
+    expect((await countPostComments(testDb.db, page.id)).missing).toBe(3);
 
     // The comments come back UNCHANGED in the ledger's older shape: a roster
     // with no row event before it (see `appendRosterOnlyLook`). No upsert runs,
@@ -435,7 +435,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     const result = await runFanslyCommentsProjection(appStub(), { accountId: page.id });
     expect(result.comments).toBe(0);
     expect(result.clearedMissing).toBe(3);
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+    expect((await countPostComments(testDb.db, page.id)).missing).toBe(0);
   });
 
   it("lands a comment that goes A→B→A; `changed_at` moves only on a hash change (J12)", async (
@@ -529,7 +529,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     });
     const result = await project(page.id);
     expect(result.markedMissing).toBe(0);
-    expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+    expect((await countPostComments(testDb.db, page.id)).missing).toBe(0);
   });
 
   it("marks nothing missing from the adapter's 204 / empty-body marker", async (context) => {
@@ -551,7 +551,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
       });
       const result = await project(page.id);
       expect(result.markedMissing).toBe(0);
-      expect((await measureFanslyComments(testDb.db, page.id)).missing).toBe(0);
+      expect((await countPostComments(testDb.db, page.id)).missing).toBe(0);
     }
 
     // The proven empty answer still reconciles.
@@ -624,7 +624,7 @@ describe("[sync-critical] WP-F5 comment projection", () => {
     const page = await seedPage();
     await seedObservation(page.id, "four", fixture("replies-four-with-accounts"));
     await project(page.id);
-    expect((await measureFanslyComments(testDb.db, page.id)).total).toBe(4);
+    expect((await countPostComments(testDb.db, page.id)).total).toBe(4);
 
     // THE DRILL. `post_comments.author_ref` is a TEXT platform ref with no FK to
     // `fans`, so the unmapped-non-cascade-FK guard is structurally blind to it —

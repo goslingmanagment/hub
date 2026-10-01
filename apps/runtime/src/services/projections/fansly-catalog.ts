@@ -56,8 +56,6 @@
 // one media row's price.
 
 import {
-  countCreatorVaultUniqueMembers,
-  countPageUniqueCreatorMedia,
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
   listDetachedPartitionsHoldingAccount,
@@ -72,7 +70,6 @@ import {
   reconcileVaultAlbumScan,
   upsertVaultAlbumScan,
   setProjectionWatermark,
-  sumCreatorVaultAlbumItemCounts,
   upsertCreatorVaultAlbum,
   upsertCreatorVaultAlbumMember,
   upsertPageAutomatedMessage,
@@ -581,36 +578,6 @@ async function reconcileListingPresence(
     default:
       return { marked: 0, cleared: 0 };
   }
-}
-
-/**
- * The catalog lane's three media censuses (A16 item 1).
- *
- * `uniqueMediaCount` is M: `count(distinct media_offer_ref)` over
- * `creator_media`. `vaultMemberUniqueCount` is the distinct raw-file union the
- * creator-vault walk measures. These are separate identities: one raw file can
- * back several offers. `albumMembershipSum` is Σ `item_count`, which
- * DOUBLE-COUNTS and is labelled non-unique everywhere it appears.
- *
- * All three are reported together on purpose, but no equality between the raw
- * file and offer counts is claimed.
- */
-export interface FanslyCatalogMediaCensus {
-  uniqueMediaCount: number;
-  vaultMemberUniqueCount: number;
-  /** Σ `item_count`. NON-UNIQUE by construction — never M. */
-  albumMembershipSum: number;
-}
-
-export async function measureFanslyCatalogMedia(
-  db: AppContext["db"],
-  pageId: number,
-): Promise<FanslyCatalogMediaCensus> {
-  return {
-    uniqueMediaCount: await countPageUniqueCreatorMedia(db, pageId),
-    vaultMemberUniqueCount: await countCreatorVaultUniqueMembers(db, pageId),
-    albumMembershipSum: await sumCreatorVaultAlbumItemCounts(db, pageId),
-  };
 }
 
 /**

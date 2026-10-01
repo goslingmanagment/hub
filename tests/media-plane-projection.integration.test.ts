@@ -7,7 +7,7 @@
 //
 //  - A17-4 VARIANT B: `message_archive` gains NO columns. Purchase state is
 //    served by JOINING `message_media_offers` on (page_id, message_ref) at read
-//    time. The archive's column set is pinned here from information_schema, so
+//    time. The archive and shadow column sets are compared here from information_schema, so
 //    adding `purchase_state` to it would fail this test rather than quietly
 //    break the shadow-rebuild set-equality gate.
 //  - COEXISTENCE: an inline `dm_messages` order row and a `purchase_history`
@@ -68,46 +68,6 @@ beforeEach(async () => {
 
 const OWN_REF = "acct-creator-plane";
 const FAN_REF = "acct-fan-plane";
-
-/** Every column `message_archive` has TODAY. A17-4 variant B says this set does
- *  not change — purchase_state / purchased_at / purchase_ref are NOT added. */
-const MESSAGE_ARCHIVE_COLUMNS = [
-  "account_id",
-  "archived_at",
-  "backfill_source",
-  "content_pending",
-  "conversation_ref",
-  "deleted_at",
-  "fan_native_id",
-  "id",
-  "in_reply_to_ref",
-  "is_new",
-  "is_opened",
-  "is_sent_by_me",
-  "is_tip",
-  "material_observed_at",
-  "media_metadata",
-  "message_ref",
-  "native_account_ref",
-  "native_message_id",
-  "occurred_at",
-  "origin_class",
-  "platform",
-  "price_mills",
-  "reply_metadata",
-  "reply_parent_observed_at",
-  "reply_root_observed_at",
-  "sender_role",
-  "serving_contract_version",
-  "source_account_seq",
-  "source_event_id",
-  "text_html",
-  "text_plain",
-  "tip_amount_mills",
-  "tip_text_plain",
-  "updated_at",
-  "vendor_changed_at",
-];
 
 function sha256(value: unknown): Buffer {
   return createHash("sha256").update(JSON.stringify(value)).digest();
@@ -405,19 +365,19 @@ describe("media plane — one paid DM page, end to end", () => {
       context.skip();
       return;
     }
-    for (const table of ["message_archive", "message_archive_shadow"]) {
-      const columns = (await rows<{ column_name: string }>(
-        `select column_name from information_schema.columns
-          where table_schema = 'public' and table_name = $1
-          order by column_name`,
-        [table],
-      )).map((row) => row.column_name);
-      expect(columns, table).toEqual(MESSAGE_ARCHIVE_COLUMNS);
-      // Named explicitly, because these three are what an earlier draft added
-      // and what the shadow-rebuild set-equality gate would have choked on.
-      for (const forbidden of ["purchase_state", "purchased_at", "purchase_ref"]) {
-        expect(columns, `${table}.${forbidden}`).not.toContain(forbidden);
-      }
+    const columnsOf = async (table: string) => (await rows<{ column_name: string }>(
+      `select column_name from information_schema.columns
+        where table_schema = 'public' and table_name = $1 order by column_name`,
+      [table],
+    )).map((row) => row.column_name);
+    const archive = await columnsOf("message_archive");
+    // The atomic switch renames the shadow INTO the archive: the two must match.
+    expect(await columnsOf("message_archive_shadow")).toEqual(archive);
+    expect(archive).toEqual(expect.arrayContaining(["reply_metadata", "reply_parent_observed_at", "reply_root_observed_at"]));
+    // Named explicitly, because these three are what an earlier draft added
+    // and what the shadow-rebuild set-equality gate would have choked on.
+    for (const forbidden of ["purchase_state", "purchased_at", "purchase_ref"]) {
+      expect(archive, forbidden).not.toContain(forbidden);
     }
   });
 

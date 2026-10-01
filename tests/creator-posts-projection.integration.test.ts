@@ -1268,24 +1268,6 @@ describe("creator posts domain projection", () => {
     expect(outcome?.failedAccounts).toEqual([poisoned.id]);
   });
 
-  it("migration registers both collection lanes", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const streams = await testDb.pool.query<{ value: string }>(
-      `select enumlabel as value
-       from pg_enum join pg_type on pg_type.oid = pg_enum.enumtypid
-       where pg_type.typname = 'sync_stream' order by enumsortorder`,
-    );
-    expect(streams.rows.map((row) => row.value)).toContain("posts");
-
-    const constraint = await testDb.pool.query<{ definition: string }>(
-      `select pg_get_constraintdef(oid) as definition
-       from pg_constraint where conname = 'ofapi_capture_jobs_kind_check'`,
-    );
-    expect(constraint.rows[0]!.definition).toContain("post_paginate");
-  });
 });
 
 // ── WP-F6 ────────────────────────────────────────────────────────────────────

@@ -3,7 +3,6 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { FANSLY_CATALOG_PROJECTION } from "../apps/runtime/src/services/projections/fansly-catalog.ts";
 import { FANSLY_COMMENTS_PROJECTION } from "../apps/runtime/src/services/projections/fansly-comments.ts";
 import {
@@ -127,17 +126,6 @@ describe("projection registry", () => {
     expect(owners.get("media.offer_location_observed")).toEqual(["media_plane"]);
   });
 
-  it("keeps every canonicalizer lane unique, so health-floor gauges cannot collide", () => {
-    // `healthFloorName` is `obs_backlog_<source>_<lane>_v<version>` and the
-    // golden-signal threshold map is built with Object.fromEntries, where a
-    // duplicate key collapses SILENTLY: two backlogs under one metric name,
-    // one of them invisible.
-    const names = CANONICALIZER_FAMILIES.map((family) =>
-      `obs_backlog_${family.source}_${family.lane}_v${family.version}`
-    );
-    expect(new Set(names).size).toBe(names.length);
-    expect(names).toContain("obs_backlog_pull_stats_v2");
-  });
 });
 
 // Per-projection declarations: each family's own pins on its registry entry

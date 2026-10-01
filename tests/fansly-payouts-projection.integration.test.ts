@@ -29,6 +29,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   appendProjectionOnlyDomainEvents,
+  countPagePayouts,
   createFanslyPage,
   createModel,
   ensureDomainEventPartitions,
@@ -42,7 +43,6 @@ import {
 import {
   FANSLY_PAYOUTS_PROJECTION,
   FANSLY_PAYOUTS_PROJECTION_TABLES,
-  measureFanslyPayouts,
   rebuildFanslyPayoutsProjection,
   runFanslyPayoutsProjection,
 } from "../apps/runtime/src/services/projections/fansly-payouts.ts";
@@ -396,7 +396,7 @@ describe("[sync-critical] WP-F7 payouts projection", () => {
     const oldest = payouts.find((row) => row.payout_ref === "000900000000008003")!;
     expect(new Date(oldest.requested_at as string).getUTCFullYear()).toBe(2023);
 
-    const census = await measureFanslyPayouts(testDb!.db, page.id);
+    const census = await countPagePayouts(testDb!.db, page.id);
     expect(census.requests).toBe(3);
     expect(census.oldestRequestedAt?.getUTCFullYear()).toBe(2023);
   });
