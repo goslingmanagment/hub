@@ -9,6 +9,7 @@
 // registry matches ENV_CONFIG_KEYS so the two can never silently drift.
 
 import { OFAPI_MIRROR_BUDGET_DEFAULTS, type AppConfig } from "./config.ts";
+import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "./fansly-pause.ts";
 import { agentExportPolicyValues } from "./types.ts";
 
 /** Bumped when the shape of a serialized running-values snapshot changes, so an
@@ -80,6 +81,17 @@ export interface ConfigDescriptor {
   note?: string;
   min?: number;
   max?: number;
+  /** What a number outside `min`/`max` gets. 'clamp' (the default) stores the
+   *  nearest bound. 'reject' refuses the write with `belowMinError` /
+   *  `aboveMaxError`, for a bound that is a rule rather than a convenience: a
+   *  silently raised or lowered value would hide the mistake from the person who
+   *  made it. The live overlay ignores a stored out-of-range value either way. */
+  outOfRange?: "clamp" | "reject";
+  /** Rejection text for a value below `min` (only with outOfRange 'reject'). The
+   *  console shows server errors verbatim, so it is written for the owner. */
+  belowMinError?: string;
+  /** Rejection text for a value above `max` (only with outOfRange 'reject'). */
+  aboveMaxError?: string;
   enumValues?: string[];
   /** Money/quota/data implication shown when editing (Stage B). */
   costWarning?: string;
@@ -156,7 +168,9 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
       "Measures a virtual stop on existing full-sweep responses without changing polling.",
   },
   { key: "fanslyBaseUrl", envName: "FANSLY_BASE_URL", configField: "fanslyBaseUrl", kind: "url", subsystem: "Fansly", label: "Fansly base URL", default: "https://apiv3.fansly.com/api/v1", editability: NEVER, runtimeApply: "none", comparable: true },
-  { key: "fanslyDefaultDelayMs", envName: "FANSLY_DEFAULT_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "number", subsystem: "Fansly", label: "Fansly default delay (ms)", default: "2500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Lowering reduces politeness against Fansly's unofficial API; raises ban/throttle risk.", note: "Captured by the Fansly adapter at boot — applies after restart." },
+  // Fansly Sync Engine plan §2.1: the one owner pace setting, live, rejected (never
+  // clamped) outside 2000..60000 ms. The env value goes through the same range at boot.
+  { key: "fanslyDefaultDelayMs", envName: "FANSLY_DEFAULT_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "number", subsystem: "Fansly", label: "Fansly pause between requests (ms)", default: "2500", editability: EDITABLE, runtimeApply: "live", comparable: true, min: FANSLY_PAUSE_MIN_MS, max: FANSLY_PAUSE_MAX_MS, outOfRange: "reject", belowMinError: `Пауза между запросами Fansly не может быть меньше ${FANSLY_PAUSE_MIN_MS} мс: правило владельца — не чаще одного запроса страницы раз в 2 с. Ниже — только правкой кода.`, aboveMaxError: `Пауза больше ${FANSLY_PAUSE_MAX_MS} мс похожа на опечатку. Допустимо от ${FANSLY_PAUSE_MIN_MS} до ${FANSLY_PAUSE_MAX_MS} мс.`, costWarning: "Lowering reduces politeness against Fansly's unofficial API; raises ban/throttle risk.", note: `One pause for every Fansly page, ${FANSLY_PAUSE_MIN_MS}-${FANSLY_PAUSE_MAX_MS} ms. A value outside the range is rejected, never clamped.` },
   { key: "fanslyGlobalDelayMs", envName: "FANSLY_GLOBAL_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "alias", subsystem: "Fansly", label: "Fansly global delay (legacy alias)", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Legacy fallback feeding Fansly default delay." },
   { key: "fanslyAccountLookupDelayMs", envName: "FANSLY_ACCOUNT_LOOKUP_DELAY_MS", configField: "fanslyDefaultDelayMs", kind: "alias", subsystem: "Fansly", label: "Fansly account-lookup delay (legacy alias)", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Legacy fallback feeding Fansly default delay." },
   { key: "followerPageDelayMs", envName: "FOLLOWER_PAGE_DELAY_MS", configField: "followerPageDelayMs", kind: "number", subsystem: "Fansly", label: "Follower page delay (ms)", default: "5000", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1 },

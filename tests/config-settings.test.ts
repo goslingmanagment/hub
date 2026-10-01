@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppConfig } from "@agency_hub_core/shared";
-import { collectCostWarnings, resolveEffectiveConfig, validateConfigOverride } from "@agency_hub_core/shared";
+import {
+  collectCostWarnings,
+  FANSLY_PAUSE_MAX_MS,
+  FANSLY_PAUSE_MIN_MS,
+  resolveEffectiveConfig,
+  validateConfigOverride,
+} from "@agency_hub_core/shared";
 
 describe("validateConfigOverride", () => {
   it("clamps a number to the descriptor min", () => {
@@ -25,6 +31,42 @@ describe("validateConfigOverride", () => {
     // window. 1_000_000 clamps down to the descriptor max.
     expect(validateConfigOverride("transactionRescanCapDays", 1_000_000)).toEqual({ ok: true, value: 365 });
     expect(validateConfigOverride("transactionLookbackDays", 1_000_000)).toEqual({ ok: true, value: 365 });
+  });
+
+  describe("reject mode (the Fansly pause)", () => {
+    it("accepts the bounds and in-range values unchanged", () => {
+      expect(validateConfigOverride("fanslyDefaultDelayMs", FANSLY_PAUSE_MIN_MS)).toEqual({ ok: true, value: 2000 });
+      expect(validateConfigOverride("fanslyDefaultDelayMs", 2500)).toEqual({ ok: true, value: 2500 });
+      expect(validateConfigOverride("fanslyDefaultDelayMs", FANSLY_PAUSE_MAX_MS)).toEqual({ ok: true, value: 60_000 });
+    });
+
+    it("rejects a value below 2000 ms with the owner-rule message instead of clamping it", () => {
+      for (const value of [0, 1, 1500, FANSLY_PAUSE_MIN_MS - 1]) {
+        expect(validateConfigOverride("fanslyDefaultDelayMs", value), String(value)).toEqual({
+          ok: false,
+          error: "Пауза между запросами Fansly не может быть меньше 2000 мс: правило владельца — "
+            + "не чаще одного запроса страницы раз в 2 с. Ниже — только правкой кода.",
+        });
+      }
+    });
+
+    it("rejects a value above 60000 ms as a likely typo", () => {
+      for (const value of [FANSLY_PAUSE_MAX_MS + 1, 250_000]) {
+        expect(validateConfigOverride("fanslyDefaultDelayMs", value), String(value)).toEqual({
+          ok: false,
+          error: "Пауза больше 60000 мс похожа на опечатку. Допустимо от 2000 до 60000 мс.",
+        });
+      }
+    });
+
+    it("still applies the generic number checks first", () => {
+      expect(validateConfigOverride("fanslyDefaultDelayMs", 2000.5)).toEqual({
+        ok: false,
+        error: "fanslyDefaultDelayMs expects an integer",
+      });
+      expect(validateConfigOverride("fanslyDefaultDelayMs", "2000").ok).toBe(false);
+      expect(validateConfigOverride("fanslyDefaultDelayMs", Number.NaN).ok).toBe(false);
+    });
   });
 
   it("rejects a non-finite number", () => {
