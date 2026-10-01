@@ -21,11 +21,20 @@
 // never claimed into a send the queue must refuse.
 //
 // THE FLAG IS THE KILL SWITCH. `agentHydrationMode`:
-//   off          — this cycle does nothing at all, not even bookkeeping;
+//   off          — nothing is expired, approved or dispatched; only the
+//                  bookkeeping about runs ALREADY dispatched goes on
+//                  (reconcile, stuck sweep), so a flip to `off` cannot strand
+//                  a row — and its page — in `dispatching` forever;
 //   request_only — requests can be filed and decided, NOTHING is dispatched;
-//                  expiry and the stuck sweep still run, so a flip away from
-//                  `dispatch` cannot strand a row in `dispatching` forever;
+//                  expiry, reconcile and the stuck sweep still run;
 //   dispatch     — approvals are drained.
+//
+// A REQUEST CLOSES ON ANY OUTCOME. The worker settles the request its run
+// answered — from the result, or from the run's failure with the run's own
+// spend — and reconciliation settles from the pg-boss job record whatever the
+// worker could not, once the run is provably gone (job terminal or missing,
+// AND no live page lease of that job: pg-boss failing a job does not stop
+// its handler).
 
 import { randomUUID } from "node:crypto";
 
@@ -48,6 +57,7 @@ import {
   rearmAgentHydrationRequest,
   recordAgentHydrationExecution,
   settleAgentHydrationRequest,
+  type AgentHydrationCasOutcome,
   type AgentHydrationRequestRecord,
 } from "@agency_hub_core/db";
 import type {
@@ -67,8 +77,14 @@ import {
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import {
+  asTargetedThreadBackfillResult,
+  describeFailedTargetedThreadBackfillJob,
+  findTargetedThreadBackfillJob,
+  isTargetedThreadBackfillJobInFlight,
+  isTargetedThreadBackfillLeaseLive,
   isTargetedThreadBackfillSlotTaken,
   sendTargetedThreadBackfillJob,
+  TargetedThreadBackfillRunError,
   type TargetedThreadBackfillResult,
 } from "./sync/targeted-thread-backfill.ts";
 
@@ -174,6 +190,17 @@ const DISPATCH_DEADLINE_MS: Readonly<Record<Platform, number>> = {
   onlyfans: 6 * 60 * 60 * 1000,
 };
 
+/**
+ * How long a Fansly run's job must have been terminal — or, for a job the
+ * queue never showed, the request dispatched — before its request is settled
+ * from that record. pg-boss marks a job terminal BEFORE its handler is gone (a
+ * worker's shutdown fails the active job while the process is still
+ * stopping), and a send that threw may still be landing; the grace lets the
+ * record become true. Settling also requires that no live page lease names
+ * the job (`isTargetedThreadBackfillLeaseLive`).
+ */
+const FANSLY_RUN_SETTLE_GRACE_MS = 2 * 60 * 1000;
+
 export async function ensureAgentHydrationQueue(
   boss: QueueCreationClient,
   createdQueues?: Set<string>,
@@ -230,20 +257,21 @@ export async function runAgentHydrationCycle(
     autoApprove: null,
     autoHeld: 0,
   };
-  if (mode === "off") {
-    return result;
+  // `off` freezes the decisions (nothing expires, nothing is approved or
+  // dispatched) but not the bookkeeping below: a run dispatched before the
+  // flip still ends, and its request must close with it.
+  if (mode !== "off") {
+    result.expired = await expireAgentHydration(app);
   }
-
-  result.expired = await expireAgentHydration(app);
   // RECONCILE FIRST. A job that reached a terminal state after its deadline but
   // before this cycle would otherwise be buried by the timeout sweep as
   // `failed`, and its real outcome, accepted counts and spend could never be
   // recovered — reconciliation only ever looks at `dispatching` rows.
-  result.reconciled = await reconcileAgentHydrationDispatches(app);
-  result.swept = await sweepStuckAgentHydration(app);
+  result.reconciled = await reconcileAgentHydrationDispatches(app, boss);
+  result.swept = await sweepStuckAgentHydration(app, boss);
 
-  // `request_only` stops HERE. Everything above is bookkeeping about work that
-  // already happened; everything below starts new work.
+  // `off` and `request_only` stop HERE. Everything above is bookkeeping about
+  // work that already happened; everything below starts new work.
   if (mode !== "dispatch") {
     return result;
   }
@@ -351,42 +379,44 @@ async function expireAgentHydration(app: AppContext): Promise<number> {
  * never settled. It ends `failed` with `timeout` — NOT back in `approved`. The
  * work may or may not have partly happened, and only a human can decide whether
  * to spend again on a thread that might already be half-walked.
+ *
+ * Each lane first reads its own record of the work (`LANE_IN_FLIGHT`): work
+ * that is demonstrably STILL RUNNING is left alone, and work that finished is
+ * settled from what it actually did. The deadline says nothing about the
+ * outcome; the work's own record does.
  */
-export async function sweepStuckAgentHydration(app: AppContext): Promise<number> {
+export async function sweepStuckAgentHydration(
+  app: AppContext,
+  boss: HydrationBoss,
+): Promise<number> {
   const rows = await listStuckAgentHydrationDispatches(app.db, { limit: SWEEP_BATCH_LIMIT });
   let swept = 0;
   for (const row of rows) {
-    const job = await ofapiJobFor(app, row);
-    // ... unless the work it authorized is demonstrably STILL RUNNING. A durable
-    // OnlyFans capture job can outlive any deadline we picked, and calling it
-    // dead while it is still spending credits would take the spend out of the
-    // owner's view.
-    if (job !== null && OFAPI_LIVE_STATES.has(job.state)) {
+    const executionRef = row.executionRef;
+    const lane = (LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined) ?? null;
+    const verdict: InFlightVerdict = lane === null || executionRef === null
+      ? { kind: "gone" }
+      : await lane.read({ app, boss, row: { ...row, executionRef } });
+    if (verdict.kind === "running") {
       app.logger.info(
         { requestRef: row.requestRef, executionRef: row.executionRef },
-        "Agent hydration dispatch is past its deadline but its capture job is still running",
+        "Agent hydration dispatch is past its deadline but its work is still running",
       );
       continue;
     }
-    // ... and a job that DID finish is settled from what it actually did. The
-    // deadline says nothing about the outcome; the job's own record does.
-    const settlement = job === null ? null : ofapiJobSettlement(job);
-    const { outcome } = await settleAgentHydrationRequest(app.db, settlement === null
-      ? { id: row.id, toState: "failed", lastError: "timeout", actor: "sweeper" }
-      : {
+    const outcome = verdict.kind === "settle"
+      ? await verdict.settle("sweeper")
+      : (await settleAgentHydrationRequest(app.db, {
         id: row.id,
-        toState: settlement.state,
-        lastError: settlement.lastError,
-        acceptedItems: job!.acceptedItems,
-        acceptedPages: job!.acceptedPages,
-        spentCredits: job!.spentCredits,
+        toState: "failed",
+        lastError: "timeout",
         actor: "sweeper",
-      });
+      })).outcome;
     if (outcome === "applied") {
       swept += 1;
       app.logger.warn(
         { requestRef: row.requestRef, pageLabel: row.pageLabel, executionRef: row.executionRef },
-        "Agent hydration request passed its dispatch deadline without settling; marked failed",
+        "Agent hydration request passed its dispatch deadline without settling; settled from its record",
       );
     }
   }
@@ -394,53 +424,168 @@ export async function sweepStuckAgentHydration(app: AppContext): Promise<number>
 }
 
 /**
- * OnlyFans settles by RECONCILIATION, not by callback: a capture job is a
- * durable row driven by the OFAPI executor, which knows nothing about hydration.
- * So the cycle reads the job's terminal state and settles the request from it.
- * (The Fansly lane settles directly from its own job result — see
- * `settleAgentHydrationFromBackfill`.)
+ * Settles in-flight requests from the record of the work they dispatched,
+ * deadline or not: reconciling early is what keeps finished work from waiting
+ * out its whole deadline.
+ *
+ * OnlyFans settles ONLY this way: a capture job is a durable row driven by the
+ * OFAPI executor, which knows nothing about hydration. The Fansly lane settles
+ * from its own run first (`settleAgentHydrationFromBackfill`,
+ * `settleAgentHydrationFromFailedRun`); this is how a request still closes when
+ * that run could not — crashed, stopped mid-run by a deploy, its settle lost
+ * to the database, or its job never created.
  */
-export async function reconcileAgentHydrationDispatches(app: AppContext): Promise<number> {
-  // Everything currently dispatching, deadline or not: reconciling early is what
-  // keeps a finished capture job from waiting out its whole deadline.
+export async function reconcileAgentHydrationDispatches(
+  app: AppContext,
+  boss: HydrationBoss,
+): Promise<number> {
   const rows = await listDispatchingAgentHydrationRequests(app.db, { limit: SWEEP_BATCH_LIMIT });
   let reconciled = 0;
   for (const row of rows) {
-    if (row.executionLane === null || row.executionRef === null || row.platform !== "onlyfans") {
+    const lane = LANE_IN_FLIGHT[row.platform as Platform] as LaneInFlight | undefined;
+    const executionRef = row.executionRef;
+    if (row.executionLane === null || executionRef === null || !lane) {
       continue;
     }
-    const job = await getOfapiCaptureJob(app.db, row.executionRef);
-    if (!job) {
+    const verdict = await lane.read({ app, boss, row: { ...row, executionRef } });
+    if (verdict.kind !== "settle") {
       continue;
     }
-    const settlement = ofapiJobSettlement(job);
-    if (settlement === null) {
-      continue;
+    if (await verdict.settle("executor") === "applied") {
+      reconciled += 1;
     }
-    await settleAgentHydrationRequest(app.db, {
-      id: row.id,
-      toState: settlement.state,
-      lastError: settlement.lastError,
-      acceptedItems: job.acceptedItems,
-      acceptedPages: job.acceptedPages,
-      spentCredits: job.spentCredits,
-    });
-    reconciled += 1;
   }
   return reconciled;
+}
+
+/**
+ * What a lane's own record says about the work a dispatching request points
+ * at: still `running` (leave it), over with an outcome to `settle` from, or
+ * `gone` without one (only the sweeper acts on that: `failed/timeout`).
+ */
+type InFlightVerdict =
+  | { kind: "running" }
+  | { kind: "gone" }
+  | {
+    kind: "settle";
+    settle: (actor: "executor" | "sweeper") => Promise<AgentHydrationCasOutcome>;
+  };
+
+interface LaneInFlight {
+  read: (input: {
+    app: AppContext;
+    boss: HydrationBoss;
+    row: AgentHydrationRequestRecord & { executionRef: string };
+  }) => Promise<InFlightVerdict>;
 }
 
 /** Capture-job states that mean the OFAPI executor still owns this work. */
 const OFAPI_LIVE_STATES = new Set(["ready", "leased", "awaiting_parse", "retry_wait"]);
 
-/** The durable capture job a request points at, when it has one. Only the
- *  OnlyFans lane does: a Fansly targeted job is bounded to one run and dies with
- *  its own queue entry, so a passed deadline there really does mean it is gone. */
-async function ofapiJobFor(app: AppContext, row: AgentHydrationRequestRecord) {
-  if (row.platform !== "onlyfans" || row.executionRef === null) {
-    return null;
+/**
+ * The lane table for work in flight — one reader per platform, looked up,
+ * never compared.
+ */
+const LANE_IN_FLIGHT: Readonly<Record<Platform, LaneInFlight>> = {
+  fansly: { read: readFanslyRun },
+  onlyfans: {
+    read: async ({ app, row }): Promise<InFlightVerdict> => {
+      const job = await getOfapiCaptureJob(app.db, row.executionRef);
+      if (!job) {
+        return { kind: "gone" };
+      }
+      // A durable capture job can outlive any deadline we picked, and calling
+      // it dead while it is still spending credits would take the spend out of
+      // the owner's view.
+      if (OFAPI_LIVE_STATES.has(job.state)) {
+        return { kind: "running" };
+      }
+      const settlement = ofapiJobSettlement(job);
+      if (settlement === null) {
+        return { kind: "gone" };
+      }
+      return {
+        kind: "settle",
+        settle: async (actor) => (await settleAgentHydrationRequest(app.db, {
+          id: row.id,
+          toState: settlement.state,
+          lastError: settlement.lastError,
+          acceptedItems: job.acceptedItems,
+          acceptedPages: job.acceptedPages,
+          spentCredits: job.spentCredits,
+          actor,
+        })).outcome,
+      };
+    },
+  },
+};
+
+/**
+ * A Fansly run, read back from the queue and the page lease.
+ *
+ * `running` while pg-boss still owns the job (queued or active), while a live
+ * page lease names the job — pg-boss fails an expired job, and a stopping
+ * worker's active job, while its handler may still be walking, and only the
+ * lease proves otherwise — and for the settle grace after the job turned
+ * terminal (or after a dispatch whose job never showed up). Then: a completed
+ * job's result settles the request exactly as the worker would have; a failed
+ * or cancelled job, or a missing one, settles it `failed` with what the record
+ * knows about the spend.
+ */
+async function readFanslyRun(input: {
+  app: AppContext;
+  boss: HydrationBoss;
+  row: AgentHydrationRequestRecord & { executionRef: string };
+}): Promise<InFlightVerdict> {
+  const { app, boss, row } = input;
+  const jobId = row.executionRef;
+  const job = await findTargetedThreadBackfillJob(boss, jobId);
+  if (job !== null && isTargetedThreadBackfillJobInFlight(job.state)) {
+    return { kind: "running" };
   }
-  return getOfapiCaptureJob(app.db, row.executionRef);
+  if (await isTargetedThreadBackfillLeaseLive(app.db, { pageId: row.pageId, jobId })) {
+    return { kind: "running" };
+  }
+  const now = Date.now();
+  if (job === null) {
+    // The send threw (INDETERMINATE) and nothing ever landed: no job, no run,
+    // no vendor request — the spend is a known zero.
+    if (row.dispatchedAt === null || now - row.dispatchedAt.getTime() < FANSLY_RUN_SETTLE_GRACE_MS) {
+      return { kind: "running" };
+    }
+    return {
+      kind: "settle",
+      settle: (actor) => settleFailedRun(app, row, { cause: "job_missing", vendorCalls: 0, actor }),
+    };
+  }
+  if (job.state === "completed") {
+    const result = asTargetedThreadBackfillResult(job.output);
+    if (result !== null) {
+      return {
+        kind: "settle",
+        settle: async () => (await settleAgentHydrationFromBackfill(app, row.requestRef, result)) ?? "conflict",
+      };
+    }
+    // The worker returns no result only for a payload it could not use: the
+    // walk never started.
+    return {
+      kind: "settle",
+      settle: (actor) => settleFailedRun(app, row, { cause: "job_without_result", vendorCalls: 0, actor }),
+    };
+  }
+  if (job.completedOn !== null && now - job.completedOn.getTime() < FANSLY_RUN_SETTLE_GRACE_MS) {
+    return { kind: "running" };
+  }
+  const failed = describeFailedTargetedThreadBackfillJob(job.output);
+  return {
+    kind: "settle",
+    settle: (actor) => settleFailedRun(app, row, {
+      cause: failed.failureClass ?? `job_${job.state}`,
+      failureClass: failed.failureClass,
+      run: failed.result,
+      actor,
+    }),
+  };
 }
 
 /**
@@ -931,11 +1076,12 @@ function fanslyRequestCeiling(request: AgentHydrationRequestRecord): number {
 /**
  * How a targeted-backfill outcome settles the request that asked for it.
  *
- * `completed` only where the walk genuinely ran out of history or met known
- * ground. Everything the run REFUSED (breaker open, lease unavailable, page
- * busy, ineligible thread) is a `failed`, not a `partially_completed`: nothing
- * was hydrated, and calling that a partial success would tell the owner the
- * spend bought something.
+ * `completed` only where the walk PROVED the end of the history: an empty
+ * page reached from the stored oldest message (the run's own outcome rule; a
+ * short page or known ground is `partial`). Everything the run REFUSED
+ * (breaker open, lease unavailable, page busy, ineligible thread) is a
+ * `failed`, not a `partially_completed`: nothing was hydrated, and calling
+ * that a partial success would tell the owner the spend bought something.
  *
  * The three TRANSIENT refusals (`REARMABLE_OUTCOMES`) reach this table only
  * once their re-arms are used up. The page stayed busy for every run the
@@ -958,6 +1104,8 @@ const BACKFILL_OUTCOME_STATES: Readonly<Record<
   thread_checkpoint_in_progress: { state: "failed", lastError: "timeout" },
   lease_unavailable: { state: "failed", lastError: "timeout" },
   lease_lost: { state: "failed", lastError: "timeout" },
+  // The thread's own breaker now holds it (500 breaker of the point path).
+  vendor_error: { state: "failed", lastError: "quarantined" },
 };
 
 /**
@@ -986,7 +1134,7 @@ async function rearmOrFailRefusedRun(
   cause: string,
   /** What the refused run sent; the callers only get here when it sent none. */
   vendorCalls: number | undefined,
-): Promise<void> {
+): Promise<AgentHydrationCasOutcome> {
   const rearmed = await rearmAgentHydrationRequest(app.db, {
     id: request.id,
     expectedVersion: request.rowVersion,
@@ -1003,7 +1151,7 @@ async function rearmOrFailRefusedRun(
       },
       "Agent hydration run was refused before any vendor request; approval re-armed",
     );
-    return;
+    return "applied";
   }
   const { outcome } = await settleAgentHydrationRequest(app.db, {
     id: request.id,
@@ -1018,6 +1166,7 @@ async function rearmOrFailRefusedRun(
       "Agent hydration page stayed busy through every allowed run; approval settled failed",
     );
   }
+  return outcome;
 }
 
 /**
@@ -1063,10 +1212,10 @@ export async function settleAgentHydrationFromBackfill(
   app: AppContext,
   requestRef: string,
   result: TargetedThreadBackfillResult,
-): Promise<void> {
+): Promise<AgentHydrationCasOutcome | null> {
   const { request } = await findAgentHydrationRequestByRef(app.db, requestRef);
   if (!request || request.state !== "dispatching") {
-    return;
+    return null;
   }
   // The run's own count of the requests it sent, which is what the autopilot's
   // daily budget is charged once the request settles. Not `requests`: that
@@ -1077,11 +1226,20 @@ export async function settleAgentHydrationFromBackfill(
   // `requests === 0` is the evidence, not the outcome name: only a run that
   // provably never reached the vendor may hand its approval back.
   if (REARMABLE_OUTCOMES.has(result.outcome) && result.requests === 0) {
-    await rearmOrFailRefusedRun(app, request, result.outcome, vendorCalls);
-    return;
+    return rearmOrFailRefusedRun(app, request, result.outcome, vendorCalls);
   }
-  const mapped = BACKFILL_OUTCOME_STATES[result.outcome];
-  await settleAgentHydrationRequest(app.db, {
+  // `completed` is believed only with its proof on the result: the empty page
+  // reached from the stored oldest message (decision №3). A result that says
+  // `completed` without it — written before the proof rule, read back from an
+  // old job — is a partial. An outcome this build does not know is no
+  // evidence of success at all: `failed`, its spend still counted.
+  const outcome = result.outcome === "completed" && result.emptyPageReached !== true
+    ? "partial"
+    : result.outcome;
+  const mapped = (BACKFILL_OUTCOME_STATES[outcome] as
+    | (typeof BACKFILL_OUTCOME_STATES)[TargetedThreadBackfillResult["outcome"]]
+    | undefined) ?? { state: "failed" as const, lastError: "vendor_unavailable" as const };
+  const settled = await settleAgentHydrationRequest(app.db, {
     id: request.id,
     toState: mapped.state,
     lastError: mapped.lastError,
@@ -1089,4 +1247,92 @@ export async function settleAgentHydrationFromBackfill(
     acceptedPages: result.requests,
     ...(vendorCalls === undefined ? {} : { vendorCalls }),
   });
+  return settled.outcome;
+}
+
+/**
+ * Settles the hydration request a targeted run answered when the run returned
+ * NO result: it threw, or its job could not be run at all.
+ *
+ * `failed`, never a re-arm — a run that threw may have reached Fansly. The
+ * journal gets a bounded `cause` and, whenever it is known, the run's real
+ * spend: a `TargetedThreadBackfillRunError` carries the attempts it started
+ * (zero for a failure before the walk). An unknown spend is settled
+ * `timeout`, which keeps the approval's whole reservation on the autopilot's
+ * budget (fail closed); a known one picks the closest code for the failure.
+ */
+export async function settleAgentHydrationFromFailedRun(
+  app: AppContext,
+  requestRef: string,
+  failure: {
+    /** What the run threw, when it ran. */
+    error?: unknown;
+    /** Bounded code for the journal when the run did not throw. */
+    cause?: string;
+    /** Known spend when there is no run error to read it from. */
+    vendorCalls?: number;
+  },
+): Promise<AgentHydrationCasOutcome | null> {
+  const { request } = await findAgentHydrationRequestByRef(app.db, requestRef);
+  if (!request || request.state !== "dispatching") {
+    return null;
+  }
+  const runError = failure.error instanceof TargetedThreadBackfillRunError ? failure.error : null;
+  return settleFailedRun(app, request, {
+    cause: runError?.failureClass ?? failure.cause ?? "run_error",
+    failureClass: runError?.failureClass ?? null,
+    run: runError?.result ?? null,
+    ...(failure.vendorCalls === undefined ? {} : { vendorCalls: failure.vendorCalls }),
+    actor: "executor",
+  });
+}
+
+/** `last_error` for a run that failed with a KNOWN spend, by failure class. */
+function failedRunLastError(failureClass: string | null): AgentHydrationLastError {
+  if (failureClass === "proxy_missing") {
+    return "proxy_missing";
+  }
+  if (failureClass === "lease_lost") {
+    return "timeout";
+  }
+  return "vendor_unavailable";
+}
+
+async function settleFailedRun(
+  app: AppContext,
+  request: AgentHydrationRequestRecord,
+  failure: {
+    cause: string;
+    failureClass?: string | null;
+    /** What the run did before it failed; `requestAttempts` is its spend. */
+    run?: TargetedThreadBackfillResult | null;
+    vendorCalls?: number;
+    actor: "executor" | "sweeper";
+  },
+): Promise<AgentHydrationCasOutcome> {
+  const run = failure.run ?? null;
+  const vendorCalls = run !== null ? run.requestAttempts : failure.vendorCalls;
+  const { outcome } = await settleAgentHydrationRequest(app.db, {
+    id: request.id,
+    toState: "failed",
+    lastError: vendorCalls === undefined ? "timeout" : failedRunLastError(failure.failureClass ?? null),
+    acceptedItems: run?.insertedMessages ?? 0,
+    acceptedPages: run?.requests ?? 0,
+    ...(vendorCalls === undefined ? {} : { vendorCalls }),
+    cause: failure.cause,
+    actor: failure.actor,
+  });
+  if (outcome === "applied") {
+    app.logger.warn(
+      {
+        requestRef: request.requestRef,
+        pageLabel: request.pageLabel,
+        executionRef: request.executionRef,
+        cause: failure.cause,
+        vendorCalls: vendorCalls ?? null,
+      },
+      "Agent hydration run ended without a result; request settled failed",
+    );
+  }
+  return outcome;
 }

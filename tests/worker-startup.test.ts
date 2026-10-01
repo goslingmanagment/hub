@@ -272,6 +272,7 @@ vi.mock("../apps/runtime/src/services/sync/targeted-thread-backfill.ts", () => (
   ensureTargetedThreadBackfillQueue: vi.fn(),
   parseTargetedThreadBackfillJob: targetedBackfillMocks.parseTargetedThreadBackfillJob,
   runTargetedThreadBackfill: targetedBackfillMocks.runTargetedThreadBackfill,
+  targetedThreadBackfillRequestRefOf: vi.fn(() => null),
 }));
 
 import { startWorkerServices } from "../apps/runtime/src/worker-services.ts";

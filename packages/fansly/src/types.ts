@@ -5,6 +5,8 @@ import type {
   ProxyConfig,
 } from "@agency_hub_core/shared";
 
+import type { FanslySendGuard } from "./send-guard.ts";
+
 export interface FanslyRequestContext {
   session: FanslySessionBundle;
   proxy?: ProxyConfig | null;
@@ -13,10 +15,15 @@ export interface FanslyRequestContext {
   /** Durable lane allowance remaining before this logical request starts.
    * The adapter clamps its retry loop to this value. */
   remainingAttempts?: (() => number) | null;
+  /** The legacy endpoint pauses (`dm_messages`, `dm_conversations`,
+   * `followers_page`), reserved per egress before the send guard is captured. */
   rateLimitWaiter?: ((scopes: Array<{
     provider: "fansly" | "onlyfans";
     scope: string;
   }>) => Promise<number>) | null;
+  /** The page's send guard (plan §2.5). Mandatory: every physical attempt,
+   * SDK retries included, is captured through it and journaled. */
+  sendGuard: FanslySendGuard;
   /** Per-request timeout override (default 30 s); the fetch is aborted. */
   requestTimeoutMs?: number | null;
 }

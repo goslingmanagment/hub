@@ -112,6 +112,7 @@ import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { retentionDate } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "stats_snapshot" as const;
 const MAPPER_VERSION = "fansly-stats-v1";
@@ -1035,6 +1036,7 @@ export async function fanslyStatsSnapshotChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const {
     attemptBudget, complete: completeLane, holdingBack, requestContext, saveProgress,

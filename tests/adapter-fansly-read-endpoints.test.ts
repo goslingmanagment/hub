@@ -5,6 +5,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -12,6 +13,7 @@ afterEach(() => {
 
 function context() {
   return {
+    sendGuard: createTestFanslySendGuard(),
     session: { authorization: "token" },
     proxy: { url: "socks5://proxy.example:1080" },
     rateLimitWaiter: vi.fn(async () => 0),
@@ -89,7 +91,6 @@ describe("Fansly read endpoint contracts", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     const requestContext = context();
     const earnings = await adapter.getEarningsOverview(requestContext);

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEvents, cleanupAdapterHarness, loadAdapters, toJsonResponse } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 let harness: Awaited<ReturnType<typeof loadAdapters>>;
 beforeAll(async () => { harness = await loadAdapters(); });
@@ -14,9 +15,10 @@ describe("Fansly audience response contracts", () => {
   ])("returns rejected follower capture material without a phantom empty page: %j", async raw => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     const result = await adapter.getFollowersPage({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     }, "account-1", { offset: 100, limit: 100 });
@@ -34,9 +36,10 @@ describe("Fansly audience response contracts", () => {
   ])("returns rejected subscriber capture material without throwing before capture: %j", async raw => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     const result = await adapter.getSubscribersPage({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     }, { offset: 100, limit: 100 });
@@ -52,8 +55,8 @@ describe("Fansly audience response contracts", () => {
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: {
         stats: { total: 0, totalActive: 0, totalExpired: 0 }, subscriptions: [],
       } }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
-    const context = { session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0) };
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
     expect(await adapter.getSubscribersPage(context, {})).toMatchObject({ contractAccepted: true, done: true });
@@ -67,8 +70,8 @@ describe("Fansly audience response contracts", () => {
       { stats: { totalActive: 0 }, subscriptions: [] },
       { stats: { totalExpired: 0 }, subscriptions: [] }];
     for (const response of responses) fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
-    const context = { session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0) };
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
@@ -86,9 +89,10 @@ describe("Fansly audience response contracts", () => {
   ])("returns rejected messaging groups capture material without throwing before capture: %j", async raw => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     const result = await adapter.getMessagingGroupsPage({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     }, { offset: 100, limit: 100 });
@@ -106,9 +110,10 @@ describe("Fansly audience response contracts", () => {
   ])("returns rejected message page capture material without throwing before capture: %j", async raw => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     const result = await adapter.getMessagesPage({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     }, { groupId: "group-1", limit: 25, before: "m-9" });
@@ -131,8 +136,8 @@ describe("Fansly audience response contracts", () => {
     for (const response of [{ messages: [] }, { messages: [{ content: "no id or createdAt" }] }]) {
       fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
-    const context = { session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0) };
     for (const _ of groupPages) {
       expect(await adapter.getMessagingGroupsPage(context, {}))
@@ -149,10 +154,11 @@ describe("Fansly audience response contracts", () => {
     const { FanslyAdapter, fetchMock } = harness;
     const raw = { content: "private DM body" };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     const request = (adapter as unknown as { request: (...args: unknown[]) => Promise<{ raw: unknown }> }).request.bind(adapter);
     expect(await request({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     }, "/message", {
@@ -171,9 +177,10 @@ describe("Fansly audience response contracts", () => {
   ])("rejects malformed account identity during session verification: %j", async raw => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     await expect(adapter.verifySession({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     })).rejects.toMatchObject({
@@ -189,8 +196,9 @@ describe("Fansly audience response contracts", () => {
     const { FanslyAdapter, fetchMock } = harness;
     const raw = { account: { id: "account-1" } };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     expect(await adapter.verifySession({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),
     })).toMatchObject({ parsed: raw, raw });
@@ -202,9 +210,10 @@ describe("Fansly audience response contracts", () => {
     const { FanslyAdapter, fetchMock } = harness;
     const raw = { content: "private account body" };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: raw }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const observed = captureEvents();
     expect(await adapter.getAccountMe({
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
     })).toMatchObject({ raw });

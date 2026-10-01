@@ -10,6 +10,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 // ONE harness for the whole file. `loadAdapters` resets the module registry and
 // re-spies `undici.fetch`; calling it per test leaves the adapter bound to a
@@ -54,6 +55,7 @@ const SESSION = {
 
 function context(overrides: Record<string, unknown> = {}) {
   return {
+    sendGuard: createTestFanslySendGuard(),
     session: SESSION,
     // FANSLY PAGES MUST GO THROUGH THEIR OWN PROXY. A direct-IP request to
     // Fansly risks a model ban, which is why the dispatcher assertion below is
@@ -70,7 +72,7 @@ describe("WP-F1 adapter methods", () => {
     for (let index = 0; index < 6; index += 1) {
       fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const beforeDate = new Date("2026-08-19T00:00:00.000Z");
     const afterDate = new Date("2026-07-20T00:00:00.000Z");
 
@@ -167,7 +169,7 @@ describe("WP-F1 adapter methods", () => {
     // request, not an invented one.
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: {} }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const beforeDate = new Date("2026-08-22T09:00:00.000Z");
     const afterDate = new Date("2026-07-23T09:00:00.000Z");
     await adapter.getAccountStats(context(), {
@@ -201,7 +203,7 @@ describe("WP-F1 adapter methods", () => {
       someFutureKey: { nested: true },
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getAccountStats(context(), {
       beforeDate: new Date(),
       afterDate: new Date(),
@@ -219,7 +221,7 @@ describe("WP-F1 adapter methods", () => {
         status: 401,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     // The envelope's own message wins when the platform sends one; the STATUS
     // is what makes the failure terminal, so that is what is pinned.
@@ -243,7 +245,7 @@ describe("WP-F1 adapter methods", () => {
     fetchMock
       .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 500 }))
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     await adapter.getTrackingLinks(context({ requestObserver }));
     await adapter.close();
@@ -259,7 +261,7 @@ describe("WP-F1 adapter methods", () => {
       .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 500 }))
       .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 500 }))
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
 
     await expect(adapter.getTrackingLinks(context({
@@ -278,7 +280,7 @@ describe("WP-F1 adapter methods", () => {
       success: true,
       response: [{ id: "link-1", totalGross: 1000, totalNet: 0 }],
     }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getTrackingLinks(context());
     await adapter.close();
     expect(new URL(String(fetchMock.mock.calls[0]![0])).pathname).toBe("/trackinglinks");
@@ -294,7 +296,7 @@ describe("WP-F1 adapter methods", () => {
     for (let index = 0; index < 5; index += 1) {
       fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getBroadcastStatsPage(context(), { before: null, limit: null, deleted: false });
     await adapter.getBroadcastStatsPage(context(), {
       before: "970000000000000001",
@@ -327,7 +329,7 @@ describe("WP-F2 adapter method: /notifications", () => {
         response: { notifications: [] },
       }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     // The head.
     await adapter.getNotificationsPage(context(), {});
     // A page older than a specific notification. THE CURSOR IS A NOTIFICATION
@@ -398,7 +400,7 @@ describe("WP-F2 adapter method: /notifications", () => {
       someFutureKey: { nested: true },
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getNotificationsPage(context(), { before: "0" });
     await adapter.close();
     expect(result.raw).toEqual(body);
@@ -411,7 +413,7 @@ describe("WP-F2 adapter method: /notifications", () => {
         status: 403,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter.getNotificationsPage(context({ requestObserver }), {})
       .then(() => null, (error: unknown) => error as { status?: number });
@@ -431,7 +433,7 @@ describe("WP-F2 adapter method: /notifications", () => {
         status: 400,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const failure = await adapter.getNotificationsPage(context(), {})
       .then(() => null, (error: unknown) => error as { status?: number });
     await adapter.close();
@@ -447,7 +449,7 @@ describe("WP-F3 adapter methods", () => {
     for (let index = 0; index < 9; index += 1) {
       fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
 
     await adapter.getVaultAlbums(context());
     await adapter.getUserVaultAlbums(context(), { accountId: "account-1" });
@@ -549,7 +551,7 @@ describe("WP-F3 adapter methods", () => {
   it("sends the by-TYPE vault form without the album-only keys", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: {} }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     // The app's second variant: `?type=<vaultType>&before&after`. Kept because
     // the app has it; the catalog walk does not use it.
     await adapter.getVaultMediaPage(context(), { type: 1000 });
@@ -564,7 +566,7 @@ describe("WP-F3 adapter methods", () => {
   it("batches ids for the bundle route the same way", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getAccountMediaBundlesByIds(context(), { ids: "b1,b2" });
     await adapter.close();
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
@@ -585,7 +587,7 @@ describe("WP-F3 adapter methods", () => {
       someFutureKey: { nested: true },
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getVaultAlbums(context());
     await adapter.close();
     expect(result.raw).toEqual(body);
@@ -598,7 +600,7 @@ describe("WP-F3 adapter methods", () => {
         status: 401,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter.getSubscriptionTiers(context({ requestObserver }))
       .then(() => null, (error: unknown) => error as { status?: number });
@@ -617,7 +619,7 @@ describe("WP-F3 adapter methods", () => {
         status: 400,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const failure = await adapter.getVaultMediaPage(context(), { albumId: "album-1" })
       .then(() => null, (error: unknown) => error as { status?: number });
     await adapter.close();
@@ -633,7 +635,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
       success: true,
       response: { posts: [], accounts: [], tips: [], tipGoals: [], stories: [], polls: [] },
     }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getPostRepliesPage(context(), { postId: "942662601546936320" });
     await adapter.close();
 
@@ -659,7 +661,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
   it("sends `before=<last reply id>` when the caller has a reason to page", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: { posts: [] } }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getPostRepliesPage(context(), {
       postId: "942662601546936320",
       before: "939669652286492672",
@@ -673,7 +675,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
   it("percent-encodes the post id into the PATH rather than a query", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: { posts: [] } }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getPostRepliesPage(context(), { postId: "a/b" });
     await adapter.close();
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
@@ -687,7 +689,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
     // (all 197 are OPTIONS preflights), so this is the honest handling of a
     // case nobody has ever observed, not an observed contract.
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
     await adapter.close();
     expect(result.raw).toEqual({ __empty: true, httpStatus: 204 });
@@ -697,7 +699,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
   it("treats an ok response with an EMPTY BODY the same way", async () => {
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
     await adapter.close();
     expect(result.raw).toEqual({ __empty: true, httpStatus: 200 });
@@ -709,7 +711,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
     // else an envelope-less body IS a failure, and a global softening would let
     // a truncated response read as "no data" on every lane at once.
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const failure = await adapter.getSubscriptionTiers(context())
       .then(() => null, (error: unknown) => error as Error);
     await adapter.close();
@@ -741,7 +743,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
       polls: [],
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getPostRepliesPage(context(), { postId: "p-1" });
     await adapter.close();
     expect(result.raw).toEqual(body);
@@ -754,7 +756,7 @@ describe("WP-F5 adapter method: /post/{postId}/replies", () => {
         status: 401,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter.getPostRepliesPage(context({ requestObserver }), { postId: "p-1" })
       .then(() => null, (error: unknown) => error as { status?: number });
@@ -793,7 +795,7 @@ describe("WP-F6 adapter method: GET /post?ids=", () => {
         accounts: [{ id: "737077689877278720" }],
       },
     }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const batch = await adapter.getPostsByIds(context(), [
       "935652730221907968",
       "935652730221907969",
@@ -827,7 +829,7 @@ describe("WP-F6 adapter method: GET /post?ids=", () => {
       success: true,
       response: { timelineItems: [] },
     }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const drifted = await adapter.getPostsByIds(context(), ["935652730221907968"]);
     await adapter.close();
     // JOURNAL BEFORE ASSERT: the body comes back so the lane can store it, and
@@ -838,7 +840,7 @@ describe("WP-F6 adapter method: GET /post?ids=", () => {
 
   it("refuses a batch shape the server has never been seen to accept", async () => {
     const { FanslyAdapter, POST_BATCH_SIZE } = harness;
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await expect(adapter.getPostsByIds(context(), [])).rejects.toThrow(/at least one id/);
     await expect(adapter.getPostsByIds(
       context(),
@@ -857,7 +859,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
     fetchMock.mockResolvedValueOnce(
       toJsonResponse({ success: true, response: { total: 0, data: [] } }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getPayoutMethods(context());
     await adapter.getPayoutRequestsPage(context(), {
       before: "",
@@ -902,7 +904,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
     fetchMock.mockResolvedValueOnce(
       toJsonResponse({ success: true, response: { total: 0, data: [] } }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getPayoutRequestsPage(context(), { limit: 10, offset: 0 });
     await adapter.close();
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
@@ -928,7 +930,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
       version: 0,
     }];
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response: body }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getPayoutMethods(context());
     await adapter.close();
     expect(result.raw).toEqual(body);
@@ -941,7 +943,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
         status: 403,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter.getPayoutMethods(context({ requestObserver }))
       .then(() => null, (error: unknown) => error as { status?: number });
@@ -961,7 +963,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
         status: 401,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter
       .getPayoutRequestsPage(context({ requestObserver }), { limit: 10, offset: 0 })
@@ -983,7 +985,7 @@ describe("WP-F7 adapter methods: the two payout routes", () => {
     // `{total, data: []}`, and letting a truncated response read as "no data"
     // would make an empty walk indistinguishable from a broken one.
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const failure = await adapter.getPayoutMethods(context())
       .then(() => null, (error: unknown) => error as Error);
     await adapter.close();
@@ -1000,7 +1002,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
         response: { dataset: { period: 86_400_000, datapoints: [] }, aggregationData: {} },
       }));
     }
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const now = new Date("2026-08-22T12:00:00.000Z");
 
     // FRESH — trailing 31 d, daily: an item that young is covered from its
@@ -1118,7 +1120,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
       aggregationData: { accountMedia: [], accountMediaBundles: [], tags: [] },
     };
     fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const result = await adapter.getMediaOfferStats(context(), {
       mediaOfferId: "000900000000004001",
       beforeDate: new Date(1_787_155_800_000),
@@ -1147,7 +1149,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
         status: 403,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter
       .getMediaOfferStats(context({ requestObserver }), {
@@ -1174,7 +1176,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
         status: 401,
       }),
     );
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const { events, requestObserver } = captureEvents();
     const failure = await adapter
       .getMediaOfferStats(context({ requestObserver }), {
@@ -1212,7 +1214,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
       // A fresh Response per call: were it retried, every attempt would answer.
       fetchMock.mockImplementation(async () =>
         toJsonResponse(errorEnvelope(details), { status: 500 }));
-      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
       const { events, requestObserver } = captureEvents();
       const failure = await adapter.getMediaOfferStats(context({ requestObserver }), STATS_WINDOW)
         .then(() => null, (error: unknown) => error as {
@@ -1256,7 +1258,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
       fetchMock
         .mockResolvedValueOnce(response())
         .mockResolvedValueOnce(toJsonResponse({ success: true, response: { dataset: {} } }));
-      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+      const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
       const result = await adapter.getMediaOfferStats(context(), STATS_WINDOW);
       await adapter.close();
 
@@ -1270,7 +1272,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     fetchMock
       .mockResolvedValueOnce(toJsonResponse(errorEnvelope("error getting graph"), { status: 500 }))
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: { dataset: {} } }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     await adapter.getAccountStats(context(), {
       beforeDate: STATS_WINDOW.beforeDate,
       afterDate: STATS_WINDOW.afterDate,
@@ -1290,7 +1292,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
         { success: false, error: { code: 1, message: "bad request", details: "missing id" } },
         { status: 400 },
       ));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     // One attempt left today: the route's own retries cannot run.
     const lastAttempt = context({ remainingAttempts: () => 1 });
     const accountStats = await adapter.getAccountStats(lastAttempt, {
@@ -1326,7 +1328,7 @@ describe("WP-F4 adapter method: /it/moie/statsnew", () => {
     // must not turn into a "body already used" failure that hides the point.
     fetchMock.mockImplementation(async () =>
       new Response(body, { status: 403, headers: { "content-type": "application/json" } }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
 
     // No static import of the fansly package here: the harness installs the
     // undici fetch spy BEFORE it loads the adapters, and an import at module

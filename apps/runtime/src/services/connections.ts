@@ -21,6 +21,7 @@ import { handleSuccessfulPageVerificationRecovery } from "./notification-inciden
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -272,6 +273,8 @@ export async function updatePageCredentials(
     proxy,
     egressKey: proxyEgressKey,
     rateLimitWaiter,
+    // The page's own guard, whatever proxy the check rides (plan §2.4).
+    sendGuard: fanslyPageSendGuard(app, stored.page.id, "account_me_api"),
   });
   assertVerifiedAccountIdentity(
     stored.page.label,

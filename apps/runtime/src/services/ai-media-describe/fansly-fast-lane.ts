@@ -48,6 +48,7 @@ import {
 } from "../page-context.ts";
 import { applyAiMediaAttachmentsEvent } from "../projections/ai-media-candidates.ts";
 import { createSyncRateLimitWaiter } from "../sync/rate-limiter.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import { dmRetentionDate, persistRawPayload } from "../sync/shared.ts";
 import {
   aiMediaNotesPolicyForPage,
@@ -108,7 +109,9 @@ const HEALTH_INTERVAL_MS = 60_000;
 export const FAST_LANE_INCIDENT_AFTER_MS = 10 * 60 * 1000;
 const SOCKET_FRESH_MS = 30_000;
 const DRAIN_LIMIT = 5;
-const HOLD_SCOPES = ["global", "dm_messages"] as const;
+/** The legacy endpoint pause the lane holds; the page-wide spacing is the
+ *  send guard's (plan §2.5). */
+const HOLD_SCOPES = ["dm_messages"] as const;
 
 export interface FanslyFastLaneFrame {
   pageId: number;
@@ -415,6 +418,7 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         requestObserver: observer,
         remainingAttempts: () => Math.max(0, 1 - admitted),
         rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: context.egressKey, holdMs: FAST_LANE_EGRESS_HOLD_MS }),
+        sendGuard: fanslyPageSendGuard(app, pageId, "ai_fast_lane"),
         requestTimeoutMs: FAST_LANE_REQUEST_TIMEOUT_MS,
       }, { groupId: row.groupRef, limit: 25, before: null });
     } catch (error) {

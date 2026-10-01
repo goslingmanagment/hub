@@ -42,7 +42,7 @@ describe("Fansly audience journal before contract rejection", () => {
     baseUrl = `https://fansly-${randomUUID()}.audit.invalid`;
     transport = new MockAgent();
     transport.disableNetConnect();
-    adapter = new FanslyAdapter({ baseUrl, globalDelayMs: 0 });
+    adapter = new FanslyAdapter({ baseUrl });
     // This suite replaces dispatcher transport only. Proxy selection/refusal is
     // covered by the adapter proxy suites; no real network is permitted here.
     vi.spyOn(adapter as unknown as { getDispatcher(): MockTransport }, "getDispatcher")

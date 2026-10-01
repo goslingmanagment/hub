@@ -146,6 +146,7 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
   proxy: FanslyRequestContext["proxy"];
   egressKey: FanslyRequestContext["egressKey"];
   rateLimitWaiter: FanslyRequestContext["rateLimitWaiter"];
+  sendGuard: FanslyRequestContext["sendGuard"];
 }) {
   const saveProgress = () => saveFanslyLaneProgress({
     db: input.db,
@@ -175,6 +176,7 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
     ...(input.rateLimitWaiter === undefined
       ? {}
       : { rateLimitWaiter: input.rateLimitWaiter }),
+    sendGuard: input.sendGuard,
   });
   const requestContext = requestContextFor(attemptBudget);
   /** Requests that leave `attempts` of the day's allowance to a later one:

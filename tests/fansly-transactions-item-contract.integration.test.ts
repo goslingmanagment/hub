@@ -86,7 +86,7 @@ describe("Fansly transactions lane item contract", () => {
         return JSON.stringify({ success: true, response: [] });
       })
       .persist();
-    adapter = new FanslyAdapter({ baseUrl, globalDelayMs: 0 });
+    adapter = new FanslyAdapter({ baseUrl });
     // Only the physical transport is mocked: the real adapter parser, the
     // transactions handler, the journal and the ledger run against Postgres.
     vi.spyOn(adapter as unknown as { getDispatcher(): MockTransport }, "getDispatcher")

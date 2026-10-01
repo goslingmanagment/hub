@@ -1541,6 +1541,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_sync_states", "page_id"],
     // R04 page provider hold (0219): cascades on pages, which erasure keeps.
     ["page_sync_provider_holds", "page_id"],
+    // Plan §2.5 send guard (0225): the page's guard row and its attempt
+    // journal; both cascade on pages, which erasure keeps.
+    ["fansly_send_log", "page_id"],
+    ["fansly_page_send_guards", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],

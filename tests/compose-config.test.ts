@@ -199,6 +199,20 @@ describe("compose config", () => {
     expect(scheduler).toContain("stale scheduler health file");
   });
 
+  // Plan §2.5: the Fansly send guard confirms a holder of an earlier run of a
+  // container (same hostname, another pid namespace) as gone only because the
+  // hostname is that one container's own id. A service with its own hostname
+  // or one shared with the host or another container breaks that proof — and a
+  // service in another's network namespace would see that container's hostname
+  // while it runs on, in a pid namespace of its own.
+  it("docker-compose.production.yml lets every container keep its id as its hostname", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    for (const service of ["api", "scheduler", "worker"]) {
+      expect(getServiceBlock(text, service)).not.toBeNull();
+    }
+    expect(text).not.toMatch(/^\s+(hostname|network_mode|uts|pid):/m);
+  });
+
   it("deploy-production.sh reads monitoring token without executing env files", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const envReader = getShellFunction(text, "read_remote_env_value");

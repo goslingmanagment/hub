@@ -6,14 +6,19 @@ import type { HttpRequestEvent } from "@agency_hub_core/shared";
 
 type MockDispatcher = {
   close: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  /** The send guard composes its check onto the dispatcher; `fetch` is mocked
+   *  here, so the view is the dispatcher itself. */
+  compose: () => MockDispatcher;
   label: string;
 };
 
 function createDispatcher(label: string): MockDispatcher {
-  return {
+  const dispatcher: MockDispatcher = {
     label,
     close: vi.fn(async () => undefined),
+    compose: () => dispatcher,
   };
+  return dispatcher;
 }
 
 export function toJsonResponse(body: unknown, init?: ResponseInit) {

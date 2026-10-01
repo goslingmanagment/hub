@@ -11,6 +11,7 @@ import type { ExecutorRequestContext } from "./executor-types.ts";
 import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 class TargetAdmissionDeferred extends Error {}
 
@@ -98,6 +99,7 @@ export async function runFanEarningsTargetStep(app: AppContext, input: ExecutorR
     session: input.pageContext.session, proxy: input.pageContext.proxy, egressKey: input.pageContext.egressKey,
     requestObserver: observer, remainingAttempts: () => admitted ? 0 : 1,
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const window = { after: new Date(0), before: new Date() };
   try {
