@@ -20,7 +20,6 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
-import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
@@ -252,10 +251,6 @@ export async function updatePageCredentials(
   const proxyEgressKey = preservesStoredProxyRoute
     ? storedEgressKey
     : buildProxyEgressKey(proxy);
-  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
-    egressKey: proxyEgressKey,
-  });
-
   const storedCredentials = body.session === undefined
     ? decryptStoredCredentials(app, stored)
     : null;
@@ -272,7 +267,6 @@ export async function updatePageCredentials(
     session,
     proxy,
     egressKey: proxyEgressKey,
-    rateLimitWaiter,
     // The page's own guard, whatever proxy the check rides (plan §2.4).
     sendGuard: fanslyPageSendGuard(app, stored.page.id, "account_me_api"),
   });

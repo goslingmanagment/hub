@@ -21,6 +21,7 @@ import {
   checkSyncConcurrencyInvariant,
   createLogger,
   loadConfig,
+  listIgnoredFanslyEndpointPauseEnv,
   resolveFanslyDefaultDelayEnvSource,
   type SkippedOverride,
 } from "@agency_hub_core/shared";
@@ -340,6 +341,17 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     logger.warn(
       { envVar: deprecatedFanslyDelayAlias },
       "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
+    );
+  }
+
+  // Plan §2.3: the endpoint pauses are gone; their env vars are parsed but
+  // ignored until the keys are removed (step 4). Said once per long-lived
+  // process: a CLI run's stdout stays its own output.
+  const ignoredEndpointPauseEnv = listIgnoredFanslyEndpointPauseEnv(process.env);
+  if (options.processRole !== undefined && options.processRole !== "cli" && ignoredEndpointPauseEnv.length > 0) {
+    logger.warn(
+      { envVars: ignoredEndpointPauseEnv },
+      "Fansly endpoint pause env vars are ignored: every Fansly request is paced only by its page's send guard (FANSLY_DEFAULT_DELAY_MS × (1 + 0–20 %)); remove them from the env",
     );
   }
 

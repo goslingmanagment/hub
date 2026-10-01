@@ -4,7 +4,13 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS, loadConfig } from "@agency_hub_core/shared";
+import {
+  FANSLY_PAUSE_MAX_MS,
+  FANSLY_PAUSE_MIN_MS,
+  IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS,
+  listIgnoredFanslyEndpointPauseEnv,
+  loadConfig,
+} from "@agency_hub_core/shared";
 
 const baseEnv = {
   DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
@@ -100,26 +106,35 @@ describe("config", () => {
       .toBe("127.0.0.1, 10.0.0.0/8");
   });
 
-  it("accepts explicit Fansly DM delay overrides", () => {
+  it("still parses the retired Fansly endpoint pause env vars the production env sets, without the old floor", () => {
+    // Plan §2.3 / §14: the pauses no longer pace anything, but an env that
+    // sets them (production: 7500 / 5000 / 5000) must keep booting until the
+    // keys are removed. The values are carried as given; nothing reads them.
     const config = loadConfig({
       ...baseEnv,
-      FANSLY_DM_CONVERSATIONS_DELAY_MS: "6200",
-      FANSLY_DM_MESSAGES_DELAY_MS: "8300",
+      FOLLOWER_PAGE_DELAY_MS: "5000",
+      FANSLY_DM_CONVERSATIONS_DELAY_MS: "2000",
+      FANSLY_DM_MESSAGES_DELAY_MS: "7500",
     });
 
-    expect(config.fanslyDmConversationsDelayMs).toBe(6200);
-    expect(config.fanslyDmMessagesDelayMs).toBe(8300);
+    expect(config.followerPageDelayMs).toBe(5000);
+    expect(config.fanslyDmConversationsDelayMs).toBe(2000);
+    expect(config.fanslyDmMessagesDelayMs).toBe(7500);
   });
 
-  it("enforces a safe Fansly DM delay floor", () => {
-    const config = loadConfig({
-      ...baseEnv,
-      FANSLY_DM_CONVERSATIONS_DELAY_MS: "2000",
-      FANSLY_DM_MESSAGES_DELAY_MS: "3000",
-    });
-
-    expect(config.fanslyDmConversationsDelayMs).toBe(5000);
-    expect(config.fanslyDmMessagesDelayMs).toBe(5000);
+  it("names the retired Fansly endpoint pause env vars an environment sets", () => {
+    expect(IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS).toEqual([
+      "FOLLOWER_PAGE_DELAY_MS",
+      "FANSLY_DM_CONVERSATIONS_DELAY_MS",
+      "FANSLY_DM_MESSAGES_DELAY_MS",
+    ]);
+    expect(listIgnoredFanslyEndpointPauseEnv({})).toEqual([]);
+    expect(listIgnoredFanslyEndpointPauseEnv({
+      FANSLY_DM_MESSAGES_DELAY_MS: "7500",
+      FOLLOWER_PAGE_DELAY_MS: "5000",
+      FANSLY_DM_CONVERSATIONS_DELAY_MS: "  ",
+      FANSLY_DEFAULT_DELAY_MS: "2500",
+    })).toEqual(["FOLLOWER_PAGE_DELAY_MS", "FANSLY_DM_MESSAGES_DELAY_MS"]);
   });
 
   it("accepts Fansly DM deep backfill pacing overrides", () => {

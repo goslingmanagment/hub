@@ -19,7 +19,6 @@ import type { ExecutorRequestContext } from "./executor-types.ts";
 import { fetchAndJournalFanslyDmMessagePage, normalizeFanslyDmMessagePage } from "./fansly-dm-messages.ts";
 import { resolveCapturePayloadRow } from "../payload-reader.ts";
 import { dmRetentionDate, persistRawPayload } from "./shared.ts";
-import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 class HintDeferred extends Error {}
@@ -206,7 +205,6 @@ async function readFanslyWsHintSubject(step: HintStep, selected: HintSelection) 
   const requestContext = {
     session: context.session, proxy: context.proxy, egressKey: context.egressKey,
     requestObserver: observer, remainingAttempts: () => Math.max(0, 1 - admitted),
-    rateLimitWaiter: createPageRateLimitWaiter(app, context),
     sendGuard: fanslyPageSendGuard(app, context.page.id, "ws_hint"),
   };
   const now = () => new Date();

@@ -11,7 +11,6 @@ import {
 } from "./fan-earnings-targets.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import { isPageAllowlisted } from "./fansly-stream-gate.ts";
-import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
@@ -55,7 +54,6 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
   const context = {
     session: input.pageContext.session, proxy: input.pageContext.proxy, egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const config = await loadEffectiveConfig(app.db, app.config);
