@@ -6,7 +6,14 @@ import { bindingGeneration, bindingReceipt } from "./helpers/fansly-binding-fixt
 
 const spies = vi.hoisted(() => ({
   snapshot: vi.fn(), generation: vi.fn(), destroy: vi.fn(), end: vi.fn(), socket: vi.fn(),
-  inspect: vi.fn(), short: vi.fn(), long: vi.fn(),
+  inspect: vi.fn(), short: vi.fn(), long: vi.fn(), guard: vi.fn(), acquire: vi.fn(), complete: vi.fn(),
+}));
+// Plan §2.5: the W0 scripts send through the page's send guard on a writable
+// connection of their own (scripts/fansly-ws/send-guard.ts, tested on a real
+// database in tests/fansly-send-guard-b2.integration.test.ts).
+vi.mock("../scripts/fansly-ws/send-guard.ts", () => ({
+  PROBE_HANDSHAKE_WINDOW_MS: 20_000,
+  withFanslyScriptSendGuard: spies.guard,
 }));
 vi.mock("pg", () => ({ Pool: class { on() {} end = spies.end; } }));
 vi.mock("@agency_hub_core/db", () => ({ createDb: () => ({}) }));
@@ -44,7 +51,14 @@ beforeEach(async () => {
   spies.long.mockImplementation(async (input) => { input.connect(); return true; });
   spies.inspect.mockResolvedValue({ identityMatched: true, observedAccountId: "123", restRequests: 1,
     httpStatus: 200, reason: "matched" });
+  spies.complete.mockResolvedValue(undefined);
+  spies.acquire.mockResolvedValue(lease);
+  spies.guard.mockImplementation(async (_config: unknown, _input: unknown, work: (guard: unknown) => Promise<unknown>) =>
+    work(sendGuard));
 });
+const lease = { token: "lease-1", pageId: 7, sent: true, sendRefused: false, bind: (dispatcher: unknown) => dispatcher,
+  complete: (...args: unknown[]) => spies.complete(...args) };
+const sendGuard = { acquire: (...args: unknown[]) => spies.acquire(...args) };
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 function run(kind: "short" | "long") {
@@ -66,7 +80,32 @@ describe("W0 preflight and receiver boundary", () => {
     expect(spies.socket).not.toHaveBeenCalled();
     expect(spies.short).not.toHaveBeenCalled();
     expect(spies.long).not.toHaveBeenCalled();
+    // Refused before the page's guard was taken.
+    expect(spies.acquire).not.toHaveBeenCalled();
     expect(spies.end).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["short", "long"] as const)("%s opens its one handshake on a capture of the page's guard", async (kind) => {
+    await run(kind);
+    expect(spies.guard).toHaveBeenCalledOnce();
+    expect(spies.guard.mock.calls[0]![1]).toMatchObject({ pageId: 7, source: "ws_probe" });
+    expect(spies.acquire).toHaveBeenCalledOnce();
+    expect(spies.acquire.mock.calls[0]![0]).toMatchObject({ operation: "ws_probe", requestTimeoutMs: 20_000 });
+    expect(spies.socket).toHaveBeenCalledOnce();
+    expect(spies.socket.mock.calls[0]![1]).toBe(lease);
+    // Completed once the observation is over (the handshake completes it
+    // first in production; this is the idempotent backstop).
+    expect(spies.complete).toHaveBeenCalledOnce();
+    expect(spies.acquire.mock.invocationCallOrder[0]).toBeLessThan(spies.socket.mock.invocationCallOrder[0]!);
+  });
+
+  it.each(["short", "long"] as const)("%s sends nothing when the page's guard refuses", async (kind) => {
+    spies.acquire.mockRejectedValue(new Error("Fansly page 7 is closed to new requests"));
+    await expect(run(kind)).rejects.toThrow("closed to new requests");
+    expect(spies.socket).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
+    expect(spies.end).toHaveBeenCalledOnce();
+    expect(spies.destroy).toHaveBeenCalledOnce();
   });
 
   it.each(["short", "long"] as const)("%s connects only after the current generation read succeeds", async (kind) => {
@@ -120,7 +159,11 @@ describe("W0 preflight and receiver boundary", () => {
     expect(spies.inspect).toHaveBeenCalledWith(expect.objectContaining({
       expectedAccountId: "123", session: { authorization: "SYNTHETIC_SECRET" },
       egress: { dispatcher: { destroy: spies.destroy } },
+      // Plan §2.5: under the page's send guard, on its own writable connection.
+      sendGuard,
     }));
+    expect(spies.guard).toHaveBeenCalledOnce();
+    expect(spies.guard.mock.calls[0]![1]).toMatchObject({ pageId: 7, source: "binding_preflight" });
     expect(result).toMatchObject({ identityMatched: true, restRequests: 1, credentialRouteGeneration: bindingGeneration });
     expect(JSON.stringify(result)).not.toContain("SYNTHETIC_SECRET");
     expect(spies.socket).not.toHaveBeenCalled();

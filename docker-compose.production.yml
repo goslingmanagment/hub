@@ -29,6 +29,11 @@ services:
       start_period: 10s
 
   api:
+    # Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the
+    # one in flight finish (its timeout is at most 30 s) and write its
+    # completion to the page's send guard. Cut short, the page would stay
+    # closed until the deploy's confirmation of the stopped containers.
+    stop_grace_period: 45s
     build: .
     image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
     logging: *production-logging

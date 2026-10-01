@@ -213,6 +213,38 @@ describe("compose config", () => {
     expect(text).not.toMatch(/^\s+(hostname|network_mode|uts|pid):/m);
   });
 
+  // Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the
+  // one in flight (≤ 30 s) finish and write its completion; Docker's default
+  // 10 s would cut it and leave its page closed.
+  it("docker-compose.production.yml gives the api time to complete an in-flight Fansly request", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    expect(getServiceBlock(text, "api")).toMatch(/^ {4}stop_grace_period: 45s$/m);
+    expect(getServiceBlock(text, "worker")).toMatch(/^ {4}stop_grace_period: 60s$/m);
+  });
+
+  it("deploy-production.sh confirms the stopped containers' send-guard holders once the stack is healthy, never failing it", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const hook = getShellFunction(text, "confirm_remote_fansly_send_guard_terminations") ?? "";
+    expect(hook).toContain("set -euo pipefail");
+    // The instant is taken before the listing, and bounds what is released.
+    expect(hook.indexOf("date -u")).toBeLessThan(hook.indexOf("docker ps -q"));
+    expect(hook).toContain("xargs -r docker inspect -f '{{.Config.Hostname}}'");
+    expect(hook).toContain('test -n \\"\\$running_hosts\\"');
+    expect(hook).toContain("exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated");
+    expect(hook).toContain("--include-unexpired --captured-before");
+    expect(hook).not.toContain("fail ");
+    expect(hook).not.toContain("|| true");
+
+    const recreate = text.indexOf("up -d --remove-orphans --force-recreate --no-build ${RECREATE_SERVICES}");
+    const labels = text.indexOf("\nverify_post_deploy_image_labels\n");
+    const call = text.indexOf("\nconfirm_remote_fansly_send_guard_terminations \\\n  || log \"WARNING:");
+    const healthDone = text.indexOf("finish_phase service-health");
+    expect(recreate).toBeGreaterThan(0);
+    expect(labels).toBeGreaterThan(recreate);
+    expect(call).toBeGreaterThan(labels);
+    expect(healthDone).toBeGreaterThan(call);
+  });
+
   it("deploy-production.sh reads monitoring token without executing env files", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const envReader = getShellFunction(text, "read_remote_env_value");

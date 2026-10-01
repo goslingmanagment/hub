@@ -1,6 +1,7 @@
 import { fetch } from "undici";
-import { buildFanslyRequestHeaders } from "@agency_hub_core/fansly";
+import { buildFanslyRequestHeaders, type FanslySendGuard, type FanslySendLease } from "@agency_hub_core/fansly";
 import type { FanslySessionBundle } from "@agency_hub_core/shared";
+import { fanslySendFailureOutcome } from "./fansly-send-lease.ts";
 import type { AppEgressContext } from "./resolver.ts";
 
 const ENDPOINT = "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true";
@@ -26,10 +27,13 @@ function accountId(body: unknown): string | null {
 }
 
 /** One physical REST attempt through the exact dispatcher from the snapshot.
- * No retry, redirect, pacing, observer, provider-body export or database writer. */
+ * No retry, redirect, observer, provider-body export or database writer of its
+ * own. Plan §2.4/§2.5: the request is paced and journaled by `sendGuard`, the
+ * send guard of the snapshot's page (source `binding_preflight`): one capture,
+ * one physical request, completed after the body was read or cancelled. */
 export async function inspectFanslyBinding(input: {
   session: FanslySessionBundle; expectedAccountId: string | null;
-  egress: AppEgressContext; signal?: AbortSignal;
+  egress: AppEgressContext; sendGuard: FanslySendGuard; signal?: AbortSignal;
 }): Promise<BindingInspection> {
   const result: BindingInspection = {
     identityMatched: false, observedAccountId: null, httpStatus: null,
@@ -40,16 +44,28 @@ export async function inspectFanslyBinding(input: {
   if (!dispatcher || !egressKey || egressKey === "direct" || /^(vendor|service|legacy-page):/.test(egressKey)) {
     return { ...result, reason: "invalid_page_egress" };
   }
-  const deadline = AbortSignal.timeout(REQUEST_DEADLINE_MS);
-  const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
+  let lease: FanslySendLease | null = null;
+  let dispatched = false;
+  let httpStatus: number | null = null;
+  let failure: unknown = null;
   try {
     const headers = buildFanslyRequestHeaders(input.session, "/account/me");
+    input.signal?.throwIfAborted();
+    // The guard's wait for the page is not the request's: the deadline runs
+    // from the capture, like the send window.
+    lease = await input.sendGuard.acquire({
+      operation: "account_me", requestTimeoutMs: REQUEST_DEADLINE_MS, signal: input.signal ?? null,
+    });
+    const deadline = AbortSignal.timeout(REQUEST_DEADLINE_MS);
+    const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
     signal.throwIfAborted();
     result.restRequests = 1;
+    dispatched = true;
     const response = await fetch(ENDPOINT, {
-      method: "GET", dispatcher, redirect: "manual", signal,
+      method: "GET", dispatcher: lease.bind(dispatcher), redirect: "manual", signal,
       headers,
     });
+    httpStatus = response.status;
     result.httpStatus = response.status;
     if (response.status !== 200) {
       await response.body?.cancel();
@@ -83,8 +99,15 @@ export async function inspectFanslyBinding(input: {
     if (result.observedAccountId === null) return { ...result, reason: "invalid_response" };
     result.identityMatched = result.observedAccountId === input.expectedAccountId;
     return { ...result, reason: result.identityMatched ? "matched" : "account_mismatch" };
-  } catch {
+  } catch (error) {
+    failure = error;
     // A provider/proxy/parser error may contain credentials or response bytes.
     return { ...result, reason: "request_failed" };
+  } finally {
+    // After the body was read or cancelled (or the request failed): the page
+    // opens again only from here.
+    await lease?.complete(httpStatus !== null
+      ? { outcome: "response", httpStatus }
+      : { outcome: dispatched ? fanslySendFailureOutcome(failure) : "aborted_before_send" });
   }
 }

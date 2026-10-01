@@ -157,6 +157,16 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
       where id<>$1::uuid order by started_at`, [f.id])).rows)
       .toEqual([{ stop_reason: "pong_timeout" }, { stop_reason: "disabled" }]);
+    // Plan §2.5: each connection attempt was one capture of the page's send
+    // guard (source ws_connect), completed by the end of its attempt, and the
+    // page is free again.
+    expect((await testDb.pool.query(`select source, operation, completed_at is not null as done
+      from fansly_send_log where page_id = $1 order by id`, [f.page.id])).rows).toEqual([
+      { source: "ws_connect", operation: "ws_connect", done: true },
+      { source: "ws_connect", operation: "ws_connect", done: true },
+    ]);
+    expect((await testDb.pool.query("select holder_token from fansly_page_send_guards where page_id = $1",
+      [f.page.id])).rows).toEqual([{ holder_token: null }]);
   });
 
   it("the actual worker retains capture through replay failure and observes live off within 60 seconds", async () => {

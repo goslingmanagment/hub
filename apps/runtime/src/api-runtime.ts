@@ -6,6 +6,10 @@ import {
   type FanslySendGuardSweeper,
 } from "./services/fansly-send-guard/index.ts";
 import {
+  startFanslySendGuardMonitor,
+  type FanslySendGuardMonitor,
+} from "./services/fansly-send-guard/monitor.ts";
+import {
   publishCaptureCasSettingsAtStartup,
   startRuntimeHeartbeat,
   type RuntimeHeartbeat,
@@ -23,6 +27,7 @@ export async function runApiRuntime() {
   let heartbeat: RuntimeHeartbeat | null = null;
   let watchdog: OpsWatchdog | null = null;
   let sendGuardSweeper: FanslySendGuardSweeper | null = null;
+  let sendGuardMonitor: FanslySendGuardMonitor | null = null;
 
   try {
     await server.listen({
@@ -45,8 +50,13 @@ export async function runApiRuntime() {
     sendGuardSweeper = startFanslySendGuardSweeper(appContext, {
       registry: getFanslySendGuards(appContext),
     });
+    // Plan §2.5/§10: the alerts of the send guard — a closed page, and any two
+    // sends of a page closer than the pause setting (the journal, every
+    // source, behind a durable cursor). One api runs it.
+    sendGuardMonitor = startFanslySendGuardMonitor(appContext);
   } catch (error) {
     clearInterval(keepAlive);
+    await sendGuardMonitor?.stop().catch(() => undefined);
     await sendGuardSweeper?.stop().catch(() => undefined);
     await watchdog?.stop();
     await heartbeat?.stop().catch(() => undefined);
@@ -58,15 +68,18 @@ export async function runApiRuntime() {
   const shutdown = async () => {
     clearInterval(keepAlive);
     // No new Fansly capture from here on; a request already in flight
-    // finishes and appContext.close() waits for its completion.
+    // finishes (bounded by its own timeout, at most 30 s) and
+    // appContext.close() waits for its completion to be written.
     appContext.fanslySendGuards?.stop();
     // The watchdog lets a fallback Telegram send settle its outbox row before
-    // the pool ends. Both stops are bounded at 5 s and run side by side, inside
-    // Docker's 10 s stop grace.
+    // the pool ends. These stops are bounded at 5 s each and run side by side;
+    // with the in-flight request after them this fits the api's 45 s stop
+    // grace (docker-compose.production.yml).
     await Promise.all([
       watchdog?.stop(),
       heartbeat?.stop().catch(() => undefined),
       sendGuardSweeper?.stop().catch(() => undefined),
+      sendGuardMonitor?.stop().catch(() => undefined),
     ]);
     await server.close();
     await appContext.close();
