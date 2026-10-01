@@ -341,6 +341,8 @@ describe("CI job admission", () => {
     ["push", null, false, "", "", true],
     ["workflow_dispatch", null, false, "", "", true],
   ] as const)("static on %s/%s draft=%s full=%s DBproof=%s runs: %s", (event, action, draft, provenBy, integrationProvenBy, runs) => {
+    // The fingerprint job supplies the outputs this condition reads.
+    expect(job("static").needs).toEqual(["fingerprint"]);
     for (const pool of ["", "pc"]) {
       const context = eventContext({ event, action, draft, provenBy, integrationProvenBy, pool });
       expect(condition(job("static").if, context), pool).toBe(runs);
@@ -424,6 +426,7 @@ describe("CI job admission", () => {
 
   it("pins the integration admission text and the proof recording steps", () => {
     const unproven = "needs.fingerprint.outputs.proven_by == ''";
+    expect(job("integration").needs).toEqual(["fingerprint"]);
     // A metadata-only event has no fingerprint at all, so it must not reach
     // the proof steps: an empty hash would publish `quality-gate-` as a proof.
     const freshProof = `env.METADATA_ONLY != 'true' && ${unproven}`;
@@ -559,6 +562,10 @@ describe("CI runner pool", () => {
     const context = { ...eventContext({ runnerEnvironment }), "env.METADATA_ONLY": metadataOnly, "needs.integration.result": "success" };
     const ran = job(name).steps.filter(item => stepRuns(item, context, PASSING)).map(item => item.name);
     expect(ran.slice(0, expected.length)).toEqual(expected);
+    // The metadata-only mirror needs a Node with global fetch.
+    const setup = step(name, "Setup Node.js");
+    expect(setup.uses).toBe("actions/setup-node@v6");
+    expect(setup.with).toEqual({ "node-version": 22 });
   });
 
   it("the Quality Gate's aggregating path runs no Node and sets none up", () => {
@@ -1260,11 +1267,9 @@ describe("CI integration shards", () => {
     expect(legs).toEqual(Array.from({ length: total }, (_, index) => index + 1));
     if (!Array.isArray(legs)) throw new Error("integration matrix must be a list");
     const commands = legs.map(shard => field(shell(step("integration", dbStepName)), eventContext({ ...outputs, shard: Number(shard) })));
-    commands.forEach((command, index) => {
-      expect(command).toContain("pnpm test:sync-critical:db");
-      expect(command).toContain(`--shard=${index + 1}/${total}`);
-    });
-    expect(shell(step("integration", "Sync-critical API tests"))).toContain("pnpm test:sync-critical:api");
+    // Exact: an extra --exclude or name filter would silently drop protected files.
+    expect(commands).toEqual(legs.map(shard => `pnpm test:sync-critical:db --shard=${String(shard)}/${total}`));
+    expect(shell(step("integration", "Sync-critical API tests"))).toBe("pnpm test:sync-critical:api");
     const names = legs.map(shard => field(job("integration").name ?? "", eventContext({ ...outputs, shard: Number(shard) })));
     expect(names).toEqual(legs.map(shard => `Integration ${String(shard)}/${total}`));
     expect(legs.filter(shard => condition(step("integration", "Sync-critical API tests").if, eventContext({ ...outputs, shard: Number(shard) })))).toEqual([1]);
@@ -1280,9 +1285,7 @@ describe("CI integration shards", () => {
     for (const shard of [1, 2, 3]) {
       const context = eventContext({ shards: "", shardTotal: "", shard });
       expect(field(job("integration").name ?? "", context)).toBe(`Integration ${shard}/${DEFAULT_SHARD_TOTAL}`);
-      const command = field(shell(step("integration", dbStepName)), context);
-      expect(command).toContain("pnpm test:sync-critical:db");
-      expect(command).toContain(`--shard=${shard}/${DEFAULT_SHARD_TOTAL}`);
+      expect(field(shell(step("integration", dbStepName)), context)).toBe(`pnpm test:sync-critical:db --shard=${shard}/${DEFAULT_SHARD_TOTAL}`);
     }
   });
 });

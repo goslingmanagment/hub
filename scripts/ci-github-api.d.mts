@@ -1,3 +1,4 @@
+export const API_TIMEOUT_MS: number;
 export function githubApi(
   endpoint: string,
   options?: {

@@ -5,7 +5,7 @@
 // the job. A failure names the status and the endpoint only — never the token
 // or the response body.
 const DEFAULT_API_URL = "https://api.github.com";
-const API_TIMEOUT_MS = 20_000;
+export const API_TIMEOUT_MS = 20_000;
 
 export async function githubApi(endpoint, { env = process.env, fetchImpl = globalThis.fetch, timeoutMs = API_TIMEOUT_MS } = {}) {
   const token = env.GH_TOKEN ?? "";
