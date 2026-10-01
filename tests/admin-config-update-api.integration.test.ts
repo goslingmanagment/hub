@@ -243,6 +243,107 @@ describe("admin config update api (Stage B1)", () => {
     expect((await getConfigOverrides(testDb.db)).get("healthSyncLightMaxAgeMinutes")?.value).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  // Fansly Sync Engine plan §2.1: the Fansly pause is live, and a value outside
+  // 2000..60000 ms is REJECTED with a message the console shows verbatim — never clamped.
+  it("rejects a Fansly pause below 2000 ms with the owner-rule message and writes nothing", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    for (const value of [1500, 1999]) {
+      const response = await server.inject({
+        method: "PATCH",
+        url: "/api/v1/admin/config",
+        headers: { cookie },
+        payload: { patches: [{ key: "fanslyDefaultDelayMs", value }], note: "too fast" },
+      });
+      expect(response.statusCode, String(value)).toBe(400);
+      expect((response.json() as { message: string }).message).toBe(
+        "Пауза между запросами Fansly не может быть меньше 2000 мс: правило владельца — "
+          + "не чаще одного запроса страницы раз в 2 с. Ниже — только правкой кода.",
+      );
+    }
+    const tooSlow = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: { patches: [{ key: "fanslyDefaultDelayMs", value: 60_001 }] },
+    });
+    expect(tooSlow.statusCode).toBe(400);
+    expect((tooSlow.json() as { message: string }).message)
+      .toBe("Пауза больше 60000 мс похожа на опечатку. Допустимо от 2000 до 60000 мс.");
+
+    // Nothing written: no override, no config audit row, no audit event.
+    expect((await getConfigOverrides(testDb.db)).has("fanslyDefaultDelayMs")).toBe(false);
+    expect(await listConfigAudit(testDb.db, { key: "fanslyDefaultDelayMs" })).toEqual([]);
+    const events = await testDb.pool.query(
+      "select count(*)::int as count from audit_events where event_type like 'admin.config%'",
+    );
+    expect(events.rows[0]?.count).toBe(0);
+    // The effective value is still the env value.
+    expect((await loadEffectiveConfig(appContext.db, appContext.config)).fanslyDefaultDelayMs).toBe(2500);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("sets the Fansly pause to 2000 ms live, audited with its cost warning, and DELETE reverts it", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const response = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/config",
+      headers: { cookie },
+      payload: { patches: [{ key: "fanslyDefaultDelayMs", value: 2000, expectedVersion: 0 }], note: "plan step 5" },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({ results: [{ key: "fanslyDefaultDelayMs", value: 2000, version: 1 }] });
+    expect((await getConfigOverrides(testDb.db)).get("fanslyDefaultDelayMs")).toEqual({ value: 2000, version: 1 });
+    expect((await loadEffectiveConfig(appContext.db, appContext.config)).fanslyDefaultDelayMs).toBe(2000);
+
+    const [audit] = await listConfigAudit(testDb.db, { key: "fanslyDefaultDelayMs" });
+    expect(audit).toMatchObject({ oldValue: null, newValue: 2000, oldVersion: null, newVersion: 1 });
+    expect(audit!.userId).not.toBeNull();
+    expect(audit!.note).toBe(
+      "plan step 5 [cost-warnings] fanslyDefaultDelayMs: "
+        + "Lowering reduces politeness against Fansly's unofficial API; raises ban/throttle risk.",
+    );
+    const update = await testDb.pool.query<{ source: string; actor_user_id: number | null; metadata: unknown }>(
+      "select source, actor_user_id::int as actor_user_id, metadata from audit_events where event_type = 'admin.config_update'",
+    );
+    expect(update.rows).toHaveLength(1);
+    expect(update.rows[0]).toMatchObject({
+      source: "api",
+      actor_user_id: audit!.userId,
+      metadata: { keys: [{ key: "fanslyDefaultDelayMs", version: 1 }], note: audit!.note },
+    });
+
+    // The view lists it as live, with the override pending until processes report it.
+    const view = (await server
+      .inject({ method: "GET", url: "/api/v1/admin/config", headers: { cookie } })
+      .then((r) => r.json())) as ConfigViewResponse;
+    const item = findItem(view, "fanslyDefaultDelayMs");
+    expect(item.live).toBe(true);
+    expect(item.desired).toBe(2000);
+    expect(item.source).toBe("override");
+
+    const cleared = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/config/fanslyDefaultDelayMs?expectedVersion=1&note=rollback",
+      headers: { cookie },
+    });
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect((await getConfigOverrides(testDb.db)).has("fanslyDefaultDelayMs")).toBe(false);
+    expect((await loadEffectiveConfig(appContext.db, appContext.config)).fanslyDefaultDelayMs).toBe(2500);
+    const [clearRow] = await listConfigAudit(testDb.db, { key: "fanslyDefaultDelayMs" });
+    expect(clearRow).toMatchObject({ oldValue: 2000, newValue: null, oldVersion: 1, newVersion: null, note: "rollback" });
+    const clear = await testDb.pool.query<{ source: string; metadata: unknown }>(
+      "select source, metadata from audit_events where event_type = 'admin.config_clear'",
+    );
+    expect(clear.rows).toEqual([{ source: "api", metadata: { key: "fanslyDefaultDelayMs", note: "rollback" } }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("surfaces a stale expectedVersion as 409", async (context) => {
     if (!testDb || !server) {
       context.skip();

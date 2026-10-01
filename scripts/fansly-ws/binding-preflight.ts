@@ -3,6 +3,11 @@ import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 import { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { inspectFanslyBinding, isNativeAccountId } from "../../apps/runtime/src/services/egress/fansly-binding-preflight.ts";
+import { withFanslyScriptSendGuard } from "./send-guard.ts";
+
+/** The send guard's wait plus the request, inside the CLI's 35 s process
+ *  deadline with room left to write the completion. */
+const GUARDED_REQUEST_BUDGET_MS = 20_000;
 
 export function parseBindingPreflightArgs(args: string[]) {
   if (args.length !== 2 || args[0] !== "--page" || args[1] !== "lilly-1") {
@@ -24,11 +29,17 @@ export async function runBindingPreflight(pageLabel: "lilly-1", signal: AbortSig
   let context: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
   try {
     context = await readProbeSnapshot(createDb(pool), config, pageLabel);
+    const snapshot = context;
     const startedAt = new Date().toISOString();
-    const inspection = await inspectFanslyBinding({
-      session: context.session, expectedAccountId: context.expectedAccountId,
-      egress: context.egress, signal: AbortSignal.any([signal, controller.signal]),
-    });
+    // Plan §2.5: the request waits for the page's send guard (source
+    // `binding_preflight`) on a writable connection of its own.
+    const inspection = await withFanslyScriptSendGuard(config, {
+      pageId: snapshot.pageId, source: "binding_preflight", applicationName: "hub-fansly-w0-binding-guard",
+    }, (sendGuard) => inspectFanslyBinding({
+      session: snapshot.session, expectedAccountId: snapshot.expectedAccountId,
+      egress: snapshot.egress, sendGuard,
+      signal: AbortSignal.any([signal, controller.signal, AbortSignal.timeout(GUARDED_REQUEST_BUDGET_MS)]),
+    }));
     return {
       schemaVersion: 1, evidenceKind: "w0_rest_identity_preflight", pageLabel, pageId: context.pageId,
       expectedAccountId: isNativeAccountId(context.expectedAccountId) ? context.expectedAccountId : null,

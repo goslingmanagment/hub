@@ -29,6 +29,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { resolveEgress } from "../egress/resolver.ts";
 import { downloadMediaForDescribe, type MediaDownloadResult } from "../egress/media-download.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import {
   AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY,
   AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
@@ -127,7 +128,13 @@ function nextUtcMidnight(now: Date) {
 async function defaultDownload(app: AppContext, input: { url: string; pageId: number }) {
   const egress = await resolveEgress(app, { kind: "page", pageId: input.pageId });
   try {
-    return await downloadMediaForDescribe({ url: input.url, dispatcher: egress.dispatcher });
+    // Plan §2.5: a Fansly CDN hop rides the page's send guard; the download
+    // uses it for Fansly hosts only.
+    return await downloadMediaForDescribe({
+      url: input.url,
+      dispatcher: egress.dispatcher,
+      fanslySendGuard: fanslyPageSendGuard(app, input.pageId, "media_download"),
+    });
   } finally {
     await egress.close().catch(() => undefined);
   }
@@ -424,6 +431,16 @@ async function processRow(
 
   const download = deps.download ?? ((args) => defaultDownload(app, args));
   const downloaded = await download({ url: resolution.url, pageId: row.pageId });
+  if (!downloaded.ok && downloaded.reason === "send_guard") {
+    // The page's send guard did not admit the CDN request (the page is closed,
+    // or this worker is stopping): nothing was sent and nothing is wrong with
+    // the file. Like a missing proxy, look again later; never a failure.
+    await finish("pending", {
+      errorCode: "download_send_guard",
+      nextAttemptAt: new Date(clock().getTime() + TRANSIENT_RETRY_MS),
+    });
+    return { status: "download_retry", sent: false };
+  }
   if (!downloaded.ok) {
     const transient = downloaded.reason === "timeout" || downloaded.reason === "transport"
       || (downloaded.reason === "http_status" && (downloaded.httpStatus ?? 0) >= 500);

@@ -1,11 +1,19 @@
 import type { Duplex } from "node:stream";
+import type { FanslySendLease } from "@agency_hub_core/fansly";
 import { WebSocket, type Dispatcher } from "undici";
 import type { AppEgressContext } from "./resolver.ts";
 import { createFanslyWsFrameBudget } from "./fansly-ws-frame-budget.ts";
+import { bindFanslyUpgradeLease } from "./fansly-send-lease.ts";
 
 /** Own the upgraded transport as well as the dispatcher. Undici's close()
- * handshake alone cannot enforce the B0 kill-switch on a stalled peer. */
-export function openFanslyReceiverSocket(egress: AppEgressContext) {
+ * handshake alone cannot enforce the B0 kill-switch on a stalled peer.
+ *
+ * Plan §2.4/§2.5: the HTTP Upgrade is a request of the page and rides `lease`,
+ * a capture of the page's send guard (source `ws_connect`) that the caller
+ * took for this one attempt. The lease admits exactly one handshake and
+ * completes when it settles (101, another status or an error); a reconnect is
+ * a new capture. */
+export function openFanslyReceiverSocket(egress: AppEgressContext, lease: FanslySendLease) {
   if (!egress.dispatcher || !egress.egressKey || egress.egressKey === "direct"
     || /^(vendor|service|legacy-page):/.test(egress.egressKey)) {
     throw new Error("fansly_receiver_page_egress_required");
@@ -13,7 +21,7 @@ export function openFanslyReceiverSocket(egress: AppEgressContext) {
   let upgraded: Duplex | undefined;
   let stopped = false;
   const acceptBytes = createFanslyWsFrameBudget();
-  const dispatcher = egress.dispatcher.compose((dispatch) => (options, handler) => dispatch({
+  const receiver = egress.dispatcher.compose((dispatch) => (options, handler) => dispatch({
     ...options,
     // Undici offers compression by default, whose decompressed fragments can
     // exceed the wire budget. B0 intentionally negotiates no extensions.
@@ -49,6 +57,8 @@ export function openFanslyReceiverSocket(egress: AppEgressContext) {
     onResponseEnd: (controller, trailers) => handler.onResponseEnd?.(controller, trailers),
     onResponseError: (controller, error) => handler.onResponseError?.(controller, error),
   }));
+  // The guard's send check is the last check before the headers are written.
+  const dispatcher = bindFanslyUpgradeLease(lease, receiver);
   const socket = new WebSocket("wss://wsv3.fansly.com/?v=3", {
     dispatcher, headers: { origin: "https://fansly.com" },
   });

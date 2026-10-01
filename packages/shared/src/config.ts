@@ -1,6 +1,7 @@
 import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
+import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "./fansly-pause.ts";
 import { assertProxyTargetAllowed } from "./proxy.ts";
 import { agentExportPolicyValues, type AgentExportPolicyValue } from "./types.ts";
 import {
@@ -103,6 +104,7 @@ const envSchema = z.object({
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
   FANSLY_FAN_EARNINGS_RECOVERY_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
@@ -468,6 +470,9 @@ export interface AppConfig {
   fanslyDmShadowPageAllowlist?: string;
   fanslyWsCaptureEnabled?: boolean;
   fanslyWsCapturePageAllowlist?: string;
+  /** Pages whose chatter routes and AI kernel context read the live overlay
+   * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
+  fanslyLiveOverlayReadPages?: string;
   fanslyFanEarningsRecoveryEnabled?: boolean;
   fanslyFanEarningsRecoveryPageAllowlist?: string;
   fanslyFanEarningsTargetsEnabled?: boolean;
@@ -814,6 +819,15 @@ export function loadConfig(
     parsed.FANSLY_GLOBAL_DELAY_MS ??
     parsed.FANSLY_ACCOUNT_LOOKUP_DELAY_MS ??
     2500;
+  if (fanslyDefaultDelayMs < FANSLY_PAUSE_MIN_MS || fanslyDefaultDelayMs > FANSLY_PAUSE_MAX_MS) {
+    // Fail the boot loudly: a silently raised value would hide a wrong env, and a
+    // lowered one would break the owner's pace rule for every Fansly page.
+    throw new Error(
+      `FANSLY_DEFAULT_DELAY_MS must be between ${FANSLY_PAUSE_MIN_MS} and ${FANSLY_PAUSE_MAX_MS} ms `
+        + `(got ${fanslyDefaultDelayMs} from ${resolveFanslyDefaultDelayEnvSource(env) ?? "the default"}); `
+        + "the owner rule is at most one request of a Fansly page every 2 s, and going lower is a code change",
+    );
+  }
   const telegramBotToken = parsed.TELEGRAM_BOT_TOKEN ?? null;
   const telegramChatId = parsed.TELEGRAM_CHAT_ID ?? null;
   const telegramEnabled = telegramBotToken !== null && telegramChatId !== null;
@@ -842,6 +856,7 @@ export function loadConfig(
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
     fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
     fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
+    fanslyLiveOverlayReadPages: parsed.FANSLY_LIVE_OVERLAY_READ_PAGES,
     fanslyFanEarningsRecoveryEnabled: parsed.FANSLY_FAN_EARNINGS_RECOVERY_ENABLED,
     fanslyFanEarningsRecoveryPageAllowlist: parsed.FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,

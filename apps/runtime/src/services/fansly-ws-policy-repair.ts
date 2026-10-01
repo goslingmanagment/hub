@@ -9,6 +9,7 @@ import { applyEffectiveOverrides, loadEffectiveConfig } from "./effective-config
 import { inspectFanslyBinding } from "./egress/fansly-binding-preflight.ts";
 import { readFanslyPageGeneration, readProbeSnapshot } from "./egress/fansly-probe-context.ts";
 import { assertFanslyPage } from "./fansly-page.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 const POLICY_KEY = "fanslyWsHintsPolicies";
 const GATE_KEYS = ["fanslyWsCaptureEnabled", "fanslyWsCapturePageAllowlist", "fanslyWsHintsEnabled",
@@ -22,6 +23,9 @@ const proposalSchema = z.object({
 }).strict();
 export type FanslyWsRepairProposal = z.infer<typeof proposalSchema>;
 type RepairApp = Pick<AppContext, "db" | "config">;
+/** The binding check sends a request of the page: it needs the process's send
+ *  guards (plan §2.5) and their logger. */
+type BindingApp = RepairApp & Pick<AppContext, "logger" | "fanslySendGuards">;
 
 /** Informational only: B1 is additive, so a mismatch must not fail deploy health. */
 export async function getFanslyWsHintDiagnostic(app: RepairApp, label: string, config = app.config) {
@@ -57,17 +61,19 @@ async function readPolicySnapshot(db: Database, config: AppContext["config"], la
 }
 
 /** The socket's verified_at is only an auth-shaped frame. Independently check
- * account/me through the exact snapshotted page dispatcher, then close it. */
-async function inspectBinding(app: RepairApp, label: string) {
+ * account/me through the exact snapshotted page dispatcher, then close it. The
+ * request waits for the page's send guard (source `binding_preflight`). */
+async function inspectBinding(app: BindingApp, label: string) {
   const context = await readProbeSnapshot(app.db, app.config, label);
   try {
     return { pageId: context.pageId, generation: context.generation,
       ...await inspectFanslyBinding({ session: context.session,
-        expectedAccountId: context.expectedAccountId, egress: context.egress }) };
+        expectedAccountId: context.expectedAccountId, egress: context.egress,
+        sendGuard: fanslyPageSendGuard(app, context.pageId, "binding_preflight") }) };
   } finally { await context.egress.dispatcher?.destroy(); }
 }
 
-export async function previewFanslyWsPolicyRepair(app: RepairApp, label: string) {
+export async function previewFanslyWsPolicyRepair(app: BindingApp, label: string) {
   const snapshot = await app.db.transaction(tx => readPolicySnapshot(tx as unknown as Database, app.config, label),
     { isolationLevel: "repeatable read", accessMode: "read only" });
   const connection = await app.db.execute(sql`select id, verified_at, last_guard_at, closed_at, stop_reason
@@ -99,7 +105,7 @@ export async function previewFanslyWsPolicyRepair(app: RepairApp, label: string)
     effect: "Only future hint routing; retained disabled receipts and the rolling request budget remain unchanged." };
 }
 
-export async function applyFanslyWsPolicyRepair(app: RepairApp, reviewed: unknown) {
+export async function applyFanslyWsPolicyRepair(app: BindingApp, reviewed: unknown) {
   const proposal = proposalSchema.parse(reviewed);
   const binding = await inspectBinding(app, proposal.pageLabel);
   if (!binding.identityMatched || binding.observedAccountId !== proposal.nativeAccountId

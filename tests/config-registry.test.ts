@@ -4,6 +4,8 @@ import {
   buildRunningSnapshot,
   CONFIG_DESCRIPTORS,
   ENV_CONFIG_KEYS,
+  FANSLY_PAUSE_MAX_MS,
+  FANSLY_PAUSE_MIN_MS,
   getDescriptor,
   loadConfig,
 } from "@agency_hub_core/shared";
@@ -82,6 +84,8 @@ describe("config registry", () => {
     "fanslyDmBoundedPolicies",
     "fanslyWsCaptureEnabled",
     "fanslyWsCapturePageAllowlist",
+    // Fansly Sync Engine step 1: the live overlay readers, page by page.
+    "fanslyLiveOverlayReadPages",
     "fanslyFanEarningsRecoveryEnabled",
     "fanslyFanEarningsRecoveryPageAllowlist",
     "fanslyFanEarningsTargetsEnabled",
@@ -95,6 +99,9 @@ describe("config registry", () => {
     "fanslyFanEarningsShadowPageAllowlist",
     "fanslyDmShadowPageAllowlist",
     "fanslyDmHeadCatchupPageAllowlist",
+    // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
+    // rejected (never clamped) outside 2000..60000 ms.
+    "fanslyDefaultDelayMs",
     "ofapiCreditAlertThreshold",
     "ofapiWebhookSilenceThresholdMinutes",
     "ofapiBurnAlertCreditsPerHour",
@@ -253,6 +260,29 @@ describe("config registry", () => {
     expect(none.length).toBe(CONFIG_DESCRIPTORS.length - LIVE_KEYS.length - BOOT_KEYS.length);
     for (const key of [...LIVE_KEYS, ...BOOT_KEYS]) {
       expect(none, `${key} must not be 'none'`).not.toContain(key);
+    }
+  });
+
+  it("keeps the Fansly pause live, bounded by the shared constants and in reject mode", () => {
+    const descriptor = getDescriptor("fanslyDefaultDelayMs")!;
+    expect(descriptor.runtimeApply).toBe("live");
+    expect(descriptor.editability).toBe("editable");
+    expect(descriptor.min).toBe(FANSLY_PAUSE_MIN_MS);
+    expect(descriptor.max).toBe(FANSLY_PAUSE_MAX_MS);
+    expect(FANSLY_PAUSE_MIN_MS).toBe(2000);
+    expect(FANSLY_PAUSE_MAX_MS).toBe(60_000);
+    // A floor that is the owner's rule is never silently raised: out-of-range is refused.
+    expect(descriptor.outOfRange).toBe("reject");
+    expect(descriptor.belowMinError).toContain("2000 мс");
+    expect(descriptor.aboveMaxError).toContain("60000 мс");
+    expect(descriptor.costWarning).toBeTruthy();
+    // Every other key keeps the historical clamp behaviour unless it opts in explicitly.
+    expect(CONFIG_DESCRIPTORS.filter((d) => d.outOfRange === "reject").map((d) => d.key))
+      .toEqual(["fanslyDefaultDelayMs"]);
+    for (const d of CONFIG_DESCRIPTORS) {
+      if (d.belowMinError || d.aboveMaxError) {
+        expect(d.outOfRange, `${d.key} carries rejection text without reject mode`).toBe("reject");
+      }
     }
   });
 

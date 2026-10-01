@@ -4,7 +4,7 @@ import { z } from "zod";
 import { capturePayloadRefFromColumns, fanslyDmReaderHeadKey, findPageByLabel,
   isDmArchiveScopeFenced, queryFanslyDmReaderHeads, tryAcquireDmArchiveWriterFenceLock,
   type Database } from "@agency_hub_core/db";
-import { extractFanslyWsHints, FANSLY_WS_CAPTURE_KIND, wsJson, wsObject } from "@agency_hub_core/shared";
+import { extractFanslyWsHints, FANSLY_WS_CAPTURE_KIND, fanslyWsCreatedAtMs, wsJson, wsObject } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { assertFanslyPage } from "./fansly-page.ts";
@@ -15,16 +15,6 @@ const requestSchema = z.object({ pageLabel: z.string().min(1), targets: z.array(
   groupRef: nativeId, messageRef: nativeId,
 }).strict()).min(1).max(20) }).strict();
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-
-/** A WS frame's message createdAt is epoch seconds, usually fractional. Same
- * unit rule as REST normalizeFanslyTimestamp (>= 1e12 is already ms), kept to
- * a whole-ms instant; anything else is absent. */
-export function fanslyWsCreatedAtMs(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  const ms = value >= 1_000_000_000_000 ? value : value * 1000;
-  const wholeMs = Math.round(ms);
-  return wholeMs <= 8.64e15 ? wholeMs : null;
-}
 
 /** A bounded dry run, never a projector. Absence, detached material and
  * ambiguous custody are explicit blockers, not permission to synthesize a thread. */
