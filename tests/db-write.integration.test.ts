@@ -344,7 +344,9 @@ describe("db write safety", () => {
     expect(verification).toMatchObject({
       egressKey: "http://proxy.example:80",
     });
-    expect(typeof verification.rateLimitWaiter).toBe("function");
+    // Paced by nothing but its send guard: the endpoint pauses are gone (§2.3).
+    expect(verification).toHaveProperty("sendGuard");
+    expect(verification).not.toHaveProperty("rateLimitWaiter");
   });
 
   it("leaves no persisted rows behind when Fansly auth verification fails during onboarding", async (context) => {
@@ -670,13 +672,13 @@ describe("db write safety", () => {
     });
 
     let verifiedEgressKey: string | null = null;
-    let verifiedRateLimitWaiter: unknown = null;
+    let verifiedContextKeys: string[] = [];
     const app = createTestAppContext(testDb, {
       syncSharedRateLimitEnabled: true,
       adapter: {
-        async verifySession(contextInput: { egressKey?: string; rateLimitWaiter?: unknown }) {
+        async verifySession(contextInput: { egressKey?: string }) {
           verifiedEgressKey = contextInput.egressKey ?? null;
-          verifiedRateLimitWaiter = contextInput.rateLimitWaiter ?? null;
+          verifiedContextKeys = Object.keys(contextInput);
           return {
             parsed: {
               account: {
@@ -704,7 +706,9 @@ describe("db write safety", () => {
     `);
 
     expect(verifiedEgressKey).toBe("shared-proxy-pool");
-    expect(typeof verifiedRateLimitWaiter).toBe("function");
+    // The page's own send guard paces the check; no endpoint pause (§2.3).
+    expect(verifiedContextKeys).toContain("sendGuard");
+    expect(verifiedContextKeys).not.toContain("rateLimitWaiter");
     expect(proxyRows.rows[0]).toEqual({
       url: "socks5://proxy.example:1080",
       rate_limit_scope_key: "shared-proxy-pool",
@@ -1079,18 +1083,17 @@ describe("db write safety", () => {
 
     let verifiedProxy: Record<string, unknown> | null = null;
     let verifiedEgressKey: unknown = null;
-    let verifiedRateLimitWaiter: unknown = null;
+    let verifiedContextKeys: string[] = [];
     const app = createTestAppContext(testDb, {
       syncSharedRateLimitEnabled: true,
       adapter: {
         async verifySession(contextInput: {
           proxy?: Record<string, unknown> | null;
           egressKey?: string | null;
-          rateLimitWaiter?: unknown;
         }) {
           verifiedProxy = contextInput.proxy ?? null;
           verifiedEgressKey = contextInput.egressKey ?? null;
-          verifiedRateLimitWaiter = contextInput.rateLimitWaiter ?? null;
+          verifiedContextKeys = Object.keys(contextInput);
           return {
             parsed: {
               account: {
@@ -1129,7 +1132,9 @@ describe("db write safety", () => {
       password: "proxy-pass",
     });
     expect(verifiedEgressKey).toBe("shared-proxy-pool");
-    expect(typeof verifiedRateLimitWaiter).toBe("function");
+    // The page's own send guard paces the check; no endpoint pause (§2.3).
+    expect(verifiedContextKeys).toContain("sendGuard");
+    expect(verifiedContextKeys).not.toContain("rateLimitWaiter");
     expect(proxyRows.rows).toEqual([
       {
         url: "socks5://proxy.example",

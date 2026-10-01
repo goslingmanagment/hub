@@ -20,7 +20,8 @@ import {
 // inline with no catalog reference.
 // These cases pin that every role that captures publishes the settings before
 // it can consume work: the worker before startWorkerServices registers a
-// handler, the api before it accepts a request.
+// handler, the api before it accepts a request, the sync process before its
+// first beat (its page actors, which journal every response, start after it).
 
 const h = vi.hoisted(() => {
   const order: string[] = [];
@@ -34,6 +35,7 @@ const h = vi.hoisted(() => {
     buildApiServer: vi.fn(),
     startOpsWatchdog: vi.fn(() => ({ stop: vi.fn(async () => undefined) })),
     createAppContext: vi.fn(),
+    createSyncContext: vi.fn(),
     PgBoss: vi.fn(function PgBoss(this: { on: () => void }) {
       this.on = vi.fn();
     }),
@@ -46,6 +48,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => ({
 }));
 vi.mock("pg-boss", () => ({ PgBoss: h.PgBoss }));
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({ createAppContext: h.createAppContext }));
+vi.mock("../apps/runtime/src/sync/context.ts", () => ({ createSyncContext: h.createSyncContext }));
 vi.mock("../apps/runtime/src/worker-services.ts", () => ({ startWorkerServices: h.startWorkerServices }));
 vi.mock("../apps/runtime/src/api/server.ts", () => ({ buildApiServer: h.buildApiServer }));
 vi.mock("../apps/runtime/src/services/ops-watchdog.ts", () => ({ startOpsWatchdog: h.startOpsWatchdog }));
@@ -111,6 +114,9 @@ beforeEach(() => {
     return { shutdown: vi.fn(async () => undefined) };
   });
   h.startRuntimeHeartbeat.mockImplementation((_app: unknown, role: string) => {
+    // The sync process consumes no work before its heartbeat starts: what it
+    // has published by then is what its first capture would act on.
+    if (role === "sync") snapshot("sync:heartbeat");
     h.order.push(`${role}:heartbeat`);
     return { instanceId: "test", stop: vi.fn(async () => undefined) };
   });
@@ -177,6 +183,20 @@ describe("capture CAS settings at role startup", () => {
       expect.objectContaining({ err: failure, role: "worker" }),
       expect.stringContaining("capture CAS settings not loaded at startup"),
     );
+  });
+
+  it("sync: publishes the settings at startup, before its first beat", async () => {
+    const app = makeApp();
+    h.createSyncContext.mockResolvedValue(app);
+    const { runSyncRuntime } = await import("../apps/runtime/src/sync/main.ts");
+
+    await runSyncRuntime();
+
+    expect(h.snapshots).toEqual([
+      { at: "sync:heartbeat", dualWrite: "*", pointerOnly: "*", readMode: "serve" },
+    ]);
+    expect(h.startRuntimeHeartbeat).toHaveBeenCalledWith(app, "sync", expect.objectContaining({ intervalMs: 30_000 }));
+    expect(app.logger.warn).not.toHaveBeenCalled();
   });
 
   it("api: publishes the settings before the server accepts a request", async () => {

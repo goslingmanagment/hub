@@ -36,3 +36,26 @@ it("allows application rollback after the additive guard tables", () => {
   expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
     .toContain(`"${migration}"`);
 });
+
+// 0227: the send guard's checks (plan §2.4 «проверка, а не вера», §10).
+const checks = "0227_fansly_send_guard_checks.sql";
+const checksSql = readFileSync(`packages/db/migrations/${checks}`, "utf8")
+  .split("\n")
+  .filter((line) => !line.trimStart().startsWith("--"))
+  .join("\n");
+
+it("0227 only adds: a nullable journal column, the cursor table, its seed row and a grant", () => {
+  const statements = checksSql.split(/;\s*(?:\n|$)/).map((statement) => statement.replace(/\s+/g, " ").trim()).filter(Boolean);
+  expect(statements.filter((statement) => /^(drop|delete|update|truncate)\b/i.test(statement))).toEqual([]);
+  const alters = statements.filter((statement) => /^alter\b/i.test(statement));
+  // Catalog-only: nullable, no default, no rewrite of the journal.
+  expect(alters).toEqual(["alter table fansly_send_log add column if not exists lease_until timestamptz"]);
+  expect(checksSql).toContain("create table if not exists fansly_send_pace_cursor");
+  expect(checksSql).toMatch(/insert into fansly_send_pace_cursor \(id\) values \(1\) on conflict \(id\) do nothing/);
+});
+
+it("allows application rollback after the additive checks migration", () => {
+  const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
+  expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
+    .toContain(`"${checks}"`);
+});

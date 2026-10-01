@@ -8,6 +8,7 @@ import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTy
 import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
+  deleteExpiredSyncEngineTelemetry,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -395,9 +396,18 @@ export async function startWorkerServices(
     // audit fact. Reuse the already-scheduled nightly retention job so crashed
     // Desktop reservations cannot accumulate forever.
     await timed("pendingDeviceTokens", () => deleteExpiredPendingDeviceTokens(app.db, now));
+    const observabilityCutoff = new Date(
+      now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000,
+    );
     const observability = await timed("syncObservability", () => deleteExpiredSyncObservability(
       app.db,
-      new Date(now.getTime() - app.config.syncObservabilityRetentionDays * 24 * 60 * 60 * 1000),
+      observabilityCutoff,
+    ));
+    // Fansly Sync Engine telemetry (0228): closed work and terminal attempts,
+    // same window, its own (smaller) wall-clock budget.
+    const engineTelemetry = await timed("syncEngineTelemetry", () => deleteExpiredSyncEngineTelemetry(
+      app.db,
+      observabilityCutoff,
     ));
     // Voice-notes retention rides the nightly cleanup: purge audio bytes older
     // than 7 days and release the reservations of long-stale indeterminate rows.
@@ -414,9 +424,15 @@ export async function startWorkerServices(
         budgetExhausted: observability.budgetExhausted,
         steps: observability.steps,
       },
+      syncEngineTelemetry: {
+        deletedWork: engineTelemetry.deletedWork,
+        deletedAttempts: engineTelemetry.deletedAttempts,
+        budgetExhausted: engineTelemetry.budgetExhausted,
+        steps: engineTelemetry.steps,
+      },
       voiceRetention,
     };
-    if (observability.budgetExhausted) {
+    if (observability.budgetExhausted || engineTelemetry.budgetExhausted) {
       // Not a failure — the sweep is resumable and tomorrow finds less to do.
       // It IS the one outcome worth a warning, because a budget exhausted every
       // night means the backlog is growing faster than the window removes it.

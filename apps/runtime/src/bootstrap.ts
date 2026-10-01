@@ -1,5 +1,5 @@
 import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
-import { assertRuntimeSchemaReady, createDb, createPool, getConfigOverrides, type Database } from "@agency_hub_core/db";
+import { assertRuntimeSchemaReady, createDb, createPool, type Database } from "@agency_hub_core/db";
 import { FanslyAdapter } from "@agency_hub_core/fansly";
 import type {
   FanslyAccount,
@@ -17,14 +17,15 @@ import type {
   FanslySubscriber,
 } from "@agency_hub_core/fansly";
 import {
-  applyBootOverrides,
   checkSyncConcurrencyInvariant,
   createLogger,
   loadConfig,
+  listIgnoredFanslyEndpointPauseEnv,
   resolveFanslyDefaultDelayEnvSource,
   type SkippedOverride,
 } from "@agency_hub_core/shared";
 
+import { loadBootConfig } from "./services/boot-config.ts";
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import { createEgressPacer } from "./services/egress/pacer.ts";
@@ -343,6 +344,17 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     );
   }
 
+  // Plan §2.3: the endpoint pauses are gone; their env vars are parsed but
+  // ignored until the keys are removed (step 4). Said once per long-lived
+  // process: a CLI run's stdout stays its own output.
+  const ignoredEndpointPauseEnv = listIgnoredFanslyEndpointPauseEnv(process.env);
+  if (options.processRole !== undefined && options.processRole !== "cli" && ignoredEndpointPauseEnv.length > 0) {
+    logger.warn(
+      { envVars: ignoredEndpointPauseEnv },
+      "Fansly endpoint pause env vars are ignored: every Fansly request is paced only by its page's send guard (FANSLY_DEFAULT_DELAY_MS × (1 + 0–20 %)); remove them from the env",
+    );
+  }
+
   if (!hasServiceEgressProxy(rawConfig) && rawConfig.telegramProxyPageLabel) {
     logger.warn({
       component: "service_egress",
@@ -367,32 +379,8 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     const db = createDb(pool);
 
     // Apply the staged ('boot') DB overrides onto the env config exactly once, before
-    // anything reads config (adapters/OFAPI client/sink). With no boot overrides in
-    // the DB this is a no-op and config === rawConfig.
-    //
-    // W5.5 (A31): a read failure used to fall back to env config — i.e. boot
-    // with EVERY staged cutover flag silently off. A crash-looping container
-    // is visible; a "healthy" api running pre-cutover code paths is not.
-    // Retry the read (schema is already proven ready above, so failures here
-    // are transient), then rethrow: fail closed, never fail open.
-    const overrides = await (async () => {
-      const attempts = 3;
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          return await getConfigOverrides(db);
-        } catch (err) {
-          if (attempt >= attempts) {
-            logger.error({ err, attempts }, "boot override read failed after retries; refusing fail-open boot");
-            throw err;
-          }
-          logger.warn({ err, attempt }, "boot override read failed; retrying");
-          await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
-        }
-      }
-    })();
-    const applied = applyBootOverrides(rawConfig, overrides);
-    const config = applied.config;
-    const bootSkipped: SkippedOverride[] = applied.skipped;
+    // anything reads config (adapters/OFAPI client/sink). Fails closed (A31).
+    const { config, bootSkipped } = await loadBootConfig(db, rawConfig, logger);
 
     const adapter = new FanslyAdapter({ baseUrl: config.fanslyBaseUrl });
     const fanslySendGuards = createFanslySendGuards({

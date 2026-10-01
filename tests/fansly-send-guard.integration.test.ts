@@ -397,8 +397,15 @@ describe("the guard statements", () => {
       runningHosts: ["worker-now"], ownHost: hostname(), confirmer: "test", includeUnexpired: false, dryRun: false,
     });
     expect(expiredOnly.map((row) => [row.pageId, row.released])).toEqual([[gone.id, true]]);
-    const all = await confirmFanslySendGuardHostsTerminated(testDb.db, {
+    // A live lease is released only for a capture older than the listing of
+    // the running hostnames, whose instant must be given.
+    await expect(confirmFanslySendGuardHostsTerminated(testDb.db, {
       runningHosts: ["worker-now"], ownHost: hostname(), confirmer: "test", includeUnexpired: true, dryRun: false,
+    })).rejects.toThrow("--captured-before");
+    const listedAt = (await testDb.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
+    const all = await confirmFanslySendGuardHostsTerminated(testDb.db, {
+      runningHosts: ["worker-now"], ownHost: hostname(), confirmer: "test", includeUnexpired: true,
+      capturedBefore: listedAt, dryRun: false,
     });
     expect(all.map((row) => [row.pageId, row.released])).toEqual([[fresh.id, true]]);
     const guards = new Map((await listFanslySendGuards(testDb.db)).map((row) => [row.pageId, row]));

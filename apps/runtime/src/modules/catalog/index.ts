@@ -53,7 +53,6 @@ import {
   listModelSummaries,
   listPageSummaries,
 } from "../../services/reporting.ts";
-import { createSyncRateLimitWaiter } from "../../services/sync/rate-limiter.ts";
 import { fanslyUnpacedSendGuard } from "../../services/fansly-send-guard/index.ts";
 import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
@@ -421,12 +420,10 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         const proxy = normalizeProxyConfig(body.proxy);
         await assertAllowedProxyTarget(proxy);
         const egressKey = buildProxyEgressKey(proxy);
-        const rateLimitWaiter = createSyncRateLimitWaiter(appContext, { egressKey });
         const result = await appContext.adapter.verifySession({
           session: body.session,
           proxy,
           egressKey,
-          rateLimitWaiter,
           // No page: journaled, paced against no page (owner decision №4).
           sendGuard: fanslyUnpacedSendGuard(appContext, "credentials_verify"),
         });

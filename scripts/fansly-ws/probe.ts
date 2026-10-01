@@ -9,6 +9,7 @@ import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services
 import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyProbe, MAX_PROBE_DURATION_MS } from "./probe-observer.ts";
 import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
+import { PROBE_HANDSHAKE_WINDOW_MS, withFanslyScriptSendGuard } from "./send-guard.ts";
 
 export { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 
@@ -71,16 +72,30 @@ export async function runStoredFanslyProbe(input: {
         () => readProbeGeneration(db, input.pageLabel));
     let connectionAttempts = 0;
     const transportDiagnostics = createProbeTransportDiagnostics();
-    const observation = await observeFanslyProbe({
-      connect: () => {
-        connectionAttempts++;
-        return openFanslyProbeSocket(context.egress, transportDiagnostics);
-      },
-      token: before.token,
-      key,
-      durationMs: input.durationMs,
-      signal: input.controller.signal,
-      transportDiagnostics,
+    // Plan §2.5: the one handshake waits for the page's send guard (source
+    // `ws_probe`); its capture completes when the handshake settles, at the
+    // latest when the observation ends.
+    const observation = await withFanslyScriptSendGuard(config, {
+      pageId: context.pageId, source: "ws_probe", applicationName: "hub-fansly-w0-probe-guard",
+    }, async (sendGuard) => {
+      const lease = await sendGuard.acquire({
+        operation: "ws_probe", requestTimeoutMs: PROBE_HANDSHAKE_WINDOW_MS, signal: input.controller.signal,
+      });
+      try {
+        return await observeFanslyProbe({
+          connect: () => {
+            connectionAttempts++;
+            return openFanslyProbeSocket(context.egress, lease, transportDiagnostics);
+          },
+          token: context.token,
+          key,
+          durationMs: input.durationMs,
+          signal: input.controller.signal,
+          transportDiagnostics,
+        });
+      } finally {
+        await lease.complete({ outcome: lease.sent ? "transport_error" : "aborted_before_send" });
+      }
     });
     let generationUnchanged: boolean | null = null;
     if (!input.controller.signal.aborted) {

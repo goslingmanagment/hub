@@ -66,7 +66,6 @@ import {
   type DmConversationSweepState,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import {
   captureFanslyMessagingGroupsPayload,
   dmRetentionDate,
@@ -287,7 +286,6 @@ export async function fanslyDmConversationsChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");

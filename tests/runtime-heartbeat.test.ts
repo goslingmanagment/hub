@@ -109,6 +109,38 @@ describe("startRuntimeHeartbeat", () => {
     await hb.stop();
   });
 
+  // Design §9.1: the `sync` role beats every 30 s, so a 2-minute liveness
+  // alert and a 90 s health-file check both survive one slow or failed beat.
+  // Every other role keeps the 60 s default.
+  it("beats on the interval it is given (the sync role's 30 s) and every 60 s by default", async () => {
+    h.upsertInstanceHeartbeat.mockImplementation(async () => {
+      h.calls.push("upsert");
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { HEARTBEAT_INTERVAL_MS, startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const roles = () => h.upsertInstanceHeartbeat.mock.calls
+        .map((call) => (call as unknown[])[1] as { role: string })
+        .map((input) => input.role)
+        .sort();
+      const sync = startRuntimeHeartbeat(makeApp(), "sync", { intervalMs: 30_000 });
+      const worker = startRuntimeHeartbeat(makeApp(), "worker");
+
+      // Both publish immediately at start.
+      await vi.waitFor(() => expect(roles()).toEqual(["sync", "worker"]));
+      vi.advanceTimersByTime(30_000);
+      await vi.waitFor(() => expect(roles()).toEqual(["sync", "sync", "worker"]));
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS - 30_000);
+      await vi.waitFor(() => expect(roles()).toEqual(["sync", "sync", "sync", "worker", "worker"]));
+
+      await Promise.all([sync.stop(), worker.stop()]);
+    } finally {
+      vi.useRealTimers();
+      // Back to the parking implementation the other cases rely on.
+      h.upsertInstanceHeartbeat.mockReset();
+    }
+  });
+
   it("awaits an in-flight beat before removing the instance, so a late upsert can't resurrect the row", async () => {
     const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
     const hb = startRuntimeHeartbeat(makeApp(), "api");

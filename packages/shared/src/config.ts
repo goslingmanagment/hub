@@ -9,8 +9,6 @@ import {
   getServiceEgressProxyUrlError,
 } from "./proxy-string.ts";
 
-const MIN_FANSLY_DM_DELAY_MS = 5000;
-
 export const OFAPI_MIRROR_BUDGET_DEFAULTS = {
   globalDailyCreditBudget: 7_000,
   principalDailyCallCap: 4_000,
@@ -104,6 +102,7 @@ const envSchema = z.object({
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
   FANSLY_FAN_EARNINGS_RECOVERY_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
@@ -462,13 +461,21 @@ export interface AppConfig {
    *  failures, and attempts whose DB telemetry row was lost are printed. */
   syncHttpAttemptTraceStdout?: boolean;
   fanslyDefaultDelayMs: number;
+  /** @deprecated Ignored: the per-page send guard is the only pacing of a
+   *  Fansly request (plan §2.3). Parsed so the production env still boots;
+   *  removed with the legacy engine (plan §14, step 4). */
   followerPageDelayMs: number;
+  /** @deprecated Ignored, like {@link AppConfig.followerPageDelayMs}. */
   fanslyDmConversationsDelayMs: number;
+  /** @deprecated Ignored, like {@link AppConfig.followerPageDelayMs}. */
   fanslyDmMessagesDelayMs: number;
   fanslyDmHeadCatchupPageAllowlist?: string;
   fanslyDmShadowPageAllowlist?: string;
   fanslyWsCaptureEnabled?: boolean;
   fanslyWsCapturePageAllowlist?: string;
+  /** Pages whose chatter routes and AI kernel context read the live overlay
+   * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
+  fanslyLiveOverlayReadPages?: string;
   fanslyFanEarningsRecoveryEnabled?: boolean;
   fanslyFanEarningsRecoveryPageAllowlist?: string;
   fanslyFanEarningsTargetsEnabled?: boolean;
@@ -715,10 +722,6 @@ function hasConfiguredValue(value: string | undefined) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function enforceFanslyDmDelayFloor(delayMs: number) {
-  return Math.max(delayMs, MIN_FANSLY_DM_DELAY_MS);
-}
-
 function resolveServiceEgressProxyTuple(input: {
   SERVICE_EGRESS_PROXY_URL?: string | undefined;
   SERVICE_EGRESS_PROXY_USERNAME?: string | undefined;
@@ -772,6 +775,22 @@ export function resolveFanslyDefaultDelayEnvSource(env: NodeJS.ProcessEnv = proc
   }
 
   return null;
+}
+
+/** The legacy endpoint pauses (plan §2.3). Their env vars are still parsed —
+ *  the production env sets them — but nothing reads the values: every Fansly
+ *  request is paced only by its page's send guard (`fanslyDefaultDelayMs` ×
+ *  (1 + 0–20 %) from the previous completion). Removing a key and changing
+ *  traffic are separate steps (plan §14), so the keys stay until step 4. */
+export const IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS = [
+  "FOLLOWER_PAGE_DELAY_MS",
+  "FANSLY_DM_CONVERSATIONS_DELAY_MS",
+  "FANSLY_DM_MESSAGES_DELAY_MS",
+] as const;
+
+/** The ignored endpoint pause env vars this environment sets (boot warning). */
+export function listIgnoredFanslyEndpointPauseEnv(env: NodeJS.ProcessEnv = process.env) {
+  return IGNORED_FANSLY_ENDPOINT_PAUSE_ENV_KEYS.filter((key) => hasConfiguredValue(env[key]));
 }
 
 /** Concurrency > 1 is only safe when the shared rate limiter is on (the limiter is
@@ -846,12 +865,13 @@ export function loadConfig(
     syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
     followerPageDelayMs: parsed.FOLLOWER_PAGE_DELAY_MS,
-    fanslyDmConversationsDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS),
-    fanslyDmMessagesDelayMs: enforceFanslyDmDelayFloor(parsed.FANSLY_DM_MESSAGES_DELAY_MS),
+    fanslyDmConversationsDelayMs: parsed.FANSLY_DM_CONVERSATIONS_DELAY_MS,
+    fanslyDmMessagesDelayMs: parsed.FANSLY_DM_MESSAGES_DELAY_MS,
     fanslyDmHeadCatchupPageAllowlist: parsed.FANSLY_DM_HEAD_CATCHUP_PAGE_ALLOWLIST,
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
     fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
     fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
+    fanslyLiveOverlayReadPages: parsed.FANSLY_LIVE_OVERLAY_READ_PAGES,
     fanslyFanEarningsRecoveryEnabled: parsed.FANSLY_FAN_EARNINGS_RECOVERY_ENABLED,
     fanslyFanEarningsRecoveryPageAllowlist: parsed.FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,

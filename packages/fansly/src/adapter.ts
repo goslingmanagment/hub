@@ -4,7 +4,6 @@ import { fetch, type Dispatcher } from "undici";
 
 import {
   assertHttpRequestActive,
-  buildProxyEgressKey,
   buildProxyDispatcherCacheKey,
   classifyTransportError,
   createProxyRequestDispatcher,
@@ -18,8 +17,6 @@ import {
   sanitizeError,
   redactSensitiveText,
   resolveRetryDelayMs,
-  waitForHttpRequestDelay,
-  waitForHttpRequestPermit,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
@@ -215,8 +212,6 @@ function isFanslyAccountLists(value: unknown): value is FanslyAccountList[] {
 }
 
 export class FanslyAdapter {
-  private readonly requestTimestamps = new Map<string, number>();
-  private readonly rateLimitChains = new Map<string, Promise<void>>();
   private readonly proxyAgents = new Map<string, Dispatcher>();
   private readonly retiringDispatchers = new Set<Promise<void>>();
   private directDispatcher: Dispatcher = createRequestDispatcher();
@@ -240,7 +235,6 @@ export class FanslyAdapter {
     return this.request<FanslyAccountMeResponse>(context, "/account/me", {
       operation: "account_me",
       endpointTemplate: "/account/me",
-      category: "account",
       requestShape: {},
       summarizeResponse: (response) => ({
         accountId: response.account.id,
@@ -259,7 +253,6 @@ export class FanslyAdapter {
       {
         operation: "earnings_overview",
         endpointTemplate: "/account/wallets/earnings",
-        category: "transactions",
         requestShape: {},
         summarizeResponse: (parsed) => ({
           contractAccepted: isFanslyEarningsOverview(parsed),
@@ -283,7 +276,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/trackinglinks", {
       operation: "tracking_links",
       endpointTemplate: "/trackinglinks",
-      category: "account",
       requestShape: {},
       summarizeResponse: (parsed) => ({
         returnedItems: Array.isArray(parsed) ? parsed.length : null,
@@ -349,7 +341,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/it/amoie/stats", {
       operation: "account_stats",
       endpointTemplate: "/it/amoie/stats",
-      category: "account",
       query: {
         beforeDate: String(params.beforeDate.getTime()),
         afterDate: String(params.afterDate.getTime()),
@@ -384,7 +375,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/it/moie/statsnew", {
       operation: "media_offer_stats",
       endpointTemplate: "/it/moie/statsnew",
-      category: "media",
       query: {
         mediaOfferId: params.mediaOfferId,
         beforeDate: String(params.beforeDate.getTime()),
@@ -422,7 +412,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/account/wallets/earnings/stats", {
       operation: "earnings_stats_window",
       endpointTemplate: "/account/wallets/earnings/stats",
-      category: "transactions",
       query: {
         before: String(params.before.getTime()),
         after: String(params.after.getTime()),
@@ -461,7 +450,6 @@ export class FanslyAdapter {
       {
         operation: "earnings_monthly_stats",
         endpointTemplate: "/account/wallets/earnings/monthlystats",
-        category: "transactions",
         query: {
           before: params?.before ? String(params.before.getTime()) : undefined,
           after: params?.after ? String(params.after.getTime()) : undefined,
@@ -495,7 +483,6 @@ export class FanslyAdapter {
       {
         operation: "discovery_media_suggestions",
         endpointTemplate: "/contentdiscovery/media/suggestionsnew",
-        category: "media",
         query: {
           before: String(params.before ?? 0),
           after: "0",
@@ -543,7 +530,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/notifications", {
       operation: "notifications_page",
       endpointTemplate: "/notifications",
-      category: "account",
       query: {
         // "0" is the head, and it is what the UI itself sends first.
         before: params.before ?? "0",
@@ -576,7 +562,6 @@ export class FanslyAdapter {
         // Fansly uses the explicit empty value for the all-lists form.
         itemId: normalizedItemId ?? "",
       },
-      category: "account",
       requestShape: {
         itemIdPresent: normalizedItemId !== null,
       },
@@ -630,7 +615,6 @@ export class FanslyAdapter {
         after: after ?? undefined,
         sortMode: String(sortMode),
       },
-      category: "account",
       requestShape: {
         listIdPresent: true,
         limit,
@@ -666,7 +650,6 @@ export class FanslyAdapter {
       operation: "account_lookup",
       endpointTemplate: "/account",
       query: { ids: ids.join(",") },
-      category: "account",
       requestShape: {
         idsCount: ids.length,
       },
@@ -704,7 +687,6 @@ export class FanslyAdapter {
           after: "0",
           wallId: wallId ?? undefined,
         },
-        category: "posts",
         requestShape: {
           accountId,
           hasWallId: wallId !== null,
@@ -766,7 +748,6 @@ export class FanslyAdapter {
       operation: "post_lookup",
       endpointTemplate: "/post",
       query: { ids: ids.join(",") },
-      category: "posts",
       requestShape: {
         idsCount: ids.length,
       },
@@ -808,7 +789,6 @@ export class FanslyAdapter {
       query: {
         targetIds: targetIds.join(","),
       },
-      category: "posts",
       requestShape: {
         targetIdsCount: targetIds.length,
       },
@@ -856,7 +836,6 @@ export class FanslyAdapter {
           limit: params.limit != null ? String(params.limit) : undefined,
           offset: params.offset != null ? String(params.offset) : undefined,
         },
-        category: "transactions",
         requestShape: {
           after: params.after ? params.after.toISOString() : null,
           before: params.before ? params.before.toISOString() : null,
@@ -912,7 +891,6 @@ export class FanslyAdapter {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
         },
-        category: "top_spenders",
         requestShape: {
           after: params.after ? params.after.toISOString() : null,
           before: params.before ? params.before.toISOString() : null,
@@ -954,7 +932,6 @@ export class FanslyAdapter {
         before: params.before ? String(params.before.getTime()) : undefined,
         status,
       },
-      category: "subscribers",
       requestShape: {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
@@ -1008,7 +985,6 @@ export class FanslyAdapter {
       after?: string | null;
       before?: string | null;
       lastSeenAfter?: number | null;
-      minDelayMs?: number;
     },
   ) {
     const response = await this.request<unknown>(
@@ -1024,8 +1000,6 @@ export class FanslyAdapter {
           before: params.before ?? undefined,
           lastSeenAfter: params.lastSeenAfter != null ? String(params.lastSeenAfter) : undefined,
         },
-        category: "followers",
-        minDelayMs: params.minDelayMs,
         requestShape: {
           offset: params.offset ?? 0,
           limit: params.limit ?? 100,
@@ -1086,7 +1060,6 @@ export class FanslyAdapter {
         subscriptionTierId: params.subscriptionTierId ?? undefined,
         listIds: params.listIds ?? undefined,
       },
-      category: "dm_conversations",
       requestShape: {
         offset: params.offset ?? 0,
         limit: params.limit ?? 100,
@@ -1136,7 +1109,6 @@ export class FanslyAdapter {
     return this.request<FanslyGroupDetail>(context, `/group/${groupId}`, {
       operation: "group_detail",
       endpointTemplate: "/group/:groupId",
-      category: "dm_conversations",
       requestShape: {
         groupId,
       },
@@ -1165,7 +1137,6 @@ export class FanslyAdapter {
         limit: params.limit != null ? String(params.limit) : undefined,
         before: params.before ?? undefined,
       },
-      category: "dm_messages",
       requestShape: {
         groupId: params.groupId,
         limit: params.limit ?? 25,
@@ -1232,7 +1203,6 @@ export class FanslyAdapter {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
         },
-        category: "top_spenders",
         requestShape: {
           correlationAccountId: params.correlationAccountId ?? null,
           after: params.after ? params.after.toISOString() : null,
@@ -1266,7 +1236,6 @@ export class FanslyAdapter {
           after: params.after ? String(params.after.getTime()) : undefined,
           before: params.before ? String(params.before.getTime()) : undefined,
         },
-        category: "top_spenders",
         requestShape: {
           correlationAccountId: params.correlationAccountId ?? null,
           after: params.after ? params.after.toISOString() : null,
@@ -1301,7 +1270,6 @@ export class FanslyAdapter {
         before: params.before ?? undefined,
         limit: params.limit != null ? String(params.limit) : undefined,
       },
-      category: "media",
       requestShape: {
         hasAccountIds: Boolean(params.accountIds),
         hasAccountMediaId: Boolean(params.accountMediaId),
@@ -1389,7 +1357,6 @@ export class FanslyAdapter {
       {
         operation: "post_replies",
         endpointTemplate: "/post/{postId}/replies",
-        category: "posts",
         // OMITTED entirely on the first call — the bare form is the only one
         // five live responses prove. `before` appears only once the caller has
         // a reason to suspect a second page exists.
@@ -1423,7 +1390,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/groups/mediaoffers", {
       operation: "group_mediaoffers_probe",
       endpointTemplate: "/groups/mediaoffers",
-      category: "dm_conversations",
       query: {
         groupId: params.groupId,
         accountId: params.accountId ?? undefined,
@@ -1465,7 +1431,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, pathname, {
       operation: deleted ? "broadcast_stats_deleted_probe" : "broadcast_stats_probe",
       endpointTemplate: pathname,
-      category: "dm_conversations",
       query: {
         before: params.before ?? undefined,
         limit: params.limit != null ? String(params.limit) : undefined,
@@ -1492,7 +1457,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/message/broadcast/scheduled", {
       operation: "broadcast_scheduled_probe",
       endpointTemplate: "/message/broadcast/scheduled",
-      category: "dm_conversations",
       summarizeResponse: summarizeUnknownResponse,
     });
 
@@ -1512,7 +1476,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/account/media/orders", {
       operation: "account_media_orders_probe",
       endpointTemplate: "/account/media/orders",
-      category: "media",
       query: {
         limit: params.limit != null ? String(params.limit) : undefined,
         offset: params.offset != null ? String(params.offset) : undefined,
@@ -1541,7 +1504,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/tips/account", {
       operation: "tips_account_probe",
       endpointTemplate: "/tips/account",
-      category: "transactions",
       query: { accountIds: params.accountIds ?? undefined },
       requestShape: { hasAccountIds: Boolean(params.accountIds) },
       summarizeResponse: summarizeUnknownResponse,
@@ -1558,7 +1520,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/mediastory/views", {
       operation: "mediastory_views_probe",
       endpointTemplate: "/mediastory/views",
-      category: "media",
       query: {
         storyId: params.storyId,
         limit: params.limit != null ? String(params.limit) : undefined,
@@ -1581,7 +1542,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/polls", {
       operation: "polls_probe",
       endpointTemplate: "/polls",
-      category: "posts",
       summarizeResponse: summarizeUnknownResponse,
     });
 
@@ -1596,7 +1556,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/recapstats", {
       operation: "recapstats_probe",
       endpointTemplate: "/recapstats",
-      category: "account",
       summarizeResponse: summarizeUnknownResponse,
     });
 
@@ -1620,7 +1579,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/vault/albumsnew", {
       operation: "vault_albums",
       endpointTemplate: "/vault/albumsnew",
-      category: "media",
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };
@@ -1642,7 +1600,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/uservault/albumsnew", {
       operation: "uservault_albums",
       endpointTemplate: "/uservault/albumsnew",
-      category: "media",
       query: { accountId: params.accountId },
       requestShape: { hasAccountId: params.accountId.length > 0 },
       summarizeResponse: summarizeUnknownResponse,
@@ -1661,7 +1618,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/subscriptions/tiers", {
       operation: "subscription_tiers",
       endpointTemplate: "/subscriptions/tiers",
-      category: "account",
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };
@@ -1675,7 +1631,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/subscriptions/giftcodes", {
       operation: "gift_codes",
       endpointTemplate: "/subscriptions/giftcodes",
-      category: "account",
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };
@@ -1690,7 +1645,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/message/automated", {
       operation: "automated_messages",
       endpointTemplate: "/message/automated",
-      category: "messaging",
       summarizeResponse: summarizeUnknownResponse,
     });
     return { items: response.parsed, raw: response.raw };
@@ -1704,7 +1658,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/account/media", {
       operation: "account_media_by_ids_probe",
       endpointTemplate: "/account/media",
-      category: "media",
       query: { ids: params.ids },
       requestShape: { idCount: params.ids.split(",").filter(Boolean).length },
       summarizeResponse: summarizeUnknownResponse,
@@ -1720,7 +1673,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/account/media/bundle", {
       operation: "account_media_bundles_by_ids_probe",
       endpointTemplate: "/account/media/bundle",
-      category: "media",
       query: { ids: params.ids },
       requestShape: { idCount: params.ids.split(",").filter(Boolean).length },
       summarizeResponse: summarizeUnknownResponse,
@@ -1736,7 +1688,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/account/walls", {
       operation: "account_walls_probe",
       endpointTemplate: "/account/walls",
-      category: "account",
       query: { correlationPostIds: params.correlationPostIds ?? undefined },
       requestShape: { hasPostIds: Boolean(params.correlationPostIds) },
       summarizeResponse: summarizeUnknownResponse,
@@ -1788,7 +1739,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/media/vaultnew", {
       operation: "vault_media",
       endpointTemplate: "/media/vaultnew",
-      category: "media",
       query: byAlbum
         ? {
           albumId: params.albumId ?? undefined,
@@ -1847,7 +1797,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/payments/payoutmethods", {
       operation: "payout_methods",
       endpointTemplate: "/payments/payoutmethods",
-      category: "transactions",
       requestShape: {},
       summarizeResponse: summarizeUnknownResponse,
     });
@@ -1886,7 +1835,6 @@ export class FanslyAdapter {
     const response = await this.request<unknown>(context, "/payments/payout/requests", {
       operation: "payout_requests",
       endpointTemplate: "/payments/payout/requests",
-      category: "transactions",
       query: {
         // Present-and-empty, never omitted.
         before: params.before ?? PAYOUT_REQUESTS_UNBOUNDED,
@@ -1906,7 +1854,6 @@ export class FanslyAdapter {
     pathname: string,
     options: {
       query?: Record<string, string | undefined>;
-      category: string;
       operation: string;
       endpointTemplate: string;
       requestShape?: Record<string, unknown>;
@@ -1916,7 +1863,6 @@ export class FanslyAdapter {
         pageIndex?: number | null;
         cursorPresent?: boolean | null;
       };
-      minDelayMs?: number;
       retries?: number;
       /**
        * WP-F5. HTTP statuses this route answers with an EMPTY BODY, which are a
@@ -1955,7 +1901,6 @@ export class FanslyAdapter {
     const url = `${this.options.baseUrl}${pathname}?${query.toString()}`;
     const retryAllowance = Math.max(0, context.remainingAttempts?.() ?? Number.MAX_SAFE_INTEGER);
     const retries = Math.min(options.retries ?? 3, Math.max(0, retryAllowance - 1));
-    const minDelayMs = options.minDelayMs ?? 0;
     const requestId = `${options.operation}:${randomUUID()}`;
     const requestTimeoutMs = context.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 
@@ -1984,9 +1929,9 @@ export class FanslyAdapter {
         retries,
         waitForRateLimit: async () => {
           await releaseUnusedLease();
-          // Endpoint pauses first, then the page's send guard (plan §2.5): the
-          // guard's capture is the last thing before the attempt starts.
-          const endpointWaitMs = await this.waitForEndpointPause(context, options.category, minDelayMs);
+          // The page's send guard is the only pacing of a Fansly request
+          // (plan §2.3, §2.5): no endpoint pause, no per-egress queue. Its
+          // capture is the last thing before the attempt starts.
           assertHttpRequestActive();
           const captureStartedAt = Date.now();
           const lease = await context.sendGuard.acquire({
@@ -1999,7 +1944,7 @@ export class FanslyAdapter {
             throw new Error("Fansly request settled before its send-guard capture resolved");
           }
           admittedLease = lease;
-          return endpointWaitMs + (Date.now() - captureStartedAt);
+          return Date.now() - captureStartedAt;
         },
         execute: async () => {
           const lease = admittedLease;
@@ -2283,90 +2228,5 @@ export class FanslyAdapter {
 
   private buildProxyCacheKey(proxy: ProxyConfig) {
     return buildProxyDispatcherCacheKey(proxy);
-  }
-
-  /**
-   * The legacy endpoint pauses (`followers_page`, `dm_conversations`,
-   * `dm_messages`), which stay until the guard has passed its acceptance
-   * (plan §2.5 p.4). The page-wide spacing is no longer here: the send guard
-   * replaced the per-egress `global` scope and its +100 ms.
-   */
-  private async waitForEndpointPause(
-    context: FanslyRequestContext,
-    category: string,
-    minDelayMs: number,
-  ) {
-    const scopes: Array<{ provider: "fansly" | "onlyfans"; scope: string }> = [
-      ...(category === "followers" && minDelayMs > 0
-        ? [{ provider: "fansly", scope: "followers_page" } as const]
-        : []),
-      ...(category === "dm_conversations"
-        ? [{ provider: "fansly", scope: "dm_conversations" } as const]
-        : []),
-      ...(category === "dm_messages"
-        ? [{ provider: "fansly", scope: "dm_messages" } as const]
-        : []),
-    ];
-
-    if (context.rateLimitWaiter) {
-      return scopes.length === 0 ? 0 : context.rateLimitWaiter(scopes);
-    }
-
-    // No shared limiter in this process: the category's own minimum delay,
-    // kept in process memory.
-    const egressKey = context.egressKey ?? buildProxyEgressKey(context.proxy);
-    const categoryKey = `${egressKey}:${category}`;
-
-    const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());
-    this.rateLimitChains.set(categoryKey, categoryGate.chain);
-
-    try {
-      await waitForHttpRequestPermit(() => categoryGate.previous);
-      assertHttpRequestActive();
-      const categoryWaitMs = await this.waitForMinimumDelay(
-        this.requestTimestamps.get(categoryKey),
-        minDelayMs,
-      );
-      assertHttpRequestActive();
-      this.requestTimestamps.set(categoryKey, Date.now());
-      return categoryWaitMs;
-    } finally {
-      categoryGate.release();
-      // A cancelled waiter may still follow an occupied predecessor. Keep
-      // that chain visible until it settles, or a third caller could bypass
-      // the predecessor's pacing slot.
-      void categoryGate.chain.then(() => {
-        if (this.rateLimitChains.get(categoryKey) === categoryGate.chain) {
-          this.rateLimitChains.delete(categoryKey);
-        }
-      });
-    }
-  }
-
-  private enterRateLimitChain(previous: Promise<void>) {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    return {
-      previous,
-      chain: previous.then(() => gate),
-      release,
-    };
-  }
-
-  private async waitForMinimumDelay(lastStartedAt: number | null | undefined, minDelayMs: number) {
-    if (lastStartedAt === null || lastStartedAt === undefined || minDelayMs <= 0) {
-      return 0;
-    }
-
-    const elapsed = Date.now() - lastStartedAt;
-    if (elapsed >= minDelayMs) {
-      return 0;
-    }
-
-    const waitedMs = minDelayMs - elapsed;
-    await waitForHttpRequestDelay(waitedMs);
-    return waitedMs;
   }
 }

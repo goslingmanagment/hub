@@ -29,8 +29,8 @@ import {
 // packages/db/src/repositories/fansly-send-guard.ts); this module turns it into
 // leases for the adapter:
 //
-//   acquire  — capture the row (endpoint pauses were already reserved by the
-//              caller). Refused because of the pause: sleep exactly the time the
+//   acquire  — capture the row; it is the only pacing of a Fansly request
+//              (plan §2.3). Refused because of the pause: sleep exactly the time the
 //              database says is left. Refused because a request is in flight:
 //              poll about every 250 ms — or, when THIS process holds the page,
 //              wait for that request's completion locally. Refused because the
@@ -185,6 +185,14 @@ async function waitFor(promise: Promise<void>, signal: AbortSignal | null) {
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
+}
+
+async function waitForValue<T>(promise: Promise<T>, signal: AbortSignal | null): Promise<T> {
+  let value!: T;
+  await waitFor(promise.then((resolved) => {
+    value = resolved;
+  }), signal);
+  return value;
 }
 
 function assertRequestTimeout(value: number) {
@@ -418,7 +426,9 @@ export class FanslySendGuardRegistry {
         continue;
       }
 
-      const settingMs = assertSettingMs(await this.deps.readSettingMs());
+      // A read only: abandoning it on abort leaves nothing behind (unlike the
+      // capture statement, which is always waited for).
+      const settingMs = assertSettingMs(await waitForValue(this.deps.readSettingMs(), signal));
       this.assertOpen(signal);
       if (this.#localHolds.has(pageId)) continue;
 

@@ -9,7 +9,6 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
-import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 export async function setPageProxy(
@@ -31,10 +30,6 @@ export async function setPageProxy(
   const proxyEgressKey = preservesStoredProxyRoute
     ? pageContext.egressKey
     : proxyRouteKey;
-  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
-    egressKey: proxyEgressKey,
-  });
-
   if (pageContext.platform !== "fansly") {
     // Stage 18: OnlyFans egress happens at the OFAPI vendor — a hub-side
     // proxy would never carry that traffic, so assigning one is an error.
@@ -47,7 +42,6 @@ export async function setPageProxy(
     session: pageContext.session,
     proxy: normalizedProxy,
     egressKey: proxyEgressKey,
-    rateLimitWaiter,
     // The page's own guard, whatever proxy the check rides (plan §2.4).
     sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "account_me_cli"),
   });

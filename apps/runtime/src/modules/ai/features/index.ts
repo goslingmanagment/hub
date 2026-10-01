@@ -29,6 +29,7 @@ import {
   UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
+import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
 import { isPageAllowlisted } from "../../../services/voice-notes.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
@@ -52,6 +53,7 @@ import {
   loadSpendingContext,
   loadSubscriptionContext,
   loadTranscriptContext,
+  type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
   type FanProfilePromptContext,
 } from "../context/index.ts";
@@ -554,6 +556,16 @@ export async function prepareAiFeatureStream(
         unionMode = "unknown";
       }
     }
+    // Fansly Sync Engine step 1 (plan §7.11): a page in
+    // `fanslyLiveOverlayReadPages` reads the archive ∪ its socket messages the
+    // archive does not hold yet. Read once per generation; a failed read keeps
+    // the archive and says so in the manifest. Other platforms never read it.
+    let liveOverlay: AiTranscriptLiveOverlay;
+    try {
+      liveOverlay = await pageReadsLiveOverlay(app, stored.page) ? "serve" : "off";
+    } catch {
+      liveOverlay = "unknown";
+    }
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
@@ -562,6 +574,7 @@ export async function prepareAiFeatureStream(
       conversationRef: body.conversationRef,
       limit: resolvedMessageLimit,
       unionMode,
+      liveOverlay,
     });
     contextManifest = transcript.contextManifest;
     const spending = policy.includesEarnings

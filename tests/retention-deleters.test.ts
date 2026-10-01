@@ -12,6 +12,9 @@ import { describe, expect, it } from "vitest";
 // captured data on a timer — are exactly:
 //   - deleteExpiredSyncObservability (sync_http_attempts, sync_run_events,
 //     and since Stage 28 sync_runs; 30 days)
+//   - deleteExpiredSyncEngineTelemetry (Fansly Sync Engine, 0228: closed
+//     sync_work rows and terminal non-evidence sync_attempts rows; the same
+//     30 days, the same nightly job)
 //   - the golden-signals sampler prune (ops_metric_samples; 90 days)
 //   - the page_dm_messages prune (cache policy, archive-coverage-gated)
 //   - terminal typing command expiry after its short idempotency window
@@ -139,7 +142,6 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/projections/fansly-payouts.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
-  "apps/runtime/src/services/sync/rate-limiter.ts",
   "packages/db/src/repositories/auth.ts",
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
@@ -182,6 +184,11 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/runtime-instances.ts",
   "packages/db/src/repositories/spenders.ts",
   "packages/db/src/repositories/sync.ts",
+  // Fansly Sync Engine telemetry (0228), scheduled with the sync
+  // observability sweep: closed work rows and terminal attempts that are not
+  // coverage evidence, 30 days. No captured fact: raw responses live in
+  // observations, which it never touches.
+  "packages/db/src/repositories/sync/retention.ts",
   "packages/db/src/repositories/top-spenders.ts",
   "packages/db/src/repositories/transactions.ts",
   "packages/db/src/repositories/voice-profiles.ts",

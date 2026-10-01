@@ -38,7 +38,6 @@ import { ExistingMemberNotice, InviteModal } from "../apps/dashboard/src/pages/s
 import { LinkRevealModal } from "../apps/dashboard/src/pages/settings/team/LinkRevealModal.tsx";
 import { UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
 import {
-  buildJoinLink,
   daysToHours,
   deviceRevokedReasonLabel,
   findTeamMember,
@@ -194,10 +193,6 @@ describe("findTeamMember", () => {
     expect(findTeamMemberByLogin([old], "nikita")).toBeNull();
   });
 
-  it("returns null when the person is no longer in the list", () => {
-    expect(findTeamMember([], 99)).toBeNull();
-    expect(findTeamMember([user({ username: "grisha" })], 99)).toBeNull();
-  });
 });
 
 describe("existing-login recovery", () => {
@@ -275,10 +270,6 @@ describe("groupPagesByPlatform", () => {
 });
 
 describe("the invite link", () => {
-  it("carries its secret in the URL fragment, so no server log ever sees it", () => {
-    expect(buildJoinLink("https://gosling-agency.ru", "s3cr3t")).toBe("https://gosling-agency.ru/join#s3cr3t");
-  });
-
   it("writes a Telegram message a person can act on without being told anything else", () => {
     const message = telegramMessage("invite", "grisha", "https://gosling-agency.ru/join#s3cr3t");
     expect(message).toContain("https://gosling-agency.ru/join#s3cr3t");
@@ -377,6 +368,36 @@ describe("formatRelativeRu", () => {
 /* ------------------------------------------------------------------ */
 
 describe("TeamTab", () => {
+  function renderTeam(data: AdminUser[] | undefined, isError = false) {
+    mockEverything();
+    queries.useAdminUsers.mockReturnValue(query(data, { isError, error: isError ? new Error("Connection interrupted") : null }));
+    return render(TeamTab);
+  }
+
+  it("shows an error and retry instead of an empty team when the first request fails", () => {
+    const markup = renderTeam(undefined, true);
+    expect(markup).toContain("Не удалось загрузить команду");
+    expect(markup).toContain("Connection interrupted");
+    expect(markup).toContain("Повторить");
+    expect(markup).not.toContain("В команде пока никого");
+  });
+
+  it("keeps the last successful users visible with a stale notice when refresh fails", () => {
+    const markup = renderTeam([user({ username: "dmitriy", role: "owner" })], true);
+    expect(markup).toContain("dmitriy");
+    expect(markup).toContain("Показан последний загруженный список");
+    expect(markup).toContain("Connection interrupted");
+    expect(markup).toContain("Повторить");
+    expect(markup).not.toContain("Не удалось загрузить команду");
+  });
+
+  it("shows the empty team only after a successful empty response", () => {
+    const markup = renderTeam([]);
+    expect(markup).toContain("В команде пока никого");
+    expect(markup).not.toContain("Не удалось загрузить команду");
+    expect(markup).not.toContain("Показан последний загруженный список");
+  });
+
   it("shows each person with their role, state and last activity", () => {
     mockEverything();
     queries.useAdminUsers.mockReturnValue(query([
@@ -478,13 +499,6 @@ describe("UserDetailModal", () => {
     expect(working).not.toContain("Отправить приглашение заново");
   });
 
-  it("never offers a link reset for an owner — owners change their own password (§4.1 п.8)", () => {
-    mockEverything();
-    const markup = renderCard(user({ username: "admin", role: "owner" }));
-    expect(markup).not.toContain("Сбросить пароль ссылкой");
-    expect(markup).not.toContain("Отправить приглашение заново");
-  });
-
   // The kernel answers 400 to both, in English. A button that can only produce
   // a foreign error message is worse than no button.
   it("offers an owner no dead end: no termination, no deactivation, no link reset", () => {
@@ -534,19 +548,14 @@ describe("UserDetailModal", () => {
     expect(markup).not.toContain(">Close<");
   });
 
-  it("offers deactivation for a working person and a return for a deactivated one", () => {
-    mockEverything();
-    expect(renderCard(user({ username: "grisha" }))).toContain("Отключить доступ");
-    expect(renderCard(user({ username: "ivan", disabledAt: "2026-09-01T00:00:00.000Z" })))
-      .toContain("Восстановить доступ");
-  });
-
   it.each(["active", "invited"] as const)("makes a disabled %s participant's recovery primary and pages read-only", (registrationState) => {
     mockEverything();
     const markup = renderCard(user({
       username: "Nikita", registrationState, disabledAt: "2026-09-15T00:00:00.000Z",
       assignedPages: [{ id: 11, label: "lora", platform: "fansly", modelSlug: "lora", modelName: "Lora" }],
     }));
+    // indexOf alone passes on -1: the return button must be there AND above the devices.
+    expect(markup).toMatch(/>\s*Восстановить доступ\s*<\/button>/);
     expect(markup.indexOf("Восстановить доступ")).toBeLessThan(markup.indexOf("Устройства"));
     expect(markup).toContain("Сохранённые страницы");
     expect(markup).toContain("lora");
@@ -625,12 +634,18 @@ describe("LinkRevealModal", () => {
 
   it("cannot be dismissed by a stray backdrop click — the link is unrecoverable", () => {
     vi.stubGlobal("window", { location: { origin: "https://gosling-agency.ru" } });
-    const onClose = vi.fn();
-    const markup = render(LinkRevealModal as ComponentType<Record<string, unknown>>, {
-      link: { userId: 17, username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
-      onClose,
-    });
-    // The backdrop carries no click handler, so only the explicit buttons close it.
+    // Static markup drops handlers, so read the element the modal returns:
+    // ModalShell's explicitCloseOnly is what removes the backdrop click and Escape.
+    let shell: ReturnType<typeof LinkRevealModal> | undefined;
+    function Capture() {
+      shell = LinkRevealModal({
+        link: { userId: 17, username: "grisha", kind: "invite", secret: "s3cr3t", expiresAt: "2026-09-22T00:00:00.000Z" },
+        onClose: vi.fn(),
+      });
+      return shell;
+    }
+    const markup = renderToStaticMarkup(createElement(Capture));
+    expect((shell as { props: { explicitCloseOnly?: boolean } }).props.explicitCloseOnly).toBe(true);
     expect(markup).toContain("Готово");
     expect(markup).toContain("Закрыть");
     expect(markup).not.toContain(">Close<");

@@ -19,6 +19,7 @@ import { createRequire } from "node:module";
 import { createProxyRequestDispatcher } from "./packages/shared/src/http-client.ts";
 import { openFanslyProbeSocket } from "./apps/runtime/src/services/egress/fansly-probe-socket.ts";
 import { createProbeTransportDiagnostics } from "./apps/runtime/src/services/egress/fansly-probe-diagnostics.ts";
+import { createTestFanslySendGuards } from "./tests/helpers/fansly-send-guard.ts";
 const require = createRequire(new URL("./apps/runtime/src/bootstrap.ts", import.meta.url));
 const { Dispatcher, setGlobalDispatcher } = require("undici");
 let fallbackCalls = 0, paceCalls = 0;
@@ -36,11 +37,14 @@ const dispatcher = createProxyRequestDispatcher({
 const deadline = setTimeout(() => process.exit(3), 15_000);
 const result = { opened: false, message: null, closeCode: null, error: false };
 const diagnostics = createProbeTransportDiagnostics();
+// Plan §2.5: the handshake is one capture of the page's send guard.
+const { registry, store } = createTestFanslySendGuards();
+const lease = await registry.forPage(7, "ws_probe").acquire({ operation: "ws_probe", requestTimeoutMs: 10_000 });
 const socket = openFanslyProbeSocket({
   dispatcher, egressKey: "fixture-page",
   pace: async () => { paceCalls++; throw new Error("REST_pacing_forbidden"); },
   close: () => dispatcher.close(),
-}, diagnostics);
+}, lease, diagnostics);
 socket.addEventListener("open", () => { result.opened = true; });
 socket.addEventListener("message", (event) => {
   result.message = event.data;
@@ -52,9 +56,13 @@ await new Promise((resolve) => socket.addEventListener("close", (event) => {
   resolve();
 }, { once: true }));
 await dispatcher.destroy();
+await lease.complete({ outcome: lease.sent ? "transport_error" : "aborted_before_send" });
+await registry.drain();
 clearTimeout(deadline);
 process.stdout.write(JSON.stringify({ ...result, fallbackCalls, paceCalls, url: socket.url,
-  diagnostics: diagnostics.finish() }));
+  diagnostics: diagnostics.finish(),
+  journal: store.journal.map((row) => ({ source: row.source, outcome: row.outcome, httpStatus: row.httpStatus,
+    sent: row.sentAt !== null })) }));
 `;
 
 async function runClient(proxy: string, trustFixture: boolean) {
@@ -72,8 +80,16 @@ async function runClient(proxy: string, trustFixture: boolean) {
     opened: boolean; message: string | null; closeCode: number; error: boolean;
     fallbackCalls: number; paceCalls: number; url: string;
     diagnostics: { httpStatus: number | null; transportErrorCode: string | null };
+    journal: Array<{ source: string; outcome: string | null; httpStatus: number | null; sent: boolean }>;
   };
 }
+
+/** A lease that is never used: these cases refuse before any dispatch. */
+const unusedLease = {
+  token: "unused", pageId: 7, sent: false, sendRefused: false,
+  bind: () => { throw new Error("bind_unexpected"); },
+  complete: async () => undefined,
+};
 
 describe("one-page Fansly probe transport", () => {
   it.each(["", "direct", "vendor:ofapi", "service:socks5://fixture", "legacy-page:fixture"])(
@@ -83,7 +99,7 @@ describe("one-page Fansly probe transport", () => {
         egressKey, dispatcher, pace: vi.fn(), close: () => dispatcher.close(),
       };
       try {
-        expect(() => openFanslyProbeSocket(egress)).toThrow("fansly_probe_page_egress_required");
+        expect(() => openFanslyProbeSocket(egress, unusedLease)).toThrow("fansly_probe_page_egress_required");
         expect(egress.pace).not.toHaveBeenCalled();
       } finally { await dispatcher.destroy(); }
     },
@@ -92,7 +108,7 @@ describe("one-page Fansly probe transport", () => {
   it("refuses a missing dispatcher", () => {
     expect(() => openFanslyProbeSocket({
       egressKey: "fixture-page", dispatcher: null, pace: vi.fn(), close: vi.fn(),
-    })).toThrow("fansly_probe_page_egress_required");
+    }, unusedLease)).toThrow("fansly_probe_page_egress_required");
   });
 
   describe.each(["http", "socks5"] as const)("%s page proxy", (protocol) => {
@@ -104,6 +120,8 @@ describe("one-page Fansly probe transport", () => {
           opened: true, message: '{"t":2,"d":"{}"}', closeCode: 1000, error: false,
           fallbackCalls: 0, paceCalls: 0, url: "wss://wsv3.fansly.com/?v=3",
           diagnostics: { httpStatus: 101, transportErrorCode: null },
+          // One capture, sent once, completed at the 101.
+          journal: [{ source: "ws_probe", outcome: "response", httpStatus: 101, sent: true }],
         });
         expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
         expect(network.upgrades).toHaveLength(1);
@@ -131,6 +149,8 @@ describe("one-page Fansly probe transport", () => {
         expect(JSON.stringify(result)).not.toContain(network.password);
         expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
         expect(network.upgrades).toEqual([]);
+        // The capture completes whatever happened; nothing reached the origin.
+        expect(result.journal).toEqual([{ source: "ws_probe", outcome: "transport_error", httpStatus: null, sent: false }]);
       } finally { await network.stop(); }
     });
 
@@ -146,6 +166,7 @@ describe("one-page Fansly probe transport", () => {
         expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
         expect(network.upgrades).toHaveLength(1);
         expect(network.frames).toEqual([]);
+        expect(result.journal).toEqual([{ source: "ws_probe", outcome: "response", httpStatus: 403, sent: true }]);
       } finally { await network.stop(); }
     }, 10_000);
   });

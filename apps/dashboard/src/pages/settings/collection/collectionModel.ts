@@ -74,10 +74,6 @@ export function draftEntries(draft: CollectionDraft | null): DraftEntry[] {
 /** The server accepts at most ONE enabled (mode ≠ off) category per apply
  *  (`enable_one_category_at_a_time`) — the staged-rollout rule from the plan.
  *  Any number of "off" changes may travel together. */
-export function draftEnableCount(draft: CollectionDraft | null) {
-  return draftEntries(draft).filter((entry) => entry.settings.mode !== "off").length;
-}
-
 export function draftBlockReason(draft: CollectionDraft | null): string | null {
   const enabled = draftEntries(draft).filter((entry) => entry.settings.mode !== "off");
   if (enabled.length > 1) {
