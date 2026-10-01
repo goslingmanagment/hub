@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   FANSLY_SEND_GUARD_OWNER_ENGINES,
+  pageDmThreads,
+  THREAD_CHAIN_SOURCES,
+  THREAD_HISTORY_PROOFS,
+  THREAD_HISTORY_STATES,
   SYNC_APPLY_STATES,
   SYNC_ENGINE_GUARD_OWNER,
   SYNC_ATTEMPT_OUTCOMES,
@@ -18,7 +22,7 @@ import {
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
 // each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration; later
-// step-2 PRs (0229–0233) add theirs here.
+// step-2 PRs (0232–0233) add theirs here.
 
 function stripComments(text: string): string {
   return text
@@ -194,6 +198,94 @@ describe("0230_tip_context_observation_lineage.sql", () => {
 
   it("grants nothing new: the read role has never been granted the fan-note table", () => {
     expect(sql).not.toMatch(/\bgrant\b/i);
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0231_dm_thread_history_chain.sql", () => {
+  const migration = "0231_dm_thread_history_chain.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+  const threadColumns = [
+    "head_confirmed_id", "head_confirmed_at", "contiguous_oldest_id", "contiguous_oldest_at", "contiguous_count",
+    "chain_upward_count", "chain_epoch", "history_state", "history_proof", "history_proven_at",
+    "history_proof_observation_id", "history_proof_observation_received_at", "history_proof_raw_payload_id",
+    "chain_source", "chain_journal_watermark",
+  ];
+
+  it("adds columns, checks, comments and one marking of the new state column — nothing else", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(
+        /^(alter table (page_dm_threads|fansly_ws_connections) (add column if not exists|validate constraint)|update page_dm_threads t set history_state = 'unverified' from pages p|comment on column|do \$\$)/,
+      );
+      expect(statement).not.toMatch(/\b(drop|rename|truncate|delete)\b/i);
+    }
+    const added = statements[0]!.match(/add column if not exists ([a-z_]+)/g)!.map((clause) => clause.split(" ").pop());
+    expect(added).toEqual(threadColumns);
+    // Nullable or NOT NULL with a constant default: catalog-only on Postgres 16.
+    for (const clause of statements[0]!.split(", ")) {
+      if (/not null/.test(clause)) expect(clause).toMatch(/not null default ('none'|0)$/);
+    }
+    expect(statements).toContain(
+      "alter table fansly_ws_connections add column if not exists state_reconciled_at timestamptz, "
+        + "add column if not exists transient_unknown tstzrange",
+    );
+  });
+
+  it("marks only Fansly threads holding messages, and only from 'none' (§2.3)", () => {
+    const updates = statements.filter((statement) => statement.startsWith("update"));
+    expect(updates).toEqual([
+      "update page_dm_threads t set history_state = 'unverified' from pages p where p.id = t.platform_account_id "
+        + "and p.platform = 'fansly' and t.stored_message_count > 0 and t.history_state = 'none'",
+    ]);
+  });
+
+  it("keeps the vocabularies of the checks equal to the repository's constants", () => {
+    const list = (constraint: string) => {
+      const start = sql.indexOf(`constraint ${constraint}`);
+      expect(start, constraint).toBeGreaterThanOrEqual(0);
+      const body = sql.slice(start, sql.indexOf("not valid", start));
+      return [...body.slice(body.indexOf(" in (")).matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+    };
+    expect(list("page_dm_threads_history_state_check")).toEqual([...THREAD_HISTORY_STATES]);
+    expect(list("page_dm_threads_history_proof_check")).toEqual([...THREAD_HISTORY_PROOFS]);
+    expect(list("page_dm_threads_chain_source_check")).toEqual([...THREAD_CHAIN_SOURCES]);
+    for (const constraint of [
+      "page_dm_threads_history_state_check",
+      "page_dm_threads_history_proof_check",
+      "page_dm_threads_contiguous_count_check",
+      "page_dm_threads_chain_source_check",
+      "page_dm_threads_history_proof_observation_check",
+    ]) {
+      expect(sql).toContain(`if not exists (select 1 from pg_constraint where conname = '${constraint}')`);
+      expect(statements).toContain(`alter table page_dm_threads validate constraint ${constraint}`);
+    }
+  });
+
+  it("comments every new column", () => {
+    for (const column of threadColumns) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column page_dm_threads.${column} is '`)), column)
+        .toBe(true);
+    }
+    for (const column of ["state_reconciled_at", "transient_unknown"]) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column fansly_ws_connections.${column} is '`)))
+        .toBe(true);
+    }
+  });
+
+  it("grants the read role nothing new on the fan-material thread table", () => {
+    expect(sql).not.toMatch(/grant [^;]* on page_dm_threads/i);
+    expect(sql).toContain("grant select on fansly_ws_connections to read_only");
+  });
+
+  it("is mirrored in the drizzle table", () => {
+    const names = Object.values(pageDmThreads as unknown as Record<string, { name?: unknown }>)
+      .map((column) => column.name);
+    for (const column of threadColumns) expect(names).toContain(column);
   });
 
   it("allows application rollback after the additive migration", () => {

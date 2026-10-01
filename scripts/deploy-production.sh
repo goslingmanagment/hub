@@ -540,6 +540,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # columns, so its rows leave them null (which the check accepts) and it runs
   # unchanged after a rollback.
   "0230_tip_context_observation_lineage.sql"
+  # Contiguous-chain coverage of DM threads (sync engine design §2.3): new
+  # columns on page_dm_threads (nullable, or NOT NULL with a constant default:
+  # catalog-only), their checks, a one-time 'unverified' marking of the new
+  # history_state column, and two nullable columns on fansly_ws_connections.
+  # The previous image never names any of them and writes threads by named
+  # columns, so it runs unchanged after a rollback.
+  "0231_dm_thread_history_chain.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

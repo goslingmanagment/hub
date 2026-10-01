@@ -56,6 +56,7 @@ import {
   readFanslySendGuardStatus,
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
+import { registerSyncChainCommands } from "./sync/cli/chain.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -3286,6 +3287,10 @@ export function buildProgram() {
         await app.close();
       }
     });
+
+  // Fansly Sync Engine DM chains (design §8.2, §8.3): `sync chain rebuild |
+  // check-end-rule | check-window`.
+  registerSyncChainCommands(sync);
 
   queue
     .command("planner-recover")

@@ -174,6 +174,11 @@
 //                                                 (the capture is skipped, never
 //                                                 journaled empty; a re-run
 //                                                 resumes)
+//   sync/fansly/lib/chain-rebuild.ts              catch → body_unavailable
+//                                                 (the journal page folds
+//                                                 nothing and is counted; never
+//                                                 read as an empty page, which
+//                                                 would prove an end)
 //
 // One more site reads bodies without this seam, inside packages/db, and #223
 // gave it the same law by hand: repositories/ofapi-message-coverage.ts, whose
