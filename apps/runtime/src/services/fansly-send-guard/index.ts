@@ -51,8 +51,10 @@ export {
   createDefaultFanslySendOsProbe,
   createPortableFanslySendOsProbe,
   createProcFanslySendOsProbe,
+  FanslySendProbeUnknownError,
   hostnameIsContainerId,
   judgeFanslySendHolderTermination,
+  parseProcStatStartToken,
   type FanslySendHolderRole,
   type FanslySendOsProbe,
   type FanslySendTerminationEvidence,
@@ -136,11 +138,17 @@ export function fanslyUnpacedSendGuard(app: GuardHost, source: FanslySendSource)
 }
 
 export const FANSLY_SEND_GUARD_SWEEP_INTERVAL_MS = 10_000;
+/** stop() waits at most this long for a pass in flight: inside the api's and
+ *  the worker's stop grace, beside the other bounded stops. A pass cut off by
+ *  the exit wrote nothing half-way — each release or close is one statement. */
+export const FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS = 5_000;
 
 export interface FanslySendGuardSweeper {
   /** One pass (tests drive it directly). */
   sweepOnce(): Promise<FanslySendGuardSweepResult>;
-  stop(): Promise<void>;
+  /** Stops the ticks and waits for the pass in flight, bounded by
+   *  `timeoutMs` (default FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS). */
+  stop(options?: { timeoutMs?: number }): Promise<void>;
 }
 
 export interface FanslySendGuardSweepResult {
@@ -241,13 +249,38 @@ export function startFanslySendGuardSweeper(
 
   return {
     sweepOnce,
-    async stop() {
+    async stop(options = {}) {
       stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
-      await running;
+      const inFlight = running;
+      if (!inFlight) return;
+      const timeoutMs = options.timeoutMs ?? FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS;
+      if (!await settlesWithin(inFlight, timeoutMs)) {
+        app.logger.warn(
+          { component: "fansly_send_guard", timeoutMs },
+          "Fansly send guard sweeper stop timed out on a pass in flight; the next process's sweeper repeats it",
+        );
+      }
     },
   };
+}
+
+/** Whether `promise` settles within `timeoutMs` (it is never rejected here:
+ *  the callers' chains catch their own errors). */
+export async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        deadline = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+        deadline.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 /** `fansly-send-guard status`. */
