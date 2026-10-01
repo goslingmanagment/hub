@@ -1,16 +1,20 @@
-// The live config write path (Stage B1) of the owner console
-// (PATCH / DELETE /api/v1/admin/config), kept out of the route so another audited
-// caller can run it unchanged: the live allowlist, the validateConfigOverride gate
-// (which rejects, never clamps, a key like the Fansly pause that opts into
-// `outOfRange: 'reject'`), the transition hooks, the cost-warning audit note, the
-// repository writer (config_settings + config_audit_log in one transaction), the
-// `audit_events` row and the ramp-gate wake-up. Only the actor is the caller's.
-// Nothing here decides who may call it — the route checks `requireOwner`.
+// The live config write path (Stage B1), shared by the owner console
+// (PATCH / DELETE /api/v1/admin/config) and the audited CLI (`config set|clear`).
+// Both callers run the SAME allowlist, the SAME validateConfigOverride gate (which
+// rejects, never clamps, a key like the Fansly pause that opts into
+// `outOfRange: 'reject'`), the SAME transition hooks, the SAME cost-warning audit
+// note, the SAME repository writer (config_settings + config_audit_log in one
+// transaction), the SAME `audit_events` row and the SAME ramp-gate wake-up. Only
+// the actor differs: an owner session (`source: 'api'`) or the CLI (`source: 'cli'`,
+// no user). Nothing here decides who may call it — the route checks `requireOwner`,
+// and the CLI needs a shell in the api container (DATABASE_URL and the app key).
 
 import { randomUUID } from "node:crypto";
 
 import {
   clearConfigOverride,
+  getConfigOverrides,
+  listConfigAudit,
   listFanslyPages,
   // The row-level writer, distinct from the same-named sync-control service (which
   // resolves a page by label and enqueues a pg-boss wakeup for a whole scope).
@@ -30,7 +34,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { recordAudit, type AuditContext } from "./auth.ts";
-import { LIVE_CONFIG_KEYS, loadEffectiveConfig } from "./effective-config.ts";
+import { applyEffectiveOverrides, LIVE_CONFIG_KEYS, loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError } from "./errors.ts";
 import {
   evaluateFanslyStreamGate,
@@ -326,4 +330,73 @@ export async function clearLiveConfigOverride(
     metadata: { key: input.key, note: input.note ?? null },
   });
   await wakeGatedStreamsAfterConfigChange(app, gateBefore);
+}
+
+/** The command line hands every value over as a string; turn it into the type the
+ *  key's descriptor declares, and leave anything that does not parse as the raw string
+ *  so validateConfigOverride rejects it with its usual message ("expects a finite
+ *  number", "expects a boolean"). No bound or range is checked here — that stays in the
+ *  one shared validator. */
+export function parseLiveConfigCliValue(key: string, raw: string): unknown {
+  const kind = getDescriptor(key)?.kind;
+  if (kind === "number") {
+    const trimmed = raw.trim();
+    return /^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : raw;
+  }
+  if (kind === "boolean") {
+    if (raw.trim() === "true") return true;
+    if (raw.trim() === "false") return false;
+    return raw;
+  }
+  return raw;
+}
+
+export interface LiveConfigKeyState {
+  key: string;
+  envName: string;
+  /** The process env value (before any override). */
+  env: ConfigOverrideValue | null;
+  /** The stored override, or null when the key runs on its env value. */
+  override: { value: ConfigOverrideValue; version: number } | null;
+  /** Why the live overlay ignores the stored override (e.g. a hand-written value outside
+   *  a reject-mode range), or null when it applies or there is none. */
+  overrideIgnoredReason: string | null;
+  /** What a process reading the key right now gets (loadEffectiveConfig). */
+  effective: ConfigOverrideValue | null;
+  /** The newest config_audit_log row for the key, if any. */
+  lastChange: { changedAt: Date; userId: number | null; note: string | null } | null;
+}
+
+function toScalar(raw: unknown): ConfigOverrideValue | null {
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    return raw;
+  }
+  return raw == null ? null : String(raw);
+}
+
+/** Read-only view of one live-editable key: env value, stored override, effective value
+ *  (the same overlay every read site applies) and the latest audit row. */
+export async function describeLiveConfigKey(app: AppContext, key: string): Promise<LiveConfigKeyState> {
+  assertLiveEditableConfigKey(key);
+  const descriptor = getDescriptor(key)!;
+  const field = descriptor.configField as string;
+  const envConfig = (app.rawConfig ?? app.config) as unknown as Record<string, unknown>;
+
+  const overrides = await getConfigOverrides(app.db);
+  const stored = overrides.get(key) ?? null;
+  const validated = stored ? validateConfigOverride(key, stored.value) : null;
+  const effective = applyEffectiveOverrides(app.config, overrides) as unknown as Record<string, unknown>;
+  const [latest] = await listConfigAudit(app.db, { key, limit: 1 });
+
+  return {
+    key,
+    envName: descriptor.envName,
+    env: toScalar(envConfig[field]),
+    override: stored ? { value: stored.value, version: stored.version } : null,
+    overrideIgnoredReason: validated && !validated.ok ? validated.error : null,
+    effective: toScalar(effective[field]),
+    lastChange: latest
+      ? { changedAt: latest.changedAt, userId: latest.userId, note: latest.note }
+      : null,
+  };
 }

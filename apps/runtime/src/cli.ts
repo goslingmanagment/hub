@@ -32,6 +32,7 @@ import {
   normalizeProviderStreamFailure,
   undiciRequest,
   type AiProviderFailureClassification,
+  type ConfigOverrideValue,
   type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
@@ -39,6 +40,13 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
+import {
+  applyLiveConfigPatches,
+  assertLiveEditableConfigKey,
+  clearLiveConfigOverride,
+  describeLiveConfigKey,
+  parseLiveConfigCliValue,
+} from "./services/live-config.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -500,6 +508,23 @@ function auditContext() {
     source: "cli",
     actorUserId: null,
   };
+}
+
+/** A CLI config write has no user, so its note is what explains it: required, not
+ *  blank, and marked, because a config_audit_log row has no source column of its own. */
+function requireCliConfigNote(note: string) {
+  const trimmed = note.trim();
+  if (trimmed.length === 0) {
+    throw new Error("--note must say why the value changes");
+  }
+  return `[cli] ${trimmed}`;
+}
+
+function formatConfigValue(value: ConfigOverrideValue | null) {
+  if (value === null) {
+    return "(unset)";
+  }
+  return typeof value === "string" ? JSON.stringify(value) : String(value);
 }
 
 function describeError(error: unknown) {
@@ -3516,6 +3541,95 @@ export function buildProgram() {
           pageLabel: options.page,
         }, auditContext());
         console.log(`Unassigned ${options.userId} from ${options.page}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Audited live config, for the moments an operator session must change an owner
+  // setting without the console (Fansly Sync Engine plan §2.1, §2.5 p.5: set the
+  // Fansly pause once, roll it back on a 429). Only live-editable keys; the write
+  // path, validation and audit are the console's own (services/live-config.ts):
+  // config_audit_log rows plus an audit_events row with source "cli".
+  const config = program
+    .command("config")
+    .description("Live-editable owner settings: read, set or clear an override (audited like the console)");
+
+  config
+    .command("get")
+    .description("Print the env value, the stored override and the effective value of a live key")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .action(async (key: string) => {
+      const app = await createAppContext();
+      try {
+        const state = await describeLiveConfigKey(app, key);
+        console.log(`key: ${state.key} (${state.envName})`);
+        console.log(`env: ${formatConfigValue(state.env)}`);
+        console.log(state.override
+          ? `override: ${formatConfigValue(state.override.value)} (version ${state.override.version})${
+            state.overrideIgnoredReason ? ` - ignored: ${state.overrideIgnoredReason}` : ""
+          }`
+          : "override: none");
+        console.log(`effective: ${formatConfigValue(state.effective)}`);
+        if (state.lastChange) {
+          console.log(`last change: ${state.lastChange.changedAt.toISOString()} by ${
+            state.lastChange.userId === null ? "no user" : `user ${state.lastChange.userId}`
+          }${state.lastChange.note ? ` - ${state.lastChange.note}` : ""}`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  config
+    .command("set")
+    .description("Write an override for a live key; the console's validation and audit apply")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .argument("<value>", "new value; numbers and true/false are parsed by the key's type")
+    .requiredOption("--note <why>", "why the value changes; stored in the audit rows")
+    .option("--expected-version <n>", "fail unless the stored override is at this version (0 = none)", parseNonnegativeInt)
+    .action(async (key: string, rawValue: string, options: { note: string; expectedVersion?: number }) => {
+      const note = requireCliConfigNote(options.note);
+      const app = await createAppContext();
+      try {
+        const [result] = await applyLiveConfigPatches(app, {
+          patches: [{
+            key,
+            value: parseLiveConfigCliValue(key, rawValue),
+            expectedVersion: options.expectedVersion,
+          }],
+          note,
+          actor: { userId: null, audit: auditContext() },
+        });
+        console.log(`Set ${result!.key} = ${formatConfigValue(result!.value)} (override version ${result!.version}); `
+          + "audited as admin.config_update, source cli");
+      } finally {
+        await app.close();
+      }
+    });
+
+  config
+    .command("clear")
+    .description("Remove the override of a live key so the env value applies again; audited")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .requiredOption("--note <why>", "why the override goes; stored in the audit rows")
+    .option("--expected-version <n>", "fail unless the stored override is at this version", parseNonnegativeInt)
+    .action(async (key: string, options: { note: string; expectedVersion?: number }) => {
+      const note = requireCliConfigNote(options.note);
+      // The console's DELETE also clears non-live editable keys; this path stays on
+      // the live set, the only keys an operator session may touch.
+      assertLiveEditableConfigKey(key);
+      const app = await createAppContext();
+      try {
+        await clearLiveConfigOverride(app, {
+          key,
+          expectedVersion: options.expectedVersion,
+          note,
+          actor: { userId: null, audit: auditContext() },
+        });
+        const state = await describeLiveConfigKey(app, key);
+        console.log(`Cleared the ${key} override; effective value is now ${formatConfigValue(state.effective)} (env); `
+          + "audited as admin.config_clear, source cli");
       } finally {
         await app.close();
       }
