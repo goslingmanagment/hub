@@ -87,19 +87,32 @@ if (overBudget.length > 0) {
   process.exit(1);
 }
 
-// The shrink demand only applies when the FULL workspace is visible — the
-// production Docker build context excludes tests/ (and the snapshot's files
-// with them), which makes the total drop without any debt being paid. Files
-// that exist are still held to their per-file budgets above.
-const fullWorkspace = Object.keys(snapshot).every((file) => existsSync(join(root, file)));
-if (fullWorkspace && total < snapshotTotal) {
+// The production Docker build copies apps/, packages/ and scripts/ but not
+// tests/ (see the Dockerfile), so there the snapshot's test files are absent
+// and the total drops without any debt being paid: that context, and only
+// that one, skips the shrink demand. Files that exist are still held to their
+// per-file budgets above. Anywhere else a snapshot file that does not exist
+// was deleted or renamed without --update; it fails, where it once switched
+// the shrink check off for every later change.
+const dockerContext = !existsSync(join(root, "tests"));
+const missing = Object.keys(snapshot).filter(
+  (file) => !existsSync(join(root, file)) && !(dockerContext && file.startsWith("tests/")),
+);
+if (missing.length > 0) {
+  console.error(
+    "strictness-ratchet: snapshot files no longer exist (deleted or renamed?) — pnpm typecheck:ratchet-update, commit the snapshot:",
+  );
+  for (const file of missing) console.error(`  ${file}`);
+  process.exit(1);
+}
+if (!dockerContext && total < snapshotTotal) {
   console.error(
     `strictness-ratchet: debt shrank (${snapshotTotal} → ${total}) — lock it in: pnpm typecheck:ratchet-update, commit the snapshot.`,
   );
   process.exit(1);
 }
-if (!fullWorkspace) {
-  console.log("strictness-ratchet: partial workspace (some snapshot files absent) — per-file budgets enforced, shrink check skipped.");
+if (dockerContext) {
+  console.log("strictness-ratchet: Docker build context (no tests/) — per-file budgets enforced, shrink check skipped.");
 }
 
 console.log(`strictness-ratchet: OK — ${total} known error(s) within budget (${Object.keys(counts).length} file(s) with debt).`);

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -37,6 +37,34 @@ function ratchet(tscOutput: string[]) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+/**
+ * The script in a scratch root of its own: `files` exist, the snapshot holds
+ * `snapshot`, and tsc reports `errors` (file → count). With `tests` false the
+ * root has no tests/ directory, as the production Docker build context.
+ */
+function ratchetIn(input: { files: string[]; snapshot: Record<string, number>; errors: Record<string, number>; tests: boolean }) {
+  const dir = mkdtempSync(path.join(tmpdir(), "hub-strictness-root-"));
+  try {
+    mkdirSync(path.join(dir, "scripts"));
+    copyFileSync("scripts/check-strictness-ratchet.mjs", path.join(dir, "scripts/check-strictness-ratchet.mjs"));
+    writeFileSync(path.join(dir, "scripts/strictness-ratchet.json"), JSON.stringify(input.snapshot));
+    if (input.tests) mkdirSync(path.join(dir, "tests"));
+    for (const file of input.files) {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), "");
+    }
+    const tscOutput = Object.entries(input.errors).flatMap(([file, count]) =>
+      Array.from({ length: count }, (_, i) => `${file}(${i + 1},1): error TS2322: Type 'string' is not assignable to type 'number'.\n`),
+    ).join("");
+    writeFileSync(path.join(dir, "tsc.out"), tscOutput);
+    writeFileSync(path.join(dir, "pnpm"), `#!/bin/sh\ncat "$(dirname "$0")/tsc.out"\nexit ${tscOutput ? 2 : 0}\n`);
+    chmodSync(path.join(dir, "pnpm"), 0o755);
+    return spawnSync(process.execPath, [path.join(dir, "scripts/check-strictness-ratchet.mjs")], {
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8",
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 describe("strictness ratchet (Stage 35)", () => {
   it("passes the snapshot's own debt, exactly at budget", () => {
     const result = ratchet(atBudget);
@@ -52,5 +80,40 @@ describe("strictness ratchet (Stage 35)", () => {
       expect(result.stderr).toContain(lines[0]);
       expect(result.stderr).not.toContain("debt shrank");
     }
+  });
+
+  // A snapshot file deleted or renamed without --update once made the script
+  // take the full checkout for the Docker context and drop the shrink demand.
+  it("fails a full checkout whose snapshot names a file that no longer exists", () => {
+    const result = ratchetIn({
+      files: ["apps/a.ts", "tests/a.test.ts"],
+      snapshot: { "apps/a.ts": 1, "tests/gone.test.ts": 2 },
+      errors: { "apps/a.ts": 1 },
+      tests: true,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("strictness-ratchet: snapshot files no longer exist");
+    expect(result.stderr).toContain("  tests/gone.test.ts");
+  });
+
+  it("still demands the shrink in a full checkout", () => {
+    const result = ratchetIn({ files: ["apps/a.ts", "tests/a.test.ts"], snapshot: { "apps/a.ts": 2, "tests/a.test.ts": 1 }, errors: { "apps/a.ts": 2 }, tests: true });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("strictness-ratchet: debt shrank (3 → 2)");
+  });
+
+  it("skips only the test files and the shrink demand in the Docker build context", () => {
+    const docker = { files: ["apps/a.ts"], snapshot: { "apps/a.ts": 1, "tests/a.test.ts": 2 }, errors: { "apps/a.ts": 1 }, tests: false };
+    const passed = ratchetIn(docker);
+    expect(passed.status, passed.stderr).toBe(0);
+    expect(passed.stdout).toContain("strictness-ratchet: Docker build context (no tests/)");
+
+    const gone = ratchetIn({ ...docker, snapshot: { ...docker.snapshot, "apps/gone.ts": 1 } });
+    expect(gone.status).toBe(1);
+    expect(gone.stderr).toContain("  apps/gone.ts");
+
+    const over = ratchetIn({ ...docker, errors: { "apps/a.ts": 2 } });
+    expect(over.status).toBe(1);
+    expect(over.stderr).toContain("apps/a.ts: 2 error(s), budget 1");
   });
 });
