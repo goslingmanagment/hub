@@ -12,12 +12,14 @@ import {
   getPageConversationMessages,
   getPageConversationPreview,
   getPageDmSyncCoverage,
+  type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
+import { pageReadsLiveOverlay } from "./live-overlay-read.ts";
 import { buildConversationHistorySyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "./sync-status.ts";
 
@@ -27,6 +29,16 @@ function serializeTimestamp(value: Date | string | null | undefined) {
   }
 
   return new Date(value).toISOString();
+}
+
+/** Additive provenance of a message (plan §7.11): only rows of a page that
+ * reads the live overlay carry it, so the confirmed-only response is the
+ * same, byte for byte, as before the overlay. */
+function serializeProvenance(provenance: PageConversationMessageProvenance | undefined) {
+  if (provenance === undefined) return {};
+  return provenance.source === "live"
+    ? { source: "live" as const, apiUnavailable: provenance.apiUnavailable }
+    : { source: "rest" as const };
 }
 
 function serializePageMetric(value: number | null | undefined) {
@@ -111,11 +123,13 @@ export async function getPageConversationPreviewReport(
 ): Promise<PageConversationPreviewResponse> {
   requireDashboardUser(principal);
   const page = await resolveAccessiblePage(app, principal, params.pageLabel);
+  const liveOverlay = await pageReadsLiveOverlay(app, page);
   const [preview, freshness] = await Promise.all([
     getPageConversationPreview(app.db, {
       platformAccountId: page.id,
       platformConversationId: params.platformConversationId,
       limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
+      liveOverlay,
     }),
     getPageDmSyncCoverage(app.db, page.id),
   ]);
@@ -157,6 +171,7 @@ export async function getPageConversationPreviewReport(
       createdAt: message.createdAt.toISOString(),
       content: normalizeDmMessageText(message.content),
       totalTipAmountCents: message.totalTipAmountCents,
+      ...serializeProvenance(message.provenance),
     })),
   };
 }
@@ -173,6 +188,7 @@ export async function getPageConversationMessagesReport(
     platformAccountId: page.id,
     platformConversationId: params.conversationId,
     limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
+    liveOverlay: await pageReadsLiveOverlay(app, page),
   });
 
   if (!conversation) {
@@ -199,6 +215,7 @@ export async function getPageConversationMessagesReport(
       content: normalizeDmMessageText(message.content),
       createdAt: message.createdAt.toISOString(),
       tipAmountCents: message.tipAmountCents,
+      ...serializeProvenance(message.provenance),
     })),
   };
 }

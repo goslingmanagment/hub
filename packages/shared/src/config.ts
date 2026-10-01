@@ -102,6 +102,7 @@ const envSchema = z.object({
   FANSLY_DM_SHADOW_PAGE_ALLOWLIST: z.string().default("none"),
   FANSLY_WS_CAPTURE_ENABLED: booleanSchema.default(false),
   FANSLY_WS_CAPTURE_PAGE_ALLOWLIST: z.string().default(""),
+  FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
   FANSLY_FAN_EARNINGS_RECOVERY_ENABLED: booleanSchema.default(false),
   FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST: z.string().default(""),
   FANSLY_FAN_EARNINGS_TARGETS_ENABLED: booleanSchema.default(false),
@@ -472,6 +473,9 @@ export interface AppConfig {
   fanslyDmShadowPageAllowlist?: string;
   fanslyWsCaptureEnabled?: boolean;
   fanslyWsCapturePageAllowlist?: string;
+  /** Pages whose chatter routes and AI kernel context read the live overlay
+   * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
+  fanslyLiveOverlayReadPages?: string;
   fanslyFanEarningsRecoveryEnabled?: boolean;
   fanslyFanEarningsRecoveryPageAllowlist?: string;
   fanslyFanEarningsTargetsEnabled?: boolean;
@@ -867,6 +871,7 @@ export function loadConfig(
     fanslyDmShadowPageAllowlist: parsed.FANSLY_DM_SHADOW_PAGE_ALLOWLIST,
     fanslyWsCaptureEnabled: parsed.FANSLY_WS_CAPTURE_ENABLED,
     fanslyWsCapturePageAllowlist: parsed.FANSLY_WS_CAPTURE_PAGE_ALLOWLIST,
+    fanslyLiveOverlayReadPages: parsed.FANSLY_LIVE_OVERLAY_READ_PAGES,
     fanslyFanEarningsRecoveryEnabled: parsed.FANSLY_FAN_EARNINGS_RECOVERY_ENABLED,
     fanslyFanEarningsRecoveryPageAllowlist: parsed.FANSLY_FAN_EARNINGS_RECOVERY_PAGE_ALLOWLIST,
     fanslyFanEarningsTargetsEnabled: parsed.FANSLY_FAN_EARNINGS_TARGETS_ENABLED,

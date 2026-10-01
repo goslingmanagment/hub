@@ -23,7 +23,7 @@ import { formatDateTime, formatRelativeTime } from "@/lib/format";
  * machinery is named out loud.
  *
  * Everywhere else the owner deals in people, logins, devices and links (§2
- * vocabulary, pinned by tests/dashboard-team-copy-vocabulary.test.ts, which
+ * vocabulary, pinned by tests/dashboard-copy-vocabulary.test.ts, which
  * excludes this file by name). Here live the two surfaces that are genuinely
  * about machines: agent read-plane keys, and the Desktop harvest binding that
  * ties one preserved machine identity to one sign-in.
@@ -52,7 +52,7 @@ export function TechnicalTab() {
   );
 }
 
-export function AgentKeysSection() {
+function AgentKeysSection() {
   const { data: keys, isLoading, isError, error } = useAgentKeys();
   const [creating, setCreating] = useState(false);
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);

@@ -1381,6 +1381,18 @@ const pageConversationStateSchema = z.object({
   lastMessageAt: isoTimestamp.nullable(),
 });
 
+/** Provenance of a conversation message (Fansly live overlay, plan §7.11).
+ * Additive: present only on pages that read the live overlay
+ * (`fanslyLiveOverlayReadPages`), absent everywhere else and from older
+ * kernels; an absent value means a REST copy. `rest`: Hub's REST-synced copy.
+ * `live`: the message came from the page's Fansly socket and Hub's REST copy
+ * has not arrived yet: text, sender and time are provisional, and tips and
+ * PPV appear only once the REST copy replaces it. */
+const conversationMessageSourceSchema = z.enum(["rest", "live"]);
+/** Only on `live` rows: true when the chat is excluded from REST message sync,
+ * so no REST copy will ever confirm the message («API недоступен»). */
+const conversationMessageApiUnavailableSchema = z.boolean();
+
 const pageConversationPreviewMessageSchema = z.object({
   platformMessageId: z.string(),
   senderPlatformUserId: z.string().nullable(),
@@ -1388,6 +1400,8 @@ const pageConversationPreviewMessageSchema = z.object({
   createdAt: isoTimestamp,
   content: z.string(),
   totalTipAmountCents: z.number().int(),
+  source: conversationMessageSourceSchema.optional(),
+  apiUnavailable: conversationMessageApiUnavailableSchema.optional(),
 });
 
 export const pageConversationPreviewResponseSchema = z.object({
@@ -1404,6 +1418,8 @@ export const pageConversationMessageItemSchema = z.object({
   content: z.string(),
   createdAt: isoTimestamp,
   tipAmountCents: z.number().int(),
+  source: conversationMessageSourceSchema.optional(),
+  apiUnavailable: conversationMessageApiUnavailableSchema.optional(),
 });
 
 export const pageConversationMessagesResponseSchema = z.object({

@@ -20,7 +20,7 @@
 // not list it), so the archive stays REST-confirmed only. A deletion is a
 // sticky mark on the overlay row in the same transaction; nothing clears it.
 
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import {
   decodeFanslyWsCapture,
   decodeFanslyWsLiveFrame,
@@ -647,4 +647,178 @@ export async function readFanslyWsLiveGauges(
     decodeDebt24h: Number(debt.rows[0]?.n ?? 0),
     pendingAgeMs: Math.max(0, Number(pending.rows[0]?.age_ms ?? 0)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Readers (plan §7.11, §15 step 1 «показ читателям»). The chatter routes and
+// the AI kernel context of a page in `fanslyLiveOverlayReadPages` read "REST
+// store ∪ unconfirmed overlay" through readDmLiveUnion, and nothing else reads
+// the overlay: Agent Read, the archive routes, search and timelines stay
+// REST-confirmed on every page. A page outside the list never calls it, so
+// its readers run exactly the confirmed-only queries of before.
+//
+// An overlay row is shown while the store the reader already reads holds no
+// row with its Fansly message id (in any state: a REST tombstone is a REST
+// copy too, so a deleted message never comes back from the socket). That is
+// what "unconfirmed" means per reader: a parity verdict found in the OTHER
+// store does not hide the row, or a message would blink out between the two
+// stores' arrivals (the archive trails page_dm_messages by its projection
+// minute, and the AI fast lane fills the archive before page_dm_messages). A
+// `not_found` verdict hides it: REST had no copy for the whole parity window,
+// and REST wins (plan §7.4). Chats excluded from REST message sync never get a
+// copy; their socket rows stay visible, marked `apiUnavailable` (plan §7.9a).
+// A chat Hub has no thread row for stays invisible (plan §7.6). A socket
+// deletion hides the store's copy of that message as well (tombstone
+// dominance), ahead of the legacy deletion reconcile. Money is REST-only
+// (owner decision №7): an overlay row carries no tip, price or purchase.
+
+/** The REST store a reader already reads; the overlay dedups against it. */
+export type DmLiveReaderStore = "page_dm_messages" | "message_archive";
+
+/** A provisional message as a reader shows it: socket fields only. */
+export interface DmLiveReaderMessage {
+  platformMessageId: string;
+  platformConversationId: string;
+  senderPlatformUserId: string;
+  /** The REST rule (resolveDmSenderRole): `model` when the page sent it,
+   * `fan` when the chat's partner did, otherwise `unknown`. */
+  senderRole: "fan" | "model" | "unknown";
+  createdAt: Date;
+  content: string;
+  inReplyToMessageId: string | null;
+  /** The chat is excluded from REST message sync, so no REST copy will ever
+   * confirm this message: «API недоступен» (plan §7.9a). */
+  apiUnavailable: boolean;
+}
+
+export type DmLiveUnionItem<Row> =
+  | { source: "rest"; row: Row }
+  | { source: "live"; message: DmLiveReaderMessage };
+
+/** SQL predicate a store reader ANDs into its filter: true unless a socket
+ * deletion tombstones the message whose id is in `messageIdColumn` (qualify
+ * the column; the predicate's own subquery has one of the same name). */
+export type DmLiveTombstoneFilter = (messageIdColumn: SQL) => SQL;
+
+/** Numeric-aware: Fansly ids are digit strings; other refs compare as text. */
+function compareMessageIds(left: string, right: string) {
+  if (/^[0-9]+$/.test(left) && /^[0-9]+$/.test(right) && left.length !== right.length) {
+    return left.length - right.length;
+  }
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * The live union of one chat for one reader (see the section header): the
+ * reader's own REST rows minus those a socket deletion tombstones, plus the
+ * overlay rows its store does not hold yet, newest first, at most `limit`.
+ * `readStore` is the reader's own query: newest first, at most `limit` rows,
+ * with the given tombstone predicate in its filter; `storeKey` names a row's
+ * message id and instant for the merge (each list keeps its own order). The
+ * overlay is read first, so a REST copy committing in between shows up in
+ * both reads and the REST row wins; it can never be missed by both.
+ */
+export async function readDmLiveUnion<Row>(
+  db: Database,
+  input: {
+    pageId: number;
+    platformConversationId: string;
+    store: DmLiveReaderStore;
+    limit: number;
+    readStore: (notTombstoned: DmLiveTombstoneFilter) => Promise<Row[]>;
+    storeKey: (row: Row) => { messageId: string; at: Date | null };
+  },
+): Promise<DmLiveUnionItem<Row>[]> {
+  const live = await listDmLiveReaderMessages(db, input);
+  const notTombstoned: DmLiveTombstoneFilter = (messageIdColumn) => sql`not exists (
+    select 1 from dm_live_messages tombstone
+    where tombstone.page_id = ${input.pageId}
+      and tombstone.platform_message_id = ${messageIdColumn}
+      and tombstone.deleted_at is not null
+  )`;
+  const rest = await input.readStore(notTombstoned);
+  const restIds = new Set(rest.map((row) => input.storeKey(row).messageId));
+  const pending = live.filter((message) => !restIds.has(message.platformMessageId));
+
+  const merged: DmLiveUnionItem<Row>[] = [];
+  let restIndex = 0;
+  let liveIndex = 0;
+  while (merged.length < input.limit && (restIndex < rest.length || liveIndex < pending.length)) {
+    const restRow = rest[restIndex];
+    const liveRow = pending[liveIndex];
+    if (restRow !== undefined && (liveRow === undefined || !liveIsNewer(liveRow, input.storeKey(restRow)))) {
+      merged.push({ source: "rest", row: restRow });
+      restIndex += 1;
+    } else if (liveRow !== undefined) {
+      merged.push({ source: "live", message: liveRow });
+      liveIndex += 1;
+    }
+  }
+  return merged;
+}
+
+/** Newest-first merge order: instant, then message id; a REST row with no
+ * instant sorts last (the archive's `nulls last`); a full tie keeps REST first. */
+function liveIsNewer(live: DmLiveReaderMessage, rest: { messageId: string; at: Date | null }) {
+  if (rest.at === null) return true;
+  const difference = live.createdAt.getTime() - rest.at.getTime();
+  if (difference !== 0) return difference > 0;
+  return compareMessageIds(live.platformMessageId, rest.messageId) > 0;
+}
+
+/** The overlay arm of readDmLiveUnion: visible, unconfirmed (for this
+ * reader's store) overlay rows of one known chat, newest first. */
+async function listDmLiveReaderMessages(
+  db: Database,
+  input: { pageId: number; platformConversationId: string; store: DmLiveReaderStore; limit: number },
+): Promise<DmLiveReaderMessage[]> {
+  const heldByStore = input.store === "page_dm_messages"
+    ? sql`exists (
+        select 1 from page_dm_messages held
+        where held.platform_account_id = m.page_id and held.platform_message_id = m.platform_message_id
+      )`
+    : sql`exists (
+        select 1 from message_archive held
+        where held.account_id = m.page_id and held.platform = 'fansly' and held.message_ref = m.platform_message_id
+      )`;
+  const result = await db.execute<{
+    platform_message_id: string;
+    platform_conversation_id: string;
+    sender_platform_user_id: string;
+    sender_role: "fan" | "model" | "unknown";
+    created_at: Date | string;
+    content: string;
+    in_reply_to_message_id: string | null;
+    api_unavailable: boolean;
+  }>(sql`
+    select m.platform_message_id, m.platform_conversation_id, m.sender_platform_user_id,
+      case when m.is_sent_by_page then 'model'
+        when t.partner_platform_user_id = m.sender_platform_user_id then 'fan'
+        else 'unknown' end as sender_role,
+      m.created_at, m.content, m.in_reply_to_message_id,
+      coalesce(btrim(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}), '') <> '' as api_unavailable
+    from dm_live_messages m
+    join page_dm_threads t
+      on t.platform_account_id = m.page_id and t.platform_conversation_id = m.platform_conversation_id
+    where m.page_id = ${input.pageId}
+      and m.platform_conversation_id = ${input.platformConversationId}
+      and m.deleted_at is null
+      and m.sender_platform_user_id is not null
+      and m.created_at is not null
+      and m.content is not null
+      and m.confirm_outcome is distinct from 'not_found'
+      and not ${heldByStore}
+    order by m.created_at desc, m.platform_message_id desc
+    limit ${input.limit}
+  `);
+  return result.rows.map((row) => ({
+    platformMessageId: row.platform_message_id,
+    platformConversationId: row.platform_conversation_id,
+    senderPlatformUserId: row.sender_platform_user_id,
+    senderRole: row.sender_role,
+    createdAt: new Date(row.created_at),
+    content: row.content,
+    inReplyToMessageId: row.in_reply_to_message_id,
+    apiUnavailable: row.api_unavailable === true,
+  }));
 }
