@@ -253,7 +253,8 @@ export interface FanslyWireRequest {
   spec: FanslyWireId;
   url: string;
   headers: Record<string, string>;
-  /** Total budget of the request: connect, headers and the whole body. */
+  /** Total budget of the call: connect and proxy tunnel, headers and the
+   *  whole body. */
   timeoutMs: number;
 }
 
@@ -267,7 +268,11 @@ export interface FanslyWireSendHooks {
 /** How a send ended. `sent` / `sendMark` say whether bytes left for Fansly:
  *  `request_start` = the check passed at `onRequestStart`; `completion_fallback`
  *  = a response came back without that mark (no such path exists on undici
- *  dispatchers; the completion instant is then the safe upper bound). */
+ *  dispatchers; the completion instant is then the safe upper bound).
+ *  Before `onRequestStart`: the budget running out is a `timeout` with
+ *  `sent: false` (the transport never became ready), the caller's cancel is
+ *  `aborted_before_send` / `lease_inactive`, and a refusal of the check is
+ *  `aborted_before_send` with its reason. */
 export type FanslyWireOutcome =
   | {
     kind: "response";

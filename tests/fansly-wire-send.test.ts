@@ -1,6 +1,6 @@
 import { getEventListeners } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net";
 import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -141,13 +141,16 @@ describe("[A1] one admission is one physical request", () => {
       asked += 1;
       return null;
     });
+    expect(gate.asked).toBe(false);
     expect(gate.check()).toBeNull();
+    expect(gate.asked).toBe(true);
     expect(gate.sent).toBe(true);
     expect(gate.check()?.reason).toBe("lease_used");
     expect(asked).toBe(1);
 
     const refused = createOneShotSendCheck(() => new FanslySendRefusedError("takeover_floor"));
     expect(refused.check()?.reason).toBe("takeover_floor");
+    expect(refused.asked).toBe(true);
     expect(refused.sent).toBe(false);
     expect(refused.refusal?.reason).toBe("takeover_floor");
   });
@@ -181,30 +184,120 @@ describe("the request budget is total", () => {
     expect(outcome).toMatchObject({ kind: "timeout", sent: true });
   });
 
-  it("never asks the admission for a request cancelled before the transport was ready", async () => {
-    const { network, dispatcher } = await open({ tunnelDelayMs: () => 400 });
+  it("settles on a cancel before the transport is ready, and the late tunnel carries nothing", async () => {
+    const { network, dispatcher } = await open({ tunnelDelayMs: () => 1_000 });
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
     const { calls, hooks } = recordingCheck();
-    const outcome = await sendFanslyWireRequest(dispatcher, accountMe(network.baseUrl), hooks, controller.signal);
+    const startedAt = performance.now();
+    const outcome = await sendFanslyWireRequest(dispatcher, accountMe(network.baseUrl, 20_000), hooks, controller.signal);
+    const elapsed = performance.now() - startedAt;
 
-    // undici still reaches onRequestStart once the tunnel is up, and aborts
-    // there: the request is refused as stopping, and no send is counted.
+    // Stopping, not a network failure; settled at the cancel, not when the
+    // tunnel came up.
     expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
-    await sleep(200);
+    expect(elapsed).toBeLessThan(600);
+    // undici still reaches onRequestStart once the tunnel is up and aborts
+    // there: the admission is never asked and the origin sees nothing.
+    await sleep(1_300);
+    expect(network.tunnels).toBe(1);
     expect(calls).toHaveLength(0);
     expect(network.arrivals).toHaveLength(0);
   });
 
-  it("never asks the admission for a request whose budget ran out before the transport was ready", async () => {
-    const { network, dispatcher } = await open({ tunnelDelayMs: () => 400 });
+  it("times out within its budget before the transport is ready, and the late tunnel carries nothing", async () => {
+    const { network, dispatcher } = await open({ tunnelDelayMs: () => 1_000 });
     const { calls, hooks } = recordingCheck();
-    const outcome = await sendFanslyWireRequest(dispatcher, accountMe(network.baseUrl, 150), hooks, live());
+    const signal = live();
+    const startedAt = performance.now();
+    const outcome = await sendFanslyWireRequest(dispatcher, accountMe(network.baseUrl, 150), hooks, signal);
+    const elapsed = performance.now() - startedAt;
 
-    expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "send_deadline_passed" });
-    await sleep(200);
+    expect(outcome).toMatchObject({ kind: "timeout", sent: false });
+    expect(elapsed).toBeGreaterThanOrEqual(140);
+    expect(elapsed).toBeLessThan(600);
+    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+    await sleep(1_300);
+    expect(network.tunnels).toBe(1);
     expect(calls).toHaveLength(0);
     expect(network.arrivals).toHaveLength(0);
+  });
+
+  it("dispatches nothing for a call cancelled before it started", async () => {
+    const { network, dispatcher } = await open();
+    const controller = new AbortController();
+    controller.abort();
+    const { calls, hooks } = recordingCheck();
+    const outcome = await sendFanslyWireRequest(dispatcher, accountMe(network.baseUrl), hooks, controller.signal);
+
+    expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
+    await sleep(100);
+    expect(network.tunnels).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  describe("a proxy that accepts TCP and never answers CONNECT", () => {
+    // undici bounds that CONNECT only by the proxy client's own 300 s headers
+    // timeout; the call's budget and its cancel must not wait for it.
+    async function openHungProxy() {
+      const sockets = new Set<Socket>();
+      const hung = createNetServer((socket) => {
+        sockets.add(socket);
+        socket.on("error", () => undefined);
+      });
+      await new Promise<void>((resolve) => hung.listen(0, "127.0.0.1", () => resolve()));
+      extraServers.push({
+        close(callback) {
+          for (const socket of sockets) socket.destroy();
+          hung.close(() => callback());
+        },
+      });
+      const hungDispatcher = createProxyRequestDispatcher({
+        url: `http://127.0.0.1:${(hung.address() as AddressInfo).port}`,
+      });
+      return { sockets, hungDispatcher };
+    }
+
+    afterEach(async () => {
+      // `close()` would wait for the pending CONNECT; destroy fails it now.
+      await dispatcher?.destroy();
+      dispatcher = null;
+    });
+
+    it("times out at its budget", async () => {
+      const { sockets, hungDispatcher } = await openHungProxy();
+      dispatcher = hungDispatcher;
+      const { calls, hooks } = recordingCheck();
+      const startedAt = performance.now();
+      const outcome = await sendFanslyWireRequest(hungDispatcher, accountMe("http://127.0.0.1:9", 300), hooks, live());
+      const elapsed = performance.now() - startedAt;
+
+      expect(outcome).toMatchObject({ kind: "timeout", sent: false });
+      expect(elapsed).toBeGreaterThanOrEqual(290);
+      expect(elapsed).toBeLessThan(1_000);
+      expect(sockets.size).toBe(1);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("settles at the caller's cancel", async () => {
+      const { hungDispatcher } = await openHungProxy();
+      dispatcher = hungDispatcher;
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error("shutdown")), 100);
+      const { calls, hooks } = recordingCheck();
+      const startedAt = performance.now();
+      const outcome = await sendFanslyWireRequest(
+        hungDispatcher,
+        accountMe("http://127.0.0.1:9", 20_000),
+        hooks,
+        controller.signal,
+      );
+      const elapsed = performance.now() - startedAt;
+
+      expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
+      expect(elapsed).toBeLessThan(600);
+      expect(calls).toHaveLength(0);
+    });
   });
 
   it("reports a cancel in flight as a transport error of a sent request", async () => {

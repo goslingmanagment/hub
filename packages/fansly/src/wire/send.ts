@@ -34,22 +34,25 @@ const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
  * The admission's check, made one-shot for this send: the first dispatch asks
  * `check`, any further dispatch of the same send (a redirect hop, a hidden
  * re-send — none exists on this path, which is why this is a belt) is refused
- * as `lease_used` without asking again. Records whether the request went out.
+ * as `lease_used` without asking again. Records whether a dispatch reached the
+ * check and whether the request went out.
  */
 export function createOneShotSendCheck(check: FanslySendCheck): {
   readonly check: FanslySendCheck;
+  /** A dispatch reached `onRequestStart`: from here undici owns the abort. */
+  readonly asked: boolean;
   readonly sent: boolean;
   readonly refusal: FanslySendRefusedError | null;
 } {
-  let dispatched = false;
+  let asked = false;
   let sent = false;
   let refusal: FanslySendRefusedError | null = null;
   return {
     check() {
-      if (dispatched) {
+      if (asked) {
         return new FanslySendRefusedError("lease_used");
       }
-      dispatched = true;
+      asked = true;
       const verdict = check();
       if (verdict === null) {
         sent = true;
@@ -57,6 +60,9 @@ export function createOneShotSendCheck(check: FanslySendCheck): {
         refusal = verdict;
       }
       return verdict;
+    },
+    get asked() {
+      return asked;
     },
     get sent() {
       return sent;
@@ -69,9 +75,10 @@ export function createOneShotSendCheck(check: FanslySendCheck): {
 
 /**
  * Send one Fansly request through `dispatcher` (the page's proxy dispatcher).
- * `req.timeoutMs` bounds the WHOLE request — connect, headers and a drip-fed
- * body alike (undici's own header/body timeouts are inactivity timers only).
- * `signal` cancels it (shutdown). Never throws for a request outcome.
+ * `req.timeoutMs` bounds the WHOLE call — connect and proxy tunnel, headers
+ * and a drip-fed body alike (undici's own header/body timeouts are inactivity
+ * timers of the origin request only). `signal` cancels it (shutdown) at once.
+ * Never throws for a request outcome.
  */
 export async function sendFanslyWireRequest(
   dispatcher: Dispatcher,
@@ -79,11 +86,45 @@ export async function sendFanslyWireRequest(
   hooks: FanslyWireSendHooks,
   signal: AbortSignal,
 ): Promise<FanslyWireOutcome> {
-  // One controller per request, fed by the caller's signal and the total
-  // budget; both listeners are dropped when the request settles, so a
-  // long-lived shutdown signal accumulates nothing across requests.
   const abort = new AbortController();
   let timedOut = false;
+
+  // A cancelled or timed-out request can still reach `onRequestStart` once its
+  // tunnel comes up (undici aborts it right there, before the headers): it
+  // must not ask the admission, which would count a send that never happens.
+  const gate = createOneShotSendCheck(() => {
+    if (abort.signal.aborted) {
+      return new FanslySendRefusedError(timedOut ? "send_deadline_passed" : "lease_inactive");
+    }
+    return hooks.check();
+  });
+
+  // Before `onRequestStart` undici only records an abort and applies it once
+  // the connection — and the proxy's CONNECT — is up, which a proxy that
+  // accepts TCP and never answers delays by minutes. So this call settles by
+  // itself the moment its abort fires before the admission was asked. That is
+  // final: from then on the gate above refuses every dispatch, so a tunnel
+  // that comes up later carries no request byte; the abandoned dispatch
+  // settles in the background and its result is dropped.
+  let settleUnsent: (outcome: FanslyWireOutcome) => void = () => undefined;
+  const unsent = new Promise<FanslyWireOutcome>((resolve) => {
+    settleUnsent = resolve;
+  });
+  const onAbort = () => {
+    if (gate.asked) return;
+    settleUnsent(timedOut
+      ? {
+        kind: "timeout",
+        sent: false,
+        message: `TimeoutError: Fansly request exceeded its ${req.timeoutMs} ms budget before the transport was ready`,
+      }
+      : { kind: "aborted_before_send", refusal: "lease_inactive" });
+  };
+  abort.signal.addEventListener("abort", onAbort, { once: true });
+
+  // One controller per request, fed by the caller's signal and the total
+  // budget; both listeners are dropped when the call settles, so a
+  // long-lived shutdown signal accumulates nothing across requests.
   const timer = setTimeout(() => {
     timedOut = true;
     abort.abort(new DOMException(`Fansly request exceeded its ${req.timeoutMs} ms budget`, "TimeoutError"));
@@ -92,15 +133,6 @@ export async function sendFanslyWireRequest(
   if (signal.aborted) onCancel();
   else signal.addEventListener("abort", onCancel, { once: true });
 
-  // A cancelled or timed-out request can still reach `onRequestStart` (undici
-  // aborts it right after, before the headers): it must not ask the admission,
-  // which would count a send that never happens.
-  const gate = createOneShotSendCheck(() => {
-    if (abort.signal.aborted) {
-      return new FanslySendRefusedError(timedOut ? "send_deadline_passed" : "lease_inactive");
-    }
-    return hooks.check();
-  });
   const failed = (error: unknown): FanslyWireOutcome => {
     const refusal = findFanslySendRefusal(error) ?? gate.refusal;
     if (!gate.sent && refusal !== null) {
@@ -119,35 +151,43 @@ export async function sendFanslyWireRequest(
       : { kind: "transport_error", sent: gate.sent, message };
   };
 
+  const exchange = async (): Promise<FanslyWireOutcome> => {
+    try {
+      const target = new URL(req.url);
+      const response = await composeFanslySendCheck(dispatcher, gate.check).request({
+        origin: target.origin,
+        path: `${target.pathname}${target.search}`,
+        method: "GET",
+        headers: req.headers,
+        signal: abort.signal,
+        headersTimeout: req.timeoutMs,
+        bodyTimeout: req.timeoutMs,
+      });
+      const raw = await readBoundedBody(response.body);
+      const headers = flattenHeaders(response.headers);
+      const body = NULL_BODY_STATUSES.has(response.statusCode)
+        ? raw
+        : await decodeContent(raw, headers["content-encoding"]);
+      return {
+        kind: "response",
+        status: response.statusCode,
+        headers,
+        bodyText: new TextDecoder("utf-8").decode(body),
+        bodyBytes: raw.length,
+        sendMark: gate.sent ? "request_start" : "completion_fallback",
+      };
+    } catch (error) {
+      return failed(error);
+    }
+  };
+
   try {
-    const target = new URL(req.url);
-    const response = await composeFanslySendCheck(dispatcher, gate.check).request({
-      origin: target.origin,
-      path: `${target.pathname}${target.search}`,
-      method: "GET",
-      headers: req.headers,
-      signal: abort.signal,
-      headersTimeout: req.timeoutMs,
-      bodyTimeout: req.timeoutMs,
-    });
-    const raw = await readBoundedBody(response.body);
-    const headers = flattenHeaders(response.headers);
-    const body = NULL_BODY_STATUSES.has(response.statusCode)
-      ? raw
-      : await decodeContent(raw, headers["content-encoding"]);
-    return {
-      kind: "response",
-      status: response.statusCode,
-      headers,
-      bodyText: new TextDecoder("utf-8").decode(body),
-      bodyBytes: raw.length,
-      sendMark: gate.sent ? "request_start" : "completion_fallback",
-    };
-  } catch (error) {
-    return failed(error);
+    // A call cancelled before it started dispatches nothing: not even a tunnel.
+    return await (abort.signal.aborted ? unsent : Promise.race([exchange(), unsent]));
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", onCancel);
+    abort.signal.removeEventListener("abort", onAbort);
   }
 }
 
