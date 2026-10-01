@@ -27,7 +27,7 @@
     "db:migrate": "node --import tsx/esm packages/db/src/migrate.ts",
     "analytics:run": "node scripts/analytics-run.mjs",
     "test": "NODE_OPTIONS=--max-old-space-size=8192 vitest run",
-    "test:unit": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude tests/**/*.integration.test.ts --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts",
+    "test:unit": "NODE_OPTIONS=--max-old-space-size=8192 vitest run --exclude 'tests/**/*.integration.test.ts' --exclude tests/schema-guard.test.ts --exclude tests/http-client.test.ts --exclude tests/network.test.ts",
     "test:prerequisites": "pnpm test:sync-critical",
     "test:sync-critical": "pnpm test:sync-critical:db && pnpm test:sync-critical:api",
     "test:sync-critical:db": "NODE_OPTIONS=--max-old-space-size=8192 vitest run ${SYNC_CRITICAL_DB_PARALLELISM:---no-file-parallelism} tests/*.integration.test.ts tests/schema-guard.test.ts tests/http-client.test.ts tests/network.test.ts --exclude tests/api.integration.test.ts",

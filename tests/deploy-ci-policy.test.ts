@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1512,6 +1512,119 @@ describe("CI integration shards", () => {
       expect(field(shell(step("integration", dbStepName)), context)).toBe(`pnpm test:sync-critical:db --shard=${shard}/${DEFAULT_SHARD_TOTAL}`);
     }
     await expectEveryFileOnce(planShards({}).shards, DEFAULT_SHARD_TOTAL);
+  });
+});
+
+// A PR runs every test file in exactly one of three package.json tiers: the
+// unit tests in the static job, the sync-critical DB files across the
+// integration shards, and the [sync-critical] tests of the API file on shard
+// 1. pnpm runs a script through `sh -c`, so an unquoted glob belongs to the
+// shell before vitest sees it: with two tests/<dir>/*.integration.test.ts
+// files, an unquoted `--exclude tests/**/*.integration.test.ts` became one
+// excluded file plus one positional filter, and the unit tier ran 1 file of
+// ~400 and stayed green. What each tier runs is asked of vitest itself,
+// through the same shell, so neither the shell nor a new directory can drop
+// files out of every tier unnoticed.
+describe("CI test tiers", () => {
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  const scripts = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> }).scripts;
+  const TIERS = ["test:unit", "test:sync-critical:db", "test:sync-critical:api"] as const;
+  const vitestCli = path.join(path.dirname(createRequire(import.meta.url).resolve("vitest/package.json")), "vitest.mjs");
+
+  /** The environment a CI step gives a script: no vitest worker state, no PC parallelism switch. */
+  function scriptEnv(): NodeJS.ProcessEnv {
+    return Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => !key.startsWith("VITEST") && key !== "SYNC_CRITICAL_DB_PARALLELISM"));
+  }
+
+  function script(name: string): string {
+    const body = scripts[name];
+    if (!body) throw new Error(`package.json has no ${name} script`);
+    return body;
+  }
+
+  /** The argv `pnpm <name>` hands vitest from `cwd`: `sh -c`, with or without pathname expansion. */
+  function shellArgv(name: string, cwd: string, expand = true): string[] {
+    const result = spawnSync("sh", ["-c", `${expand ? "" : "set -f\n"}vitest() { printf '%s\\n' "$@"; }\n${script(name)}`], {
+      encoding: "utf8",
+      cwd,
+      env: scriptEnv(),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trimEnd().split("\n");
+  }
+
+  /** The repo-relative files `pnpm <name>` runs, as `vitest list --filesOnly` reports them for the same argv. */
+  function tierFiles(name: string): string[] {
+    const body = script(name);
+    expect(body, name).toMatch(/^NODE_OPTIONS=\S+ vitest run /);
+    const result = spawnSync("sh", ["-c", `vitest() { shift; "$NODE" "$VITEST_CLI" list --filesOnly --json "$@"; }\n${body}`], {
+      encoding: "utf8",
+      cwd: repoRoot,
+      env: { ...scriptEnv(), NODE: process.execPath, VITEST_CLI: vitestCli },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    expect(result.status, `${name}: ${result.stderr}`).toBe(0);
+    const listed = JSON.parse(result.stdout) as { file: string }[];
+    return listed.map(entry => path.relative(repoRoot, entry.file).split(path.sep).join("/")).sort();
+  }
+
+  it("runs every tests/**/*.test.ts file in exactly one tier", () => {
+    const universe = readdirSync(path.join(repoRoot, "tests"), { recursive: true, encoding: "utf8" })
+      .map(name => `tests/${name.split(path.sep).join("/")}`)
+      .filter(file => file.endsWith(".test.ts"))
+      .sort();
+    const tiers = new Map<string, string[]>();
+    for (const name of TIERS) {
+      for (const file of tierFiles(name)) tiers.set(file, [...(tiers.get(file) ?? []), name]);
+    }
+    const inSeveral = [...tiers].filter(([, names]) => names.length > 1).map(([file, names]) => `${file}: ${names.join(", ")}`);
+    expect(inSeveral, "files more than one tier runs").toEqual([]);
+    // The DB tier's positional glob is the shell's and reaches only tests/*,
+    // so a file in a tests/<dir>/ that test:unit excludes lands here.
+    expect(universe.filter(file => !tiers.has(file)), "test files no CI tier runs").toEqual([]);
+    expect([...tiers.keys()].filter(file => !universe.includes(file)), "tier files that are not tests/**/*.test.ts").toEqual([]);
+    expect(universe.length).toBeGreaterThan(600);
+    // The shard tests above split syncCriticalDbFiles(); it is what vitest runs.
+    expect([...tiers].filter(([, names]) => names.includes("test:sync-critical:db")).map(([file]) => file).sort()).toEqual(syncCriticalDbFiles());
+    expect([...tiers].filter(([, names]) => names.includes("test:sync-critical:api")).map(([file]) => file)).toEqual(["tests/api.integration.test.ts"]);
+  });
+
+  // The partition above holds for today's tree. A pattern the shell may expand
+  // only misbehaves once matching files exist, so each script runs here in a
+  // tree that has them: every --exclude must reach vitest exactly as written.
+  it.each(TIERS)("%s hands every --exclude pattern to vitest as written", name => {
+    const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-tiers-"));
+    try {
+      for (const file of ["a.test.ts", "b.test.ts", "a.integration.test.ts", "b.integration.test.ts"]) {
+        for (const folder of ["tests", "tests/nested"]) {
+          mkdirSync(path.join(dir, folder), { recursive: true });
+          writeFileSync(path.join(dir, folder, file), "");
+        }
+      }
+      const excludes = (argv: string[]) => argv.flatMap((arg, index) => arg === "--exclude" ? [argv[index + 1]] : []);
+      const written = excludes(shellArgv(name, dir, false));
+      expect(excludes(shellArgv(name, dir))).toEqual(written);
+      expect(written.every(pattern => pattern?.startsWith("tests/"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // test:sync-critical:api selects the API file's tests by name. A pattern
+  // that matches nothing still exits 0 (every test skipped), so a renamed tag
+  // or a broken escape would turn that step into a pass that tests nothing.
+  // 27 tests carried the tag when this floor was set; raise it as tags are added.
+  it("selects at least 27 tagged tests of the API file by name", () => {
+    const argv = shellArgv("test:sync-critical:api", repoRoot);
+    expect(argv.filter(arg => arg === "--testNamePattern")).toHaveLength(1);
+    const pattern = new RegExp(argv[argv.indexOf("--testNamePattern") + 1] ?? "");
+    const source = readFileSync(path.join(repoRoot, "tests/api.integration.test.ts"), "utf8");
+    // A test's full name includes its describe titles, so its own title
+    // matching is a lower bound on what vitest selects.
+    const titles = [...source.matchAll(/\b(?:it|test)(?:\.(?:only|skip|concurrent|sequential|fails))*\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1/g)]
+      .map(match => match[2] ?? "");
+    expect(titles.filter(title => pattern.test(title)).length).toBeGreaterThanOrEqual(27);
   });
 });
 
