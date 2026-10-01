@@ -819,6 +819,27 @@ export async function clearPageHold(
   await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
 }
 
+/**
+ * The account the page's credentials answer for (`/account/me`, design §5.1):
+ * `identity_account_id` and the instant it was read. Written by the `account`
+ * resource's live apply, fenced like every actor write.
+ */
+export async function recordSyncPageIdentity(
+  db: Database,
+  input: { pageId: number; generation: bigint; accountId: string },
+): Promise<void> {
+  if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
+  const result = await db.execute(sql`
+    update sync_pages
+       set identity_account_id = ${input.accountId},
+           identity_checked_at = clock_timestamp(),
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+       ${ownedPageFilter(input.generation)}
+  `);
+  await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+}
+
 /** The consecutive network-failure count of §9 (3 ⇒ a `network` hold). */
 export async function setNetworkFailureStreak(
   db: Database,

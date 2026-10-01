@@ -4,6 +4,7 @@ import {
 } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, type SyncContext } from "./context.ts";
 import { SyncEngineHost } from "./engine/host.ts";
+import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
@@ -40,6 +41,7 @@ export function createSyncRuntimeHost(context: SyncContext): SyncRuntimeHost {
     rawConfig: context.rawConfig,
     logger: context.logger,
     registry: createFanslyRegistry(),
+    capture: fanslyCaptureCodec,
   });
 }
 

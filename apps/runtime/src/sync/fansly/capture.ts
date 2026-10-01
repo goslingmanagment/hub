@@ -26,6 +26,8 @@ import { createHash } from "node:crypto";
 
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 
+import type { CaptureCodec } from "../engine/commit.ts";
+
 import { FANSLY_CATALOG_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-catalog.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-payouts.ts";
 import { FANSLY_STATS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-stats.ts";
@@ -154,3 +156,19 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     loneSurrogatesReplaced: surrogates.replaced,
   };
 }
+
+/**
+ * The Fansly journal of the engine's capture (tx 2): every served response
+ * becomes exactly the body the legacy lane journals for it, by its kind. The
+ * reply walk's position comes from the request (`post.replies` names the
+ * post in its path).
+ */
+export const fanslyCaptureCodec: CaptureCodec = {
+  prepare({ kind, response, contractAccepted, request }) {
+    const params = request.params as { postId?: unknown; before?: unknown };
+    const walk = request.spec === "post.replies" && typeof params.postId === "string"
+      ? { postId: params.postId, before: typeof params.before === "string" ? params.before : null }
+      : undefined;
+    return prepareJournalBody({ kind }, { response, contractAccepted, ...(walk === undefined ? {} : { walk }) }).payload;
+  },
+};
