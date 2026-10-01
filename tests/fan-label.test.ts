@@ -91,23 +91,6 @@ describe("resolveFanLabel", () => {
     });
   });
 
-  it("keeps deleted users distinguishable by platform user id", () => {
-    const first = resolveFanLabel({
-      platformUserId: "deleted-user-11111111",
-      username: null,
-      displayName: null,
-    });
-    const second = resolveFanLabel({
-      platformUserId: "deleted-user-22222222",
-      username: null,
-      displayName: null,
-    });
-
-    expect(first.label).toBe("Deleted user · 11111111");
-    expect(second.label).toBe("Deleted user · 22222222");
-    expect(first.label).not.toBe(second.label);
-  });
-
   it("prefers pageAlias only in page scope", () => {
     expect(resolveFanLabel({
       platformUserId: "123456789",

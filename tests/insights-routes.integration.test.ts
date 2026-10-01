@@ -698,6 +698,7 @@ describe("WP-S1 serving routes: traffic", () => {
     );
     expect(secondPage.statusCode).toBe(200);
     const second = secondPage.json();
+    expect(second.rows.length).toBeGreaterThan(0);
     const firstKeys = first.rows.map((row: { sourceCode: string }) => row.sourceCode);
     const secondKeys = second.rows.map((row: { sourceCode: string }) => row.sourceCode);
     // A keyset cursor never repeats a row it already delivered.

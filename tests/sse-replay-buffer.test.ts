@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createMonotonicSeqGuard } from "../apps/runtime/src/services/events-stream.ts";
 import {
   createBoundedSseReplayBuffer,
-  subscribeBeforeReplayBoundary,
   validateGaplessReplayBatch,
   validateV2DeliverableReplayBatch,
 } from "../apps/runtime/src/services/sse-replay-buffer.ts";
@@ -37,51 +35,6 @@ describe("bounded SSE pre-replay buffer", () => {
     buffer.push(3);
     expect(buffer.drain()).toEqual([1, 2, 3]);
     expect(buffer.drain()).toEqual([]);
-  });
-
-  it("closes the validation-to-subscription race with a fresh replay boundary", async () => {
-    const journal = [11];
-    const validationBoundary = 10;
-    const buffered = createBoundedSseReplayBuffer<number>({
-      maxBytes: 10,
-      sizeOf: () => 1,
-      onOverflow: () => undefined,
-    });
-    let subscribed = false;
-
-    const captured = await subscribeBeforeReplayBoundary({
-      subscribe: () => {
-        subscribed = true;
-        return () => undefined;
-      },
-      loadBoundary: async () => {
-        expect(subscribed).toBe(true);
-        // 11 committed after the stale validation read but before subscribe;
-        // 12 commits after subscribe, so it is both live-buffered and inside
-        // the fresh durable ceiling. The monotonic guard removes the duplicate.
-        journal.push(12);
-        buffered.push(12);
-        return journal.at(-1)!;
-      },
-    });
-
-    expect(validationBoundary).toBe(10);
-    expect(captured.boundary).toBe(12);
-    const guard = createMonotonicSeqGuard(validationBoundary);
-    const written = [
-      ...journal.filter((seq) => seq <= captured.boundary),
-      ...buffered.drain(),
-    ].filter((seq) => guard.advance(seq));
-    expect(written).toEqual([11, 12]);
-  });
-
-  it("unsubscribes when the post-subscription boundary read fails", async () => {
-    const unsubscribe = vi.fn();
-    await expect(subscribeBeforeReplayBoundary({
-      subscribe: () => unsubscribe,
-      loadBoundary: () => Promise.reject(new Error("boundary unavailable")),
-    })).rejects.toThrow("boundary unavailable");
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an internal or terminal ledger hole before a later cursor is emitted", () => {

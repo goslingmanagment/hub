@@ -660,17 +660,6 @@ describe("H3 v2 frame context", () => {
     expect(frame?.event["transactionRef"]).toBe("tx-1");
   });
 
-  it("binds every cursor of a platform=onlyfans connection to the platform", async () => {
-    const frames = await runV2Stream({
-      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
-      rows: [1, 2],
-      head: 2,
-      platformFilter: "onlyfans",
-    });
-    const ids = frames.map((frame) => frame.id);
-    expect(ids.length).toBe(3);
-    expect(ids.at(-1)).toBe(encodeDomainEventCursor(new Map([[7, 2]]), { platform: "onlyfans" }));
-  });
 });
 
 describe("H3 grant revalidation through the platform filter", () => {

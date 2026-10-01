@@ -108,7 +108,7 @@ describe("transactions single-writer gate (Stage 13)", () => {
     const incidents = await testDb.pool.query<{ kind: string; status: string }>(
       "select kind, status from notification_incidents where kind = 'wrong_transactions_writer'",
     );
-    expect(incidents.rows.length).toBeGreaterThan(0);
+    expect(incidents.rows).toHaveLength(1);
     expect(incidents.rows[0]?.status).toBe("open");
   });
 

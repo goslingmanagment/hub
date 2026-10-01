@@ -6,6 +6,7 @@ import {
   createModel,
   upsertFanPages,
   upsertFans,
+  type Database,
 } from "@agency_hub_core/db";
 
 import {
@@ -109,6 +110,7 @@ describe("countDistinctFansForPages", () => {
       return;
     }
 
-    expect(await countDistinctFansForPages(testDb.db, [])).toBe(0);
+    // A db that would throw on any query: the empty list must not reach it.
+    expect(await countDistinctFansForPages({} as Database, [])).toBe(0);
   });
 });
