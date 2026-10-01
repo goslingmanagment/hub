@@ -129,6 +129,12 @@ describe("readErrorReason", () => {
 });
 
 describe("clientOffersForPlatforms", () => {
+  it("offers only the clients the person's own pages need", () => {
+    expect(clientOffersForPlatforms(["fansly"]).map((offer) => offer.platform)).toEqual(["fansly"]);
+    expect(clientOffersForPlatforms(["onlyfans"]).map((offer) => offer.platform)).toEqual(["onlyfans"]);
+    expect(clientOffersForPlatforms([]).length).toBe(0);
+  });
+
   it("keeps a stable order and does not repeat a platform", () => {
     expect(clientOffersForPlatforms(["onlyfans", "fansly", "fansly"]).map((offer) => offer.platform))
       .toEqual(["fansly", "onlyfans"]);

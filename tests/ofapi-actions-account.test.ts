@@ -106,6 +106,24 @@ describe("account settings, banking reads and provider automation actions", () =
     expect(request("account_drm_update", { enabled: false }).body).toEqual({ enabled: false });
   });
 
+  it("rejects explicit provider errors before accepting read, automation or withdrawal evidence", () => {
+    const cases = [
+      { command: parse("bank_payout_details_read"), data: { accountNumber: "masked" } },
+      { command: parse("saved_message_autosend_update", { period: 12 }), data: { period: 12 } },
+      { command: parse("payout_withdrawal_request", { amountCents: 5000 }), data: { list: [{ state: "new", rejectReason: null }] } },
+      { command: parse("account_drm_update", { enabled: false }), data: { success: true } },
+    ];
+    for (const { command, data } of cases) {
+      expect(ofapiAccountResultConfirmed(command, 200, { data })).toBe(true);
+      for (const marker of [{ error: "denied" }, { errors: ["denied"] }, { errors: { reason: "denied" } }, { hasError: true }, { success: false }]) {
+        expect(ofapiAccountResultConfirmed(command, 200, { data, ...marker })).toBe(false);
+        expect(ofapiAccountResultConfirmed(command, 200, { data: { ...data, ...marker } })).toBe(false);
+      }
+    }
+    const disable = parse("saved_message_autosend_disable");
+    expect(ofapiAccountResultConfirmed(disable, 200, { data: [], errors: ["denied"] })).toBe(false);
+  });
+
   it("allows absent error values while limiting the false-success exception to username data", () => {
     const username = parse("username_availability_read", { username: "already_used" });
     for (const empty of [undefined, null, false, [], "", 0]) {
