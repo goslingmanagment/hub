@@ -7,8 +7,6 @@ type FanIntelligenceMarkdownProps = {
   body: string;
 };
 
-export const FanIntelligenceMarkdownRenderer = ReactMarkdown;
-
 export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) {
   const { preamble, sections } = useMemo(() => parseProfileSections(body), [body]);
 
@@ -16,7 +14,7 @@ export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) 
   if (sections.length < 2) {
     return (
       <div className="fan-intelligence-markdown">
-        <FanIntelligenceMarkdownRenderer>{body}</FanIntelligenceMarkdownRenderer>
+        <ReactMarkdown>{body}</ReactMarkdown>
       </div>
     );
   }
@@ -25,7 +23,7 @@ export function FanIntelligenceMarkdown({ body }: FanIntelligenceMarkdownProps) 
     <div>
       {preamble && (
         <div className="fan-intelligence-markdown mb-3">
-          <FanIntelligenceMarkdownRenderer>{preamble}</FanIntelligenceMarkdownRenderer>
+          <ReactMarkdown>{preamble}</ReactMarkdown>
         </div>
       )}
       {sections.map((section, index) => (
@@ -67,7 +65,7 @@ function AccordionSection({
       </button>
       {open && (
         <div className="fan-intelligence-markdown mt-2 px-1">
-          <FanIntelligenceMarkdownRenderer>{content}</FanIntelligenceMarkdownRenderer>
+          <ReactMarkdown>{content}</ReactMarkdown>
         </div>
       )}
     </div>

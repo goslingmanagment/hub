@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { escapeLikePattern } from "./search.ts";
+import type { DmLiveTombstoneFilter } from "./sync/live-messages.ts";
 
 export const MESSAGE_ARCHIVE_PROJECTION = "message_archive";
 export const MESSAGE_ARCHIVE_SHADOW_PROJECTION = "message_archive_shadow";
@@ -1539,21 +1540,28 @@ export async function listArchiveConversationMessages(
  * is 1500 (AI windows read deeper than the dashboard's 500 clamp, whose
  * route contract is unchanged).
  */
+/** The AI transcript reader's deepest window (fastreply-freshness PR2). */
+export const ARCHIVE_AI_TRANSCRIPT_MAX_ROWS = 1500;
+
 export async function listArchiveConversationMessagesForAi(
   db: Database,
   input: {
     accountId: number;
     conversationRef: string;
     limit?: number;
+    /** The Fansly live overlay union's REST arm (sync/live-messages.ts):
+     * also hide messages a socket deletion tombstones. */
+    notTombstoned?: DmLiveTombstoneFilter;
   },
 ): Promise<ArchiveMessageRow[]> {
-  const limit = Math.min(input.limit ?? 100, 1500);
+  const limit = Math.min(input.limit ?? 100, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS);
   const result = await db.execute<Record<string, unknown>>(sql`
     select ma.* from message_archive ma
     where ma.conversation_ref = ${input.conversationRef}
       and ma.account_id = ${input.accountId}
       and ma.deleted_at is null
-      and ma.content_pending = false
+      and ma.content_pending = false${input.notTombstoned === undefined ? sql`` : sql`
+      and ${input.notTombstoned(sql`ma.message_ref`)}`}
     order by ma.occurred_at desc nulls last, ma.id desc
     limit ${limit}
   `);

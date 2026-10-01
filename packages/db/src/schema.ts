@@ -868,11 +868,29 @@ export const fanslySendLog = pgTable(
     outcome: text("outcome"),
     outcomeDetail: text("outcome_detail"),
     httpStatus: integer("http_status"),
+    // 0227: the capture's lease end; held past it, the page was closed.
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
   },
   (table) => ({
     guardTokenUidx: uniqueIndex("fansly_send_log_guard_token_uidx").on(table.guardToken),
     pageCapturedIdx: index("fansly_send_log_page_captured_idx").on(table.pageId, table.capturedAt),
     capturedIdx: index("fansly_send_log_captured_idx").on(table.capturedAt),
+  }),
+);
+
+// 0227 (plan §2.4/§10): the newest fansly_send_log id the minutely pace check
+// has examined. One row.
+export const fanslySendPaceCursor = pgTable(
+  "fansly_send_pace_cursor",
+  {
+    id: smallint("id").primaryKey().default(1),
+    afterId: bigint("after_id", { mode: "number" }).notNull().default(0),
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    singleton: check("fansly_send_pace_cursor_singleton", sql`${table.id} = 1`),
+    afterIdCheck: check("fansly_send_pace_cursor_after_id_check", sql`${table.afterId} >= 0`),
   }),
 );
 

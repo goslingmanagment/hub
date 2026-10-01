@@ -1,11 +1,16 @@
 import { sql } from "drizzle-orm";
 
 import {
+  ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
+  readDmLiveUnion,
   type AiTranscriptUnionRow,
+  type ArchiveMessageRow,
+  type DmLiveReaderMessage,
+  type DmLiveUnionItem,
 } from "@agency_hub_core/db";
-import { millsToDollarsNumber } from "@agency_hub_core/shared";
+import { millsToDollarsNumber, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import {
@@ -78,10 +83,32 @@ function archiveRowToOfapiShape(row: {
   } as OfapiChatMessage;
 }
 
+/** A Fansly live overlay row in the archive row shape the shaper reads: the
+ * socket fields only. No price, tip or media: money is REST-only (owner
+ * decision №7), and Fansly archive rows carry no media metadata either, so a
+ * message reads the same before and after its REST copy replaces it. */
+function liveMessageToArchiveShape(message: DmLiveReaderMessage) {
+  return {
+    messageRef: message.platformMessageId,
+    textPlain: normalizeDmMessageText(message.content),
+    isSentByMe: message.senderRole === "model",
+    occurredAt: message.createdAt,
+    priceMills: null,
+    isTip: false,
+    tipAmountMills: 0,
+  };
+}
+
 /** PR3: the effective union-read mode for one generation. "unknown" = the
  * mode read failed or the stored value was invalid — NOT a silent archive
  * fallback: it is recorded in the manifest as unknown-freshness. */
 export type AiTranscriptUnionMode = "off" | "shadow" | "serve" | "unknown";
+
+/** Fansly live overlay (plan §7.11): "serve" when the page is in
+ * `fanslyLiveOverlayReadPages`, so the transcript is the archive ∪ the
+ * socket messages the archive does not hold yet; "unknown" when the switch
+ * itself could not be read (the archive serves; the manifest says so). */
+export type AiTranscriptLiveOverlay = "off" | "serve" | "unknown";
 
 export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 
@@ -103,20 +130,52 @@ export async function loadTranscriptContext(
     conversationRef: string;
     limit?: number;
     unionMode?: AiTranscriptUnionMode;
+    /** Fansly pages only; the OnlyFans union mode never runs beside it. */
+    liveOverlay?: AiTranscriptLiveOverlay;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
   const mode = input.unionMode ?? "off";
+  const liveOverlay = input.liveOverlay ?? "off";
 
   // The AI reader filters tombstones + content-pending stubs in the repo
   // layer and accepts the deeper 1500 cap (fastreply-freshness PR2). It is
   // read in EVERY mode: it serves off/shadow/unknown, it is the serve-mode
-  // fallback, and it anchors the manifest comparison.
-  const archiveRows = await listArchiveConversationMessagesForAi(app.db, {
-    accountId: input.pageId,
-    conversationRef: input.conversationRef,
-    limit,
-  });
+  // fallback, and it anchors the manifest comparison. With the live overlay
+  // it is the union's REST arm (socket deletions hide its rows too); a failed
+  // union read is never a hard failure: the plain archive serves.
+  let liveUnion: DmLiveUnionItem<ArchiveMessageRow>[] | null = null;
+  let liveError = false;
+  let archiveRows: ArchiveMessageRow[] = [];
+  if (liveOverlay === "serve") {
+    try {
+      liveUnion = await readDmLiveUnion(app.db, {
+        pageId: input.pageId,
+        platformConversationId: input.conversationRef,
+        store: "message_archive",
+        limit: Math.min(limit, ARCHIVE_AI_TRANSCRIPT_MAX_ROWS),
+        readStore: async (notTombstoned) => {
+          archiveRows = await listArchiveConversationMessagesForAi(app.db, {
+            accountId: input.pageId,
+            conversationRef: input.conversationRef,
+            limit,
+            notTombstoned,
+          });
+          return archiveRows;
+        },
+        storeKey: (row) => ({ messageId: row.messageRef, at: row.occurredAt }),
+      });
+    } catch {
+      liveError = true;
+    }
+  }
+  if (liveUnion === null) {
+    archiveRows = await listArchiveConversationMessagesForAi(app.db, {
+      accountId: input.pageId,
+      conversationRef: input.conversationRef,
+      limit,
+    });
+  }
 
   // shadow EXECUTES the union query too (that is the point of shadow — and
   // why `off` is the PERF rollback while `shadow` is the correctness one).
@@ -140,7 +199,9 @@ export async function loadTranscriptContext(
   }
 
   const serveUnion = mode === "serve" && unionRows !== null;
-  const servedRows = serveUnion ? unionRows! : archiveRows;
+  const servedRows = liveUnion !== null
+    ? liveUnion.map((item) => item.source === "rest" ? item.row : liveMessageToArchiveShape(item.message))
+    : serveUnion ? unionRows! : archiveRows;
   const shaped = servedRows
     .map((row) => archiveRowToOfapiShape(row as never))
     .filter((row): row is OfapiChatMessage => row !== null);
@@ -154,7 +215,7 @@ export async function loadTranscriptContext(
   const contextManifest: Record<string, unknown> = {
     loaderVersion: TRANSCRIPT_LOADER_VERSION,
     mode,
-    source: serveUnion ? "union" : "archive",
+    source: liveUnion !== null ? "live_union" : serveUnion ? "union" : "archive",
     archiveCount: archiveRows.length,
     unionCount: unionRows === null ? null : unionRows.length,
     archiveHeadRef: archiveHead?.messageRef ?? null,
@@ -177,6 +238,11 @@ export async function loadTranscriptContext(
     queryDurationMs,
     unionError,
     staleContext: mode === "serve" && unionError,
+    // Fansly live overlay: socket messages served beside the archive (they
+    // carry no money), and whether the union read failed (archive served).
+    liveOverlay,
+    liveCount: liveUnion === null ? null : liveUnion.filter((item) => item.source === "live").length,
+    liveError,
   };
 
   const mediaByMessage = new Map<number, OnlyFansMessageMedia>();

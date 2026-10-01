@@ -113,7 +113,7 @@ export type AnalyticsQueryId =
  * failure banner names surfaces, not query variables: "media traffic failed"
  * means nothing to the person reading the page.
  */
-export const ANALYTICS_QUERY_SURFACES: Readonly<Record<AnalyticsQueryId, readonly string[]>> = {
+const ANALYTICS_QUERY_SURFACES: Readonly<Record<AnalyticsQueryId, readonly string[]>> = {
   profileTraffic: ["Traffic by source"],
   mediaTraffic: ["FYP vs direct media views", "Content performance · Avg. watch"],
   media: ["Top media", "Content performance"],

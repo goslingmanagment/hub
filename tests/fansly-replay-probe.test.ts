@@ -12,10 +12,6 @@ vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
   })),
 }));
 
-vi.mock("../apps/runtime/src/services/sync/rate-limiter.ts", () => ({
-  createSyncRateLimitWaiter: vi.fn(() => vi.fn(async () => 0)),
-}));
-
 const { runFanslyReplayProbe, summarizeReplayProbe } = await import(
   "../apps/runtime/src/services/fansly-replay-probe.ts"
 );

@@ -155,18 +155,18 @@ export async function captureFanslyPageSendGuard(
          and g.holder_token is null
          and clock_timestamp() >= g.last_completed_at
            + (${input.settingMs}::double precision * (1 + g.next_u)) * interval '1 millisecond'
-      returning g.page_id, g.captured_at, g.last_completed_at, g.next_u
+      returning g.page_id, g.captured_at, g.lease_until, g.last_completed_at, g.next_u
     ), journal as (
       insert into fansly_send_log (
         page_id, guard_token, source, operation, holder_host, holder_pid, holder_role,
         holder_instance, setting_ms, jitter_u, pause_ms, previous_completed_at,
-        capture_wait_ms, capture_refusals, captured_at
+        capture_wait_ms, capture_refusals, captured_at, lease_until
       )
       select page_id, ${input.token}::uuid, ${input.source}, ${input.operation},
              ${holder.host}, ${holder.pid}, ${holder.role}, ${holder.instance}::uuid,
              ${input.settingMs}, next_u,
              ceil(${input.settingMs}::double precision * (1 + next_u))::integer,
-             last_completed_at, ${input.captureWaitMs}, ${input.captureRefusals}, captured_at
+             last_completed_at, ${input.captureWaitMs}, ${input.captureRefusals}, captured_at, lease_until
         from captured
       returning id, jitter_u, pause_ms
     )

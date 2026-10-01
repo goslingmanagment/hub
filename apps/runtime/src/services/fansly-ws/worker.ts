@@ -5,10 +5,12 @@ import {
   findPageByLabel, finishFanslyWsConnection, guardFanslyWsConnection,
   replayFanslyWsDecode, isFanslyWsGenerationBlocked, type Database,
 } from "@agency_hub_core/db";
+import type { FanslySendLease } from "@agency_hub_core/fansly";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { readFanslyPageGeneration, readProbeGeneration, readProbeSnapshot } from "../egress/fansly-probe-context.ts";
 import { openFanslyReceiverSocket } from "../egress/fansly-receiver-socket.ts";
+import { FanslyPageSendClosedError, fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import {
   FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsConnectionTiming, type FanslyWsStopReason,
 } from "./connection.ts";
@@ -117,6 +119,8 @@ async function runPage(
     let connectionId: string | undefined;
     let intakeStoppedAt: Date | undefined;
     let applier: ReturnType<typeof createFanslyWsLiveApplier> | undefined;
+    let lease: FanslySendLease | null = null;
+    let sendGuardClosed = false;
     let reason: FanslyWsStopReason = "guard_unavailable";
     // Guard/status and capture share the lock-owning session without nested
     // transactions interleaving. No queue of business tasks or new dispatch authority.
@@ -145,6 +149,15 @@ async function runPage(
       }
       await replayFanslyWsDecode(owned.db, pageId).catch(() => undefined);
       if (controller.signal.aborted) throw new Error("fansly_ws_stopped");
+      // Plan §2.4/§2.5: the handshake is a request of the page and waits for
+      // its send guard like any other, before this attempt's connection row.
+      // One capture per attempt; the frames of the open socket are not paced.
+      lease = await fanslyPageSendGuard(app, pageId, "ws_connect").acquire({
+        operation: "ws_connect",
+        requestTimeoutMs: timing.authTimeoutMs * 2,
+        signal: controller.signal,
+      });
+      const admitted = lease;
       connectionId = randomUUID();
       const id = connectionId;
       await beginFanslyWsConnection(owned.db, { id, pageId, generation });
@@ -163,7 +176,7 @@ async function runPage(
       const live = createFanslyWsLiveApplier(app);
       applier = live;
       reason = await receiveFanslyConnection({
-        open: () => openFanslyReceiverSocket(egress), token, signal: controller.signal, timing,
+        open: () => openFanslyReceiverSocket(egress, admitted), token, signal: controller.signal, timing,
         onStable: () => { failures = 0; },
         onIntakeStopped: (at) => { intakeStoppedAt = at; },
         capture: async (frame, ordinal, receivedAt) => {
@@ -188,12 +201,23 @@ async function runPage(
           await replayFanslyWsDecode(owned.db, pageId).catch(() => undefined);
         }),
       });
-    } catch {
-      // Never log credential/dispatcher/SQL error objects. The attempt row is
-      // the evidence; a failed initial resolution made no provider request.
-      app.logger.warn({ pageLabel: label }, "Fansly B0 unavailable; polling continues");
+    } catch (error) {
+      if (error instanceof FanslyPageSendClosedError) {
+        // The page's send guard is closed (a holder overran its lease; the
+        // guard alert says what to do). Not a connection failure: look again
+        // after the page pause, off the reconnect ladder.
+        sendGuardClosed = true;
+        app.logger.warn({ pageLabel: label }, "Fansly B0 waits: the page's send guard is closed");
+      } else {
+        // Never log credential/dispatcher/SQL error objects. The attempt row is
+        // the evidence; a failed initial resolution made no provider request.
+        app.logger.warn({ pageLabel: label }, "Fansly B0 unavailable; polling continues");
+      }
     } finally {
       controller.abort("disabled");
+      // The handshake completed its capture when it settled; this covers an
+      // attempt that ended before (idempotent). Nothing is sent after it.
+      if (lease) await lease.complete({ outcome: lease.sent ? "transport_error" : "aborted_before_send" });
       // Captured frames reach the overlay before the attempt closes; apply needs
       // no page ownership, so this holds for every stop reason.
       if (applier) await applier.drain(timing.applyDrainMs);
@@ -224,6 +248,10 @@ async function runPage(
       signal.removeEventListener("abort", abort);
     }
     if (signal.aborted) return;
+    if (sendGuardClosed) {
+      await pause(signal, timing.pagePauseMs);
+      continue;
+    }
     if (reason === "auth_refused") {
       // Fail closed for this generation, including worker restarts (journal
       // check below). REST authority remains independent; no logout/revoke.

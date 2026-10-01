@@ -55,6 +55,7 @@ import {
   getFanslySendGuards,
   readFanslySendGuardStatus,
 } from "./services/fansly-send-guard/index.ts";
+import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -3010,7 +3011,15 @@ export function buildProgram() {
       + "its container is gone or started again after the holder's captured_at "
       + "(docker inspect -f '{{.State.StartedAt}}' <container>); only a holder past its lease",
     )
-    .option("--include-unexpired", "with --running-hosts: also release holders whose lease has not expired yet", false)
+    .option(
+      "--include-unexpired",
+      "with --running-hosts: also release holders whose lease has not expired yet, if captured before --captured-before",
+      false,
+    )
+    .option(
+      "--captured-before <iso>",
+      "with --include-unexpired: the instant taken on the host right before the running hostnames were listed",
+    )
     .option("--dry-run", "list what would be released without writing", false)
     .action(async (options) => {
       const byHosts = options.runningHosts !== undefined;
@@ -3018,9 +3027,16 @@ export function buildProgram() {
       if (byHosts === byToken) {
         throw new Error("confirm-terminated takes exactly one of --running-hosts or --holder-token");
       }
-      if (byToken && options.includeUnexpired) {
+      if (byToken && (options.includeUnexpired || options.capturedBefore !== undefined)) {
         throw new Error("--include-unexpired applies to --running-hosts only; a holder token is released only past its lease");
       }
+      if (Boolean(options.includeUnexpired) !== (options.capturedBefore !== undefined)) {
+        throw new Error(
+          "--include-unexpired and --captured-before go together: a live lease is released only for a capture "
+          + "older than the listing of the running hostnames",
+        );
+      }
+      const capturedBefore = options.capturedBefore === undefined ? null : parseDateOption(String(options.capturedBefore));
       const app = await createAppContext();
       try {
         const identity = getFanslySendGuards(app).holderIdentity();
@@ -3041,6 +3057,7 @@ export function buildProgram() {
           ownHost: identity.host,
           confirmer: `cli@${identity.host} pid ${identity.pid}`,
           includeUnexpired: Boolean(options.includeUnexpired),
+          capturedBefore,
           dryRun: Boolean(options.dryRun),
         });
         printRows(
@@ -3051,6 +3068,30 @@ export function buildProgram() {
             options.dryRun ? true : outcome.released,
           ]),
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Plan §2.5 p.3 (b) / §15 step 1: the acceptance report of the send guard,
+  // read from the journal of every guarded attempt (read-only).
+  sendGuard
+    .command("report")
+    .description(
+      "per Fansly page since --since: sends by source, the smallest gap between sends and the setting, "
+      + "pairs closer than the setting (must be 0), guard triggers (must be non-zero), outcomes and HTTP "
+      + "statuses (429/401/403), closed periods; JSON, read-only",
+    )
+    .requiredOption("--since <iso>", "window start: an ISO timestamp, or a relative 30m / 1h / 2d", parseSinceOption)
+    .option("--page <label>", "one Fansly page")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const report = await buildFanslySendGuardReport(app.db, {
+          since: options.since as Date,
+          pageLabel: options.page === undefined ? null : String(options.page),
+        });
+        console.log(JSON.stringify(report, null, 2));
       } finally {
         await app.close();
       }

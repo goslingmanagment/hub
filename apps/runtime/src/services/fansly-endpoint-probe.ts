@@ -6,7 +6,6 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
-import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 // Liveness probe for the endpoints-cover initiative: WP-F9 (`dm_commerce`), [E1],
@@ -438,12 +437,10 @@ export async function runFanslyEndpointProbe(
       throw new Error(`Page "${pageLabel}" is not a Fansly page (platform=${context.platform})`);
     }
 
-    const rateLimitWaiter = createSyncRateLimitWaiter(app, { egressKey: context.egressKey });
     const requestContext = {
       session: context.session,
       proxy: context.proxy,
       egressKey: context.egressKey,
-      rateLimitWaiter,
       sendGuard: fanslyPageSendGuard(app, context.page.id, "endpoint_probe"),
     };
 

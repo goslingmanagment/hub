@@ -4,19 +4,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   FanIntelligenceMarkdown,
-  FanIntelligenceMarkdownRenderer,
 } from "../apps/dashboard/src/components/page/FanIntelligenceMarkdown.tsx";
+import { parseProfileSections } from "../apps/dashboard/src/lib/parseFanProfile.ts";
 
 function render(body: string): string {
   return renderToStaticMarkup(createElement(FanIntelligenceMarkdown, { body }));
 }
 
 describe("FanIntelligenceMarkdown", () => {
-  it("exports FanIntelligenceMarkdownRenderer as ReactMarkdown", () => {
-    expect(FanIntelligenceMarkdownRenderer).toBeDefined();
-    expect(typeof FanIntelligenceMarkdownRenderer).toBe("function");
-  });
-
   it("renders flat when no H2 headings are present", () => {
     const html = render("# Title\n\nSome content");
     expect(html).toContain('class="fan-intelligence-markdown"');
@@ -52,5 +47,49 @@ describe("FanIntelligenceMarkdown", () => {
     expect(html).not.toContain('aria-expanded="true"');
     // Section content should not be rendered when collapsed
     expect(html).not.toContain("hook one");
+  });
+});
+
+describe("parseProfileSections", () => {
+  it("splits body into sections by H2 headings", () => {
+    const body = [
+      "Preamble text",
+      "",
+      "## 1. ДОСЬЕ",
+      "",
+      "Dossier content here",
+      "",
+      "## 2. ПОРТРЕТ",
+      "",
+      "Portrait content here",
+      "",
+      "## 3. СТРАТЕГИЯ",
+      "",
+      "Strategy content here",
+    ].join("\n");
+
+    expect(parseProfileSections(body)).toEqual({
+      preamble: "Preamble text",
+      sections: [
+        { heading: "1. ДОСЬЕ", content: "Dossier content here" },
+        { heading: "2. ПОРТРЕТ", content: "Portrait content here" },
+        { heading: "3. СТРАТЕГИЯ", content: "Strategy content here" },
+      ],
+    });
+  });
+
+  it("preserves H3 headings within H2 sections", () => {
+    const { sections } = parseProfileSections("## Parent\n\n### Child\n\nNested content\n\n## Next");
+    expect(sections).toHaveLength(2);
+    expect(sections[0]?.content).toContain("### Child");
+    expect(sections[0]?.content).toContain("Nested content");
+  });
+
+  it("handles ATX closing hashes in H2 headings", () => {
+    expect(parseProfileSections("## Heading ##\n\nContent").sections[0]?.heading).toBe("Heading");
+  });
+
+  it("trims whitespace from heading text", () => {
+    expect(parseProfileSections("##   Spaced Heading  \n\nContent").sections[0]?.heading).toBe("Spaced Heading");
   });
 });

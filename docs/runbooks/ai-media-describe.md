@@ -98,7 +98,7 @@ The fast lane (`services/ai-media-describe/fansly-fast-lane.ts`,
    bundle (`contentType` 1/2; tips never). One row per message goes to
    `ai_media_accelerator_reads` (`lane = 'fast'`, the frame's generation).
 2. Per page, one at a time, after ~1 s of coalescing (and at most one read
-   per conversation every 10 s), **before any pacing slot is reserved**: the
+   per conversation every 10 s), **before the page's send guard is captured**: the
    shared 24 h cap (`..._ACCELERATOR_DAILY_LIMIT`), a lane cooldown or any
    stream cooling down on any page of the egress, the DM stream paused or
    blocked, a 429 (15 min), 5xx (5 min) or 401/403 (30 min) in the egress's
@@ -106,11 +106,13 @@ The fast lane (`services/ai-media-describe/fansly-fast-lane.ts`,
    current, and no unfinished sync request of the egress (looked at again
    twice, 2 s apart). The page must also be on `FANSLY_WS_CAPTURE_PAGE_ALLOWLIST`.
 3. The read `/message?groupId&limit=25` (new chats too — addressed by the
-   frame's groupId, no roster row needed) reserves its slot in the egress's
-   shared pacing queue and **holds it for its whole 5 s timeout**; right
+   frame's groupId, no roster row needed) captures the page's send guard,
+   its only pacing (one request of the page in flight, the Fansly pause
+   × (1 + 0–20 %) from the previous completion; no endpoint pause), and
+   **holds it until the read completes or its 5 s timeout ends**; right
    before dispatch (after the wait) every check of step 2 is asked again,
-   then it admits itself (compare-and-set, one attempt) and extends the hold
-   from its real start. `dispatched_at` records it.
+   then it admits itself (compare-and-set, one attempt). `dispatched_at`
+   records it.
 4. The response is journaled (raw + observation only), the canonicalizer's
    own parser runs over it, and `applyAiMediaAttachmentsEvent` (the
    projector's code) makes the fan's files due. The describe loop takes them

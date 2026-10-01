@@ -9,7 +9,6 @@ import { loadEffectiveConfig } from "../effective-config.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
-import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import {
   executeFanEarningsRecovery, FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD,
@@ -66,7 +65,6 @@ export async function executeFanEarningsChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
 

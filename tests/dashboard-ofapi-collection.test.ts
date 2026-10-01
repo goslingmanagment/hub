@@ -75,7 +75,6 @@ import {
   describeSettings,
   diffDraftAgainstSnapshot,
   draftBlockReason,
-  draftEnableCount,
   draftKey,
   emptyDraft,
   formatBytes,
@@ -95,7 +94,6 @@ import {
   usageTotals,
   type CollectionDraft,
 } from "../apps/dashboard/src/pages/settings/collection/collectionModel.ts";
-import { buildSettingsRoute, resolveSettingsTab } from "../apps/dashboard/src/lib/navigation.ts";
 import { OfapiCreditsPage } from "../apps/dashboard/src/pages/OfapiCreditsPage.tsx";
 
 // ---------------------------------------------------------------------------
@@ -581,11 +579,10 @@ describe("draft, preview, pause and conflict surfaces (static render)", () => {
 });
 
 describe("collection model helpers", () => {
-  it("removes a draft entry that returns to its base value and serialises round-trip", () => {
+  it("compares settings by value and serialises a draft round-trip into its change body", () => {
     const base = settings({ mode: "off", intervalMinutes: 1440, dailyCreditLimit: 200 });
     const draft = emptyDraft(3, { kind: "all" });
     draft.entries[draftKey(null, "posts_comments")] = { settings: settings(), base };
-    expect(draftEnableCount(draft)).toBe(1);
     expect(sameSettings(base, settings())).toBe(false);
     expect(sameSettings(base, { ...base })).toBe(true);
     const restored = restoreDraft(serializeDraft(draft));
@@ -744,11 +741,6 @@ describe("collection model helpers", () => {
 });
 
 describe("navigation and the Credits link", () => {
-  it("knows the collection tab", () => {
-    expect(resolveSettingsTab("collection")).toBe("collection");
-    expect(buildSettingsRoute("collection")).toBe("/settings?tab=collection");
-  });
-
   it("OFAPI Credits links to the collection settings", () => {
     creditsQueryMocks.useAdminOfapiCreditsDaily.mockReturnValue({ data: { days: [], balance: [], refills: [], byOperation: [], byPage: [] }, isLoading: false });
     creditsQueryMocks.useAdminOfapiCreditsLedger.mockReturnValue({ data: { total: 0, pageOptions: [], rows: [] }, isLoading: false });

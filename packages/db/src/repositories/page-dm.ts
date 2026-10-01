@@ -4,6 +4,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { readDmLiveUnion, type DmLiveReaderMessage, type DmLiveTombstoneFilter } from "./sync/live-messages.ts";
 import {
   fanPages,
   fans,
@@ -1531,6 +1532,14 @@ export async function getPageDmSyncCoverage(
   } satisfies PageDmSyncCoverage;
 }
 
+/** Provenance of a message row, set only when the page reads the live
+ * overlay (`liveOverlay`): `rest` is the page_dm_messages copy, `live` a
+ * socket message REST has not delivered to it yet (sync/live-messages.ts).
+ * A `live` row also says whether REST can ever confirm it. */
+export type PageConversationMessageProvenance =
+  | { source: "rest" }
+  | { source: "live"; apiUnavailable: boolean };
+
 export interface PageConversationPreviewMessageRow {
   platformMessageId: string;
   senderPlatformUserId: string | null;
@@ -1538,6 +1547,7 @@ export interface PageConversationPreviewMessageRow {
   createdAt: Date;
   content: string;
   totalTipAmountCents: number;
+  provenance?: PageConversationMessageProvenance;
 }
 
 export interface PageConversationPreview {
@@ -1569,6 +1579,13 @@ export interface PageConversationMessageRow {
   content: string;
   createdAt: Date;
   tipAmountCents: number;
+  provenance?: PageConversationMessageProvenance;
+}
+
+/** An overlay row's provenance. Its money fields are 0, never socket
+ * values: tips and PPV come with the REST copy (owner decision №7). */
+function liveProvenance(message: DmLiveReaderMessage): PageConversationMessageProvenance {
+  return { source: "live", apiUnavailable: message.apiUnavailable };
 }
 
 export interface PageConversationMessages {
@@ -1593,6 +1610,10 @@ export async function getPageConversationMessages(
     platformAccountId: number;
     platformConversationId: string;
     limit?: number;
+    /** The page reads the live overlay (`fanslyLiveOverlayReadPages`): the
+     * newest `limit` of page_dm_messages ∪ unconfirmed socket messages, each
+     * row with its provenance. Off: page_dm_messages only, as always. */
+    liveOverlay?: boolean;
   },
 ) {
   const limit = Math.min(Math.max(input.limit ?? 25, 1), 100);
@@ -1604,7 +1625,7 @@ export async function getPageConversationMessages(
     return null;
   }
 
-  const messagesResult = await db.execute<{
+  const readStore = async (notTombstoned?: DmLiveTombstoneFilter) => (await db.execute<{
     messageId: string;
     senderRole: DmSenderRole;
     createdAt: TimestampValue;
@@ -1619,10 +1640,37 @@ export async function getPageConversationMessages(
     from page_dm_messages
     where conversation_id = ${conversation.id}
       and platform_account_id = ${input.platformAccountId}
-      and deleted_at is null
+      and deleted_at is null${notTombstoned === undefined ? sql`` : sql`
+      and ${notTombstoned(sql`page_dm_messages.platform_message_id`)}`}
     order by created_at desc, platform_message_id desc, id desc
     limit ${limit}
-  `);
+  `)).rows;
+  const storeMessage = (row: Awaited<ReturnType<typeof readStore>>[number]): PageConversationMessageRow => ({
+    messageId: row.messageId,
+    senderRole: row.senderRole,
+    content: row.content,
+    createdAt: requireTimestamp(row.createdAt, "createdAt"),
+    tipAmountCents: normalizeNumber(row.tipAmountCents, "tipAmountCents"),
+  });
+  const messages: PageConversationMessageRow[] = input.liveOverlay === true
+    ? (await readDmLiveUnion(db, {
+      pageId: input.platformAccountId,
+      platformConversationId: conversation.platformConversationId,
+      store: "page_dm_messages",
+      limit,
+      readStore,
+      storeKey: (row) => ({ messageId: row.messageId, at: requireTimestamp(row.createdAt, "createdAt") }),
+    })).map((item): PageConversationMessageRow => item.source === "rest"
+      ? { ...storeMessage(item.row), provenance: { source: "rest" } }
+      : {
+        messageId: item.message.platformMessageId,
+        senderRole: item.message.senderRole,
+        content: item.message.content,
+        createdAt: item.message.createdAt,
+        tipAmountCents: 0,
+        provenance: liveProvenance(item.message),
+      })
+    : (await readStore()).map(storeMessage);
 
   return {
     conversationId: conversation.platformConversationId,
@@ -1637,13 +1685,7 @@ export async function getPageConversationMessages(
       unreadCount: conversation.unreadCount,
       lastMessageAt: conversation.lastMessageAt,
     },
-    messages: messagesResult.rows.map((row) => ({
-      messageId: row.messageId,
-      senderRole: row.senderRole,
-      content: row.content,
-      createdAt: requireTimestamp(row.createdAt, "createdAt"),
-      tipAmountCents: normalizeNumber(row.tipAmountCents, "tipAmountCents"),
-    })),
+    messages,
   } satisfies PageConversationMessages;
 }
 
@@ -1653,6 +1695,9 @@ export async function getPageConversationPreview(
     platformAccountId: number;
     platformConversationId: string;
     limit?: number;
+    /** As in getPageConversationMessages: the newest `limit` of the live
+     * union, each row with its provenance, still oldest first. */
+    liveOverlay?: boolean;
   },
 ) {
   const limit = Math.min(
@@ -1686,31 +1731,10 @@ export async function getPageConversationPreview(
         ))
         .limit(1)
       : Promise.resolve([]),
-    db.execute<{
-      platformMessageId: string;
-      senderPlatformUserId: string | null;
-      senderRole: DmSenderRole;
-      createdAt: TimestampValue;
-      content: string;
-      totalTipAmountCents: NumericValue;
-    }>(sql`
-      select platform_message_id as "platformMessageId",
-             sender_platform_user_id as "senderPlatformUserId",
-             sender_role as "senderRole",
-             created_at as "createdAt",
-             content as "content",
-             total_tip_amount_cents as "totalTipAmountCents"
-      from (
-        select *
-        from page_dm_messages
-        where conversation_id = ${conversation.id}
-          and platform_account_id = ${input.platformAccountId}
-          and deleted_at is null
-        order by created_at desc, platform_message_id desc, id desc
-        limit ${limit}
-      ) newest
-      order by created_at asc, platform_message_id asc
-    `),
+    input.liveOverlay === true
+      ? readPreviewLiveUnion(db, { conversation, platformAccountId: input.platformAccountId, limit })
+      : readPreviewMessages(db, { conversationId: conversation.id, platformAccountId: input.platformAccountId, limit })
+        .then((rows) => rows.map(previewStoreMessage)),
   ]);
 
   return {
@@ -1735,15 +1759,95 @@ export async function getPageConversationPreview(
       unreadCount: conversation.unreadCount,
       lastMessageAt: conversation.lastMessageAt,
     },
-    messages: messagesResult.rows.map((row) => ({
-      platformMessageId: row.platformMessageId,
-      senderPlatformUserId: row.senderPlatformUserId,
-      senderRole: row.senderRole,
-      createdAt: requireTimestamp(row.createdAt, "createdAt"),
-      content: row.content,
-      totalTipAmountCents: normalizeNumber(row.totalTipAmountCents, "totalTipAmountCents"),
-    })),
+    messages: messagesResult,
   } satisfies PageConversationPreview;
+}
+
+type PreviewStoreRow = {
+  platformMessageId: string;
+  senderPlatformUserId: string | null;
+  senderRole: DmSenderRole;
+  createdAt: TimestampValue;
+  content: string;
+  totalTipAmountCents: NumericValue;
+};
+
+/** The preview's page_dm_messages read: the newest `limit` rows, oldest
+ * first (the confirmed-only preview) or, as the live union's REST arm
+ * (`union`), newest first and without the messages a socket deletion
+ * tombstones. */
+async function readPreviewMessages(
+  db: Database,
+  input: { conversationId: number; platformAccountId: number; limit: number },
+  union?: { notTombstoned: DmLiveTombstoneFilter },
+) {
+  const result = await db.execute<PreviewStoreRow>(sql`
+      select platform_message_id as "platformMessageId",
+             sender_platform_user_id as "senderPlatformUserId",
+             sender_role as "senderRole",
+             created_at as "createdAt",
+             content as "content",
+             total_tip_amount_cents as "totalTipAmountCents"
+      from (
+        select *
+        from page_dm_messages
+        where conversation_id = ${input.conversationId}
+          and platform_account_id = ${input.platformAccountId}
+          and deleted_at is null${union === undefined ? sql`` : sql`
+          and ${union.notTombstoned(sql`page_dm_messages.platform_message_id`)}`}
+        order by created_at desc, platform_message_id desc, id desc
+        limit ${input.limit}
+      ) newest
+      ${union === undefined
+        ? sql`order by created_at asc, platform_message_id asc`
+        : sql`order by created_at desc, platform_message_id desc, id desc`}
+    `);
+  return result.rows;
+}
+
+function previewStoreMessage(row: PreviewStoreRow): PageConversationPreviewMessageRow {
+  return {
+    platformMessageId: row.platformMessageId,
+    senderPlatformUserId: row.senderPlatformUserId,
+    senderRole: row.senderRole,
+    createdAt: requireTimestamp(row.createdAt, "createdAt"),
+    content: row.content,
+    totalTipAmountCents: normalizeNumber(row.totalTipAmountCents, "totalTipAmountCents"),
+  };
+}
+
+async function readPreviewLiveUnion(
+  db: Database,
+  input: {
+    conversation: { id: number; platformConversationId: string };
+    platformAccountId: number;
+    limit: number;
+  },
+): Promise<PageConversationPreviewMessageRow[]> {
+  const union = await readDmLiveUnion(db, {
+    pageId: input.platformAccountId,
+    platformConversationId: input.conversation.platformConversationId,
+    store: "page_dm_messages",
+    limit: input.limit,
+    readStore: (notTombstoned) => readPreviewMessages(db, {
+      conversationId: input.conversation.id,
+      platformAccountId: input.platformAccountId,
+      limit: input.limit,
+    }, { notTombstoned }),
+    storeKey: (row) => ({ messageId: row.platformMessageId, at: requireTimestamp(row.createdAt, "createdAt") }),
+  });
+  // The union is newest first; the preview reads oldest first.
+  return union.reverse().map((item): PageConversationPreviewMessageRow => item.source === "rest"
+    ? { ...previewStoreMessage(item.row), provenance: { source: "rest" } }
+    : {
+      platformMessageId: item.message.platformMessageId,
+      senderPlatformUserId: item.message.senderPlatformUserId,
+      senderRole: item.message.senderRole,
+      createdAt: item.message.createdAt,
+      content: item.message.content,
+      totalTipAmountCents: 0,
+      provenance: liveProvenance(item.message),
+    });
 }
 
 // ─── Per-conversation DM message-sync circuit breaker (0086) ───────────────

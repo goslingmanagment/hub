@@ -220,10 +220,13 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
       "aiMediaDescribeFanslyFastLaneMode",
       "aiMediaDescribeFanslyFastLanePages",
+      // Fansly Sync Engine step 1: the live overlay read kill-switch.
+      "fanslyLiveOverlayReadPages",
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(96);
+    expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(97);
   });
 });

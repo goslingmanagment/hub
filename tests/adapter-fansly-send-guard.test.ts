@@ -9,6 +9,7 @@ import {
   captureEvents,
   cleanupAdapterHarness,
   fanslyAccountResponse,
+  fanslyFollowersResponse,
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
@@ -19,10 +20,10 @@ import {
 } from "./helpers/fansly-send-guard.ts";
 
 // Plan §2.5 step 1, adapter side: every physical attempt is admitted by the
-// page's send guard AFTER the legacy endpoint pauses, dispatched through the
-// lease's own dispatcher with redirects off, and completed on every path.
-// The page-wide spacing is the guard's: no in-memory `global` chain, no
-// `global` limiter scope, no +100 ms.
+// page's send guard, dispatched through the lease's own dispatcher with
+// redirects off, and completed on every path. The guard is the ONLY pacing of
+// a Fansly request (plan §2.3, §2.5 p.4): no endpoint pause for messages, the
+// chat list or followers, no in-memory chain, no `global` scope, no +100 ms.
 
 let harness: Awaited<ReturnType<typeof loadAdapters>>;
 let sendGuardModule: typeof SendGuardModule;
@@ -63,7 +64,7 @@ function guards(settingMs = 0) {
   });
 }
 
-/** A guard that records the order of admissions against the endpoint waiter. */
+/** A guard that records its admissions. */
 function recordingGuard(inner: FanslySendGuard, order: string[]): FanslySendGuard {
   return {
     async acquire(input) {
@@ -74,51 +75,82 @@ function recordingGuard(inner: FanslySendGuard, order: string[]): FanslySendGuar
 }
 
 describe("the adapter under the per-page send guard", () => {
-  it("reserves the endpoint pause first, then captures the page, for every attempt", async () => {
+  it("captures the page for every attempt, the SDK retry included", async () => {
     harness.fetchMock
       .mockResolvedValueOnce(toJsonResponse({ success: false }, { status: 503 }))
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: { messages: [] } }));
     const order: string[] = [];
-    const waiter = vi.fn(async (scopes: Array<{ scope: string }>) => {
-      order.push(`endpoint:${scopes.map((scope) => scope.scope).join(",")}`);
-      return 0;
-    });
     const { registry, store } = guards();
     vi.useFakeTimers();
     const request = adapter().getMessagesPage({
       session,
       proxy,
-      rateLimitWaiter: waiter,
       sendGuard: recordingGuard(registry.forPage(7, "sync_stream"), order),
     }, { groupId: "group-1", limit: 25 });
     await vi.runAllTimersAsync();
     await request;
 
-    // The retry is a new attempt: the endpoint pause and a new capture again.
-    expect(order).toEqual([
-      "endpoint:dm_messages",
-      "capture:messages",
-      "endpoint:dm_messages",
-      "capture:messages",
-    ]);
+    // The retry is a new attempt: a new capture, and nothing else before it.
+    expect(order).toEqual(["capture:messages", "capture:messages"]);
     expect(store.journal.map((row) => [row.pageId, row.outcome, row.httpStatus])).toEqual([
       [7, "response", 503],
       [7, "response", 200],
     ]);
   });
 
-  it("asks the shared limiter for no scope at all outside the endpoint categories", async () => {
-    harness.fetchMock.mockResolvedValueOnce(fanslyAccountResponse());
-    const waiter = vi.fn(async () => 0);
-    const { registry } = guards();
-    await adapter().getAccountMe({
-      session,
-      proxy,
-      rateLimitWaiter: waiter,
-      sendGuard: registry.forPage(7, "account_me_api"),
+  it("paces messages, the chat list and followers by the guard alone: S × (1 + u), no endpoint pause", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    harness.fetchMock.mockImplementation(async (...args: unknown[]) => {
+      const path = new URL(String(args[0])).pathname;
+      if (path.endsWith("/messaging/groups")) {
+        return toJsonResponse({ success: true, response: { data: [], aggregationData: { groups: [], accounts: [] } } });
+      }
+      if (path.includes("/followersnew")) return fanslyFollowersResponse();
+      return toJsonResponse({ success: true, response: { messages: [] } });
     });
-    // The page-wide `global` scope (S + 100 ms per egress) is gone.
-    expect(waiter).not.toHaveBeenCalled();
+    // u = draw × 0.2 is drawn at each completion and spaces the next send.
+    const draws = [0, 0.625, 0.3125, 0.9375, 0.5, 0];
+    const store = new InMemoryFanslySendGuardStore(() => Date.now(), true);
+    const { registry } = createTestFanslySendGuards({
+      store,
+      settingMs: 2_000,
+      random: () => draws.shift() ?? 0,
+      clock: globalTimersFanslySendGuardClock,
+    });
+    const { events, requestObserver } = captureEvents();
+    const context = { session, proxy, requestObserver, sendGuard: registry.forPage(7, "sync_stream") };
+    const fansly = adapter();
+    const sequence = [
+      () => fansly.getMessagesPage(context, { groupId: "group-1", limit: 25 }),
+      () => fansly.getMessagesPage(context, { groupId: "group-2", limit: 25 }),
+      () => fansly.getMessagesPage(context, { groupId: "group-3", limit: 25 }),
+      () => fansly.getMessagingGroupsPage(context, { offset: 0, limit: 25 }),
+      () => fansly.getFollowersPage(context, "acct-1", { offset: 0, limit: 100 }),
+      () => fansly.getMessagesPage(context, { groupId: "group-4", limit: 25 }),
+    ];
+    for (const next of sequence) {
+      const request = next();
+      await vi.runAllTimersAsync();
+      await request;
+    }
+
+    const started = events
+      .filter((event) => event.state === "started")
+      .map((event) => new Date(String(event.timestamp)).getTime());
+    const gaps = started.slice(1).map((at, index) => at - started[index]!);
+    // S × (1 + u) from the previous completion (instant here), u = 0, 0.125,
+    // 0.0625, 0.1875, 0.1: never the retired 7500 / 5000 ms endpoint pauses.
+    const expected = [2_000, 2_250, 2_125, 2_375, 2_200];
+    expect(gaps).toHaveLength(expected.length);
+    gaps.forEach((gap, index) => {
+      expect(gap).toBeGreaterThanOrEqual(expected[index]!);
+      expect(gap).toBeLessThanOrEqual(expected[index]! + 1);
+    });
+    expect(store.journal.map((row) => row.operation)).toEqual([
+      "messages", "messages", "messages", "messaging_groups", "followers", "messages",
+    ]);
+    expect(store.journal.every((row) => row.settingMs === 2_000)).toBe(true);
   });
 
   it("paces a page from the previous COMPLETION by S × (1 + u), with no +100 ms", async () => {

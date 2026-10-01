@@ -215,9 +215,9 @@ What the script does:
 - builds each dist-only image as the clean full image plus one four-layer dashboard/runtime/database/migrations artifact overlay
 - streams a locally built image to the remote host with `docker load`
 - syncs release files into `/opt/agency-hub` by default
-- by default verifies that PostgreSQL and shared Compose infrastructure are unchanged, then recreates only `api worker scheduler`; `--recreate-scope stack` explicitly restores whole-stack recreation for infrastructure updates
-- verifies `/api/v1/health`, worker health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
-- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `scheduler`, and `worker` logs automatically
+- by default verifies that PostgreSQL and shared Compose infrastructure are unchanged, then recreates `api worker scheduler` and, once the API is healthy (startup migrations done), the Fansly Sync Engine's `sync` container on its own, so the old engine keeps running through the migrations; `--recreate-scope stack` explicitly restores whole-stack recreation for infrastructure updates
+- verifies `/api/v1/health`, worker, scheduler and sync container health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
+- if verification fails after the stack is recreated, rolls back to the previous remote image when one was captured and `schema_migrations` did not change during the failed deploy, then prints `docker compose ps` plus recent `postgres`, `api`, `worker`, and `sync` logs automatically
 
 ### Deploy a prebuilt image (pull mode)
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   cleanupAdapterHarness,
@@ -63,7 +63,6 @@ describe("Fansly posts adapter", () => {
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" },
       proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0),
     };
     const page = await adapter.getPostsPage(context, "772956494390898689", {
       before: "900000000000000000",

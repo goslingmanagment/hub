@@ -518,6 +518,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # image never names the table or the columns, so it runs unchanged after a
   # rollback; a later re-deploy finds the migration already applied.
   "0226_fansly_ws_live_overlay.sql"
+  # Send guard checks (plan §2.4/§10): a nullable lease-end column on the
+  # 0225 journal (catalog-only, no default) and the pace check's one-row
+  # cursor table. The previous image names neither, so it runs unchanged.
+  "0227_fansly_send_guard_checks.sql"
   # Fansly Sync Engine core state (design §2.2): three new tables (sync_pages,
   # sync_work, sync_attempts), two pure SQL functions, a seed row per Fansly
   # page (mode 'off') and grants. The previous image never names any of them,
@@ -761,9 +765,13 @@ remote_release_file_args() {
   printf '%s ' "${quoted[@]}"
 }
 
+# Compose refuses a whole `logs` call, printing nothing, when one named service
+# is missing from the compose file. fail() runs this dump after the rollback
+# restored the previous release files, which may predate the sync service, so
+# the sync logs are a call of their own, made only when those files define it.
 dump_remote_diagnostics() {
   log "Remote verification failed; collecting docker compose status and recent logs"
-  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; exit 0" \
+  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; if ${REMOTE_COMPOSE} config --services 2>/dev/null | grep -qx sync; then printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 sync; fi; exit 0" \
     || log "Unable to collect remote diagnostics"
 }
 
@@ -1197,6 +1205,49 @@ wait_for_scheduler_health() {
   return 1
 }
 
+# The Fansly Sync Engine's process. The app-scope recreate above leaves it
+# alone on purpose: listed with api/worker/scheduler, Compose would stop the
+# old engine while the new api is still migrating (its depends_on delays only
+# the new container's start). Recreated here, once the api is healthy, Compose
+# stops the old container (SIGTERM, 45 s grace: it finishes its in-flight
+# request) and only then starts the new one. A stack-scope recreate already
+# started the new container after API health through its depends_on, so it
+# is not recreated twice.
+# scripts/check-compose-recreate-order.sh proves this order on a throwaway
+# Compose project.
+recreate_sync_service() {
+  if [[ "$RECREATE_SCOPE" != "apps" ]]; then
+    log "Stack recreate already started the sync container after API health"
+    return 0
+  fi
+  log "Recreating the sync container after API health (migrations done)"
+  run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED} && ${REMOTE_COMPOSE} up -d --no-deps --force-recreate --no-build sync"
+}
+
+# The sync container's compose healthcheck (health file freshness, written only
+# after a successful heartbeat upsert) must reach 'healthy'.
+wait_for_sync_container_health() {
+  local attempt=0
+  local status
+
+  while (( attempt < 60 )); do
+    attempt=$((attempt + 1))
+    status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q sync 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
+    case "$status" in
+      healthy)
+        return 0
+        ;;
+      missing|exited|dead|restarting)
+        log "Sync container status: ${status:-unknown}"
+        ;;
+    esac
+    sleep 3
+  done
+
+  log "Sync container last observed status: ${status:-unknown}"
+  return 1
+}
+
 wait_for_sync_health() {
   local sync_file="$1"
   local url="${VERIFY_URL%/}/api/v1/health/sync"
@@ -1254,6 +1305,30 @@ verify_post_deploy_image_labels() {
   verify_service_image_labels api
   verify_service_image_labels worker
   verify_service_image_labels scheduler
+  verify_service_image_labels sync
+}
+
+# Plan §2.5: the per-page Fansly send guard. A request that the recreate cut
+# off (a container killed past its stop grace, a crash) leaves its page closed:
+# an expired lease never opens a page by itself, and the new containers'
+# sweepers cannot see the old containers' processes. Docker can: a holder whose
+# container is not running any more is gone with it. So, once the new stack is
+# healthy, list the hostnames of every running container on the host and let
+# the new api confirm every other holder terminated. The instant is taken
+# BEFORE the listing and only holders captured before it are released, so a
+# container that starts after the listing is never taken for a gone one.
+#
+# Never fails or rolls back the deploy: a failure only leaves a page closed,
+# with its alert, until the same command is run by hand.
+confirm_remote_fansly_send_guard_terminations() {
+  local output
+  output="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
+listed_at=\"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)\"
+running_hosts=\"\$(docker ps -q | xargs -r docker inspect -f '{{.Config.Hostname}}' | paste -sd, -)\"
+test -n \"\$running_hosts\"
+${REMOTE_COMPOSE} exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated --running-hosts \"\$running_hosts\" --include-unexpired --captured-before \"\$listed_at\"")" \
+    || return 1
+  log "Fansly send guard: confirmed the holders of stopped containers terminated: ${output//$'\n'/; }"
 }
 
 ensure_node_base_image() {
@@ -1878,6 +1953,7 @@ log "Waiting for ${VERIFY_URL%/}/api/v1/health"
 wait_for_api_health "$HEALTH_FILE" || fail "API health never reached 200 at ${VERIFY_URL%/}/api/v1/health"
 verify_post_deploy_lifecycle_capability \
   || fail "Production health capability does not match the verified candidate"
+recreate_sync_service || fail "docker compose failed while recreating the sync container"
 
 log "Waiting for the worker container healthcheck"
 wait_for_worker_health || fail "Worker container never reached a healthy state"
@@ -1885,7 +1961,12 @@ wait_for_worker_health || fail "Worker container never reached a healthy state"
 log "Waiting for the scheduler container healthcheck"
 wait_for_scheduler_health || fail "Scheduler container never reached a healthy state"
 
+log "Waiting for the sync container healthcheck"
+wait_for_sync_container_health || fail "Sync container never reached a healthy state"
+
 verify_post_deploy_image_labels
+confirm_remote_fansly_send_guard_terminations \
+  || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
 finish_phase service-health
 start_phase sync-health
 

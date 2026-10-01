@@ -124,7 +124,7 @@ export function buildAnalyticsRoute(pageLabel?: string | null, range?: Analytics
   return suffix.length > 0 ? `/analytics?${suffix}` : "/analytics";
 }
 
-export function buildFanProfileRoute(
+function buildFanProfileRoute(
   pageLabel: string,
   platform: string,
   platformUserId: string,

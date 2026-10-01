@@ -8,6 +8,7 @@ import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services
 import { readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyContinuity, type parseContinuityArgs } from "./continuity.ts";
 import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
+import { PROBE_HANDSHAKE_WINDOW_MS, withFanslyScriptSendGuard } from "./send-guard.ts";
 
 export async function runStoredFanslyContinuity(
   args: ReturnType<typeof parseContinuityArgs>,
@@ -33,12 +34,25 @@ export async function runStoredFanslyContinuity(
       () => readProbeGeneration(db, args.pageLabel));
     const ownedContext = context;
     const transportDiagnostics = createProbeTransportDiagnostics();
-    return await observeFanslyContinuity({
-      ...args, token: context.token, generation: context.generation, key, controller, writeLine,
-      bindingPreflight,
-      connect: () => openFanslyProbeSocket(ownedContext.egress, transportDiagnostics),
-      transportDiagnostics,
-      readGeneration: () => readProbeGeneration(db, args.pageLabel),
+    // Plan §2.5: the one handshake waits for the page's send guard (source
+    // `ws_probe`), on a writable connection of its own.
+    return await withFanslyScriptSendGuard(config, {
+      pageId: ownedContext.pageId, source: "ws_probe", applicationName: "hub-fansly-w0-continuity-guard",
+    }, async (sendGuard) => {
+      const lease = await sendGuard.acquire({
+        operation: "ws_probe", requestTimeoutMs: PROBE_HANDSHAKE_WINDOW_MS, signal: controller.signal,
+      });
+      try {
+        return await observeFanslyContinuity({
+          ...args, token: ownedContext.token, generation: ownedContext.generation, key, controller, writeLine,
+          bindingPreflight,
+          connect: () => openFanslyProbeSocket(ownedContext.egress, lease, transportDiagnostics),
+          transportDiagnostics,
+          readGeneration: () => readProbeGeneration(db, args.pageLabel),
+        });
+      } finally {
+        await lease.complete({ outcome: lease.sent ? "transport_error" : "aborted_before_send" });
+      }
     });
   } finally {
     try { await context?.egress.dispatcher?.destroy(); }

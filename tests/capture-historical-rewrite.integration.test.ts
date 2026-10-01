@@ -1496,7 +1496,7 @@ describe("C — capture:reclaim, sync_raw_payloads (the maintenance-rewrite rout
       // The refusal must tell the operator the thing that actually works. The
       // old text said "stop the worker and the scheduler first", which is the
       // state they were already in.
-      expect(result.refusals.join(" ")).toMatch(/stop api, worker AND scheduler/);
+      expect(result.refusals.join(" ")).toMatch(/stop api, worker, scheduler AND sync/);
       expect(result.refusals.join(" ")).toMatch(/capture-historical-rewrite\.md/);
       // Nothing was nulled while it refused.
       const intact = await testDb.pool.query<{ n: string }>(
@@ -1517,7 +1517,7 @@ describe("C — capture:reclaim, sync_raw_payloads (the maintenance-rewrite rout
     it("still refuses for a stale-but-live heartbeat from any single role", async (context) => {
       if (!testDb) return context.skip();
       await armRawScope("writers-each");
-      for (const role of ["api", "worker", "scheduler"]) {
+      for (const role of ["api", "worker", "scheduler", "sync"]) {
         await testDb.pool.query("delete from runtime_instances");
         await heartbeat(role);
         const result = await rawReclaim({ phase: "null-bodies" });
