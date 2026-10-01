@@ -30,8 +30,13 @@ export default defineConfig({
     // --shard=k/N packs files by measured duration (tests/ci/shard-weights.json)
     // instead of splitting by count; runs without --shard are unaffected.
     sequence: { sequencer: WeightedShardSequencer },
+    // `pnpm test:coverage`: the whole suite (integration needs Docker) over
+    // the production sources. Code a test runs in a child process (spawnSync
+    // and the like) is not instrumented and shows as uncovered.
     coverage: {
-      reporter: ["text", "lcov"],
+      provider: "v8",
+      include: ["apps/*/src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
+      reporter: ["text-summary", "json-summary", "lcov"],
     },
   },
 });
