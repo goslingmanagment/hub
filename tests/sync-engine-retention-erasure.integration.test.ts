@@ -1,0 +1,304 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  createFanslyPage,
+  createModel,
+  deleteExpiredSyncEngineTelemetry,
+  ensureSyncPage,
+  type Database,
+} from "@agency_hub_core/db";
+
+import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
+import {
+  resetIntegrationDatabase,
+  startIntegrationTestDatabase,
+  type StartedTestDatabase,
+} from "./helpers/db.ts";
+
+// Fansly Sync Engine core state (0228), the parts other subsystems own: the
+// migration's seed and grants, the nightly telemetry retention, and the
+// erasure inventory (page scope) and fan scope (design §2.9).
+
+let testDb: StartedTestDatabase | null = null;
+
+beforeAll(async () => {
+  testDb = await startIntegrationTestDatabase();
+}, 120_000);
+
+afterAll(async () => {
+  await testDb?.stop();
+});
+
+beforeEach(async () => {
+  if (testDb) await resetIntegrationDatabase(testDb.pool);
+});
+
+function db(): Database {
+  return testDb!.db as unknown as Database;
+}
+
+async function query<T extends Record<string, unknown>>(text: string, values: unknown[] = []): Promise<T[]> {
+  return (await testDb!.pool.query<T>(text, values)).rows;
+}
+
+async function seedPage(label: string): Promise<number> {
+  const model = await createModel(db(), { slug: `model-${label}`, name: label });
+  const page = await createFanslyPage(db(), { modelId: model!.id, label });
+  await ensureSyncPage(db(), { pageId: page!.id });
+  return page!.id;
+}
+
+/** jsonb columns get their JSON text; Dates and scalars pass through. */
+function sqlValue(value: unknown): unknown {
+  return value !== null && typeof value === "object" && !(value instanceof Date) ? JSON.stringify(value) : value;
+}
+
+async function insertWork(pageId: number, fields: Record<string, unknown>): Promise<number> {
+  const row = {
+    page_id: pageId,
+    resource: "dm-messages.head",
+    subject: "",
+    kind: "trigger",
+    class: "urgent",
+    ...fields,
+  };
+  const columns = Object.keys(row);
+  const values = Object.values(row).map(sqlValue);
+  const rows = await query<{ id: string }>(
+    `insert into sync_work (${columns.join(", ")}) values (${columns.map((_, index) => `$${index + 1}`).join(", ")}) returning id::text`,
+    values,
+  );
+  return Number(rows[0]!.id);
+}
+
+async function insertAttempt(pageId: number, fields: Record<string, unknown>): Promise<number> {
+  const row = {
+    page_id: pageId,
+    resource: "dm-messages.head",
+    subject: "",
+    class: "urgent",
+    owner_generation: 1,
+    setting_ms: 2_000,
+    jitter_u: 0.1,
+    pause_ms: 2_200,
+    operation: "messages.page",
+    request: { path: "/api/v1/message", query: {} },
+    ...fields,
+  };
+  const columns = Object.keys(row);
+  const values = Object.values(row).map(sqlValue);
+  const rows = await query<{ id: string }>(
+    `insert into sync_attempts (${columns.join(", ")}) values (${columns.map((_, index) => `$${index + 1}`).join(", ")}) returning id::text`,
+    values,
+  );
+  return Number(rows[0]!.id);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+describe("the 0228 migration", () => {
+  it("seeds every existing Fansly page in mode off, grants the read role, and merges demand in SQL", async (context) => {
+    if (!testDb) return context.skip();
+    const partial = await startIntegrationTestDatabase({ through: "0225_fansly_page_send_guards.sql" });
+    if (!partial) return context.skip();
+    try {
+      await partial.pool.query("insert into models (slug, name) values ('seed-model', 'Seed')");
+      await partial.pool.query(`insert into pages (model_id, platform, label)
+        select id, 'fansly', 'seed-fansly' from models where slug = 'seed-model'`);
+      await partial.pool.query(`insert into pages (model_id, platform, label)
+        select id, 'onlyfans', 'seed-onlyfans' from models where slug = 'seed-model'`);
+      const { runMigrations } = await import("../packages/db/src/migrate-runner.ts");
+      const client = await partial.pool.connect();
+      try {
+        await runMigrations({
+          db: client,
+          migrationsDir: path.resolve("packages/db/migrations"),
+          through: "0228_sync_engine_core.sql",
+        });
+      } finally {
+        client.release();
+      }
+      const seeded = await partial.pool.query(`
+        select p.label, sp.mode, sp.mode_changed_by, sp.owner_generation::int as generation, sp.cycle_pos
+          from sync_pages sp join pages p on p.id = sp.page_id`);
+      expect(seeded.rows).toEqual([
+        { label: "seed-fansly", mode: "off", mode_changed_by: "migration:0228", generation: 0, cycle_pos: 0 },
+      ]);
+      const grants = await partial.pool.query(`
+        select has_table_privilege('read_only', 'sync_pages', 'select') as pages,
+               has_table_privilege('read_only', 'sync_attempts', 'select') as attempts,
+               has_column_privilege('read_only', 'sync_work', 'demand', 'select') as work_demand,
+               has_column_privilege('read_only', 'sync_work', 'secret_params', 'select') as work_secret`);
+      expect(grants.rows[0]).toEqual({ pages: true, attempts: true, work_demand: true, work_secret: false });
+
+      const merged = await partial.pool.query(`
+        select sync_work_merge_demand('{"messageIds":["a","b"],"reasons":["ws"]}'::jsonb,
+                                      '{"messageIds":["b","c"],"txIds":["t"],"reasons":["ws","poll"]}'::jsonb) as d`);
+      expect(merged.rows[0].d).toEqual({ messageIds: ["a", "b", "c"], txIds: ["t"], reasons: ["ws", "poll"], overflow: false });
+      const overflow = await partial.pool.query(`
+        select sync_work_merge_demand(
+          jsonb_build_object('txIds', (select jsonb_agg('t' || n) from generate_series(1, 199) n)),
+          '{"txIds":["x","y"]}'::jsonb) as d`);
+      expect(overflow.rows[0].d.txIds).toHaveLength(200);
+      expect(overflow.rows[0].d.txIds.at(-1)).toBe("x");
+      expect(overflow.rows[0].d.overflow).toBe(true);
+    } finally {
+      await partial.stop();
+    }
+  }, 120_000);
+});
+
+describe("engine telemetry retention", () => {
+  it("expires closed work and terminal non-evidence attempts, keeping open, evidence and unfinished rows", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("retention");
+    const old = new Date(Date.now() - 40 * DAY_MS);
+    const recent = new Date(Date.now() - DAY_MS);
+    const work = {
+      oldDone: await insertWork(pageId, { subject: "a", state: "done", closed_at: old, created_at: old }),
+      oldSuperseded: await insertWork(pageId, { subject: "b", shadow: true, state: "superseded", closed_at: old }),
+      recentDone: await insertWork(pageId, { subject: "c", state: "done", closed_at: recent }),
+      oldOpen: await insertWork(pageId, { subject: "d", created_at: old, due_at: old }),
+      oldQuarantined: await insertWork(pageId, { subject: "e", state: "quarantined", created_at: old }),
+      oldRunning: await insertWork(pageId, { subject: "f", state: "running", created_at: old }),
+    };
+    const attempts = {
+      oldResponse: await insertAttempt(pageId, { admitted_at: old, completed_at: old, outcome: "response", apply_state: "applied" }),
+      oldShadow: await insertAttempt(pageId, {
+        shadow: true, admitted_at: old, completed_at: old, outcome: "shadow", send_mark: "shadow", apply_state: "skipped",
+      }),
+      oldAborted: await insertAttempt(pageId, { admitted_at: old, completed_at: old, outcome: "aborted_before_send" }),
+      oldEvidence: await insertAttempt(pageId, {
+        admitted_at: old, completed_at: old, outcome: "response", apply_state: "applied", evidence: true,
+      }),
+      oldAdmitted: await insertAttempt(pageId, { admitted_at: old }),
+      oldSent: await insertAttempt(pageId, { admitted_at: old, outcome: "sent", sent_at: old }),
+      oldCaptured: await insertAttempt(pageId, {
+        admitted_at: old, completed_at: old, outcome: "response", apply_state: "captured",
+        observation_id: 1, observation_received_at: old,
+      }),
+      oldDeferred: await insertAttempt(pageId, { admitted_at: old, completed_at: old, outcome: "response", apply_state: "deferred" }),
+      oldQuarantined: await insertAttempt(pageId, { admitted_at: old, completed_at: old, outcome: "response", apply_state: "quarantined" }),
+      lateCompletion: await insertAttempt(pageId, { admitted_at: old, completed_at: recent, outcome: "unknown" }),
+      recent: await insertAttempt(pageId, { admitted_at: recent, completed_at: recent, outcome: "response", apply_state: "applied" }),
+    };
+    const cutoff = new Date(Date.now() - 30 * DAY_MS);
+
+    const starved = await deleteExpiredSyncEngineTelemetry(db(), cutoff, { budgetMs: 0 });
+    expect(starved).toMatchObject({ deletedWork: 0, deletedAttempts: 0, budgetExhausted: true });
+
+    const result = await deleteExpiredSyncEngineTelemetry(db(), cutoff, { batchRows: 1 });
+    expect(result).toMatchObject({ deletedWork: 2, deletedAttempts: 3, budgetExhausted: false });
+    expect(result.steps.map((step) => [step.table, step.batches])).toEqual([["sync_work", 3], ["sync_attempts", 4]]);
+
+    const leftWork = new Set((await query<{ id: string }>("select id::text from sync_work")).map((row) => Number(row.id)));
+    expect([...leftWork].sort((a, b) => a - b)).toEqual(
+      [work.recentDone, work.oldOpen, work.oldQuarantined, work.oldRunning].sort((a, b) => a - b),
+    );
+    const leftAttempts = new Set((await query<{ id: string }>("select id::text from sync_attempts")).map((row) => Number(row.id)));
+    expect([...leftAttempts].sort((a, b) => a - b)).toEqual([
+      attempts.oldEvidence, attempts.oldAdmitted, attempts.oldSent, attempts.oldCaptured, attempts.oldDeferred,
+      attempts.oldQuarantined, attempts.lateCompletion, attempts.recent,
+    ].sort((a, b) => a - b));
+  });
+});
+
+describe("erasure of the engine's state (design §2.9)", () => {
+  const FAN = "300100200300400500";
+  // Contains FAN as a prefix: a different fan, never matched.
+  const OTHER_FAN = `${FAN}7`;
+
+  async function withEraser<T>(body: (app: never, operatorId: number) => Promise<T>): Promise<T> {
+    const operator = await query<{ id: string }>("insert into users (username, role) values ('sync-erasure-owner', 'owner') returning id::text");
+    const lakeDir = await mkdtemp(path.join(tmpdir(), "sync-engine-erasure-"));
+    try {
+      const app = {
+        db: testDb!.db,
+        pool: testDb!.pool,
+        config: { lakeDir },
+        logger: { info: () => {}, warn: () => {}, error: () => {} },
+      } as never;
+      return await body(app, Number(operator[0]!.id));
+    } finally {
+      await rm(lakeDir, { recursive: true, force: true });
+    }
+  }
+
+  it("a fan erasure removes the fan's work and attempts by subject and by the ids inside their parameters", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("erase-fan");
+    await query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, 'group-fan', $2), ($1, 'group-other', $3)`,
+      [pageId, FAN, OTHER_FAN],
+    );
+    const erased = [
+      await insertWork(pageId, { subject: "group-fan" }),
+      await insertWork(pageId, { resource: "fan-profiles.probe", subject: FAN, class: "planned" }),
+      await insertWork(pageId, { resource: "fan-profiles.lookup", kind: "goal", class: "planned", params: { ids: `111,${FAN},222` } }),
+      await insertWork(pageId, { resource: "fan-earnings.roster", kind: "goal", class: "planned", subject: "x", cursor: { after: FAN } }),
+      await insertWork(pageId, { resource: "account.verify", subject: "y", result: { fans: [FAN] } }),
+    ];
+    const kept = [
+      await insertWork(pageId, { subject: "group-other" }),
+      await insertWork(pageId, { resource: "fan-profiles.probe", subject: OTHER_FAN, class: "planned" }),
+      await insertWork(pageId, { resource: "fan-profiles.lookup", kind: "goal", class: "planned", subject: "z", params: { ids: OTHER_FAN } }),
+    ];
+    const erasedAttempts = [
+      await insertAttempt(pageId, { subject: "group-fan", evidence: true, outcome: "response" }),
+      await insertAttempt(pageId, {
+        resource: "fan-profiles.lookup", operation: "account.by_ids", request: { path: "/api/v1/account", query: { ids: `${FAN},999` } },
+      }),
+      await insertAttempt(pageId, {
+        resource: "fan-earnings.roster", operation: "earnings.by_fan", request: { path: "/x", query: { correlationAccountId: FAN } },
+      }),
+    ];
+    const keptAttempts = [
+      await insertAttempt(pageId, { subject: "group-other", evidence: true }),
+      await insertAttempt(pageId, { resource: "fan-profiles.lookup", request: { query: { ids: `${OTHER_FAN},1` } } }),
+    ];
+
+    await withEraser(async (app, operatorId) => {
+      const scope = { scopeType: "fan" as const, platform: "fansly" as const, fanRef: FAN };
+      const plan = await planErasure(app, scope);
+      const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
+      expect(targets.get("hot:sync_work:delete")).toBe(erased.length);
+      expect(targets.get("hot:sync_attempts:delete")).toBe(erasedAttempts.length);
+      const result = await executeErasure(app, scope, { initiatedBy: operatorId });
+      expect(result.executedCounts["hot:sync_work:delete"]).toBe(erased.length);
+      expect(result.executedCounts["hot:sync_attempts:delete"]).toBe(erasedAttempts.length);
+    });
+    const leftWork = (await query<{ id: string }>("select id::text from sync_work order by id")).map((row) => Number(row.id));
+    expect(leftWork).toEqual(kept);
+    const leftAttempts = (await query<{ id: string }>("select id::text from sync_attempts order by id")).map((row) => Number(row.id));
+    expect(leftAttempts).toEqual(keptAttempts);
+    // The page's engine row is not fan material.
+    expect(await query("select page_id::int from sync_pages")).toEqual([{ page_id: pageId }]);
+  });
+
+  it("a page erasure removes the page's engine row, work and attempts, and only that page's", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("erase-page");
+    const other = await seedPage("erase-page-other");
+    for (const page of [pageId, other]) {
+      await insertWork(page, { subject: "g" });
+      await insertAttempt(page, { evidence: true });
+    }
+    await withEraser(async (app, operatorId) => {
+      const scope = { scopeType: "page" as const, pageLabel: "erase-page" };
+      const plan = await planErasure(app, scope);
+      const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
+      expect(targets.get("hot:sync_pages:delete")).toBe(1);
+      expect(targets.get("hot:sync_work:delete")).toBe(1);
+      expect(targets.get("hot:sync_attempts:delete")).toBe(1);
+      await executeErasure(app, scope, { initiatedBy: operatorId });
+    });
+    for (const table of ["sync_pages", "sync_work", "sync_attempts"]) {
+      expect(await query(`select page_id::int from ${table}`), table).toEqual([{ page_id: other }]);
+    }
+  });
+});

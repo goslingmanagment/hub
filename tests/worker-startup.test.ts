@@ -14,6 +14,14 @@ const dbMocks = vi.hoisted(() => ({
     durationMs: 0,
     budgetExhausted: false,
   })),
+  deleteExpiredSyncEngineTelemetry: vi.fn(async (_db: unknown, cutoff: Date) => ({
+    cutoff,
+    steps: [],
+    deletedWork: 0,
+    deletedAttempts: 0,
+    durationMs: 0,
+    budgetExhausted: false,
+  })),
   getLatestScheduledReportDateOnOrBefore: vi.fn(),
   getTelegramSettings: vi.fn(),
   // Voice-notes recovery jobs (Task 7): the nightly raw-payload cleanup handler
@@ -538,6 +546,13 @@ describe("worker startup", () => {
     expect(dbMocks.deleteExpiredPendingDeviceTokens).toHaveBeenCalledWith(
       app.db,
       new Date("2026-03-23T11:00:00.000Z"),
+    );
+    // The Fansly Sync Engine telemetry rides the same night with the same
+    // window as the sync observability sweep.
+    expect(dbMocks.deleteExpiredSyncEngineTelemetry).toHaveBeenCalledTimes(1);
+    expect(dbMocks.deleteExpiredSyncEngineTelemetry).toHaveBeenCalledWith(
+      app.db,
+      dbMocks.deleteExpiredSyncObservability.mock.calls.at(-1)?.[1],
     );
 
     await runtime.shutdown();

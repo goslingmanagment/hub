@@ -352,6 +352,17 @@ function payloadMatchPredSql(
   return quoted;
 }
 
+/** A fan ref anywhere in a text-rendered column of request parameters: a
+ * numeric platform id as a whole number (no digit on either side, so it is
+ * found inside `ids=1,2,3` lists and `key=value` query strings, never inside a
+ * longer id); any other ref as a plain substring. */
+function fanRefTextMatchSql(fanRef: string, column: SQL): SQL {
+  if (/^\d+$/.test(fanRef)) {
+    return sql`(${column}::text ~ ${`(^|[^0-9])${fanRef}([^0-9]|$)`})`;
+  }
+  return sql`(strpos(${column}::text, ${fanRef}) > 0)`;
+}
+
 function duckdbEscape(value: string): string {
   return value.replaceAll("'", "''");
 }
@@ -934,6 +945,27 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: tx => execCount(tx, sql`delete from follower_outreach_attempts where ${outreachPred}`),
   });
 
+  // Fansly Sync Engine (0228). Work and attempts name the fan by subject — a
+  // thread's work by the fan's chat (group id), fan work (`fan-profiles.*`) by
+  // the fan id — and carry fan ids inside their request parameters
+  // (`/account?ids=` batches, `correlationAccountId=` of fan earnings) and the
+  // work's cursor, goal, proof or result. Erasure outranks the evidence
+  // retention of attempts.
+  const syncWorkPred = sql`page_id in ${scope.pageIds} and (subject in ${wsGroupRefs}
+    or ${fanRefTextMatchSql(ref, sql.raw("jsonb_build_array(params, cursor, goal, proof, result)"))})`;
+  targets.push({
+    plane: "hot", target: "sync_work", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from sync_work where ${syncWorkPred}`),
+    run: tx => execCount(tx, sql`delete from sync_work where ${syncWorkPred}`),
+  });
+  const syncAttemptPred = sql`page_id in ${scope.pageIds} and (subject in ${wsGroupRefs}
+    or ${fanRefTextMatchSql(ref, sql.raw("request"))})`;
+  targets.push({
+    plane: "hot", target: "sync_attempts", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from sync_attempts where ${syncAttemptPred}`),
+    run: tx => execCount(tx, sql`delete from sync_attempts where ${syncAttemptPred}`),
+  });
+
   targets.push({
     plane: "hot",
     target: "sync_raw_payloads",
@@ -1001,9 +1033,12 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
 
   // fan_earnings_stats FKs fans with RESTRICT — must clear before the fans row.
+  // The Fansly Sync Engine's fan-profile queue (plane `fan_profile`, design
+  // §4.3) keys on the fan id like the two earnings planes.
   const earningsRefreshPred = sql`page_id in ${scope.pageIds} and (
     (plane = 'fansly_ws_dm' and subject_ref in ${wsGroupRefs}) or
     (plane in ('fan_earnings_lifetime', 'fan_earnings_monthly') and subject_ref = ${ref})
+    or (plane = 'fan_profile' and subject_ref = ${ref})
     or (plane = 'fan_earnings_attribution' and exists (
       select 1 from transactions t
       where t.platform_account_id = subject_refresh_state.page_id
@@ -1545,6 +1580,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // journal; both cascade on pages, which erasure keeps.
     ["fansly_send_log", "page_id"],
     ["fansly_page_send_guards", "page_id"],
+    // Fansly Sync Engine (0228): the page's attempt journal, its work queue and
+    // its engine row (mode, ownership, holds). RESTRICT FKs; erasure keeps pages.
+    ["sync_attempts", "page_id"],
+    ["sync_work", "page_id"],
+    ["sync_pages", "page_id"],
     ["projection_watermarks", "platform_account_id"],
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
