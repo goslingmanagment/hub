@@ -14,6 +14,10 @@ const REQUIRED_TABLE_NAMES = [
   "creator_posts",
   "creator_post_tips",
   "transaction_tip_contexts",
+  // Fansly Sync Engine core state (0228).
+  "sync_pages",
+  "sync_work",
+  "sync_attempts",
 ] as const;
 const LEGACY_TABLE_NAMES = [
   ["platform", "accounts"].join("_"),

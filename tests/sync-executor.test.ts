@@ -9,6 +9,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { executeObservedRequest, waitForHttpRequestDelay } from "@agency_hub_core/shared";
 
 import { ProxyMissingError } from "../apps/runtime/src/services/errors.ts";
+import { FanslyPageOwnedBySyncEngineError } from "../apps/runtime/src/services/fansly-send-guard/index.ts";
 import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
   PostsCaptureConfigurationError,
@@ -1513,6 +1514,40 @@ describe("sync executor", () => {
     }));
     expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
     expect(notificationMocks.notifySyncChunkFailureIncident).not.toHaveBeenCalled();
+  });
+
+  it("retries a page the Fansly Sync Engine owns under its own class: a page-level stop, no block, no hold", async () => {
+    const app = {
+      db: {},
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+
+    dbMocks.acquirePageSyncLease.mockResolvedValueOnce({ ...taskLease, stream: "dm_messages" });
+    handlerMocks.executeStreamChunk.mockRejectedValue(new FanslyPageOwnedBySyncEngineError(55));
+
+    const result = await executeNextSyncPageChunk(app, 55);
+
+    // The guard refused the capture before anything was sent (design §2.7):
+    // not the provider's answer, not a dead session, not a config state.
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      stream: "dm_messages",
+      retryKind: "fansly_sync_engine_owned",
+    }));
+    const call = dbMocks.retryPageSync.mock.calls[0]?.[1] as { retryAt?: Date | null };
+    expect(call.retryAt ?? null).toBeNull();
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.pausePageSyncForAuth).not.toHaveBeenCalled();
+    expect(dbMocks.armPageSyncProviderHold).not.toHaveBeenCalled();
+    expect(notificationMocks.notifyAuthFailedIncident).not.toHaveBeenCalled();
+    // The ordinary streak rule: a stream that keeps meeting it (a fence the
+    // switch missed) still reaches the owner.
+    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
+      stream: "dm_messages",
+      forceOpen: false,
+      errorSummary: expect.stringContaining("is owned by the Fansly Sync Engine"),
+    }));
+    expect(result).toMatchObject({ kind: "failed", runId: 777 });
   });
 
   it("parks the stream with blocker proxy_missing when the context refuses proxyless Fansly egress (W3.1)", async () => {

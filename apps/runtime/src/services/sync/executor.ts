@@ -34,6 +34,7 @@ import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { ProxyMissingError } from "../errors.ts";
+import { isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
@@ -249,6 +250,16 @@ export const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit" } 
  */
 export const OFAPI_COLLECTION_POLICY_RETRY_CLASS = "ofapi_collection_policy";
 export const OFAPI_COLLECTION_PAUSE_RECHECK_MS = 15 * 60_000;
+
+/**
+ * Sync engine design §2.7: the page's send guard belongs to the Fansly Sync
+ * Engine (the step-3 switch), so the guard refused the capture before anything
+ * was sent. A page-level stop under its own retry class on the ordinary
+ * ladder — never a provider answer, a blocker or a thread's failure. The
+ * switch fences the page's streams before it flips the guard, so only a chunk
+ * already running meets this; a rollback's recovery request wakes them again.
+ */
+export const FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS = "fansly_sync_engine_owned";
 
 function classifyOfapiApiError(
   error: OfapiApiError,
@@ -499,6 +510,13 @@ function classifyTaskFailure(
       blockerType: "manual_action_required",
       blockerCode: "proxy_missing",
       blockerReason: failure.summary,
+    };
+  }
+
+  if (isFanslyPageOwnedBySyncEngineError(error)) {
+    return {
+      mode: "retry",
+      retryClass: FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS,
     };
   }
 

@@ -19,6 +19,7 @@ import { FANSLY_MAPPER_VERSION, FanslyApiError } from "@agency_hub_core/fansly";
 import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import type { DmMessagesChunkSummary, SyncRunTelemetry } from "./observability.ts";
 import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
@@ -44,9 +45,14 @@ export const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
  * timeout (408), rate limits (429), a provider Retry-After deadline, gateway
  * and edge answers (502/503/504 and every 5xx but 500 describe the path to
  * Fansly, not the thread), an envelope failure at HTTP 200 (as likely a
- * proxy's page as Fansly's verdict), and every status-less failure
- * (transport, proxy, capture, contract drift). */
+ * proxy's page as Fansly's verdict), every status-less failure (transport,
+ * proxy, capture, contract drift), and the send guard's refusal of a page the
+ * Fansly Sync Engine owns (sync engine design §2.7: a page-level stop, so the
+ * engine's import of `page_dm_message_sync_health` never inherits it). */
 export function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
+  if (isFanslyPageOwnedBySyncEngineError(error)) {
+    return false;
+  }
   if (!(error instanceof FanslyApiError) || typeof error.status !== "number" || error.retryAfterAt !== null) {
     return false;
   }
