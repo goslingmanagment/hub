@@ -125,10 +125,11 @@ describe("bootstrap", () => {
       "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
     );
     expect(bootstrapMocks.assertRuntimeSchemaReady).toHaveBeenCalledWith(bootstrapMocks.pool);
+    // The page-wide spacing is the send guard's (plan §2.5), not the adapter's.
     expect(bootstrapMocks.FanslyAdapter).toHaveBeenCalledWith({
       baseUrl: "https://example.invalid",
-      globalDelayMs: 2500,
     });
+    expect(app.fanslySendGuards).toBeDefined();
     expect(app.db).toBe(bootstrapMocks.db);
     expect(app.adapter).toBe(bootstrapMocks.adapter);
     // No boot overrides in the DB → nothing skipped, config is the env config.

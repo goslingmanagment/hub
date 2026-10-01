@@ -64,9 +64,9 @@ export function createSyncRateLimitWaiter(
   };
 }
 
-/** The waiter every executor chunk builds: the page's own egress key is the
- *  rate-limit identity, so two pages sharing a proxy share a queue and two
- *  pages that do not, do not. */
+/** The waiter every executor chunk builds for the legacy endpoint pauses: the
+ *  page's own egress key is their identity, so two pages sharing a proxy share
+ *  those queues. The page-wide spacing is the page's send guard. */
 export function createPageRateLimitWaiter(
   app: AppContext,
   pageContext: ResolvedPageContext,
@@ -84,11 +84,13 @@ async function ensureProviderRateLimitProfile(
   },
 ) {
   if (input.provider === "fansly") {
+    // The endpoint pauses only. The page-wide spacing (the former `global`
+    // scope, S + 100 ms per egress) is the per-page send guard now (plan §2.5);
+    // these scopes go once the guard has passed its acceptance.
     await ensureSyncProviderRateLimitProfile(app.db, {
       provider: "fansly",
       egressKey: input.egressKey,
       scopes: [
-        { scope: "global", minSpacingMs: app.config.fanslyDefaultDelayMs + 100 },
         { scope: "followers_page", minSpacingMs: app.config.followerPageDelayMs },
         { scope: "dm_conversations", minSpacingMs: app.config.fanslyDmConversationsDelayMs },
         { scope: "dm_messages", minSpacingMs: app.config.fanslyDmMessagesDelayMs },

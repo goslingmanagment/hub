@@ -23,6 +23,7 @@ import type { ResolvedFanslyPageContext } from "../page-context.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
 import { fetchAndJournalFanslyDmMessagePage } from "./fansly-dm-messages.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 // AI media describer — Fansly freshness accelerator (plan §4, OFF by default:
 // AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED). When a WS frame says a fan
@@ -125,6 +126,7 @@ export async function runAiMediaAcceleratorStep(
     requestObserver: observer,
     remainingAttempts: () => Math.max(0, 1 - admitted),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "ai_accelerator"),
   };
   try {
     await fetchAndJournalFanslyDmMessagePage(app, {

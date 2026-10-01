@@ -10,6 +10,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 // ONE harness for the whole file (the rule tests/adapter-fansly-endpoint-scour
 // states): `loadAdapters` resets the module registry and re-spies
@@ -57,6 +58,7 @@ function rateLimitedResponse(retryAfter?: string) {
 
 function fanslyRequestInput(requestObserver: ReturnType<typeof captureEvents>["requestObserver"]) {
   return {
+    sendGuard: createTestFanslySendGuard(),
     session: { authorization: "token" },
     proxy: { url: "socks5://proxy.example:1080" },
     requestObserver,
@@ -66,7 +68,6 @@ function fanslyRequestInput(requestObserver: ReturnType<typeof captureEvents>["r
 function buildAdapter() {
   return new harness.FanslyAdapter({
     baseUrl: "https://fansly.example",
-    globalDelayMs: 0,
   });
 }
 

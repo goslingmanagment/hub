@@ -11,6 +11,7 @@ import {
   createRequestDispatcher,
   executeObservedRequest,
   exponentialRetryDelayMs,
+  getHttpRequestSignal,
   MAX_RETRY_DELAY_MS,
   millsFromInteger,
   parseRetryAfterInstant,
@@ -24,6 +25,11 @@ import {
 
 import { FanslyApiError, FanslyProxyMissingError } from "./errors.ts";
 import { buildFanslyRequestHeaders } from "./request-headers.ts";
+import {
+  findFanslySendRefusal,
+  type FanslySendCompletionOutcome,
+  type FanslySendLease,
+} from "./send-guard.ts";
 import type {
   FanslyAccount,
   FanslyAccountList,
@@ -55,7 +61,6 @@ import type {
 
 interface AdapterOptions {
   baseUrl: string;
-  globalDelayMs?: number;
 }
 
 type ApiEnvelope<T> = {
@@ -78,7 +83,6 @@ const REQUEST_TIMEOUT_MS = 30_000;
 /** How much of Fansly's `error.details` an error message carries. The whole
  *  body stays in `responseSnippet`. */
 const ERROR_DETAILS_MAX_CHARS = 200;
-const GLOBAL_DELAY_SAFETY_MARGIN_MS = 100;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
 /**
  * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
@@ -2213,206 +2217,274 @@ export class FanslyAdapter {
     const retries = Math.min(options.retries ?? 3, Math.max(0, retryAllowance - 1));
     const minDelayMs = options.minDelayMs ?? 0;
     const requestId = `${options.operation}:${randomUUID()}`;
+    const requestTimeoutMs = context.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 
-    return executeObservedRequest({
-      observer: context.requestObserver,
-      requestId,
-      operation: options.operation,
-      endpointTemplate: options.endpointTemplate,
-      method: "GET",
-      pagination: options.pagination ?? null,
-      requestMetadata: options.requestShape ?? {},
-      retries,
-      waitForRateLimit: () => this.waitForRateLimit(context, options.category, minDelayMs),
-      execute: async () => {
-        const response = await fetch(url, {
-          method: "GET",
-          headers: buildFanslyRequestHeaders(context.session, pathname),
-          signal: AbortSignal.timeout(context.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
-          dispatcher: this.getDispatcher(context.proxy),
-        });
-        const text = await response.text();
-        return {
-          response,
-          text,
-          envelope: this.safeParseEnvelope<T>(text),
-        };
-      },
-      onTransportError: (error, executionContext) => {
-        const failureKind = classifyTransportError(error);
-        if (failureKind === "transport") {
-          this.resetDispatcher(context.proxy);
-        }
+    // The send-guard lease of the attempt between its admission and its
+    // dispatch. An attempt that never reaches `execute` (an observer refused
+    // it, the run was cancelled, a decoder threw) still gives the page back:
+    // the outer `finally` completes it as never sent. A capture that resolves
+    // after the request settled is released on arrival.
+    let admittedLease: FanslySendLease | null = null;
+    let requestSettled = false;
+    const releaseUnusedLease = async () => {
+      const lease = admittedLease;
+      admittedLease = null;
+      await lease?.complete({ outcome: "aborted_before_send" });
+    };
 
-        if (executionContext.retriesRemaining > 0) {
+    try {
+      return await executeObservedRequest({
+        observer: context.requestObserver,
+        requestId,
+        operation: options.operation,
+        endpointTemplate: options.endpointTemplate,
+        method: "GET",
+        pagination: options.pagination ?? null,
+        requestMetadata: options.requestShape ?? {},
+        retries,
+        waitForRateLimit: async () => {
+          await releaseUnusedLease();
+          // Endpoint pauses first, then the page's send guard (plan §2.5): the
+          // guard's capture is the last thing before the attempt starts.
+          const endpointWaitMs = await this.waitForEndpointPause(context, options.category, minDelayMs);
+          assertHttpRequestActive();
+          const captureStartedAt = Date.now();
+          const lease = await context.sendGuard.acquire({
+            operation: options.operation,
+            requestTimeoutMs,
+            signal: getHttpRequestSignal() ?? null,
+          });
+          if (requestSettled) {
+            await lease.complete({ outcome: "aborted_before_send" });
+            throw new Error("Fansly request settled before its send-guard capture resolved");
+          }
+          admittedLease = lease;
+          return endpointWaitMs + (Date.now() - captureStartedAt);
+        },
+        execute: async () => {
+          const lease = admittedLease;
+          admittedLease = null;
+          if (!lease) {
+            throw new Error("Fansly request reached dispatch without a send-guard lease");
+          }
+          let outcome: FanslySendCompletionOutcome = "transport_error";
+          let httpStatus: number | null = null;
+          try {
+            const response = await fetch(url, {
+              method: "GET",
+              headers: buildFanslyRequestHeaders(context.session, pathname),
+              signal: AbortSignal.timeout(requestTimeoutMs),
+              dispatcher: lease.bind(this.getDispatcher(context.proxy)),
+              // One capture is one physical request: a 3xx is an answer, never
+              // a second request undici sends on its own.
+              redirect: "manual",
+            });
+            httpStatus = response.status;
+            const text = await response.text();
+            outcome = "response";
+            return {
+              response,
+              text,
+              envelope: this.safeParseEnvelope<T>(text),
+            };
+          } catch (error) {
+            outcome = lease.sendRefused && !lease.sent
+              ? "aborted_before_send"
+              : classifyTransportError(error) === "timeout" ? "timeout" : "transport_error";
+            throw error;
+          } finally {
+            await lease.complete({ outcome, httpStatus });
+          }
+        },
+        onTransportError: (error, executionContext) => {
+          // The guard refused the dispatch: nothing was sent. The next attempt
+          // captures the page again (and is paced by it), so there is no
+          // transport to reset and no backoff to wait out.
+          const refusal = findFanslySendRefusal(error);
+          if (refusal) {
+            const errorMessage = refusal.message;
+            return executionContext.retriesRemaining > 0
+              ? { kind: "retry", failureKind: "policy", retryDelayMs: 0, errorMessage, error }
+              : { kind: "failed", failureKind: "policy", errorMessage, error };
+          }
+          const failureKind = classifyTransportError(error);
+          if (failureKind === "transport") {
+            this.resetDispatcher(context.proxy);
+          }
+
+          if (executionContext.retriesRemaining > 0) {
+            return {
+              kind: "retry",
+              failureKind,
+              retryDelayMs: exponentialRetryDelayMs(executionContext.attemptNumber),
+              errorMessage: sanitizeError(error, { format: "chain" }).message,
+              error,
+            };
+          }
+
           return {
-            kind: "retry",
+            kind: "failed",
             failureKind,
-            retryDelayMs: exponentialRetryDelayMs(executionContext.attemptNumber),
             errorMessage: sanitizeError(error, { format: "chain" }).message,
             error,
           };
-        }
-
-        return {
-          kind: "failed",
-          failureKind,
-          errorMessage: sanitizeError(error, { format: "chain" }).message,
-          error,
-        };
-      },
-      onResponse: ({ response, text, envelope }, executionContext) => {
-        const envelopeMessage = envelope?.error?.message === undefined
-          ? undefined
-          : redactSensitiveText(envelope.error.message);
-        // Redact BEFORE slicing: a cut through a credential URL leaves a
-        // fragment the redactor no longer recognises as one (decision #248).
-        const responseSnippet = redactSensitiveText(text).slice(0, 400);
-        // Fansly puts the reason in `error.details`, not `message`. Redacted
-        // before it is sliced, like the snippet.
-        const envelopeDetails = envelope?.error?.details === undefined
-          || envelope.error.details.trim().length === 0
-          ? undefined
-          : redactSensitiveText(envelope.error.details.trim()).slice(0, ERROR_DETAILS_MAX_CHARS);
-        /** The provider's message when it sent one; otherwise ours, with the
-         *  provider's details after it. */
-        const failureMessage = (fallback: string) =>
-          envelopeMessage
-            ?? (envelopeDetails === undefined ? fallback : `${fallback}: ${envelopeDetails}`);
-        const retryAfterHeader = response.headers.get("retry-after");
-        const observedAt = Date.now();
-        // Unclamped on purpose: the provider's deadline is a fact, and a
-        // terminal failure carries it to the durable retry.
-        const retryAfterAt = parseRetryAfterInstant(retryAfterHeader, observedAt);
-        // A Retry-After beyond what this loop may sleep cannot be waited out
-        // in process: clamping it to 60s would burn every remaining attempt on
-        // a window the provider already told us is closed, and each attempt is
-        // one more 429 against the same page. Stop here and let the caller
-        // sleep durably until `retryAfterAt`.
-        const retryAfterExceedsInProcessClamp = retryAfterAt !== null
-          && retryAfterAt.getTime() - observedAt > MAX_RETRY_DELAY_MS;
-        const failureResponseMetadata = {
-          bodyLength: text.length,
-          errorCode: envelope?.error?.code ?? null,
-          errorMessage: envelopeMessage ?? null,
-          responseSnippet: responseSnippet.length > 0 ? responseSnippet : null,
-        };
-
-        if (response.status === 401 || response.status === 403) {
-          return {
-            kind: "failed",
-            failureKind: "http",
-            httpStatus: response.status,
-            errorMessage: failureMessage(`Fansly authorization failed (${response.status})`),
-            responseMetadata: failureResponseMetadata,
-            error: new FanslyApiError(
-              failureMessage(`Fansly authorization failed (${response.status})`),
-              response.status,
-              envelope?.error?.code,
-              responseSnippet,
-            ),
+        },
+        onResponse: ({ response, text, envelope }, executionContext) => {
+          const envelopeMessage = envelope?.error?.message === undefined
+            ? undefined
+            : redactSensitiveText(envelope.error.message);
+          // Redact BEFORE slicing: a cut through a credential URL leaves a
+          // fragment the redactor no longer recognises as one (decision #248).
+          const responseSnippet = redactSensitiveText(text).slice(0, 400);
+          // Fansly puts the reason in `error.details`, not `message`. Redacted
+          // before it is sliced, like the snippet.
+          const envelopeDetails = envelope?.error?.details === undefined
+            || envelope.error.details.trim().length === 0
+            ? undefined
+            : redactSensitiveText(envelope.error.details.trim()).slice(0, ERROR_DETAILS_MAX_CHARS);
+          /** The provider's message when it sent one; otherwise ours, with the
+           *  provider's details after it. */
+          const failureMessage = (fallback: string) =>
+            envelopeMessage
+              ?? (envelopeDetails === undefined ? fallback : `${fallback}: ${envelopeDetails}`);
+          const retryAfterHeader = response.headers.get("retry-after");
+          const observedAt = Date.now();
+          // Unclamped on purpose: the provider's deadline is a fact, and a
+          // terminal failure carries it to the durable retry.
+          const retryAfterAt = parseRetryAfterInstant(retryAfterHeader, observedAt);
+          // A Retry-After beyond what this loop may sleep cannot be waited out
+          // in process: clamping it to 60s would burn every remaining attempt on
+          // a window the provider already told us is closed, and each attempt is
+          // one more 429 against the same page. Stop here and let the caller
+          // sleep durably until `retryAfterAt`.
+          const retryAfterExceedsInProcessClamp = retryAfterAt !== null
+            && retryAfterAt.getTime() - observedAt > MAX_RETRY_DELAY_MS;
+          const failureResponseMetadata = {
+            bodyLength: text.length,
+            errorCode: envelope?.error?.code ?? null,
+            errorMessage: envelopeMessage ?? null,
+            responseSnippet: responseSnippet.length > 0 ? responseSnippet : null,
           };
-        }
 
-        // WP-F5's opt-in empty answer. It sits AFTER the auth check (a 401 is
-        // never "no replies") and before the envelope check, because a 204 —
-        // or an ok response with a zero-length body — carries no envelope to
-        // parse and would otherwise fail as `provider` drift.
-        const emptyStatuses = options.emptyStatuses ?? [];
-        if (
-          emptyStatuses.includes(response.status)
-          || (emptyStatuses.length > 0 && response.ok && text.trim().length === 0)
-        ) {
-          const empty = { __empty: true, httpStatus: response.status } as const;
+          if (response.status === 401 || response.status === 403) {
+            return {
+              kind: "failed",
+              failureKind: "http",
+              httpStatus: response.status,
+              errorMessage: failureMessage(`Fansly authorization failed (${response.status})`),
+              responseMetadata: failureResponseMetadata,
+              error: new FanslyApiError(
+                failureMessage(`Fansly authorization failed (${response.status})`),
+                response.status,
+                envelope?.error?.code,
+                responseSnippet,
+              ),
+            };
+          }
+
+          // WP-F5's opt-in empty answer. It sits AFTER the auth check (a 401 is
+          // never "no replies") and before the envelope check, because a 204 —
+          // or an ok response with a zero-length body — carries no envelope to
+          // parse and would otherwise fail as `provider` drift.
+          const emptyStatuses = options.emptyStatuses ?? [];
+          if (
+            emptyStatuses.includes(response.status)
+            || (emptyStatuses.length > 0 && response.ok && text.trim().length === 0)
+          ) {
+            const empty = { __empty: true, httpStatus: response.status } as const;
+            return {
+              kind: "success",
+              value: { parsed: empty as unknown as T, raw: empty as unknown as T },
+              httpStatus: response.status,
+              responseMetadata: { responseKind: "empty", bodyLength: text.length },
+            };
+          }
+
+          // The route's own deterministic answer, where the route opts in (see
+          // `finalServerErrorEnvelope`): it falls through to the terminal failure
+          // below on the first attempt. A `Retry-After` says "come back later",
+          // which is the opposite claim, so it keeps its retries.
+          const finalServerError = options.finalServerErrorEnvelope === true
+            && response.status >= 500
+            && retryAfterHeader === null
+            && isFanslyErrorEnvelope(envelope);
+          if (
+            [429, 500, 502, 503, 504].includes(response.status)
+            && executionContext.retriesRemaining > 0
+            && !retryAfterExceedsInProcessClamp
+            && !finalServerError
+          ) {
+            return {
+              kind: "retry",
+              failureKind: "http",
+              httpStatus: response.status,
+              retryDelayMs: resolveRetryDelayMs(
+                retryAfterHeader,
+                executionContext.attemptNumber,
+                observedAt,
+              ),
+              responseMetadata: failureResponseMetadata,
+              errorMessage: failureMessage(`Fansly request failed (${response.status})`),
+            };
+          }
+
+          if (!response.ok) {
+            return {
+              kind: "failed",
+              failureKind: "http",
+              httpStatus: response.status,
+              errorMessage: failureMessage(`Fansly request failed (${response.status})`),
+              responseMetadata: failureResponseMetadata,
+              error: new FanslyApiError(
+                failureMessage(`Fansly request failed (${response.status})`),
+                response.status,
+                envelope?.error?.code,
+                responseSnippet,
+                retryAfterAt,
+              ),
+            };
+          }
+
+          if (!envelope?.success || envelope.response === undefined) {
+            return {
+              kind: "failed",
+              failureKind: "provider",
+              httpStatus: response.status,
+              errorMessage: failureMessage("Fansly response envelope was unsuccessful"),
+              responseMetadata: failureResponseMetadata,
+              error: new FanslyApiError(
+                failureMessage("Fansly response envelope was unsuccessful"),
+                response.status,
+                envelope?.error?.code,
+                responseSnippet,
+              ),
+            };
+          }
+
+          let responseMetadata: Record<string, unknown>;
+          try {
+            responseMetadata = options.summarizeResponse?.(envelope.response) ?? {};
+          } catch {
+            // Summaries are diagnostics, not the contract validator. Preserve the
+            // response for ordered capture; never turn its contents (e.g. DM text)
+            // or a decoder's exception message into a diagnostic snippet.
+            responseMetadata = { summaryUnavailable: true };
+          }
           return {
             kind: "success",
-            value: { parsed: empty as unknown as T, raw: empty as unknown as T },
+            value: {
+              parsed: envelope.response,
+              raw: envelope.response,
+            },
             httpStatus: response.status,
-            responseMetadata: { responseKind: "empty", bodyLength: text.length },
+            responseMetadata,
           };
-        }
-
-        // The route's own deterministic answer, where the route opts in (see
-        // `finalServerErrorEnvelope`): it falls through to the terminal failure
-        // below on the first attempt. A `Retry-After` says "come back later",
-        // which is the opposite claim, so it keeps its retries.
-        const finalServerError = options.finalServerErrorEnvelope === true
-          && response.status >= 500
-          && retryAfterHeader === null
-          && isFanslyErrorEnvelope(envelope);
-        if (
-          [429, 500, 502, 503, 504].includes(response.status)
-          && executionContext.retriesRemaining > 0
-          && !retryAfterExceedsInProcessClamp
-          && !finalServerError
-        ) {
-          return {
-            kind: "retry",
-            failureKind: "http",
-            httpStatus: response.status,
-            retryDelayMs: resolveRetryDelayMs(
-              retryAfterHeader,
-              executionContext.attemptNumber,
-              observedAt,
-            ),
-            responseMetadata: failureResponseMetadata,
-            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
-          };
-        }
-
-        if (!response.ok) {
-          return {
-            kind: "failed",
-            failureKind: "http",
-            httpStatus: response.status,
-            errorMessage: failureMessage(`Fansly request failed (${response.status})`),
-            responseMetadata: failureResponseMetadata,
-            error: new FanslyApiError(
-              failureMessage(`Fansly request failed (${response.status})`),
-              response.status,
-              envelope?.error?.code,
-              responseSnippet,
-              retryAfterAt,
-            ),
-          };
-        }
-
-        if (!envelope?.success || envelope.response === undefined) {
-          return {
-            kind: "failed",
-            failureKind: "provider",
-            httpStatus: response.status,
-            errorMessage: failureMessage("Fansly response envelope was unsuccessful"),
-            responseMetadata: failureResponseMetadata,
-            error: new FanslyApiError(
-              failureMessage("Fansly response envelope was unsuccessful"),
-              response.status,
-              envelope?.error?.code,
-              responseSnippet,
-            ),
-          };
-        }
-
-        let responseMetadata: Record<string, unknown>;
-        try {
-          responseMetadata = options.summarizeResponse?.(envelope.response) ?? {};
-        } catch {
-          // Summaries are diagnostics, not the contract validator. Preserve the
-          // response for ordered capture; never turn its contents (e.g. DM text)
-          // or a decoder's exception message into a diagnostic snippet.
-          responseMetadata = { summaryUnavailable: true };
-        }
-        return {
-          kind: "success",
-          value: {
-            parsed: envelope.response,
-            raw: envelope.response,
-          },
-          httpStatus: response.status,
-          responseMetadata,
-        };
-      },
-    });
+        },
+      });
+    } finally {
+      requestSettled = true;
+      await releaseUnusedLease();
+    }
   }
 
   private safeParseEnvelope<T>(text: string): ApiEnvelope<T> | null {
@@ -2478,13 +2550,18 @@ export class FanslyAdapter {
     return buildProxyDispatcherCacheKey(proxy);
   }
 
-  private async waitForRateLimit(
+  /**
+   * The legacy endpoint pauses (`followers_page`, `dm_conversations`,
+   * `dm_messages`), which stay until the guard has passed its acceptance
+   * (plan §2.5 p.4). The page-wide spacing is no longer here: the send guard
+   * replaced the per-egress `global` scope and its +100 ms.
+   */
+  private async waitForEndpointPause(
     context: FanslyRequestContext,
     category: string,
     minDelayMs: number,
   ) {
     const scopes: Array<{ provider: "fansly" | "onlyfans"; scope: string }> = [
-      { provider: "fansly", scope: "global" },
       ...(category === "followers" && minDelayMs > 0
         ? [{ provider: "fansly", scope: "followers_page" } as const]
         : []),
@@ -2497,12 +2574,13 @@ export class FanslyAdapter {
     ];
 
     if (context.rateLimitWaiter) {
-      return context.rateLimitWaiter(scopes);
+      return scopes.length === 0 ? 0 : context.rateLimitWaiter(scopes);
     }
 
+    // No shared limiter in this process: the category's own minimum delay,
+    // kept in process memory.
     const egressKey = context.egressKey ?? buildProxyEgressKey(context.proxy);
     const categoryKey = `${egressKey}:${category}`;
-    const globalKey = egressKey;
 
     const categoryGate = this.enterRateLimitChain(this.rateLimitChains.get(categoryKey) ?? Promise.resolve());
     this.rateLimitChains.set(categoryKey, categoryGate.chain);
@@ -2514,33 +2592,9 @@ export class FanslyAdapter {
         this.requestTimestamps.get(categoryKey),
         minDelayMs,
       );
-      const globalGate = this.enterRateLimitChain(this.rateLimitChains.get(globalKey) ?? Promise.resolve());
-      this.rateLimitChains.set(globalKey, globalGate.chain);
-
-      try {
-        await waitForHttpRequestPermit(() => globalGate.previous);
-        assertHttpRequestActive();
-        const configuredGlobalDelayMs = this.options.globalDelayMs ?? 2500;
-        const effectiveGlobalDelayMs = configuredGlobalDelayMs > 0
-          ? configuredGlobalDelayMs + GLOBAL_DELAY_SAFETY_MARGIN_MS
-          : 0;
-        const globalWaitMs = await this.waitForMinimumDelay(
-          this.requestTimestamps.get(globalKey),
-          effectiveGlobalDelayMs,
-        );
-        assertHttpRequestActive();
-        const startedAt = Date.now();
-        this.requestTimestamps.set(categoryKey, startedAt);
-        this.requestTimestamps.set(globalKey, startedAt);
-        return categoryWaitMs + globalWaitMs;
-      } finally {
-        globalGate.release();
-        void globalGate.chain.then(() => {
-          if (this.rateLimitChains.get(globalKey) === globalGate.chain) {
-            this.rateLimitChains.delete(globalKey);
-          }
-        });
-      }
+      assertHttpRequestActive();
+      this.requestTimestamps.set(categoryKey, Date.now());
+      return categoryWaitMs;
     } finally {
       categoryGate.release();
       // A cancelled waiter may still follow an occupied predecessor. Keep

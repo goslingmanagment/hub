@@ -114,6 +114,7 @@ import {
   retentionDate,
   trimFanslyPostRepliesPayload,
 } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "post_replies" as const;
 
@@ -399,6 +400,7 @@ export async function fanslyPostRepliesChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 

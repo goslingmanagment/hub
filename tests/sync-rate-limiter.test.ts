@@ -65,7 +65,6 @@ describe("sync rate limiter", () => {
     expect(waiter).not.toBeNull();
 
     const scopes = [
-      { provider: "fansly" as const, scope: "global" },
       { provider: "fansly" as const, scope: "dm_messages" },
     ];
 
@@ -80,8 +79,9 @@ describe("sync rate limiter", () => {
     expect(dbMocks.ensureSyncProviderRateLimitProfile).toHaveBeenCalledWith(db, {
       provider: "fansly",
       egressKey: "socks5://proxy.example:1080",
+      // The endpoint pauses only: the page-wide `global` scope (S + 100 ms)
+      // is the per-page send guard now (plan §2.5).
       scopes: [
-        { scope: "global", minSpacingMs: 2_600 },
         { scope: "followers_page", minSpacingMs: 5_000 },
         { scope: "dm_conversations", minSpacingMs: 5_000 },
         { scope: "dm_messages", minSpacingMs: 5_000 },
@@ -89,13 +89,11 @@ describe("sync rate limiter", () => {
     });
     expect(dbMocks.reserveSyncProviderRateLimit).toHaveBeenNthCalledWith(1, db, {
       scopes: [
-        { provider: "fansly", scope: "global", egressKey: "socks5://proxy.example:1080" },
         { provider: "fansly", scope: "dm_messages", egressKey: "socks5://proxy.example:1080" },
       ],
     });
     expect(dbMocks.reserveSyncProviderRateLimit).toHaveBeenNthCalledWith(2, db, {
       scopes: [
-        { provider: "fansly", scope: "global", egressKey: "socks5://proxy.example:1080" },
         { provider: "fansly", scope: "dm_messages", egressKey: "socks5://proxy.example:1080" },
       ],
     });
@@ -113,7 +111,7 @@ describe("sync rate limiter", () => {
     }, { egressKey: "synthetic-proxy" });
 
     await expect(runWithHttpRequestSignal(controller.signal, () => waiter!([
-      { provider: "fansly", scope: "global" },
+      { provider: "fansly", scope: "dm_messages" },
     ]))).rejects.toBe(reason);
     expect(dbMocks.reserveSyncProviderRateLimit).not.toHaveBeenCalled();
     expect(timerMocks.delay).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ import {
 
 export async function runSchedulerRuntime() {
   const processStartedAt = new Date();
-  const app = await createAppContext();
+  const app = await createAppContext({ processRole: "scheduler" });
   let stopped = false;
 
   app.logger.info("Scheduler booting; contending for leadership");

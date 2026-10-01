@@ -32,6 +32,7 @@ import type { StreamChunkResult } from "./executor-handlers.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const FANSLY_POSTS_MAPPER_VERSION = "fansly-posts-v1";
 const FANSLY_POST_TIPS_MAPPER_VERSION = "fansly-post-tips-v2";
@@ -810,6 +811,7 @@ export async function fanslyPostsChunk(
       engagementAttempts,
     ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const accountId = resolveFanslyPlatformAccountId(input.pageContext.page);
 

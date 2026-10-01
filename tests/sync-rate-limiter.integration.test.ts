@@ -66,7 +66,6 @@ describe("sync rate limiter integration", () => {
       { scope: "dm_conversations", minSpacingMs: 5_000 },
       { scope: "dm_messages", minSpacingMs: 5_000 },
       { scope: "followers_page", minSpacingMs: 5_000 },
-      { scope: "global", minSpacingMs: 2_600 },
     ]);
 
     await testDb.pool.query(`
@@ -92,7 +91,6 @@ describe("sync rate limiter integration", () => {
       { scope: "dm_conversations", minSpacingMs: 6_200 },
       { scope: "dm_messages", minSpacingMs: 8_300 },
       { scope: "followers_page", minSpacingMs: 5_000 },
-      { scope: "global", minSpacingMs: 2_600 },
     ]);
   }, 15_000);
 });

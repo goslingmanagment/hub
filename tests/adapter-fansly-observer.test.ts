@@ -6,6 +6,7 @@ import {
   fanslyFollowersResponse,
   loadAdapters,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -28,6 +29,7 @@ describe("adapter hardening", () => {
     });
 
     await adapter.getFollowersPage({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "super-secret-token",
       },

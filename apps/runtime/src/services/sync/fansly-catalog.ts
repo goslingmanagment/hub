@@ -101,6 +101,7 @@ import {
   retentionDate,
   trimFanslyCatalogPayload,
 } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "catalog" as const;
 
@@ -392,6 +393,7 @@ export async function fanslyCatalogChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 

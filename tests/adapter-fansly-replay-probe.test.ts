@@ -5,6 +5,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -20,8 +21,9 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }))
       .mockResolvedValueOnce(toJsonResponse({ success: true, response: [] }));
 
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const context = {
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token-abc",
         fanslyClientId: "client-1",

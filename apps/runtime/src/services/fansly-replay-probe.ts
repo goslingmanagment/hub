@@ -3,6 +3,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 // Stage 6 — Fansly server-replay gate.
 // Fires one read-only call per endpoint family against an owner-chosen page,
@@ -130,6 +131,7 @@ export async function runFanslyReplayProbe(
       proxy: context.proxy,
       egressKey: context.egressKey,
       rateLimitWaiter,
+      sendGuard: fanslyPageSendGuard(app, context.page.id, "replay_probe"),
     };
 
     for (let attempt = 1; attempt <= calls; attempt += 1) {

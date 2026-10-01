@@ -80,6 +80,7 @@ import {
 import { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./../sync-queue.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 export const TARGETED_THREAD_BACKFILL_QUEUE = "sync.thread.backfill";
 
@@ -726,6 +727,7 @@ async function runTargetedThreadBackfillOnce(
       requestObserver,
     ),
     rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: pageContext.egressKey }),
+    sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "targeted_backfill"),
   };
 
   const result: TargetedThreadBackfillResult = emptyResult(threadId, "partial", {
