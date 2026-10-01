@@ -18,7 +18,7 @@
   "apps/runtime/src/modules/events/index.ts": 1,
   "apps/runtime/src/modules/finance/index.ts": 7,
   "apps/runtime/src/modules/ingest/index.ts": 1,
-  "apps/runtime/src/modules/ops/index.ts": 12,
+  "apps/runtime/src/modules/ops/index.ts": 10,
   "apps/runtime/src/services/auth.ts": 1,
   "apps/runtime/src/services/connections.ts": 4,
   "apps/runtime/src/services/fan-profiles.ts": 1,
