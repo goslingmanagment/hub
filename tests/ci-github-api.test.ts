@@ -159,23 +159,31 @@ describe("CI gate scripts against a stand-in GitHub API", () => {
   const headSha = "c".repeat(40);
   const mirrorEnv = { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "200", HEAD_SHA: headSha, IS_DRAFT: "false" };
 
-  it("ci-mirror-gate mirrors an earlier passing Quality Gate", async () => {
-    const earlier = { name: "Quality Gate", app: { slug: "github-actions" }, status: "completed", conclusion: "success",
+  const runsUrl = `/repos/owner/repo/actions/runs?head_sha=${headSha}&per_page=100&page=1`;
+  const checkRunsUrl = `/repos/owner/repo/commits/${headSha}/check-runs?filter=all&per_page=100&page=1`;
+
+  it("ci-mirror-gate mirrors the newest passing Quality Gate", async () => {
+    const earlier = { id: 9, name: "Quality Gate", app: { slug: "github-actions" }, status: "completed", conclusion: "success",
       html_url: "https://github.com/owner/repo/actions/runs/150/job/9" };
-    const { run, seen } = await withApi(() => ({ status: 200, body: { check_runs: [earlier] } }), async (base, requests) => ({
+    const { run, seen } = await withApi(url => ({
+      status: 200,
+      body: url.startsWith("/repos/owner/repo/actions/runs?")
+        ? { workflow_runs: [{ id: 150, path: ".github/workflows/ci.yml", status: "completed" }] }
+        : { check_runs: [earlier] },
+    }), async (base, requests) => ({
       run: await runScript("ci-mirror-gate.mjs", { ...mirrorEnv, GITHUB_API_URL: base }),
       seen: requests,
     }));
     expect(run.code, run.stderr).toBe(0);
-    expect(run.stdout).toBe(`Quality Gate mirrors run 150 (${earlier.html_url}) — the same head ${headSha} already passed.\n`);
-    expect(seen.map(item => item.url)).toEqual([`/repos/owner/repo/commits/${headSha}/check-runs?check_name=Quality%20Gate&filter=all&per_page=100&page=1`]);
+    expect(run.stdout).toBe(`Quality Gate mirrors run 150 (${earlier.html_url}) — the newest gate on head ${headSha} passed.\n`);
+    expect(seen.map(item => item.url)).toEqual([runsUrl, checkRunsUrl]);
   });
 
   it("ci-mirror-gate stays red when the API fails, without printing the token", async () => {
     const run = await withApi(() => ({ status: 500, body: { message: token } }), base =>
       runScript("ci-mirror-gate.mjs", { ...mirrorEnv, GITHUB_API_URL: base }));
     expect(run.code).toBe(1);
-    expect(run.stderr).toBe(`GitHub API answered 500 for repos/owner/repo/commits/${headSha}/check-runs?check_name=Quality%20Gate&filter=all&per_page=100&page=1\n`);
+    expect(run.stderr).toBe(`GitHub API answered 500 for ${runsUrl.slice(1)}\n`);
     expect(run.stdout + run.stderr).not.toContain(token);
   });
 });

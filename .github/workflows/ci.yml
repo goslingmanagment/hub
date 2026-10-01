@@ -482,8 +482,12 @@ jobs:
   # suite for the head SHA, so a run that renames or skips this job takes the
   # gate off that head and the PR becomes unmergeable with every check green
   # (Decision 377). A metadata-only event therefore still runs this job and
-  # mirrors the verdict an earlier run recorded for the same SHA; it cannot
-  # manufacture one, so a red, pending or missing gate stays that way.
+  # mirrors the verdict of the NEWEST gate another real run recorded for the
+  # same SHA (scripts/ci-mirror-gate.mjs): a newer red gate beats an older
+  # green one, and a missing gate stays red. Its own run is the newest suite,
+  # so whatever it reports stands until the next event: while a real run on
+  # the head is still working, it waits for that verdict (MIRROR_WAIT_MS,
+  # then red) rather than repeating an older one.
   #
   # On the PC the job asks for the gate runner class (ci-pc-control), as the
   # fingerprint job does. It queues like any other when the PC is off,
@@ -494,10 +498,13 @@ jobs:
     runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
     needs: [fingerprint, static, integration]
     if: always()
-    timeout-minutes: 5
-    # Reading this head's earlier check runs on a private repository needs
-    # checks:read. Nothing in this job writes.
+    # The mirror's wait for a real run on the same head plus setup; the
+    # aggregating path takes seconds.
+    timeout-minutes: 45
+    # Reading this head's workflow runs and earlier check runs on a private
+    # repository needs actions:read and checks:read. Nothing in this job writes.
     permissions:
+      actions: read
       checks: read
       contents: read
     env:
