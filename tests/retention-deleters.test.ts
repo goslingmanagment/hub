@@ -139,7 +139,6 @@ const SANCTIONED_DELETER_FILES = [
   "apps/runtime/src/services/projections/fansly-payouts.ts",
   "apps/runtime/src/services/sync/executor.ts",
   "apps/runtime/src/services/sync/observability.ts",
-  "apps/runtime/src/services/sync/rate-limiter.ts",
   "packages/db/src/repositories/auth.ts",
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",

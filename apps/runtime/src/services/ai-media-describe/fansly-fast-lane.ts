@@ -3,7 +3,6 @@ import { sql } from "drizzle-orm";
 import {
   admitAiMediaAcceleratorReadOutcome,
   countAiMediaAcceleratorAdmissions24h,
-  extendSyncProviderRateLimitHold,
   findPageById,
   finishAiMediaAcceleratorRead,
   getFanslyFastLanePageSyncGate,
@@ -47,7 +46,6 @@ import {
   type ResolvedFanslyPageContext,
 } from "../page-context.ts";
 import { applyAiMediaAttachmentsEvent } from "../projections/ai-media-candidates.ts";
-import { createSyncRateLimitWaiter } from "../sync/rate-limiter.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 import { dmRetentionDate, persistRawPayload } from "../sync/shared.ts";
 import {
@@ -70,15 +68,16 @@ import {
 // addressed by the frame's groupId.
 //
 // Outside the page's sync lease, but never beside another request of the
-// egress on the wire, and never into a cooldown:
-//   - before reserving a pacing slot and again right before dispatch (after
-//     the wait): no stream of any page of the egress cooling down, the DM
-//     stream not paused/blocked, no 429 (15 min), 5xx (5 min) or 401/403
-//     (30 min) seen on the egress, no unfinished sync request of the egress,
-//     the frame's credential/proxy generation still current, the shared
-//     rolling 24 h cap not spent;
-//   - the slot holds the egress's pacing queue for the whole timeout, and the
-//     hold is extended from the real dispatch;
+// page on the wire, and never into a cooldown:
+//   - before the page's send guard is captured and again right before
+//     dispatch (after the wait): no stream of any page of the egress cooling
+//     down, the DM stream not paused/blocked, no 429 (15 min), 5xx (5 min) or
+//     401/403 (30 min) seen on the egress, no unfinished sync request of the
+//     egress, the frame's credential/proxy generation still current, the
+//     shared rolling 24 h cap not spent;
+//   - the page's send guard is its only pacing (plan §2.3, §2.5): one request
+//     of the page in flight, S × (1 + u) from the previous completion, held
+//     until this read completes or times out;
 //   - one physical attempt, a 5 s timeout, compare-and-set admission;
 //   - a 429/5xx/401/403 pauses the lane on every page of the egress.
 // A request the lane declines goes back to the in-chunk accelerator (which
@@ -87,8 +86,6 @@ import {
 // Logging rule: ids, statuses and outcomes only — never a URL or a message.
 
 export const FAST_LANE_REQUEST_TIMEOUT_MS = 5_000;
-/** The egress stays closed to other requests for the whole timeout. */
-export const FAST_LANE_EGRESS_HOLD_MS = FAST_LANE_REQUEST_TIMEOUT_MS + 500;
 /** Frames of one burst share one read. */
 export const FAST_LANE_COALESCE_MS = 1_000;
 export const FAST_LANE_STALE_AFTER_MS = 10 * 60 * 1000;
@@ -109,9 +106,6 @@ const HEALTH_INTERVAL_MS = 60_000;
 export const FAST_LANE_INCIDENT_AFTER_MS = 10 * 60 * 1000;
 const SOCKET_FRESH_MS = 30_000;
 const DRAIN_LIMIT = 5;
-/** The legacy endpoint pause the lane holds; the page-wide spacing is the
- *  send guard's (plan §2.5). */
-const HOLD_SCOPES = ["dm_messages"] as const;
 
 export interface FanslyFastLaneFrame {
   pageId: number;
@@ -314,8 +308,8 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
       }) ? "egress_busy" : null);
   }
 
-  /** What can change while the read waits for its slot; re-asked right
-   * before dispatch. */
+  /** What can change while the read waits for its send-guard capture;
+   * re-asked right before dispatch. */
   async function wireGate(input: { pageId: number; pageIds: readonly number[]; label: string; generation: string | null }): Promise<string | null> {
     const now = clock();
     if (await hasAiMediaFastLaneCooldown(app.db, { pageIds: input.pageIds, now })) return "lane_cooldown";
@@ -355,8 +349,8 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
     }
     const limit24h = Math.max(0, effective.aiMediaDescribeFanslyAcceleratorDailyLimit ?? 60);
 
-    // Checks before a pacing slot is reserved: a refused read never holds
-    // the egress. A busy egress is looked at again twice, 2 s apart.
+    // Checks before the page's send guard is captured: a refused read never
+    // holds the page. A busy egress is looked at again twice, 2 s apart.
     let refusal = await gate({ pageId, label, generation: row.generation, limit24h });
     for (let attempt = 0; refusal === "egress_busy" && attempt < EGRESS_BUSY_RETRIES && !stopped; attempt += 1) {
       await sleep(EGRESS_BUSY_RETRY_MS);
@@ -395,13 +389,7 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
           if (admission === "cap") throw new FastLaneRefused("budget_exhausted");
           admitted += 1;
           dispatchedHttp = true;
-          const dispatchAt = clock();
-          // The hold counts from the real start, not from the slot.
-          await extendSyncProviderRateLimitHold(app.db, {
-            provider: "fansly", egressKey: context.egressKey, scopes: HOLD_SCOPES,
-            until: new Date(dispatchAt.getTime() + FAST_LANE_EGRESS_HOLD_MS),
-          });
-          await markAiMediaAcceleratorReadDispatched(app.db, { id: row.id, now: dispatchAt });
+          await markAiMediaAcceleratorReadDispatched(app.db, { id: row.id, now: clock() });
         }
         if (event.state === "failed" && (event.failureKind === "transport" || event.failureKind === "timeout")) {
           transportFailure = event.failureKind;
@@ -417,7 +405,6 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         egressKey: context.egressKey,
         requestObserver: observer,
         remainingAttempts: () => Math.max(0, 1 - admitted),
-        rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: context.egressKey, holdMs: FAST_LANE_EGRESS_HOLD_MS }),
         sendGuard: fanslyPageSendGuard(app, pageId, "ai_fast_lane"),
         requestTimeoutMs: FAST_LANE_REQUEST_TIMEOUT_MS,
       }, { groupId: row.groupRef, limit: 25, before: null });

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   captureEvents,
@@ -59,7 +59,6 @@ async function fetchTransactionsPage(response: unknown) {
     sendGuard: createTestFanslySendGuard(),
     session: { authorization: "token" },
     proxy: { url: "socks5://proxy.example:1080" },
-    rateLimitWaiter: vi.fn(async () => 0),
     requestObserver,
   }, { offset: 0, limit: 100 });
   await adapter.close();
@@ -86,7 +85,6 @@ describe("Fansly transaction page contract", () => {
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" },
       proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0),
     };
 
     const results = [

@@ -96,7 +96,6 @@ import {
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { SyncRunTelemetry } from "./observability.ts";
-import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./../sync-queue.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
@@ -943,7 +942,6 @@ async function walkTargetedThread(
       budget,
       requestObserver,
     ),
-    rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: pageContext.egressKey }),
     sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "targeted_backfill"),
   };
   // The adapter clamps its in-process retries to this allowance.

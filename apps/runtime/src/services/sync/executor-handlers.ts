@@ -124,7 +124,6 @@ import {
   type TopSpendersCursorWindow,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import {
   isOnlyFansDmPollingEnabled,
   isOnlyFansDmPollingStream,
@@ -840,7 +839,6 @@ export async function fanslyTopSpendersChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
 
@@ -1399,7 +1397,6 @@ export async function fanslyTransactionsChunk(
         proxy: input.pageContext.proxy,
         egressKey: input.pageContext.egressKey,
         requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-        rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
         sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
       },
       syncRunId: input.syncRunId,
@@ -1605,7 +1602,6 @@ export async function fanslySubscribersChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
@@ -2163,7 +2159,6 @@ export async function executeFollowersChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers");
@@ -2202,7 +2197,6 @@ export async function executeFollowersChunk(
       {
         offset: state.offset,
         limit: 100,
-        minDelayMs: app.config.followerPageDelayMs,
       },
     );
     await persistRawPayload(app.db, {
@@ -2465,7 +2459,6 @@ export async function executeFollowersReconcileChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers_reconcile");
@@ -2923,7 +2916,6 @@ export async function executeFollowersReconcileChunk(
       {
         offset: state.offset,
         limit: FOLLOWERS_RECONCILE_PAGE_SIZE,
-        minDelayMs: app.config.followerPageDelayMs,
       },
     );
     await persistRawPayload(app.db, {
@@ -3207,7 +3199,6 @@ export async function fanslyDmMessagesChunk(
       input.budget,
       dmMessagesRequestObserver,
     ),
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   // For a failing thread's retry: the adapter clamps its in-process retries
@@ -4250,7 +4241,6 @@ export async function executePurchaseHistoryChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const {

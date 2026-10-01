@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { captureEvents, cleanupAdapterHarness, loadAdapters, toJsonResponse } from "./helpers/adapter-harness.ts";
 import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
@@ -20,7 +20,7 @@ describe("Fansly audience response contracts", () => {
     const result = await adapter.getFollowersPage({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     }, "account-1", { offset: 100, limit: 100 });
     await adapter.close();
     expect(result).toMatchObject({ contractAccepted: false, done: false, raw, offset: 100 });
@@ -41,7 +41,7 @@ describe("Fansly audience response contracts", () => {
     const result = await adapter.getSubscribersPage({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     }, { offset: 100, limit: 100 });
     await adapter.close();
     expect(result).toMatchObject({ contractAccepted: false, done: false, raw, offset: 100 });
@@ -56,8 +56,7 @@ describe("Fansly audience response contracts", () => {
         stats: { total: 0, totalActive: 0, totalExpired: 0 }, subscriptions: [],
       } }));
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
-    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0) };
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" } };
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
     expect(await adapter.getSubscribersPage(context, {})).toMatchObject({ contractAccepted: true, done: true });
     await adapter.close();
@@ -71,8 +70,7 @@ describe("Fansly audience response contracts", () => {
       { stats: { totalExpired: 0 }, subscriptions: [] }];
     for (const response of responses) fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
-    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0) };
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" } };
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
     expect(await adapter.getFollowersPage(context, "account", {})).toMatchObject({ contractAccepted: true, done: true });
     expect(await adapter.getSubscribersPage(context, {})).toMatchObject({ contractAccepted: true, done: true });
@@ -94,7 +92,7 @@ describe("Fansly audience response contracts", () => {
     const result = await adapter.getMessagingGroupsPage({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     }, { offset: 100, limit: 100 });
     await adapter.close();
     expect(result).toMatchObject({
@@ -115,7 +113,7 @@ describe("Fansly audience response contracts", () => {
     const result = await adapter.getMessagesPage({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     }, { groupId: "group-1", limit: 25, before: "m-9" });
     await adapter.close();
     expect(result).toMatchObject({
@@ -137,8 +135,7 @@ describe("Fansly audience response contracts", () => {
       fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
     }
     const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
-    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0) };
+    const context = { sendGuard: createTestFanslySendGuard(), session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" } };
     for (const _ of groupPages) {
       expect(await adapter.getMessagingGroupsPage(context, {}))
         .toMatchObject({ contractAccepted: true, done: true, items: [], accounts: [], groups: [] });
@@ -160,7 +157,7 @@ describe("Fansly audience response contracts", () => {
     expect(await request({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     }, "/message", {
       operation: "message", endpointTemplate: "/message", category: "message",
       summarizeResponse: () => { throw new Error(raw.content); },
@@ -182,7 +179,7 @@ describe("Fansly audience response contracts", () => {
     await expect(adapter.verifySession({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     })).rejects.toMatchObject({
       name: "FanslyApiError", message: "Fansly session verification returned an invalid account",
     });
@@ -200,7 +197,6 @@ describe("Fansly audience response contracts", () => {
     expect(await adapter.verifySession({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0),
     })).toMatchObject({ parsed: raw, raw });
     await adapter.close();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -215,7 +211,7 @@ describe("Fansly audience response contracts", () => {
     expect(await adapter.getAccountMe({
       sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" }, proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0), requestObserver: observed.requestObserver,
+      requestObserver: observed.requestObserver,
     })).toMatchObject({ raw });
     await adapter.close();
     expect(observed.events.map(event => event.state)).toEqual(["started", "success"]);

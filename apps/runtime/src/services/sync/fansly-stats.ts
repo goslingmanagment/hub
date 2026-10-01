@@ -110,7 +110,6 @@ import {
 } from "./fansly-earnings-window.ts";
 import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
-import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { retentionDate } from "./shared.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
@@ -1035,7 +1034,6 @@ export async function fanslyStatsSnapshotChunk(
     session: input.pageContext.session,
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
-    rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
     sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const {
