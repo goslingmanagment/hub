@@ -518,6 +518,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # image never names the table or the columns, so it runs unchanged after a
   # rollback; a later re-deploy finds the migration already applied.
   "0226_fansly_ws_live_overlay.sql"
+  # Send guard checks (plan §2.4/§10): a nullable lease-end column on the
+  # 0225 journal (catalog-only, no default) and the pace check's one-row
+  # cursor table. The previous image names neither, so it runs unchanged.
+  "0227_fansly_send_guard_checks.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
