@@ -45,6 +45,12 @@ export const SYNC_SEND_WINDOW_MS = 15_000;
 export const SYNC_FLOOR_LOOKBACK_MS = 600_000;
 /** First send after a takeover ≥ this × S after every earlier send (I5). */
 export const SYNC_TAKEOVER_FACTOR = 1.2;
+/** How far before its window the pace audit looks for the page's previous
+ *  send. A longer gap is far above the largest pause a page can be held to
+ *  (`FANSLY_PAUSE_MAX_MS` = 60 s, × 1.2 at most with jitter or a takeover),
+ *  so it can never be a pace violation; the bound keeps the audit's cost
+ *  proportional to its window, not to the page's whole journal. */
+export const SYNC_PACE_AUDIT_LOOKBACK_MS = 300_000;
 /** Generic apply errors before the attempt and its work are quarantined (§3.7.3). */
 export const SYNC_APPLY_FAILURES_TO_QUARANTINE = 3;
 
@@ -635,15 +641,20 @@ export interface SyncPaceAuditSend {
   sentAt: Date;
   settingMs: number;
   ownerGeneration: bigint;
-  /** Gap to the previous recorded send of the page (any owner), ms. */
+  /** Gap to the previous recorded send of the page (any owner), ms; null for
+   *  the window's first send when no send precedes it within
+   *  `SYNC_PACE_AUDIT_LOOKBACK_MS` before `since`. */
   gapMs: number | null;
 }
 
 /**
  * Every recorded send of a page in [since, until), in send order, each with
- * the gap to the previous send of the page (including the last one before
- * `since`) — the pace audit of §2.4 and alert 1. Live and shadow are separate
- * journals (`shadow`).
+ * the gap to the previous send of the page (including the last one in the
+ * `SYNC_PACE_AUDIT_LOOKBACK_MS` before `since`) — the pace audit of §2.4 and
+ * alert 1. Live and shadow are separate journals (`shadow`). The look-back
+ * bound keeps the search for that previous send an index range: the
+ * `sync_attempts_page_sent` index does not carry `shadow`, so an unbounded
+ * search on a page whose whole history is the other journal walks all of it.
  */
 export async function listSendsForPaceAudit(
   db: Database,
@@ -672,6 +683,8 @@ export async function listSendsForPaceAudit(
               where b.page_id = ${input.pageId}
                 and b.shadow = ${shadow}::boolean
                 and b.sent_at < ${input.since}::timestamptz
+                and b.sent_at >= ${input.since}::timestamptz
+                  - ${SYNC_PACE_AUDIT_LOOKBACK_MS}::double precision * interval '1 millisecond'
            ), ${input.since}::timestamptz)
            and a.sent_at < ${until}
       ) s

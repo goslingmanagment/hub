@@ -47,6 +47,7 @@ import {
   settleAttemptWithoutCapture,
   settleWork,
   supersedeShadowWork,
+  SYNC_PACE_AUDIT_LOOKBACK_MS,
   upsertDemand,
   upsertDemands,
   writeSafeRelease,
@@ -171,6 +172,55 @@ async function admit(
     });
     return { attemptId, demandRevision: running.demandRevision };
   });
+}
+
+interface PlanNode {
+  "Node Type": string;
+  "Relation Name"?: string;
+  "Actual Rows"?: number;
+  "Actual Loops"?: number;
+  "Rows Removed by Filter"?: number;
+  "Heap Fetches"?: number;
+  Plans?: PlanNode[];
+}
+
+/** The result of `run` and the last statement it put on the pool, verbatim. */
+async function captureStatement<T>(run: () => Promise<T>): Promise<{ result: T; text: string; values: unknown[] }> {
+  const pool = testDb!.pool as unknown as { query: (config: unknown, values?: unknown) => Promise<unknown> };
+  const original = pool.query.bind(pool);
+  const captured: { text: string; values: unknown[] }[] = [];
+  pool.query = (config: unknown, values?: unknown) => {
+    if (typeof config === "string") {
+      captured.push({ text: config, values: (values as unknown[] | undefined) ?? [] });
+    } else if (config && typeof (config as { text?: unknown }).text === "string") {
+      const record = config as { text: string; values?: unknown[] };
+      captured.push({ text: record.text, values: (values as unknown[] | undefined) ?? record.values ?? [] });
+    }
+    return original(config, values);
+  };
+  try {
+    const result = await run();
+    const statement = captured.at(-1);
+    if (!statement) throw new Error("no statement reached the pool");
+    return { result, ...statement };
+  } finally {
+    pool.query = original;
+  }
+}
+
+/** Rows of `relation` the executed plan read from the heap (kept or filtered out). */
+async function heapVisits(statement: { text: string; values: unknown[] }, relation: string): Promise<number> {
+  const explained = await testDb!.pool.query<{ "QUERY PLAN": { Plan: PlanNode }[] }>(
+    `explain (analyze, format json) ${statement.text}`,
+    statement.values,
+  );
+  const flatten = (node: PlanNode): PlanNode[] => [node, ...(node.Plans ?? []).flatMap(flatten)];
+  return flatten(explained.rows[0]!["QUERY PLAN"][0]!.Plan).reduce((sum, node) => {
+    if (node["Relation Name"] !== relation) return sum;
+    return sum + (node["Node Type"] === "Index Only Scan"
+      ? node["Heap Fetches"] ?? 0
+      : ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 0));
+  }, 0);
 }
 
 // ── pages ────────────────────────────────────────────────────────────────────
@@ -1059,4 +1109,51 @@ describe("the takeover floor (I5) and the pace audit", () => {
     expect((await listSendsForPaceAudit(db(), { pageId, since: new Date(base - 1_000) }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
     expect(await listSendsForPaceAudit(db(), { pageId, since: new Date(base - 1_000), shadow: true })).toEqual([]);
   });
+
+  it("looks back a bounded span for the previous send, however long the other journal is", async (context) => {
+    if (!testDb) return context.skip();
+    // 30 days of one journal (a send every 2 min) and nothing of the other
+    // before the window: the live audit of a page in its first hour after the
+    // switch, or the shadow audit of a page live for a long time. The audit's
+    // reads must stay inside its window and the look-back.
+    for (const shadow of [false, true]) {
+      const pageId = await seedPage(`audit-history-${shadow ? "shadow" : "live"}`);
+      const generation = await own(pageId);
+      const since = new Date(Date.now() - 60_000);
+      const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                       admitted_at, sent_at, send_mark, operation, request, outcome`;
+      const values = `$1, $2::boolean, 'dm-messages.head', 'group-1', 'urgent', $3, 2000, 0.1, 2200, t, t,
+                      case when $2::boolean then 'shadow' else 'request_start' end, 'messages.page', '{}'::jsonb,
+                      case when $2::boolean then 'shadow' else 'response' end`;
+      await query(
+        `insert into sync_attempts (${columns})
+         select ${values} from generate_series(1, 21600) n, lateral (select $4::timestamptz - n * interval '2 minutes') s(t)`,
+        [pageId, !shadow, generation.toString(), since],
+      );
+      const send = async (at: number): Promise<number> => {
+        const rows = await query<{ id: string }>(
+          `insert into sync_attempts (${columns}) select ${values} from (select $4::timestamptz) s(t) returning id::text`,
+          [pageId, shadow, generation.toString(), new Date(at)],
+        );
+        return Number(rows[0]!.id);
+      };
+      const ids = [await send(since.getTime() + 1_000), await send(since.getTime() + 3_100), await send(since.getTime() + 5_300)];
+      await query("analyze sync_attempts");
+
+      const audit = await captureStatement(() => listSendsForPaceAudit(db(), { pageId, since, shadow }));
+      expect(audit.result.map((row) => [row.attemptId, row.gapMs])).toEqual([[ids[0], null], [ids[1], 2_100], [ids[2], 2_200]]);
+      expect(await heapVisits(audit, "sync_attempts")).toBeLessThan(50);
+
+      // An earlier send of the same journal beyond the look-back is no pace
+      // violation whatever the setting: the window's first gap stays unknown.
+      const earlier = await send(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS - 1);
+      expect((await listSendsForPaceAudit(db(), { pageId, since, shadow }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
+      // At the look-back's edge it is the previous send.
+      await query("update sync_attempts set sent_at = $2 where id = $1", [earlier, new Date(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS)]);
+      expect((await listSendsForPaceAudit(db(), { pageId, since, shadow }))[0]).toMatchObject({
+        attemptId: ids[0],
+        gapMs: SYNC_PACE_AUDIT_LOOKBACK_MS + 1_000,
+      });
+    }
+  }, 120_000);
 });
