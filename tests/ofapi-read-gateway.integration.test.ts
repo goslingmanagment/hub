@@ -457,9 +457,11 @@ describe("OFAPI read gateway integration", () => {
     );
 
     const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.headers["retry-after"]).toBe("7");
-    expect(upstreamRequests).toHaveLength(1);
+    // Under load this once answered a 503 with no retry-after: say whose 503.
+    const answered = `${response.statusCode} ${JSON.stringify(response.headers)} ${response.body}; upstream saw ${JSON.stringify(upstreamRequests)}`;
+    expect(response.statusCode, answered).toBe(503);
+    expect(response.headers["retry-after"], answered).toBe("7");
+    expect(upstreamRequests, answered).toHaveLength(1);
     expect(proxyRequests).toHaveLength(0);
     expect(scriptedResponses).toHaveLength(1);
   });
