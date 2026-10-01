@@ -47,9 +47,11 @@ export {
 } from "./engine.ts";
 export {
   buildFanslySendHolderIdentity,
+  containerIdFromMountinfo,
   createDefaultFanslySendOsProbe,
   createPortableFanslySendOsProbe,
   createProcFanslySendOsProbe,
+  hostnameIsContainerId,
   judgeFanslySendHolderTermination,
   type FanslySendHolderRole,
   type FanslySendOsProbe,
@@ -149,10 +151,10 @@ export interface FanslySendGuardSweepResult {
 /**
  * The termination check every long-lived process runs (~10 s). For each page
  * whose holder overran its lease: if this host can PROVE the holder's process
- * is gone (another kernel boot, or the same host and pid namespace with the pid
- * gone or reused), release the page with another 1.2 × S and journal
- * `confirmed_terminated`; otherwise record the page as closed. A live holder is
- * never released.
+ * is gone (another kernel boot; an earlier run of this very container; or the
+ * same host and pid namespace with the pid gone or reused), release the page
+ * with another 1.2 × S and journal `confirmed_terminated`; otherwise record the
+ * page as closed. A live holder is never released.
  */
 export function startFanslySendGuardSweeper(
   app: { db: Database; logger: FanslySendGuardLogger },
@@ -290,4 +292,46 @@ export async function confirmFanslySendGuardHostsTerminated(
     outcomes.push({ pageId: row.pageId, pageLabel: row.pageLabel, holderHost: row.holderHost, released });
   }
   return outcomes;
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `fansly-send-guard confirm-terminated --holder-token <uuid>`: an operator's
+ * Docker-level confirmation of ONE holder (its token from `status`) that no
+ * automatic rule can prove gone — e.g. its container restarted under the same
+ * hostname but runs no sweeper, or its hostname is not its container's id. The
+ * operator has checked that the holder's process is gone: its container is
+ * gone, or started again after the holder's `captured_at`
+ * (`docker inspect -f '{{.State.StartedAt}}' <container>`). Only a holder past
+ * its lease is released; `dryRun` checks without writing.
+ */
+export async function confirmFanslySendGuardHolderTerminated(
+  db: Database,
+  input: { token: string; confirmer: string; dryRun: boolean },
+): Promise<{ pageId: number; pageLabel: string | null; holderHost: string | null; released: boolean }> {
+  const token = input.token.trim().toLowerCase();
+  if (!UUID_PATTERN.test(token)) {
+    throw new Error(`--holder-token expects a holder token (a uuid) from \`fansly-send-guard status\`, received "${input.token}"`);
+  }
+  const rows = await listHeldFanslySendGuards(db, { expiredOnly: false });
+  const row = rows.find((candidate) => candidate.holderToken === token);
+  if (!row) {
+    throw new Error(`No Fansly page is held by token ${token}; it completed or was released already`);
+  }
+  if (!row.leaseExpired) {
+    throw new Error(
+      `The lease of token ${token} runs until ${row.leaseUntil?.toISOString() ?? "?"}; `
+      + "a holder is released by token only past its lease",
+    );
+  }
+  const released = input.dryRun
+    ? false
+    : await confirmFanslySendGuardTerminated(db, {
+      pageId: row.pageId,
+      token,
+      evidence: `operator_confirmed_holder; confirmed by ${input.confirmer}`,
+      requireExpiredLease: true,
+    });
+  return { pageId: row.pageId, pageLabel: row.pageLabel, holderHost: row.holderHost, released };
 }

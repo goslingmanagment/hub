@@ -40,7 +40,8 @@ export async function runApiRuntime() {
     // itself while either is down. The whole context: Telegram egress needs it.
     watchdog = startOpsWatchdog(appContext);
     // Plan §2.5: releases Fansly pages whose request holder is provably gone
-    // (a CLI process in this container, a restarted container on this host).
+    // (a CLI process in this container, an earlier run of this container,
+    // anything from before a reboot of this host).
     sendGuardSweeper = startFanslySendGuardSweeper(appContext, {
       registry: getFanslySendGuards(appContext),
     });

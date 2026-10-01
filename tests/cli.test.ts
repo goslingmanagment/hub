@@ -383,6 +383,32 @@ describe("CLI parsing", () => {
     expect(cliMocks.createAppContext).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [[], "exactly one of --running-hosts or --holder-token"],
+    [
+      ["--running-hosts", "a,b", "--holder-token", "33333333-3333-4333-8333-333333333333"],
+      "exactly one of --running-hosts or --holder-token",
+    ],
+    [
+      ["--holder-token", "33333333-3333-4333-8333-333333333333", "--include-unexpired"],
+      "--include-unexpired applies to --running-hosts only",
+    ],
+  ])("refuses fansly-send-guard confirm-terminated %j before opening the database", async (args, message) => {
+    const { program } = createProgramHarness();
+    await expect(program.parseAsync(["fansly-send-guard", "confirm-terminated", ...args], { from: "user" }))
+      .rejects.toThrow(message);
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("documents both Docker-level confirmations of the Fansly send guard", () => {
+    const sendGuard = buildProgram().commands.find((command) => command.name() === "fansly-send-guard");
+    const confirm = sendGuard?.commands.find((command) => command.name() === "confirm-terminated");
+    const help = (confirm?.helpInformation() ?? "").replace(/\s+/g, " ");
+    expect(help).toContain("--running-hosts <hosts>");
+    expect(help).toContain("--holder-token <uuid>");
+    expect(help).toContain("only a holder past its lease");
+  });
+
   const attributionCommands = [
     {
       name: "hydration decision", flag: "--as-user-id", legacy: "--as",

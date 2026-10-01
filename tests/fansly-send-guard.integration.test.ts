@@ -20,10 +20,12 @@ import {
 } from "@agency_hub_core/db";
 
 import {
+  confirmFanslySendGuardHolderTerminated,
   confirmFanslySendGuardHostsTerminated,
   createDefaultFanslySendOsProbe,
   createFanslySendGuards,
   startFanslySendGuardSweeper,
+  type FanslySendOsProbe,
 } from "../apps/runtime/src/services/fansly-send-guard/index.ts";
 import {
   resetIntegrationDatabase,
@@ -251,6 +253,122 @@ describe("the guard statements", () => {
     expect(guards.get(alive.id)?.holderToken).toBe(aliveCapture.token);
     expect(guards.get(alive.id)?.closedReason).toBe("lease_expired_unconfirmed");
     expect(guards.get(elsewhere.id)?.holderToken).toBe(elsewhereCapture.token);
+  });
+
+  it("the sweeper of a restarted container releases its earlier run's holder after the lease", async (context) => {
+    if (!testDb) return context.skip();
+    // The container (hostname = its id) restarted on the same kernel boot and
+    // got a new pid namespace; the earlier run's pid 7 is taken again.
+    const containerId = "48edd945dd22a3a9f0a6a0c1d4be2d4f0e1c6b3f9a1d2e3c4b5a69788796a5b4";
+    const restarted: FanslySendOsProbe = {
+      hostname: () => "48edd945dd22",
+      bootId: () => "boot-1",
+      pidNamespace: () => "pid:[4026532779]",
+      processStartToken: (pid) => (pid === 7 ? "start-7-new" : null),
+      containerId: () => containerId,
+    };
+    const registry = createFanslySendGuards({
+      db: testDb.db, config: {} as never, logger: silentFanslySendGuardLogger, role: "worker", probe: restarted,
+    });
+    const earlierRun = holder({
+      host: "48edd945dd22", pid: 7, pidStart: "start-7-old", pidNs: "pid:[4026532643]", bootId: "boot-1", role: "worker",
+    });
+    const expired = await seedPage("guard-restart-expired");
+    const leased = await seedPage("guard-restart-leased");
+    const sibling = await seedPage("guard-restart-sibling");
+    for (const page of [expired, leased, sibling]) await openGuard(page.id);
+    const expiredCapture = captureInput(expired.id, { leaseMs: 1, holder: earlierRun });
+    const leasedCapture = captureInput(leased.id, { leaseMs: 600_000, holder: { ...earlierRun, instance: randomUUID() } });
+    // Same pid namespace as this run: compared by pid, and pid 7 is alive.
+    const siblingCapture = captureInput(sibling.id, {
+      leaseMs: 1, holder: { ...earlierRun, pidNs: "pid:[4026532779]", pidStart: "start-7-new", instance: randomUUID() },
+    });
+    for (const capture of [expiredCapture, leasedCapture, siblingCapture]) {
+      expect((await captureFanslyPageSendGuard(testDb.db, capture)).kind).toBe("captured");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const sweeper = startFanslySendGuardSweeper(
+      { db: testDb.db, logger: silentFanslySendGuardLogger },
+      { registry, probe: restarted, intervalMs: 60_000 },
+    );
+    try {
+      const result = await sweeper.sweepOnce();
+      expect(result.confirmed).toEqual([{ pageId: expired.id, evidence: "pid_namespace_replaced" }]);
+      expect(result.closed).toEqual([sibling.id]);
+    } finally {
+      await sweeper.stop();
+    }
+    const guards = new Map((await listFanslySendGuards(testDb.db)).map((row) => [row.pageId, row]));
+    expect(guards.get(expired.id)?.holderToken).toBeNull();
+    expect(guards.get(expired.id)?.nextU).toBe(0.2);
+    // Not before its lease is over, whatever the evidence.
+    expect(guards.get(leased.id)?.holderToken).toBe(leasedCapture.token);
+    expect(guards.get(sibling.id)?.holderToken).toBe(siblingCapture.token);
+    const journal = await testDb.pool.query(
+      "select outcome, outcome_detail from fansly_send_log where guard_token = $1",
+      [expiredCapture.token],
+    );
+    expect(journal.rows).toEqual([{
+      outcome: "confirmed_terminated",
+      outcome_detail: expect.stringMatching(/^pid_namespace_replaced; confirmed by worker@48edd945dd22 pid \d+$/),
+    }]);
+
+    // The same restart without proof that the hostname is the container's own
+    // id (`--hostname`, `network_mode: host`): the page stays closed.
+    const unproven = await seedPage("guard-restart-unproven");
+    await openGuard(unproven.id);
+    const unprovenCapture = captureInput(unproven.id, { leaseMs: 1, holder: { ...earlierRun, instance: randomUUID() } });
+    await captureFanslyPageSendGuard(testDb.db, unprovenCapture);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const blind = startFanslySendGuardSweeper(
+      { db: testDb.db, logger: silentFanslySendGuardLogger },
+      { registry, probe: { ...restarted, containerId: () => null }, intervalMs: 60_000 },
+    );
+    try {
+      const result = await blind.sweepOnce();
+      expect(result.confirmed).toEqual([]);
+      expect(result.closed).toEqual([unproven.id]);
+    } finally {
+      await blind.stop();
+    }
+  });
+
+  it("releases one holder by its token once the operator confirmed it gone, only past its lease", async (context) => {
+    if (!testDb) return context.skip();
+    const stuck = await seedPage("guard-token-stuck");
+    const fresh = await seedPage("guard-token-fresh");
+    for (const page of [stuck, fresh]) await openGuard(page.id);
+    const stuckCapture = captureInput(stuck.id, { leaseMs: 1, holder: holder({ host: "worker-container" }) });
+    const freshCapture = captureInput(fresh.id, { leaseMs: 600_000, holder: holder({ host: "worker-container" }) });
+    for (const capture of [stuckCapture, freshCapture]) await captureFanslyPageSendGuard(testDb.db, capture);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const confirm = (token: string, dryRun = false) =>
+      confirmFanslySendGuardHolderTerminated(testDb!.db, { token, confirmer: "cli@test pid 1", dryRun });
+
+    await expect(confirm("not-a-token")).rejects.toThrow("--holder-token expects a holder token");
+    await expect(confirm(randomUUID())).rejects.toThrow("No Fansly page is held by token");
+    await expect(confirm(freshCapture.token)).rejects.toThrow("only past its lease");
+
+    expect(await confirm(stuckCapture.token.toUpperCase(), true)).toEqual({
+      pageId: stuck.id, pageLabel: "guard-token-stuck", holderHost: "worker-container", released: false,
+    });
+    expect((await listFanslySendGuards(testDb.db)).find((row) => row.pageId === stuck.id)?.holderToken)
+      .toBe(stuckCapture.token);
+
+    expect((await confirm(stuckCapture.token)).released).toBe(true);
+    const guards = new Map((await listFanslySendGuards(testDb.db)).map((row) => [row.pageId, row]));
+    expect(guards.get(stuck.id)?.holderToken).toBeNull();
+    expect(guards.get(stuck.id)?.nextU).toBe(0.2);
+    expect(guards.get(fresh.id)?.holderToken).toBe(freshCapture.token);
+    const journal = await testDb.pool.query(
+      "select outcome, outcome_detail from fansly_send_log where guard_token = $1",
+      [stuckCapture.token],
+    );
+    expect(journal.rows).toEqual([
+      { outcome: "confirmed_terminated", outcome_detail: "operator_confirmed_holder; confirmed by cli@test pid 1" },
+    ]);
+    await expect(confirm(stuckCapture.token)).rejects.toThrow("No Fansly page is held by token");
   });
 
   it("confirms holders of containers that are no longer running (Docker level)", async (context) => {

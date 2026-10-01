@@ -12,7 +12,9 @@ import {
 } from "../apps/runtime/src/services/fansly-send-guard/engine.ts";
 import {
   buildFanslySendHolderIdentity,
+  containerIdFromMountinfo,
   createPortableFanslySendOsProbe,
+  hostnameIsContainerId,
   judgeFanslySendHolderTermination,
   type FanslySendOsProbe,
 } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
@@ -383,6 +385,7 @@ describe("termination evidence", () => {
     bootId: () => "boot-1",
     pidNamespace: () => "pid:[1]",
     processStartToken: (pid) => alive[pid] ?? null,
+    containerId: () => null,
   });
   const local = {
     identity: { ...buildFanslySendHolderIdentity(probe({ [process.pid]: "me" }), "api") },
@@ -416,6 +419,100 @@ describe("termination evidence", () => {
     expect(judgeFanslySendHolderTermination({ ...holder, holderPidNs: "pid:[2]", holderPid: 11 }, local)).toBeNull();
     expect(judgeFanslySendHolderTermination({ ...holder, holderPid: 11, holderInstance: local.identity.instance }, local))
       .toBeNull();
+  });
+
+  // Taken from `docker run` (Docker 29): a container's hostname is the first
+  // 12 hex digits of its id, and /etc/hostname is bind-mounted from its own
+  // directory, also under `--hostname`, `--network host` and `--uts host`.
+  const CONTAINER_ID = "1b311277ddfc9a6d6b022a2181b7b2136a2d16c7a7351f5c8d17a79e409c730f";
+  const mountinfo = (id: string) => [
+    "102 97 0:94 / / rw,relatime master:1 - overlay overlay rw,lowerdir=/x,upperdir=/y,workdir=/z",
+    `111 102 254:1 /docker/containers/${id}/hostname /etc/hostname rw,relatime - ext4 /dev/vda1 rw,discard`,
+    `112 102 254:1 /docker/containers/${id}/hosts /etc/hosts rw,relatime - ext4 /dev/vda1 rw,discard`,
+  ].join("\n");
+
+  it("reads the container id from the source of the /etc/hostname mount", () => {
+    expect(containerIdFromMountinfo(mountinfo(CONTAINER_ID))).toBe(CONTAINER_ID);
+    expect(containerIdFromMountinfo(
+      `120 100 0:50 /var/lib/docker/containers/${CONTAINER_ID}/hostname /etc/hostname rw - xfs /dev/sdb rw`,
+    )).toBe(CONTAINER_ID);
+    // Outside a container there is no such mount.
+    expect(containerIdFromMountinfo("22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw")).toBeNull();
+    expect(containerIdFromMountinfo("")).toBeNull();
+
+    expect(hostnameIsContainerId("1b311277ddfc", CONTAINER_ID)).toBe(true);
+    expect(hostnameIsContainerId(CONTAINER_ID, CONTAINER_ID)).toBe(true);
+    // `--hostname worker`, `--network host` (the host's name), another id, no container.
+    expect(hostnameIsContainerId("worker", CONTAINER_ID)).toBe(false);
+    expect(hostnameIsContainerId("docker-desktop", CONTAINER_ID)).toBe(false);
+    expect(hostnameIsContainerId("cb7d59d9c0d7", CONTAINER_ID)).toBe(false);
+    expect(hostnameIsContainerId("1b31", CONTAINER_ID)).toBe(false);
+    expect(hostnameIsContainerId("1b311277ddfc", null)).toBe(false);
+  });
+
+  describe("an earlier run of this container", () => {
+    // The container restarted: same hostname (its id), same kernel boot, a new
+    // pid namespace; the old holder's pid may well be taken in the new one.
+    const containerProbe = (input: { host?: string; containerId?: string | null; pidNs?: string | null } = {}) => ({
+      hostname: () => input.host ?? "1b311277ddfc",
+      bootId: () => "boot-1",
+      pidNamespace: () => (input.pidNs === undefined ? "pid:[4026532779]" : input.pidNs),
+      processStartToken: (pid: number) => ({ 1: "start-1", 7: "start-7-new" } as Record<number, string>)[pid] ?? null,
+      containerId: () => (input.containerId === undefined ? CONTAINER_ID : input.containerId),
+    }) satisfies FanslySendOsProbe;
+    const restarted = (input: Parameters<typeof containerProbe>[0] = {}) => {
+      const local = containerProbe(input);
+      return { identity: buildFanslySendHolderIdentity(local, "worker"), probe: local };
+    };
+    const oldRun = {
+      holderHost: "1b311277ddfc",
+      holderPid: 7,
+      holderPidStart: "start-7-old",
+      holderPidNs: "pid:[4026532643]",
+      holderBootId: "boot-1",
+      holderInstance: "44444444-4444-4444-8444-444444444444",
+    };
+
+    it("is confirmed gone: the pid namespace was replaced", () => {
+      expect(judgeFanslySendHolderTermination(oldRun, restarted())).toBe("pid_namespace_replaced");
+      // Whatever now runs under its pid in the new namespace.
+      expect(judgeFanslySendHolderTermination({ ...oldRun, holderPid: 1, holderPidStart: "start-1" }, restarted()))
+        .toBe("pid_namespace_replaced");
+    });
+
+    it("is judged by pid when the new run got the same namespace inode back", () => {
+      const sameInode = restarted({ pidNs: oldRun.holderPidNs });
+      expect(judgeFanslySendHolderTermination(oldRun, sameInode)).toBe("pid_reused");
+      expect(judgeFanslySendHolderTermination({ ...oldRun, holderPid: 9 }, sameInode)).toBe("pid_gone");
+    });
+
+    it("is not judged when the hostname is not provably this container's id", () => {
+      // `--hostname`, `--network host` / `--uts host`: another container, or
+      // the host, may run under the same name in a pid namespace of its own.
+      expect(judgeFanslySendHolderTermination({ ...oldRun, holderHost: "worker" }, restarted({ host: "worker" })))
+        .toBeNull();
+      expect(judgeFanslySendHolderTermination(
+        { ...oldRun, holderHost: "docker-desktop" },
+        restarted({ host: "docker-desktop" }),
+      )).toBeNull();
+      // Not in a container at all, or no /etc/hostname mount to prove it.
+      expect(judgeFanslySendHolderTermination(oldRun, restarted({ containerId: null }))).toBeNull();
+      // Another container's id.
+      expect(judgeFanslySendHolderTermination(
+        oldRun,
+        restarted({ containerId: "cb7d59d9c0d71776450f2bdfff298a6d14d960b0d3780bcff09cd1350bd3fee0" }),
+      )).toBeNull();
+    });
+
+    it("is not judged without both pid namespaces", () => {
+      expect(judgeFanslySendHolderTermination({ ...oldRun, holderPidNs: null }, restarted())).toBeNull();
+      expect(judgeFanslySendHolderTermination(oldRun, restarted({ pidNs: null }))).toBeNull();
+    });
+
+    it("never judges this very process", () => {
+      const local = restarted();
+      expect(judgeFanslySendHolderTermination({ ...oldRun, holderInstance: local.identity.instance }, local)).toBeNull();
+    });
   });
 
   it("the portable probe sees this process and not a finished one", () => {
