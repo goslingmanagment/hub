@@ -156,6 +156,12 @@ export * from "./repositories/fansly-dm-shadow.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
 export * from "./repositories/fansly-dm-shadow-snapshot.ts";
 export * from "./repositories/fansly-send-guard.ts";
+// Fansly Sync Engine core state (0228): pages, the work queue, the attempt
+// journal and its telemetry retention.
+export * from "./repositories/sync/pages.ts";
+export * from "./repositories/sync/work.ts";
+export * from "./repositories/sync/attempts.ts";
+export * from "./repositories/sync/retention.ts";
 export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync-context.ts";

@@ -868,6 +868,188 @@ export const fanslySendLog = pgTable(
   }),
 );
 
+// 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
+// pauses, holds, ownership (generation + the owner process's identity), the
+// scheduler's cycle position and the pacer's facts. Written through
+// repositories/sync/pages.ts only; `handover`/`live` only by the switch CLI.
+export const syncPages = pgTable(
+  "sync_pages",
+  {
+    pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
+      onDelete: "restrict",
+    }),
+    mode: text("mode").$type<"off" | "shadow" | "handover" | "live">().notNull().default("off"),
+    modeChangedAt: timestamp("mode_changed_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    modeChangedBy: text("mode_changed_by").notNull().default("migration"),
+    requestsEnabledAt: timestamp("requests_enabled_at", { withTimezone: true }),
+    legacyImportedAt: timestamp("legacy_imported_at", { withTimezone: true }),
+    registryOverrides: jsonbSafe("registry_overrides").$type<Record<string, unknown>>().notNull().default({}),
+    pausedAll: boolean("paused_all").notNull().default(false),
+    pausedRequests: boolean("paused_requests").notNull().default(false),
+    pausedResources: text("paused_resources").array().notNull().default(sql`'{}'::text[]`),
+    pauseNote: text("pause_note"),
+    holdKind: text("hold_kind").$type<"rate_limit" | "auth" | "identity_mismatch" | "network">(),
+    holdUntil: timestamp("hold_until", { withTimezone: true }),
+    holdSince: timestamp("hold_since", { withTimezone: true }),
+    holdStep: smallint("hold_step").notNull().default(0),
+    holdDetail: jsonbSafe("hold_detail").$type<Record<string, unknown>>().notNull().default({}),
+    networkFailureStreak: smallint("network_failure_streak").notNull().default(0),
+    resourceHolds: jsonbSafe("resource_holds").$type<Record<string, unknown>>().notNull().default({}),
+    identityAccountId: text("identity_account_id"),
+    identityCheckedAt: timestamp("identity_checked_at", { withTimezone: true }),
+    credentialsGeneration: text("credentials_generation"),
+    ownerGeneration: bigint("owner_generation", { mode: "bigint" }).notNull().default(sql`0`),
+    ownerInstance: uuid("owner_instance"),
+    ownerHost: text("owner_host"),
+    ownerPid: integer("owner_pid"),
+    ownerPidStart: text("owner_pid_start"),
+    ownerPidNs: text("owner_pid_ns"),
+    ownerBootId: text("owner_boot_id"),
+    ownerAcquiredAt: timestamp("owner_acquired_at", { withTimezone: true }),
+    ownerHeartbeatAt: timestamp("owner_heartbeat_at", { withTimezone: true }),
+    ownerReleasedAt: timestamp("owner_released_at", { withTimezone: true }),
+    ownerReleaseGeneration: bigint("owner_release_generation", { mode: "bigint" }),
+    ownerStopConfirmedAt: timestamp("owner_stop_confirmed_at", { withTimezone: true }),
+    ownerStopConfirmedBy: text("owner_stop_confirmed_by"),
+    cyclePos: smallint("cycle_pos").notNull().default(0),
+    plannedRr: jsonbSafe("planned_rr").$type<Record<string, string>>().notNull().default({}),
+    lastAdmittedAt: timestamp("last_admitted_at", { withTimezone: true }),
+    lastSendAt: timestamp("last_send_at", { withTimezone: true }),
+    lastSendAttemptId: bigint("last_send_attempt_id", { mode: "number" }),
+    lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }),
+    wsRouterCursor: bigint("ws_router_cursor", { mode: "number" }).notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (table) => ({
+    modeCheck: check("sync_pages_mode_check", sql`${table.mode} in ('off', 'shadow', 'handover', 'live')`),
+    holdPairCheck: check("sync_pages_hold_pair_check", sql`(${table.holdKind} is null) = (${table.holdUntil} is null)`),
+    cyclePosCheck: check("sync_pages_cycle_pos_check", sql`${table.cyclePos} between 0 and 9`),
+  }),
+);
+
+// 0228 (plan §3, §11): the one work queue of the new engine. One open row per
+// page × shadow × resource × subject (`sync_work_open_uniq`); demand merges
+// into it through `upsertDemand` (repositories/sync/work.ts).
+export const syncWork = pgTable(
+  "sync_work",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    shadow: boolean("shadow").notNull().default(false),
+    resource: text("resource").notNull(),
+    subject: text("subject").notNull().default(""),
+    kind: text("kind").$type<"poll" | "trigger" | "goal" | "repair">().notNull(),
+    class: text("class").$type<"urgent" | "requests" | "planned">().notNull(),
+    state: text("state")
+      .$type<"open" | "running" | "quarantined" | "done" | "cancelled" | "superseded">()
+      .notNull()
+      .default("open"),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    coalesceUntil: timestamp("coalesce_until", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    firstDemandAt: timestamp("first_demand_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    lastServedAt: timestamp("last_served_at", { withTimezone: true }),
+    demandRevision: bigint("demand_revision", { mode: "number" }).notNull().default(1),
+    appliedRevision: bigint("applied_revision", { mode: "number" }).notNull().default(0),
+    demand: jsonbSafe("demand").$type<Record<string, unknown>>().notNull().default({}),
+    cursor: jsonbSafe("cursor").notNull().default({}),
+    goal: jsonbSafe("goal"),
+    proof: jsonbSafe("proof"),
+    params: jsonbSafe("params").notNull().default({}),
+    secretParams: text("secret_params"),
+    result: jsonbSafe("result"),
+    failureCount: smallint("failure_count").notNull().default(0),
+    breakerUntil: timestamp("breaker_until", { withTimezone: true }),
+    blockedByVendorAt: timestamp("blocked_by_vendor_at", { withTimezone: true }),
+    lastErrorClass: text("last_error_class"),
+    lastAttemptId: bigint("last_attempt_id", { mode: "number" }),
+    waitingReason: text("waiting_reason"),
+    waitingUntil: timestamp("waiting_until", { withTimezone: true }),
+    attemptsCount: integer("attempts_count").notNull().default(0),
+    ownerGeneration: bigint("owner_generation", { mode: "bigint" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closeReason: text("close_reason"),
+  },
+  (table) => ({
+    openUniq: uniqueIndex("sync_work_open_uniq")
+      .on(table.pageId, table.shadow, table.resource, table.subject)
+      .where(sql`${table.state} in ('open', 'running', 'quarantined')`),
+    runnableIdx: index("sync_work_runnable")
+      .on(table.pageId, table.shadow, table.class, table.dueAt)
+      .where(sql`${table.state} = 'open'`),
+    keyRecentIdx: index("sync_work_key_recent").on(table.pageId, table.resource, table.subject, table.id.desc()),
+    closedAtIdx: index("sync_work_closed_at").on(table.closedAt).where(sql`${table.closedAt} is not null`),
+    closedCheck: check(
+      "sync_work_closed_check",
+      sql`(${table.state} in ('done', 'cancelled', 'superseded')) = (${table.closedAt} is not null)`,
+    ),
+    revisionCheck: check("sync_work_revision_check", sql`${table.appliedRevision} <= ${table.demandRevision}`),
+  }),
+);
+
+// 0228 (plan §8, §11): one row per physical attempt of the new engine (or a
+// simulated one in shadow). 30-day telemetry, except coverage evidence and
+// unfinished rows (repositories/sync/retention.ts).
+export const syncAttempts = pgTable(
+  "sync_attempts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    shadow: boolean("shadow").notNull().default(false),
+    workId: bigint("work_id", { mode: "number" }),
+    resource: text("resource").notNull(),
+    subject: text("subject").notNull().default(""),
+    class: text("class").$type<"urgent" | "requests" | "planned">().notNull(),
+    slot: smallint("slot"),
+    ownerGeneration: bigint("owner_generation", { mode: "bigint" }).notNull(),
+    demandRevision: bigint("demand_revision", { mode: "number" }),
+    settingMs: integer("setting_ms").notNull(),
+    jitterU: doublePrecision("jitter_u").notNull(),
+    pauseMs: integer("pause_ms").notNull(),
+    admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    sendMark: text("send_mark").$type<"request_start" | "completion_fallback" | "shadow">(),
+    sendMonoOffsetMs: doublePrecision("send_mono_offset_ms"),
+    gapPrevMs: doublePrecision("gap_prev_ms"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    operation: text("operation").notNull(),
+    request: jsonbSafe("request").notNull(),
+    outcome: text("outcome").notNull().default("admitted"),
+    httpStatus: smallint("http_status"),
+    retryAfterMs: integer("retry_after_ms"),
+    errorClass: text("error_class"),
+    durationMs: integer("duration_ms"),
+    responseBytes: integer("response_bytes"),
+    observationId: bigint("observation_id", { mode: "number" }),
+    observationReceivedAt: timestamp("observation_received_at", { withTimezone: true }),
+    applyState: text("apply_state").notNull().default("none"),
+    applyError: text("apply_error"),
+    applyFailures: smallint("apply_failures").notNull().default(0),
+    applyRetryAt: timestamp("apply_retry_at", { withTimezone: true }),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    evidence: boolean("evidence").notNull().default(false),
+  },
+  (table) => ({
+    pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),
+    pageSentIdx: index("sync_attempts_page_sent")
+      .on(table.pageId, table.sentAt)
+      .where(sql`${table.sentAt} is not null`),
+    workIdx: index("sync_attempts_work").on(table.workId, table.id.desc()),
+    unfinishedIdx: index("sync_attempts_unfinished")
+      .on(table.pageId, table.id)
+      .where(sql`${table.outcome} in ('admitted', 'sent') or ${table.applyState} in ('captured', 'deferred')`),
+    retentionIdx: index("sync_attempts_retention").on(table.admittedAt).where(sql`not ${table.evidence}`),
+    jitterCheck: check("sync_attempts_jitter_check", sql`${table.jitterU} >= 0 and ${table.jitterU} <= 0.2`),
+    observationCheck: check(
+      "sync_attempts_observation_check",
+      sql`(${table.observationId} is null) = (${table.observationReceivedAt} is null)`,
+    ),
+  }),
+);
+
 export const pageSyncCursors = pgTable(
   "page_sync_cursors",
   {

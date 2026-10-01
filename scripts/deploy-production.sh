@@ -518,6 +518,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # image never names the table or the columns, so it runs unchanged after a
   # rollback; a later re-deploy finds the migration already applied.
   "0226_fansly_ws_live_overlay.sql"
+  # Fansly Sync Engine core state (design §2.2): three new tables (sync_pages,
+  # sync_work, sync_attempts), two pure SQL functions, a seed row per Fansly
+  # page (mode 'off') and grants. The previous image never names any of them,
+  # so after a rollback it runs unchanged; a later re-deploy finds the
+  # migration already applied.
+  "0228_sync_engine_core.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
