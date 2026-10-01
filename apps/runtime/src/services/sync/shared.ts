@@ -34,7 +34,6 @@ import {
   replaceJournalLoneSurrogates,
 } from "./journal-lone-surrogates.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
-import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 // Legacy mapper tag for OnlyFans failed-payload rows (kept byte-identical to
@@ -764,17 +763,12 @@ export async function refreshPageMetadata(
    *  telemetry) by default; the API and CLI page checks name themselves. */
   sendSource: FanslySendSource = telemetry ? "sync_stream" : "account_me_api",
 ) {
-  const rateLimitWaiter = createSyncRateLimitWaiter(app, {
-    egressKey: pageContext.egressKey,
-  });
-
   {
     const accountMe = await app.adapter.getAccountMe({
       session: pageContext.session,
       proxy: pageContext.proxy,
       egressKey: pageContext.egressKey,
       requestObserver: requestObserver ?? telemetry?.getRequestObserver() ?? null,
-      rateLimitWaiter,
       sendGuard: fanslyPageSendGuard(app, pageContext.page.id, sendSource),
     });
     await persistRawPayload(app.db, {

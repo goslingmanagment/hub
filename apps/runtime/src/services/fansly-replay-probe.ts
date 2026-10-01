@@ -2,7 +2,6 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
-import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 // Stage 6 — Fansly server-replay gate.
@@ -125,12 +124,10 @@ export async function runFanslyReplayProbe(
       throw new Error(`Page "${pageLabel}" is not a Fansly page (platform=${context.platform})`);
     }
 
-    const rateLimitWaiter = createSyncRateLimitWaiter(app, { egressKey: context.egressKey });
     const requestContext = {
       session: context.session,
       proxy: context.proxy,
       egressKey: context.egressKey,
-      rateLimitWaiter,
       sendGuard: fanslyPageSendGuard(app, context.page.id, "replay_probe"),
     };
 

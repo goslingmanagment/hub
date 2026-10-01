@@ -145,7 +145,6 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
   session: FanslyRequestContext["session"];
   proxy: FanslyRequestContext["proxy"];
   egressKey: FanslyRequestContext["egressKey"];
-  rateLimitWaiter: FanslyRequestContext["rateLimitWaiter"];
   sendGuard: FanslyRequestContext["sendGuard"];
 }) {
   const saveProgress = () => saveFanslyLaneProgress({
@@ -173,9 +172,6 @@ export function createFanslyLaneRuntime<TState extends FanslyDailyAttemptState>(
     ...(input.egressKey === undefined ? {} : { egressKey: input.egressKey }),
     requestObserver: budget.observer,
     remainingAttempts: budget.remainingAttempts,
-    ...(input.rateLimitWaiter === undefined
-      ? {}
-      : { rateLimitWaiter: input.rateLimitWaiter }),
     sendGuard: input.sendGuard,
   });
   const requestContext = requestContextFor(attemptBudget);

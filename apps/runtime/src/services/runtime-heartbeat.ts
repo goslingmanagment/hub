@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -17,10 +17,18 @@ import {
 import { publishCaptureCasReadMode } from "./payload-reader.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
-export type RuntimeRole = "api" | "worker" | "scheduler";
+export type RuntimeRole = "api" | "worker" | "scheduler" | "sync";
 
-/** How often each process refreshes its heartbeat row. The staleness TTL on the
- *  repository side (INSTANCE_STALE_TTL_MS) is a small multiple of this. */
+/** What a heartbeat reads from its process: the DB, the boot config (boot
+ *  overrides applied) with what boot skipped, and a logger. Every role's
+ *  context has these — the full AppContext of api/worker/scheduler and the
+ *  adapter-free SyncContext of the `sync` role. */
+export type RuntimeHeartbeatContext = Pick<AppContext, "db" | "config" | "logger" | "bootSkipped">;
+
+/** How often each process refreshes its heartbeat row by default. The
+ *  staleness TTL on the repository side (INSTANCE_STALE_TTL_MS) is a small
+ *  multiple of this. A role whose liveness is judged on a tighter clock passes
+ *  `intervalMs` (the `sync` role: 30 s, against its 2-minute alert). */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_STOP_TIMEOUT_MS = 5_000;
 
@@ -39,11 +47,15 @@ export async function writeRuntimeHealthFile(
   status: "starting" | "ready" | "stopping",
 ) {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify({
+  // Write a sibling and rename it over the file: a healthcheck (or a test)
+  // reading concurrently sees the old body or the new one, never half of it.
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify({
     status,
     timestamp: new Date().toISOString(),
     pid: process.pid,
   })}\n`, "utf8");
+  await rename(temporaryPath, path);
 }
 
 async function waitForShutdownStep(
@@ -108,7 +120,7 @@ function publishCaptureCasSettings(effectiveConfig: AppConfig): void {
  *  only without dedup; the first successful heartbeat publishes the real
  *  values. */
 export async function publishCaptureCasSettingsAtStartup(
-  app: AppContext,
+  app: Pick<RuntimeHeartbeatContext, "db" | "config" | "logger">,
   role: RuntimeRole,
 ): Promise<void> {
   try {
@@ -130,15 +142,21 @@ export async function publishCaptureCasSettingsAtStartup(
  *  snapshot source should switch to the live effective-config provider so `running`
  *  stays equal to what the process actually reads. */
 export function startRuntimeHeartbeat(
-  app: AppContext,
+  app: RuntimeHeartbeatContext,
   role: RuntimeRole,
-  options: { startedAt?: Date; stopTimeoutMs?: number; healthFilePath?: string | null } = {},
+  options: {
+    startedAt?: Date | undefined;
+    stopTimeoutMs?: number | undefined;
+    healthFilePath?: string | null | undefined;
+    intervalMs?: number | undefined;
+  } = {},
 ): RuntimeHeartbeat {
   const instanceId = randomUUID();
   const startedAt = options.startedAt ?? new Date();
   const imageTag = process.env.IMAGE_TAG ?? process.env.GIT_SHA ?? null;
   const stopTimeoutMs = options.stopTimeoutMs ?? HEARTBEAT_STOP_TIMEOUT_MS;
   const healthFilePath = options.healthFilePath ?? null;
+  const intervalMs = options.intervalMs ?? HEARTBEAT_INTERVAL_MS;
 
   // `stopped` flips on shutdown so an in-flight beat skips its upsert; `inFlight` serializes
   // beats (a slow beat must not overlap the next tick) and lets stop() await the active beat
@@ -194,7 +212,7 @@ export function startRuntimeHeartbeat(
 
   // Publish immediately so the view is populated right after boot, then on interval.
   runBeat();
-  const timer = setInterval(runBeat, HEARTBEAT_INTERVAL_MS);
+  const timer = setInterval(runBeat, intervalMs);
   // Never keep the event loop alive solely for the heartbeat.
   timer.unref?.();
 

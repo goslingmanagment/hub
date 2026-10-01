@@ -35,6 +35,10 @@ const emptyDaily = {
   byPage: [],
 };
 
+function withSummary(overrides?: Partial<Record<string, unknown>>) {
+  queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({ data: summaryFixture(overrides), isLoading: false, isError: false });
+}
+
 function summaryFixture(overrides?: Partial<Record<string, unknown>>) {
   return {
     enabled: true,
@@ -80,11 +84,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("answers balance, runway, and top-up in the hero card", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
 
     const markup = renderPage();
     expect(markup).toContain("Кредиты OFAPI");
@@ -106,15 +106,13 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("keeps an unexplained balance drop visible without presenting it as recurring spend", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ forecast: {
-        basis: "recorded_activity", avgDailySpend7d: 100, daysLeft: 10,
-        runOutDate: "2026-06-22", monthToDateSpend: 100, monthEndProjection: 1000,
-        monthUnverifiedResidualCredits: 38_795,
-        unverifiedResidual: { credits: 38_795, from: "2026-06-05T12:00:00.000Z", to: "2026-06-12T12:00:00.000Z" },
-        refillRecommendation: { targetDays: 30, credits: 0 },
-      } }), isLoading: false, isError: false,
-    });
+    withSummary({ forecast: {
+      basis: "recorded_activity", avgDailySpend7d: 100, daysLeft: 10,
+      runOutDate: "2026-06-22", monthToDateSpend: 100, monthEndProjection: 1000,
+      monthUnverifiedResidualCredits: 38_795,
+      unverifiedResidual: { credits: 38_795, from: "2026-06-05T12:00:00.000Z", to: "2026-06-12T12:00:00.000Z" },
+      refillRecommendation: { targetDays: 30, credits: 0 },
+    } });
     const markup = renderPage();
     expect(markup).toContain("Прогноз по операциям");
     expect(markup).toContain("Необъяснённая разница баланса в прогноз не включена");
@@ -125,11 +123,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows today's spend with a per-source split and labelled budget meters", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
 
     const markup = renderPage();
     expect(markup).toContain("Учтено сегодня · 2026-06-12");
@@ -149,12 +143,10 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows negative corrections alongside the net daily total", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ today: {
-        day: "2026-06-12", total: 0,
-        bySource: { rest: 1, adjustment: -1, webhookAccrual: 0, external: 0 },
-      } }), isLoading: false, isError: false,
-    });
+    withSummary({ today: {
+      day: "2026-06-12", total: 0,
+      bySource: { rest: 1, adjustment: -1, webhookAccrual: 0, external: 0 },
+    } });
     const markup = renderPage();
     expect(markup).toContain("Приложение 1");
     expect(markup).toContain("Корректировки -1");
@@ -162,11 +154,9 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("keeps a negative net budget amount visible while clamping its visual meter", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ budgets: [{
-        stream: "dm", spentToday: -25, dailyCeiling: 500, state: "ok", retryAt: null,
-      }] }), isLoading: false, isError: false,
-    });
+    withSummary({ budgets: [{
+      stream: "dm", spentToday: -25, dailyCeiling: 500, state: "ok", retryAt: null,
+    }] });
     const markup = renderPage();
     expect(markup).toContain("-25 из 500 кр");
     expect(markup).toContain('aria-valuenow="0"');
@@ -175,9 +165,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("omits percentage shares for a mixed-sign operation window", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(), isLoading: false, isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: { ...emptyDaily, byOperation: [
         { operation: "ofapi_chats", requests: 1, credits: 10 },
@@ -193,11 +181,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("keeps system health collapsed and quiet while everything passes", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
 
     const markup = renderPage();
     expect(markup).toContain("Состояние системы");
@@ -209,15 +193,11 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("renders the pending current-day webhook estimate with today's spend", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        accrual: {
-          lastPostedDay: "2026-06-11",
-          pendingToday: { day: "2026-06-12", eventCount: 4464, estimatedCredits: 45 },
-        },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      accrual: {
+        lastPostedDay: "2026-06-11",
+        pendingToday: { day: "2026-06-12", eventCount: 4464, estimatedCredits: 45 },
+      },
     });
 
     const markup = renderPage();
@@ -227,11 +207,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows the disabled notice pointing at Settings > Configuration", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ enabled: false }),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary({ enabled: false });
 
     const markup = renderPage();
     expect(markup).toContain("Журнал кредитов выключен");
@@ -246,23 +222,19 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("explains a paused stream and raises the incident banner", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        budgets: [{
-          stream: "dm",
-          spentToday: 500,
-          dailyCeiling: 500,
-          state: "budget_exhausted",
-          retryAt: "2026-06-13T00:00:00.000Z",
-        }],
-        incidents: [{
-          kind: "ofapi_burn_rate",
-          openedAt: "2026-06-12T11:00:00.000Z",
-          errorSummary: "OFAPI spent 400 credits in the trailing hour",
-        }],
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      budgets: [{
+        stream: "dm",
+        spentToday: 500,
+        dailyCeiling: 500,
+        state: "budget_exhausted",
+        retryAt: "2026-06-13T00:00:00.000Z",
+      }],
+      incidents: [{
+        kind: "ofapi_burn_rate",
+        openedAt: "2026-06-12T11:00:00.000Z",
+        errorSummary: "OFAPI spent 400 credits in the trailing hour",
+      }],
     });
 
     const markup = renderPage();
@@ -279,16 +251,12 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("names the webhook auto-redelivery cap apart from the burn-rate alarm", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        incidents: [{
-          kind: "ofapi_burn_rate:auto_redelivery_cap",
-          openedAt: "2026-06-12T11:00:00.000Z",
-          errorSummary: "OFAPI webhook auto-redelivery reached its daily cap (1000/1000 this UTC day)",
-        }],
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      incidents: [{
+        kind: "ofapi_burn_rate:auto_redelivery_cap",
+        openedAt: "2026-06-12T11:00:00.000Z",
+        errorSummary: "OFAPI webhook auto-redelivery reached its daily cap (1000/1000 this UTC day)",
+      }],
     });
 
     const markup = renderPage();
@@ -297,13 +265,9 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("raises a floor-blocked alarm and reddens a short runway", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        floor: { value: 500, blocked: true },
-        forecast: { avgDailySpend7d: 900, daysLeft: 2, runOutDate: "2026-06-14" },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      floor: { value: 500, blocked: true },
+      forecast: { avgDailySpend7d: 900, daysLeft: 2, runOutDate: "2026-06-14" },
     });
 
     const markup = renderPage();
@@ -316,11 +280,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("renders ledger rows with friendly labels and an accessible expander", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
       isLoading: false,
       isError: false,
@@ -366,9 +326,7 @@ describe("OfapiCreditsPage", () => {
     ["refill", "Увеличение баланса после учтённых расходов; платёж не подтверждён"],
     ["adjustment", "Оценочная корректировка учёта кредитов"],
   ])("explains estimated %s rows using their actual evidence source", (source, explanation) => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(), isLoading: false, isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
       isLoading: false,
       data: {
@@ -388,11 +346,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("offers an operation datalist from the breakdown operations", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: {
         ...emptyDaily,
@@ -409,21 +363,17 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("deep-links every credit knob to Settings > Configuration", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        budgets: [
-          { stream: "dm", spentToday: 84, dailyCeiling: 500, state: "ok", retryAt: null },
-          { stream: "audience", spentToday: 12, dailyCeiling: 300, state: "ok", retryAt: null },
-        ],
-        // An open incident expands System health, which hosts the settings row.
-        incidents: [{
-          kind: "ofapi_webhook_silence",
-          openedAt: "2026-06-12T11:00:00.000Z",
-          errorSummary: null,
-        }],
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      budgets: [
+        { stream: "dm", spentToday: 84, dailyCeiling: 500, state: "ok", retryAt: null },
+        { stream: "audience", spentToday: 12, dailyCeiling: 300, state: "ok", retryAt: null },
+      ],
+      // An open incident expands System health, which hosts the settings row.
+      incidents: [{
+        kind: "ofapi_webhook_silence",
+        openedAt: "2026-06-12T11:00:00.000Z",
+        errorSummary: null,
+      }],
     });
 
     const markup = renderPage();
@@ -435,18 +385,14 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows health detail rows in plain language once expanded", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        reconciliation: { lastRunAt: "2026-06-12T12:00:00.000Z", lastDriftCredits: 20 },
-        accrual: { lastPostedDay: "2026-06-11" },
-        incidents: [{
-          kind: "ofapi_webhook_silence",
-          openedAt: "2026-06-12T11:00:00.000Z",
-          errorSummary: null,
-        }],
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      reconciliation: { lastRunAt: "2026-06-12T12:00:00.000Z", lastDriftCredits: 20 },
+      accrual: { lastPostedDay: "2026-06-11" },
+      incidents: [{
+        kind: "ofapi_webhook_silence",
+        openedAt: "2026-06-12T11:00:00.000Z",
+        errorSummary: null,
+      }],
     });
 
     const markup = renderPage();
@@ -460,11 +406,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows scoped errors for charts, breakdown, and the activity log", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -486,11 +428,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows USD estimates and per-page ROI once a credit price is configured", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({ pricing: { microUsdPerCredit: 10_000 } }),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary({ pricing: { microUsdPerCredit: 10_000 } });
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: {
         ...emptyDaily,
@@ -514,11 +452,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("hides the USD cost columns and nudges when no price is configured", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: {
         ...emptyDaily,
@@ -538,11 +472,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("drills breakdown activity and page rows into the log filters", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: {
         ...emptyDaily,
@@ -561,11 +491,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("sources ledger page filter options from the uncapped ledger response", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsDaily.mockReturnValue({
       data: {
         ...emptyDaily,
@@ -592,11 +518,7 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("offers a CSV export button in the activity log toolbar", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture(),
-      isLoading: false,
-      isError: false,
-    });
+    withSummary();
     queryMocks.useAdminOfapiCreditsLedger.mockReturnValue({
       isLoading: false,
       isError: false,
@@ -625,19 +547,15 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("raises the burn banner with named drivers when the window alerts", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        recentBurn: {
-          windowMinutes: 60,
-          total: 450,
-          threshold: 300,
-          alerting: true,
-          topOperations: [{ operation: "ofapi_chats", requests: 40, credits: 300 }],
-          topPages: [{ pageId: 3, pageLabel: "lora-of", credits: 150 }],
-        },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      recentBurn: {
+        windowMinutes: 60,
+        total: 450,
+        threshold: 300,
+        alerting: true,
+        topOperations: [{ operation: "ofapi_chats", requests: 40, credits: 300 }],
+        topPages: [{ pageId: 3, pageLabel: "lora-of", credits: 150 }],
+      },
     });
 
     const markup = renderPage();
@@ -649,19 +567,15 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("keeps a quiet burn window out of the alarms", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        recentBurn: {
-          windowMinutes: 60,
-          total: 120,
-          threshold: 300,
-          alerting: false,
-          topOperations: [],
-          topPages: [],
-        },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      recentBurn: {
+        windowMinutes: 60,
+        total: 120,
+        threshold: 300,
+        alerting: false,
+        topOperations: [],
+        topPages: [],
+      },
     });
 
     const markup = renderPage();
@@ -672,20 +586,16 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("recommends a top-up and reports the month trajectory", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        pricing: { microUsdPerCredit: 10_000 },
-        forecast: {
-          avgDailySpend7d: 100,
-          daysLeft: 40,
-          runOutDate: "2026-07-30",
-          monthToDateSpend: 800,
-          monthEndProjection: 2_000,
-          refillRecommendation: { targetDays: 30, credits: 1_500 },
-        },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      pricing: { microUsdPerCredit: 10_000 },
+      forecast: {
+        avgDailySpend7d: 100,
+        daysLeft: 40,
+        runOutDate: "2026-07-30",
+        monthToDateSpend: 800,
+        monthEndProjection: 2_000,
+        refillRecommendation: { targetDays: 30, credits: 1_500 },
+      },
     });
 
     const markup = renderPage();
@@ -697,19 +607,15 @@ describe("OfapiCreditsPage", () => {
   });
 
   it("shows the runway as covered when no top-up is needed", () => {
-    queryMocks.useAdminOfapiCreditsSummary.mockReturnValue({
-      data: summaryFixture({
-        forecast: {
-          avgDailySpend7d: 100,
-          daysLeft: 400,
-          runOutDate: null,
-          monthToDateSpend: 800,
-          monthEndProjection: 2_000,
-          refillRecommendation: { targetDays: 30, credits: 0 },
-        },
-      }),
-      isLoading: false,
-      isError: false,
+    withSummary({
+      forecast: {
+        avgDailySpend7d: 100,
+        daysLeft: 400,
+        runOutDate: null,
+        monthToDateSpend: 800,
+        monthEndProjection: 2_000,
+        refillRecommendation: { targetDays: 30, credits: 0 },
+      },
     });
 
     const markup = renderPage();

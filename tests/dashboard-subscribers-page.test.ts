@@ -65,9 +65,10 @@ describe("SubscribersPage", () => {
     // Header shows the page population, not the current result-set size.
     expect(html).toContain("500 total");
     expect(html).not.toContain("12 total");
-    // All four chips carry their own population counts.
-    for (const count of ["500", "12", "3", "7"]) {
-      expect(html).toContain(count);
-    }
+    // Each chip carries its own population count.
+    expect(html).toMatch(/>All<span[^>]*>500<\/span>/);
+    expect(html).toMatch(/>Expiring ≤7d<span[^>]*>12<\/span>/);
+    expect(html).toMatch(/>New 24h<span[^>]*>3<\/span>/);
+    expect(html).toMatch(/>Auto-renew Off<span[^>]*>7<\/span>/);
   });
 });

@@ -42,7 +42,6 @@ export interface ProviderFollowersPageParams {
   after?: string | null;
   before?: string | null;
   lastSeenAfter?: number | null;
-  minDelayMs?: number;
 }
 
 export interface ProviderAdapter<

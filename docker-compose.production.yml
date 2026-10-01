@@ -134,5 +134,44 @@ services:
       retries: 6
       start_period: 30s
 
+  # The Fansly Sync Engine's process (plan §8; one actor per Fansly page). The
+  # deploy recreates it on its own, AFTER the api is healthy (migrations
+  # done) — never in the same `up` as api/worker/scheduler, which would stop
+  # the old engine before the new api migrates. The stop grace covers one
+  # in-flight request (20 s) plus its commit and drain. node is PID 1 (no
+  # `init:`): a restart of this container is itself the proof that the
+  # previous owner of its pages is gone (same hostname, new pid namespace).
+  sync:
+    stop_grace_period: 45s
+    image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}
+    logging: *production-logging
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      SYNC_HEALTH_FILE: /tmp/agency-hub-sync-health.json
+      TZ: UTC
+    command: ["node", "apps/runtime/dist/startup.js", "sync"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    # The heartbeat (30 s cadence) refreshes the file only AFTER a successful
+    # DB upsert, so mtime freshness certifies the event loop and a DB
+    # round-trip together.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs = require('node:fs'); const file = process.env.SYNC_HEALTH_FILE || '/tmp/agency-hub-sync-health.json'; const stat = fs.statSync(file); if (Date.now() - stat.mtimeMs > 90000) throw new Error('stale sync health file');",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
 volumes:
   postgres_data:

@@ -11,11 +11,6 @@ export type ParsedProfile = {
 // Matches ## headings, allowing optional trailing # (ATX closing)
 const H2_REGEX = /^##\s+(.+?)\s*#*\s*$/gm;
 
-// Strips leading numeric prefixes like "1.", "03)", "1 -" from a heading for classification
-function stripNumericPrefix(heading: string): string {
-  return heading.replace(/^\d+[.)]\s*/, "").trim();
-}
-
 export function parseProfileSections(body: string): ParsedProfile {
   const matches = [...body.matchAll(H2_REGEX)];
 
@@ -35,9 +30,4 @@ export function parseProfileSections(body: string): ParsedProfile {
   });
 
   return { preamble, sections };
-}
-
-export function isStrategySection(heading: string): boolean {
-  const bare = stripNumericPrefix(heading);
-  return /^стратегия$/i.test(bare) || /^strategy$/i.test(bare);
 }

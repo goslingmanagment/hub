@@ -66,5 +66,21 @@ services:
       migrator:
         condition: service_completed_successfully
 
+  # The Fansly Sync Engine's process, as in docker-compose.production.yml.
+  sync:
+    image: agency_hub_core/runtime:local
+    logging: *local-logging
+    stop_grace_period: 45s
+    command: ["node", "apps/runtime/dist/startup.js", "sync"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agency_hub_core
+      SYNC_HEALTH_FILE: /tmp/agency-hub-sync-health.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:

@@ -9,7 +9,6 @@ import {
   ensureSyncProviderRateLimitProfile,
   insertSyncRequestAttempt,
   requestAiMediaAcceleratorRead,
-  reserveSyncProviderRateLimit,
   startSyncRun,
   storeProxyConfig,
 } from "@agency_hub_core/db";
@@ -196,8 +195,8 @@ describe("Fansly fast lane", () => {
     fast.onCaptured(frameInput(mediaFrame("5004")));
     await fast.idle();
     await fast.stop();
-    // Refused before a pacing slot is even reserved (first look and two
-    // retries), then handed to the in-chunk accelerator, still pending.
+    // Refused before the page's send guard is even captured (first look and
+    // two retries), then handed to the in-chunk accelerator, still pending.
     expect(calls).toHaveLength(0);
     expect(await reads()).toEqual([{ lane: "chunk", status: "pending", outcome: "handoff_egress_busy", http_status: null, dispatched: false, framed: true }]);
     const admitted = await testDb!.pool.query(`select count(*)::int as n from ai_media_accelerator_reads where admitted_at is not null`);
@@ -299,7 +298,7 @@ describe("Fansly fast lane", () => {
         page: page!, platform: "fansly", session: {} as never, proxy: null, egressKey: "socks5://proxy.example.internal:1080",
       }) as unknown as ResolvedFanslyPageContext,
       fetchHead: async (context) => {
-        // While this read waited for its slot, a sync stream of the page hit a 5xx.
+        // While this read waited for its send-guard capture, a sync stream of the page hit a 5xx.
         await testDb!.pool.query(
           `insert into page_sync_states (page_id, stream, status, cadence_seconds, slot_offset_seconds, retry_kind, retry_at)
            values ($1, 'dm_conversations', 'retrying', 3600, 0, 'provider_5xx', now() + interval '5 minutes')`, [pageId],
@@ -373,18 +372,34 @@ describe("fast lane plumbing", () => {
     await expect(claimAiMediaAcceleratorRead(app.db, { pageId, now: later, perConversationGapMs: 0, staleAfterMs: 600_000, minAgeMs: 60_000 })).resolves.not.toBeNull();
   });
 
-  it("a held reservation keeps the egress closed for the whole timeout", async () => {
+  it("a read is paced by the page's send guard alone: it holds no legacy pacing row of the egress", async () => {
+    // A `dm_messages` row the retired endpoint pause left behind (plan §2.3).
+    const egressKey = "socks5://proxy.example.internal:1080";
+    const stale = new Date("2026-09-28T12:00:00Z");
     await ensureSyncProviderRateLimitProfile(app.db, {
-      provider: "fansly", egressKey: "hold-egress",
-      scopes: [{ scope: "global", minSpacingMs: 2600 }, { scope: "dm_messages", minSpacingMs: 7500 }],
+      provider: "fansly", egressKey, scopes: [{ scope: "dm_messages", minSpacingMs: 7500 }],
     });
-    const now = new Date("2026-09-28T12:00:00Z");
-    const held = await reserveSyncProviderRateLimit(app.db, {
-      scopes: [{ provider: "fansly", scope: "global", egressKey: "hold-egress" }], now, holdMs: 5500,
+    await testDb!.pool.query(
+      "update sync_rate_limits set next_available_at = $2, updated_at = $2 where egress_key = $1",
+      [egressKey, stale],
+    );
+    const contexts: Array<Record<string, unknown>> = [];
+    const { fast, calls } = lane({
+      respond: async (context) => {
+        contexts.push(context as unknown as Record<string, unknown>);
+        return headPage("5101");
+      },
     });
-    const next = await reserveSyncProviderRateLimit(app.db, {
-      scopes: [{ provider: "fansly", scope: "global", egressKey: "hold-egress" }], now,
-    });
-    expect(next.getTime() - held.getTime()).toBe(5500);
+    fast.onCaptured(frameInput(mediaFrame("5101")));
+    await fast.idle();
+    await fast.stop();
+
+    expect(calls).toHaveLength(1);
+    expect(contexts[0]).toHaveProperty("sendGuard");
+    expect(contexts[0]).not.toHaveProperty("rateLimitWaiter");
+    const rows = await testDb!.pool.query(
+      "select scope, next_available_at, updated_at from sync_rate_limits where provider = 'fansly'",
+    );
+    expect(rows.rows).toEqual([{ scope: "dm_messages", next_available_at: stale, updated_at: stale }]);
   });
 });

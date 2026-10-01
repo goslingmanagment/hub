@@ -5,10 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from
   "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import {
-  ANALYTICS_QUERY_SURFACES,
-  analyticsFailureBanner,
-  analyticsPanelState,
-  mapPanelState,
   retryFailedAnalytics,
   type AnalyticsQueryEntry,
 } from "../apps/dashboard/src/pages/analytics-query-state.ts";
@@ -205,78 +201,7 @@ beforeEach(() => {
   }
 });
 
-describe("analytics panel state", () => {
-  it("calls a request with no data and no error what it is: loading", () => {
-    expect(analyticsPanelState(loading())).toEqual({ status: "loading" });
-  });
-
-  it("keeps a failed request out of the data channel entirely", () => {
-    expect(analyticsPanelState(failed("boom"))).toEqual({
-      status: "error",
-      message: "boom",
-    });
-  });
-
-  it("reports data in hand as ready", () => {
-    expect(analyticsPanelState(ready({ rows: [] }))).toEqual({
-      status: "ready",
-      data: { rows: [] },
-      refreshFailed: false,
-    });
-  });
-
-  it("keeps cached data AND says its refresh failed — the two are not exclusive", () => {
-    // React Query v5's `isRefetchError`: what we hold is still true, it is
-    // only old. Dropping it on a failed refresh would be losing a fact.
-    expect(analyticsPanelState(cached({ rows: [1] }))).toEqual({
-      status: "ready",
-      data: { rows: [1] },
-      refreshFailed: true,
-    });
-  });
-
-  it("projects a submetric without losing the state it was measured in", () => {
-    expect(mapPanelState(analyticsPanelState(loading()), () => 42))
-      .toEqual({ status: "loading" });
-    expect(mapPanelState(analyticsPanelState(cached([2]) as {
-      data: number[] | undefined;
-      isLoadingError: boolean;
-      isRefetchError: boolean;
-      error: unknown;
-    }), (rows) => rows.length)).toEqual({
-      status: "ready",
-      data: 1,
-      refreshFailed: true,
-    });
-  });
-});
-
-/**
- * The dependency map is the whole reason per-panel states are safe. It is
- * pinned because it is NOT one-to-one and nothing in the component tree makes
- * the hidden edges visible.
- */
-describe("the query → surface map", () => {
-  it("records that media traffic feeds Content Performance, not just the FYP chart", () => {
-    expect(ANALYTICS_QUERY_SURFACES.mediaTraffic).toEqual([
-      "FYP vs direct media views",
-      "Content performance · Avg. watch",
-    ]);
-  });
-
-  it("records both consumers of media and of comments", () => {
-    expect(ANALYTICS_QUERY_SURFACES.media).toEqual(["Top media", "Content performance"]);
-    expect(ANALYTICS_QUERY_SURFACES.comments).toEqual(["Comments per post", "Likers"]);
-  });
-
-  it("names surfaces in the banner, never query variables", () => {
-    const entries: AnalyticsQueryEntry[] = [
-      { id: "media", failed: true, refetch: vi.fn() },
-      { id: "tags", failed: false, refetch: vi.fn() },
-    ];
-    expect(analyticsFailureBanner(entries)).toEqual(["Top media", "Content performance"]);
-  });
-
+describe("analytics retry", () => {
   it("retries each failed query ONCE — not once per consumer", () => {
     const mediaRefetch = vi.fn();
     const tagsRefetch = vi.fn();

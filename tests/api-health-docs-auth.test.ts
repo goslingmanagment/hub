@@ -527,7 +527,11 @@ describe("admin credential verification", () => {
       expect(verificationContext).toMatchObject({
         egressKey: "socks5://proxy.example:1080",
       });
-      expect(typeof (verificationContext as Record<string, unknown> | null)?.rateLimitWaiter).toBe("function");
+      // The check rides its no-page send guard (journaled, owner decision №4)
+      // and nothing else: the endpoint pauses' shared limiter is gone (§2.3).
+      const context = verificationContext as Record<string, unknown> | null;
+      expect(typeof (context?.sendGuard as { acquire?: unknown } | undefined)?.acquire).toBe("function");
+      expect(context).not.toHaveProperty("rateLimitWaiter");
     } finally {
       await server.close();
     }

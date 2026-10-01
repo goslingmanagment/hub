@@ -19,7 +19,9 @@ export function infrastructureFingerprint(config) {
     || Array.isArray(config.services.postgres)) {
     throw new Error("Invalid resolved Compose configuration: expected project and postgres service");
   }
-  const appServices = new Set(["api", "worker", "scheduler"]);
+  // The runtime image's services. An app-scope deploy may add, change or drop
+  // any of them; everything else (PostgreSQL first) must stay byte-identical.
+  const appServices = new Set(["api", "worker", "scheduler", "sync"]);
   const services = Object.fromEntries(Object.entries(config.services).filter(([name]) => !appServices.has(name)));
   const infrastructure = { name: config.name, services };
   for (const key of ["networks", "volumes", "configs", "secrets"]) {

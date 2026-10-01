@@ -207,10 +207,104 @@ describe("compose config", () => {
   // while it runs on, in a pid namespace of its own.
   it("docker-compose.production.yml lets every container keep its id as its hostname", async () => {
     const text = await readComposeFile("docker-compose.production.yml");
-    for (const service of ["api", "scheduler", "worker"]) {
+    for (const service of ["api", "scheduler", "worker", "sync"]) {
       expect(getServiceBlock(text, service)).not.toBeNull();
     }
     expect(text).not.toMatch(/^\s+(hostname|network_mode|uts|pid):/m);
+  });
+
+  // Sync Engine design §9.2: the engine's own long-lived process. node is PID 1
+  // (no `init:`), so a restart of the container is itself the proof that the
+  // previous owner of its pages is gone (§3.6 rule (d)); the stop grace covers
+  // one in-flight request (20 s) plus its commit and drain; the healthcheck
+  // trusts the health file the 30 s heartbeat refreshes only after a
+  // successful upsert, so 90 s is three beats.
+  it("docker-compose.production.yml runs the sync role as node PID 1 with a 45 s stop grace and a heartbeat-file healthcheck", async () => {
+    const text = await readComposeFile("docker-compose.production.yml");
+    const sync = getServiceBlock(text, "sync") ?? "";
+    const main = await readComposeFile("apps/runtime/src/sync/main.ts");
+
+    expect(sync).toContain('command: ["node", "apps/runtime/dist/startup.js", "sync"]');
+    expect(sync).toContain("image: ${RUNTIME_IMAGE:-agency_hub_core/runtime:production}");
+    expect(sync).toContain("restart: unless-stopped");
+    expect(sync).toContain(".env.production");
+    expect(sync).toContain("TZ: UTC");
+    expect(sync).toContain("stop_grace_period: 45s");
+    expect(sync).toContain("SYNC_HEALTH_FILE: /tmp/agency-hub-sync-health.json");
+    expect(sync).toMatch(/depends_on:\n {6}postgres:\n {8}condition: service_healthy\n {6}api:\n {8}condition: service_healthy\n/);
+    expect(sync).toContain("stale sync health file");
+    expect(sync).toContain("Date.now() - stat.mtimeMs > 90000");
+    expect(sync).not.toMatch(/^\s+(init|volumes|ports):/m);
+    expect(main).toContain("export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;");
+  });
+
+  it("docker-compose.yml runs the sync role locally after the migrator", async () => {
+    const text = await readComposeFile("docker-compose.yml");
+    const sync = getServiceBlock(text, "sync") ?? "";
+
+    expect(sync).toContain('command: ["node", "apps/runtime/dist/startup.js", "sync"]');
+    expect(sync).toContain("logging: *local-logging");
+    expect(sync).toContain("stop_grace_period: 45s");
+    expect(sync).toContain("SYNC_HEALTH_FILE");
+    expect(sync).toContain("migrator:");
+    expect(sync).toContain("condition: service_completed_successfully");
+    expect(sync).not.toContain("restart: unless-stopped");
+  });
+
+  // Design §9.3 [A3]: listed with api/worker/scheduler, Compose would stop the
+  // old sync container while the new api is still migrating. The deploy keeps
+  // sync out of that `up` (and out of the legacy quiesce) and recreates it on
+  // its own once the api is healthy, then gates on its health and labels.
+  it("deploy-production.sh recreates sync on its own after API health and gates on its health", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const main = text.slice(text.indexOf('ROLLBACK_RELEASE_ARCHIVE="${TEMP_DIR}/rollback-release-files.tar"'));
+    const recreate = getShellFunction(text, "recreate_sync_service") ?? "";
+    const health = getShellFunction(text, "wait_for_sync_container_health") ?? "";
+    const quiesce = getShellFunction(text, "quiesce_remote_legacy_sync_services") ?? "";
+    const restore = getShellFunction(text, "restore_quiesced_sync_services") ?? "";
+    const labels = getShellFunction(text, "verify_post_deploy_image_labels") ?? "";
+    const diagnostics = getShellFunction(text, "dump_remote_diagnostics") ?? "";
+
+    expect(main).toContain('RECREATE_SERVICES="api worker scheduler"\n');
+    expect(recreate).toContain('[[ "$RECREATE_SCOPE" != "apps" ]]');
+    expect(recreate).toContain("${REMOTE_COMPOSE} up -d --no-deps --force-recreate --no-build sync\"");
+    expect(health).toContain("ps -q sync");
+    expect(health).toContain(".State.Health.Status");
+    expect(quiesce).toContain('stop -t 75 scheduler worker"');
+    expect(restore).toContain('start scheduler worker"');
+    expect(labels).toContain("verify_service_image_labels sync");
+    expect(diagnostics).toContain("${REMOTE_COMPOSE} logs --tail=200 postgres api worker;");
+    expect(diagnostics).toContain(
+      "if ${REMOTE_COMPOSE} config --services 2>/dev/null | grep -qx sync; then printf '\\\\n'; ${REMOTE_COMPOSE} logs --tail=200 sync; fi;",
+    );
+    expect(diagnostics).not.toContain("worker sync");
+
+    const stackUp = main.indexOf("--no-build ${RECREATE_SERVICES}");
+    const apiHealth = main.indexOf('wait_for_api_health "$HEALTH_FILE" || fail');
+    const syncRecreate = main.indexOf("recreate_sync_service || fail");
+    const syncHealth = main.indexOf("wait_for_sync_container_health || fail");
+    const labelCheck = main.indexOf("verify_post_deploy_image_labels\n");
+    expect(stackUp).toBeGreaterThan(-1);
+    expect(apiHealth).toBeGreaterThan(stackUp);
+    expect(syncRecreate).toBeGreaterThan(apiHealth);
+    expect(syncHealth).toBeGreaterThan(syncRecreate);
+    expect(labelCheck).toBeGreaterThan(syncHealth);
+  });
+
+  // The [A3] check runs the deploy's own commands; drift between the two would
+  // prove an order the deploy no longer follows.
+  it("check-compose-recreate-order.sh exercises the deploy's exact recreate commands", async () => {
+    const deploy = await readComposeFile("scripts/deploy-production.sh");
+    const check = await readComposeFile("scripts/check-compose-recreate-order.sh");
+    const services = deploy.match(/^ {2}RECREATE_SERVICES="([^"]+)"$/m)?.[1];
+
+    expect(services).toBe("api worker scheduler");
+    expect(deploy).toContain("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build ${RECREATE_SERVICES}");
+    expect(check).toContain(`APP_RECREATE=(up -d --remove-orphans --force-recreate --no-build ${services})`);
+    expect(getShellFunction(deploy, "recreate_sync_service")).toContain("up -d --no-deps --force-recreate --no-build sync");
+    expect(check).toContain("SYNC_RECREATE=(up -d --no-deps --force-recreate --no-build sync)");
+    expect(getShellFunction(deploy, "rollback_remote_stack")).toContain("${REMOTE_COMPOSE} up -d --remove-orphans --force-recreate --no-build\"");
+    expect(check).toContain("ROLLBACK_RECREATE=(up -d --remove-orphans --force-recreate --no-build)");
   });
 
   // Plan §2.5: on SIGTERM the api admits no new Fansly request and lets the

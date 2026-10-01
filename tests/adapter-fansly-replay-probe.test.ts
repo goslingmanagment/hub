@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   cleanupAdapterHarness,
@@ -35,7 +35,6 @@ describe("Fansly adapter Stage 6 replay-probe methods", () => {
         },
       },
       proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0),
     };
 
     const after = new Date("2026-01-01T00:00:00.000Z");

@@ -61,7 +61,6 @@ function context(overrides: Record<string, unknown> = {}) {
     // Fansly risks a model ban, which is why the dispatcher assertion below is
     // not a formality.
     proxy: { url: "socks5://proxy.example:1080" },
-    rateLimitWaiter: vi.fn(async () => 0),
     ...overrides,
   };
 }

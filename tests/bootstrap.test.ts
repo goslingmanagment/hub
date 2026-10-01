@@ -113,6 +113,9 @@ describe("bootstrap", () => {
     delete process.env.FANSLY_DEFAULT_DELAY_MS;
     delete process.env.FANSLY_GLOBAL_DELAY_MS;
     delete process.env.FANSLY_ACCOUNT_LOOKUP_DELAY_MS;
+    delete process.env.FOLLOWER_PAGE_DELAY_MS;
+    delete process.env.FANSLY_DM_CONVERSATIONS_DELAY_MS;
+    delete process.env.FANSLY_DM_MESSAGES_DELAY_MS;
   });
 
   it("verifies runtime schema readiness before returning the app context", async () => {
@@ -169,6 +172,37 @@ describe("bootstrap", () => {
       { envVar: "FANSLY_GLOBAL_DELAY_MS" },
       "Deprecated Fansly delay env var in use; prefer FANSLY_DEFAULT_DELAY_MS",
     );
+  });
+
+  it("warns a long-lived process that the retired Fansly endpoint pause env vars are ignored, naming the ones set", async () => {
+    process.env.FANSLY_DM_MESSAGES_DELAY_MS = "7500";
+    process.env.FOLLOWER_PAGE_DELAY_MS = "5000";
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+
+    const app = await createAppContext({ processRole: "worker" });
+    await app.close();
+
+    expect(bootstrapMocks.logger.warn).toHaveBeenCalledWith(
+      { envVars: ["FOLLOWER_PAGE_DELAY_MS", "FANSLY_DM_MESSAGES_DELAY_MS"] },
+      expect.stringMatching(/^Fansly endpoint pause env vars are ignored: every Fansly request is paced only by its page's send guard/),
+    );
+  });
+
+  it("says nothing about endpoint pauses when the env sets none, or to a CLI run", async () => {
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
+    const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
+    const pauseWarning = [expect.objectContaining({ envVars: expect.anything() }), expect.anything()];
+
+    const quiet = await createAppContext({ processRole: "api" });
+    await quiet.close();
+    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...pauseWarning);
+
+    // A CLI command's stdout is its output (some of it is parsed).
+    process.env.FANSLY_DM_MESSAGES_DELAY_MS = "7500";
+    const cli = await createAppContext();
+    await cli.close();
+    expect(bootstrapMocks.logger.warn).not.toHaveBeenCalledWith(...pauseWarning);
   });
 
   it("constructs the voice provider only when both the key and proxy tuple are ready", async () => {

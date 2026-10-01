@@ -5,3 +5,7 @@ export * from "./request-headers.ts";
 export * from "./response-contracts.ts";
 export * from "./send-guard.ts";
 export * from "./types.ts";
+export * from "./wire/contracts.ts";
+export * from "./wire/send.ts";
+export * from "./wire/specs.ts";
+export * from "./wire/types.ts";

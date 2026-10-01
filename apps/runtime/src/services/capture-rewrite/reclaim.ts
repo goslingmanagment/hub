@@ -295,9 +295,9 @@ async function checkWritersStopped(app: Ctx, ctx: PreconditionContext): Promise<
   if (roles.length > 0) {
     ctx.refusals.push(
       `${roles.length} runtime instance(s) are still heartbeating (${roles.join(", ")}) — `
-        + "stop api, worker AND scheduler (all three write capture; the api journals an "
-        + "observation on every audited admin mutation and writes sync_raw_payloads itself on "
-        + "POST /api/v1/admin/pages/:pageLabel/verify), then allow the 3-minute heartbeat TTL "
+        + "stop api, worker, scheduler AND sync (every runtime role writes capture; the api "
+        + "journals an observation on every audited admin mutation and writes sync_raw_payloads "
+        + "itself on POST /api/v1/admin/pages/:pageLabel/verify), then allow the 3-minute heartbeat TTL "
         + "to lapse — docs/runbooks/capture-historical-rewrite.md step R2",
     );
   }
