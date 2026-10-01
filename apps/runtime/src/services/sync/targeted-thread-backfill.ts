@@ -97,7 +97,7 @@ import {
 } from "./fansly-dm-messages.ts";
 import { SyncRunTelemetry } from "./observability.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./../sync-queue.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
+import { fanslyPageSendGuard, isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 
 export const TARGETED_THREAD_BACKFILL_QUEUE = "sync.thread.backfill";
 
@@ -397,7 +397,9 @@ function emptyResult(
 export class TargetedThreadBackfillRunError extends Error {
   readonly result: TargetedThreadBackfillResult;
   /** Bounded code for journals: `proxy_missing`, `fansly_<status>`,
-   * `fansly_transport`, `lease_lost` or `internal`. */
+   * `fansly_transport`, `lease_lost`, `sync_engine_owned` (the page's send
+   * guard belongs to the Fansly Sync Engine: nothing was sent) or
+   * `internal`. */
   readonly failureClass: string;
 
   constructor(cause: unknown, result: TargetedThreadBackfillResult) {
@@ -414,6 +416,9 @@ function classifyTargetedRunFailure(error: unknown): string {
   }
   if (error instanceof PageSyncLeaseLostError) {
     return "lease_lost";
+  }
+  if (isFanslyPageOwnedBySyncEngineError(error)) {
+    return "sync_engine_owned";
   }
   if (error instanceof FanslyApiError) {
     return typeof error.status === "number" ? `fansly_${error.status}` : "fansly_transport";

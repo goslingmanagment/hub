@@ -803,7 +803,9 @@ export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
 // 0225 (plan §2.5): the per-page Fansly send guard shared by every process of
 // the legacy engine. The capture and its completion are conditional UPDATEs by
 // DB clock (repositories/fansly-send-guard.ts); an expired lease never opens
-// the page by itself.
+// the page by itself. 0229 (sync engine design §2.7): `owner_engine` — a row
+// the step-3 switch gave to the Fansly Sync Engine refuses every legacy
+// capture.
 export const fanslyPageSendGuards = pgTable(
   "fansly_page_send_guards",
   {
@@ -827,9 +829,15 @@ export const fanslyPageSendGuards = pgTable(
     closedReason: text("closed_reason"),
     closedAt: timestamp("closed_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    ownerEngine: text("owner_engine").$type<"legacy" | "fansly_sync_engine">().notNull().default("legacy"),
+    engineSwitchedAt: timestamp("engine_switched_at", { withTimezone: true }),
   },
   (table) => ({
     nextURange: check("fansly_page_send_guards_next_u_check", sql`${table.nextU} >= 0 and ${table.nextU} <= 0.2`),
+    ownerEngine: check(
+      "fansly_page_send_guards_owner_engine_check",
+      sql`${table.ownerEngine} in ('legacy', 'fansly_sync_engine')`,
+    ),
   }),
 );
 

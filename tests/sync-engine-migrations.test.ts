@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  FANSLY_SEND_GUARD_OWNER_ENGINES,
   SYNC_APPLY_STATES,
+  SYNC_ENGINE_GUARD_OWNER,
   SYNC_ATTEMPT_OUTCOMES,
   SYNC_PAGE_HOLD_KINDS,
   SYNC_PAGE_MODES,
@@ -113,6 +115,44 @@ describe("0228_sync_engine_core.sql", () => {
     for (const name of ["sync_state", "sync_cursors", "sync_requests", "rate_limit_buckets", "raw_payloads"]) {
       expect(sql).not.toMatch(new RegExp(`create table if not exists ${name}\\b`));
     }
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0229_send_guard_owner_engine.sql", () => {
+  const migration = "0229_send_guard_owner_engine.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("only adds two columns, a check, comments and the read-role grant on the step-1 guard table", () => {
+    expect(statements).toEqual([
+      "alter table fansly_page_send_guards add column if not exists owner_engine text not null default 'legacy', "
+        + "add column if not exists engine_switched_at timestamptz",
+      "do $$…$$",
+      "alter table fansly_page_send_guards validate constraint fansly_page_send_guards_owner_engine_check",
+      "comment on column fansly_page_send_guards.owner_engine is "
+        + "'Who may capture the page: legacy (the legacy engine, every process) or fansly_sync_engine (no legacy "
+        + "capture; the engine''s live admission requires it). Flipped only by the step-3 switch and its rollback.'",
+      "comment on column fansly_page_send_guards.engine_switched_at is 'When owner_engine last changed; null if it never did.'",
+      "do $$…$$",
+    ]);
+    // No row changes owner here: the default makes every row 'legacy'.
+    expect(sql).not.toMatch(/\b(update|delete|drop|rename|truncate)\b/i);
+    expect(sql).toMatch(
+      /if not exists \(select 1 from pg_constraint where conname = 'fansly_page_send_guards_owner_engine_check'\) then\s+alter table fansly_page_send_guards add constraint fansly_page_send_guards_owner_engine_check\s+check \(owner_engine in \('legacy', 'fansly_sync_engine'\)\) not valid;/,
+    );
+    expect(sql).toContain("grant select on fansly_page_send_guards to read_only");
+  });
+
+  it("keeps the owner vocabulary equal to the repositories' constants", () => {
+    const start = sql.indexOf("check (owner_engine in (");
+    const list = sql.slice(start, sql.indexOf(")", start + "check (owner_engine in (".length));
+    expect([...list.matchAll(/'([a-z_]+)'/g)].map((match) => match[1])).toEqual([...FANSLY_SEND_GUARD_OWNER_ENGINES]);
+    expect(FANSLY_SEND_GUARD_OWNER_ENGINES).toContain(SYNC_ENGINE_GUARD_OWNER);
   });
 
   it("allows application rollback after the additive migration", () => {

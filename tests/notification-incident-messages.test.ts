@@ -135,7 +135,7 @@ describe("resolveMessageForIncident", () => {
       holderPid: 123456, holderPidStart: null, holderPidNs: null, holderBootId: null, holderInstance: null,
       holderRole: "worker", capturedAt: new Date("2026-10-01T12:00:00Z"), leaseUntil: new Date("2026-10-01T12:01:15Z"),
       leaseExpired: true, lastCompletedAt: new Date("2026-10-01T11:59:00Z"), nextU: 0.1, closedReason: null,
-      closedAt: null, dbNow: new Date("2026-10-01T12:02:00Z"),
+      closedAt: null, ownerEngine: "legacy", engineSwitchedAt: null, dbNow: new Date("2026-10-01T12:02:00Z"),
     });
     const message = openMessageForIncident({
       kind: "sync_silent", pageLabel: "lilly-1", platform: "fansly", subKey: "send_guard_closed", errorSummary: summary,

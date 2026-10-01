@@ -399,20 +399,13 @@ describe("page ownership (I6, I7)", () => {
     await query("update sync_pages set mode = 'live' where page_id = $1", [pageId]);
     await expect(inTx(live)).rejects.toMatchObject({ reason: "guard_owner_engine", ownerEngine: null });
     await ensureFanslyPageSendGuard(db(), pageId);
-    // Before 0229 the guard row has no owner_engine: closed.
+    // A new guard row belongs to the legacy engine (0229 default): closed.
     const closed = await inTx(live).catch((error: unknown) => error);
     expect(closed).toBeInstanceOf(LiveGateClosedError);
-    expect(closed).toMatchObject({ reason: "guard_owner_engine", ownerEngine: null });
-    // The 0229 column, simulated on this clone: legacy keeps it closed, the
-    // engine's flip opens it.
-    await query("alter table fansly_page_send_guards add column owner_engine text not null default 'legacy'");
-    try {
-      await expect(inTx(live)).rejects.toMatchObject({ reason: "guard_owner_engine", ownerEngine: "legacy" });
-      await query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
-      expect(await inTx(live)).toEqual({ mode: "live", ownerEngine: "fansly_sync_engine" });
-    } finally {
-      await query("alter table fansly_page_send_guards drop column owner_engine");
-    }
+    expect(closed).toMatchObject({ reason: "guard_owner_engine", ownerEngine: "legacy" });
+    // The switch's flip (design §2.8) opens it.
+    await query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
+    expect(await inTx(live)).toEqual({ mode: "live", ownerEngine: "fansly_sync_engine" });
 
     // Generation-fenced page writes.
     await expect(advanceWsRouterCursor(db(), { pageId, generation: generation + 1n, cursor: 10 }))

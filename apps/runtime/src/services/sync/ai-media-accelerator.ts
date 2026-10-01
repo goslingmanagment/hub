@@ -22,7 +22,7 @@ import { loadEffectiveConfig } from "../effective-config.ts";
 import type { ResolvedFanslyPageContext } from "../page-context.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
 import { fetchAndJournalFanslyDmMessagePage } from "./fansly-dm-messages.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
+import { fanslyPageSendGuard, isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 
 // AI media describer — Fansly freshness accelerator (plan §4, OFF by default:
 // AI_MEDIA_DESCRIBE_FANSLY_ACCELERATOR_ENABLED). When a WS frame says a fan
@@ -142,6 +142,13 @@ export async function runAiMediaAcceleratorStep(
     if (error instanceof AcceleratorDeferred) {
       // No chunk capacity left: the request stays pending for the next chunk.
       if (error.message !== "capacity") await finish("skipped", error.message);
+      return;
+    }
+    if (isFanslyPageOwnedBySyncEngineError(error)) {
+      // The page's send guard belongs to the Fansly Sync Engine (sync engine
+      // design §2.7): refused before anything was sent, as for a held page.
+      // The chunk's own next request meets the same page-level stop.
+      await finish("skipped", "page_held");
       return;
     }
     if (error instanceof FanslyApiError) {

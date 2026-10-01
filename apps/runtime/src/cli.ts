@@ -2946,10 +2946,12 @@ export function buildProgram() {
       }
     });
 
-  // Plan §2.5: the per-page Fansly send guard. `status` reads; the
-  // Docker-level confirmation releases pages whose holder's container is gone
-  // (the hostnames of the running containers, e.g. from `docker ps`), or the
-  // one page of a holder the operator has confirmed gone (`--holder-token`).
+  // Plan §2.5: the per-page Fansly send guard. `status` reads (its `owner` is
+  // `fansly_sync_engine` once the step-3 switch gave the page to the new
+  // engine, sync engine design §2.7); the Docker-level confirmation releases
+  // pages whose holder's container is gone (the hostnames of the running
+  // containers, e.g. from `docker ps`), or the one page of a holder the
+  // operator has confirmed gone (`--holder-token`).
   const sendGuard = program.command("fansly-send-guard");
   sendGuard
     .command("status")
@@ -2960,6 +2962,7 @@ export function buildProgram() {
         printRows(
           [
             "page",
+            "owner",
             "state",
             "holder",
             "holder_token",
@@ -2973,6 +2976,7 @@ export function buildProgram() {
           ],
           rows.map((row) => [
             row.pageLabel ?? row.pageId,
+            row.ownerEngine,
             row.holderToken === null ? "free" : row.leaseExpired ? "closed" : "held",
             row.holderToken === null
               ? null
