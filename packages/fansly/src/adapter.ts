@@ -30,6 +30,24 @@ import {
   type FanslySendCompletionOutcome,
   type FanslySendLease,
 } from "./send-guard.ts";
+import {
+  isFanslyErrorEnvelope,
+  parseFanslyEnvelope,
+  parseFanslyFollowersPage,
+  parseFanslyMessagesPage,
+  parseFanslyMessagingGroupsPage,
+  parseFanslySubscribersPage,
+  parseFanslyTransactionsPage,
+  type FanslyEnvelope,
+} from "./wire/contracts.ts";
+import {
+  ACCOUNT_MEDIA_BATCH_SIZE,
+  PAYOUT_REQUESTS_PAGE_SIZE,
+  PAYOUT_REQUESTS_UNBOUNDED,
+  POST_BATCH_SIZE,
+  POST_REPLIES_EMPTY_STATUSES,
+  VAULT_MEDIA_HEAD_CURSOR,
+} from "./wire/specs.ts";
 import type {
   FanslyAccount,
   FanslyAccountList,
@@ -39,40 +57,23 @@ import type {
   FanslyEarningsAccountsPageResponse,
   FanslyEarningsOverview,
   FanslyEarningsOverviewResponse,
-  FanslyEarningsTransaction,
-  FanslyFollowersPage,
   FanslyGroupDetail,
   FanslyListItem,
   FanslyListItemsPageResponse,
-  FanslyMessagesPage,
   FanslyMessagesPageResponse,
-  FanslyMessagingGroupsPage,
   FanslyMessagingGroupsPageResponse,
   FanslyPostsPage,
   FanslyPostsPageResponse,
   FanslyPostTip,
   FanslyPostTipsResponse,
   FanslyRequestContext,
-  FanslySubscribersPage,
   FanslyTrackingLink,
   FanslyTrackingLinksResponse,
-  FanslyTransactionsPage,
 } from "./types.ts";
 
 interface AdapterOptions {
   baseUrl: string;
 }
-
-type ApiEnvelope<T> = {
-  success?: boolean;
-  response?: T;
-  error?: {
-    code?: number;
-    message?: string;
-    details?: string;
-    [key: string]: unknown;
-  } | null;
-};
 
 type RequestResult<T> = {
   parsed: T;
@@ -84,74 +85,16 @@ const REQUEST_TIMEOUT_MS = 30_000;
  *  body stays in `responseSnippet`. */
 const ERROR_DETAILS_MAX_CHARS = 200;
 const EARNINGS_ACCOUNTS_PAGE_LIMIT = 100;
-/**
- * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
- * `before` and `after`. An empty `before=` is a cursor the server does not
- * honour — it answers `{albumMedia: [], media: []}` for an album with 4 760
- * items, which is indistinguishable from an exhausted album. The app's own
- * caller sends "0"; so does this adapter.
- */
-export const VAULT_MEDIA_HEAD_CURSOR = "0";
-/**
- * WP-F3: ids per `/account/media?ids=` and `/account/media/bundle?ids=` call.
- *
- * NOT a guess: the app batches its own hydration at `splice(0, 100)` in both
- * `requestMediaTick` and `requestBundleTick`, so 100 is the size the server is
- * known to answer for. A smaller batch would triple the call count of the
- * hydration step for no benefit; a larger one would be a shape nobody has
- * observed the server accept.
- */
-export const ACCOUNT_MEDIA_BATCH_SIZE = 100;
-
-/**
- * WP-F6: ids per `GET /post?ids=` call.
- *
- * The app's own `getPosts` joins the id list with no splice of its own — its
- * two live call sites hydrate one or two ids — so unlike
- * `ACCOUNT_MEDIA_BATCH_SIZE` this number is NOT read out of a batching loop in
- * the bundle. It is the size the same app uses for every OTHER `?ids=` route it
- * batches (`requestedAccountIds_`, `requestedMediaIds_`, `requestedBundleIds_`
- * are all `splice(0, 100)`), and the refresh lane's arithmetic is sized on it.
- * A larger batch would be a shape nobody has seen the server accept.
- */
-export const POST_BATCH_SIZE = 100;
-
-/**
- * WP-F5: the statuses `/post/{postId}/replies` may answer with an empty body.
- *
- * NOT live-proven — no GET anywhere in the 2026-08-19 HAR returned 204 (all 197
- * are OPTIONS preflights), and production's "no replies" is a 200 with an empty
- * `posts[]` — so this is the handling of a case we have never seen rather than
- * a contract we have observed. It is scoped to that ONE
- * method deliberately: everywhere else an envelope-less body is a failure, and
- * a global softening would let a truncated response read as "no data" on every
- * lane at once.
- */
-export const POST_REPLIES_EMPTY_STATUSES = [204] as const;
-
-/**
- * WP-F7: the page size `/payments/payout/requests` is walked at.
- *
- * The wallet UI requests 10 and the server served 10 on eight of nine observed
- * pages (the ninth, the last, returned 3 of a `total` of 83). Whether a larger
- * `limit` is honoured on this route was NEVER measured — the one authorized
- * follow-up probe answered it for `/earnings/transactions`, a different route —
- * so 10 is assumed rather than believed, which costs nine calls once per page
- * and buys a walk that cannot silently skip rows.
- */
-export const PAYOUT_REQUESTS_PAGE_SIZE = 10;
-
-/**
- * The value `before` and `after` carry on `/payments/payout/requests`: PRESENT
- * AND EMPTY.
- *
- * The app sent them that way on all nine observed calls, and the wallet surface
- * never exposed a control that would fill them. An OMITTED parameter is a
- * different request from an empty one, and only the empty one has ever been
- * answered — the same lesson `/media/vaultnew` taught the catalog lane, where a
- * guessed cursor form returned an empty page for a 4 760-item album.
- */
-export const PAYOUT_REQUESTS_UNBOUNDED = "";
+// The wire facts of these routes live with their specs; the adapter sends
+// the same values and keeps exporting them under the same names.
+export {
+  ACCOUNT_MEDIA_BATCH_SIZE,
+  PAYOUT_REQUESTS_PAGE_SIZE,
+  PAYOUT_REQUESTS_UNBOUNDED,
+  POST_BATCH_SIZE,
+  POST_REPLIES_EMPTY_STATUSES,
+  VAULT_MEDIA_HEAD_CURSOR,
+};
 
 /**
  * Response summary for a route whose shape is NOT yet known (the WP-F9 / [E1]
@@ -269,209 +212,6 @@ function isFanslyAccountList(value: unknown): value is FanslyAccountList {
 
 function isFanslyAccountLists(value: unknown): value is FanslyAccountList[] {
   return Array.isArray(value) && value.every(isFanslyAccountList);
-}
-
-function isApiError(value: unknown): value is NonNullable<ApiEnvelope<unknown>["error"]> {
-  return isRecord(value) &&
-    (value.code === undefined ||
-      (typeof value.code === "number" && Number.isFinite(value.code))) &&
-    (value.message === undefined || typeof value.message === "string") &&
-    (value.details === undefined || typeof value.details === "string");
-}
-
-function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
-  return isRecord(value) &&
-    (value.success === undefined || typeof value.success === "boolean") &&
-    (value.error === undefined || value.error === null || isApiError(value.error));
-}
-
-/**
- * Fansly's own APPLICATION error, well-formed: `success: false` with a numeric
- * `error.code` and a non-empty `error.details`, e.g.
- * `{"success":false,"error":{"code":500,"details":"error getting graph"}}`.
- * A proxy or gateway page, an empty body or a bare `{success:false}` is not one.
- */
-function isFanslyErrorEnvelope(envelope: ApiEnvelope<unknown> | null): boolean {
-  return envelope !== null &&
-    envelope.success === false &&
-    typeof envelope.error?.code === "number" &&
-    typeof envelope.error.details === "string" &&
-    envelope.error.details.trim().length > 0;
-}
-
-// A createdAt before 2019 (before Fansly) or more than two days past the clock
-// is a unit change (seconds for milliseconds), not a sale time.
-const FANSLY_TRANSACTION_MIN_CREATED_AT_MS = Date.UTC(2019, 0, 1);
-const FANSLY_TRANSACTION_MAX_CREATED_AT_LEAD_MS = 2 * 24 * 60 * 60 * 1000;
-
-function isSafeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-/** Mills on the wire: an integer, or an integer string. A fraction is refused
- * here rather than truncated later by `millsFromInteger`. */
-function parseFanslyMillsInteger(value: unknown): number | null {
-  const parsed = typeof value === "string" && /^-?\d+$/.test(value) ? Number(value) : value;
-  return isSafeInteger(parsed) ? parsed : null;
-}
-
-/** The fields the ledger writes or computes from. Returns the item with its
- * amounts as numbers, or the first field that fails. */
-function parseFanslyEarningsTransaction(
-  value: unknown,
-  nowMs: number,
-): { item: FanslyEarningsTransaction } | { field: string } {
-  if (!isRecord(value)) {
-    return { field: "item" };
-  }
-  if (typeof value.transactionId !== "string" || value.transactionId.length === 0) {
-    return { field: "transactionId" };
-  }
-  if (!isSafeInteger(value.type)) {
-    return { field: "type" };
-  }
-  if (!isSafeInteger(value.status)) {
-    return { field: "status" };
-  }
-  const amount = parseFanslyMillsInteger(value.amount);
-  if (amount === null) {
-    return { field: "amount" };
-  }
-  const destinationAmount = parseFanslyMillsInteger(value.destinationAmount);
-  if (destinationAmount === null) {
-    return { field: "destinationAmount" };
-  }
-  if (value.destinationTax !== null && !isSafeInteger(value.destinationTax)) {
-    return { field: "destinationTax" };
-  }
-  if (
-    !isSafeInteger(value.createdAt) ||
-    value.createdAt < FANSLY_TRANSACTION_MIN_CREATED_AT_MS ||
-    value.createdAt > nowMs + FANSLY_TRANSACTION_MAX_CREATED_AT_LEAD_MS
-  ) {
-    return { field: "createdAt" };
-  }
-
-  return {
-    item: { ...value, amount, destinationAmount } as unknown as FanslyEarningsTransaction,
-  };
-}
-
-/**
- * A malformed total or data array rejects the page (null). A malformed item
- * keeps the total and names the first bad item: the caller fails the page
- * without treating the offset scan as unstable.
- */
-function parseFanslyTransactionsPage(value: unknown): FanslyTransactionsPage | null {
-  if (
-    !isRecord(value) ||
-    typeof value.total !== "number" ||
-    !Number.isSafeInteger(value.total) ||
-    value.total < 0 ||
-    !Array.isArray(value.data)
-  ) {
-    return null;
-  }
-
-  const nowMs = Date.now();
-  const data: FanslyEarningsTransaction[] = [];
-  for (const [index, entry] of value.data.entries()) {
-    const parsed = parseFanslyEarningsTransaction(entry, nowMs);
-    if ("field" in parsed) {
-      const transactionId = isRecord(entry) &&
-          typeof entry.transactionId === "string" &&
-          entry.transactionId.length > 0
-        ? entry.transactionId
-        : null;
-      return {
-        total: value.total,
-        data: [],
-        itemViolation: { index, transactionId, field: parsed.field },
-      };
-    }
-    data.push(parsed.item);
-  }
-
-  return {
-    total: value.total,
-    data,
-    itemViolation: null,
-  };
-}
-
-function isNonNegativeCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function parseFanslySubscribersPage(value: unknown, status: string) {
-  if (!isRecord(value) || !isRecord(value.stats) || !Array.isArray(value.subscriptions) ||
-    !value.subscriptions.every((item) => isRecord(item) &&
-      typeof item.id === "string" && item.id.length > 0 &&
-      typeof item.subscriberId === "string" && item.subscriberId.length > 0 &&
-      typeof item.status === "number" && Number.isFinite(item.status))) {
-    return null;
-  }
-  const total = status === "5" ? value.stats.totalExpired
-    : status === "3,4" ? value.stats.totalActive : value.stats.total;
-  if (!isNonNegativeCount(total)) return null;
-  return {
-    total,
-    totalActive: isNonNegativeCount(value.stats.totalActive) ? value.stats.totalActive : null,
-    totalExpired: isNonNegativeCount(value.stats.totalExpired) ? value.stats.totalExpired : null,
-    subscriptions: value.subscriptions as FanslySubscribersPage["subscriptions"],
-  };
-}
-
-function parseFanslyFollowersPage(value: unknown): FanslyFollowersPage | null {
-  if (!isRecord(value) || !Array.isArray(value.followers) ||
-    !value.followers.every((item) => isRecord(item) &&
-      typeof item.id === "string" && item.id.length > 0 &&
-      typeof item.followerId === "string" && item.followerId.length > 0)) {
-    return null;
-  }
-  if (value.aggregationData !== undefined && value.aggregationData !== null &&
-    (!isRecord(value.aggregationData) ||
-      (value.aggregationData.accounts !== undefined && value.aggregationData.accounts !== null &&
-        (!Array.isArray(value.aggregationData.accounts) ||
-          !value.aggregationData.accounts.every((item) => isRecord(item) &&
-            typeof item.id === "string" && item.id.length > 0))))) {
-    return null;
-  }
-  return value as unknown as FanslyFollowersPage;
-}
-
-function hasNullableIdentityRecords(value: unknown) {
-  return value === undefined || value === null ||
-    (Array.isArray(value) && value.every((item) => isRecord(item) &&
-      typeof item.id === "string" && item.id.length > 0));
-}
-
-/** The container and identity contract of `/messaging/groups`, mirroring
- * parseFanslyFollowersPage: a row, group or account without its id cannot be
- * applied, and the capture trim would silently drop it. Scalar fields (flags,
- * counters, head ids, `total`) stay with the lane's own guards. */
-function parseFanslyMessagingGroupsPage(value: unknown): FanslyMessagingGroupsPage | null {
-  if (!isRecord(value) || !Array.isArray(value.data) ||
-    !value.data.every((item) => isRecord(item) &&
-      typeof item.groupId === "string" && item.groupId.length > 0)) {
-    return null;
-  }
-  if (value.aggregationData !== undefined && value.aggregationData !== null &&
-    (!isRecord(value.aggregationData) ||
-      !hasNullableIdentityRecords(value.aggregationData.groups) ||
-      !hasNullableIdentityRecords(value.aggregationData.accounts))) {
-    return null;
-  }
-  return value as unknown as FanslyMessagingGroupsPage;
-}
-
-/** Container contract only. Per-message drift (a missing id or createdAt) is
- * the lane's to account for after capture; rejecting the page for one bad
- * message would wedge the conversation sweep's limit-1 head repair. */
-function parseFanslyMessagesPage(value: unknown): FanslyMessagesPage | null {
-  return isRecord(value) && Array.isArray(value.messages)
-    ? value as unknown as FanslyMessagesPage
-    : null;
 }
 
 export class FanslyAdapter {
@@ -2487,13 +2227,8 @@ export class FanslyAdapter {
     }
   }
 
-  private safeParseEnvelope<T>(text: string): ApiEnvelope<T> | null {
-    try {
-      const parsed: unknown = JSON.parse(text);
-      return isApiEnvelope(parsed) ? parsed as ApiEnvelope<T> : null;
-    } catch {
-      return null;
-    }
+  private safeParseEnvelope<T>(text: string): FanslyEnvelope<T> | null {
+    return parseFanslyEnvelope<T>(text);
   }
 
   private getDispatcher(proxy?: ProxyConfig | null) {
