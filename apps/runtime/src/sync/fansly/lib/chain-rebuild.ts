@@ -344,31 +344,32 @@ export type StoredFactsReader = (threadId: number) => Promise<{ nonDeletedCount:
 /**
  * Fold one journal entry into the book: skips are counted, a page is folded
  * into its thread's chain (StoredFacts read only for empty pages). Returns the
- * fold (null when skipped) and the chain and segment the page met, so callers
- * that check the journal can look at the state before the page.
+ * thread and its fold, or null when the entry was skipped.
  */
 export async function foldJournalEntry(
   book: Map<string, ThreadFoldState>,
   entry: JournalEntry,
   counters: ChainFoldCounters,
   readStored: StoredFactsReader,
-): Promise<{ state: ThreadFoldState; before: { chain: ThreadChain; segment: Segment | null }; fold: ChainFold } | null> {
+): Promise<{ state: ThreadFoldState; fold: ChainFold } | null> {
   const { result } = entry;
   if (result.kind === "skip") {
     counters.skipped[result.reason] += 1;
     return null;
   }
   const state = book.get(result.groupId);
-  const skip = state === undefined ? "unknown_thread"
-    : state.engineOwned ? "engine_owned"
-      : state.conflicted ? "conflicted"
-        : entry.rawId <= state.foldedThrough ? "already_folded" : null;
-  if (skip !== null || state === undefined) {
-    counters.skipped[skip ?? "unknown_thread"] += 1;
+  if (state === undefined) {
+    counters.skipped.unknown_thread += 1;
+    return null;
+  }
+  const skip: JournalSkipReason | null = state.engineOwned ? "engine_owned"
+    : state.conflicted ? "conflicted"
+      : entry.rawId <= state.foldedThrough ? "already_folded" : null;
+  if (skip !== null) {
+    counters.skipped[skip] += 1;
     return null;
   }
   const stored = chainPageNeedsStoredFacts(result.page) ? await readStored(state.threadId) : null;
-  const before = { chain: state.chain, segment: state.segment };
   const fold = foldChainPage(state.chain, state.segment, result.page, stored);
   counters.folded += 1;
   countVerdict(counters, fold.verdict, entry.rawId, result.groupId);
@@ -378,7 +379,7 @@ export async function foldJournalEntry(
   state.segment = fold.segment;
   state.dirty = true;
   state.foldedPages += 1;
-  return { state, before, fold };
+  return { state, fold };
 }
 
 // ── the rebuild ───────────────────────────────────────────────────────────────
