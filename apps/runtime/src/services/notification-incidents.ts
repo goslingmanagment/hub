@@ -28,6 +28,14 @@ export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
 /** The Fansly fast lane was unavailable on a describer page for > 10 min. */
 export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
+/** Plan §2.5/§10: the page-scoped latches of the Fansly send guard, under the
+ * Fansly-only `sync_silent` kind (a new kind is a contract change). A closed
+ * page sends nothing — its sync is silent — until the holder of its last
+ * request completes or is confirmed gone. */
+export const FANSLY_SEND_GUARD_CLOSED_SUBKEY = "send_guard_closed";
+/** Plan §2.4/§10: two sends of one page closer than the pause setting. Must
+ * never happen; the latch stays open for an hour after the last one seen. */
+export const FANSLY_PACE_VIOLATION_SUBKEY = "pace_violation";
 
 type IncidentApp = Pick<AppContext, "db"> & {
   logger: Pick<AppContext["logger"], "warn">;
@@ -93,6 +101,14 @@ function openTitleForIncident(
   }
   if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
     return "⚠️ Fansly image fast lane unavailable for over 10 minutes";
+  }
+  // The send guard's latches share the Fansly-only kind, not its title: a
+  // closed page and a pace violation each say what happened and what to do.
+  if (input.kind === "sync_silent" && input.subKey === FANSLY_SEND_GUARD_CLOSED_SUBKEY) {
+    return "🚨 Fansly page closed: a request overran its lease, nothing is sent for the page";
+  }
+  if (input.kind === "sync_silent" && input.subKey === FANSLY_PACE_VIOLATION_SUBKEY) {
+    return "🚨 Fansly pace violated: two requests of a page closer than the pause setting";
   }
   switch (input.kind) {
     case "auth_blocked":
@@ -244,6 +260,12 @@ function resolveDetailForIncident(
     case "ops_sampler_silent":
       return "Golden-signal sampler emitting again";
     case "sync_silent":
+      if (input.subKey === FANSLY_SEND_GUARD_CLOSED_SUBKEY) {
+        return "Fansly page open again: its request holder completed or was confirmed gone";
+      }
+      if (input.subKey === FANSLY_PACE_VIOLATION_SUBKEY) {
+        return "No Fansly pace violation for an hour";
+      }
       return "Fansly sync chunks starting again";
     case "ofapi_chargebacks_reconcile_failed":
       return "OFAPI chargebacks reconcile recovered";
@@ -684,6 +706,84 @@ export async function resolveOfapiAuthIncident(
     platformAccountId: input.platformAccountId,
     pageLabel: input.pageLabel,
     platform: input.platform,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/**
+ * Plan §2.5/§10: the page's send guard is closed — the holder of its last
+ * request overran its lease and is neither completed nor confirmed gone, so
+ * nothing is sent for the page. The summary names the holder and what to run.
+ */
+export async function notifyFanslySendGuardClosedIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    pageId: number;
+    pageLabel: string | null;
+    errorSummary: string;
+    occurredAt: Date;
+  },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "sync_silent",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "fansly",
+    subKey: FANSLY_SEND_GUARD_CLOSED_SUBKEY,
+    errorCode: "send_guard_closed",
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+/** The page's send guard is open again. */
+export async function resolveFanslySendGuardClosedIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string | null; recoveredAt: Date },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: "sync_silent",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "fansly",
+    subKey: FANSLY_SEND_GUARD_CLOSED_SUBKEY,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/** Plan §2.4/§10: two sends of the page closer than the setting in force for
+ *  the later one (journal `sent_at`, all sources). */
+export async function notifyFanslyPaceViolationIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: {
+    pageId: number;
+    pageLabel: string | null;
+    errorSummary: string;
+    occurredAt: Date;
+  },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "sync_silent",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "fansly",
+    subKey: FANSLY_PACE_VIOLATION_SUBKEY,
+    errorCode: "pace_violation",
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveFanslyPaceViolationIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string | null; recoveredAt: Date },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: "sync_silent",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "fansly",
+    subKey: FANSLY_PACE_VIOLATION_SUBKEY,
     recoveredAt: input.recoveredAt,
   });
 }
