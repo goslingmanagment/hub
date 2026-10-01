@@ -321,6 +321,20 @@ export async function ensureSyncPage(
   return { created: (result.rowCount ?? 0) > 0 };
 }
 
+/** Give every Fansly page its row (mode `off`) — the host at start, so a page
+ *  onboarded after 0228 is listed too. Returns how many rows were created. */
+export async function ensureFanslySyncPages(db: Database, input: { createdBy?: string } = {}): Promise<number> {
+  const result = await db.execute(sql`
+    insert into sync_pages (page_id, mode, mode_changed_by)
+    select p.id, 'off', ${input.createdBy ?? "ensure"}
+      from pages p
+     where p.platform = 'fansly'
+     order by p.id
+    on conflict (page_id) do nothing
+  `);
+  return result.rowCount ?? 0;
+}
+
 export async function getSyncPage(db: Database, pageId: number): Promise<SyncPageRow | null> {
   const result = await db.execute<PageSqlRow>(sql`
     select ${pageColumns}
@@ -668,6 +682,10 @@ export async function confirmSyncOwnersStopped(
     confirmedBy: string;
     dryRun: boolean;
     pageIds?: readonly number[];
+    /** Only owners that acquired the page before this instant: the instant
+     *  taken right before the running hostnames were listed, so an owner that
+     *  started after the listing is never taken for a gone one. */
+    acquiredBefore?: Date | null;
   },
 ): Promise<ConfirmedSyncOwnerStop[]> {
   const running = [...new Set([...input.runningHosts, input.ownHost].map((host) => host.trim()).filter(Boolean))];
@@ -680,6 +698,9 @@ export async function confirmSyncOwnersStopped(
   const pageFilter = input.pageIds === undefined
     ? sql``
     : sql`and sp.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])`;
+  const acquiredFilter = input.acquiredBefore === undefined || input.acquiredBefore === null
+    ? sql``
+    : sql`and sp.owner_acquired_at < ${input.acquiredBefore}::timestamptz`;
   const candidates = sql`
     select sp.page_id
       from sync_pages sp
@@ -690,6 +711,7 @@ export async function confirmSyncOwnersStopped(
        and (sp.owner_stop_confirmed_at is null or sp.owner_acquired_at is null
             or sp.owner_stop_confirmed_at <= sp.owner_acquired_at)
        ${pageFilter}
+       ${acquiredFilter}
   `;
   const result = input.dryRun
     ? await db.execute<{ pageId: string; pageLabel: string | null; generation: string; ownerHost: string | null }>(sql`

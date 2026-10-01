@@ -198,8 +198,11 @@ export function createDefaultFanslySendOsProbe(): FanslySendOsProbe {
   return existsSync("/proc/self/stat") ? createProcFanslySendOsProbe() : createPortableFanslySendOsProbe();
 }
 
-/** `script`: an operator script in a container of its own (the W0 probes). */
-export const FANSLY_SEND_HOLDER_ROLES = ["api", "worker", "scheduler", "cli", "script", "test"] as const;
+/** `script`: an operator script in a container of its own (the W0 probes).
+ *  `sync`: the Fansly Sync Engine's process. It never holds this guard; it
+ *  records the same identity as a page owner (`sync_pages.owner_*`) and judges
+ *  its predecessors with `judgeFanslySendHolderTermination` (design §3.6, §14 F4). */
+export const FANSLY_SEND_HOLDER_ROLES = ["api", "worker", "scheduler", "cli", "script", "test", "sync"] as const;
 export type FanslySendHolderRole = (typeof FANSLY_SEND_HOLDER_ROLES)[number];
 
 /** One per process start: the uuid tells this process apart from an earlier

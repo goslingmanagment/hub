@@ -89,6 +89,11 @@ describe("the Fansly send-guard boundary (plan §2.5)", () => {
     expect(matching(/resolveEgress\([^)]*kind: "page"/)).toEqual([
       "apps/runtime/src/services/ai-media-describe/worker.ts",
       "apps/runtime/src/services/egress/fansly-probe-context.ts",
+      // The Sync Engine's live page transport: built only by the engine's live
+      // loop, which no build runs before the switch (LIVE_LOOP_ENABLED = false,
+      // I17); its admissions need the guard row handed to the engine, and its
+      // send check is the engine pacer's (tests/sync-live-gate.integration.test.ts).
+      "apps/runtime/src/sync/fansly/transport.ts",
     ]);
     // The probe context (session + page egress) and who opens it.
     expect(matching(/\b(readProbeSnapshot|resolveFanslyProbeContext)\(/)).toEqual([

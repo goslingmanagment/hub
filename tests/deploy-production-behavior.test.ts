@@ -325,6 +325,66 @@ describe("production deploy behavior without production access", () => {
     expect(result.stderr).not.toContain("confirmed the holders");
   });
 
+  // Sync Engine design §3.6 rule (e): the same shape for the sync container's
+  // page owners — the instant, then the running sync containers' hostnames,
+  // then the confirmation in the new api, bounded by the instant.
+  function syncOwnerHook(options: { running?: string; execFails?: boolean } = {}) {
+    const bin = path.join(fixtureRoot, "bin");
+    const calls = path.join(fixtureRoot, "docker-calls.log");
+    mkdirSync(bin);
+    writeFileSync(calls, "");
+    writeFileSync(path.join(bin, "date"), [
+      "#!/usr/bin/env bash",
+      `printf 'date %s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      "printf '2026-10-02T09:00:00.456Z\\n'",
+    ].join("\n"), { mode: 0o755 });
+    writeFileSync(path.join(bin, "docker"), [
+      "#!/usr/bin/env bash",
+      `printf 'docker %s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      'case "$1" in',
+      '  inspect) shift 3; for id in "$@"; do printf "host-%s\\n" "$id"; done ;;',
+      '  compose)',
+      '    if [[ "$*" == *" ps -q sync"* ]]; then',
+      `      printf ${JSON.stringify(options.running ?? "s1\\n")}`,
+      "    else",
+      `      ${options.execFails ? "exit 2" : "printf 'page\\tgeneration\\towner_host\\tconfirmed\\nlilly-1\\t3\\told-sync\\ttrue\\n'"}`,
+      "    fi ;;",
+      "esac",
+    ].join("\n"), { mode: 0o755 });
+    const result = runFunctions(["confirm_sync_owner_handover"], String.raw`
+      run_remote() { printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"; PATH="$TEST_BIN:$PATH" bash -c "$1"; }
+      confirm_sync_owner_handover
+    `, { TEST_BIN: bin, REMOTE_APP_DIR_ESCAPED: `'${fixtureRoot}'`, REMOTE_COMPOSE: "docker compose --current" });
+    return { result, calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) };
+  }
+
+  it("confirms the page owners of every sync container that is not running, acquired before the listing", () => {
+    const { result, calls } = syncOwnerHook();
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toEqual([
+      "date -u +%Y-%m-%dT%H:%M:%S.%3NZ",
+      "docker compose --current ps -q sync",
+      "docker inspect -f {{.Config.Hostname}} s1",
+      "docker compose --current exec -T api node apps/runtime/dist/cli.js sync ownership confirm-stopped "
+        + "--running-hosts host-s1 --acquired-before 2026-10-02T09:00:00.456Z",
+    ]);
+    expect(result.stderr).toContain("Sync engine: confirmed the page owners of stopped sync containers");
+    expect(result.stderr).toContain("lilly-1\t3\told-sync\ttrue");
+  });
+
+  it("confirms no sync owner when no sync container runs", () => {
+    const { result, calls } = syncOwnerHook({ running: "" });
+    expect(result.status).not.toBe(0);
+    expect(calls.join("\n")).not.toContain("confirm-stopped");
+  });
+
+  it("returns non-zero for a failed sync owner confirmation (the main flow only logs it)", () => {
+    const { result, calls } = syncOwnerHook({ execFails: true });
+    expect(result.status).not.toBe(0);
+    expect(calls.at(-1)).toContain("confirm-stopped");
+    expect(result.stderr).not.toContain("confirmed the page owners");
+  });
+
   it("stages candidate Compose using the actual project name and production project directory", () => {
     writeFileSync(path.join(fixtureRoot, "docker-compose.production.yml"), "fixture compose bytes\n");
     const result = runFunctions(["prepare_remote_infrastructure_check"], String.raw`

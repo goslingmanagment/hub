@@ -191,7 +191,8 @@ describe("the sync runtime role", () => {
         return rows.length > 0 ? rows : null;
       }, 90_000, "the sync process's first heartbeat");
       await waitFor(() => (existsSync(healthFile) ? true : null), 10_000, "the sync health file");
-      expect(stdout).toContain("Sync runtime started");
+      // The engine host starts after the first beat (it owns no page here).
+      await waitFor(() => (stdout.includes("Sync runtime started") ? true : null), 10_000, "the started line");
 
       await sleep(IDLE_EXIT_WINDOW_MS);
       alive();

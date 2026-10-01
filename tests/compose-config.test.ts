@@ -339,6 +339,30 @@ describe("compose config", () => {
     expect(healthDone).toBeGreaterThan(call);
   });
 
+  // Sync Engine design §3.6 rule (e), §9.3: owners of the recreated sync
+  // container that did not release are confirmed stopped by Docker, after the
+  // new sync container is healthy, without ever failing the deploy.
+  it("deploy-production.sh confirms the stopped sync containers' page owners once sync is healthy, never failing it", async () => {
+    const text = await readComposeFile("scripts/deploy-production.sh");
+    const hook = getShellFunction(text, "confirm_sync_owner_handover") ?? "";
+    expect(hook).toContain("set -euo pipefail");
+    // The instant is taken before the listing, and bounds what is confirmed.
+    expect(hook.indexOf("date -u")).toBeLessThan(hook.indexOf("ps -q sync"));
+    expect(hook).toContain("${REMOTE_COMPOSE} ps -q sync | xargs -r docker inspect -f '{{.Config.Hostname}}'");
+    expect(hook).toContain('test -n \\"\\$sync_hosts\\"');
+    expect(hook).toContain("exec -T api node apps/runtime/dist/cli.js sync ownership confirm-stopped");
+    expect(hook).toContain("--acquired-before");
+    expect(hook).not.toContain("fail ");
+    expect(hook).not.toContain("|| true");
+
+    const syncHealth = text.indexOf("\nwait_for_sync_container_health || fail");
+    const call = text.indexOf("\nconfirm_sync_owner_handover \\\n  || log \"WARNING:");
+    const healthDone = text.indexOf("finish_phase service-health");
+    expect(syncHealth).toBeGreaterThan(0);
+    expect(call).toBeGreaterThan(syncHealth);
+    expect(healthDone).toBeGreaterThan(call);
+  });
+
   it("deploy-production.sh reads monitoring token without executing env files", async () => {
     const text = await readComposeFile("scripts/deploy-production.sh");
     const envReader = getShellFunction(text, "read_remote_env_value");

@@ -112,6 +112,9 @@ const DIRECT_WRITERS = [
   "apps/runtime/src/services/ofapi-read-gateway-capture.ts",
   "apps/runtime/src/services/ofapi-webhook-capture.ts",
   "apps/runtime/src/services/sync/shared.ts",
+  // The Sync Engine's capture (design §3.7.2): the wire spec's kind — today's
+  // kinds, each pinned registered by the wire-spec test — or `<kind>:failed`.
+  "apps/runtime/src/sync/engine/commit.ts",
 ];
 
 describe("(1) coverage — every written kind is owned by something", () => {
