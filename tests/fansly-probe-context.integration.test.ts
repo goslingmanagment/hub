@@ -15,6 +15,7 @@ import { inspectFanslyBinding } from "../apps/runtime/src/services/egress/fansly
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { READ_ONLY_ROLE_PASSWORD } from "./helpers/db-context.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { createTestFanslySendGuards } from "./helpers/fansly-send-guard.ts";
 
 
 let testDb: StartedTestDatabase;
@@ -87,18 +88,28 @@ describe("Fansly W0 stored probe context", () => {
     await testDb.pool.query("update pages set external_page_id = '123' where id = $1", [page.id]);
     const before = await snapshot();
     const context = await readProbeSnapshot(app.db, app.config, page.label);
+    // The request goes through the lease's send check, which speaks undici's
+    // handler interface (onRequestStart …) to the dispatcher below it.
+    const controller = { abort: vi.fn(), pause: () => {}, resume: () => {}, paused: false, aborted: false, reason: null };
     const dispatch = vi.spyOn(context.egress.dispatcher!, "dispatch").mockImplementation((_options, handler) => {
-      handler.onConnect?.(() => {});
-      handler.onHeaders?.(200, [Buffer.from("content-type"), Buffer.from("application/json")], () => {}, "OK");
-      handler.onData?.(Buffer.from(JSON.stringify({ success: true,
+      handler.onRequestStart?.(controller, {});
+      handler.onResponseStart?.(controller, 200, { "content-type": "application/json" }, "OK");
+      handler.onResponseData?.(controller, Buffer.from(JSON.stringify({ success: true,
         response: { account: { id: "123", checkToken: "SYNTHETIC_SECRET" } } })));
-      handler.onComplete?.([]);
+      handler.onResponseEnd?.(controller, {});
       return true;
     });
+    // The page's send guard, in memory: this test pins that the probe writes
+    // nothing to the hub's tables (the guard's own rows are its journal).
+    const { registry, store } = createTestFanslySendGuards();
     try {
       const receipt = await inspectFanslyBinding({ session: context.session,
-        expectedAccountId: context.expectedAccountId, egress: context.egress });
+        expectedAccountId: context.expectedAccountId, egress: context.egress,
+        sendGuard: registry.forPage(page.id, "binding_preflight") });
       expect(receipt).toMatchObject({ identityMatched: true, observedAccountId: "123", restRequests: 1 });
+      expect(store.journal.map((row) => [row.source, row.outcome, row.httpStatus, row.sentAt !== null]))
+        .toEqual([["binding_preflight", "response", 200, true]]);
+      expect(controller.abort).not.toHaveBeenCalled();
       expect(dispatch).toHaveBeenCalledOnce();
       expect(dispatch.mock.calls[0]?.[0]).toMatchObject({ method: "GET",
         path: "/api/v1/account/me?ngsw-bypass=true", origin: "https://apiv3.fansly.com" });
