@@ -33,6 +33,7 @@ import {
   TARGETED_THREAD_BACKFILL_QUEUE,
   type TargetedThreadBackfillResult,
 } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
+import { handleTargetedThreadBackfillJobs } from "../apps/runtime/src/worker-services.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -329,6 +330,26 @@ function stubBoss() {
   return { send, findJobs } as unknown as HydrationBoss & { send: typeof send };
 }
 
+/**
+ * The queue after a worker died mid-run: every job the executor sent is
+ * `failed` with pg-boss's own message (no run record), long enough ago for
+ * reconciliation to trust it, and no page lease names it.
+ */
+function crashedBoss() {
+  const send = vi.fn(async (_queue: string, _data: unknown, options?: { id?: string }) =>
+    options?.id ?? "job-1");
+  const findJobs = vi.fn(async (_queue: string, options?: { id?: string }) =>
+    options?.id === undefined
+      ? []
+      : [{
+        id: options.id,
+        state: "failed",
+        output: { value: "pg-boss shut down while active" },
+        completedOn: new Date(Date.now() - 10 * 60 * 1000),
+      }]);
+  return { send, findJobs } as unknown as HydrationBoss & { send: typeof send };
+}
+
 /** A real pg-boss on the test database with the targeted-backfill queue created
  *  exactly as the worker creates it. No worker is attached: a sent job stays
  *  `created` and holds its page's slot until the test frees it. */
@@ -392,6 +413,26 @@ function vendorRun(
     providerHistoryExhausted: outcome === "completed",
     emptyPageReached: outcome === "completed",
   };
+}
+
+/** Backdates a targeted job's terminal stamp past the settle grace. */
+async function backdateJobCompletion(jobId: string) {
+  await testDb!.pool.query(
+    "update pgboss.job set completed_on = now() - interval '10 minutes' where id = $1::uuid",
+    [jobId],
+  );
+}
+
+/** Puts a live dm_messages lease on the Fansly fixture page, owned by `owner`. */
+async function holdPageLease(owner: string) {
+  await ensurePageSyncStates(testDb!.db, { pageId: fanslyPageId });
+  await testDb!.pool.query(`
+    update page_sync_states
+    set status = 'running', leased_seq = request_seq, lease_owner = $2,
+        lease_token = 'targeted-lease', lease_heartbeat_at = now(),
+        lease_expires_at = now() + interval '2 minutes'
+    where page_id = $1 and stream = 'dm_messages'
+  `, [fanslyPageId, owner]);
 }
 
 describe("[sync-critical] agent hydration requests", () => {
@@ -919,26 +960,29 @@ describe("[sync-critical] agent hydration requests", () => {
     }
   });
 
-  it("a crashed run is swept to failed and needs a FRESH decision, never a retry", async () => {
+  it("a crashed run is settled failed and needs a FRESH decision, never a retry", async () => {
     const { request } = await fileRequest();
     await approve(request);
     await setFlag("agentHydrationMode", "dispatch");
     const boss = stubBoss();
     await runAgentHydrationCycle(appContext, boss);
 
-    // The worker died: the request is dispatching and its deadline passes.
-    await testDb!.pool.query(
-      "update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'",
-    );
-    const secondBoss = stubBoss();
+    // The worker died mid-run: pg-boss failed the job, no lease is live. The
+    // request closes from that record at once, not at its 30-minute deadline.
+    const secondBoss = crashedBoss();
     const cycle = await runAgentHydrationCycle(appContext, secondBoss);
-    expect(cycle.swept).toBe(1);
+    expect(cycle.reconciled).toBe(1);
     // NOT re-enqueued. One approval buys one attempt.
     expect(secondBoss.send).not.toHaveBeenCalled();
 
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request?.state).toBe("failed");
+    // What the dead run spent is unknown: `timeout`, no `vendorCalls`, so the
+    // approval keeps its whole reservation (fail closed).
     expect(stored.request?.lastError).toBe("timeout");
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    expect(events.at(-1)?.detail).toMatchObject({ cause: "job_failed" });
+    expect(events.at(-1)?.detail).not.toHaveProperty("vendorCalls");
 
     // A third cycle changes nothing: a failed request is terminal.
     const thirdBoss = stubBoss();
@@ -1302,7 +1346,7 @@ describe("[sync-critical] agent hydration requests", () => {
          accepted_items = 300, accepted_pages = 3, spent_credits = 3 where id = $1::uuid`,
       [dispatched.request!.executionRef],
     );
-    expect(await reconcileAgentHydrationDispatches(appContext)).toBe(1);
+    expect(await reconcileAgentHydrationDispatches(appContext, stubBoss())).toBe(1);
     const settled = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(settled.request?.state).toBe("partially_completed");
     expect(settled.request?.lastError).toBe("budget_exhausted");
@@ -1320,7 +1364,7 @@ describe("[sync-critical] agent hydration requests", () => {
 
     // The job is `ready`: it is going to spend credits. Calling the request dead
     // now would take that spend out of the owner's view entirely.
-    expect(await sweepStuckAgentHydration(appContext)).toBe(0);
+    expect(await sweepStuckAgentHydration(appContext, stubBoss())).toBe(0);
     const alive = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(alive.request?.state).toBe("dispatching");
 
@@ -1331,7 +1375,7 @@ describe("[sync-critical] agent hydration requests", () => {
        where id = $1::uuid`,
       [alive.request!.executionRef],
     );
-    expect(await sweepStuckAgentHydration(appContext)).toBe(1);
+    expect(await sweepStuckAgentHydration(appContext, stubBoss())).toBe(1);
     const dead = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(dead.request?.state).toBe("failed");
   });
@@ -1376,6 +1420,198 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
     // The settle records what the run SPENT: every HTTP attempt, not the pages.
     expect(events.at(-1)?.detail.vendorCalls).toBe(4);
+  });
+
+  it("`completed` needs the EMPTY page: overlap or a short page alone settles partially_completed", async () => {
+    // Request 76dc13d6: one request, nothing new, `overlapFound` — and it was
+    // reported `completed` while its thread stayed `partial_window`.
+    for (const shape of [
+      { overlapFound: true, providerHistoryExhausted: false },
+      { overlapFound: false, providerHistoryExhausted: true },
+    ]) {
+      const { request } = await fileRequest("lora-2", CONVERSATION_REF, { idempotencyKey: randomUUID() });
+      await approve(request);
+      await setFlag("agentHydrationMode", "dispatch");
+      expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+
+      // Even a result that CALLS itself completed (written before the proof
+      // rule) is not believed without the empty page behind it.
+      await settleAgentHydrationFromBackfill(appContext, request.requestRef, {
+        ...vendorRun("completed", 1, 1),
+        ...shape,
+        emptyPageReached: false,
+        insertedMessages: 0,
+      });
+      const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+      expect(stored.request?.state, JSON.stringify(shape)).toBe("partially_completed");
+      expect(stored.request?.lastError).toBe("none");
+    }
+  });
+
+  it("the flag OFF still closes the request of a run dispatched before the flip", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
+
+    await setFlag("agentHydrationMode", "off");
+    const boss = crashedBoss();
+    const cycle = await runAgentHydrationCycle(appContext, boss);
+    expect(cycle.mode).toBe("off");
+    // Bookkeeping about work already dispatched goes on; nothing new starts.
+    expect(cycle.reconciled).toBe(1);
+    expect(boss.send).not.toHaveBeenCalled();
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("failed");
+  });
+
+  it("a completed job whose worker could not settle is settled from the job's result", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = await startRealBoss();
+    try {
+      expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(1);
+      const dispatched = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+      const [job] = await boss.fetch(TARGETED_THREAD_BACKFILL_QUEUE);
+      expect(job?.id).toBe(dispatched.request?.executionRef);
+
+      // Running — even past its deadline, a job pg-boss still owns is left.
+      await testDb!.pool.query(
+        "update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'",
+      );
+      const running = await runAgentHydrationCycle(appContext, boss);
+      expect(running.reconciled + running.swept).toBe(0);
+
+      // The run finished; its own settle was lost (the database blinked).
+      await boss.complete(TARGETED_THREAD_BACKFILL_QUEUE, job!.id, vendorRun("completed", 3, 4));
+      const cycle = await runAgentHydrationCycle(appContext, boss);
+      expect(cycle.reconciled).toBe(1);
+      const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+      expect(stored.request).toMatchObject({ state: "completed", acceptedItems: 75, acceptedPages: 3 });
+      const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+      expect(events.at(-1)?.detail.vendorCalls).toBe(4);
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("a failed job settles only once its run is provably gone, with the spend its error carries", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = await startRealBoss();
+    try {
+      expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(1);
+      const [job] = await boss.fetch(TARGETED_THREAD_BACKFILL_QUEUE);
+      // What the worker's TargetedThreadBackfillRunError serializes to.
+      await boss.fail(TARGETED_THREAD_BACKFILL_QUEUE, job!.id, {
+        name: "TargetedThreadBackfillRunError",
+        message: "Bad gateway",
+        failureClass: "fansly_502",
+        result: vendorRun("partial", 2, 3),
+      });
+      const stillDispatching = async () =>
+        (await findAgentHydrationRequestByRef(testDb!.db, request.requestRef)).request?.state;
+
+      // Just failed: pg-boss fails a job before its handler is gone.
+      expect((await runAgentHydrationCycle(appContext, boss)).reconciled).toBe(0);
+      expect(await stillDispatching()).toBe("dispatching");
+
+      // Past the grace, but the run still holds the page lease (an expired
+      // job's handler walks on), even past the deadline.
+      await backdateJobCompletion(job!.id);
+      await testDb!.pool.query(
+        "update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'",
+      );
+      await holdPageLease(`targeted-thread-backfill:4242:${job!.id}`);
+      const held = await runAgentHydrationCycle(appContext, boss);
+      expect(held.reconciled + held.swept).toBe(0);
+      expect(await stillDispatching()).toBe("dispatching");
+
+      // A lease that names no job (an older worker) might be this run: held too.
+      await holdPageLease("targeted-thread-backfill:4242");
+      expect((await runAgentHydrationCycle(appContext, boss)).reconciled).toBe(0);
+
+      // A lease named after ANOTHER job is not this run.
+      await holdPageLease(`targeted-thread-backfill:4242:${randomUUID()}`);
+      expect((await runAgentHydrationCycle(appContext, boss)).reconciled).toBe(1);
+      const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+      expect(stored.request).toMatchObject({
+        state: "failed", lastError: "vendor_unavailable", acceptedItems: 50, acceptedPages: 2,
+      });
+      const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+      expect(events.at(-1)?.detail).toMatchObject({ vendorCalls: 3, cause: "fansly_502" });
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("a job still queued past its deadline keeps its request open; it is not swept from under the run", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = await startRealBoss();
+    try {
+      expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(1);
+      await testDb!.pool.query(
+        `update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute',
+           dispatched_at = now() - interval '31 minutes'`,
+      );
+      // The single serial consumer has not reached it yet. Sweeping it now let
+      // the job run later with its outcome and spend lost (the settle found the
+      // request already failed).
+      const cycle = await runAgentHydrationCycle(appContext, boss);
+      expect(cycle.reconciled + cycle.swept).toBe(0);
+      const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+      expect(stored.request?.state).toBe("dispatching");
+    } finally {
+      await boss.stop();
+    }
+  }, 30_000);
+
+  it("an INDETERMINATE send whose job never landed settles failed after the grace, spending nothing", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const flaky = {
+      send: vi.fn(async () => {
+        throw new Error("connection reset before the insert");
+      }),
+      findJobs: vi.fn(async () => []),
+    } as unknown as Parameters<typeof runAgentHydrationCycle>[1];
+    await runAgentHydrationCycle(appContext, flaky);
+    // Within the grace the send may still be landing: left alone.
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).reconciled).toBe(0);
+
+    await testDb!.pool.query(
+      "update agent_hydration_requests set dispatched_at = now() - interval '5 minutes'",
+    );
+    expect((await runAgentHydrationCycle(appContext, stubBoss())).reconciled).toBe(1);
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request?.state).toBe("failed");
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    // No job, no run, no vendor request: a KNOWN zero, so nothing is reserved.
+    expect(events.at(-1)?.detail).toMatchObject({ cause: "job_missing", vendorCalls: 0 });
+  });
+
+  it("a run that throws before its lease settles its request at once, with zero spend", async () => {
+    const { request } = await fileRequest();
+    await approve(request);
+    await setFlag("agentHydrationMode", "dispatch");
+    const boss = stubBoss();
+    expect((await runAgentHydrationCycle(appContext, boss)).dispatched).toBe(1);
+    const [, data, options] = boss.send.mock.calls[0] as unknown as [string, unknown, { id: string }];
+
+    // The fixture page has no stored session: the run fails resolving it,
+    // before the page lease and before any Fansly request.
+    await expect(handleTargetedThreadBackfillJobs(appContext, [{ id: options.id, data }]))
+      .rejects.toThrow(/no stored platform credentials/);
+
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request).toMatchObject({ state: "failed", lastError: "vendor_unavailable" });
+    const events = await listAgentHydrationEvents(testDb!.db, stored.request!.id);
+    expect(events.at(-1)?.detail).toMatchObject({ vendorCalls: 0, cause: "internal" });
   });
 
   it("an expired approval is never dispatched", async () => {
@@ -1686,15 +1922,11 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
     // All 80 were available again; 40 remain after this approval.
     expect(second.autoApprove?.budgetRemaining).toBe(40);
 
-    // The second run's worker died: the sweeper settles it `timeout`, and the
-    // spend it may have made stays counted.
-    await testDb!.pool.query(
-      `update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'
-       where state = 'dispatching'`,
-    );
+    // The second run's worker died: reconciliation settles it `timeout` from
+    // the failed job, and the spend it may have made stays counted.
     await fileRequest("lora-2", "third-thread-ref", { maxCalls: 40 });
-    const third = await runAgentHydrationCycle(appContext, stubBoss());
-    expect(third.swept).toBe(1);
+    const third = await runAgentHydrationCycle(appContext, crashedBoss());
+    expect(third.reconciled).toBe(1);
     expect(third.autoApprove?.approved).toBe(1);
     expect(third.autoApprove?.budgetRemaining).toBe(0);
   });
@@ -1862,14 +2094,11 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
     const first = (await fileRequest("lora-2", CONVERSATION_REF, { maxCalls: 40 })).request;
     await autopilot("enforce", 2000);
     expect((await runAgentHydrationCycle(appContext, stubBoss())).dispatched).toBe(1);
-    // The worker died mid-run (2026-09-30: a restart killed one): the sweeper
-    // settles `timeout` without knowing what the run spent.
-    await testDb!.pool.query(
-      `update agent_hydration_requests set dispatch_deadline_at = now() - interval '1 minute'
-       where state = 'dispatching'`,
-    );
-    const swept = await runAgentHydrationCycle(appContext, stubBoss());
-    expect(swept.swept).toBe(1);
+    // The worker died mid-run (2026-09-30: a restart killed one):
+    // reconciliation settles `timeout` from the failed job without knowing
+    // what the run spent.
+    const swept = await runAgentHydrationCycle(appContext, crashedBoss());
+    expect(swept.reconciled).toBe(1);
     expect(swept.autoApprove?.budgetRemaining).toBe(2000 - 40);
     expect((await findAgentHydrationRequestByRef(testDb!.db, first.requestRef)).request?.state)
       .toBe("failed");

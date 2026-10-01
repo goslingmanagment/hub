@@ -20,7 +20,10 @@
 //      message; a short page is read past, stored ground stops it `partial`.
 //   7. the 500 breaker of the point path: a thread-attributable failure is
 //      recorded on the thread's breaker and ends the run `vendor_error`; any
-//      other failure throws with the run's spend.
+//      other failure throws with the run's spend; and the worker settles the
+//      hydration request on every one of those ways out.
+
+import { randomUUID } from "node:crypto";
 
 import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -30,7 +33,10 @@ import {
   createFanslyPage,
   createModel,
   ensurePageSyncStates,
+  findAgentHydrationRequestByRef,
   getConversationSyncHealth,
+  insertAgentKey,
+  listAgentHydrationEvents,
   listUnresolvedProjectionDebt,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   storeFanslySession,
@@ -51,6 +57,7 @@ import { emptyDmMessagesCursorState } from "../apps/runtime/src/services/sync/cu
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   ensureTargetedThreadBackfillQueue,
+  isTargetedThreadBackfillLeaseLive,
   readTargetedThreadBackfillJobStatus,
   runTargetedThreadBackfill,
   sendTargetedThreadBackfillJob,
@@ -303,6 +310,49 @@ async function countMessages(conversationId: number) {
     [conversationId],
   );
   return Number(result.rows[0]!.n);
+}
+
+/** A hydration request already `dispatching` the job `executionRef`, as the
+ *  executor's claim leaves it — the row the worker must settle. */
+async function seedDispatchingHydrationRequest(input: {
+  pageId: number;
+  threadId: number;
+  executionRef: string;
+}) {
+  const key = await insertAgentKey(appContext.db, {
+    name: `hydration-${input.executionRef.slice(0, 8)}`,
+    keyPrefix: "ahk_test",
+    keyDigest: randomUUID().replaceAll("-", ""),
+    capabilities: ["request:hydration"],
+    pageIds: [input.pageId],
+    dailyRequestBudget: 100,
+    dailyRowBudget: 1000,
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    createdBy: null,
+  });
+  const requestRef = randomUUID();
+  await testDb!.pool.query(`
+    insert into agent_hydration_requests (
+      request_ref, agent_key_id, page_id, conversation_ref, thread_id, state,
+      target_before_message_ref, reason_sha256, reason_length, idempotency_key,
+      request_fingerprint, coverage_fingerprint, admissible, decision_approved,
+      decision_source, decision_allow_mark_read, decision_max_calls, decision_max_pages,
+      expires_at, decided_at, dispatched_at, dispatch_deadline_at, execution_lane,
+      execution_ref, dispatch_count, row_version
+    ) values (
+      $1, $2, $3, $4, $5, 'dispatching', 'a10', repeat('a', 64), 10, gen_random_uuid(),
+      repeat('b', 64), repeat('c', 64), true, true, 'owner', false, 40, 40,
+      now() + interval '1 day', now(), now(), now() + interval '30 minutes', 'vendor_paid_low',
+      $6, 1, 2
+    )
+  `, [requestRef, key.id, input.pageId, TARGET_GROUP_ID, input.threadId, input.executionRef]);
+  return requestRef;
+}
+
+async function settledRequest(requestRef: string) {
+  const { request } = await findAgentHydrationRequestByRef(appContext.db, requestRef);
+  const events = await listAgentHydrationEvents(appContext.db, request!.id);
+  return { request: request!, last: events.at(-1)! };
 }
 
 beforeAll(async () => {
@@ -1431,4 +1481,111 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(calls).toHaveLength(0);
   }, 120_000);
 
+  it("names its job in the page lease, so a live run is told apart from any other", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const jobId = randomUUID();
+    const seen: Array<{ owner: string | null; own: boolean; other: boolean }> = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, [], {
+        beforeReturn: async () => {
+          const owner = await testDb!.pool.query<{ owner: string | null }>(
+            "select lease_owner as owner from page_sync_states where page_id = $1 and stream = 'dm_messages'",
+            [page.id],
+          );
+          seen.push({
+            owner: owner.rows[0]!.owner,
+            own: await isTargetedThreadBackfillLeaseLive(appContext.db, { pageId: page.id, jobId }),
+            other: await isTargetedThreadBackfillLeaseLive(appContext.db, {
+              pageId: page.id, jobId: randomUUID(),
+            }),
+          });
+        },
+      }) as never,
+    };
+
+    await handleTargetedThreadBackfillJobs(appContext, [{ id: jobId, data: { threadId: targetThreadId } }]);
+
+    expect(seen[0]).toEqual({
+      owner: `targeted-thread-backfill:${process.pid}:${jobId}`, own: true, other: false,
+    });
+    expect(await isTargetedThreadBackfillLeaseLive(appContext.db, { pageId: page.id, jobId })).toBe(false);
+  }, 120_000);
+
+  it("the worker settles a request whose run threw, with the run's real spend, and still fails the job", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const jobId = randomUUID();
+    const requestRef = await seedDispatchingHydrationRequest({
+      pageId: page.id, threadId: targetThreadId, executionRef: jobId,
+    });
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, [], {
+        beforeReturn: async ({ callIndex }) => {
+          if (callIndex === 1) {
+            throw new FanslyApiError("Bad gateway", 502);
+          }
+        },
+      }) as never,
+    };
+
+    await expect(handleTargetedThreadBackfillJobs(appContext, [{
+      id: jobId,
+      data: { threadId: targetThreadId, ignoreRetentionLimit: true, hydrationRequestRef: requestRef },
+    }])).rejects.toThrow("Bad gateway");
+
+    // Closed at once — not `dispatching` until a sweep 30 minutes later.
+    const { request, last } = await settledRequest(requestRef);
+    expect(request).toMatchObject({
+      state: "failed", lastError: "vendor_unavailable", acceptedItems: 25, acceptedPages: 1,
+    });
+    expect(last.detail).toMatchObject({ vendorCalls: 2, cause: "fansly_502" });
+  }, 120_000);
+
+  it("the worker settles a vendor_error run failed/quarantined with its spend", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const jobId = randomUUID();
+    const requestRef = await seedDispatchingHydrationRequest({
+      pageId: page.id, threadId: targetThreadId, executionRef: jobId,
+    });
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, [], {
+        beforeReturn: async () => {
+          throw new FanslyApiError("Fansly answered 500", 500);
+        },
+      }) as never,
+    };
+
+    const output = await handleTargetedThreadBackfillJobs(appContext, [{
+      id: jobId,
+      data: { threadId: targetThreadId, ignoreRetentionLimit: true, hydrationRequestRef: requestRef },
+    }]);
+
+    expect(output).toMatchObject({ outcome: "vendor_error", requestAttempts: 1 });
+    const { request, last } = await settledRequest(requestRef);
+    expect(request).toMatchObject({ state: "failed", lastError: "quarantined", acceptedPages: 0 });
+    expect(last.detail).toMatchObject({ vendorCalls: 1 });
+  }, 120_000);
+
+  it("a job whose payload cannot run settles its request at once, spending nothing", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const jobId = randomUUID();
+    const requestRef = await seedDispatchingHydrationRequest({
+      pageId: page.id, threadId: targetThreadId, executionRef: jobId,
+    });
+    const calls: AdapterCall[] = [];
+    appContext = { ...appContext, adapter: messagesAdapter({}, calls) as never };
+
+    const output = await handleTargetedThreadBackfillJobs(appContext, [{
+      id: jobId,
+      data: { threadId: "not-a-thread", hydrationRequestRef: requestRef },
+    }]);
+
+    expect(output).toBeUndefined();
+    expect(calls).toHaveLength(0);
+    const { request, last } = await settledRequest(requestRef);
+    expect(request).toMatchObject({ state: "failed", lastError: "vendor_unavailable" });
+    expect(last.detail).toMatchObject({ vendorCalls: 0, cause: "job_data_invalid" });
+  }, 120_000);
 });
