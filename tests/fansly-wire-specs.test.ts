@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type * as FanslyPackage from "@agency_hub_core/fansly";
 import type {
@@ -179,7 +179,6 @@ describe("Fansly wire specs against the adapter", () => {
       session: SESSION,
       proxy: { url: "http://proxy.example:8080" },
       sendGuard: createTestFanslySendGuard(),
-      rateLimitWaiter: vi.fn(async () => 0),
       requestObserver,
       remainingAttempts: () => 1,
     };
