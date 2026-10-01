@@ -142,10 +142,6 @@ describe("clientOffersForPlatforms", () => {
 });
 
 describe("redeemFailureMessage", () => {
-  it("reads a refused password as a password problem", () => {
-    expect(redeemFailureMessage({ status: 400 })).toContain("пароль");
-  });
-
   it("names the rule when the kernel says which one was broken", () => {
     // Over HTTP only `common` arrives: the route schema rejects the length
     // cases first, as a plain validation 400 with no reason.

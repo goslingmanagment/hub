@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   cleanupAdapterHarness,
@@ -42,7 +42,6 @@ describe("Fansly subscribers adapter", () => {
         authorization: "token",
       },
       proxy: { url: "socks5://proxy.example:1080" },
-      rateLimitWaiter: vi.fn(async () => 0),
     }, {
       offset: 0,
       limit: 2,
