@@ -800,6 +800,13 @@ export function buildProgram() {
   const program = new Command();
 
   program.name("pnpm cli");
+  // An option belongs to the command it follows. Without this the root hands
+  // every option after the first unknown one to the first-level command, so
+  // `sync` (which has its own `--page`) would swallow the `--page` of
+  // `sync page mode|pause|resume|override|status`, `sync why` and
+  // `sync ownership confirm-stopped`. No other group declares options, and
+  // the subcommands created below inherit the setting.
+  program.enablePositionalOptions();
 
   const model = program.command("model");
 

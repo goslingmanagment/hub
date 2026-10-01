@@ -19,7 +19,9 @@ import {
   getWorkForStatus,
   heartbeatSyncPageOwner,
   insertAdmission,
+  countRecentFailedSubjects,
   issueSyncSwitchCapability,
+  lastRateLimitAt,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
   listSyncPages,
@@ -1148,5 +1150,61 @@ describe("the takeover floor (I5) and the pace audit", () => {
         gapMs: SYNC_PACE_AUDIT_LOOKBACK_MS + 1_000,
       });
     }
+  }, 120_000);
+});
+
+describe("the capture's reads of the journal (under the page row lock)", () => {
+  it("read only the attempts admitted within their bound, however long the journal is", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("rate-limit-lookback");
+    const generation = await own(pageId);
+    const withinMs = 70 * 60_000;
+    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                     admitted_at, sent_at, completed_at, send_mark, operation, request, outcome, http_status`;
+    const insert = async (shadow: boolean, admittedAt: Date, status: number): Promise<number> => {
+      const rows = await query<{ id: string }>(
+        `insert into sync_attempts (${columns})
+         values ($1, $2::boolean, 'posts.refresh', '', 'planned', $3, 2000, 0.1, 2200, $4, $4,
+                 $4::timestamptz + interval '5 seconds', 'request_start', 'posts.page', '{}'::jsonb, 'response', $5)
+         returning id::text`,
+        [pageId, shadow, generation.toString(), admittedAt, status],
+      );
+      return Number(rows[0]!.id);
+    };
+    // 30 days of answers (one every 2 min): a 429 among them every day, a
+    // subject failure every third.
+    const now = Date.now();
+    await query(
+      `insert into sync_attempts (${columns}, error_class)
+       select $1, false, 'posts.refresh', 'subject-' || n, 'planned', $2, 2000, 0.1, 2200, t, t, t + interval '1 second',
+              'request_start', 'posts.page', '{}'::jsonb, 'response', case when n % 720 = 0 then 429 else 200 end,
+              case when n % 3 = 0 then 'subject_failure' end
+         from generate_series(1, 21600) n, lateral (select $3::timestamptz - n * interval '2 minutes') s(t)
+        where t < $3::timestamptz - interval '2 hours'`,
+      [pageId, generation.toString(), new Date(now)],
+    );
+    await query("analyze sync_attempts");
+
+    // Every 429 of the journal is older than the bound: the ladder has reset.
+    const read = await captureStatement(() => lastRateLimitAt(db(), { pageId, withinMs }));
+    expect(read.result).toBeNull();
+    expect(await heapVisits(read, "sync_attempts")).toBeLessThan(50);
+
+    const failed = await captureStatement(() => countRecentFailedSubjects(db(), { pageId, file: "posts", windowMs: 600_000 }));
+    expect(failed.result).toBe(0);
+    expect(await heapVisits(failed, "sync_attempts")).toBeLessThan(50);
+
+    // A 429 inside the bound is the newest one, by its completion.
+    const recent = new Date(now - 30 * 60_000);
+    const recentId = await insert(false, recent, 429);
+    expect((await lastRateLimitAt(db(), { pageId, withinMs }))?.getTime()).toBe(recent.getTime() + 5_000);
+    // The outcome being captured does not count, nor does a shadow attempt.
+    expect(await lastRateLimitAt(db(), { pageId, withinMs, excludeAttemptId: recentId })).toBeNull();
+    await query("delete from sync_attempts where id = $1", [recentId]);
+    await insert(true, recent, 429);
+    expect(await lastRateLimitAt(db(), { pageId, withinMs })).toBeNull();
+    // Admitted just past the bound: forgotten.
+    await insert(false, new Date(now - withinMs - 60_000), 429);
+    expect(await lastRateLimitAt(db(), { pageId, withinMs })).toBeNull();
   }, 120_000);
 });

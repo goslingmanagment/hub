@@ -51,9 +51,12 @@ import {
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../services/sync/fansly-cdn-tokens.ts";
 import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
+import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import {
   classifyWireOutcome,
+  escalateResourceHold,
   onOutcome,
+  RATE_LIMIT_LADDER_RESET_MS,
   RESOURCE_BREAKER_WINDOW_MS,
   RESOURCE_HOLD_EXEMPT_KEYS,
   resourceFileOf,
@@ -62,7 +65,7 @@ import {
   type PageErrorState,
   type ResourceHoldEntry,
 } from "./errors.ts";
-import type { Admission, SlotGrant } from "./pacer.ts";
+import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
 import type { AlertSink, Clock, Metrics, Rng } from "./ports.ts";
 import {
   demandToUpsert,
@@ -214,6 +217,11 @@ const DEFERRED_RETRY_LADDER: ReadonlyArray<{ ageBelowMs: number; retryInMs: numb
 const DEFERRED_RETRY_CAP_MS = 60_000;
 /** A journaled body unreadable for longer than this is quarantined. */
 export const PAYLOAD_UNAVAILABLE_QUARANTINE_MS = 600_000;
+/** How far back the capture looks for the page's newest 429 (by admission):
+ *  the [A8] decay hour plus FLOOR_LOOKBACK_MS, which is far longer than an
+ *  admission → completion span (send window + request timeout) and covers
+ *  app/DB clock skew. An older 429 has already reset the ladder. */
+export const RATE_LIMIT_LOOKBACK_MS = RATE_LIMIT_LADDER_RESET_MS + FLOOR_LOOKBACK_MS;
 
 function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => body(tx as unknown as Database));
@@ -629,7 +637,11 @@ export async function capture(
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
       page: pageErrorState(page),
-      lastRateLimitAt: await lastRateLimitAt(tx, { pageId: d.pageId, excludeAttemptId: admission.attemptId }),
+      // The newest 429 matters only while the 429 ladder is above step 0
+      // (`rateLimitStep`); the steady state reads nothing.
+      lastRateLimitAt: page.holdStep > 0
+        ? await lastRateLimitAt(tx, { pageId: d.pageId, withinMs: RATE_LIMIT_LOOKBACK_MS, excludeAttemptId: admission.attemptId })
+        : null,
       subjectState: {
         failureCount: admission.work.failureCount,
         breakerUntil: admission.work.breakerUntil,
@@ -645,7 +657,12 @@ export async function capture(
         })
         : 0,
     });
-    await writeOutcomeDecision(tx, d, admission, decision, module);
+    await writeOutcomeDecision(tx, d, {
+      attemptId: admission.attemptId,
+      work: admission.work,
+      demandRevision: admission.demandRevision,
+      subjectQueue: admission.spec.subjectQueue === true,
+    }, decision, module);
     return { decision, paceGapMs: captured.paceGapMs };
   });
 
@@ -665,12 +682,23 @@ export async function capture(
   };
 }
 
+/** What an outcome decision is written against: the attempt and its work. */
+interface OutcomeTarget {
+  attemptId: number;
+  /** Null when the attempt's work row is gone: only the page and the attempt
+   *  take the decision. */
+  work: SyncWorkRow | null;
+  /** The work's demand revision the attempt served (I11). */
+  demandRevision: number;
+  subjectQueue: boolean;
+}
+
 async function writeOutcomeDecision(
   tx: Database,
   d: CommitDeps,
-  admission: AdmissionRecord,
+  target: OutcomeTarget,
   decision: OutcomeDecision,
-  module: ResourceModule,
+  module: ResourceModule | null,
 ): Promise<void> {
   const fenced = { pageId: d.pageId, generation: d.generation };
   const hold = decision.pageHold;
@@ -689,11 +717,13 @@ async function writeOutcomeDecision(
     await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: null });
   }
   if (decision.quarantineAttempt) {
-    await markAttemptQuarantined(tx, { attemptId: admission.attemptId, error: decision.errorClass });
+    await markAttemptQuarantined(tx, { attemptId: target.attemptId, error: decision.errorClass });
   }
-  const subjectQueue = admission.spec.subjectQueue === true;
-  if (subjectQueue && decision.subjectBreaker !== null && module.onSubjectOutcome !== undefined) {
-    await module.onSubjectOutcome(tx, admission.work, {
+  const work = target.work;
+  if (work === null) return;
+  const subjectQueue = target.subjectQueue;
+  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
+    await module.onSubjectOutcome(tx, work, {
       kind: decision.subjectBreaker.terminal ? "terminal" : "failure",
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
@@ -707,34 +737,34 @@ async function writeOutcomeDecision(
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
     }
     : undefined;
-  const work = decision.work;
-  switch (work.action) {
+  const next = decision.work;
+  switch (next.action) {
     case "apply":
       return;
     case "reopen":
       await settleWork(tx, {
-        workId: admission.work.id,
+        workId: work.id,
         generation: d.generation,
-        servedRevision: admission.demandRevision,
+        servedRevision: target.demandRevision,
         satisfiesRevision: false,
-        nextDueAt: work.dueAt,
-        waitingReason: work.waitingReason,
-        waitingUntil: work.waitingUntil,
+        nextDueAt: next.dueAt,
+        waitingReason: next.waitingReason,
+        waitingUntil: next.waitingUntil,
         lastErrorClass: decision.attemptErrorClass,
         ...(breaker === undefined ? {} : { breaker }),
       });
       return;
     case "quarantine":
-      await quarantineWork(tx, { workId: admission.work.id, generation: d.generation, errorClass: work.reason });
+      await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: next.reason });
       return;
     case "close":
       await settleWork(tx, {
-        workId: admission.work.id,
+        workId: work.id,
         generation: d.generation,
-        servedRevision: admission.demandRevision,
+        servedRevision: target.demandRevision,
         satisfiesRevision: true,
         close: "done",
-        closeReason: work.closeReason,
+        closeReason: next.closeReason,
         lastErrorClass: decision.attemptErrorClass,
         ...(breaker === undefined ? {} : { breaker }),
       });
@@ -782,18 +812,28 @@ export function errorName(error: unknown): string {
   return "unknown";
 }
 
+/** What a deterministic apply error stops beyond its own work (§3.7.3):
+ *  an identity error the whole page (§3.8, §5.1), a wrong transactions writer
+ *  the resource's file (§5.6). */
+export type ApplyErrorScope = "page_identity" | "resource_writer";
+
+export function applyErrorScope(error: unknown): ApplyErrorScope | null {
+  for (const link of errorChain(error)) {
+    if (link instanceof PlatformAccountIdentityImmutableError || link instanceof PlatformAccountIdentityConflictError) {
+      return "page_identity";
+    }
+    if (link instanceof WrongTransactionsWriterError) return "resource_writer";
+  }
+  return null;
+}
+
 /** The apply error classes of design §3.7.3. */
 export function classifyApplyError(error: unknown): ApplyErrorKind {
   for (const link of errorChain(error)) {
     if (link instanceof ApplyDeferred || isCapturePayloadUnavailable(link)) return "deferred";
-    if (
-      link instanceof FanslyContractViolationError ||
-      link instanceof PlatformAccountIdentityImmutableError ||
-      link instanceof PlatformAccountIdentityConflictError
-    ) {
-      return "deterministic";
-    }
+    if (link instanceof FanslyContractViolationError) return "deterministic";
   }
+  if (applyErrorScope(error) !== null) return "deterministic";
   const state = sqlStateOf(error);
   if (state !== null) {
     if (state.startsWith("22") || state.startsWith("23")) return "deterministic";
@@ -930,12 +970,14 @@ export async function apply(
 
 async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown): Promise<ApplyErrorKind> {
   const kind = classifyApplyError(error);
+  const scope = kind === "deterministic" ? applyErrorScope(error) : null;
   const name = errorName(error);
-  const quarantined = await inTx(d.db, async (tx) => {
+  const settled = await inTx(d.db, async (tx): Promise<{ quarantined: boolean; alerts: AlertDecision[] }> => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     const attempt = await lockAttemptForApply(tx, attemptId);
-    if (attempt === null) return false;
-    const answerAgeMs = Math.max(0, d.clock.wallNow().getTime() - (attempt.completedAt ?? attempt.admittedAt).getTime());
+    if (attempt === null) return { quarantined: false, alerts: [] };
+    const now = d.clock.wallNow();
+    const answerAgeMs = Math.max(0, now.getTime() - (attempt.completedAt ?? attempt.admittedAt).getTime());
     const retryInMs = deferredRetryInMs(answerAgeMs);
     let quarantine = false;
     if (kind === "deferred" || kind === "transient") {
@@ -954,15 +996,74 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
       });
       quarantine = recorded?.quarantined === true;
     }
-    if (quarantine && attempt.workId !== null) {
+    if (!quarantine) return { quarantined: false, alerts: [] };
+
+    const quarantinedAlert: AlertDecision = { subKey: "live_degraded", detail: "quarantined" };
+    if (scope === "page_identity") {
+      // The credentials answer for another account: no further request of
+      // this page goes out with them. Through `onOutcome` like any outcome
+      // (§3.8): the indefinite `identity_mismatch` hold under this credentials
+      // generation (the gate admits nothing until it changes), the work
+      // quarantined, alerts 1 and 2.
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+      const work = attempt.workId === null ? null : await getSyncWork(tx, attempt.workId);
+      const subjectQueue = d.registry.spec(attempt.resource)?.subjectQueue === true;
+      const decision = onOutcome({
+        errorClass: "identity_mismatch",
+        now,
+        resource: attempt.resource,
+        subject: attempt.subject,
+        httpStatus: attempt.httpStatus,
+        retryAfterMs: null,
+        page: pageErrorState(page),
+        // Read only by the 429 ladder.
+        lastRateLimitAt: null,
+        subjectState: {
+          failureCount: work?.failureCount ?? 0,
+          breakerUntil: work?.breakerUntil ?? null,
+          blockedByVendorAt: work?.blockedByVendorAt ?? null,
+        },
+        subjectQueue,
+        recentFailedSubjects: 0,
+      });
+      // The decision has no subject breaker, so no module hook is needed.
+      await writeOutcomeDecision(tx, d, {
+        attemptId,
+        work,
+        demandRevision: attempt.demandRevision ?? work?.demandRevision ?? 0,
+        subjectQueue,
+      }, decision, null);
+      return { quarantined: true, alerts: decision.alerts };
+    }
+    if (scope === "resource_writer") {
+      // Another writer owns this page's ledger: the file waits on the
+      // resource-hold ladder instead of failing every one of its works.
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+      const hold = escalateResourceHold(
+        page.resourceHolds as Record<string, ResourceHoldEntry>,
+        attempt.resource,
+        now,
+      );
+      if (hold.action === "set") {
+        await setResourceHold(tx, {
+          pageId: d.pageId,
+          generation: d.generation,
+          file: hold.file,
+          hold: { until: hold.until, step: hold.step },
+        });
+      }
+    }
+    if (attempt.workId !== null) {
       await quarantineWork(tx, { workId: attempt.workId, generation: d.generation, errorClass: `apply:${name}` });
     }
-    return quarantine;
+    return { quarantined: true, alerts: [quarantinedAlert] };
   });
   d.metrics.increment("sync_apply_errors", { kind, error: name });
   const log = kind === "transient" || kind === "deferred" ? d.logger.warn.bind(d.logger) : d.logger.error.bind(d.logger);
-  log({ pageId: d.pageId, attemptId, kind, error: name, quarantined }, "Fansly sync: apply failed");
-  if (quarantined) await openAlerts(d, [{ subKey: "live_degraded", detail: "quarantined" }], { attemptId });
+  log({ pageId: d.pageId, attemptId, kind, error: name, quarantined: settled.quarantined }, "Fansly sync: apply failed");
+  if (settled.alerts.length > 0) await openAlerts(d, settled.alerts, { attemptId });
   return kind;
 }
 

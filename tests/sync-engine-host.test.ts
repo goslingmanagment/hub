@@ -5,15 +5,27 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 
 import { FANSLY_SEND_HOLDER_ROLES } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
+import { WrongTransactionsWriterError } from "../apps/runtime/src/services/transactions-writer-gate.ts";
 import { pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
 import {
   ApplyDeferred,
+  applyErrorScope,
   classifyApplyError,
   deferredRetryInMs,
   errorName,
   FanslyContractViolationError,
+  RATE_LIMIT_LOOKBACK_MS,
   requestJsonOf,
 } from "../apps/runtime/src/sync/engine/commit.ts";
+import {
+  escalateResourceHold,
+  onOutcome,
+  RATE_LIMIT_LADDER_RESET_MS,
+  RESOURCE_HOLD_LADDER_MS,
+  type OutcomeClass,
+  type OutcomeInput,
+} from "../apps/runtime/src/sync/engine/errors.ts";
+import { REQUEST_TIMEOUT_MS, SEND_WINDOW_MS } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
@@ -155,6 +167,10 @@ describe("what a pick leaves out", () => {
   });
 });
 
+function wrongWriter(): WrongTransactionsWriterError {
+  return new WrongTransactionsWriterError({ platformAccountId: 7, attemptedWriter: "fansly", assignedWriter: "ofapi" });
+}
+
 describe("apply errors (design §3.7.3)", () => {
   const sqlError = (code: string) => Object.assign(new Error("driver text with SQL and parameters"), { code });
 
@@ -168,6 +184,8 @@ describe("apply errors (design §3.7.3)", () => {
     ["a contract violation", new FanslyContractViolationError("response", "no id"), "deterministic"],
     ["an identity change", new PlatformAccountIdentityImmutableError("lora-1", "1", "2"), "deterministic"],
     ["an identity conflict", new PlatformAccountIdentityConflictError("fansly", "1", "lora-2"), "deterministic"],
+    ["a wrong transactions writer", wrongWriter(), "deterministic"],
+    ["a wrapped identity change", new Error("apply failed", { cause: new PlatformAccountIdentityImmutableError("lora-1", "1", "2") }), "deterministic"],
     ["a serialization failure", sqlError("40001"), "transient"],
     ["a deadlock", sqlError("40P01"), "transient"],
     ["a lock timeout", sqlError("55P03"), "transient"],
@@ -181,6 +199,14 @@ describe("apply errors (design §3.7.3)", () => {
     expect(classifyApplyError(error)).toBe(kind);
   });
 
+  it("an identity error stops the page, a wrong transactions writer its resource file", () => {
+    expect(applyErrorScope(new PlatformAccountIdentityImmutableError("lora-1", "1", "2"))).toBe("page_identity");
+    expect(applyErrorScope(new PlatformAccountIdentityConflictError("fansly", "1", null))).toBe("page_identity");
+    expect(applyErrorScope(new Error("wrapped", { cause: wrongWriter() }))).toBe("resource_writer");
+    expect(applyErrorScope(sqlError("23505"))).toBeNull();
+    expect(applyErrorScope(new FanslyContractViolationError("response", "no id"))).toBeNull();
+  });
+
   it("journals an error class, never a message", () => {
     expect(errorName(sqlError("23505"))).toBe("23505");
     expect(errorName(new ApplyDeferred("erasure_busy"))).toBe("deferred:erasure_busy");
@@ -190,6 +216,66 @@ describe("apply errors (design §3.7.3)", () => {
   it("a deferred apply is retried 1 s → 5 s → 30 s → 60 s by the age of its answer", () => {
     expect([0, 4_999, 5_000, 29_999, 30_000, 299_999, 300_000, 3_600_000].map(deferredRetryInMs))
       .toEqual([1_000, 1_000, 5_000, 5_000, 30_000, 30_000, 60_000, 60_000]);
+  });
+});
+
+describe("the resource hold of a wrong transactions writer", () => {
+  const NOW = new Date("2026-10-02T12:00:00.000Z");
+  const iso = (offsetMs: number) => new Date(NOW.getTime() + offsetMs).toISOString();
+
+  it("climbs the 30 m → 2 h → 6 h ladder and keeps a hold in force", () => {
+    expect(escalateResourceHold({}, "transactions.head", NOW)).toEqual({
+      action: "set", file: "transactions", until: new Date(NOW.getTime() + RESOURCE_HOLD_LADDER_MS[0]!), step: 1,
+    });
+    const expired = { transactions: { until: iso(-1), step: 1, since: iso(-3_600_000) } };
+    expect(escalateResourceHold(expired, "transactions.rescan", NOW)).toEqual({
+      action: "set", file: "transactions", until: new Date(NOW.getTime() + RESOURCE_HOLD_LADDER_MS[1]!), step: 2,
+    });
+    const top = { transactions: { until: iso(-1), step: 7, since: iso(-3_600_000) } };
+    expect(escalateResourceHold(top, "transactions.head", NOW)).toMatchObject({
+      until: new Date(NOW.getTime() + RESOURCE_HOLD_LADDER_MS[2]!), step: 8,
+    });
+    const active = { transactions: { until: iso(60_000), step: 1, since: iso(-60_000) } };
+    expect(escalateResourceHold(active, "transactions.head", NOW)).toEqual({ action: "keep" });
+    expect(escalateResourceHold({}, "dm-messages.head", NOW)).toEqual({ action: "keep" });
+  });
+});
+
+describe("the capture's newest-429 read", () => {
+  const NOW = new Date("2026-10-02T12:00:00.000Z");
+  const input = (errorClass: OutcomeClass, lastRateLimitAt: Date | null): OutcomeInput => ({
+    errorClass,
+    now: NOW,
+    resource: "posts.refresh",
+    subject: "",
+    httpStatus: errorClass === "rate_limit" ? 429 : 200,
+    retryAfterMs: null,
+    page: {
+      holdKind: null,
+      holdUntil: null,
+      holdSince: null,
+      holdStep: 0,
+      holdDetail: {},
+      networkFailureStreak: 0,
+      resourceHolds: {},
+      credentialsGeneration: "1",
+    },
+    lastRateLimitAt,
+    subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
+    subjectQueue: false,
+    recentFailedSubjects: 0,
+  });
+
+  it.each<OutcomeClass>([
+    "ok", "rate_limit", "auth", "identity_mismatch", "subject_failure", "subject_terminal",
+    "network", "contract", "cursor_stuck", "envelope_unsuccessful", "not_sent",
+  ])("is not needed at 429 step 0 (%s): the capture skips it", (errorClass) => {
+    const recent = new Date(NOW.getTime() - 60_000);
+    expect(onOutcome(input(errorClass, recent))).toEqual(onOutcome(input(errorClass, null)));
+  });
+
+  it("looks back past the decay hour by more than an admission → completion span", () => {
+    expect(RATE_LIMIT_LOOKBACK_MS - RATE_LIMIT_LADDER_RESET_MS).toBeGreaterThan(SEND_WINDOW_MS + REQUEST_TIMEOUT_MS);
   });
 });
 

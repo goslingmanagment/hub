@@ -138,6 +138,13 @@ A retry after an error is always a new attempt through the same admission.
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
 | refused before sending | `not_sent` | nothing learned: the work is admitted again |
 
+An apply that fails (`engine/commit.ts`, `classifyApplyError`) never stops the actor. A deferral (erasure fence busy,
+journal body unreadable) and a transient database error retry without counting; an unexpected error is counted and
+quarantined at the third try; a deterministic one (SQLSTATE class 22/23, contract) is quarantined at once, alert 2.
+Two deterministic errors stop more than their work: an identity error (`PlatformAccountIdentity*Error`) goes through
+`onOutcome` as `identity_mismatch` (page hold until new credentials, alerts 1 and 2), and a wrong transactions writer
+holds the resource file (30 min → 2 h → 6 h).
+
 ## Recipes
 
 | Change | Where |
