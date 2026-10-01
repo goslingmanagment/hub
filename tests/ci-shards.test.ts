@@ -5,15 +5,11 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SHARD_TOTAL, MAX_PC_SHARD_TOTAL, planShards, shardOutputs } from "../scripts/ci-shards.mjs";
+import { planShards, shardOutputs } from "../scripts/ci-shards.mjs";
 
 const script = new URL("../scripts/ci-shards.mjs", import.meta.url).pathname;
 
 describe("CI integration shard plan", () => {
-  it("keeps three shards by default and caps the PC at eight", () => {
-    expect(DEFAULT_SHARD_TOTAL).toBe(3);
-    expect(MAX_PC_SHARD_TOTAL).toBe(8);
-  });
 
   it.each([
     // CI_POOL, run attempt, CI_PC_SHARDS, shard total

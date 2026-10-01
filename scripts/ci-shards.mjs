@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 // while "Re-run failed jobs" reuses this plan from the first attempt, so a
 // re-run leg keeps its shard total and the file split stays whole.
 export const DEFAULT_SHARD_TOTAL = 3;
-export const MAX_PC_SHARD_TOTAL = 8;
+const MAX_PC_SHARD_TOTAL = 8;
 
 export function planShards(env) {
   const onPc = env.CI_POOL === "pc" && env.RUN_ATTEMPT === "1";

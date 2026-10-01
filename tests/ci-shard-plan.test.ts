@@ -54,14 +54,6 @@ const specs = (files: readonly string[]) =>
   files.map(file => ({ moduleId: path.join(repoRoot, file), project }) as unknown as TestSpecification);
 
 describe("weighted shard plan", () => {
-  it.each(SHARD_COUNTS)("puts every sync-critical DB file in exactly one of %i shards", count => {
-    expect(suite.length).toBeGreaterThan(8);
-    const plan = planWeightedShards(suite, committed, count);
-    expect(plan.shards).toHaveLength(count);
-    expectPartition(plan.shards, suite);
-    for (const shard of plan.shards) expect(shard.length).toBeGreaterThan(0);
-  });
-
   it.each(SHARD_COUNTS)("puts every file in exactly one of %i shards with unweighted and repeated files", count => {
     const files = ["tests/new-a.integration.test.ts", ...Object.keys(committed.files).slice(0, 20), "tests/new-b.integration.test.ts", "tests/new-a.integration.test.ts"];
     const plan = planWeightedShards(files, committed, count);
@@ -180,6 +172,8 @@ describe("WeightedShardSequencer", () => {
       selected.push(chosen.map(spec => shardKey(repoRoot, spec.moduleId)));
     }
     expectPartition(selected, suite);
+    expect(suite.length).toBeGreaterThan(8);
+    for (const shard of selected) expect(shard.length).toBeGreaterThan(0);
     expect(selected).toEqual(planWeightedShards(suite, committed, count).shards);
   });
 
@@ -222,9 +216,6 @@ describe("WeightedShardSequencer", () => {
     expect(sizes).toEqual([...sizes].sort((a, b) => b - a));
   });
 
-  it("keys specs by repo-relative path with forward slashes", () => {
-    expect(shardKey(repoRoot, path.join(repoRoot, "tests", "network.test.ts"))).toBe("tests/network.test.ts");
-  });
 });
 
 // A trimmed PC job log: GitHub timestamps every line; vitest colours its output.

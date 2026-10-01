@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-export function countRawFetchSites() {
+function countRawFetchSites() {
   let output;
   try {
     output = execFileSync(

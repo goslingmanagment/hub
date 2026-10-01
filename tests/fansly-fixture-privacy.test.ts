@@ -337,18 +337,31 @@ describe("Fansly fixture privacy", () => {
     }
   });
 
-  it("keeps every WP-F2 engagement fixture structurally synthetic", async () => {
-    const fixtureNames = await listJsonFiles(ENGAGEMENT_FIXTURE_DIRECTORY);
+  // The same inspector for every Fansly shape: no URLs, no emails, no `@`, no
+  // credential-shaped keys, and every 15+ digit identifier structurally
+  // fabricated. Provenance is part of the fixture: `_fixture` says which live
+  // shape it mirrors and that the values are invented.
+  it.each([
+    // A comment body is a FAN'S OWN WORDS: a pasted capture would put a real
+    // person's sentence in the repository under a name.
+    ["WP-F5 comment", COMMENTS_FIXTURE_DIRECTORY, COMMENTS_FIXTURE_MAX_BYTES],
+    ["WP-F2 engagement", ENGAGEMENT_FIXTURE_DIRECTORY, ENGAGEMENT_FIXTURE_MAX_BYTES],
+    // Two catalog shapes embed raw media rows whose location/locations[]/
+    // variants[] are signed CDN URLs live; the fixtures carry placeholders.
+    ["WP-F3 catalog", CATALOG_FIXTURE_DIRECTORY, CATALOG_FIXTURE_MAX_BYTES],
+    // A real /it/amoie/stats response is 768 KB decoded: a fixture anywhere
+    // near that is a pasted capture, whatever its ids say.
+    ["WP-F1 statistics", STATS_FIXTURE_DIRECTORY, STATS_FIXTURE_MAX_BYTES],
+  ] as const)("keeps every %s fixture structurally synthetic", async (_label, directory, maxBytes) => {
+    const fixtureNames = await listJsonFiles(directory);
     expect(fixtureNames.length).toBeGreaterThan(0);
 
     for (const fixtureName of fixtureNames) {
-      const raw = await readFile(path.join(ENGAGEMENT_FIXTURE_DIRECTORY, fixtureName), "utf8");
-      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(ENGAGEMENT_FIXTURE_MAX_BYTES);
+      const raw = await readFile(path.join(directory, fixtureName), "utf8");
+      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(maxBytes);
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       expect(typeof parsed._fixture, fixtureName).toBe("string");
       expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
-      // The same inspector: no URLs, no emails, no `@`, no credential-shaped
-      // keys, and every 15+ digit identifier structurally fabricated.
       inspectStatsFixtureValue(parsed);
     }
   });
@@ -367,57 +380,4 @@ describe("Fansly fixture privacy", () => {
     }
   });
 
-  it("keeps every WP-F5 comment fixture structurally synthetic", async () => {
-    const fixtureNames = await listJsonFiles(COMMENTS_FIXTURE_DIRECTORY);
-    expect(fixtureNames.length).toBeGreaterThan(0);
-
-    for (const fixtureName of fixtureNames) {
-      const raw = await readFile(path.join(COMMENTS_FIXTURE_DIRECTORY, fixtureName), "utf8");
-      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(COMMENTS_FIXTURE_MAX_BYTES);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      expect(typeof parsed._fixture, fixtureName).toBe("string");
-      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
-      // The same inspector. It matters more here than anywhere else in this
-      // file: a comment body is a FAN'S OWN WORDS, and a pasted capture would
-      // put a real person's sentence in the repository under a name.
-      inspectStatsFixtureValue(parsed);
-    }
-  });
-
-  it("keeps every WP-F3 catalog fixture structurally synthetic", async () => {
-    const fixtureNames = await listJsonFiles(CATALOG_FIXTURE_DIRECTORY);
-    expect(fixtureNames.length).toBeGreaterThan(0);
-
-    for (const fixtureName of fixtureNames) {
-      const raw = await readFile(path.join(CATALOG_FIXTURE_DIRECTORY, fixtureName), "utf8");
-      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(CATALOG_FIXTURE_MAX_BYTES);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      expect(typeof parsed._fixture, fixtureName).toBe("string");
-      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
-      // The same inspector: no URLs, no emails, no `@`, no credential-shaped
-      // keys, and every 15+ digit identifier structurally fabricated. The
-      // no-URL half is load-bearing HERE and not decorative: two of these
-      // shapes embed raw media rows whose `location`/`locations[]`/`variants[]`
-      // are signed CDN URLs live, and the fixtures carry placeholders instead.
-      inspectStatsFixtureValue(parsed);
-    }
-  });
-
-  it("keeps every WP-F1 statistics fixture structurally synthetic", async () => {
-    const fixtureNames = await listJsonFiles(STATS_FIXTURE_DIRECTORY);
-    expect(fixtureNames.length).toBeGreaterThan(0);
-
-    for (const fixtureName of fixtureNames) {
-      const raw = await readFile(path.join(STATS_FIXTURE_DIRECTORY, fixtureName), "utf8");
-      // A real /it/amoie/stats response is 768 KB decoded. A fixture anywhere
-      // near that is a pasted capture, whatever its ids say.
-      expect(Buffer.byteLength(raw), fixtureName).toBeLessThan(STATS_FIXTURE_MAX_BYTES);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      // Provenance is part of the fixture: it says which live shape it mirrors
-      // and that the values are invented.
-      expect(typeof parsed._fixture, fixtureName).toBe("string");
-      expect(String(parsed._fixture)).toMatch(/SYNTHETIC/u);
-      inspectStatsFixtureValue(parsed);
-    }
-  });
 });

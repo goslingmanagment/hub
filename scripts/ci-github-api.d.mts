@@ -1,5 +1,3 @@
-export const DEFAULT_API_URL: string;
-export const API_TIMEOUT_MS: number;
 export function githubApi(
   endpoint: string,
   options?: {

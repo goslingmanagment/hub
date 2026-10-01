@@ -34,7 +34,7 @@ const REGEX_AFTER_WORD = new Set(["return", "typeof", "case", "do", "else", "in"
  * comments never count, and regex literals are skipped so a quote inside one
  * cannot throw the rest of the file out of step.
  */
-export function scanSource(source: string): { literals: Literal[]; code: string } {
+function scanSource(source: string): { literals: Literal[]; code: string } {
   const literals: Literal[] = [];
   const n = source.length;
   const code: string[] = [];

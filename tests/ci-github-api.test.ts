@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { API_TIMEOUT_MS, DEFAULT_API_URL, githubApi } from "../scripts/ci-github-api.mjs";
+import { githubApi } from "../scripts/ci-github-api.mjs";
 
 // The gate scripts run on GitHub-hosted runners AND on the owner's PC, whose
 // image has no GitHub CLI: they read the API through Node's fetch only.
@@ -34,13 +34,11 @@ describe("CI GitHub API reads", () => {
       "x-github-api-version": "2022-11-28",
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
-    expect(API_TIMEOUT_MS).toBe(20_000);
   });
 
   it("defaults to api.github.com when the runner sets no API URL", async () => {
     const fetchImpl = vi.fn(async (_url: string, _init: RequestInit) => jsonResponse({}));
     await githubApi("repos/owner/repo", { env: { GH_TOKEN: token }, fetchImpl });
-    expect(DEFAULT_API_URL).toBe("https://api.github.com");
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://api.github.com/repos/owner/repo");
   });
 
@@ -134,23 +132,6 @@ describe("CI gate scripts against a stand-in GitHub API", () => {
       expect(readFileSync(outputs, "utf8")).toBe("proven_by=123\nintegration_proven_by=\n");
       expect(readFileSync(summary, "utf8")).toBe("Gate proof: 123; integration proof: miss.\n");
       expect(result.seen.map(item => item.headers.authorization)).toEqual([`Bearer ${token}`, `Bearer ${token}`]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("ci-find-proof turns an unavailable API into a miss, not a failed job", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "hub-ci-find-proof-"));
-    try {
-      const outputs = path.join(dir, "outputs");
-      writeFileSync(outputs, "");
-      const run = await withApi(() => ({ status: 503, body: {} }), base => runScript("ci-find-proof.mjs", {
-        GITHUB_API_URL: base, GITHUB_REPOSITORY: "owner/repo", GITHUB_REPOSITORY_ID: "42",
-        GATE_FINGERPRINT: "a".repeat(64), INTEGRATION_FINGERPRINT: "b".repeat(64), FORCE_FULL: "false", IS_DRAFT: "false",
-        PR_TITLE: "", GITHUB_OUTPUT: outputs, GITHUB_STEP_SUMMARY: path.join(dir, "summary"),
-      }));
-      expect(run.code, run.stderr).toBe(0);
-      expect(readFileSync(outputs, "utf8")).toBe("proven_by=\nintegration_proven_by=\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

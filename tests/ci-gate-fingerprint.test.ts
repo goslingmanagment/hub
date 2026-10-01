@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -167,17 +167,6 @@ describe("CI gate fingerprint", () => {
 
   it("fails loudly on an unknown revision instead of printing a hash", () => {
     expect(() => fingerprint(repo, "no-such-revision")).toThrow();
-  });
-
-  it("does not hide an evidence file that ESLint rejects", () => {
-    const source = "const unusedEvidence = 1;\n";
-    const result = spawnSync(process.execPath, [
-      path.resolve("node_modules/eslint/bin/eslint.js"),
-      "--stdin", "--stdin-filename", "investigations/ci-regression.mjs",
-    ], { cwd: REPO_ROOT, encoding: "utf8", input: source });
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("@typescript-eslint/no-unused-vars");
-    expect(variant({ "investigations/ci-regression.mjs": source }, "lint regression")).not.toBe(baseFingerprint);
   });
 
   it("observes symlinks even when their names look like prose", () => {

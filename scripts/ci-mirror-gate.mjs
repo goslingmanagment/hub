@@ -15,11 +15,11 @@ export const GATE_CHECK_NAME = "Quality Gate";
 // `if:` is the inverse of METADATA_ONLY). That is how a mirror tells another
 // mirror's gate, a copy or a failed lookup, from a verdict.
 export const FINGERPRINT_CHECK_NAME = "Gate fingerprint";
-export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 
 // filter=all keeps older suites in the answer; the default (latest) can hide
 // the earlier runs behind this run's own in-progress check.
-export const CHECK_RUNS_QUERY = "filter=all&per_page=100";
+const CHECK_RUNS_QUERY = "filter=all&per_page=100";
 
 // The last 100 PR runs took at most 17 min (01.10.2026). The job's
 // timeout-minutes covers this wait plus checkout and a last poll.
@@ -30,7 +30,7 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
 
 /** The workflow run that produced a check run, read from the URLs GitHub returns. */
-export function runIdOf(checkRun) {
+function runIdOf(checkRun) {
   const url = checkRun?.html_url ?? checkRun?.details_url ?? "";
   return /\/actions\/runs\/(\d+)(?:[/?#]|$)/.exec(url)?.[1] ?? "";
 }
@@ -60,7 +60,7 @@ async function readAll(api, endpoint, key, what) {
 // id orders verdicts and covers re-run attempts (same run id, new check run).
 // started_at is when a runner picked the job up: a gate queued behind a busy
 // runner can start after a newer run's gate, and it ties at one-second steps.
-export async function readHead({ repo, headSha, currentRunId, api }) {
+async function readHead({ repo, headSha, currentRunId, api }) {
   const current = String(currentRunId);
   const runs = await readAll(api, `repos/${repo}/actions/runs?head_sha=${headSha}&per_page=${PAGE_SIZE}`, "workflow_runs", "workflow runs");
   const checkRuns = (await readAll(api, `repos/${repo}/commits/${headSha}/check-runs?${CHECK_RUNS_QUERY}`, "check_runs", "check runs"))
