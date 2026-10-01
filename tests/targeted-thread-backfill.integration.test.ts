@@ -16,6 +16,11 @@
 //   5. contention with the page's own chunks is waited out (bounded, no
 //      vendor request) instead of refused on first sight, and the run's
 //      result lands in pgboss.job.output where the CLI's --wait reads it.
+//   6. `completed` is a proof: an EMPTY page reached from the stored oldest
+//      message; a short page is read past, stored ground stops it `partial`.
+//   7. the 500 breaker of the point path: a thread-attributable failure is
+//      recorded on the thread's breaker and ends the run `vendor_error`; any
+//      other failure throws with the run's spend.
 
 import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -33,6 +38,7 @@ import {
   upsertFans,
   upsertPageDmMessages,
 } from "@agency_hub_core/db";
+import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
   encryptJson,
   type FanslySessionBundle,
@@ -49,6 +55,7 @@ import {
   runTargetedThreadBackfill,
   sendTargetedThreadBackfillJob,
   TARGETED_THREAD_BACKFILL_QUEUE,
+  TargetedThreadBackfillRunError,
   waitForTargetedThreadBackfillJob,
 } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import { handleTargetedThreadBackfillJobs } from "../apps/runtime/src/worker-services.ts";
@@ -84,6 +91,8 @@ interface AdapterHooks {
   beforeReturn?: (input: { groupId: string; callIndex: number }) => Promise<void>;
   /** Attempts the HTTP layer retried before this call's successful one. */
   retriesBefore?: (callIndex: number) => number;
+  /** The physical attempts the caller allows this call (null: no clamp). */
+  onAttemptAllowance?: (input: { callIndex: number; allowance: number | null }) => void;
 }
 
 /** Endless history: every call returns 25 fresh older ids and `done:false`. */
@@ -104,6 +113,7 @@ function messagesAdapter(
     async getMessagesPage(
       requestContext: {
         requestObserver?: { onRequestEvent(event: HttpRequestEvent): Promise<void> } | null;
+        remainingAttempts?: (() => number) | null;
       },
       params: { groupId: string; limit: number; before?: string | null },
     ) {
@@ -114,6 +124,10 @@ function messagesAdapter(
       });
       const callIndex = cursors.get(params.groupId) ?? 0;
       cursors.set(params.groupId, callIndex + 1);
+      hooks?.onAttemptAllowance?.({
+        callIndex,
+        allowance: requestContext.remainingAttempts?.() ?? null,
+      });
       // One logical request, every attempt announced the way executeObservedRequest
       // announces it: each retried attempt is started and closed as a retry.
       const requestId = `req-${calls.length}`;
@@ -309,7 +323,7 @@ beforeEach(async (context) => {
 });
 
 describe("targeted thread backfill (slice C′)", () => {
-  it("walks exactly the named thread, journals every page, and completes on exhaustion", async (context) => {
+  it("walks exactly the named thread, journals every page, and completes only on an EMPTY page", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -333,31 +347,35 @@ describe("targeted thread backfill (slice C′)", () => {
     expect(result).toMatchObject({
       threadId: targetThreadId,
       platformAccountId: page.id,
-      requests: 2,
+      requests: 3,
       insertedMessages: 3,
       providerHistoryExhausted: true,
+      emptyPageReached: true,
     });
 
     // EXACTLY the named thread, walked backwards from its oldest stored id.
+    // The short page (a07, `done`) is NOT the end (decision №3): the walk
+    // reads on before it, and only that empty answer proves the history.
     expect(calls).toEqual([
       { groupId: TARGET_GROUP_ID, before: "a10", limit: 25 },
       { groupId: TARGET_GROUP_ID, before: "a08", limit: 25 },
+      { groupId: TARGET_GROUP_ID, before: "a07", limit: 25 },
     ]);
     expect(await countMessages(targetThreadId)).toBe(3);
     expect(await countMessages(decoyThreadId)).toBe(0);
 
-    // Capture first (DP 7): both vendor pages are journaled raw AND as
-    // observations before anything else is derived from them.
+    // Capture first (DP 7): every vendor page is journaled raw AND as an
+    // observation before anything else is derived from it.
     const raw = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from sync_raw_payloads where page_id = $1 and endpoint = 'dm_messages'",
       [page.id],
     );
-    expect(Number(raw.rows[0]!.n)).toBe(2);
+    expect(Number(raw.rows[0]!.n)).toBe(3);
     const observations = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from observations where account_id = $1 and kind = 'dm_messages'",
       [page.id],
     );
-    expect(Number(observations.rows[0]!.n)).toBe(2);
+    expect(Number(observations.rows[0]!.n)).toBe(3);
 
     // The lease is released and the thread's coverage verdict is recorded.
     const state = await readSyncState(page.id);
@@ -398,16 +416,16 @@ describe("targeted thread backfill (slice C′)", () => {
     const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
 
     expect(result.outcome).toBe("completed");
-    // Two pages accepted, four requests sent: the hydration budget is charged
-    // the four (#202 settles by actual calls).
-    expect(result.requests).toBe(2);
-    expect(result.requestAttempts).toBe(4);
+    // Three pages accepted (the last one empty), five requests sent: the
+    // hydration budget is charged the five (#202 settles by actual calls).
+    expect(result.requests).toBe(3);
+    expect(result.requestAttempts).toBe(5);
     // ... which is exactly what the run journaled, attempt by attempt.
     const journaled = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from sync_http_attempts where sync_run_id = $1",
       [result.syncRunId],
     );
-    expect(Number(journaled.rows[0]!.n)).toBe(4);
+    expect(Number(journaled.rows[0]!.n)).toBe(5);
   }, 120_000);
 
   it("keeps a walk that left a message without createdAt unstored out of complete", async (context) => {
@@ -482,7 +500,7 @@ describe("targeted thread backfill (slice C′)", () => {
       ignoreRetentionLimit: true,
     });
     expect(overridden.outcome).toBe("completed");
-    expect(calls.map((call) => call.groupId)).toEqual([TARGET_GROUP_ID]);
+    expect(calls.map((call) => call.groupId)).toEqual([TARGET_GROUP_ID, TARGET_GROUP_ID]);
 
     // The override was a parameter of THAT run: the global config was never
     // written, and the very next run of another deep thread still refuses.
@@ -495,7 +513,7 @@ describe("targeted thread backfill (slice C′)", () => {
 
     const stillRefused = await runTargetedThreadBackfill(appContext, { threadId: decoyThreadId });
     expect(stillRefused.outcome).toBe("retention_limit_reached");
-    expect(calls.map((call) => call.groupId)).toEqual([TARGET_GROUP_ID]);
+    expect(calls.map((call) => call.groupId)).toEqual([TARGET_GROUP_ID, TARGET_GROUP_ID]);
   }, 120_000);
 
   it("refuses a thread inside an open breaker window before any vendor traffic", async (context) => {
@@ -550,7 +568,7 @@ describe("targeted thread backfill (slice C′)", () => {
     const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
 
     expect(result.outcome).toBe("completed");
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     // Before, the row outlived the read: a thread whose history is complete
     // is not offered to the regular crawl again, and the page stayed
     // coverage_degraded on /health/sync.
@@ -640,7 +658,8 @@ describe("targeted thread backfill (slice C′)", () => {
     const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
     expect(result.outcome).toBe("completed");
 
-    expect(leaseProbes).toHaveLength(1);
+    // Two vendor calls: the page, then the empty answer that proves the end.
+    expect(leaseProbes).toHaveLength(2);
     expect(leaseProbes[0]!.status).toBe("running");
     expect(leaseProbes[0]!.leaseToken).not.toBeNull();
     expect(leaseProbes[0]!.leaseToken).not.toBe("regular-lease-token");
@@ -903,9 +922,10 @@ describe("targeted thread backfill (slice C′)", () => {
         { contentionWaitMs: 10_000, contentionPollMs: 100 },
       );
 
-      expect(result).toMatchObject({ outcome: "completed", requests: 1, insertedMessages: 1 });
-      // The wait itself made no request: the one call is the walk's.
-      expect(calls).toHaveLength(1);
+      expect(result).toMatchObject({ outcome: "completed", requests: 2, insertedMessages: 1 });
+      // The wait itself made no request: both calls are the walk's (its page,
+      // and the empty page that proves the end).
+      expect(calls).toHaveLength(2);
       expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
     } finally {
       clearTimeout(chunkEnds);
@@ -950,8 +970,8 @@ describe("targeted thread backfill (slice C′)", () => {
         { contentionWaitMs: 10_000, contentionPollMs: 100 },
       );
 
-      expect(result).toMatchObject({ outcome: "completed", requests: 1 });
-      expect(calls).toHaveLength(1);
+      expect(result).toMatchObject({ outcome: "completed", requests: 2 });
+      expect(calls).toHaveLength(2);
     } finally {
       clearTimeout(chunkEnds);
     }
@@ -1044,8 +1064,8 @@ describe("targeted thread backfill (slice C′)", () => {
       { contentionWaitMs: 10_000, contentionPollMs: 100 },
     );
 
-    expect(result).toMatchObject({ outcome: "completed", requests: 1 });
-    expect(calls).toHaveLength(1);
+    expect(result).toMatchObject({ outcome: "completed", requests: 2 });
+    expect(calls).toHaveLength(2);
   }, 120_000);
 
   it("keeps the worker's result as the pg-boss job output the CLI waits on", async (context) => {
@@ -1091,8 +1111,9 @@ describe("targeted thread backfill (slice C′)", () => {
           outcome: "completed",
           threadId: targetThreadId,
           platformAccountId: page.id,
-          requests: 1,
+          requests: 2,
           insertedMessages: 1,
+          emptyPageReached: true,
           messageCoverageStatus: "complete",
         },
       });
@@ -1134,7 +1155,7 @@ describe("targeted thread backfill (slice C′)", () => {
 
     expect(result.outcome).toBe("concurrent_page_chunk");
     expect(result.projectionDebtRecorded).toBe(true);
-    expect(result.requests).toBe(1);
+    expect(result.requests).toBe(2);
 
     const debts = await listUnresolvedProjectionDebt(appContext.db, 10);
     expect(debts).toHaveLength(1);
@@ -1220,8 +1241,13 @@ describe("targeted thread backfill (slice C′)", () => {
       threadId: targetThreadId, startBeforeMessageRef: "a10",
     });
 
-    expect(calls).toEqual([{ groupId: TARGET_GROUP_ID, before: "a10", limit: 25 }]);
-    expect(result).toMatchObject({ outcome: "completed", messageCoverageStatus: "complete" });
+    expect(calls).toEqual([
+      { groupId: TARGET_GROUP_ID, before: "a10", limit: 25 },
+      { groupId: TARGET_GROUP_ID, before: "a09", limit: 25 },
+    ]);
+    expect(result).toMatchObject({
+      outcome: "completed", emptyPageReached: true, messageCoverageStatus: "complete",
+    });
     expect(await coverage(targetThreadId)).toBe("complete");
   }, 120_000);
 
@@ -1243,7 +1269,11 @@ describe("targeted thread backfill (slice C′)", () => {
       // Nothing below the stored oldest message was read: overlap on an
       // interior boundary is no evidence of full coverage (nor of less).
       expect(calls).toEqual([{ groupId: TARGET_GROUP_ID, before: "a12", limit: 25 }]);
-      expect(result).toMatchObject({ overlapFound: true, providerHistoryExhausted: false });
+      // ... and no proof for the request either: stored ground ends the walk
+      // `partial`, never `completed` (the false-complete of request 76dc13d6).
+      expect(result).toMatchObject({
+        outcome: "partial", overlapFound: true, providerHistoryExhausted: false, emptyPageReached: false,
+      });
       expect(await coverage(targetThreadId)).toBe(status);
     },
     120_000,
@@ -1262,7 +1292,143 @@ describe("targeted thread backfill (slice C′)", () => {
       threadId: targetThreadId, startBeforeMessageRef: "a03",
     });
 
-    expect(result).toMatchObject({ outcome: "completed", providerHistoryExhausted: true });
+    // The end below a03 is real, but the walk did not start at the stored
+    // oldest message: nothing proves the window above it, so the RUN is not
+    // `completed` either — only the thread's verdict refused it before.
+    expect(result).toMatchObject({
+      outcome: "partial", providerHistoryExhausted: true, emptyPageReached: true,
+    });
     expect(await coverage(targetThreadId)).toBe("partial_window");
   }, 120_000);
+  it("reads past a SHORT page and stores the history behind it (16.09)", async () => {
+    const { targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({
+        [TARGET_GROUP_ID]: [
+          // 24 of 25 with `done`: lilly-2's heads on 16.09 had 117 and 21
+          // older messages behind such a page.
+          { ids: Array.from({ length: 24 }, (_, index) => `a09-${index}`), done: true },
+          { ids: Array.from({ length: 25 }, (_, index) => `a08-${index}`), done: false },
+        ],
+      }, calls) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(calls.map((call) => call.before)).toEqual(["a10", "a09-23", "a08-24"]);
+    expect(result).toMatchObject({
+      outcome: "completed", requests: 3, insertedMessages: 49, emptyPageReached: true,
+      messageCoverageStatus: "complete",
+    });
+    expect(await countMessages(targetThreadId)).toBe(49);
+  }, 120_000);
+
+  it("records a terminal 500 on the thread's breaker and ends vendor_error instead of throwing", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, calls, {
+        beforeReturn: async ({ callIndex }) => {
+          if (callIndex === 1) {
+            throw new FanslyApiError("Fansly answered 500", 500);
+          }
+        },
+      }) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    // A result, not a throw: the request it answers settles with its spend.
+    expect(result).toMatchObject({
+      outcome: "vendor_error", requests: 1, requestAttempts: 2, projectionDebtRecorded: true,
+    });
+    const health = await getConversationSyncHealth(testDb!.db, targetThreadId);
+    expect(health).toMatchObject({ failureCount: 1, errorClass: "fansly_500" });
+    expect(health!.nextRetryAt!.getTime()).toBeGreaterThan(Date.now());
+    // The breaker holds the thread now: the next run refuses before any request.
+    const again = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+    expect(again.outcome).toBe("breaker_open");
+    expect(calls).toHaveLength(2);
+
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+    const run = await testDb!.pool.query<{ outcome: string }>(
+      "select outcome::text as outcome from sync_runs where id = $1",
+      [result.syncRunId],
+    );
+    expect(run.rows[0]!.outcome).toBe("failed");
+  }, 120_000);
+
+  it("retries a thread with failures on record on ONE physical attempt, then walks normally", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    await testDb!.pool.query(`
+      insert into page_dm_message_sync_health (
+        conversation_id, platform_account_id, failure_count, error_class,
+        last_error, last_attempt_at, next_retry_at, quarantine_until
+      ) values ($1, $2, 2, 'fansly_500', 'boom', now() - interval '20 minutes',
+                now() - interval '1 minute', null)
+    `, [targetThreadId, page.id]);
+    const allowances: Array<number | null> = [];
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: [{ ids: ["a09"], done: true }] }, [], {
+        onAttemptAllowance: ({ allowance }) => allowances.push(allowance),
+      }) as never,
+    };
+
+    const result = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId });
+
+    expect(result.outcome).toBe("completed");
+    // A poison thread costs the run one request, not four; once it answered,
+    // its breaker row is gone and the walk is ordinary work again.
+    expect(allowances).toEqual([1, null]);
+    expect(await getConversationSyncHealth(testDb!.db, targetThreadId)).toBeNull();
+  }, 120_000);
+
+  it("throws any other failure with the run's spend, and leaves the thread's breaker alone", async () => {
+    const { page, targetThreadId } = await seedPageWithThreads();
+    appContext = {
+      ...appContext,
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, [], {
+        beforeReturn: async ({ callIndex }) => {
+          if (callIndex === 1) {
+            // A gateway answer describes the path to Fansly, not the thread.
+            throw new FanslyApiError("Bad gateway", 502);
+          }
+        },
+      }) as never,
+    };
+
+    const failure = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId })
+      .then(() => null, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(TargetedThreadBackfillRunError);
+    const runError = failure as TargetedThreadBackfillRunError;
+    expect(runError.message).toBe("Bad gateway");
+    expect(runError.cause).toBeInstanceOf(FanslyApiError);
+    expect(runError.failureClass).toBe("fansly_502");
+    expect(runError.result).toMatchObject({ requests: 1, requestAttempts: 2, insertedMessages: 25 });
+    expect(await getConversationSyncHealth(testDb!.db, targetThreadId)).toBeNull();
+    expect(await readSyncState(page.id)).toMatchObject({ leaseToken: null, leasedSeq: null });
+  }, 120_000);
+
+  it("throws a failure before the lease with a known zero spend", async () => {
+    const { targetThreadId } = await seedPageWithThreads();
+    const calls: AdapterCall[] = [];
+    appContext = {
+      ...createTestAppContext(testDb!, { syncSharedRateLimitEnabled: false }),
+      adapter: messagesAdapter({ [TARGET_GROUP_ID]: endlessPages("a") }, calls) as never,
+    };
+
+    const failure = await runTargetedThreadBackfill(appContext, { threadId: targetThreadId })
+      .then(() => null, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(TargetedThreadBackfillRunError);
+    expect((failure as TargetedThreadBackfillRunError).result.requestAttempts).toBe(0);
+    expect((failure as TargetedThreadBackfillRunError).failureClass).toBe("internal");
+    expect(calls).toHaveLength(0);
+  }, 120_000);
+
 });

@@ -366,6 +366,7 @@ function refusedRun(outcome: TargetedThreadBackfillResult["outcome"]): TargetedT
     journaledMessages: 0,
     overlapFound: false,
     providerHistoryExhausted: false,
+    emptyPageReached: false,
     storedMessageCountBefore: 12,
     oldestStoredMessageIdBefore: null,
     messageCoverageStatus: null,
@@ -389,6 +390,7 @@ function vendorRun(
     insertedMessages: requests * 25,
     journaledMessages: requests * 25,
     providerHistoryExhausted: outcome === "completed",
+    emptyPageReached: outcome === "completed",
   };
 }
 
@@ -1349,8 +1351,9 @@ describe("[sync-critical] agent hydration requests", () => {
       requestAttempts: 4,
       insertedMessages: 61,
       journaledMessages: 75,
-      overlapFound: true,
-      providerHistoryExhausted: false,
+      overlapFound: false,
+      providerHistoryExhausted: true,
+      emptyPageReached: true,
       storedMessageCountBefore: 12,
       oldestStoredMessageIdBefore: "m-100",
       messageCoverageStatus: "complete",

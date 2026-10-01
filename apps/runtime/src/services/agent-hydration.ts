@@ -931,11 +931,12 @@ function fanslyRequestCeiling(request: AgentHydrationRequestRecord): number {
 /**
  * How a targeted-backfill outcome settles the request that asked for it.
  *
- * `completed` only where the walk genuinely ran out of history or met known
- * ground. Everything the run REFUSED (breaker open, lease unavailable, page
- * busy, ineligible thread) is a `failed`, not a `partially_completed`: nothing
- * was hydrated, and calling that a partial success would tell the owner the
- * spend bought something.
+ * `completed` only where the walk PROVED the end of the history: an empty
+ * page reached from the stored oldest message (the run's own outcome rule; a
+ * short page or known ground is `partial`). Everything the run REFUSED
+ * (breaker open, lease unavailable, page busy, ineligible thread) is a
+ * `failed`, not a `partially_completed`: nothing was hydrated, and calling
+ * that a partial success would tell the owner the spend bought something.
  *
  * The three TRANSIENT refusals (`REARMABLE_OUTCOMES`) reach this table only
  * once their re-arms are used up. The page stayed busy for every run the
@@ -958,6 +959,8 @@ const BACKFILL_OUTCOME_STATES: Readonly<Record<
   thread_checkpoint_in_progress: { state: "failed", lastError: "timeout" },
   lease_unavailable: { state: "failed", lastError: "timeout" },
   lease_lost: { state: "failed", lastError: "timeout" },
+  // The thread's own breaker now holds it (500 breaker of the point path).
+  vendor_error: { state: "failed", lastError: "quarantined" },
 };
 
 /**
