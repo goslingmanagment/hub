@@ -1,6 +1,7 @@
 import { listFanslyFanPageIdentityBackfillTargets } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { upsertHydratedFansForPageDetailed } from "./sync/fan-hydration.ts";
 
@@ -72,6 +73,7 @@ export async function backfillFanslyPageAliases(
       session: pageContext.session,
       proxy: pageContext.proxy,
       egressKey: pageContext.egressKey,
+      sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "alias_backfill"),
     };
 
     const summary: FanslyPageAliasBackfillPageSummary = {

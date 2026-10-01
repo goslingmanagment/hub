@@ -155,6 +155,7 @@ export * from "./repositories/fansly-dm-head-debt.ts";
 export * from "./repositories/fansly-dm-shadow.ts";
 export * from "./repositories/fansly-dm-reader-heads.ts";
 export * from "./repositories/fansly-dm-shadow-snapshot.ts";
+export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync-context.ts";

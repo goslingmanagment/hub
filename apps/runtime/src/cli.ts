@@ -41,6 +41,12 @@ import {
 import { createAppContext } from "./bootstrap.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
+import {
+  confirmFanslySendGuardHolderTerminated,
+  confirmFanslySendGuardHostsTerminated,
+  getFanslySendGuards,
+  readFanslySendGuardStatus,
+} from "./services/fansly-send-guard/index.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -1676,7 +1682,7 @@ export function buildProgram() {
           egressKey: context.egressKey,
         });
         if (context.platform === "fansly") {
-          const verified = await refreshPageMetadata(app, context, "light");
+          const verified = await refreshPageMetadata(app, context, "light", undefined, null, "account_me_cli");
           const recoveredAt = new Date();
           printPageEgressSummary(await egressSummaryPromise);
           await handleSuccessfulPageVerificationRecovery(app, {
@@ -2909,6 +2915,113 @@ export function buildProgram() {
         console.log(`pages=${result.totalPages}`);
         console.log(`updated=${result.updatedPages}`);
         console.log(`failed=${result.failedPages}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Plan §2.5: the per-page Fansly send guard. `status` reads; the
+  // Docker-level confirmation releases pages whose holder's container is gone
+  // (the hostnames of the running containers, e.g. from `docker ps`), or the
+  // one page of a holder the operator has confirmed gone (`--holder-token`).
+  const sendGuard = program.command("fansly-send-guard");
+  sendGuard
+    .command("status")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const rows = await readFanslySendGuardStatus(app.db);
+        printRows(
+          [
+            "page",
+            "state",
+            "holder",
+            "holder_token",
+            "source",
+            "operation",
+            "captured_at",
+            "lease_until",
+            "closed_reason",
+            "last_completed_at",
+            "next_u",
+          ],
+          rows.map((row) => [
+            row.pageLabel ?? row.pageId,
+            row.holderToken === null ? "free" : row.leaseExpired ? "closed" : "held",
+            row.holderToken === null
+              ? null
+              : `${row.holderRole ?? "?"}@${row.holderHost ?? "?"} pid ${row.holderPid ?? "?"}`,
+            row.holderToken,
+            row.holderSource,
+            row.holderOperation,
+            row.capturedAt,
+            row.leaseUntil,
+            row.closedReason,
+            row.lastCompletedAt,
+            row.nextU,
+          ]),
+        );
+      } finally {
+        await app.close();
+      }
+    });
+  sendGuard
+    .command("confirm-terminated")
+    .description(
+      "release Fansly pages whose request holder is confirmed gone at Docker level: "
+      + "by the running containers' hostnames, or one holder by its token",
+    )
+    .option(
+      "--running-hosts <hosts>",
+      "comma-separated hostnames of the containers that are running; every other holder is gone",
+    )
+    .option(
+      "--holder-token <uuid>",
+      "release the one page held by this token (see `status`) once you have confirmed its process is gone: "
+      + "its container is gone or started again after the holder's captured_at "
+      + "(docker inspect -f '{{.State.StartedAt}}' <container>); only a holder past its lease",
+    )
+    .option("--include-unexpired", "with --running-hosts: also release holders whose lease has not expired yet", false)
+    .option("--dry-run", "list what would be released without writing", false)
+    .action(async (options) => {
+      const byHosts = options.runningHosts !== undefined;
+      const byToken = options.holderToken !== undefined;
+      if (byHosts === byToken) {
+        throw new Error("confirm-terminated takes exactly one of --running-hosts or --holder-token");
+      }
+      if (byToken && options.includeUnexpired) {
+        throw new Error("--include-unexpired applies to --running-hosts only; a holder token is released only past its lease");
+      }
+      const app = await createAppContext();
+      try {
+        const identity = getFanslySendGuards(app).holderIdentity();
+        if (byToken) {
+          const outcome = await confirmFanslySendGuardHolderTerminated(app.db, {
+            token: String(options.holderToken),
+            confirmer: `cli@${identity.host} pid ${identity.pid}`,
+            dryRun: Boolean(options.dryRun),
+          });
+          printRows(
+            ["page", "holder_host", options.dryRun ? "would_release" : "released"],
+            [[outcome.pageLabel ?? outcome.pageId, outcome.holderHost, options.dryRun ? true : outcome.released]],
+          );
+          return;
+        }
+        const outcomes = await confirmFanslySendGuardHostsTerminated(app.db, {
+          runningHosts: String(options.runningHosts).split(","),
+          ownHost: identity.host,
+          confirmer: `cli@${identity.host} pid ${identity.pid}`,
+          includeUnexpired: Boolean(options.includeUnexpired),
+          dryRun: Boolean(options.dryRun),
+        });
+        printRows(
+          ["page", "holder_host", options.dryRun ? "would_release" : "released"],
+          outcomes.map((outcome) => [
+            outcome.pageLabel ?? outcome.pageId,
+            outcome.holderHost,
+            options.dryRun ? true : outcome.released,
+          ]),
+        );
       } finally {
         await app.close();
       }

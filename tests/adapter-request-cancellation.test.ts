@@ -7,6 +7,11 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import {
+  createTestFanslySendGuard,
+  createTestFanslySendGuards,
+  globalTimersFanslySendGuardClock,
+} from "./helpers/fansly-send-guard.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -15,6 +20,7 @@ function deferred<T>() {
 }
 
 const context = {
+  sendGuard: createTestFanslySendGuard(),
   session: { authorization: "synthetic-token" },
   proxy: { url: "socks5://proxy.example:1080" },
 };
@@ -38,7 +44,7 @@ describe("Fansly adapter lease cancellation", () => {
     const controller = new AbortController();
     const reason = new Error("synthetic lease loss");
     fetchMock.mockResolvedValue(toJsonResponse({ success: false }, { status: 503 }));
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
 
     await expect(runWithHttpRequestSignal(controller.signal, () => adapter.getAccountMe({
       ...context,
@@ -56,7 +62,7 @@ describe("Fansly adapter lease cancellation", () => {
     const entered = deferred<void>();
     const response = deferred<Response>();
     fetchMock.mockImplementation(() => { entered.resolve(); return response.promise; });
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 0 });
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
     const request = runWithHttpRequestSignal(controller.signal, () => adapter.getAccountMe(context));
     await entered.promise;
     controller.abort(new Error("synthetic lease loss"));
@@ -69,28 +75,35 @@ describe("Fansly adapter lease cancellation", () => {
     await adapter.close();
   });
 
-  it("keeps a cancelled fallback waiter from letting another request bypass its predecessor", async () => {
+  it("keeps a cancelled send-guard waiter from letting another request bypass its predecessor", async () => {
     vi.useFakeTimers();
     const { FanslyAdapter, fetchMock } = harness;
     fetchMock.mockImplementation(async () => fanslyAccountResponse());
-    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example", globalDelayMs: 100 });
-    await adapter.getAccountMe(context);
-    const predecessor = adapter.getAccountMe(context);
+    // S = 100 ms, u = 0: each capture waits 100 ms from the previous completion.
+    const { registry } = createTestFanslySendGuards({
+      settingMs: 100,
+      random: () => 0,
+      clock: globalTimersFanslySendGuardClock,
+    });
+    const paced = { ...context, sendGuard: registry.forPage(1, "sync_stream") };
+    const adapter = new FanslyAdapter({ baseUrl: "https://fansly.example" });
+    await adapter.getAccountMe(paced);
+    const predecessor = adapter.getAccountMe(paced);
     await vi.advanceTimersByTimeAsync(0);
     const controller = new AbortController();
     const reason = new Error("synthetic lease loss");
-    const cancelled = runWithHttpRequestSignal(controller.signal, () => adapter.getAccountMe(context));
+    const cancelled = runWithHttpRequestSignal(controller.signal, () => adapter.getAccountMe(paced));
     const rejected = expect(cancelled).rejects.toBe(reason);
     await vi.advanceTimersByTimeAsync(0);
     controller.abort(reason);
     await rejected;
-    const successor = adapter.getAccountMe(context);
-    await vi.advanceTimersByTimeAsync(199);
+    const successor = adapter.getAccountMe(paced);
+    await vi.advanceTimersByTimeAsync(99);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     await predecessor;
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(199);
+    await vi.advanceTimersByTimeAsync(99);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     await successor;

@@ -17,6 +17,7 @@ import {
 import {
   fanEarningsRecoveryEnabled, fanEarningsRosterMaxAgeMs, runFanEarningsTargetStep,
 } from "./fan-earnings-targets.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 /** Deterministic rejections the legacy walk may cross in a row, with no fan
  * read successfully between them. The next one stops the walk as before: a
@@ -66,6 +67,7 @@ export async function executeFanEarningsChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
 
   // The earnings endpoints answer PER FAN: a windowed call without

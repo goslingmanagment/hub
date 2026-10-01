@@ -1,6 +1,7 @@
 import { PgBoss } from "pg-boss";
 
 import { createAppContext } from "./bootstrap.ts";
+import { getFanslySendGuards, startFanslySendGuardSweeper } from "./services/fansly-send-guard/index.ts";
 import {
   publishCaptureCasSettingsAtStartup,
   startRuntimeHeartbeat,
@@ -9,7 +10,7 @@ import { startWorkerServices } from "./worker-services.ts";
 
 export async function runWorkerRuntime() {
   const processStartedAt = new Date();
-  const app = await createAppContext();
+  const app = await createAppContext({ processRole: "worker" });
   const boss = new PgBoss({
     connectionString: app.config.databaseUrl,
     // Stage 25: cron registration + firing belong to the scheduler role.
@@ -36,12 +37,15 @@ export async function runWorkerRuntime() {
   // heartbeat written before startWorkerServices() could otherwise show
   // worker: active in the Configuration view while no jobs are being consumed.
   const heartbeat = startRuntimeHeartbeat(app, "worker", { startedAt: processStartedAt });
+  // Plan §2.5: releases Fansly pages whose request holder is provably gone.
+  const sendGuardSweeper = startFanslySendGuardSweeper(app, { registry: getFanslySendGuards(app) });
 
   const shutdown = async () => {
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);
 
     await heartbeat.stop().catch(() => undefined);
+    await sendGuardSweeper.stop().catch(() => undefined);
     await runtime.shutdown();
     process.exit(0);
   };

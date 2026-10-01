@@ -68,6 +68,9 @@ import { describe, expect, it } from "vitest";
 const SANCTIONED_DELETER_FILES = [
   // B0: Map.delete releases an in-memory supervisor handle only. No SQL deletion.
   "apps/runtime/src/services/fansly-ws/worker.ts",
+  // Plan §2.5 send guard: Map/Set.delete forget this process's lease handles
+  // once their completion is written. No SQL deletion.
+  "apps/runtime/src/services/fansly-send-guard/engine.ts",
   // Decision270: owner reset of encrypted-response-derived configuration, no source deletion.
   "apps/runtime/src/services/projections/ofapi-marketing.ts",
   // Decision266: owner-invoked reset of replayable OFAPI snapshot projection only.

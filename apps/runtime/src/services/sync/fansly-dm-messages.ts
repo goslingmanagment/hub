@@ -15,7 +15,7 @@ import {
   type PageDmConversationRow,
   type upsertPageDmMessages,
 } from "@agency_hub_core/db";
-import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, FanslyApiError } from "@agency_hub_core/fansly";
 import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -28,6 +28,34 @@ import { dmRetentionDate, normalizeDmTipAmountCents, normalizeFanslyTimestamp, p
 export const FANSLY_DM_MESSAGE_PAGE_LIMIT = 25;
 
 export type FanslyDmMessageRequestContext = Parameters<AppContext["adapter"]["getMessagesPage"]>[0];
+
+// Per-thread breaker outage guard, shared by the executor's dm_messages walk
+// and the targeted thread backfill: a failure while this many OTHER groups of
+// the page failed since its last successful /message read (3+ distinct
+// threads) is a page-wide outage, not a poison thread.
+export const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
+// Scan window for that guard; also lets a guarded pin fall to the breaker
+// once nothing else has failed for this long.
+export const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
+
+/** An application answer about this request that may be the thread's own: a
+ * terminal HTTP 500 after in-process retries, or a 404/4xx. Everything else
+ * is page-level and never opens a per-thread breaker: auth (401/403), a
+ * timeout (408), rate limits (429), a provider Retry-After deadline, gateway
+ * and edge answers (502/503/504 and every 5xx but 500 describe the path to
+ * Fansly, not the thread), an envelope failure at HTTP 200 (as likely a
+ * proxy's page as Fansly's verdict), and every status-less failure
+ * (transport, proxy, capture, contract drift). */
+export function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
+  if (!(error instanceof FanslyApiError) || typeof error.status !== "number" || error.retryAfterAt !== null) {
+    return false;
+  }
+  const status = error.status;
+  if (status >= 500) {
+    return status === 500;
+  }
+  return status >= 400 && status !== 401 && status !== 403 && status !== 408 && status !== 429;
+}
 export type FanslyDmMessagePage = Awaited<ReturnType<AppContext["adapter"]["getMessagesPage"]>>;
 export type FanslyDmMessageUpsertInput = Parameters<typeof upsertPageDmMessages>[1];
 

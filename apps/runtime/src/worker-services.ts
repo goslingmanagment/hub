@@ -104,6 +104,7 @@ import {
   ensureAgentHydrationQueue,
   runAgentHydrationCycle,
   settleAgentHydrationFromBackfill,
+  settleAgentHydrationFromFailedRun,
 } from "./services/agent-hydration.ts";
 import { startSyncPageExecutor } from "./services/sync/executor.ts";
 import {
@@ -111,6 +112,7 @@ import {
   parseTargetedThreadBackfillJob,
   runTargetedThreadBackfill,
   TARGETED_THREAD_BACKFILL_QUEUE,
+  targetedThreadBackfillRequestRefOf,
   type TargetedThreadBackfillResult,
 } from "./services/sync/targeted-thread-backfill.ts";
 import { runSyncPlannerCycle } from "./services/sync/planner.ts";
@@ -193,6 +195,13 @@ const PROJECTION_TICK_DURATION_ALERT_MS = 45_000;
  * return value as pgboss.job.output, which is where the CLI's `--wait` (and
  * anyone after the worker's log is gone) reads the outcome — a refusal
  * included.
+ *
+ * Slice C: a run that answered a hydration request settles it HERE, on every
+ * way out — the result, the run's failure (with the spend the failure
+ * carries; the job then still fails, for the CLI and the log), or a payload
+ * that could not run at all. Whatever this cannot settle (the process died,
+ * the settle itself failed) the hydration cycle settles from the job record
+ * once the run is provably gone (`reconcileAgentHydrationDispatches`).
  */
 export async function handleTargetedThreadBackfillJobs(
   app: AppContext,
@@ -204,20 +213,50 @@ export async function handleTargetedThreadBackfillJobs(
     if (!payload) {
       app.logger.error({ jobId: job.id, data: job.data },
         "Targeted thread backfill job carried no usable threadId");
+      const requestRef = targetedThreadBackfillRequestRefOf(job.data);
+      if (requestRef !== null) {
+        // Nothing ran, so nothing was sent.
+        await settleHydrationOrLeaveToReconcile(app, job.id, () =>
+          settleAgentHydrationFromFailedRun(app, requestRef, { cause: "job_data_invalid", vendorCalls: 0 }));
+      }
       continue;
     }
-    const result = await runTargetedThreadBackfill(app, payload);
-    // Slice C: a run that answered a hydration request settles it here, with
-    // the outcome in hand. A crash before this leaves the request
-    // `dispatching` until the stuck sweeper closes it — the correct order of
-    // failure: an unsettled request is visible, a wrongly-settled one is not.
-    if (payload.hydrationRequestRef !== undefined) {
-      await settleAgentHydrationFromBackfill(app, payload.hydrationRequestRef, result);
+    let result: TargetedThreadBackfillResult;
+    try {
+      result = await runTargetedThreadBackfill(app, payload, { jobId: job.id });
+    } catch (error) {
+      const requestRef = payload.hydrationRequestRef;
+      if (requestRef !== undefined) {
+        await settleHydrationOrLeaveToReconcile(app, job.id, () =>
+          settleAgentHydrationFromFailedRun(app, requestRef, { error }));
+      }
+      throw error;
+    }
+    const requestRef = payload.hydrationRequestRef;
+    if (requestRef !== undefined) {
+      await settleHydrationOrLeaveToReconcile(app, job.id, () =>
+        settleAgentHydrationFromBackfill(app, requestRef, result));
     }
     app.logger.info({ jobId: job.id, ...result }, "Targeted thread backfill job complete");
     output = result;
   }
   return output;
+}
+
+/** A settle that fails must not take the job's own record with it: the result
+ *  (or the run's error) still lands in pgboss.job.output, and reconciliation
+ *  settles the request from there. */
+async function settleHydrationOrLeaveToReconcile(
+  app: AppContext,
+  jobId: string,
+  settle: () => Promise<unknown>,
+) {
+  try {
+    await settle();
+  } catch (error) {
+    app.logger.error({ err: error, jobId },
+      "Targeted thread backfill could not settle its hydration request; left to reconciliation");
+  }
 }
 
 export async function startWorkerServices(
@@ -665,6 +704,9 @@ export async function startWorkerServices(
         });
       }
       abortController.abort();
+      // No new Fansly capture from here on; requests already in flight finish
+      // and app.close() waits for their completions.
+      app.fanslySendGuards?.stop();
       await aiMediaDescribeLoop.stop().catch((error) => {
         app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
       });

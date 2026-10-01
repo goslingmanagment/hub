@@ -1176,7 +1176,7 @@ export interface SyncObservabilityPruneOptions {
 }
 
 export interface SyncObservabilityPruneStep {
-  table: "sync_http_attempts" | "sync_run_events" | "sync_runs";
+  table: "sync_http_attempts" | "sync_run_events" | "sync_runs" | "fansly_send_log";
   deleted: number;
   batches: number;
   durationMs: number;
@@ -1190,6 +1190,8 @@ export interface SyncObservabilityPruneResult {
   deletedAttempts: number;
   deletedEvents: number;
   deletedRuns: number;
+  /** 0225: the Fansly send guard's attempt journal. */
+  deletedSendLog: number;
   durationMs: number;
   budgetExhausted: boolean;
 }
@@ -1335,13 +1337,32 @@ export async function deleteExpiredSyncObservability(
     `,
   );
 
-  const steps = [attempts, events, runs];
+  // 0225: the Fansly send guard's attempt journal is telemetry like the
+  // attempts above. A row still waiting for its completion (a holder that was
+  // never completed nor confirmed) is kept whatever its age.
+  const sendLog = await pruneTable(
+    "fansly_send_log",
+    sql`
+      with doomed as (
+        select id from fansly_send_log
+         where captured_at < ${cutoff}
+           and completed_at < ${cutoff}
+         limit ${batchRows}
+      ), removed as (
+        delete from fansly_send_log l using doomed where l.id = doomed.id returning 1
+      )
+      select count(*)::text as n from removed
+    `,
+  );
+
+  const steps = [attempts, events, runs, sendLog];
   return {
     cutoff,
     steps,
     deletedAttempts: attempts.deleted,
     deletedEvents: events.deleted,
     deletedRuns: runs.deleted,
+    deletedSendLog: sendLog.deleted,
     durationMs: nowMs() - startedMs,
     budgetExhausted: steps.some((step) => step.budgetExhausted),
   };

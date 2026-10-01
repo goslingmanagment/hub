@@ -13,6 +13,7 @@ import { composeRequestObservers } from "./chunk-budget.ts";
 import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 /** A traversed roster whose coverage is not certified: recovery debt, or a
  * legacy walk that crossed a deterministically rejected fan. */
@@ -55,6 +56,7 @@ export async function executeFanEarningsRecovery(app: AppContext, input: Executo
     session: input.pageContext.session, proxy: input.pageContext.proxy, egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const config = await loadEffectiveConfig(app.db, app.config);
   // Decision 368: null keeps the every-spender recovery roster unchanged. Only a

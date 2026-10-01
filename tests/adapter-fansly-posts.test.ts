@@ -7,6 +7,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -57,9 +58,9 @@ describe("Fansly posts adapter", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     const context = {
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" },
       proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),

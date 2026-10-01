@@ -5,6 +5,7 @@ import {
   fanslyAccountResponse,
   loadAdapters,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -25,7 +26,6 @@ describe("adapter hardening", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     const proxy = {
       url: "http://proxy.example:8080",
@@ -34,12 +34,14 @@ describe("adapter hardening", () => {
     };
 
     await adapter.getAccountMe({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token-a",
       },
       proxy,
     });
     await adapter.getAccountMe({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token-b",
       },

@@ -11,7 +11,7 @@ import {
   recordSyncHttpAttemptResponseBodyBytes,
   updatePageMetadata,
 } from "@agency_hub_core/db";
-import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, type FanslySendSource } from "@agency_hub_core/fansly";
 import { type HttpRequestObserver, millsFromInteger } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -35,6 +35,7 @@ import {
 } from "./journal-lone-surrogates.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { createSyncRateLimitWaiter } from "./rate-limiter.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 // Legacy mapper tag for OnlyFans failed-payload rows (kept byte-identical to
 // the retired packages/onlyfans export so recorded rows stay comparable).
@@ -759,6 +760,9 @@ export async function refreshPageMetadata(
   syncType?: "light" | "followers",
   telemetry?: SyncRunTelemetry,
   requestObserver?: HttpRequestObserver | null,
+  /** Who sends, for the page's send guard journal. A sync chunk (with
+   *  telemetry) by default; the API and CLI page checks name themselves. */
+  sendSource: FanslySendSource = telemetry ? "sync_stream" : "account_me_api",
 ) {
   const rateLimitWaiter = createSyncRateLimitWaiter(app, {
     egressKey: pageContext.egressKey,
@@ -771,6 +775,7 @@ export async function refreshPageMetadata(
       egressKey: pageContext.egressKey,
       requestObserver: requestObserver ?? telemetry?.getRequestObserver() ?? null,
       rateLimitWaiter,
+      sendGuard: fanslyPageSendGuard(app, pageContext.page.id, sendSource),
     });
     await persistRawPayload(app.db, {
       platformAccountId: pageContext.page.id,

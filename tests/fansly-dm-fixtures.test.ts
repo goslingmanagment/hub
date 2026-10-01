@@ -13,6 +13,7 @@ import {
   resolveDmConversationCoverageStatus,
 } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 async function loadResponseFixture<T>(name: string) {
   const file = path.resolve("tests/fixtures/fansly", name);
@@ -43,7 +44,6 @@ describe("Fansly DM fixtures", () => {
     }>("messaging_groups.json");
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
@@ -51,6 +51,7 @@ describe("Fansly DM fixtures", () => {
     });
 
     const result = await adapter.getMessagingGroupsPage({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token",
       },
@@ -97,7 +98,6 @@ describe("Fansly DM fixtures", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: payload.response,
@@ -105,6 +105,7 @@ describe("Fansly DM fixtures", () => {
     });
 
     const result = await adapter.getMessagingGroupsPage({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token",
       },
@@ -124,7 +125,6 @@ describe("Fansly DM fixtures", () => {
     const fixture = await loadResponseFixture<Record<string, unknown>>("group_detail.json");
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
@@ -132,6 +132,7 @@ describe("Fansly DM fixtures", () => {
     });
 
     const result = await adapter.getGroupDetail({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token",
       },
@@ -157,7 +158,6 @@ describe("Fansly DM fixtures", () => {
     }>("message.json");
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     vi.spyOn(adapter as unknown as { request: () => Promise<unknown> }, "request").mockResolvedValue({
       parsed: fixture.response,
@@ -165,6 +165,7 @@ describe("Fansly DM fixtures", () => {
     });
 
     const result = await adapter.getMessagesPage({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token",
       },

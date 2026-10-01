@@ -131,6 +131,7 @@ import {
   FANSLY_PAYOUTS_CAPTURE_MAPPER_VERSION,
   retentionDate,
 } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "payouts" as const;
 
@@ -552,6 +553,7 @@ export async function fanslyPayoutsChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 
