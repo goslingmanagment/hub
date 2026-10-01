@@ -3247,3 +3247,80 @@ describe("recap-status read (Task 9)", () => {
     expect(res.statusCode).toBe(401);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
+
+describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
+  // A Fansly request without clientContext reads the kernel archive. A page
+  // in `fanslyLiveOverlayReadPages` reads the archive ∪ its socket messages
+  // the archive does not hold yet; `none` keeps the archive only.
+  const group = "880001";
+
+  async function seedLiveChat() {
+    await testDb!.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $3)`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref,
+         fan_native_id, is_sent_by_me, occurred_at, text_plain)
+       values ($1, 'fansly', $2, '7701', $3, false, now() - interval '10 minutes', 'archived hello')`,
+      [fanslyPageId, group, FAN],
+    );
+    await testDb!.pool.query(
+      `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id,
+         sender_platform_user_id, is_sent_by_page, created_at, content, decoder_version, first_visible_at)
+       values ($1, '7702', $2, $3, false, now() - interval '5 seconds', 'LIVE_SOCKET_LINE', 1, now())`,
+      [fanslyPageId, group, FAN],
+    );
+  }
+
+  async function runKernelFastReply() {
+    const capture: { input?: AiGatewayProviderInput } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const res = await apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/fast-reply",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-fs",
+        platform: "fansly",
+        conversationRef: group,
+        fanRef: FAN,
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const { rows } = await testDb!.pool.query<{ params: { contextManifest?: Record<string, unknown> } }>(
+      `select params from ai_generation_content where feature = 'fast-reply' order by id desc limit 1`,
+    );
+    return { promptText: JSON.stringify(capture.input), manifest: rows[0]?.params.contextManifest };
+  }
+
+  it("serves socket messages only while the page is listed", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedLiveChat();
+
+    const off = await runKernelFastReply();
+    expect(off.promptText).toContain("archived hello");
+    expect(off.promptText).not.toContain("LIVE_SOCKET_LINE");
+    expect(off.manifest).toMatchObject({ source: "archive", liveOverlay: "off", liveCount: null });
+
+    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
+    const served = await runKernelFastReply();
+    expect(served.promptText).toContain("archived hello");
+    expect(served.promptText).toContain("LIVE_SOCKET_LINE");
+    expect(served.manifest).toMatchObject({ source: "live_union", liveOverlay: "serve", liveCount: 1, liveError: false });
+
+    // The key is live: an override of `none` is the kill-switch, no restart.
+    await testDb.pool.query(
+      `insert into config_settings (scope_type, scope_id, key, value, version)
+       values ('global', 0, 'fanslyLiveOverlayReadPages', '"none"'::jsonb, 1)`,
+    );
+    const killed = await runKernelFastReply();
+    expect(killed.promptText).not.toContain("LIVE_SOCKET_LINE");
+    expect(killed.manifest).toMatchObject({ source: "archive", liveOverlay: "off" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+});
