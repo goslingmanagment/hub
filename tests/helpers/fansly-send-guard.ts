@@ -14,7 +14,7 @@ import {
   type FanslySendGuardStore,
 } from "../../apps/runtime/src/services/fansly-send-guard/engine.ts";
 
-// An in-memory twin of the 0225 guard statements
+// An in-memory twin of the 0225/0229 guard statements
 // (packages/db/src/repositories/fansly-send-guard.ts), driven by an injectable
 // "database clock". The state machine tests run the real registry against it
 // with a fake clock; adapter tests that are not about pacing use
@@ -31,6 +31,8 @@ export interface InMemoryGuardRow {
   lastCompletedAt: number;
   nextU: number;
   closedReason: string | null;
+  /** 0229: `legacy`, or `fansly_sync_engine` (every capture refused). */
+  ownerEngine: string;
 }
 
 export interface InMemoryJournalRow {
@@ -72,7 +74,7 @@ export class InMemoryFanslySendGuardStore implements FanslySendGuardStore {
     private readonly seedOpen = false,
   ) {}
 
-  seed(pageId: number, input: { lastCompletedAt?: number; nextU?: number } = {}) {
+  seed(pageId: number, input: { lastCompletedAt?: number; nextU?: number; ownerEngine?: string } = {}) {
     this.rows.set(pageId, {
       pageId,
       holderToken: null,
@@ -84,6 +86,7 @@ export class InMemoryFanslySendGuardStore implements FanslySendGuardStore {
       lastCompletedAt: input.lastCompletedAt ?? this.now(),
       nextU: input.nextU ?? 0.2,
       closedReason: null,
+      ownerEngine: input.ownerEngine ?? "legacy",
     });
   }
 
@@ -98,6 +101,10 @@ export class InMemoryFanslySendGuardStore implements FanslySendGuardStore {
     }
     const now = this.now();
     const opensAt = row.lastCompletedAt + input.settingMs * (1 + row.nextU);
+    if (row.ownerEngine !== "legacy") {
+      if (fault === "lost_answer") throw new Error("connection lost after commit");
+      return { kind: "engine_owned", ownerEngine: row.ownerEngine, engineSwitchedAt: null };
+    }
     if (row.holderToken === null && now >= opensAt) {
       row.holderToken = input.token;
       row.holderSource = input.source;

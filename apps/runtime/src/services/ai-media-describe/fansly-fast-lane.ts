@@ -46,7 +46,7 @@ import {
   type ResolvedFanslyPageContext,
 } from "../page-context.ts";
 import { applyAiMediaAttachmentsEvent } from "../projections/ai-media-candidates.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
+import { fanslyPageSendGuard, isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 import { dmRetentionDate, persistRawPayload } from "../sync/shared.ts";
 import {
   aiMediaNotesPolicyForPage,
@@ -414,6 +414,9 @@ export function createFanslyFastLane(app: AppContext, deps: FanslyFastLaneDeps =
         if (error.message === "stopping") return "stop";
         return handOff(error.message);
       }
+      // The page's send guard belongs to the Fansly Sync Engine (sync engine
+      // design §2.7): refused before anything was sent, like a held page.
+      if (isFanslyPageOwnedBySyncEngineError(error)) return handOff("page_held");
       if (error instanceof FanslyApiError) {
         const status = error.status ?? null;
         const cooldownMs = status === 429

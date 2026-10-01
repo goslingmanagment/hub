@@ -51,9 +51,20 @@ describe("Fansly Sync Engine repository boundaries", () => {
     ]);
   });
 
-  it("reads the step-1 guard owner in the live gate, failing closed before 0229 adds it", () => {
-    expect(filesMatching("to_jsonb\\(g\\) ->> 'owner_engine'", SOURCES)).toEqual([
+  it("reads the step-1 guard owner (0229) in the live gate", () => {
+    expect(filesMatching("g\\.owner_engine as \"ownerEngine\"", ["packages/db/src/repositories/sync"])).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
+    ]);
+  });
+
+  it("captures the step-1 guard only while the legacy engine owns it (0229, design §2.7)", () => {
+    // The capture statement is the only writer of a holder; it requires the
+    // legacy owner, so a page the switch gave away refuses every legacy sender.
+    expect(filesMatching("set holder_token = \\$\\{", SOURCES)).toEqual([
+      "packages/db/src/repositories/fansly-send-guard.ts",
+    ]);
+    expect(filesMatching("and g\\.owner_engine = 'legacy'", SOURCES)).toEqual([
+      "packages/db/src/repositories/fansly-send-guard.ts",
     ]);
   });
 });
