@@ -183,11 +183,14 @@ import {
 } from "./shared.ts";
 import {
   assertDmSharedRateLimitEnabled,
+  DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS,
+  DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS,
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
   isDmHeadStaleByTime,
   isDmMessagePageAfterOnboarding,
+  isThreadAttributableFanslyFailure,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
@@ -211,13 +214,6 @@ import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
-// Per-thread breaker outage guard: a first-page failure while this many OTHER
-// groups of the page failed since its last successful /message read (3+
-// distinct threads) is a page-wide outage, not a poison thread.
-const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
-// Scan window for that guard; also lets a guarded pin fall to the breaker
-// once nothing else has failed for this long.
-const DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS = 6 * 60 * 60 * 1000;
 // The deferral (or, with nothing left to wait for, quality hold) of a
 // dm_messages chunk whose only work was threads the breaker deferred.
 const FANSLY_DM_THREADS_DEFERRED = "fansly_dm_threads_deferred";
@@ -371,25 +367,6 @@ function isTerminalFanslyServerError(error: unknown): error is FanslyApiError & 
     typeof error.status === "number" &&
     error.status >= 500 &&
     error.status < 600;
-}
-
-/** An application answer about this request that may be the thread's own: a
- * terminal HTTP 500 after in-process retries, or a 404/4xx. Everything else
- * is page-level and never opens a per-thread breaker: auth (401/403), a
- * timeout (408), rate limits (429), a provider Retry-After deadline, gateway
- * and edge answers (502/503/504 and every 5xx but 500 describe the path to
- * Fansly, not the thread), an envelope failure at HTTP 200 (as likely a
- * proxy's page as Fansly's verdict), and every status-less failure
- * (transport, proxy, capture, contract drift). */
-function isThreadAttributableFanslyFailure(error: unknown): error is FanslyApiError & { status: number } {
-  if (!(error instanceof FanslyApiError) || typeof error.status !== "number" || error.retryAfterAt !== null) {
-    return false;
-  }
-  const status = error.status;
-  if (status >= 500) {
-    return status === 500;
-  }
-  return status >= 400 && status !== 401 && status !== 403 && status !== 408 && status !== 429;
 }
 
 /** A partner-account probe failure that speaks for the page, not the partner:

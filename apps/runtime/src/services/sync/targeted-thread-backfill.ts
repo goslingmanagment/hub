@@ -21,6 +21,18 @@
 // the run's request budget the outcome is reported as `partial` and the owner
 // re-runs; there is no checkpoint-and-re-enqueue continuation.
 //
+// `completed` is a PROOF, not a stopping reason (plan §6.2, owner decision
+// №3): the walk started at the thread's stored oldest message and read on,
+// page after contiguous page, until Fansly answered an EMPTY page. A short
+// page is not the end (16.09: two 24-of-25 heads with 117 and 21 older
+// messages behind them), so the walk reads on past it; meeting stored ground
+// is not the end either, so the walk stops there `partial`.
+//
+// A thread-attributable failure (the executor's per-thread breaker rule) is
+// recorded on the thread's breaker and RETURNED as `vendor_error`; every
+// other failure is thrown as a `TargetedThreadBackfillRunError` carrying what
+// the run did, so whoever settles a hydration request knows the real spend.
+//
 // The run's result is the job's return value, so pg-boss keeps it in
 // pgboss.job.output — the record the CLI's `--wait` reads. A refusal is a
 // completed job with a refusal outcome there, not an error.
@@ -34,6 +46,7 @@ import {
   acquireTargetedPageSyncLease,
   assertOwnedPageSyncLease,
   clearConversationSyncHealth,
+  countOtherDmMessageGroupsFailingSinceLastSuccess,
   ensurePageSyncStates,
   finalizePageDmConversationMessageSync,
   getCheckpoint,
@@ -48,6 +61,7 @@ import {
   PageSyncLeaseLostError,
   pausePageSyncForAuth,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+  recordConversationSyncFailure,
   recordProjectionDebt,
   releaseTargetedPageSyncLease,
   runWithPageSyncExecutionContext,
@@ -58,11 +72,12 @@ import {
   type PageSyncState,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { FanslyApiError } from "@agency_hub_core/fansly";
+import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
 import { isFanslyDmMessageSyncExcluded } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { ProxyMissingError } from "../errors.ts";
 import { notifyAuthFailedIncident } from "../notification-incidents.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
 import { resolvePageContextById } from "../page-context.ts";
@@ -72,9 +87,12 @@ import { parseDmMessagesCursorState } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import {
   assertDmSharedRateLimitEnabled,
+  DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS,
+  DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS,
   DmMessagesChunkRequestObserver,
   FANSLY_DM_MESSAGE_PAGE_LIMIT,
   fetchAndJournalFanslyDmMessagePage,
+  isThreadAttributableFanslyFailure,
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { SyncRunTelemetry } from "./observability.ts";
@@ -109,6 +127,12 @@ export interface TargetedThreadBackfillRunOptions {
   /** Test seams for the contention wait above. */
   contentionWaitMs?: number;
   contentionPollMs?: number;
+  /**
+   * The pg-boss job this run executes. Written into the page lease's owner,
+   * so reconciliation can tell THIS run's lease from any other targeted run's
+   * (`isTargetedThreadBackfillLeaseLive`).
+   */
+  jobId?: string;
 }
 
 export interface TargetedThreadBackfillJob {
@@ -154,10 +178,17 @@ export interface TargetedThreadBackfillSendInput extends TargetedThreadBackfillJ
 }
 
 export type TargetedThreadBackfillOutcome =
-  /** The provider ran out of history (or the walk met already-stored ground). */
+  /** PROVEN: from the thread's stored oldest message the walk read contiguous
+   * pages down to an EMPTY one — the whole history is stored. */
   | "completed"
-  /** The run's bound was reached with history still left; re-run to continue. */
+  /** Stopped without that proof — the run's bound or item cap, stored ground
+   * met, or the end of history below an approved boundary that is not the
+   * stored oldest message; re-run to continue. */
   | "partial"
+  /** Fansly refused a page of this thread with a thread-attributable answer
+   * (a terminal 500, or a 4xx that is not auth, timeout or rate limit); the
+   * thread's breaker recorded it, so its next run waits out the backoff. */
+  | "vendor_error"
   | "thread_not_found"
   | "unsupported_platform"
   /** Excluded/invisible/unidentified thread — the same rows the picker skips. */
@@ -195,7 +226,11 @@ export interface TargetedThreadBackfillResult {
   insertedMessages: number;
   journaledMessages: number;
   overlapFound: boolean;
+  /** Fansly's own "no more" on the walk's last page: a short page counts. */
   providerHistoryExhausted: boolean;
+  /** The walk's last page came back EMPTY: Fansly holds nothing older than
+   * its cursor. The only evidence of the end of a history (decision №3). */
+  emptyPageReached: boolean;
   storedMessageCountBefore: number;
   oldestStoredMessageIdBefore: string | null;
   messageCoverageStatus: MessageCoverageStatus | null;
@@ -270,6 +305,29 @@ export async function isTargetedThreadBackfillSlotTaken(
   return jobs.some((job) => TARGETED_BACKFILL_SLOT_STATES.has(job.state));
 }
 
+/** One targeted job as pg-boss holds it; null when the queue has no such job. */
+export interface TargetedThreadBackfillJobRecord {
+  state: string;
+  /** The run's result once `completed`; the serialized error once `failed`. */
+  output: unknown;
+  completedOn: Date | null;
+}
+
+export async function findTargetedThreadBackfillJob(
+  boss: Pick<PgBoss, "findJobs">,
+  jobId: string,
+): Promise<TargetedThreadBackfillJobRecord | null> {
+  const [job] = await boss.findJobs(TARGETED_THREAD_BACKFILL_QUEUE, { id: jobId });
+  return job
+    ? { state: job.state, output: job.output ?? null, completedOn: job.completedOn ?? null }
+    : null;
+}
+
+/** pg-boss still owns the job: it is queued, or a worker is running it. */
+export function isTargetedThreadBackfillJobInFlight(state: string): boolean {
+  return TARGETED_BACKFILL_SLOT_STATES.has(state);
+}
+
 export function parseTargetedThreadBackfillJob(data: unknown): TargetedThreadBackfillJob | null {
   if (typeof data !== "object" || data === null) {
     return null;
@@ -317,6 +375,7 @@ function emptyResult(
     journaledMessages: 0,
     overlapFound: false,
     providerHistoryExhausted: false,
+    emptyPageReached: false,
     storedMessageCountBefore: 0,
     oldestStoredMessageIdBefore: null,
     messageCoverageStatus: null,
@@ -324,6 +383,128 @@ function emptyResult(
     projectionDebtRecorded: false,
     ...overrides,
   };
+}
+
+/**
+ * A run that FAILED, thrown with what it did before the failure.
+ *
+ * The message is the original error's (the CLI's `--wait` and the job log
+ * read it), the original is the `cause`, and `result.requestAttempts` is the
+ * run's real spend — zero for a failure before the walk. pg-boss serializes
+ * the thrown error into the failed job's output, `result` and
+ * `failureClass` included, so a request the worker could not settle is
+ * still settled from the job record later (agent-hydration reconciliation).
+ */
+export class TargetedThreadBackfillRunError extends Error {
+  readonly result: TargetedThreadBackfillResult;
+  /** Bounded code for journals: `proxy_missing`, `fansly_<status>`,
+   * `fansly_transport`, `lease_lost` or `internal`. */
+  readonly failureClass: string;
+
+  constructor(cause: unknown, result: TargetedThreadBackfillResult) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "TargetedThreadBackfillRunError";
+    this.result = result;
+    this.failureClass = classifyTargetedRunFailure(cause);
+  }
+}
+
+function classifyTargetedRunFailure(error: unknown): string {
+  if (error instanceof ProxyMissingError || error instanceof FanslyProxyMissingError) {
+    return "proxy_missing";
+  }
+  if (error instanceof PageSyncLeaseLostError) {
+    return "lease_lost";
+  }
+  if (error instanceof FanslyApiError) {
+    return typeof error.status === "number" ? `fansly_${error.status}` : "fansly_transport";
+  }
+  return "internal";
+}
+
+/**
+ * Reads a targeted run's result back from wherever it was kept: the value a
+ * completed job returned, or the `result` a failed job's serialized
+ * `TargetedThreadBackfillRunError` carries. Anything else is not a result.
+ */
+export function asTargetedThreadBackfillResult(value: unknown): TargetedThreadBackfillResult | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const counts = [record.requests, record.requestAttempts, record.insertedMessages];
+  if (
+    typeof record.outcome !== "string" ||
+    typeof record.threadId !== "number" ||
+    !counts.every((count) => typeof count === "number" && Number.isSafeInteger(count) && count >= 0)
+  ) {
+    return null;
+  }
+  return record as unknown as TargetedThreadBackfillResult;
+}
+
+/** What a failed targeted job's output says about its run, when anything. */
+export function describeFailedTargetedThreadBackfillJob(output: unknown): {
+  result: TargetedThreadBackfillResult | null;
+  failureClass: string | null;
+} {
+  const record = typeof output === "object" && output !== null ? output as Record<string, unknown> : {};
+  return {
+    result: asTargetedThreadBackfillResult(record.result),
+    failureClass: typeof record.failureClass === "string" ? record.failureClass : null,
+  };
+}
+
+/** The hydration request a job's raw data names, even when the rest of the
+ * payload is unusable (the worker still owes that request an answer). */
+export function targetedThreadBackfillRequestRefOf(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) {
+    return null;
+  }
+  const ref = (data as Record<string, unknown>).hydrationRequestRef;
+  return typeof ref === "string" && ref.length > 0 ? ref : null;
+}
+
+const TARGETED_BACKFILL_LEASE_OWNER_PREFIX = "targeted-thread-backfill";
+
+/** `targeted-thread-backfill:<pid>[:<pg-boss job id>]`. The job id makes the
+ * lease attributable to one run; a run started outside a job has none. */
+function targetedBackfillLeaseOwner(jobId: string | undefined) {
+  return jobId === undefined
+    ? `${TARGETED_BACKFILL_LEASE_OWNER_PREFIX}:${process.pid}`
+    : `${TARGETED_BACKFILL_LEASE_OWNER_PREFIX}:${process.pid}:${jobId}`;
+}
+
+/**
+ * Whether a targeted run of THIS job may still be holding the page.
+ *
+ * pg-boss failing a job does not stop its handler: an expired job is failed
+ * while its code runs on, and a worker's shutdown fails its active job before
+ * the process is gone. The page's dm_messages lease is what proves a run is
+ * still alive — it is heartbeated every 30 s and lapses within its 120 s TTL
+ * once nobody does. Read on the database clock. An unexpired targeted lease
+ * owned by ANOTHER job is not this run; one whose owner names no job (written
+ * before owners carried it) might be, and counts as live.
+ */
+export async function isTargetedThreadBackfillLeaseLive(
+  db: AppContext["db"],
+  input: { pageId: number; jobId: string },
+): Promise<boolean> {
+  const result = await db.execute<{ owner: string | null }>(sql`
+    select lease_owner as "owner"
+    from page_sync_states
+    where page_id = ${input.pageId}
+      and stream = 'dm_messages'
+      and leased_seq is not null
+      and lease_expires_at > clock_timestamp()
+      and lease_owner like ${`${TARGETED_BACKFILL_LEASE_OWNER_PREFIX}:%`}
+  `);
+  const owner = result.rows[0]?.owner;
+  if (typeof owner !== "string") {
+    return false;
+  }
+  const [, , ...jobParts] = owner.split(":");
+  return jobParts.length === 0 || jobParts.join(":") === input.jobId;
 }
 
 /** pgboss.job, as the CLI reads it back for one targeted backfill job. */
@@ -525,7 +706,7 @@ export async function runTargetedThreadBackfill(
   const deadline = Date.now() + (options?.contentionWaitMs ?? TARGETED_BACKFILL_CONTENTION_WAIT_MS);
   const pollMs = options?.contentionPollMs ?? TARGETED_BACKFILL_CONTENTION_POLL_MS;
   for (;;) {
-    const result = await runTargetedThreadBackfillOnce(app, input);
+    const result = await runTargetedThreadBackfillOnce(app, input, options?.jobId);
     if (result.outcome !== "page_busy" && result.outcome !== "lease_unavailable") {
       return result;
     }
@@ -548,9 +729,40 @@ export async function runTargetedThreadBackfill(
   }
 }
 
+/** What one attempt has done so far; read back when it throws. */
+interface TargetedRunProgress {
+  result: TargetedThreadBackfillResult | null;
+  budget: SyncChunkBudget | null;
+}
+
+/**
+ * One attempt, and the only place a run's failure leaves it: every throw —
+ * before the lease, around the walk, after it — becomes a
+ * `TargetedThreadBackfillRunError` that carries the run's spend so far.
+ */
 async function runTargetedThreadBackfillOnce(
   app: AppContext,
   input: TargetedThreadBackfillJob,
+  jobId: string | undefined,
+): Promise<TargetedThreadBackfillResult> {
+  const progress: TargetedRunProgress = { result: null, budget: null };
+  try {
+    return await walkTargetedThread(app, input, jobId, progress);
+  } catch (error) {
+    if (error instanceof TargetedThreadBackfillRunError) {
+      throw error;
+    }
+    const result = progress.result ?? emptyResult(input.threadId, "partial");
+    result.requestAttempts = progress.budget?.totalRequests ?? result.requestAttempts;
+    throw new TargetedThreadBackfillRunError(error, result);
+  }
+}
+
+async function walkTargetedThread(
+  app: AppContext,
+  input: TargetedThreadBackfillJob,
+  jobId: string | undefined,
+  progress: TargetedRunProgress,
 ): Promise<TargetedThreadBackfillResult> {
   const { threadId } = input;
   const ignoreRetentionLimit = input.ignoreRetentionLimit === true;
@@ -578,6 +790,11 @@ async function runTargetedThreadBackfillOnce(
   if (isConversationSyncHealthExcluded(health)) {
     return emptyResult(threadId, "breaker_open", base);
   }
+  // A lapsed window with failures still on record is a retry of a thread
+  // Fansly has been refusing: its first page goes out on ONE physical
+  // attempt, as the executor's failing-thread retry does, so a poison thread
+  // costs one request instead of four.
+  const failingThread = (health?.failureCount ?? 0) > 0;
 
   // Stage 17 depth cap, per run instead of per global config: the deep-backfill
   // picker offers a thread only while stored_message_count < retention_limit.
@@ -602,7 +819,7 @@ async function runTargetedThreadBackfillOnce(
   const lease = await acquireTargetedPageSyncLease(app.db, {
     pageId: platformAccountId,
     stream: "dm_messages",
-    workerId: `targeted-thread-backfill:${process.pid}`,
+    workerId: targetedBackfillLeaseOwner(jobId),
     leaseToken: randomUUID(),
     leaseTtlMs: TARGETED_BACKFILL_LEASE_TTL_MS,
   });
@@ -729,6 +946,8 @@ async function runTargetedThreadBackfillOnce(
     rateLimitWaiter: createSyncRateLimitWaiter(app, { egressKey: pageContext.egressKey }),
     sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "targeted_backfill"),
   };
+  // The adapter clamps its in-process retries to this allowance.
+  const singleAttemptRequestContext = { ...requestContext, remainingAttempts: () => 1 };
 
   const result: TargetedThreadBackfillResult = emptyResult(threadId, "partial", {
     ...base,
@@ -737,7 +956,13 @@ async function runTargetedThreadBackfillOnce(
     messageCoverageStatus: conversation.messageCoverageStatus,
     oldestStoredMessageIdBefore: conversation.oldestStoredMessageId,
   });
+  progress.result = result;
+  progress.budget = budget;
   let walkFailure: unknown = null;
+  /** The thread-attributable failure the breaker recorded (`vendor_error`).
+   * Assigned inside the execution-context callback; the cast keeps the
+   * declared type instead of a narrowing to `null` across it. */
+  let vendorFailure = null as (FanslyApiError & { status: number }) | null;
   /** A page of this walk left a message unstored (no parseable createdAt). */
   let normalizationDebt = false;
   /** When this walk read the thread head; finalize never stamps it otherwise. */
@@ -777,6 +1002,63 @@ async function runTargetedThreadBackfillOnce(
     }
   };
 
+  /**
+   * The executor's per-thread breaker (0086), written by the point path too:
+   * a thread Fansly keeps refusing backs off (5 min doubling, 6 h quarantine
+   * from the 4th failure) instead of being walked into the same answer by
+   * every approval. Not recorded while several OTHER groups of the page have
+   * failed since its last successful read — that is an outage, not this
+   * thread. Runs inside the execution context, so the write is fenced.
+   */
+  const recordThreadBreakerFailure = async (
+    error: FanslyApiError & { status: number },
+  ): Promise<{ recorded: boolean; leaseLost: PageSyncLeaseLostError | null }> => {
+    try {
+      const otherFailingGroups = await countOtherDmMessageGroupsFailingSinceLastSuccess(app.db, {
+        platformAccountId,
+        platformConversationId: conversation.platformConversationId,
+        since: new Date(Date.now() - DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS),
+      });
+      if (otherFailingGroups >= DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS) {
+        await telemetry.addNote(
+          "DM message failures span several conversations; treated as a page-wide outage, no breaker",
+          { conversationId: threadId, httpStatus: error.status, otherFailingGroups },
+        );
+        return { recorded: false, leaseLost: null };
+      }
+      const health = await withOwnedPageSyncTransaction(app.db, async (dbTx) =>
+        recordConversationSyncFailure(dbTx, {
+          conversationId: threadId,
+          platformAccountId,
+          errorClass: `fansly_${error.status}`,
+          errorMessage: error.message,
+        }));
+      await telemetry.addNote(
+        health.quarantineUntil !== null
+          ? "DM conversation quarantined after repeated targeted-backfill failures"
+          : "DM conversation targeted-backfill failure recorded, backing off",
+        {
+          conversationId: threadId,
+          httpStatus: error.status,
+          failureCount: health.failureCount,
+          nextRetryAt: health.nextRetryAt?.toISOString() ?? null,
+          quarantineUntil: health.quarantineUntil?.toISOString() ?? null,
+          otherFailingGroups,
+        },
+      );
+      return { recorded: true, leaseLost: null };
+    } catch (breakerError) {
+      if (breakerError instanceof PageSyncLeaseLostError) {
+        return { recorded: false, leaseLost: breakerError };
+      }
+      app.logger.warn(
+        { err: breakerError, threadId, platformAccountId },
+        "Targeted thread backfill could not record the thread's breaker failure",
+      );
+      return { recorded: false, leaseLost: null };
+    }
+  };
+
   try {
     await runWithPageSyncExecutionContext({
       pageId: platformAccountId,
@@ -790,6 +1072,7 @@ async function runTargetedThreadBackfillOnce(
         let before = input.startBeforeMessageRef ?? conversation.oldestStoredMessageId;
         // Only a walk of an empty thread starts at (and reads) the head.
         headReadAt = before === null ? new Date() : null;
+        let pageRequestContext = failingThread ? singleAttemptRequestContext : requestContext;
 
         while (budget.hasRequestCapacity() && budget.hasWallClockCapacity()) {
           if (leaseFenced) {
@@ -801,7 +1084,7 @@ async function runTargetedThreadBackfillOnce(
           requestObserver.recordConversationTouched(threadId);
 
           const messagePage = await fetchAndJournalFanslyDmMessagePage(app, {
-            requestContext,
+            requestContext: pageRequestContext,
             telemetry,
             syncRunId: run.id,
             platformAccountId,
@@ -821,17 +1104,36 @@ async function runTargetedThreadBackfillOnce(
             await clearConversationSyncHealth(dbTx, threadId);
           });
 
+          // The thread answered, and its breaker row is gone: the rest of
+          // the walk is ordinary work.
+          pageRequestContext = requestContext;
+
           result.requests += 1;
           result.insertedMessages += messagePage.insertedMessageCount;
           result.journaledMessages += messagePage.normalizedMessages.length;
           result.overlapFound = result.overlapFound || messagePage.overlapFound;
           result.providerHistoryExhausted = messagePage.providerHistoryExhausted;
+          result.emptyPageReached = messagePage.page.items.length === 0;
           normalizationDebt = normalizationDebt || messagePage.normalizationDebt;
 
-          if (messagePage.providerHistoryExhausted || messagePage.overlapFound) {
-            result.outcome = "completed";
+          // The end of the history, PROVEN only by an empty page reached from
+          // the stored oldest message (decision №3). Below an approved
+          // boundary that is not the stored oldest, the same empty page leaves
+          // the window above the boundary unread: `partial`.
+          if (result.emptyPageReached) {
+            result.outcome = walkStartsAtStoredOldest ? "completed" : "partial";
             break;
           }
+          // Stored ground met: no proof of anything (plan §6.2) — a stale
+          // summary or an interior boundary. Stop; the finalize below
+          // recomputes the summary, so a re-run starts from the real oldest.
+          if (messagePage.overlapFound) {
+            result.outcome = "partial";
+            break;
+          }
+          // A SHORT page is not the end: Fansly cuts 25 rows and can filter
+          // some out (16.09). The walk reads on from its oldest message; an
+          // empty answer to that read is the proof.
 
           // Stage 17: only the explicit per-run override may lift the depth
           // predicate. Checking it ONCE before the walk would let a default run
@@ -858,6 +1160,21 @@ async function runTargetedThreadBackfillOnce(
       } catch (error) {
         walkFailure = error;
         result.outcome = error instanceof PageSyncLeaseLostError ? "lease_lost" : "partial";
+        if (isThreadAttributableFanslyFailure(error)) {
+          // The 500 breaker of the point path: the executor's per-thread rule.
+          // Recorded, the failure is this thread's verdict and the run ENDS
+          // with it (`vendor_error`) instead of throwing; not recorded (a
+          // page-wide outage, or the write failed), it stays a run failure.
+          const breaker = await recordThreadBreakerFailure(error);
+          if (breaker.recorded) {
+            walkFailure = null;
+            vendorFailure = error;
+            result.outcome = "vendor_error";
+          } else if (breaker.leaseLost) {
+            walkFailure = breaker.leaseLost;
+            result.outcome = "lease_lost";
+          }
+        }
         if (isFanslyAuthError(error)) {
           // A dead session is dead for the WHOLE page, exactly as in the
           // executor: park every stream so nothing else burns quota against
@@ -908,8 +1225,8 @@ async function runTargetedThreadBackfillOnce(
       // An aborted walk does NOT finalize (a failed chunk never writes a
       // coverage verdict, and a lost lease may not write at all) — it leaves
       // repairable debt so the 5-minute sweep recomputes the summary.
-      if (walkFailure || result.outcome === "lease_lost") {
-        await recordSummaryDebt(walkFailure ?? new PageSyncLeaseLostError());
+      if (walkFailure || vendorFailure || result.outcome === "lease_lost") {
+        await recordSummaryDebt(walkFailure ?? vendorFailure ?? new PageSyncLeaseLostError());
         return;
       }
 
@@ -936,17 +1253,18 @@ async function runTargetedThreadBackfillOnce(
         return;
       }
 
-      // The coverage verdict. Only exhaustion of a walk that started at the
-      // stored oldest message (or at the head of an empty thread) proves the
-      // whole history stored: `complete`, unless the walk left a message
-      // unstored. Overlap proves nothing here — from the stored oldest id a
-      // correct summary never overlaps, so it means an interior boundary or a
-      // stale summary — and exhaustion below any other boundary would certify
-      // the unread gap above it. Both keep the current status (the
-      // incremental rule, which still honours normalization debt) instead of
-      // claiming or downgrading coverage. An interrupted walk stays
-      // `partial_window` so the regular crawl keeps offering the thread.
-      const provesHistoryStored = result.providerHistoryExhausted && walkStartsAtStoredOldest;
+      // The coverage verdict. Only an EMPTY page reached by a walk that
+      // started at the stored oldest message (or at the head of an empty
+      // thread) proves the whole history stored: `complete`, unless the walk
+      // left a message unstored. A short page proves nothing (decision №3).
+      // Overlap proves nothing here — from the stored oldest id a correct
+      // summary never overlaps, so it means an interior boundary or a stale
+      // summary — and exhaustion below any other boundary would certify the
+      // unread gap above it. Both keep the current status (the incremental
+      // rule, which still honours normalization debt) instead of claiming or
+      // downgrading coverage. An interrupted walk stays `partial_window` so
+      // the regular crawl keeps offering the thread.
+      const provesHistoryStored = result.emptyPageReached && walkStartsAtStoredOldest;
       const endedWithoutVerdict = !provesHistoryStored &&
         (result.overlapFound || result.providerHistoryExhausted);
       const messageCoverageStatus = resolveDmConversationCoverageStatus({
@@ -1010,12 +1328,16 @@ async function runTargetedThreadBackfillOnce(
   await telemetry.finish(
     result.outcome === "completed"
       ? "success"
-      : result.outcome === "partial" ||
-          result.outcome === "retention_limit_reached" ||
-          result.outcome === "concurrent_page_chunk"
-        ? "partial"
-        : "skipped",
-    result.outcome === "lease_lost" ? "Page sync lease lost" : null,
+      : result.outcome === "vendor_error"
+        ? "failed"
+        : result.outcome === "partial" ||
+            result.outcome === "retention_limit_reached" ||
+            result.outcome === "concurrent_page_chunk"
+          ? "partial"
+          : "skipped",
+    result.outcome === "lease_lost"
+      ? "Page sync lease lost"
+      : vendorFailure?.message ?? null,
     { conversationId: threadId, ...targetedStats(result) },
   );
 
@@ -1037,6 +1359,7 @@ function targetedStats(result: TargetedThreadBackfillResult) {
     journaledMessages: result.journaledMessages,
     overlapFound: result.overlapFound,
     providerHistoryExhausted: result.providerHistoryExhausted,
+    emptyPageReached: result.emptyPageReached,
     messageCoverageStatus: result.messageCoverageStatus,
     projectionDebtRecorded: result.projectionDebtRecorded,
   };

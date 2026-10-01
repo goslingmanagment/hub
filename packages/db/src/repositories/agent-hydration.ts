@@ -677,7 +677,11 @@ export async function decideAgentHydrationRequest(
  *     budget against a dead session);
  *   - one live approval per page at a time (approved|dispatching from ANY
  *     decider blocks the page — this is also the per-page fairness bound);
- *   - one auto-approval per conversation per UTC day.
+ *   - one auto-approval per conversation per UTC day;
+ *   - a thread whose per-thread breaker window is open (backoff or
+ *     quarantine, `page_dm_message_sync_health`) waits it out: approved, its
+ *     run would only be refused `breaker_open`, and a thread Fansly keeps
+ *     answering 500 must not be walked into the same answer every day.
  *
  * The live-approval guard is a snapshot taken ONCE for the whole list, so it
  * cannot see approvals the caller makes while walking it: the caller enforces
@@ -725,6 +729,11 @@ export async function listAutoApprovableAgentHydrationRequests(
             and today.conversation_ref = r.conversation_ref
             and today.decision_source = 'auto_policy'
             and today.decided_at >= ${input.utcDayStart}
+        )
+        and not exists (
+          select 1 from page_dm_message_sync_health health
+          where health.conversation_id = r.thread_id
+            and (health.next_retry_at > ${now} or health.quarantine_until > ${now})
         )
     ) candidates
     order by page_rank asc, created_at asc, id asc
