@@ -68,7 +68,8 @@ run_remote() {
   printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"
   if [[ -n "$TEST_REMOTE_FAILURE_PATTERN" && "$1" == *"$TEST_REMOTE_FAILURE_PATTERN"* ]]; then return 23; fi
   case "$1" in
-    *"docker pull "*|*"start scheduler worker"*) return 0 ;;
+    *"docker pull "*|*"start scheduler worker"*|*"up -d --no-deps --force-recreate --no-build sync"*) return 0 ;;
+    *"ps -q sync"*) next_sync_status ;;
     *"agency-hub.source-revision"*) printf '%s\n' "$TEST_IMAGE_METADATA" ;;
     *"docker tag "*) return 0 ;;
     *"--current config --format json"*) if [[ -n "$TEST_CURRENT_COMPOSE_JSON" ]]; then printf '%s\n' "$TEST_CURRENT_COMPOSE_JSON"; else printf '%s\n' "$TEST_COMPOSE_JSON"; fi ;;
@@ -79,6 +80,18 @@ run_remote() {
     *"com.docker.compose.project"*) printf '%s\n' "$TEST_PROJECT" ;;
     *) printf 'Unexpected remote command\n' >&2; return 97 ;;
   esac
+}
+# Each sync health probe answers the next status of TEST_SYNC_STATUSES (the
+# last one repeats). The probe runs in a command substitution, so the position
+# lives in a file.
+next_sync_status() {
+  local index=0
+  [[ -f "$TEST_COMMAND_LOG.sync" ]] && index="$(cat "$TEST_COMMAND_LOG.sync")"
+  printf '%s\n' $((index + 1)) > "$TEST_COMMAND_LOG.sync"
+  set -- $TEST_SYNC_STATUSES
+  (( index < $# )) || index=$(($# - 1))
+  shift "$index"
+  printf '%s' "$1"
 }
 ssh() {
   printf 'ssh %s\n' "$*" >> "$TEST_COMMAND_LOG"
@@ -127,7 +140,7 @@ describe("production deploy behavior without production access", () => {
       TEST_CURRENT_COMPOSE_JSON: "", TEST_COMPOSE_JSON: JSON.stringify(resolvedConfig()), TEST_CONFIG_HASH: `postgres ${configHash}`,
       TEST_EXPECTED_IMAGE: imageId, TEST_POSTGRES_METADATA: currentPostgres, TEST_PROJECT: "agency-hub",
       TEST_CALCULATED_CHECKSUM: checksum,
-      TEST_REMOTE_FAILURE_PATTERN: "", TEST_SSH_FAILURE: "0",
+      TEST_REMOTE_FAILURE_PATTERN: "", TEST_SSH_FAILURE: "0", TEST_SYNC_STATUSES: "healthy",
       ...overrides,
     };
   }
@@ -396,6 +409,51 @@ describe("production deploy behavior without production access", () => {
     expect(commands()).toHaveLength(1);
   });
 
+  // Design §9.3 [A3]: the app-scope recreate leaves sync alone; it is
+  // recreated on its own, without touching its dependencies, once the api is
+  // healthy. A stack recreate already started it after API health.
+  it("recreates only the sync container in app scope, and nothing in stack scope", () => {
+    const apps = runFunctions(["recreate_sync_service"], "recreate_sync_service");
+    expect(apps.status, apps.stderr).toBe(0);
+    expect(commands()).toEqual([
+      "set -euo pipefail; cd /opt/agency-hub && docker compose --current up -d --no-deps --force-recreate --no-build sync",
+    ]);
+
+    writeFileSync(commandLog, "");
+    const stack = runFunctions(["recreate_sync_service"], "recreate_sync_service", { RECREATE_SCOPE: "stack" });
+    expect(stack.status, stack.stderr).toBe(0);
+    expect(stack.stderr).toContain("Stack recreate already started the sync container");
+    expect(commands()).toEqual([]);
+  });
+
+  it("propagates a failed sync recreate to its caller", () => {
+    const result = runFunctions(["recreate_sync_service"], String.raw`
+      if recreate_sync_service; then exit 0; else exit 51; fi
+    `, { TEST_REMOTE_FAILURE_PATTERN: "--no-deps --force-recreate --no-build sync" });
+    expect(result.status, result.stderr).toBe(51);
+  });
+
+  it("waits for the sync container healthcheck to report healthy", () => {
+    const result = runFunctions(["wait_for_sync_container_health"], String.raw`
+      sleep() { :; }
+      wait_for_sync_container_health
+    `, { TEST_SYNC_STATUSES: "missing starting starting healthy" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands()).toHaveLength(4);
+    expect(commands().every((command) => command.includes("--current ps -q sync"))).toBe(true);
+    expect(result.stderr).toContain("Sync container status: missing");
+  });
+
+  it.each(["unhealthy", "restarting", "missing"])("fails the sync health gate when the container stays %s", (status) => {
+    const result = runFunctions(["wait_for_sync_container_health"], String.raw`
+      sleep() { :; }
+      if wait_for_sync_container_health; then exit 0; else exit 51; fi
+    `, { TEST_SYNC_STATUSES: status });
+    expect(result.status, result.stderr).toBe(51);
+    expect(commands()).toHaveLength(60);
+    expect(result.stderr).toContain(`Sync container last observed status: ${status}`);
+  });
+
   it("leaves explicitly requested stack scope outside the app-only infrastructure guard", () => {
     const result = runFunctions(["prepare_remote_infrastructure_check", "verify_remote_infrastructure_unchanged"],
       "prepare_remote_infrastructure_check; verify_remote_infrastructure_unchanged", { RECREATE_SCOPE: "stack" });
@@ -426,6 +484,22 @@ describe("resolved Compose infrastructure fingerprint", () => {
     ["secret", { secrets: { database: { file: "/other-secret" } } }],
   ])("detects changed %s configuration", (_section, replacement) => {
     expect(fingerprint({ ...resolvedConfig(), ...replacement })).not.toBe(fingerprint(resolvedConfig()));
+  });
+
+  // The first release with the sync service is an app-scope deploy: adding,
+  // changing or dropping it must not read as an infrastructure change.
+  it("treats the sync service as application configuration", () => {
+    const original = resolvedConfig();
+    const withSync = {
+      ...original,
+      services: { ...original.services, sync: { image: "example/hub:production", command: ["node", "apps/runtime/dist/startup.js", "sync"] } },
+    };
+    const changedSync = {
+      ...original,
+      services: { ...original.services, sync: { image: "example/hub:new", stop_grace_period: "45s" } },
+    };
+    expect(fingerprint(withSync)).toBe(fingerprint(original));
+    expect(fingerprint(changedSync)).toBe(fingerprint(original));
   });
 
   it("detects added, changed and removed non-app services", () => {

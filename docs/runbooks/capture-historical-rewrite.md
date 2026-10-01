@@ -323,12 +323,15 @@ space is not returned until that rewrite finishes.
 
 ### R2 — stop the writers, then null the bodies
 
-**On the VPS. ALL THREE ROLES, api INCLUDED — this is a full maintenance
+**On the VPS. EVERY RUNTIME ROLE, api INCLUDED — this is a full maintenance
 window, not a worker pause:**
 
     cd /opt/agency-hub   # wherever the release lives
     docker compose --env-file .env.production -f docker-compose.production.yml \
-      stop api worker scheduler
+      stop api worker scheduler sync
+
+`sync` is the Fansly Sync Engine's process: it heartbeats like the other
+three, and once it owns pages it journals every Fansly response.
 
 **Why the api too, and what it costs (#223).** The api is a capture writer, on
 more paths than any other role: `services/auth.ts recordAudit` journals an
@@ -391,7 +394,7 @@ first and budget the window:
 ### R4 — restart
 
     docker compose --env-file .env.production -f docker-compose.production.yml \
-      start api worker scheduler
+      start api worker scheduler sync
     pnpm cli status
     curl -sS -o /dev/null -w '%{http_code}\n' https://gosling-agency.ru/api/v1/health
 
