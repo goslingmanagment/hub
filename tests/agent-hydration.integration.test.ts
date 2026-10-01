@@ -1844,6 +1844,32 @@ describe("[sync-critical] hydration autopilot (decision #202)", () => {
     expect(cycle.autoApprove?.considered).toBe(0);
   });
 
+  it("a thread inside an open breaker window waits it out instead of being approved", async () => {
+    // A thread Fansly answers 500 must not be walked into the same answer by
+    // the next day's approval: its run would only be refused `breaker_open`.
+    const { request } = await fileRequest();
+    await testDb!.pool.query(`
+      insert into page_dm_message_sync_health (
+        conversation_id, platform_account_id, failure_count, error_class,
+        last_error, last_attempt_at, next_retry_at, quarantine_until
+      ) values ($1, $2, 1, 'fansly_500', 'boom', now(), now() + interval '10 minutes', null)
+    `, [fanslyThreadId, fanslyPageId]);
+    await autopilot("enforce", 200);
+
+    const held = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(held.autoApprove?.approved).toBe(0);
+    expect((await findAgentHydrationRequestByRef(testDb!.db, request.requestRef)).request?.state)
+      .toBe("requested");
+
+    // The window lapses: the thread is approvable again (its run retries on a
+    // single physical attempt).
+    await testDb!.pool.query(
+      "update page_dm_message_sync_health set next_retry_at = now() - interval '1 minute'",
+    );
+    const lapsed = await runAgentHydrationCycle(appContext, stubBoss());
+    expect(lapsed.autoApprove?.approved).toBe(1);
+  });
+
   it("one live approval per page at a time", async () => {
     await fileRequest();
     await autopilot("enforce", 200);
