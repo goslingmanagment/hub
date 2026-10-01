@@ -2011,18 +2011,20 @@ export function buildProgram() {
         // The worker timer does the same; this is the offline repair path.
         const resolvePayload = fanslyWsLivePayloadResolver(app);
         const live: Record<string, number> = {};
+        // One forward walk: a receipt left pending (failure, erasure in
+        // progress, another applier) is passed, never listed again.
+        let after = 0;
         for (let batch = 0; batch < limit; batch++) {
-          const pending = await listPendingFanslyWsLiveReceipts(app.db, { pageId: stored.page.id, limit: 20 });
-          let acked = 0;
+          const pending = await listPendingFanslyWsLiveReceipts(app.db, {
+            pageId: stored.page.id, afterObservationId: after, limit: 20,
+          });
           for (const observationId of pending) {
             const result = await applyFanslyWsLive(app, observationId, resolvePayload);
             const key = result?.status ?? "failed";
             live[key] = (live[key] ?? 0) + 1;
-            if (key === "applied" || key === "debt" || key === "skipped") acked += 1;
           }
-          // A receipt left pending (failure, erasure in progress, another
-          // applier) would be listed again: stop rather than spin on it.
-          if (pending.length < 20 || acked < pending.length) break;
+          if (pending.length < 20) break;
+          after = pending.at(-1)!;
         }
         console.log(JSON.stringify({ pageId: stored.page.id, decoded, live }));
       } finally { await app.close(); }

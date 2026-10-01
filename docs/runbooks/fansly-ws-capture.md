@@ -162,18 +162,24 @@ nothing: the receipt stays `pending` and is applied once by a later path.
   each capture (in capture order, one transaction at a time per connection),
   at worker start, and every 5 seconds on a worker-level timer over every
   Fansly page (`skip locked`, 100 receipts per pass, receipts younger than 3 s
-  left to the connection). A page whose socket is down, blocked or disabled is
-  still applied.
+  left to the connection; each pass continues after the previous one and
+  wraps to the oldest, so receipts that keep failing never starve the rest).
+  A page whose socket is down, blocked or disabled is still applied.
 * `live_state`: `legacy` (captured before the overlay, never replayed),
   `pending`, `applied`, `debt` (a message without `id`, `groupId`, `senderId`
-  or a parseable `createdAt`, the decoder bound, or unreachable raw), `skipped`
-  (no message in the frame, or every one erasure-fenced). An erasure in flight
-  leaves the receipt `pending`; an executed erasure fences the erased fan's
-  material by material time, like every DM archive writer.
+  or a parseable `createdAt`, the decoder bound, unreachable raw, or a frame
+  the database refuses with a data error — SQLSTATE class 22 or a check
+  violation — which every retry would hit; the worker logs its SQLSTATE and
+  the frame's writes roll back, the ack commits), `skipped` (no message in the
+  frame, or every one erasure-fenced). Any other failure, and an erasure in
+  flight, leaves the receipt `pending`; an executed erasure fences the erased
+  fan's material by material time, like every DM archive writer.
 * Socket-only fields (plan §7.3): text, sender, chat, normalized time,
   reply-to, attachment fact and type (ids only). Tips, PPV prices, purchases
   and media access stay REST-only: the overlay has no money column and the
-  event carries none.
+  event carries none. Socket text is vendor text: an unpaired UTF-16
+  surrogate (a fan's broken emoji) or a NUL is stored as U+FFFD, since the
+  text column and the event's jsonb would refuse it on every retry.
 * A deletion is a sticky mark. A deletion before its create leaves a stub
   that the create fills without clearing the mark; a late create, a replay or
   a REST read never clears it. A message deleted before it became visible

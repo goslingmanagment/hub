@@ -298,6 +298,91 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
       .toEqual([{ live_state: "debt" }, { live_state: "skipped" }]);
   });
 
+  it("vendor text Postgres would refuse (a lone surrogate, a NUL) becomes visible with U+FFFD in its place", async () => {
+    const f = await fixture();
+    // A fan's broken emoji (high or low half alone), a stray NUL, a type past
+    // the integer column: each once made every apply attempt fail the same way.
+    const high = message({ content: "love you \ud83d" });
+    const low = message({ content: "\udc00 low first" });
+    const nul = message({ content: "nul\u0000byte" });
+    const wide = message({ type: 2 ** 31 });
+    const observationId = await f.capture(created(high, low, nul, wide));
+    expect(await f.apply(observationId))
+      .toEqual({ status: "applied", created: 4, deleted: 0, fenced: 0, invalid: 0, events: 4 });
+    const rows = await query<{ id: string; content: string; message_type: number | null }>(`select
+      platform_message_id as id, content, message_type from dm_live_messages order by platform_message_id`);
+    expect(rows).toEqual([
+      { id: high.id, content: "love you �", message_type: 1 },
+      { id: low.id, content: "� low first", message_type: 1 },
+      { id: nul.id, content: "nul�byte", message_type: 1 },
+      { id: wide.id, content: "hello", message_type: null },
+    ]);
+    expect((await query<{ text: string }>(`select data->>'text' as text from domain_events
+      order by message_ref`)).map((event) => event.text))
+      .toEqual(["love you �", "� low first", "nul�byte", "hello"]);
+    expect(await query("select state, live_state from fansly_ws_decode_receipts"))
+      .toEqual([{ state: "retained", live_state: "applied" }]);
+  });
+
+  it("a frame the database refuses on every attempt is acked as debt, never left pending", async () => {
+    const f = await fixture();
+    const refused = message({ content: "refused" });
+    const neighbour = message();
+    const observationId = await f.capture(created(refused, neighbour));
+    const later = await f.capture(created(message({ content: "refused" })));
+    // Stands in for any value the decoder did not foresee and Postgres refuses
+    // (class 22, the same on every retry). A transient failure (the chaos
+    // cases above) keeps the receipt pending instead.
+    await testDb.pool.query(`create function live_refuse() returns trigger language plpgsql as $$
+      begin raise exception 'refused' using errcode = 'invalid_text_representation'; end $$;
+      create trigger live_refuse before insert on dm_live_messages for each row
+        when (new.content = 'refused') execute function live_refuse()`);
+    try {
+      // The frame's writes roll back to the savepoint (its neighbour too);
+      // the ack and the legacy metadata settle commit.
+      expect(await f.apply(observationId)).toEqual({ status: "debt", dataError: "22P02",
+        created: 0, deleted: 0, fenced: 0, invalid: 2, events: 0 });
+      const warn = vi.spyOn(f.app.logger, "warn");
+      expect(await applyFanslyWsLive(f.app, later)).toMatchObject({ status: "debt", dataError: "22P02" });
+      expect(warn).toHaveBeenCalledWith({ observationId: later, errorClass: "22P02" }, expect.stringContaining("acked as debt"));
+    } finally {
+      await testDb.pool.query("drop trigger live_refuse on dm_live_messages; drop function live_refuse()");
+    }
+    expect(await count("dm_live_messages")).toBe(0);
+    expect(await count("domain_events")).toBe(0);
+    expect(await query(`select state, live_state, live_applied_at is not null as acked
+      from fansly_ws_decode_receipts order by observation_id`))
+      .toEqual([{ state: "retained", live_state: "debt", acked: true }, { state: "retained", live_state: "debt", acked: true }]);
+    expect(await listPendingFanslyWsLiveReceipts(f.app.db, { limit: 10 })).toEqual([]);
+    expect(await f.apply(observationId)).toEqual({ status: "not_pending" });
+    const gauges = await readFanslyWsLiveGauges(f.app.db, { windowMinutes: 10 });
+    expect(gauges).toMatchObject({ pendingAgeMs: 0, decodeDebt24h: 2 });
+  });
+
+  it("the timer walks past receipts that keep failing, so they never starve the ones behind them", async () => {
+    const f = await fixture();
+    const stuck: number[] = [];
+    for (let i = 0; i < 3; i++) stuck.push(await f.capture(created(message({ content: "stuck" }))));
+    const behind = await f.capture(created(message()));
+    // A transient failure on every attempt (not a data error): those receipts stay pending.
+    await testDb.pool.query(`create function live_stuck() returns trigger language plpgsql as $$
+      begin raise exception 'stuck'; end $$;
+      create trigger live_stuck before insert on dm_live_messages for each row
+        when (new.content = 'stuck') execute function live_stuck()`);
+    const timer = startFanslyWsLiveTimer(f.app, {
+      timing: { intervalMs: 50, replayMinAgeMs: 0, replayBatch: 2, parityBatch: 10 },
+    });
+    try {
+      await vi.waitFor(async () => expect(await liveState(behind)).toBe("applied"));
+    } finally {
+      await timer.stop();
+      await testDb.pool.query("drop trigger live_stuck on dm_live_messages; drop function live_stuck()");
+    }
+    expect(await listPendingFanslyWsLiveReceipts(f.app.db, { limit: 10 })).toEqual(stuck);
+    expect(await listPendingFanslyWsLiveReceipts(f.app.db, { limit: 10, afterObservationId: stuck[1]! }))
+      .toEqual([stuck[2]]);
+  });
+
   it("fan and page erasure reach the overlay, including a chat only the socket has named", async () => {
     const f = await fixture();
     const fans = await upsertFans(f.app.db, [FAN, OTHER_FAN].map((platformUserId) => ({ platform: "fansly" as const, platformUserId })));

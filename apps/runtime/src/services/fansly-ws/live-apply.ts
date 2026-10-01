@@ -41,7 +41,12 @@ export async function applyFanslyWsLive(
   resolvePayload: FanslyWsLivePayloadResolver = fanslyWsLivePayloadResolver(app),
 ): Promise<FanslyWsLiveApplyResult | null> {
   try {
-    return await applyFanslyWsLiveReceipt(app.db, { observationId, resolvePayload });
+    const result = await applyFanslyWsLiveReceipt(app.db, { observationId, resolvePayload });
+    if ("dataError" in result) {
+      app.logger.warn({ observationId, errorClass: result.dataError },
+        "Fansly live overlay frame refused by the database on every attempt; the receipt is acked as debt");
+    }
+    return result;
   } catch (error) {
     app.logger.warn({ observationId, errorClass: fanslyWsLiveErrorClass(error) },
       "Fansly live overlay apply failed; the receipt stays pending for replay");
@@ -101,17 +106,23 @@ export const FANSLY_WS_LIVE_TIMER: Readonly<FanslyWsLiveTimerTiming> = Object.fr
 
 /** Worker-level timer over all Fansly pages: replays pending live receipts
  * (bounded batch, oldest first; the receipt lock is `skip locked`) and runs
- * one bounded passive parity pass. The first tick runs at start: that is the
- * start-up replay. */
+ * one bounded passive parity pass. Each pass continues after the previous
+ * pass's last receipt and wraps to the oldest after a short batch, so
+ * receipts that keep failing for a while (an erasure in flight, a held lock)
+ * never starve the ones behind them. The first tick runs at start: that is
+ * the start-up replay. */
 export function startFanslyWsLiveTimer(app: LiveApp, options: { timing?: FanslyWsLiveTimerTiming } = {}) {
   const timing = options.timing ?? FANSLY_WS_LIVE_TIMER;
   const resolvePayload = fanslyWsLivePayloadResolver(app);
   let stopped = false;
   let ticking: Promise<void> | null = null;
+  let after = 0;
   async function tick() {
     const pending = await listPendingFanslyWsLiveReceipts(app.db, {
-      limit: timing.replayBatch, receivedBefore: new Date(Date.now() - timing.replayMinAgeMs),
+      limit: timing.replayBatch, afterObservationId: after,
+      receivedBefore: new Date(Date.now() - timing.replayMinAgeMs),
     });
+    after = pending.length < timing.replayBatch ? 0 : pending.at(-1)!;
     for (const observationId of pending) {
       if (stopped) return;
       await applyFanslyWsLive(app, observationId, resolvePayload);

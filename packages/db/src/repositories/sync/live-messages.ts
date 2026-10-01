@@ -9,7 +9,10 @@
 // ack. One function drives every path — right after capture, at start and on
 // the worker timer — and it is idempotent per receipt (only `pending` receipts
 // are taken, `for update skip locked`) and per message (the overlay keys on
-// the Fansly message id; the event dedups on `ws-msg:v1:<id>`).
+// the Fansly message id; the event dedups on `ws-msg:v1:<id>`). A transient
+// failure leaves the receipt pending for the next path; a frame the database
+// refuses the same way on every retry (a data error) is acked as debt, so no
+// receipt stays pending forever.
 //
 // Step 1 boundaries: apply creates no work and makes no HTTP request; it
 // writes no legacy store and no money (plan §7.3, owner decision №7). The
@@ -48,7 +51,8 @@ export interface FanslyWsLiveApplyCounts {
   deleted: number;
   /** Message items skipped because an executed erasure covers them. */
   fenced: number;
-  /** Message items without a required field, or past the decoder bound. */
+  /** Message items without a required field, past the decoder bound, or (on
+   * a `dataError`) in a frame the database refused. */
   invalid: number;
   /** `message.live_observed` events appended (dedup hits excluded). */
   events: number;
@@ -56,6 +60,10 @@ export interface FanslyWsLiveApplyCounts {
 
 export type FanslyWsLiveApplyResult =
   | ({ status: FanslyWsLiveState } & FanslyWsLiveApplyCounts)
+  /** The database refused the frame's writes with an error every retry would
+   * hit (`dataError` is its SQLSTATE): they are rolled back and the receipt is
+   * acked as debt, so it never stays pending and never wedges the replay. */
+  | ({ status: "debt"; dataError: string } & FanslyWsLiveApplyCounts)
   /** Already acked, or another applier holds the receipt right now. */
   | { status: "not_pending" }
   /** An erasure holds this page's fence; the receipt stays pending. */
@@ -90,6 +98,23 @@ type LiveOperation =
 
 function emptyCounts(): FanslyWsLiveApplyCounts {
   return { created: 0, deleted: 0, fenced: 0, invalid: 0, events: 0 };
+}
+
+/** The SQLSTATE of an error the same frame would hit on every retry: a data
+ * exception (class 22: an escape jsonb refuses, a NUL in text, a value past a
+ * column's range) or a check violation. Anything else (a statement timeout,
+ * a lock, a lost connection, an injected failure) is transient: null. The
+ * driver error sits under the query wrapper's `cause`. */
+function deterministicDataError(error: unknown): string | null {
+  let current = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) {
+      return code.startsWith("22") || code === "23514" ? code : null;
+    }
+    current = current.cause;
+  }
+  return null;
 }
 
 /**
@@ -138,17 +163,17 @@ export async function applyFanslyWsLiveReceipt(
       const envelope = wsObject(payload);
       frame = envelope?.codec === FANSLY_WS_CAPTURE_KIND && typeof envelope.frame === "string" ? envelope.frame : null;
     }
-    const counts = emptyCounts();
     if (frame === null) {
       // Tiered, erased or otherwise unreachable raw: nothing to apply ever.
       await ackReceipt(database, input.observationId, "debt", null);
-      return { status: "debt", ...counts };
+      return { status: "debt", ...emptyCounts() };
     }
 
     const live = decodeFanslyWsLiveFrame(frame);
+    let invalid = 0;
     const operations: LiveOperation[] = [];
     for (const item of live.items) {
-      if (item.kind === "invalid" || item.kind === "limit") counts.invalid += 1;
+      if (item.kind === "invalid" || item.kind === "limit") invalid += 1;
       else if (item.kind === "message_created") {
         operations.push({ kind: "create", messageId: item.message.id, message: item.message });
       } else if (item.kind === "message_deleted") {
@@ -161,76 +186,107 @@ export async function applyFanslyWsLiveReceipt(
     // the same messages in different orders cannot deadlock.
     operations.sort((a, b) => a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1
       : a.kind === b.kind ? 0 : a.kind === "delete" ? -1 : 1);
+    const nodes = decodeFanslyWsCapture(frame);
 
-    const ownRef = row.native_account_ref;
-    const events: DomainEventInput[] = [];
-    let applicable = 0;
-    for (const operation of operations) {
-      if (operation.kind === "create") {
-        const message = operation.message;
-        const createdAt = new Date(message.createdAtMs);
-        if (await isDmArchiveScopeFenced(database, {
-          pageId, platform: "fansly", refs: [message.groupId, message.senderId],
-          materialAt: createdAt < receivedAt ? createdAt : receivedAt,
-        })) {
-          counts.fenced += 1;
-          continue;
-        }
-        applicable += 1;
-        const sentByPage = ownRef ? message.senderId === ownRef : null;
-        const visible = await upsertCreated(database, {
-          pageId, observationId: input.observationId, receivedAt, message, sentByPage,
-        });
-        // Nothing new (a repeated frame), or a stub filled under a deletion
-        // that already arrived: neither is news for SSE.
-        if (!visible || visible.deleted) continue;
-        counts.created += 1;
-        events.push({
-          type: FANSLY_WS_LIVE_OBSERVED_EVENT,
-          occurredAt: receivedAt,
-          fanIdentityRef: sentByPage === true ? null : message.senderId,
-          conversationRef: message.groupId,
-          messageRef: message.id,
-          data: {
-            text: message.content,
-            senderRef: message.senderId,
-            sentByPage,
-            createdAt: createdAt.toISOString(),
-            inReplyToRef: message.inReplyTo,
-            inReplyToRootRef: message.inReplyToRoot,
-            attachments: message.attachments.map((attachment) => ({
-              contentType: attachment.contentType,
-              contentRef: attachment.contentId,
-            })),
-            messageType: message.type,
-            decoderVersion: live.decoderVersion,
-            confirmed: false,
-          },
-          schemaVersion: FANSLY_WS_LIVE_EVENT_SCHEMA_VERSION,
-          observationId: input.observationId,
-          dedupKey: `ws-msg:v1:${message.id}`,
-        });
-      } else {
-        if (await isDmArchiveScopeFenced(database, {
-          pageId, platform: "fansly", refs: [operation.groupId], materialAt: receivedAt,
-        })) {
-          counts.fenced += 1;
-          continue;
-        }
-        applicable += 1;
-        if (await markDeleted(database, {
-          pageId, observationId: input.observationId, receivedAt,
-          messageId: operation.messageId, groupId: operation.groupId,
-        })) counts.deleted += 1;
-      }
+    try {
+      // The frame's writes and its ack run in a savepoint (`tx` is already a
+      // transaction), so a refusal that every retry would hit rolls back only
+      // them: the receipt, still locked, is then acked as debt below instead
+      // of staying pending forever and holding the replay's head.
+      return await tx.transaction((savepoint) => applyOperations(savepoint as unknown as Database, {
+        observationId: input.observationId, pageId, receivedAt, ownRef: row.native_account_ref,
+        decoderVersion: live.decoderVersion, operations, invalid, nodes,
+      }));
+    } catch (error) {
+      const dataError = deterministicDataError(error);
+      if (dataError === null) throw error;
+      // No overlay row and no event of this frame survive; the ack does.
+      await ackReceipt(database, input.observationId, "debt", nodes);
+      return { status: "debt", ...emptyCounts(), invalid: invalid + operations.length, dataError };
     }
-    if (events.length > 0) {
-      counts.events = (await appendDomainEventsInTransaction(database, pageId, events)).appended;
-    }
-    const state: FanslyWsLiveState = counts.invalid > 0 ? "debt" : applicable > 0 ? "applied" : "skipped";
-    await ackReceipt(database, input.observationId, state, decodeFanslyWsCapture(frame));
-    return { status: state, ...counts };
   });
+}
+
+/** The frame's overlay rows, events and ack (the savepoint body above). */
+async function applyOperations(database: Database, input: {
+  observationId: number;
+  pageId: number;
+  receivedAt: Date;
+  ownRef: string | null;
+  decoderVersion: number;
+  operations: readonly LiveOperation[];
+  invalid: number;
+  nodes: ReturnType<typeof decodeFanslyWsCapture>;
+}): Promise<FanslyWsLiveApplyResult> {
+  const { pageId, receivedAt } = input;
+  const counts = { ...emptyCounts(), invalid: input.invalid };
+  const events: DomainEventInput[] = [];
+  let applicable = 0;
+  for (const operation of input.operations) {
+    if (operation.kind === "create") {
+      const message = operation.message;
+      const createdAt = new Date(message.createdAtMs);
+      if (await isDmArchiveScopeFenced(database, {
+        pageId, platform: "fansly", refs: [message.groupId, message.senderId],
+        materialAt: createdAt < receivedAt ? createdAt : receivedAt,
+      })) {
+        counts.fenced += 1;
+        continue;
+      }
+      applicable += 1;
+      const sentByPage = input.ownRef ? message.senderId === input.ownRef : null;
+      const visible = await upsertCreated(database, {
+        pageId, observationId: input.observationId, receivedAt, message, sentByPage,
+      });
+      // Nothing new (a repeated frame), or a stub filled under a deletion
+      // that already arrived: neither is news for SSE.
+      if (!visible || visible.deleted) continue;
+      counts.created += 1;
+      events.push({
+        type: FANSLY_WS_LIVE_OBSERVED_EVENT,
+        occurredAt: receivedAt,
+        fanIdentityRef: sentByPage === true ? null : message.senderId,
+        conversationRef: message.groupId,
+        messageRef: message.id,
+        data: {
+          text: message.content,
+          senderRef: message.senderId,
+          sentByPage,
+          createdAt: createdAt.toISOString(),
+          inReplyToRef: message.inReplyTo,
+          inReplyToRootRef: message.inReplyToRoot,
+          attachments: message.attachments.map((attachment) => ({
+            contentType: attachment.contentType,
+            contentRef: attachment.contentId,
+          })),
+          messageType: message.type,
+          decoderVersion: input.decoderVersion,
+          confirmed: false,
+        },
+        schemaVersion: FANSLY_WS_LIVE_EVENT_SCHEMA_VERSION,
+        observationId: input.observationId,
+        dedupKey: `ws-msg:v1:${message.id}`,
+      });
+    } else {
+      if (await isDmArchiveScopeFenced(database, {
+        pageId, platform: "fansly", refs: [operation.groupId], materialAt: receivedAt,
+      })) {
+        counts.fenced += 1;
+        continue;
+      }
+      applicable += 1;
+      if (await markDeleted(database, {
+        pageId, observationId: input.observationId, receivedAt,
+        messageId: operation.messageId, groupId: operation.groupId,
+      })) counts.deleted += 1;
+    }
+  }
+  if (events.length > 0) {
+    counts.events = (await appendDomainEventsInTransaction(database, pageId, events)).appended;
+  }
+  const state: FanslyWsLiveState = counts.invalid > 0 ? "debt" : applicable > 0 ? "applied" : "skipped";
+  await ackReceipt(database, input.observationId, state, input.nodes);
+  return { status: state, ...counts };
 }
 
 /** Insert a visible message, or fill a deletion stub (no sender yet). A row
@@ -336,17 +392,20 @@ async function ackReceipt(
 }
 
 /** Pending live receipts, oldest first: the start-up and timer replay input.
- * `receivedBefore` keeps the timer from racing a frame the live applier is
- * about to take; the receipt lock settles any race anyway. */
+ * `afterObservationId` continues a walk past the previous batch, so receipts
+ * that keep failing never hide the ones behind them. `receivedBefore` keeps
+ * the timer from racing a frame the live applier is about to take; the
+ * receipt lock settles any race anyway. */
 export async function listPendingFanslyWsLiveReceipts(
   db: Database,
-  input: { limit: number; pageId?: number; receivedBefore?: Date },
+  input: { limit: number; pageId?: number; afterObservationId?: number; receivedBefore?: Date },
 ): Promise<number[]> {
   const result = await db.execute<{ observation_id: string }>(sql`
     select observation_id::text as observation_id
     from fansly_ws_decode_receipts
     where live_state = 'pending'
       ${input.pageId === undefined ? sql`` : sql`and page_id = ${input.pageId}`}
+      ${input.afterObservationId === undefined ? sql`` : sql`and observation_id > ${input.afterObservationId}`}
       ${input.receivedBefore === undefined ? sql`` : sql`and received_at <= ${input.receivedBefore}`}
     order by observation_id
     limit ${input.limit}
