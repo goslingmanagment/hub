@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { businessFanslyWsFrame, decodeFanslyWsCapture, fanslyWsCaptureContainsSubject, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
-import { FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection } from "../apps/runtime/src/services/fansly-ws/connection.ts";
+import {
+  drainsOnStop, FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsStopReason,
+} from "../apps/runtime/src/services/fansly-ws/connection.ts";
 import { FANSLY_WS_WORKER_TIMING, fanslyWsPages, startFanslyWsWorker } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import * as liveConfig from "../apps/runtime/src/services/effective-config.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -18,14 +20,24 @@ function harness(overrides: Partial<Parameters<typeof receiveFanslyConnection>[0
   const stop = vi.fn();
   const controller = new AbortController();
   const capture = vi.fn(async () => 1);
-  const decode = vi.fn(decodeFanslyWsCapture);
-  const settle = vi.fn(async () => {});
   const guard = vi.fn(async () => {});
+  const onIntakeStopped = vi.fn();
   const done = receiveFanslyConnection({ open: () => ({ socket, stop }), token: "SYNTHETIC_AUTH",
-    signal: controller.signal, capture, decode, settle, guard, ...overrides });
+    signal: controller.signal, capture, guard, onIntakeStopped, ...overrides });
   socket.dispatchEvent(new Event("open"));
   if (authenticated) socket.frame(JSON.stringify({ t: 1, d: JSON.stringify({ token: "SYNTHETIC_AUTH" }) }));
-  return { socket, stop, controller, capture, decode, settle, guard, done };
+  return { socket, stop, controller, capture: overrides.capture ?? capture, guard, onIntakeStopped, done };
+}
+
+/** A capture that commits only when the test says so, in arrival order. */
+function gatedCapture() {
+  const commits: Array<() => void> = [];
+  let next = 100;
+  const capture = vi.fn((_frame: string, _ordinal: number, _receivedAt: Date) => new Promise<number>((resolve) => {
+    const id = next++;
+    commits.push(() => resolve(id));
+  }));
+  return { capture, commitNext: () => commits.shift()?.() };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -47,12 +59,17 @@ describe("Fansly B0 durable receiver", () => {
     expect(FANSLY_WS_WORKER_TIMING).toEqual({
       configPollMs: 10_000, configStaleMs: 20_000, pagePauseMs: 10_000, backoffBaseMs: 1_500,
       authTimeoutMs: 10_000, checkMs: 5_000, guardStaleMs: 15_000, pingMs: 20_000, pongTimeoutMs: 30_000,
+      drainMs: 20_000, applyDrainMs: 15_000,
     });
     expect(FANSLY_WS_WORKER_TIMING).toMatchObject(FANSLY_WS_CONNECTION_TIMING);
     // A flag flip is seen by the next poll; a stalled read is caught at the first
     // poll tick past staleness; one connection check covers the close.
     const { configPollMs, configStaleMs, checkMs } = FANSLY_WS_WORKER_TIMING;
     expect(configPollMs + configStaleMs + checkMs).toBeLessThanOrEqual(60_000);
+    // A stop drains received frames, applies them to the overlay, then closes
+    // through the 5 s session: well inside the worker's 60 s stop grace.
+    const { drainMs, applyDrainMs } = FANSLY_WS_WORKER_TIMING;
+    expect(drainMs + applyDrainMs + 5_000).toBeLessThanOrEqual(45_000);
   });
 
   it("polls live configuration every 10 seconds by default", async () => {
@@ -66,50 +83,113 @@ describe("Fansly B0 durable receiver", () => {
     await worker.stop();
   });
 
-  it("commits raw before decode; keeps unknown children and excludes controls", async () => {
-    let commit!: (id: number) => void;
-    const h = harness({ capture: vi.fn(() => new Promise<number>((resolve) => { commit = resolve; })) });
-    h.socket.frame(batch);
-    expect(h.decode).not.toHaveBeenCalled();
-    commit(71);
-    await vi.waitFor(() => expect(h.settle).toHaveBeenCalledWith(71, expect.arrayContaining([
-      expect.objectContaining({ path: [1], state: "unknown", transportType: 99999 }),
-    ])));
+  it("captures the exact business frames in arrival order, one durable write at a time", async () => {
+    const gate = gatedCapture();
+    const h = harness({ capture: gate.capture });
+    h.socket.frame(batch); h.socket.frame(known);
+    expect(h.capture).toHaveBeenCalledOnce();
+    expect(h.capture).toHaveBeenLastCalledWith(batch, 2, expect.any(Date));
+    gate.commitNext();
+    await vi.waitFor(() => expect(h.capture).toHaveBeenCalledTimes(2));
+    expect(h.capture).toHaveBeenLastCalledWith(known, 3, expect.any(Date));
+    gate.commitNext();
     h.socket.frame('{"t":2,"d":"{}"}');
+    await Promise.resolve();
     h.controller.abort("disabled");
     expect(await h.done).toBe("disabled");
-    expect(h.decode).toHaveBeenCalledExactlyOnceWith(batch);
     expect(h.stop).toHaveBeenCalledOnce();
   });
 
-  it("keeps committed raw pending after decode/receipt failure and proceeds", async () => {
-    const h = harness({ settle: vi.fn().mockRejectedValue(new Error("db_down")) });
-    h.socket.frame(known); h.socket.frame(unknown);
-    await vi.waitFor(() => expect(h.capture).toHaveBeenCalledTimes(2));
-    h.controller.abort(); await h.done;
-  });
-
-  it("stops on durable capture failure without decoding or silently continuing", async () => {
+  it("stops on durable capture failure without silently continuing", async () => {
     const h = harness({ capture: vi.fn().mockRejectedValue(new Error("db_down")) });
-    h.socket.frame(batch);
+    h.socket.frame(batch); h.socket.frame(known);
     expect(await h.done).toBe("capture_unavailable");
     h.socket.frame(known);
-    expect(h.decode).not.toHaveBeenCalled();
+    expect(h.capture).toHaveBeenCalledOnce();
     expect(h.stop).toHaveBeenCalledOnce();
   });
 
-  it("bounds an in-flight capture plus queued frames and stops on overflow", async () => {
+  it("bounds an in-flight capture plus queued frames, stops on overflow and bounds the drain", async () => {
+    vi.useFakeTimers();
     const h = harness({ capture: vi.fn(() => new Promise<number>(() => {})) });
     for (let i = 0; i < 129; i++) h.socket.frame(known);
-    expect(await h.done).toBe("overflow");
     expect(h.stop).toHaveBeenCalledOnce();
-    expect(h.decode).not.toHaveBeenCalled();
+    expect(h.onIntakeStopped).toHaveBeenCalledOnce();
+    // The in-flight capture never commits: the drain gives up at its bound.
+    let settled = false; void h.done.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(FANSLY_WS_CONNECTION_TIMING.drainMs - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await h.done).toBe("overflow");
+    expect(h.capture).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["ownership_lost", "generation_changed", "guard_unavailable", "disabled"])("closes immediately on %s", async (reason) => {
     const h = harness(); h.controller.abort(reason);
     expect(await h.done).toBe(reason); expect(h.stop).toHaveBeenCalledOnce();
     h.socket.frame(known); expect(h.capture).not.toHaveBeenCalled();
+  });
+
+  it("drops queued frames only when the right (or the ability) to write is lost", () => {
+    const dropping: FanslyWsStopReason[] = ["ownership_lost", "generation_changed", "guard_unavailable",
+      "capture_unavailable"];
+    const draining: FanslyWsStopReason[] = ["disabled", "closed", "transport_error", "pong_timeout", "auth_timeout",
+      "auth_refused", "provider_error", "invalid_frame", "overflow"];
+    expect(dropping.filter(drainsOnStop)).toEqual([]);
+    expect(draining.filter(drainsOnStop)).toEqual(draining);
+  });
+
+  it.each(["disabled", "closed"])("a graceful stop (%s) closes intake and captures a full queue already received", async (how) => {
+    const gate = gatedCapture();
+    const h = harness({ capture: gate.capture });
+    for (let i = 0; i < 128; i++) h.socket.frame(known);
+    expect(h.capture).toHaveBeenCalledOnce();
+    if (how === "disabled") h.controller.abort("disabled");
+    else h.socket.dispatchEvent(new Event("close"));
+    expect(h.stop).toHaveBeenCalledOnce();
+    expect(h.onIntakeStopped).toHaveBeenCalledOnce();
+    // Intake is closed: a late frame is never queued.
+    h.socket.frame(known);
+    let settled = false; void h.done.then(() => { settled = true; });
+    for (let i = 1; i < 128; i++) {
+      gate.commitNext();
+      await vi.waitFor(() => expect(h.capture).toHaveBeenCalledTimes(i + 1));
+    }
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    gate.commitNext();
+    expect(await h.done).toBe(how);
+    expect(h.capture).toHaveBeenCalledTimes(128);
+    // Ordinal 1 is the session frame; every business frame keeps its own.
+    expect(gate.capture.mock.calls.map((call) => call[1])).toEqual(Array.from({ length: 128 }, (_, i) => i + 2));
+  });
+
+  it("a drain ends at once when the right to write is lost mid-drain", async () => {
+    const gate = gatedCapture();
+    const h = harness({ capture: gate.capture });
+    for (let i = 0; i < 5; i++) h.socket.frame(known);
+    h.socket.dispatchEvent(new Event("close"));
+    gate.commitNext();
+    await vi.waitFor(() => expect(h.capture).toHaveBeenCalledTimes(2));
+    h.controller.abort("ownership_lost");
+    expect(await h.done).toBe("closed");
+    gate.commitNext();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("a capture failure during a drain ends it without retrying the frame", async () => {
+    let calls = 0;
+    const h = harness({ capture: vi.fn(async () => {
+      calls += 1;
+      if (calls === 2) throw new Error("db_down");
+      return calls;
+    }) });
+    for (let i = 0; i < 4; i++) h.socket.frame(known);
+    h.controller.abort("disabled");
+    expect(await h.done).toBe("disabled");
+    expect(h.capture).toHaveBeenCalledTimes(2);
   });
 
   it("closes within 20 seconds when the generation/DB guard never returns", async () => {
