@@ -883,6 +883,9 @@ export const fanslySendPaceCursor = pgTable(
   (table) => ({
     singleton: check("fansly_send_pace_cursor_singleton", sql`${table.id} = 1`),
     afterIdCheck: check("fansly_send_pace_cursor_after_id_check", sql`${table.afterId} >= 0`),
+  }),
+);
+
 // 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
 // pauses, holds, ownership (generation + the owner process's identity), the
 // scheduler's cycle position and the pacer's facts. Written through
