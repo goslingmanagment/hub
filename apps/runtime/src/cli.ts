@@ -40,6 +40,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import {
@@ -800,6 +801,13 @@ export function buildProgram() {
   const program = new Command();
 
   program.name("pnpm cli");
+  // An option belongs to the command it follows. Without this the root hands
+  // every option after the first unknown one to the first-level command, so
+  // `sync` (which has its own `--page`) would swallow the `--page` of
+  // `sync page mode|pause|resume|override|status`, `sync why` and
+  // `sync ownership confirm-stopped`. No other group declares options, and
+  // the subcommands created below inherit the setting.
+  program.enablePositionalOptions();
 
   const model = program.command("model");
 
@@ -992,6 +1000,9 @@ export function buildProgram() {
   const pageAdd = page.command("add");
   const sync = program.command("sync");
   sync.enablePositionalOptions();
+  // Fansly Sync Engine (design §7.6): sync page mode|pause|resume|override|status,
+  // sync why, sync ownership status|confirm-stopped.
+  registerSyncEngineCommands(sync);
   const queue = program.command("queue");
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");

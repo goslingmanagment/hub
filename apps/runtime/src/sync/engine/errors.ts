@@ -345,6 +345,26 @@ const KEEP_HOLD: PageHoldDecision = { action: "keep" };
 const KEEP_RESOURCE: ResourceHoldDecision = { action: "keep" };
 
 /**
+ * The next resource hold of `resource`'s file on the 30 m → 2 h → 6 h ladder
+ * (plan §9): the resource breaker, and a wrong transactions writer found by an
+ * apply (design §3.7.3, §5.6). A hold still in force is kept; an expired entry
+ * still on the row means the trouble came back before any success cleared it,
+ * so the ladder climbs. Exempt keys never take a hold.
+ */
+export function escalateResourceHold(
+  holds: Readonly<Record<string, ResourceHoldEntry>>,
+  resource: string,
+  now: Date,
+): ResourceHoldDecision {
+  if (isResourceHoldExempt(resource)) return KEEP_RESOURCE;
+  const file = resourceFileOf(resource);
+  const current = holds[file];
+  if (current !== undefined && new Date(current.until).getTime() > now.getTime()) return KEEP_RESOURCE;
+  const step = current === undefined ? 0 : Math.max(0, current.step);
+  return { action: "set", file, until: later(now, ladder(RESOURCE_HOLD_LADDER_MS, step)), step: step + 1 };
+}
+
+/**
  * Every consequence of one outcome (design §3.8 "one place"). Pure: the
  * caller writes the decision in the transaction that records the outcome
  * (capture, or the apply's error settlement) and opens the alerts (a shadow
@@ -512,25 +532,9 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
     case "envelope_unsuccessful": {
       const breaker = nextSubjectBreaker(input.subjectState, now);
       const reason: WaitingReasonForError = breaker.blockedByVendorAt !== null ? "blocked_by_vendor" : "subject_breaker";
-      const file = resourceFileOf(input.resource);
-      const current = page.resourceHolds[file];
-      const holdActive = current !== undefined && new Date(current.until).getTime() > now.getTime();
-      let resourceHold: ResourceHoldDecision = KEEP_RESOURCE;
-      if (
-        !isResourceHoldExempt(input.resource) &&
-        !holdActive &&
-        input.recentFailedSubjects >= RESOURCE_BREAKER_SUBJECTS
-      ) {
-        // An expired entry still on the row means the storm came back before
-        // any success cleared it: the ladder climbs.
-        const step = current === undefined ? 0 : Math.max(0, current.step);
-        resourceHold = {
-          action: "set",
-          file,
-          until: later(now, ladder(RESOURCE_HOLD_LADDER_MS, step)),
-          step: step + 1,
-        };
-      }
+      const resourceHold = input.recentFailedSubjects >= RESOURCE_BREAKER_SUBJECTS
+        ? escalateResourceHold(page.resourceHolds, input.resource, now)
+        : KEEP_RESOURCE;
       return {
         ...base,
         networkFailureStreak: streakReset,

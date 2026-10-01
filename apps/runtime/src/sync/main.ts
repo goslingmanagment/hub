@@ -3,12 +3,15 @@ import {
   startRuntimeHeartbeat,
 } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, type SyncContext } from "./context.ts";
+import { SyncEngineHost } from "./engine/host.ts";
+import { createFanslyRegistry } from "./fansly/registry.ts";
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
-// §8, §12; design §9.1). It hosts one actor per Fansly page. This revision
-// carries only the process itself — context, heartbeat, health file, signals —
-// so the container can be deployed, watched and recreated before any engine
-// code runs in it. It sends nothing and writes nothing but its heartbeat row.
+// §8, §12; design §3.6, §9.1). It hosts one actor per Fansly page in `shadow`
+// (step 2): context, CAS settings, heartbeat and health file, then the engine
+// host; on SIGTERM the host finishes the step in flight and releases every
+// page before the process exits. No build of step 2 can send to Fansly
+// (`LIVE_LOOP_ENABLED = false`, I17).
 
 /** The `sync` heartbeat cadence. Alert 5 (design §9.6) fires when no `sync`
  *  heartbeat is younger than 2 minutes, and the compose healthcheck wants the
@@ -17,13 +20,34 @@ import { createSyncContext, type SyncContext } from "./context.ts";
 export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** Bound for closing the pool at shutdown; the heartbeat bounds its own stop
- *  at 5 s. Both sit well inside the container's 45 s stop grace. */
+ *  at 5 s. With the host's budget (≤ 35 s) all sit inside the container's
+ *  45 s stop grace. */
 const SYNC_CLOSE_TIMEOUT_MS = 5_000;
+
+/** The part of the engine host the runtime drives. */
+export interface SyncRuntimeHost {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/** The production host: the Fansly registry over this process's context.
+ *  Nothing here may loosen a pace or live gate (pinned by a grep test). */
+export function createSyncRuntimeHost(context: SyncContext): SyncRuntimeHost {
+  return new SyncEngineHost({
+    db: context.db,
+    connectionString: context.config.databaseUrl,
+    config: context.config,
+    rawConfig: context.rawConfig,
+    logger: context.logger,
+    registry: createFanslyRegistry(),
+  });
+}
 
 export interface SyncRuntime {
   readonly instanceId: string;
-  /** Stops the heartbeat (its row is removed) and lets the process idle out.
-   *  Idempotent; does not close the context. */
+  /** Stops the engine host (the step in flight finishes, every page is
+   *  released), then the heartbeat (its row is removed). Idempotent; does not
+   *  close the context. */
   stop(): Promise<void>;
 }
 
@@ -33,6 +57,9 @@ export interface StartSyncRuntimeOptions {
    *  watches its mtime. */
   healthFilePath?: string | null;
   heartbeatIntervalMs?: number;
+  /** The engine host; default `createSyncRuntimeHost(context)`, null runs the
+   *  heartbeat only. */
+  host?: SyncRuntimeHost | null;
 }
 
 export async function startSyncRuntime(
@@ -51,12 +78,24 @@ export async function startSyncRuntime(
     healthFilePath: options.healthFilePath ?? null,
     intervalMs: options.heartbeatIntervalMs ?? SYNC_HEARTBEAT_INTERVAL_MS,
   });
+  const host = options.host === undefined ? createSyncRuntimeHost(context) : options.host;
+  try {
+    await host?.start();
+  } catch (error) {
+    await host?.stop().catch(() => undefined);
+    clearInterval(keepAlive);
+    await heartbeat.stop();
+    throw error;
+  }
   let stopping: Promise<void> | null = null;
 
   return {
     instanceId: heartbeat.instanceId,
     stop() {
       stopping ??= (async () => {
+        // The pages first: the request in flight finishes and every page is
+        // released while the process still heartbeats.
+        await host?.stop();
         clearInterval(keepAlive);
         await heartbeat.stop();
       })();
@@ -80,7 +119,7 @@ export async function runSyncRuntime(): Promise<void> {
   }
   context.logger.info(
     { instanceId: runtime.instanceId, heartbeatIntervalMs: SYNC_HEARTBEAT_INTERVAL_MS },
-    "Sync runtime started (heartbeat only; no page actors in this release)",
+    "Sync runtime started (engine host: shadow pages only; no live loop in this build)",
   );
 
   const shutdown = async () => {

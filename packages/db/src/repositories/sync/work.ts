@@ -686,6 +686,32 @@ export async function supersedeShadowWork(db: Database, input: { pageId: number 
   return result.rowCount ?? 0;
 }
 
+/** One work row by id, unlocked (the apply reads it first and settles it
+ *  last, after its event appends — the lock order of §3.7). */
+export async function getSyncWork(db: Database, workId: number): Promise<SyncWorkRow | null> {
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns} from sync_work w where w.id = ${workId}
+  `);
+  const row = result.rows[0];
+  return row ? normalizeWorkRow(row) : null;
+}
+
+/** The earliest due time of the page's open work in this journal (the actor
+ *  sleeps until then, at most a second). Null: no open work. */
+export async function nextOpenWorkDueAt(
+  db: Database,
+  input: { pageId: number; shadow: boolean },
+): Promise<Date | null> {
+  const result = await db.execute<{ dueAt: Date | string | null }>(sql`
+    select min(greatest(w.due_at, coalesce(w.breaker_until, w.due_at))) as "dueAt"
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.state = 'open'
+  `);
+  return toDate(result.rows[0]?.dueAt);
+}
+
 /** Lock several work rows in id order (the lock order of §3.7). */
 export async function lockWorkRows(db: Database, ids: readonly number[]): Promise<SyncWorkRow[]> {
   if (ids.length === 0) return [];
