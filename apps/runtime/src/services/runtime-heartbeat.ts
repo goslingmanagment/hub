@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
@@ -47,11 +47,15 @@ export async function writeRuntimeHealthFile(
   status: "starting" | "ready" | "stopping",
 ) {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify({
+  // Write a sibling and rename it over the file: a healthcheck (or a test)
+  // reading concurrently sees the old body or the new one, never half of it.
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify({
     status,
     timestamp: new Date().toISOString(),
     pid: process.pid,
   })}\n`, "utf8");
+  await rename(temporaryPath, path);
 }
 
 async function waitForShutdownStep(
