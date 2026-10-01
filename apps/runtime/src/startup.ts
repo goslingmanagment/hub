@@ -10,6 +10,7 @@ import {
   verifyDesktopLifecycleV2Inventory,
 } from "./services/desktop-lifecycle-v2-evidence.ts";
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
+import { runSyncRuntime } from "./sync/main.ts";
 import { runWorkerRuntime } from "./worker-runtime.ts";
 
 async function runStartupMigrations() {
@@ -44,8 +45,9 @@ async function verifyLifecycleInventory() {
 function resolveRole() {
   const role = process.argv[2] ?? process.env.AGENCY_HUB_ROLE ?? "worker";
   // Stage 25: 'scheduler' owns cron registration + firing (leader-elected);
-  // workers and the api run pg-boss with schedule: false.
-  if (role !== "api" && role !== "worker" && role !== "scheduler") {
+  // workers and the api run pg-boss with schedule: false. 'sync' is the Fansly
+  // Sync Engine's own process (no pg-boss).
+  if (role !== "api" && role !== "worker" && role !== "scheduler" && role !== "sync") {
     throw new Error(`Unsupported Agency Hub runtime role "${role}"`);
   }
 
@@ -76,6 +78,10 @@ export async function main() {
   }
   if (role === "scheduler") {
     await runSchedulerRuntime();
+    return;
+  }
+  if (role === "sync") {
+    await runSyncRuntime();
     return;
   }
 
