@@ -49,6 +49,9 @@ describe("runtime schema guard", () => {
               { name: "creator_posts" },
               { name: "creator_post_tips" },
               { name: "transaction_tip_contexts" },
+              { name: "sync_pages" },
+              { name: "sync_work" },
+              { name: "sync_attempts" },
             ],
           };
         }

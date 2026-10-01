@@ -522,6 +522,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # 0225 journal (catalog-only, no default) and the pace check's one-row
   # cursor table. The previous image names neither, so it runs unchanged.
   "0227_fansly_send_guard_checks.sql"
+  # Fansly Sync Engine core state (design §2.2): three new tables (sync_pages,
+  # sync_work, sync_attempts), two pure SQL functions, a seed row per Fansly
+  # page (mode 'off') and grants. The previous image never names any of them,
+  # so after a rollback it runs unchanged; a later re-deploy finds the
+  # migration already applied.
+  "0228_sync_engine_core.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
