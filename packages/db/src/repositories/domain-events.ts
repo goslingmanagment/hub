@@ -971,6 +971,46 @@ export async function findDomainEventByDedupKey(
   return result.rows[0] ? mapEventRow(result.rows[0]) : null;
 }
 
+/**
+ * The stored events of one account behind `dedupKeys`, in account_seq order:
+ * every key whose event exists, whoever appended it. A key with no event is
+ * simply absent. Reads through the dedup companion and the partitioned
+ * primary key (id, occurred_at), like `findDomainEventByDedupKey`.
+ *
+ * The Fansly Sync Engine feeds `message_archive` from this inside its apply
+ * transaction (design §3.7): its own append dedups to nothing when the
+ * minutely sweep canonicalized the same observation first, so the archive
+ * input is the stored rows of the observation's keys, not what this append
+ * added.
+ */
+export async function listDomainEventsByDedupKeys(
+  db: Database,
+  accountId: number,
+  dedupKeys: readonly string[],
+): Promise<DomainEventRow[]> {
+  const keys = [...new Set(dedupKeys)];
+  if (keys.length === 0) {
+    return [];
+  }
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select de.id::text as id, de.account_id, page.ofapi_account_id as current_account_ref,
+           de.account_seq::text as account_seq, de.type,
+           de.occurred_at, de.fan_identity_ref, de.conversation_ref, de.message_ref,
+           de.transaction_ref, de.post_ref, de.data, de.schema_version,
+           de.observation_id::text as observation_id,
+           de.dedup_key, de.created_at
+    from domain_event_keys k
+    join domain_events de
+      on de.id = k.event_id and de.occurred_at = k.occurred_at
+     and de.account_id = k.account_id and de.dedup_key = k.dedup_key
+    left join pages page on page.id = de.account_id
+    where k.account_id = ${accountId}
+      and k.dedup_key = any(${sql.param(keys)}::text[])
+    order by de.account_seq asc
+  `);
+  return result.rows.map(mapEventRow);
+}
+
 /** Ordered per-account read: events with account_seq > afterSeq. */
 export async function listEventsSince(
   db: Database,

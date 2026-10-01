@@ -5,6 +5,7 @@ import {
   createModel,
   DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
   insertErasureLog,
+  insertObservation,
   insertRawPayload,
   listTransactionTipContextRawPayloadsAfterId,
   readTransactionTipContextRawPayloadHighWater,
@@ -797,5 +798,203 @@ describe("transaction tip context materialization", () => {
       sourceRawPayloadId: newRaw.id,
       capturedAt: newCapturedAt,
     })).toMatchObject({ upserted: 1, erasureFenced: 0 });
+  });
+
+  // 0230 (Fansly Sync Engine design §2.4): the engine journals observations
+  // only, so its tip contexts carry observation lineage; raw lineage and the
+  // legacy writers behave exactly as above.
+  async function captureDmObservation(accountId: number, tips: unknown[]) {
+    const observation = await insertObservation(testDb!.db, {
+      source: "pull",
+      producer: "fansly-sync:dm-messages",
+      platform: "fansly",
+      accountId,
+      kind: "dm_messages",
+      payload: { messages: [], tips },
+      payloadHash: Buffer.alloc(32),
+      idempotencyKey: `tip-context-observation:${accountId}:${JSON.stringify(tips)}`,
+    });
+    return {
+      lineage: {
+        kind: "observation" as const,
+        sourceObservationId: observation.observationId,
+        sourceObservationReceivedAt: observation.receivedAt,
+      },
+      capturedAt: observation.receivedAt,
+    };
+  }
+
+  async function lineageOf(accountId: number, tipId: string) {
+    const result = await testDb!.pool.query<{
+      source_raw_payload_id: string | null;
+      source_observation_id: string | null;
+      source_observation_received_at: Date | null;
+      tip_message_source_raw_payload_id: string | null;
+      tip_message_source_observation_id: string | null;
+      tip_message_source_observation_received_at: Date | null;
+      tip_message_text: string | null;
+      tip_amount_mills: string | null;
+      captured_at: Date;
+    }>(
+      `select source_raw_payload_id::text, source_observation_id::text, source_observation_received_at,
+              tip_message_source_raw_payload_id::text, tip_message_source_observation_id::text,
+              tip_message_source_observation_received_at, tip_message_text, tip_amount_mills::text, captured_at
+         from transaction_tip_contexts where account_id = $1 and platform_tip_id = $2`,
+      [accountId, tipId],
+    );
+    return result.rows[0]!;
+  }
+
+  it("records observation lineage for the engine and keeps it against later raw captures", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("tip-context-observation-lineage");
+    const tip = { id: "tip-obs", amount: 50_000, message: "from the engine", senderId: "fan-obs", createdAt: 1_770_000_000 };
+    const first = await captureDmObservation(page.id, [tip]);
+    expect(await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-obs" },
+      responsePayload: { tips: [tip] },
+      ...first,
+    })).toMatchObject({ upserted: 1 });
+    expect(await lineageOf(page.id, "tip-obs")).toMatchObject({
+      source_raw_payload_id: null,
+      tip_message_source_raw_payload_id: null,
+      source_observation_id: String(first.lineage.sourceObservationId),
+      source_observation_received_at: first.lineage.sourceObservationReceivedAt,
+      tip_message_source_observation_id: String(first.lineage.sourceObservationId),
+      tip_message_source_observation_received_at: first.lineage.sourceObservationReceivedAt,
+      tip_message_text: "from the engine",
+      captured_at: first.capturedAt,
+    });
+
+    // A later legacy raw capture of the same tip enriches but never relinks:
+    // the row has a lineage, of the other kind.
+    const raw = await captureDmRaw({
+      accountId: page.id,
+      groupId: "group-obs",
+      responsePayload: { tips: [{ ...tip, receiverId: "creator-obs" }] },
+    });
+    expect(await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-obs" },
+      responsePayload: { tips: [{ ...tip, receiverId: "creator-obs" }] },
+      sourceRawPayloadId: raw.id,
+      capturedAt: raw.capturedAt,
+    })).toMatchObject({ upserted: 1 });
+    expect(await lineageOf(page.id, "tip-obs")).toMatchObject({
+      source_raw_payload_id: null,
+      source_observation_id: String(first.lineage.sourceObservationId),
+      tip_message_source_raw_payload_id: null,
+      tip_message_source_observation_id: String(first.lineage.sourceObservationId),
+      captured_at: first.capturedAt,
+    });
+
+    // An identical observation capture later is unchanged, not a relink.
+    const again = await captureDmObservation(page.id, [{ ...tip, receiverId: "creator-obs" }]);
+    expect(await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-obs" },
+      responsePayload: { tips: [{ ...tip, receiverId: "creator-obs" }] },
+      ...again,
+    })).toMatchObject({ upserted: 0, unchanged: 1 });
+    expect((await lineageOf(page.id, "tip-obs")).source_observation_id).toBe(String(first.lineage.sourceObservationId));
+  });
+
+  it("relinks a row whose raw lineage was deleted to the engine's observation", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("tip-context-observation-relink");
+    const tip = { id: "tip-relink", message: "same note", senderId: "fan-relink", createdAt: 1_770_000_000 };
+    const raw = await captureDmRaw({ accountId: page.id, groupId: "group-relink", responsePayload: { tips: [tip] } });
+    await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-relink" },
+      responsePayload: { tips: [tip] },
+      sourceRawPayloadId: raw.id,
+      capturedAt: raw.capturedAt,
+    });
+    await testDb.pool.query("delete from sync_raw_payloads where id = $1", [raw.id]);
+
+    const engine = await captureDmObservation(page.id, [tip]);
+    expect(await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-relink" },
+      responsePayload: { tips: [tip] },
+      ...engine,
+    })).toMatchObject({ upserted: 1 });
+    expect(await lineageOf(page.id, "tip-relink")).toMatchObject({
+      source_raw_payload_id: null,
+      source_observation_id: String(engine.lineage.sourceObservationId),
+      tip_message_source_raw_payload_id: null,
+      tip_message_source_observation_id: String(engine.lineage.sourceObservationId),
+      captured_at: engine.capturedAt,
+    });
+  });
+
+  it("moves note lineage to the observation whose note wins, leaving identity on raw", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("tip-context-observation-note");
+    const bare = { id: "tip-note", message: null, senderId: "fan-note", createdAt: 1_770_000_000 };
+    const raw = await captureDmRaw({ accountId: page.id, groupId: "group-note", responsePayload: { tips: [bare] } });
+    await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-note" },
+      responsePayload: { tips: [bare] },
+      sourceRawPayloadId: raw.id,
+      capturedAt: raw.capturedAt,
+    });
+    const noted = { ...bare, message: "note seen by the engine" };
+    const engine = await captureDmObservation(page.id, [noted]);
+    expect(await materializeFanslyDmTipContexts(testDb.db, {
+      accountId: page.id,
+      requestParams: { groupId: "group-note" },
+      responsePayload: { tips: [noted] },
+      ...engine,
+    })).toMatchObject({ upserted: 1 });
+    expect(await lineageOf(page.id, "tip-note")).toMatchObject({
+      source_raw_payload_id: String(raw.id),
+      source_observation_id: null,
+      tip_message_text: "note seen by the engine",
+      tip_message_source_raw_payload_id: null,
+      tip_message_source_observation_id: String(engine.lineage.sourceObservationId),
+      captured_at: raw.capturedAt,
+    });
+  });
+
+  it("composes into the engine's transaction and refuses a half observation address", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedPage("tip-context-observation-tx");
+    const tip = { id: "tip-tx", message: "rolled back", senderId: "fan-tx", createdAt: 1_770_000_000 };
+    const engine = await captureDmObservation(page.id, [tip]);
+    await expect(testDb.db.transaction(async (tx) => {
+      expect(await materializeFanslyDmTipContexts(tx as never, {
+        accountId: page.id,
+        requestParams: { groupId: "group-tx" },
+        responsePayload: { tips: [tip] },
+        ...engine,
+      })).toMatchObject({ upserted: 1 });
+      throw new Error("apply rolled back");
+    })).rejects.toThrow("apply rolled back");
+    expect(await testDb.pool.query(
+      "select 1 from transaction_tip_contexts where account_id = $1", [page.id],
+    ).then((result) => result.rowCount)).toBe(0);
+
+    await expect(testDb.pool.query(
+      `insert into transaction_tip_contexts (account_id, platform, platform_tip_id, captured_conversation_ref,
+         occurred_at, sender_platform_user_id, captured_at, provenance, source_observation_id)
+       values ($1, 'fansly', 'tip-half', 'group-tx', now(), 'fan-tx', now(), 'fansly_dm_tip_sidecar', 1)`,
+      [page.id],
+    )).rejects.toThrow(/transaction_tip_contexts_obs_lineage_check/);
   });
 });

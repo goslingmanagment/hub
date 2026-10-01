@@ -159,3 +159,44 @@ describe("0229_send_guard_owner_engine.sql", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });
+
+describe("0230_tip_context_observation_lineage.sql", () => {
+  const migration = "0230_tip_context_observation_lineage.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("only adds four nullable lineage columns, their pair check, an index and comments", () => {
+    expect(statements).toEqual([
+      "alter table transaction_tip_contexts add column if not exists source_observation_id bigint, "
+        + "add column if not exists source_observation_received_at timestamptz, "
+        + "add column if not exists tip_message_source_observation_id bigint, "
+        + "add column if not exists tip_message_source_observation_received_at timestamptz",
+      "do $$…$$",
+      "alter table transaction_tip_contexts validate constraint transaction_tip_contexts_obs_lineage_check",
+      "create index if not exists transaction_tip_contexts_source_observation_idx on transaction_tip_contexts "
+        + "(source_observation_id) where source_observation_id is not null",
+      ...[
+        "source_observation_id",
+        "source_observation_received_at",
+        "tip_message_source_observation_id",
+        "tip_message_source_observation_received_at",
+      ].map((column) => expect.stringMatching(new RegExp(`^comment on column transaction_tip_contexts\\.${column} is '`))),
+    ]);
+    // Nullable, no default (catalog-only), no foreign key (observations are
+    // partitioned), and no existing row is touched.
+    expect(statements[0]).not.toMatch(/\b(not null|default|references)\b/i);
+    expect(sql).not.toMatch(/\b(update|delete|drop|rename|truncate)\b/i);
+    expect(sql).toMatch(
+      /if not exists \(select 1 from pg_constraint where conname = 'transaction_tip_contexts_obs_lineage_check'\) then\s+alter table transaction_tip_contexts add constraint transaction_tip_contexts_obs_lineage_check check \(\s+\(source_observation_id is null\) = \(source_observation_received_at is null\)\s+and \(tip_message_source_observation_id is null\) = \(tip_message_source_observation_received_at is null\)\s+\) not valid;/,
+    );
+  });
+
+  it("grants nothing new: the read role has never been granted the fan-note table", () => {
+    expect(sql).not.toMatch(/\bgrant\b/i);
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});

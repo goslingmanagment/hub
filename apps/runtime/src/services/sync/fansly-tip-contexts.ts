@@ -1,6 +1,8 @@
 import {
   FANSLY_DM_TIP_SIDECAR_PROVENANCE,
   type Database,
+  resolveTransactionTipContextLineage,
+  type TransactionTipContextLineageInput,
   upsertTransactionTipContext,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
@@ -213,18 +215,28 @@ export interface MaterializeFanslyDmTipContextsResult extends FanslyDmTipSidecar
   erasureFenced: number;
 }
 
-/** Throws on DB failure so the historical backfill can stop loudly. */
+/**
+ * One `/message` capture to materialize. Its lineage is the legacy raw row
+ * (`sourceRawPayloadId`, what every legacy caller passes) or, for the Fansly
+ * Sync Engine, which journals observations only, `lineage: { kind:
+ * "observation", sourceObservationId, sourceObservationReceivedAt }` (0230).
+ * `capturedAt` is the capture time of that lineage.
+ */
+export type MaterializeFanslyDmTipContextsInput = {
+  accountId: number;
+  requestParams: unknown;
+  responsePayload: unknown;
+  capturedAt: Date;
+} & TransactionTipContextLineageInput;
+
+/** Throws on DB failure so the historical backfill can stop loudly. Composes
+ * into a caller's transaction (each upsert is then a savepoint). */
 export async function materializeFanslyDmTipContexts(
   db: Database,
-  input: {
-    accountId: number;
-    requestParams: unknown;
-    responsePayload: unknown;
-    sourceRawPayloadId: number;
-    capturedAt: Date;
-  },
+  input: MaterializeFanslyDmTipContextsInput,
 ): Promise<MaterializeFanslyDmTipContextsResult> {
   const parsed = parseFanslyDmTipSidecar(input);
+  const lineage = resolveTransactionTipContextLineage(input);
   let upserted = 0;
   let unchanged = 0;
   let conversationConflicts = 0;
@@ -235,7 +247,7 @@ export async function materializeFanslyDmTipContexts(
       accountId: input.accountId,
       platform: "fansly",
       ...context,
-      sourceRawPayloadId: input.sourceRawPayloadId,
+      lineage,
       capturedAt: input.capturedAt,
       provenance: FANSLY_DM_TIP_SIDECAR_PROVENANCE,
     });
@@ -261,6 +273,14 @@ export async function materializeFanslyDmTipContexts(
   };
 }
 
+/** The lineage as log fields: the raw id, or the observation id. */
+function lineageLogFields(input: TransactionTipContextLineageInput) {
+  const lineage = resolveTransactionTipContextLineage(input);
+  return lineage.kind === "raw"
+    ? { sourceRawPayloadId: lineage.sourceRawPayloadId }
+    : { sourceObservationId: lineage.sourceObservationId };
+}
+
 function errorClass(error: unknown) {
   if (error instanceof Error && error.name.length > 0) {
     return error.name.slice(0, 80);
@@ -276,13 +296,7 @@ function errorClass(error: unknown) {
  */
 export async function materializeFanslyDmTipContextsBestEffort(
   app: Pick<AppContext, "db" | "logger">,
-  input: {
-    accountId: number;
-    requestParams: unknown;
-    responsePayload: unknown;
-    sourceRawPayloadId: number;
-    capturedAt: Date;
-  },
+  input: MaterializeFanslyDmTipContextsInput,
 ) {
   try {
     const result = await materializeFanslyDmTipContexts(app.db, input);
@@ -296,7 +310,7 @@ export async function materializeFanslyDmTipContextsBestEffort(
     ) {
       app.logger.warn({
         accountId: input.accountId,
-        sourceRawPayloadId: input.sourceRawPayloadId,
+        ...lineageLogFields(input),
         envelopeStatus: result.envelopeStatus,
         tipItemsSeen: result.tipItemsSeen,
         rejectedItemCount: result.rejectedItems.length,
@@ -315,7 +329,7 @@ export async function materializeFanslyDmTipContextsBestEffort(
     const parsed = parseFanslyDmTipSidecar(input);
     app.logger.warn({
       accountId: input.accountId,
-      sourceRawPayloadId: input.sourceRawPayloadId,
+      ...lineageLogFields(input),
       tipItemsSeen: parsed.tipItemsSeen,
       acceptedItemCount: parsed.contexts.length,
       errorClass: errorClass(error),

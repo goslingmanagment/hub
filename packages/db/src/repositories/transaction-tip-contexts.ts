@@ -9,7 +9,23 @@ import {
 
 export const FANSLY_DM_TIP_SIDECAR_PROVENANCE = "fansly_dm_tip_sidecar" as const;
 
-export interface UpsertTransactionTipContextInput {
+/**
+ * Where a materialized tip context came from: the legacy raw journal row
+ * (`sync_raw_payloads`), or the observation the Fansly Sync Engine journaled
+ * (0230; it writes no raw row). An observation is addressed by its id and its
+ * `received_at` partition key together.
+ */
+export type TransactionTipContextLineage =
+  | { kind: "raw"; sourceRawPayloadId: number }
+  | { kind: "observation"; sourceObservationId: number; sourceObservationReceivedAt: Date };
+
+/** Either the lineage union, or the pre-0230 top-level raw id, which every
+ * legacy caller passes and which means `{ kind: "raw" }`. */
+export type TransactionTipContextLineageInput =
+  | { lineage: TransactionTipContextLineage; sourceRawPayloadId?: never }
+  | { sourceRawPayloadId: number; lineage?: never };
+
+export type UpsertTransactionTipContextInput = {
   accountId: number;
   platform: "fansly";
   platformTipId: string;
@@ -19,9 +35,17 @@ export interface UpsertTransactionTipContextInput {
   occurredAt: Date;
   senderPlatformUserId: string;
   receiverPlatformUserId: string | null;
-  sourceRawPayloadId: number;
   capturedAt: Date;
   provenance: typeof FANSLY_DM_TIP_SIDECAR_PROVENANCE;
+} & TransactionTipContextLineageInput;
+
+export function resolveTransactionTipContextLineage(
+  input: TransactionTipContextLineageInput,
+): TransactionTipContextLineage {
+  if (input.lineage !== undefined) {
+    return input.lineage;
+  }
+  return { kind: "raw", sourceRawPayloadId: input.sourceRawPayloadId };
 }
 
 export type UpsertTransactionTipContextResult =
@@ -82,6 +106,16 @@ async function upsertTransactionTipContextUnfenced(
   db: Database,
   input: UpsertTransactionTipContextInput,
 ): Promise<UpsertTransactionTipContextResult> {
+  // One lineage kind per write; the other kind's columns are written null.
+  // Every legacy caller passes raw lineage, so for it the observation columns
+  // below are constant nulls and each statement reduces to the pre-0230 one.
+  const lineage = resolveTransactionTipContextLineage(input);
+  const sourceRawPayloadId = lineage.kind === "raw" ? lineage.sourceRawPayloadId : null;
+  const sourceObservationId = lineage.kind === "observation" ? lineage.sourceObservationId : null;
+  const sourceObservationReceivedAt = lineage.kind === "observation"
+    ? lineage.sourceObservationReceivedAt
+    : null;
+  const noteLineage = input.tipMessageText !== null;
   const noteApplies = sql`(
     excluded.tip_message_text is not null
     and (
@@ -92,9 +126,14 @@ async function upsertTransactionTipContextUnfenced(
       )
     )
   )`;
+  // A lineage is missing only when NEITHER kind is set: raw lineage the
+  // raw-row deletion nulled (ON DELETE SET NULL). Observation lineage has no
+  // FK and is never nulled, so a row the engine wrote keeps it against any
+  // later identical capture, raw or observation.
   const noteLineageRelinks = sql`(
     transaction_tip_contexts.tip_message_text is not null
     and transaction_tip_contexts.tip_message_source_raw_payload_id is null
+    and transaction_tip_contexts.tip_message_source_observation_id is null
     and excluded.tip_message_text = transaction_tip_contexts.tip_message_text
   )`;
   const enrichmentApplies = sql`(
@@ -109,6 +148,7 @@ async function upsertTransactionTipContextUnfenced(
   )`;
   const identityLineageRelinks = sql`(
     transaction_tip_contexts.source_raw_payload_id is null
+    and transaction_tip_contexts.source_observation_id is null
   )`;
   const updateApplies = sql`(
     ${noteApplies}
@@ -137,24 +177,32 @@ async function upsertTransactionTipContextUnfenced(
       captured_at,
       provenance,
       created_at,
-      updated_at
+      updated_at,
+      source_observation_id,
+      source_observation_received_at,
+      tip_message_source_observation_id,
+      tip_message_source_observation_received_at
     ) values (
       ${input.accountId},
       ${input.platform},
       ${input.platformTipId},
       ${input.capturedConversationRef},
       ${input.tipMessageText},
-      ${input.tipMessageText === null ? null : input.sourceRawPayloadId},
-      ${input.tipMessageText === null ? null : input.capturedAt},
+      ${noteLineage ? sourceRawPayloadId : null},
+      ${noteLineage ? input.capturedAt : null},
       ${input.tipAmountMills},
       ${input.occurredAt},
       ${input.senderPlatformUserId},
       ${input.receiverPlatformUserId},
-      ${input.sourceRawPayloadId},
+      ${sourceRawPayloadId},
       ${input.capturedAt},
       ${input.provenance},
       now(),
-      now()
+      now(),
+      ${sourceObservationId},
+      ${sourceObservationReceivedAt},
+      ${noteLineage ? sourceObservationId : null},
+      ${noteLineage ? sourceObservationReceivedAt : null}
       )
       on conflict (account_id, platform_tip_id) do update set
       tip_message_text = case
@@ -169,6 +217,16 @@ async function upsertTransactionTipContextUnfenced(
         when ${noteApplies} or ${noteLineageRelinks}
           then excluded.tip_message_source_raw_payload_id
         else transaction_tip_contexts.tip_message_source_raw_payload_id
+      end,
+      tip_message_source_observation_id = case
+        when ${noteApplies} or ${noteLineageRelinks}
+          then excluded.tip_message_source_observation_id
+        else transaction_tip_contexts.tip_message_source_observation_id
+      end,
+      tip_message_source_observation_received_at = case
+        when ${noteApplies} or ${noteLineageRelinks}
+          then excluded.tip_message_source_observation_received_at
+        else transaction_tip_contexts.tip_message_source_observation_received_at
       end,
       tip_message_captured_at = case
         when ${noteApplies} or ${noteLineageRelinks}
@@ -188,6 +246,14 @@ async function upsertTransactionTipContextUnfenced(
       source_raw_payload_id = case
         when ${identityLineageRelinks} then excluded.source_raw_payload_id
         else transaction_tip_contexts.source_raw_payload_id
+      end,
+      source_observation_id = case
+        when ${identityLineageRelinks} then excluded.source_observation_id
+        else transaction_tip_contexts.source_observation_id
+      end,
+      source_observation_received_at = case
+        when ${identityLineageRelinks} then excluded.source_observation_received_at
+        else transaction_tip_contexts.source_observation_received_at
       end,
       captured_at = case
         when ${identityLineageRelinks} then excluded.captured_at
