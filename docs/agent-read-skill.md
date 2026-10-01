@@ -225,8 +225,14 @@ couple of minutes. What this means for how you file:
   the cap — simply STAYS `requested` for the owner. Do not refile it under a
   fresh UUID: one live approval per page and one auto-run per conversation per
   UTC day are enforced, so the duplicate just parks;
-- `completed` is not "the whole history": re-read the capture floor and decide
-  whether another bounded request is worth filing.
+- `completed` is a proof: from the oldest message the hub held, the run read
+  on to an EMPTY vendor page, so the thread's whole history is stored. A short
+  last page or meeting already-stored messages is not that proof and settles
+  `partially_completed`: re-read the capture floor and decide whether another
+  bounded request is worth filing;
+- `failed` with `lastError: quarantined` means Fansly kept refusing that thread
+  (a 500): its per-thread breaker now holds it, and the policy will not approve
+  it again until the backoff lapses. Do not refile it meanwhile.
 
 Since `hub` has no command for it, from this CLI the useful half is still yours
 to do by hand: report the specific gap (page, thread, conversation ref, window,
