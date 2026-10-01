@@ -749,9 +749,13 @@ remote_release_file_args() {
   printf '%s ' "${quoted[@]}"
 }
 
+# Compose refuses a whole `logs` call, printing nothing, when one named service
+# is missing from the compose file. fail() runs this dump after the rollback
+# restored the previous release files, which may predate the sync service, so
+# the sync logs are a call of their own, made only when those files define it.
 dump_remote_diagnostics() {
   log "Remote verification failed; collecting docker compose status and recent logs"
-  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker sync; exit 0" \
+  run_remote "set +e; cd ${REMOTE_APP_DIR_ESCAPED} || exit 0; ${REMOTE_COMPOSE} ps; printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 postgres api worker; if ${REMOTE_COMPOSE} config --services 2>/dev/null | grep -qx sync; then printf '\\n'; ${REMOTE_COMPOSE} logs --tail=200 sync; fi; exit 0" \
     || log "Unable to collect remote diagnostics"
 }
 

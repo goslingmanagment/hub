@@ -273,7 +273,11 @@ describe("compose config", () => {
     expect(quiesce).toContain('stop -t 75 scheduler worker"');
     expect(restore).toContain('start scheduler worker"');
     expect(labels).toContain("verify_service_image_labels sync");
-    expect(diagnostics).toContain("logs --tail=200 postgres api worker sync;");
+    expect(diagnostics).toContain("${REMOTE_COMPOSE} logs --tail=200 postgres api worker;");
+    expect(diagnostics).toContain(
+      "if ${REMOTE_COMPOSE} config --services 2>/dev/null | grep -qx sync; then printf '\\\\n'; ${REMOTE_COMPOSE} logs --tail=200 sync; fi;",
+    );
+    expect(diagnostics).not.toContain("worker sync");
 
     const stackUp = main.indexOf("--no-build ${RECREATE_SERVICES}");
     const apiHealth = main.indexOf('wait_for_api_health "$HEALTH_FILE" || fail');
