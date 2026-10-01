@@ -84,6 +84,8 @@ describe("config registry", () => {
     "fanslyDmBoundedPolicies",
     "fanslyWsCaptureEnabled",
     "fanslyWsCapturePageAllowlist",
+    // Fansly Sync Engine step 1: the live overlay readers, page by page.
+    "fanslyLiveOverlayReadPages",
     "fanslyFanEarningsRecoveryEnabled",
     "fanslyFanEarningsRecoveryPageAllowlist",
     "fanslyFanEarningsTargetsEnabled",

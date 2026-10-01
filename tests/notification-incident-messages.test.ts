@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveMessageForIncident } from "../apps/runtime/src/services/notification-incidents.ts";
+import { describeClosedFanslyPage } from "../apps/runtime/src/services/fansly-send-guard/monitor.ts";
+import {
+  openMessageForIncident,
+  resolveMessageForIncident,
+} from "../apps/runtime/src/services/notification-incidents.ts";
 
 // Review R2-7: the resolve-text ternary had explicit text for 8 of 12 kinds;
 // golden_signal_lag auto-resolves TODAY and fell through to "OFAPI webhooks
@@ -107,6 +111,39 @@ describe("resolveMessageForIncident", () => {
     // …and each one says what it does NOT clear.
     expect(dangling).toContain("in the measured window");
     expect(new Set([parity, collision, dangling]).size).toBe(3);
+  });
+
+  // Plan §2.5/§10: the Fansly send guard's page latches share the Fansly-only
+  // sync_silent kind with the deadman but resolve with their own lines.
+  it("the send guard's page latches resolve with their own texts", () => {
+    const closed = resolveMessageForIncident({
+      kind: "sync_silent", pageLabel: "lilly-1", platform: "fansly", subKey: "send_guard_closed",
+    });
+    const pace = resolveMessageForIncident({
+      kind: "sync_silent", pageLabel: "lilly-1", platform: "fansly", subKey: "pace_violation",
+    });
+    const deadman = resolveMessageForIncident({ kind: "sync_silent", pageLabel: null, platform: null });
+    expect(closed).toBe("✅ Resolved\nFansly page open again: its request holder completed or was confirmed gone: lilly-1 (fansly)");
+    expect(pace).toBe("✅ Resolved\nNo Fansly pace violation for an hour: lilly-1 (fansly)");
+    expect(deadman).toContain("Fansly sync chunks starting again");
+  });
+
+  it("the send guard's closed-page message keeps the token to confirm", () => {
+    const summary = describeClosedFanslyPage({
+      pageId: 7, pageLabel: "lilly-1", holderToken: "33333333-3333-4333-8333-333333333333",
+      holderSource: "targeted_backfill", holderOperation: "messages", holderHost: "a-rather-long-custom-hostname-xyz",
+      holderPid: 123456, holderPidStart: null, holderPidNs: null, holderBootId: null, holderInstance: null,
+      holderRole: "worker", capturedAt: new Date("2026-10-01T12:00:00Z"), leaseUntil: new Date("2026-10-01T12:01:15Z"),
+      leaseExpired: true, lastCompletedAt: new Date("2026-10-01T11:59:00Z"), nextU: 0.1, closedReason: null,
+      closedAt: null, dbNow: new Date("2026-10-01T12:02:00Z"),
+    });
+    const message = openMessageForIncident({
+      kind: "sync_silent", pageLabel: "lilly-1", platform: "fansly", subKey: "send_guard_closed", errorSummary: summary,
+    });
+    expect(message.split("\n")[0]).toBe("🚨 Fansly page closed: a request overran its lease, nothing is sent for the page");
+    // The summary is clamped at 240 characters; the command and its token come first.
+    expect(message).toContain("fansly-send-guard confirm-terminated --holder-token 33333333-3333-4333-8333-333333333333");
+    expect(message).toContain("Run fansly-send-guard status");
   });
 
   it("reader-first AI incident kinds have explicit recovery texts", () => {

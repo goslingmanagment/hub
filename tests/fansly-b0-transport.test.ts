@@ -12,6 +12,7 @@ const client = `
 import { createRequire } from "node:module";
 import { createProxyRequestDispatcher } from "./packages/shared/src/http-client.ts";
 import { openFanslyReceiverSocket } from "./apps/runtime/src/services/egress/fansly-receiver-socket.ts";
+import { createTestFanslySendGuards } from "./tests/helpers/fansly-send-guard.ts";
 const require = createRequire(new URL("./apps/runtime/src/bootstrap.ts", import.meta.url));
 const { Dispatcher, setGlobalDispatcher } = require("undici");
 let fallback = 0;
@@ -20,8 +21,11 @@ setGlobalDispatcher(new class extends Dispatcher {
 }());
 const dispatcher = createProxyRequestDispatcher({ url: process.env.B0_PROXY,
   username: "fixture-user", password: "fixture-password" });
+// Plan §2.5: the handshake is one capture of the page's send guard.
+const { registry, store } = createTestFanslySendGuards();
+const lease = await registry.forPage(7, "ws_connect").acquire({ operation: "ws_connect", requestTimeoutMs: 2000 });
 const receiver = openFanslyReceiverSocket({ dispatcher, egressKey: "page-fixture",
-  pace: async () => {}, close: () => dispatcher.close() });
+  pace: async () => {}, close: () => dispatcher.close() }, lease);
 let opened = false;
 const deadline = setTimeout(() => process.exit(3), 3000);
 receiver.socket.addEventListener("open", () => { opened = true; });
@@ -29,8 +33,11 @@ receiver.socket.addEventListener("error", () => {});
 receiver.socket.addEventListener("message", () => receiver.stop());
 await new Promise(resolve => receiver.socket.addEventListener("close", resolve, {once:true}));
 receiver.stop();
+await lease.complete({ outcome: lease.sent ? "transport_error" : "aborted_before_send" });
+await registry.drain();
 clearTimeout(deadline);
-process.stdout.write(JSON.stringify({opened,fallback}));
+const journal = store.journal.map((row) => [row.source, row.outcome, row.httpStatus, row.sentAt !== null]);
+process.stdout.write(JSON.stringify({opened,fallback,journal}));
 `;
 
 describe("B0 real proxy transport", () => {
@@ -42,7 +49,11 @@ describe("B0 real proxy transport", () => {
     try {
       const { stdout } = await exec(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", client],
         { cwd: root, env, timeout: 6000, maxBuffer: 4096 });
-      expect(JSON.parse(stdout)).toEqual({ opened: false, fallback: 0 });
+      // Sent once; the receiver refused the 101 for its extension, which
+      // completes the capture as a failed attempt.
+      expect(JSON.parse(stdout)).toEqual({ opened: false, fallback: 0,
+        journal: [["ws_connect", "transport_error", null, true]] });
+      expect(network.upgrades).toHaveLength(1);
     } finally { await network.stop(); }
   }, 10_000);
   it.each(["http", "socks5"] as const)("%s closes upgraded transport even when peer ignores close", async (protocol) => {
@@ -53,8 +64,11 @@ describe("B0 real proxy transport", () => {
     try {
       const { stdout } = await exec(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", client],
         { cwd: root, env, timeout: 6000, maxBuffer: 4096 });
-      expect(JSON.parse(stdout)).toEqual({ opened: true, fallback: 0 });
+      // One handshake, one capture, completed at its 101.
+      expect(JSON.parse(stdout)).toEqual({ opened: true, fallback: 0,
+        journal: [["ws_connect", "response", 101, true]] });
       expect(network.destinations).toEqual(["wsv3.fansly.com:443"]);
+      expect(network.upgrades).toHaveLength(1);
       expect(network.upgrades[0]?.headers["sec-websocket-extensions"]).toBeUndefined();
     } finally { await network.stop(); }
   }, 10_000);
@@ -66,7 +80,8 @@ describe("B0 real proxy transport", () => {
     try {
       const { stdout } = await exec(process.execPath, ["--import", "tsx/esm", "--input-type=module", "-e", client],
         { cwd: root, env, timeout: 6000, maxBuffer: 4096 });
-      expect(JSON.parse(stdout)).toEqual({ opened: false, fallback: 0 });
+      expect(JSON.parse(stdout)).toEqual({ opened: false, fallback: 0,
+        journal: [["ws_connect", "transport_error", null, false]] });
       expect(network.upgrades).toHaveLength(0);
     } finally { await network.stop(); }
   }, 10_000);

@@ -265,6 +265,66 @@ describe("production deploy behavior without production access", () => {
     },
   );
 
+  // Plan §2.5: the per-page Fansly send guard. Run the hook's remote command
+  // for real in a local bash, against `docker` and `date` shims that log what
+  // they were asked: what it lists, in which order, and what it confirms.
+  function sendGuardHook(options: { inspectFails?: boolean; running?: string; execFails?: boolean } = {}) {
+    const bin = path.join(fixtureRoot, "bin");
+    const calls = path.join(fixtureRoot, "docker-calls.log");
+    mkdirSync(bin);
+    writeFileSync(calls, "");
+    writeFileSync(path.join(bin, "date"), [
+      "#!/usr/bin/env bash",
+      `printf 'date %s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      "printf '2026-10-01T12:00:00.123Z\\n'",
+    ].join("\n"), { mode: 0o755 });
+    writeFileSync(path.join(bin, "docker"), [
+      "#!/usr/bin/env bash",
+      `printf 'docker %s\\n' "$*" >> ${JSON.stringify(calls)}`,
+      'case "$1" in',
+      `  ps) printf ${JSON.stringify(options.running ?? "c1\\nc2\\nc3\\n")} ;;`,
+      `  inspect) ${options.inspectFails ? "exit 1" : 'shift 3; for id in "$@"; do printf "host-%s\\n" "$id"; done'} ;;`,
+      `  compose) ${options.execFails ? "exit 2" : "printf 'page\\tholder_host\\treleased\\nlilly-1\\told-worker\\ttrue\\n'"} ;;`,
+      "esac",
+    ].join("\n"), { mode: 0o755 });
+    const result = runFunctions(["confirm_remote_fansly_send_guard_terminations"], String.raw`
+      run_remote() { printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"; PATH="$TEST_BIN:$PATH" bash -c "$1"; }
+      confirm_remote_fansly_send_guard_terminations
+    `, { TEST_BIN: bin, REMOTE_APP_DIR_ESCAPED: `'${fixtureRoot}'`, REMOTE_COMPOSE: "docker compose --current" });
+    return { result, calls: readFileSync(calls, "utf8").trim().split("\n").filter(Boolean) };
+  }
+
+  it("confirms the send-guard holders of every container that is not running, captured before the listing", () => {
+    const { result, calls } = sendGuardHook();
+    expect(result.status, result.stderr).toBe(0);
+    // The instant first, then the listing, then the confirmation in the new api.
+    expect(calls).toEqual([
+      "date -u +%Y-%m-%dT%H:%M:%S.%3NZ",
+      "docker ps -q",
+      "docker inspect -f {{.Config.Hostname}} c1 c2 c3",
+      "docker compose --current exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated "
+        + "--running-hosts host-c1,host-c2,host-c3 --include-unexpired --captured-before 2026-10-01T12:00:00.123Z",
+    ]);
+    expect(result.stderr).toContain("Fansly send guard: confirmed the holders of stopped containers terminated");
+    expect(result.stderr).toContain("lilly-1\told-worker\ttrue");
+  });
+
+  it.each([
+    ["an inspect failure (an incomplete list could free a live holder)", { inspectFails: true }],
+    ["no running container at all", { running: "" }],
+  ])("confirms nothing after %s", (_label, options) => {
+    const { result, calls } = sendGuardHook(options);
+    expect(result.status).not.toBe(0);
+    expect(calls.join("\n")).not.toContain("confirm-terminated");
+  });
+
+  it("returns non-zero for a failed confirmation (the main flow only logs it)", () => {
+    const { result, calls } = sendGuardHook({ execFails: true });
+    expect(result.status).not.toBe(0);
+    expect(calls.at(-1)).toContain("confirm-terminated");
+    expect(result.stderr).not.toContain("confirmed the holders");
+  });
+
   it("stages candidate Compose using the actual project name and production project directory", () => {
     writeFileSync(path.join(fixtureRoot, "docker-compose.production.yml"), "fixture compose bytes\n");
     const result = runFunctions(["prepare_remote_infrastructure_check"], String.raw`

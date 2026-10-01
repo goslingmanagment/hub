@@ -112,6 +112,32 @@ describe("notification paging policy table", () => {
     expect(policy.flap).toBeNull();
   });
 
+  it("pages the Fansly send guard's page latches at once, not after the sync deadman's hold", () => {
+    // Plan §2.5/§10: a closed page sends nothing; a pace violation must never
+    // happen. Both share the Fansly-only kind with the deadman, not its hold.
+    for (const subKey of ["send_guard_closed", "pace_violation"]) {
+      const policy = notificationPagingPolicyFor("sync_silent", subKey);
+      expect(policy.openHoldMs).toBe(0);
+      expect(decideNotificationPaging(observation(), policy, at(1_000))).toMatchObject({
+        action: "page",
+        mode: "immediate",
+      });
+    }
+    expect(notificationPagingPolicyFor("sync_silent", "send_guard_closed").recoveryHoldMs).toBe(5 * MINUTE);
+    expect(notificationPagingPolicyFor("sync_silent", "pace_violation").recoveryHoldMs).toBe(15 * MINUTE);
+    // The deadman itself keeps its ten minutes.
+    expect(notificationPagingPolicyFor("sync_silent", null).openHoldMs).toBe(10 * MINUTE);
+  });
+
+  it("names the send guard's page latches by their own titles", () => {
+    expect(incidentTitleForKind({ kind: "sync_silent", subKey: "send_guard_closed" }))
+      .toBe("Fansly page closed: a request overran its lease, nothing is sent for the page");
+    expect(incidentTitleForKind({ kind: "sync_silent", subKey: "pace_violation" }))
+      .toBe("Fansly pace violated: two requests of a page closer than the pause setting");
+    expect(parseIncidentSubKey({ incidentKey: "sync_silent:42:pace_violation", kind: "sync_silent", stream: null }))
+      .toBe("pace_violation");
+  });
+
   it("gives the disk runway warning its own long holds without touching the critical latch", () => {
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_warning").openHoldMs).toBe(6 * HOUR);
     expect(notificationPagingPolicyFor("db_disk_usage", "runway_critical").openHoldMs).toBe(0);

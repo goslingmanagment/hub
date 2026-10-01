@@ -187,6 +187,14 @@ async function waitFor(promise: Promise<void>, signal: AbortSignal | null) {
   }
 }
 
+async function waitForValue<T>(promise: Promise<T>, signal: AbortSignal | null): Promise<T> {
+  let value!: T;
+  await waitFor(promise.then((resolved) => {
+    value = resolved;
+  }), signal);
+  return value;
+}
+
 function assertRequestTimeout(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`Fansly send guard needs a positive request timeout (got ${value})`);
@@ -418,7 +426,9 @@ export class FanslySendGuardRegistry {
         continue;
       }
 
-      const settingMs = assertSettingMs(await this.deps.readSettingMs());
+      // A read only: abandoning it on abort leaves nothing behind (unlike the
+      // capture statement, which is always waited for).
+      const settingMs = assertSettingMs(await waitForValue(this.deps.readSettingMs(), signal));
       this.assertOpen(signal);
       if (this.#localHolds.has(pageId)) continue;
 
