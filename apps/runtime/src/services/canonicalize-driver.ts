@@ -37,8 +37,17 @@ import {
   CANONICALIZER_FAMILIES,
   type CanonicalizerFamily,
 } from "./canonicalize/index.ts";
-import type { CanonicalEventDraft } from "./canonicalize/types.ts";
+import { buildCanonicalDrafts, gateCanonicalObservation } from "./canonicalize-drafts.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+
+// The occurred_at window moved to the pure seam the Fansly Sync Engine shares;
+// re-exported so its existing importers keep their path.
+export {
+  clampDraftOccurredAt,
+  OCCURRED_AT_CLAMP_FUTURE_MONTHS,
+  OCCURRED_AT_CLAMP_MIN,
+  occurredAtClampMax,
+} from "./canonicalize-drafts.ts";
 
 export const CANONICALIZE_SWEEP_QUEUE = "canonicalize.sweep";
 
@@ -69,50 +78,6 @@ const SWEEP_MAX_PAGES_PER_FAMILY = 20;
  * the budget expires (the check is BETWEEN pages, never mid-row).
  */
 export const CANONICALIZE_SWEEP_BUDGET_MS = 600_000;
-
-/** W8.2 (A13 remainder, decision #133): the plausibility window for
- * occurred_at at canonicalize time. Provider timestamps are untrusted input —
- * a garbage year (1970 epoch-zero, 20326 fat-finger) used to aim the insert
- * at a partition that may not exist (ExecFindPartition 23514 → the
- * observation retries every sweep, forever). Real platform facts start 2024;
- * the future edge allows provider clock skew, nothing more. */
-export const OCCURRED_AT_CLAMP_MIN = new Date("2024-01-01T00:00:00Z");
-export const OCCURRED_AT_CLAMP_FUTURE_MONTHS = 2;
-
-export function occurredAtClampMax(now: Date): Date {
-  const max = new Date(now.getTime());
-  max.setUTCMonth(max.getUTCMonth() + OCCURRED_AT_CLAMP_FUTURE_MONTHS);
-  return max;
-}
-
-/** Out-of-window occurred_at falls back to the observation's receipt time —
- * NEVER a guessed boundary date — and the raw provider value is preserved
- * verbatim in event data (occurredAtRaw) so a later repair campaign (the
- * 1970-repair precedent) can re-date honestly. Dedup keys are built by the
- * canonicalizers BEFORE this clamp, so replays stay key-stable. */
-export function clampDraftOccurredAt(
-  draft: CanonicalEventDraft,
-  receivedAt: Date,
-  now: Date,
-): CanonicalEventDraft {
-  const time = draft.occurredAt.getTime();
-  if (
-    !Number.isNaN(time)
-    && time >= OCCURRED_AT_CLAMP_MIN.getTime()
-    && time <= occurredAtClampMax(now).getTime()
-  ) {
-    return draft;
-  }
-  return {
-    ...draft,
-    occurredAt: receivedAt,
-    data: {
-      ...draft.data,
-      occurredAtClamped: true,
-      occurredAtRaw: Number.isNaN(time) ? null : draft.occurredAt.toISOString(),
-    },
-  };
-}
 
 export async function ensureCanonicalizeQueues(
   boss: QueueCreationClient,
@@ -603,16 +568,14 @@ async function runFamily(
         // must not be stamped consumed. Stamping it would delete it from
         // every future replay just as surely as a DROP would — the exact
         // failure the parse_version contract exists to prevent.
-        // Some shape gates already perform the full parse. Keep that one
-        // result local to this observation so accepted drafts and rejection
-        // diagnostics do not repeat aggregation, sorting and fingerprints.
-        const parsed = family.parse?.(observation);
-        const rejection = parsed !== undefined
-          ? parsed.rejection
-          : family.canParse !== undefined && !family.canParse(observation)
-            ? family.parseRejection?.(observation) ?? { code: "unclassified" }
-            : null;
-        if (rejection !== null) {
+        // Some shape gates already perform the full parse. The verdict keeps
+        // that one result local to this observation so accepted drafts and
+        // rejection diagnostics do not repeat aggregation, sorting and
+        // fingerprints. The gate and the drafts below are the pure seam the
+        // Fansly Sync Engine shares (canonicalize-drafts.ts).
+        const shape = gateCanonicalObservation(family, observation);
+        if (!shape.accepted) {
+          const rejection = shape.rejection;
           totals.skippedUnparseable += 1;
           const reasonCode = rejection.code ?? "unclassified";
           // The worker logs the whole run result. Bound this list so a broad
@@ -624,7 +587,7 @@ async function runFamily(
               family: familyLabel(family),
               kind: row.kind,
               reasonCode,
-              ...(rejection?.itemIndex === undefined
+              ...(rejection.itemIndex === undefined
                 ? {}
                 : { itemIndex: rejection.itemIndex }),
             });
@@ -643,10 +606,9 @@ async function runFamily(
           }
           acceptedPostRefs = new Set(await listObservedPostRefsForCapture(app.db, row.accountId, row.id));
         }
-        const drafts = (parsed?.events ?? family.canonicalize(observation, {
-          ...runContext, ...(acceptedPostRefs === undefined ? {} : { acceptedPostRefs }),
-        }))
-          .map((draft) => clampDraftOccurredAt(draft, row.receivedAt, now));
+        const { drafts, quarantine } = buildCanonicalDrafts(family, observation, {
+          ...runContext, ...(acceptedPostRefs === undefined ? {} : { acceptedPostRefs }), now,
+        }, shape);
         // Capture-first rows (webhook) carry only the vendor account ref;
         // resolve it against the page map before the unmapped check.
         const accountId = resolveObservationAccountId(row, runContext.accountIdByNativeRef);
@@ -660,9 +622,8 @@ async function runFamily(
         const exportAccounts = exportLifecycle?.accountIds.map(ref =>
           runContext.accountIdByNativeRef.get(`onlyfans:${ref}`) ?? null);
         const accountIds = exportAccounts ?? [accountId];
-        // H2 (INC-001): only an accepted row that produced NOTHING can be a
-        // terminal quarantine, and only its family can say so.
-        const quarantine = drafts.length === 0 ? family.quarantine?.(observation) ?? null : null;
+        // H2 (INC-001): `quarantine` above is non-null only for an accepted
+        // row that produced NOTHING, and only its family can say so.
 
         if (options.dryRun) {
           totals.appended += drafts.length * Math.max(1, accountIds.length);

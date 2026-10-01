@@ -230,6 +230,9 @@ async function assertTransactionTipContextsSchema(pool: Pick<Pool, "query">) {
   // and transaction correlation refs. Guard the whole serving contract: a
   // migration-ledger marker alone cannot prove the nullable raw lineage or
   // the one-row-per-account/tip invariant survived later schema edits.
+  // 0230 adds the observation lineage pairs the Fansly Sync Engine writes
+  // (no FK: observations are partitioned), so the writer's columns, their
+  // pair check and the lookup index are part of the same contract.
   const columns = await pool.query<{ ready: boolean }>(`
     /* runtime_schema_guard_0122_columns */
     with expected(
@@ -253,7 +256,11 @@ async function assertTransactionTipContextsSchema(pool: Pick<Pool, "query">) {
         ('captured_at', 'timestamp with time zone', 'NO', '', 'NO', ''),
         ('provenance', 'text', 'NO', '', 'NO', ''),
         ('created_at', 'timestamp with time zone', 'NO', 'now()', 'NO', ''),
-        ('updated_at', 'timestamp with time zone', 'NO', 'now()', 'NO', '')
+        ('updated_at', 'timestamp with time zone', 'NO', 'now()', 'NO', ''),
+        ('source_observation_id', 'bigint', 'YES', '', 'NO', ''),
+        ('source_observation_received_at', 'timestamp with time zone', 'YES', '', 'NO', ''),
+        ('tip_message_source_observation_id', 'bigint', 'YES', '', 'NO', ''),
+        ('tip_message_source_observation_received_at', 'timestamp with time zone', 'YES', '', 'NO', '')
     )
     select not exists (
       select 1
@@ -297,7 +304,9 @@ async function assertTransactionTipContextsSchema(pool: Pick<Pool, "query">) {
         ('transaction_tip_contexts_tip_message_lineage_check', 'c',
           'CHECK (tip_message_text IS NULL AND tip_message_source_raw_payload_id IS NULL AND tip_message_captured_at IS NULL OR tip_message_text IS NOT NULL AND tip_message_captured_at IS NOT NULL)'),
         ('transaction_tip_contexts_provenance_check', 'c',
-          'CHECK (platform = ''fansly''::text AND provenance = ''fansly_dm_tip_sidecar''::text)')
+          'CHECK (platform = ''fansly''::text AND provenance = ''fansly_dm_tip_sidecar''::text)'),
+        ('transaction_tip_contexts_obs_lineage_check', 'c',
+          'CHECK ((source_observation_id IS NULL) = (source_observation_received_at IS NULL) AND (tip_message_source_observation_id IS NULL) = (tip_message_source_observation_received_at IS NULL))')
     ), actual as (
       select c.conname as constraint_name,
              c.contype::text as constraint_type,
@@ -333,6 +342,8 @@ async function assertTransactionTipContextsSchema(pool: Pick<Pool, "query">) {
           'CREATE INDEX transaction_tip_contexts_source_raw_payload_idx ON public.transaction_tip_contexts USING btree (source_raw_payload_id)'),
         ('transaction_tip_contexts_tip_message_source_raw_payload_idx',
           'CREATE INDEX transaction_tip_contexts_tip_message_source_raw_payload_idx ON public.transaction_tip_contexts USING btree (tip_message_source_raw_payload_id)'),
+        ('transaction_tip_contexts_source_observation_idx',
+          'CREATE INDEX transaction_tip_contexts_source_observation_idx ON public.transaction_tip_contexts USING btree (source_observation_id) WHERE (source_observation_id IS NOT NULL)'),
         ('sync_raw_payloads_dm_tip_context_backfill_idx',
           'CREATE INDEX sync_raw_payloads_dm_tip_context_backfill_idx ON public.sync_raw_payloads USING btree (id) WHERE ((endpoint = ''dm_messages''::text) AND (payload_kind = ''dm_messages''::text))')
     ), actual as (

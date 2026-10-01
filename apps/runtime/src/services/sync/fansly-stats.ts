@@ -114,7 +114,10 @@ import { retentionDate } from "./shared.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "stats_snapshot" as const;
-const MAPPER_VERSION = "fansly-stats-v1";
+/** Stamped on every `fansly-stats` family capture (this lane and the media
+ *  stats lane); the Fansly Sync Engine's capture helper reports the same. */
+export const FANSLY_STATS_MAPPER_VERSION = "fansly-stats-v1";
+const MAPPER_VERSION = FANSLY_STATS_MAPPER_VERSION;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
