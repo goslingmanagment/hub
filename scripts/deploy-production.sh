@@ -1331,6 +1331,29 @@ ${REMOTE_COMPOSE} exec -T api node apps/runtime/dist/cli.js fansly-send-guard co
   log "Fansly send guard: confirmed the holders of stopped containers terminated: ${output//$'\n'/; }"
 }
 
+# Sync Engine design §3.6 rule (e), §9.3: the page owners of the recreated
+# sync container. An owner that did not write its safe release (killed past its
+# 45 s stop grace, a crash) leaves its page waiting `ownership_unconfirmed`: the
+# new container cannot see the old one's processes, and a lost database session
+# is never a confirmation. Docker can: an owner whose host is not one of the
+# running sync containers is gone with its container. The instant is taken
+# BEFORE the listing and only owners that acquired their page before it are
+# confirmed, so a container that starts after the listing is never taken for
+# a gone one.
+#
+# Never fails or rolls back the deploy: a failure only leaves a page waiting,
+# with its alert, until the same command is run by hand.
+confirm_sync_owner_handover() {
+  local output
+  output="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
+listed_at=\"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)\"
+sync_hosts=\"\$(${REMOTE_COMPOSE} ps -q sync | xargs -r docker inspect -f '{{.Config.Hostname}}' | paste -sd, -)\"
+test -n \"\$sync_hosts\"
+${REMOTE_COMPOSE} exec -T api node apps/runtime/dist/cli.js sync ownership confirm-stopped --running-hosts \"\$sync_hosts\" --acquired-before \"\$listed_at\"")" \
+    || return 1
+  log "Sync engine: confirmed the page owners of stopped sync containers: ${output//$'\n'/; }"
+}
+
 ensure_node_base_image() {
   if docker image inspect "$NODE_BASE_IMAGE" >/dev/null 2>&1; then
     local cached_runtime
@@ -1967,6 +1990,8 @@ wait_for_sync_container_health || fail "Sync container never reached a healthy s
 verify_post_deploy_image_labels
 confirm_remote_fansly_send_guard_terminations \
   || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
+confirm_sync_owner_handover \
+  || log "WARNING: the sync engine owner confirmation failed; a page whose owner was cut off by this deploy waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
 finish_phase service-health
 start_phase sync-health
 

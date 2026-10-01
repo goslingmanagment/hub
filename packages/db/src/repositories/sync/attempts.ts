@@ -700,6 +700,110 @@ export async function listSendsForPaceAudit(
   }));
 }
 
+/**
+ * The apply's entry (tx 3, design §3.7.3): the attempt row locked `for
+ * update` while it still has something to apply (`captured` / `deferred`).
+ * Null when it was applied, quarantined or never captured — a repeated apply
+ * is a no-op (idempotent re-entry).
+ */
+export async function lockAttemptForApply(db: Database, attemptId: number): Promise<SyncAttemptRow | null> {
+  const result = await db.execute<AttemptSqlRow>(sql`
+    select ${attemptColumns}
+      from sync_attempts a
+     where a.id = ${attemptId}
+       and a.apply_state in ('captured', 'deferred')
+       for update of a
+  `);
+  const row = result.rows[0];
+  return row ? normalizeAttemptRow(row) : null;
+}
+
+/** Quarantine an attempt whose answer broke its contract (or whose apply
+ *  failed for good): the raw answer stays journaled; the owner re-applies it
+ *  from the journal after a fix (§9). */
+export async function markAttemptQuarantined(
+  db: Database,
+  input: { attemptId: number; error: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_attempts
+       set apply_state = 'quarantined',
+           apply_error = ${input.error},
+           apply_retry_at = null
+     where id = ${input.attemptId}
+       and apply_state in ('none', 'captured', 'deferred')
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** The newest 429 of a page before this outcome (the [A8] ladder decay). */
+export async function lastRateLimitAt(
+  db: Database,
+  input: { pageId: number; excludeAttemptId?: number | null },
+): Promise<Date | null> {
+  const result = await db.execute<{ at: Date | string | null }>(sql`
+    select max(coalesce(a.completed_at, a.admitted_at)) as at
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and not a.shadow
+       and a.http_status = 429
+       and a.id is distinct from ${input.excludeAttemptId ?? null}::bigint
+  `);
+  return toDate(result.rows[0]?.at);
+}
+
+/**
+ * Distinct subjects of one resource file whose request failed as a subject
+ * failure within the last `windowMs` (the §9 resource breaker counts them).
+ * Keys a resource hold never stops are left out.
+ */
+export async function countRecentFailedSubjects(
+  db: Database,
+  input: { pageId: number; file: string; windowMs: number; exemptKeys?: readonly string[] },
+): Promise<number> {
+  const result = await db.execute<{ subjects: number }>(sql`
+    select count(distinct a.subject)::int as subjects
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and not a.shadow
+       and split_part(a.resource, '.', 1) = ${input.file}
+       and not (a.resource = any(${sql.param([...(input.exemptKeys ?? [])])}::text[]))
+       and a.error_class in ('subject_failure', 'envelope_unsuccessful')
+       and a.admitted_at > clock_timestamp() - ${Math.max(0, input.windowMs)}::double precision * interval '1 millisecond'
+  `);
+  return Number(result.rows[0]?.subjects ?? 0);
+}
+
+export interface SyncSendCounts {
+  urgent: number;
+  requests: number;
+  planned: number;
+  byResource: Record<string, number>;
+}
+
+/** Sends of a page since `since` by class and by resource (status). Live and
+ *  shadow are separate journals. */
+export async function countSendsSince(
+  db: Database,
+  input: { pageId: number; since: Date; shadow: boolean },
+): Promise<SyncSendCounts> {
+  const result = await db.execute<{ class: SyncEngineWorkClass; resource: string; sends: number }>(sql`
+    select a.class, a.resource, count(*)::int as sends
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.shadow = ${input.shadow}::boolean
+       and a.sent_at >= ${input.since}::timestamptz
+     group by a.class, a.resource
+  `);
+  const counts: SyncSendCounts = { urgent: 0, requests: 0, planned: 0, byResource: {} };
+  for (const row of result.rows) {
+    const sends = Number(row.sends);
+    counts[row.class] += sends;
+    counts.byResource[row.resource] = (counts.byResource[row.resource] ?? 0) + sends;
+  }
+  return counts;
+}
+
 /** One attempt by id (status, the apply path). */
 export async function getSyncAttempt(db: Database, attemptId: number): Promise<SyncAttemptRow | null> {
   const result = await db.execute<AttemptSqlRow>(sql`

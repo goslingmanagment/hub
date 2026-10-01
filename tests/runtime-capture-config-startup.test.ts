@@ -49,6 +49,16 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => ({
 vi.mock("pg-boss", () => ({ PgBoss: h.PgBoss }));
 vi.mock("../apps/runtime/src/bootstrap.ts", () => ({ createAppContext: h.createAppContext }));
 vi.mock("../apps/runtime/src/sync/context.ts", () => ({ createSyncContext: h.createSyncContext }));
+// The engine host needs a database; these cases are about what the process
+// published before its first beat, which the host starts after.
+vi.mock("../apps/runtime/src/sync/engine/host.ts", () => ({
+  SyncEngineHost: vi.fn(function SyncEngineHost(this: { start: () => Promise<void>; stop: () => Promise<void> }) {
+    this.start = vi.fn(async () => {
+      h.order.push("sync:host");
+    });
+    this.stop = vi.fn(async () => undefined);
+  }),
+}));
 vi.mock("../apps/runtime/src/worker-services.ts", () => ({ startWorkerServices: h.startWorkerServices }));
 vi.mock("../apps/runtime/src/api/server.ts", () => ({ buildApiServer: h.buildApiServer }));
 vi.mock("../apps/runtime/src/services/ops-watchdog.ts", () => ({ startOpsWatchdog: h.startOpsWatchdog }));
@@ -196,6 +206,8 @@ describe("capture CAS settings at role startup", () => {
       { at: "sync:heartbeat", dualWrite: "*", pointerOnly: "*", readMode: "serve" },
     ]);
     expect(h.startRuntimeHeartbeat).toHaveBeenCalledWith(app, "sync", expect.objectContaining({ intervalMs: 30_000 }));
+    // The page actors (which journal every response) start only after it.
+    expect(h.order.at(-1)).toBe("sync:host");
     expect(app.logger.warn).not.toHaveBeenCalled();
   });
 

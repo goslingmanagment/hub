@@ -40,6 +40,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import {
@@ -991,6 +992,9 @@ export function buildProgram() {
   const pageAdd = page.command("add");
   const sync = program.command("sync");
   sync.enablePositionalOptions();
+  // Fansly Sync Engine (design §7.6): sync page mode|pause|resume|override|status,
+  // sync why, sync ownership status|confirm-stopped.
+  registerSyncEngineCommands(sync);
   const queue = program.command("queue");
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");

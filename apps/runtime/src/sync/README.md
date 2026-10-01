@@ -13,13 +13,16 @@ as the engine (`LIVE_LOOP_ENABLED = false`, `sync page mode` moves only `off ↔
 ```
 sync/
   main.ts, context.ts        the `sync` runtime role: context, heartbeat, host, signals
+  cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync ownership …`) and its reads
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
     pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
     scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes
     errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
     status.ts                "why waiting" and the page status
-    host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM
+    resource.ts              the resource contract (plan / apply / shadow) and the rules every entry shares
+    host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
+    host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step and the no-HTTP outcomes
     shadow.ts                the shadow transport and the shadow demand feed
@@ -40,6 +43,18 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+## Ownership
+
+A page has one owner generation at a time (`sync_pages.owner_generation`, fenced in every write) and its owner holds
+the session advisory lock `(58215, pageId)` on the host's one lock session. A new owner starts only when the previous
+one is **confirmed stopped**: never owned; its own safe release (`owner_released_at` of its generation — written after
+SIGTERM, a mode change or the loss of its lock session, once nothing is in flight); the step-1 OS proof
+(`judgeFanslySendHolderTermination`: pid gone, pid reused, boot changed, or this container under a new pid namespace);
+or a Docker-level confirmation (`pnpm cli sync ownership confirm-stopped --running-hosts …`, run by the deploy). A lost
+lock session alone is never a confirmation. The first send after a takeover waits `1.2 × S` after every send the
+database knows of (I5). Until the switch PR no build runs a live loop (`LIVE_LOOP_ENABLED = false`): a page written
+`live` is reported and never acquired; `sync page mode` moves pages only between `off` and `shadow`.
 
 ## Invariants
 
