@@ -196,10 +196,20 @@ jobs:
       # consistency, but editing routes.ts without `pnpm contracts:generate`
       # kept the committed artifacts mutually consistent yet stale. The
       # generator boots the API server with a stub config — no DB needed.
+      # `git status`, not `git diff`: a NEW generated file is untracked, and
+      # `git diff` never lists one, so a generator that adds an SDK module
+      # would pass with the module uncommitted.
       - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
         run: |
           pnpm contracts:generate
-          git diff --exit-code reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md
+          generated=(reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md)
+          drift="$(git status --porcelain --untracked-files=all -- "${generated[@]}")"
+          if [ -n "$drift" ]; then
+            printf '%s\n' "$drift"
+            git --no-pager diff -- "${generated[@]}"
+            echo "::error::Generated contracts are stale: run pnpm contracts:generate and commit every file it changes or adds."
+            exit 1
+          fi
 
       # Self-hosted: the unit tests run in a process group of their own beside
       # typecheck → image build → smokes, and "Reliable unit tests" joins

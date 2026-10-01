@@ -8,9 +8,14 @@ name: Nightly
 # proofs, the ratchets, vitest's parallel file mode — still runs weekly and on
 # manual dispatch, as the backstop that keeps the split honest.
 #
-# Runner pool: as in ci.yml. CI_POOL=pc runs both jobs on the owner's
-# self-hosted runners with ci.yml's PC setup (pnpm from corepack, the shared
-# pnpm store); any other value, and every re-run, uses GitHub-hosted runners.
+# Runner pool: the daily api remainder as in ci.yml — CI_POOL=pc runs it on
+# the owner's self-hosted runners with ci.yml's PC setup (pnpm from corepack,
+# the shared pnpm store); any other value, and every re-run, uses
+# GitHub-hosted runners. The whole suite always runs GitHub-hosted (owner's
+# decision, 2026-10-01): on the PC, a full suite admitted before a PR run of
+# hub shared the 20 GB cap with it and turned the PR's timing-sensitive
+# shards red (load test, CI run 36790478282). The job keeps the shared setup
+# steps, so moving it back is the runs-on line alone.
 
 on:
   schedule:
@@ -70,7 +75,7 @@ jobs:
 
   full-suite:
     name: Full suite (Testcontainers)
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     if: github.event_name != 'schedule' || github.event.schedule == '20 2 * * 1'
     timeout-minutes: 90
 
