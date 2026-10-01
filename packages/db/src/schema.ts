@@ -860,6 +860,8 @@ export const fanslySendLog = pgTable(
     outcome: text("outcome"),
     outcomeDetail: text("outcome_detail"),
     httpStatus: integer("http_status"),
+    // 0227: the capture's lease end; held past it, the page was closed.
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
   },
   (table) => ({
     guardTokenUidx: uniqueIndex("fansly_send_log_guard_token_uidx").on(table.guardToken),
@@ -868,6 +870,19 @@ export const fanslySendLog = pgTable(
   }),
 );
 
+// 0227 (plan §2.4/§10): the newest fansly_send_log id the minutely pace check
+// has examined. One row.
+export const fanslySendPaceCursor = pgTable(
+  "fansly_send_pace_cursor",
+  {
+    id: smallint("id").primaryKey().default(1),
+    afterId: bigint("after_id", { mode: "number" }).notNull().default(0),
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    singleton: check("fansly_send_pace_cursor_singleton", sql`${table.id} = 1`),
+    afterIdCheck: check("fansly_send_pace_cursor_after_id_check", sql`${table.afterId} >= 0`),
 // 0228 (Fansly Sync Engine, plan §11): the new engine's per-page state. Mode,
 // pauses, holds, ownership (generation + the owner process's identity), the
 // scheduler's cycle position and the pacer's facts. Written through
@@ -1686,6 +1701,64 @@ export const pageDmMessages = pgTable(
       columns: [table.conversationId, table.platformAccountId],
       foreignColumns: [pageDmThreads.id, pageDmThreads.platformAccountId],
     }).onDelete("cascade"),
+  }),
+);
+
+// Fansly live overlay (0226; plan §7): provisional messages from the account
+// socket, keyed by the Fansly message id. Socket-only fields, no money; the
+// deletion mark is sticky; the parity verdict compares each row with REST.
+// Written only by repositories/sync/live-messages.ts.
+export const dmLiveMessages = pgTable(
+  "dm_live_messages",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    platformMessageId: text("platform_message_id").notNull(),
+    platformConversationId: text("platform_conversation_id"),
+    senderPlatformUserId: text("sender_platform_user_id"),
+    isSentByPage: boolean("is_sent_by_page"),
+    createdAt: timestamp("created_at", { withTimezone: true }),
+    content: text("content"),
+    inReplyToMessageId: text("in_reply_to_message_id"),
+    inReplyToRootMessageId: text("in_reply_to_root_message_id"),
+    attachments: jsonbSafe("attachments").$type<Array<{ contentType: number; contentId: string }>>()
+      .default([]).notNull(),
+    messageType: integer("message_type"),
+    correlationId: text("correlation_id"),
+    fieldMask: integer("field_mask").default(0).notNull(),
+    decoderVersion: integer("decoder_version").notNull(),
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }),
+    sourceReceivedAt: timestamp("source_received_at", { withTimezone: true }),
+    firstVisibleAt: timestamp("first_visible_at", { withTimezone: true }),
+    confirmDueAt: timestamp("confirm_due_at", { withTimezone: true }),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    confirmSource: text("confirm_source").$type<"page_dm_messages" | "message_archive">(),
+    confirmOutcome: text("confirm_outcome").$type<"match" | "mismatch" | "not_found" | "excluded">(),
+    mismatchFields: text("mismatch_fields").array(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    deleteObservationId: bigint("delete_observation_id", { mode: "number" }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "dm_live_messages_pkey",
+      columns: [table.pageId, table.platformMessageId],
+    }),
+    threadIdx: index("dm_live_messages_thread").on(
+      table.pageId,
+      table.platformConversationId,
+      table.createdAt.desc(),
+    ),
+    confirmDueIdx: index("dm_live_messages_confirm_due")
+      .on(table.confirmDueAt)
+      .where(sql`${table.confirmedAt} is null and ${table.confirmDueAt} is not null`),
+    firstVisibleIdx: index("dm_live_messages_first_visible")
+      .on(table.firstVisibleAt)
+      .where(sql`${table.firstVisibleAt} is not null`),
+    confirmedIdx: index("dm_live_messages_confirmed")
+      .on(table.confirmedAt)
+      .where(sql`${table.confirmedAt} is not null`),
   }),
 );
 

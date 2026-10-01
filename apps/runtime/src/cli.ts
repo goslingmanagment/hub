@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
 import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
+import { applyFanslyWsLive, fanslyWsLivePayloadResolver } from "./services/fansly-ws/live-apply.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -19,6 +20,7 @@ import {
   insertDeliveryAttempt,
   insertErasureLog,
   replayFanslyWsDecode,
+  listPendingFanslyWsLiveReceipts,
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
@@ -32,6 +34,7 @@ import {
   normalizeProviderStreamFailure,
   undiciRequest,
   type AiProviderFailureClassification,
+  type ConfigOverrideValue,
   type ProxyConfig,
   type TransactionType,
 } from "@agency_hub_core/shared";
@@ -40,11 +43,19 @@ import { createAppContext } from "./bootstrap.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import { backfillFanslyPageAliases } from "./services/fansly-page-alias-backfill.ts";
 import {
+  applyLiveConfigPatches,
+  assertLiveEditableConfigKey,
+  clearLiveConfigOverride,
+  describeLiveConfigKey,
+  parseLiveConfigCliValue,
+} from "./services/live-config.ts";
+import {
   confirmFanslySendGuardHolderTerminated,
   confirmFanslySendGuardHostsTerminated,
   getFanslySendGuards,
   readFanslySendGuardStatus,
 } from "./services/fansly-send-guard/index.ts";
+import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -506,6 +517,23 @@ function auditContext() {
     source: "cli",
     actorUserId: null,
   };
+}
+
+/** A CLI config write has no user, so its note is what explains it: required, not
+ *  blank, and marked, because a config_audit_log row has no source column of its own. */
+function requireCliConfigNote(note: string) {
+  const trimmed = note.trim();
+  if (trimmed.length === 0) {
+    throw new Error("--note must say why the value changes");
+  }
+  return `[cli] ${trimmed}`;
+}
+
+function formatConfigValue(value: ConfigOverrideValue | null) {
+  if (value === null) {
+    return "(unset)";
+  }
+  return typeof value === "string" ? JSON.stringify(value) : String(value);
 }
 
 function describeError(error: unknown) {
@@ -1996,7 +2024,7 @@ export function buildProgram() {
 
   program
     .command("fansly:decode-ws")
-    .description("B0: settle bounded metadata receipts from durable WS raw; no provider requests")
+    .description("B0: settle bounded metadata receipts and apply pending live-overlay receipts from durable WS raw; no provider requests")
     .requiredOption("--page <label>", "one exact page label")
     .option("--max-batches <n>", "at most 20 retained observations per batch", "50")
     .action(async (options) => {
@@ -2012,7 +2040,25 @@ export function buildProgram() {
           decoded += count;
           if (count < 20) break;
         }
-        console.log(JSON.stringify({ pageId: stored.page.id, decoded }));
+        // The worker timer does the same; this is the offline repair path.
+        const resolvePayload = fanslyWsLivePayloadResolver(app);
+        const live: Record<string, number> = {};
+        // One forward walk: a receipt left pending (failure, erasure in
+        // progress, another applier) is passed, never listed again.
+        let after = 0;
+        for (let batch = 0; batch < limit; batch++) {
+          const pending = await listPendingFanslyWsLiveReceipts(app.db, {
+            pageId: stored.page.id, afterObservationId: after, limit: 20,
+          });
+          for (const observationId of pending) {
+            const result = await applyFanslyWsLive(app, observationId, resolvePayload);
+            const key = result?.status ?? "failed";
+            live[key] = (live[key] ?? 0) + 1;
+          }
+          if (pending.length < 20) break;
+          after = pending.at(-1)!;
+        }
+        console.log(JSON.stringify({ pageId: stored.page.id, decoded, live }));
       } finally { await app.close(); }
     });
 
@@ -2961,7 +3007,15 @@ export function buildProgram() {
       + "its container is gone or started again after the holder's captured_at "
       + "(docker inspect -f '{{.State.StartedAt}}' <container>); only a holder past its lease",
     )
-    .option("--include-unexpired", "with --running-hosts: also release holders whose lease has not expired yet", false)
+    .option(
+      "--include-unexpired",
+      "with --running-hosts: also release holders whose lease has not expired yet, if captured before --captured-before",
+      false,
+    )
+    .option(
+      "--captured-before <iso>",
+      "with --include-unexpired: the instant taken on the host right before the running hostnames were listed",
+    )
     .option("--dry-run", "list what would be released without writing", false)
     .action(async (options) => {
       const byHosts = options.runningHosts !== undefined;
@@ -2969,9 +3023,16 @@ export function buildProgram() {
       if (byHosts === byToken) {
         throw new Error("confirm-terminated takes exactly one of --running-hosts or --holder-token");
       }
-      if (byToken && options.includeUnexpired) {
+      if (byToken && (options.includeUnexpired || options.capturedBefore !== undefined)) {
         throw new Error("--include-unexpired applies to --running-hosts only; a holder token is released only past its lease");
       }
+      if (Boolean(options.includeUnexpired) !== (options.capturedBefore !== undefined)) {
+        throw new Error(
+          "--include-unexpired and --captured-before go together: a live lease is released only for a capture "
+          + "older than the listing of the running hostnames",
+        );
+      }
+      const capturedBefore = options.capturedBefore === undefined ? null : parseDateOption(String(options.capturedBefore));
       const app = await createAppContext();
       try {
         const identity = getFanslySendGuards(app).holderIdentity();
@@ -2992,6 +3053,7 @@ export function buildProgram() {
           ownHost: identity.host,
           confirmer: `cli@${identity.host} pid ${identity.pid}`,
           includeUnexpired: Boolean(options.includeUnexpired),
+          capturedBefore,
           dryRun: Boolean(options.dryRun),
         });
         printRows(
@@ -3002,6 +3064,30 @@ export function buildProgram() {
             options.dryRun ? true : outcome.released,
           ]),
         );
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Plan §2.5 p.3 (b) / §15 step 1: the acceptance report of the send guard,
+  // read from the journal of every guarded attempt (read-only).
+  sendGuard
+    .command("report")
+    .description(
+      "per Fansly page since --since: sends by source, the smallest gap between sends and the setting, "
+      + "pairs closer than the setting (must be 0), guard triggers (must be non-zero), outcomes and HTTP "
+      + "statuses (429/401/403), closed periods; JSON, read-only",
+    )
+    .requiredOption("--since <iso>", "window start: an ISO timestamp, or a relative 30m / 1h / 2d", parseSinceOption)
+    .option("--page <label>", "one Fansly page")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const report = await buildFanslySendGuardReport(app.db, {
+          since: options.since as Date,
+          pageLabel: options.page === undefined ? null : String(options.page),
+        });
+        console.log(JSON.stringify(report, null, 2));
       } finally {
         await app.close();
       }
@@ -3629,6 +3715,95 @@ export function buildProgram() {
           pageLabel: options.page,
         }, auditContext());
         console.log(`Unassigned ${options.userId} from ${options.page}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Audited live config, for the moments an operator session must change an owner
+  // setting without the console (Fansly Sync Engine plan §2.1, §2.5 p.5: set the
+  // Fansly pause once, roll it back on a 429). Only live-editable keys; the write
+  // path, validation and audit are the console's own (services/live-config.ts):
+  // config_audit_log rows plus an audit_events row with source "cli".
+  const config = program
+    .command("config")
+    .description("Live-editable owner settings: read, set or clear an override (audited like the console)");
+
+  config
+    .command("get")
+    .description("Print the env value, the stored override and the effective value of a live key")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .action(async (key: string) => {
+      const app = await createAppContext();
+      try {
+        const state = await describeLiveConfigKey(app, key);
+        console.log(`key: ${state.key} (${state.envName})`);
+        console.log(`env: ${formatConfigValue(state.env)}`);
+        console.log(state.override
+          ? `override: ${formatConfigValue(state.override.value)} (version ${state.override.version})${
+            state.overrideIgnoredReason ? ` - ignored: ${state.overrideIgnoredReason}` : ""
+          }`
+          : "override: none");
+        console.log(`effective: ${formatConfigValue(state.effective)}`);
+        if (state.lastChange) {
+          console.log(`last change: ${state.lastChange.changedAt.toISOString()} by ${
+            state.lastChange.userId === null ? "no user" : `user ${state.lastChange.userId}`
+          }${state.lastChange.note ? ` - ${state.lastChange.note}` : ""}`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  config
+    .command("set")
+    .description("Write an override for a live key; the console's validation and audit apply")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .argument("<value>", "new value; numbers and true/false are parsed by the key's type")
+    .requiredOption("--note <why>", "why the value changes; stored in the audit rows")
+    .option("--expected-version <n>", "fail unless the stored override is at this version (0 = none)", parseNonnegativeInt)
+    .action(async (key: string, rawValue: string, options: { note: string; expectedVersion?: number }) => {
+      const note = requireCliConfigNote(options.note);
+      const app = await createAppContext();
+      try {
+        const [result] = await applyLiveConfigPatches(app, {
+          patches: [{
+            key,
+            value: parseLiveConfigCliValue(key, rawValue),
+            expectedVersion: options.expectedVersion,
+          }],
+          note,
+          actor: { userId: null, audit: auditContext() },
+        });
+        console.log(`Set ${result!.key} = ${formatConfigValue(result!.value)} (override version ${result!.version}); `
+          + "audited as admin.config_update, source cli");
+      } finally {
+        await app.close();
+      }
+    });
+
+  config
+    .command("clear")
+    .description("Remove the override of a live key so the env value applies again; audited")
+    .argument("<key>", "registry key, e.g. fanslyDefaultDelayMs")
+    .requiredOption("--note <why>", "why the override goes; stored in the audit rows")
+    .option("--expected-version <n>", "fail unless the stored override is at this version", parseNonnegativeInt)
+    .action(async (key: string, options: { note: string; expectedVersion?: number }) => {
+      const note = requireCliConfigNote(options.note);
+      // The console's DELETE also clears non-live editable keys; this path stays on
+      // the live set, the only keys an operator session may touch.
+      assertLiveEditableConfigKey(key);
+      const app = await createAppContext();
+      try {
+        await clearLiveConfigOverride(app, {
+          key,
+          expectedVersion: options.expectedVersion,
+          note,
+          actor: { userId: null, audit: auditContext() },
+        });
+        const state = await describeLiveConfigKey(app, key);
+        console.log(`Cleared the ${key} override; effective value is now ${formatConfigValue(state.effective)} (env); `
+          + "audited as admin.config_clear, source cli");
       } finally {
         await app.close();
       }

@@ -29,6 +29,10 @@ const pageContextMocks = vi.hoisted(() => ({
   resolvePageContext: vi.fn(),
 }));
 
+const liveOverlayMocks = vi.hoisted(() => ({
+  pageReadsLiveOverlay: vi.fn(),
+}));
+
 const fanHydrationMocks = vi.hoisted(() => ({
   upsertHydratedFansForPage: vi.fn(),
   upsertHydratedFansForPageDetailed: vi.fn(),
@@ -66,6 +70,9 @@ vi.mock("../apps/runtime/src/services/fansly-page.ts", () => ({
   resolveAccessibleFanslyPage: fanslyPageMocks.resolveAccessibleFanslyPage,
   resolveAccessibleDmPage: fanslyPageMocks.resolveAccessibleDmPage,
 }));
+vi.mock("../apps/runtime/src/services/live-overlay-read.ts", () => ({
+  pageReadsLiveOverlay: liveOverlayMocks.pageReadsLiveOverlay,
+}));
 vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
   resolvePageContext: pageContextMocks.resolvePageContext,
 }));
@@ -75,7 +82,10 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => ({
 }));
 
 import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
-import { getPageConversationPreviewReport } from "../apps/runtime/src/services/conversations.ts";
+import {
+  getPageConversationMessagesReport,
+  getPageConversationPreviewReport,
+} from "../apps/runtime/src/services/conversations.ts";
 
 describe("runtime page services", () => {
   afterEach(() => {
@@ -84,6 +94,7 @@ describe("runtime page services", () => {
 
   it("builds preview sync UX from the DM-only helper instead of page-wide sync state", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
+    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(false);
     repoMocks.findPageSummaryByLabel.mockResolvedValue({
       id: 7,
       label: "lana",
@@ -160,10 +171,65 @@ describe("runtime page services", () => {
         platformAccountId: 7,
         platformConversationId: "conversation-001",
         limit: 10,
+        liveOverlay: false,
       }),
     );
     expect(result.messageSyncUx.state).toBe("healthy");
     expect(result.conversation.messageCoverageStatus).toBe("complete");
+    // A page outside the live overlay switch: the confirmed-only shape, no provenance.
+    expect(result.messages).toEqual([{
+      platformMessageId: "message-1",
+      senderPlatformUserId: null,
+      senderRole: "fan",
+      createdAt: "2026-03-24T11:55:00.000Z",
+      content: "hey",
+      totalTipAmountCents: 0,
+    }]);
+  });
+
+  it("asks the repository for the live union and serializes each row's provenance on a listed page", async () => {
+    authMocks.canAccessPage.mockReturnValue(true);
+    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(true);
+    const page = {
+      id: 7, label: "ari-1", platform: "fansly", username: null, displayName: null, followerCount: null,
+      subscriberCount: null, lastLightSyncAt: null, lastFollowerSyncAt: null, modelSlug: "ari", modelName: "Ari",
+    };
+    repoMocks.findPageSummaryByLabel.mockResolvedValue(page);
+    const conversation = {
+      platformConversationId: "800", storedMessageCount: 1, messageCoverageStatus: "complete",
+      messageBackfillComplete: true, messageSyncEligibility: "excluded",
+      messageSyncExcludedReason: "partner_missing_from_aggregation_accounts", lastMessageSyncAt: null,
+      unreadCount: 0, lastMessageAt: null,
+    };
+    repoMocks.getPageConversationMessages.mockResolvedValue({
+      conversationId: "800",
+      conversation,
+      messages: [
+        { messageId: "2", senderRole: "fan", content: "<b>live</b>", createdAt: new Date("2026-10-01T12:00:01.000Z"),
+          tipAmountCents: 0, provenance: { source: "live", apiUnavailable: true } },
+        { messageId: "1", senderRole: "model", content: "rest", createdAt: new Date("2026-10-01T12:00:00.000Z"),
+          tipAmountCents: 300, provenance: { source: "rest" } },
+      ],
+    });
+
+    const result = await getPageConversationMessagesReport(
+      { db: {} } as never,
+      {} as never,
+      { pageLabel: "ari-1", conversationId: "800" },
+      { limit: 25 },
+    );
+
+    expect(liveOverlayMocks.pageReadsLiveOverlay).toHaveBeenCalledWith({ db: {} }, page);
+    expect(repoMocks.getPageConversationMessages).toHaveBeenCalledWith(
+      {},
+      { platformAccountId: 7, platformConversationId: "800", limit: 25, liveOverlay: true },
+    );
+    expect(result.messages).toEqual([
+      { messageId: "2", senderRole: "fan", content: "live", createdAt: "2026-10-01T12:00:01.000Z",
+        tipAmountCents: 0, source: "live", apiUnavailable: true },
+      { messageId: "1", senderRole: "model", content: "rest", createdAt: "2026-10-01T12:00:00.000Z",
+        tipAmountCents: 300, source: "rest" },
+    ]);
   });
 
   it("allows OnlyFans conversation previews", async () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { loadConfig } from "@agency_hub_core/shared";
+import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS, loadConfig } from "@agency_hub_core/shared";
 
 const baseEnv = {
   DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
@@ -167,6 +167,36 @@ describe("config", () => {
     });
 
     expect(config.fanslyDefaultDelayMs).toBe(2800);
+  });
+
+  it("accepts the Fansly pause bounds themselves", () => {
+    expect(loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: String(FANSLY_PAUSE_MIN_MS) }).fanslyDefaultDelayMs)
+      .toBe(2000);
+    expect(loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: String(FANSLY_PAUSE_MAX_MS) }).fanslyDefaultDelayMs)
+      .toBe(60_000);
+  });
+
+  it("fails the boot on a Fansly pause below 2000 ms instead of raising it", () => {
+    // The old example env said 1900; it must stop the process, not be clamped silently.
+    for (const value of ["1", "1900", String(FANSLY_PAUSE_MIN_MS - 1)]) {
+      expect(() => loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: value }), value)
+        .toThrow(`FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got ${value} from FANSLY_DEFAULT_DELAY_MS)`);
+    }
+  });
+
+  it("fails the boot on a Fansly pause above 60000 ms", () => {
+    expect(() => loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: String(FANSLY_PAUSE_MAX_MS + 1) }))
+      .toThrow("FANSLY_DEFAULT_DELAY_MS must be between 2000 and 60000 ms (got 60001 from FANSLY_DEFAULT_DELAY_MS)");
+  });
+
+  it("range-checks a deprecated alias that supplies the Fansly pause and names it", () => {
+    expect(() => loadConfig({ ...baseEnv, FANSLY_GLOBAL_DELAY_MS: "1500" }))
+      .toThrow("(got 1500 from FANSLY_GLOBAL_DELAY_MS)");
+    expect(() => loadConfig({ ...baseEnv, FANSLY_ACCOUNT_LOOKUP_DELAY_MS: "90000" }))
+      .toThrow("(got 90000 from FANSLY_ACCOUNT_LOOKUP_DELAY_MS)");
+    // The canonical value wins the coalesce, so an ignored alias cannot fail the boot.
+    expect(loadConfig({ ...baseEnv, FANSLY_DEFAULT_DELAY_MS: "2500", FANSLY_GLOBAL_DELAY_MS: "1500" })
+      .fanslyDefaultDelayMs).toBe(2500);
   });
 
   it("prefers FANSLY_GLOBAL_DELAY_MS over the legacy account lookup alias when canonical is unset", () => {

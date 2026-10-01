@@ -18,7 +18,9 @@ export type ValidateConfigOverrideResult =
 
 /** PURE server-side validation of a single override. The registry is the only
  *  source of truth for which keys are editable and their bounds. Numbers are
- *  CLAMPED to min/max (the returned value is the clamped one) rather than rejected;
+ *  CLAMPED to min/max (the returned value is the clamped one) rather than rejected,
+ *  unless the descriptor opts into `outOfRange: 'reject'` (a bound that is a rule,
+ *  e.g. the Fansly pause floor), which rejects with the descriptor's message;
  *  everything else (unknown/non-editable key, type mismatch, NaN/Infinity, enum
  *  miss) is rejected with a clear message. */
 export function validateConfigOverride(
@@ -47,6 +49,15 @@ export function validateConfigOverride(
       // Every numeric config knob is an integer in the env schema (.int()).
       if (!Number.isInteger(value)) {
         return { ok: false, error: `${key} expects an integer` };
+      }
+      if (descriptor.outOfRange === "reject") {
+        if (descriptor.min != null && value < descriptor.min) {
+          return { ok: false, error: descriptor.belowMinError ?? `${key} must be at least ${descriptor.min}` };
+        }
+        if (descriptor.max != null && value > descriptor.max) {
+          return { ok: false, error: descriptor.aboveMaxError ?? `${key} must be at most ${descriptor.max}` };
+        }
+        return { ok: true, value };
       }
       let next = value;
       if (descriptor.min != null && next < descriptor.min) {

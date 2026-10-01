@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fanslyWsCreatedAtMs } from "../apps/runtime/src/services/fansly-ws-recovery-manifest.ts";
+import { fanslyWsCreatedAtMs } from "@agency_hub_core/shared";
 
 describe("WS recovery manifest createdAt units", () => {
   it("reads the frame's epoch seconds, fractional or whole, and passes milliseconds through", () => {

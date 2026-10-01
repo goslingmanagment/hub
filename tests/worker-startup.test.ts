@@ -271,6 +271,18 @@ vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
   startGoldenSignalWorker: vi.fn(async () => "gs-worker"),
   runGoldenSignalSample: vi.fn(),
 }));
+// The live overlay timer reads the database on its own clock; this file pins
+// that the worker starts it and stops it on shutdown, nothing more.
+const fanslyWsLiveMocks = vi.hoisted(() => ({
+  stop: vi.fn(async () => {}),
+  startFanslyWsLiveTimer: vi.fn(),
+}));
+vi.mock("../apps/runtime/src/services/fansly-ws/live-apply.ts", () => ({
+  startFanslyWsLiveTimer: fanslyWsLiveMocks.startFanslyWsLiveTimer.mockImplementation(() => ({
+    stop: fanslyWsLiveMocks.stop,
+  })),
+  createFanslyWsLiveApplier: vi.fn(() => ({ enqueue: vi.fn(), drain: vi.fn(async () => {}) })),
+}));
 const targetedBackfillMocks = vi.hoisted(() => ({
   parseTargetedThreadBackfillJob: vi.fn((): unknown => null),
   runTargetedThreadBackfill: vi.fn(),
@@ -540,6 +552,7 @@ describe("worker startup", () => {
     expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsSchedules).not.toHaveBeenCalled();
     expect(ofapiDmAnalyticsMocks.startOfapiDmAnalyticsWorker).toHaveBeenCalledWith(app, boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
+    expect(fanslyWsLiveMocks.startFanslyWsLiveTimer).toHaveBeenCalledWith(app);
 
     await expect(getRawPayloadCleanupHandler(boss)()).resolves.toBeUndefined();
     expect(dbMocks.deleteExpiredPendingDeviceTokens).toHaveBeenCalledTimes(1);
@@ -557,6 +570,7 @@ describe("worker startup", () => {
 
     await runtime.shutdown();
 
+    expect(fanslyWsLiveMocks.stop).toHaveBeenCalled();
     expect(boss.stop).toHaveBeenCalledTimes(1);
     expect(app.close).toHaveBeenCalledTimes(1);
   });

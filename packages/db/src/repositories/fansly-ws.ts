@@ -109,8 +109,14 @@ export async function guardFanslyWsConnection(db: Database, id: string, verified
     where id=${id}::uuid and closed_at is null`);
 }
 
-export async function finishFanslyWsConnection(db: Database, id: string, reason: string) {
-  await db.execute(sql`update fansly_ws_connections set closed_at=clock_timestamp(),stop_reason=${reason}
+/** `intakeStoppedAt` is when the receiver stopped reading the socket. A
+ * graceful stop drains already received frames after that instant, and the
+ * close must not move the next attempt's gap boundary past the last frame the
+ * socket could deliver. Never later than the database clock. */
+export async function finishFanslyWsConnection(db: Database, id: string, reason: string, intakeStoppedAt?: Date) {
+  const closedAt = intakeStoppedAt === undefined ? sql`clock_timestamp()`
+    : sql`greatest(started_at, least(clock_timestamp(), ${intakeStoppedAt}::timestamptz))`;
+  await db.execute(sql`update fansly_ws_connections set closed_at=${closedAt},stop_reason=${reason}
     where id=${id}::uuid and closed_at is null`);
 }
 
@@ -121,13 +127,17 @@ export async function isFanslyWsGenerationBlocked(db: Database, pageId: number, 
 }
 
 /** Revisit a bounded batch of already durable inline B0 facts. Missing/tiered
- * observations remain pending; they never become a successful decode receipt. */
+ * observations remain pending; they never become a successful decode receipt.
+ * Only receipts captured before the live overlay (`live_state='legacy'`): the
+ * live apply settles every newer receipt's metadata in its own transaction,
+ * and this writer never waits on a receipt that apply holds. */
 export async function replayFanslyWsDecode(db: Database, pageId: number) {
   const result = await db.execute<{ id: string; frame: string }>(sql`
     select r.observation_id::text as id,o.payload->>'frame' as frame
     from fansly_ws_decode_receipts r join observations o
       on o.id=r.observation_id and o.received_at=r.received_at
-    where r.page_id=${pageId} and r.state='pending' and o.payload->>'codec'=${FANSLY_WS_CAPTURE_KIND}
+    where r.page_id=${pageId} and r.state='pending' and r.live_state='legacy'
+      and o.payload->>'codec'=${FANSLY_WS_CAPTURE_KIND}
     order by r.observation_id limit 20`);
   for (const row of result.rows) await settleFanslyWsDecode(db, Number(row.id), decodeFanslyWsCapture(row.frame));
   return result.rows.length;

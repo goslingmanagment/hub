@@ -1,6 +1,8 @@
 export * from "./fansly-ws-capture.ts";
 export * from "./fansly-ws-hints.ts";
 export * from "./fansly-ws-media.ts";
+export * from "./fansly-ws-messages.ts";
+export * from "./fansly-live-overlay-read.ts";
 export * from "./fansly-ws-hint-policy.ts";
 export * from "./ai-stop-reason.ts";
 export * from "./capture-coverage.ts";
@@ -12,6 +14,7 @@ export * from "./dm-text.ts";
 export * from "./error-sanitizer.ts";
 export * from "./fans.ts";
 export * from "./fansly-notification-types.ts";
+export * from "./fansly-pause.ts";
 export * from "./fansly-revenue-types.ts";
 export * from "./fansly-stat-types.ts";
 export * from "./http-client.ts";

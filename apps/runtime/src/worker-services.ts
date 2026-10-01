@@ -1,4 +1,5 @@
 import { startFanslyWsWorker } from "./services/fansly-ws/worker.ts";
+import { startFanslyWsLiveTimer } from "./services/fansly-ws/live-apply.ts";
 import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
 import { ensureOfapiBindingReconcileQueue, OFAPI_BINDING_RECONCILE_QUEUE, runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
@@ -635,6 +636,9 @@ export async function startWorkerServices(
   // about each committed B0 frame; reads a fan's fresh media conversation.
   const fanslyFastLane = createFanslyFastLane(app);
   const fanslyWs = startFanslyWsWorker(app, { onCaptured: fanslyFastLane.onCaptured });
+  // Live overlay replay + passive parity over every Fansly page (plan §7.2);
+  // its first pass at start is the start-up replay. No HTTP, no work.
+  const fanslyWsLive = startFanslyWsLiveTimer(app);
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
@@ -723,6 +727,9 @@ export async function startWorkerServices(
         app.logger.warn({ err: error }, "AI media describe loop failed during shutdown");
       });
       await fanslyWs.stop();
+      await fanslyWsLive.stop().catch((error) => {
+        app.logger.warn({ err: error }, "Fansly live overlay timer failed during shutdown");
+      });
       await fanslyFastLane.stop().catch((error) => {
         app.logger.warn({ err: error }, "AI media fast lane failed during shutdown");
       });

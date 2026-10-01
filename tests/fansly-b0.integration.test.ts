@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireFanslyWsOwnership, beginFanslyWsConnection, captureFanslyWsFrame, createFanslyPage,
+  acquireFanslyWsOwnership, applyFanslyWsLiveReceipt, beginFanslyWsConnection, captureFanslyWsFrame, createFanslyPage,
   finishFanslyWsConnection, isFanslyWsGenerationBlocked, replayFanslyWsDecode,
   settleFanslyWsDecode, upsertFans, upsertFanPages, type Database,
 } from "@agency_hub_core/db";
@@ -26,6 +26,7 @@ import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/
 const scaled: FanslyWsWorkerTiming = {
   configPollMs: 1_000, configStaleMs: 2_000, pagePauseMs: 1_000, backoffBaseMs: 150,
   authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
+  drainMs: 2_000, applyDrainMs: 1_500,
 };
 
 let testDb: StartedTestDatabase;
@@ -156,6 +157,16 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect((await testDb.pool.query(`select stop_reason from fansly_ws_connections
       where id<>$1::uuid order by started_at`, [f.id])).rows)
       .toEqual([{ stop_reason: "pong_timeout" }, { stop_reason: "disabled" }]);
+    // Plan §2.5: each connection attempt was one capture of the page's send
+    // guard (source ws_connect), completed by the end of its attempt, and the
+    // page is free again.
+    expect((await testDb.pool.query(`select source, operation, completed_at is not null as done
+      from fansly_send_log where page_id = $1 order by id`, [f.page.id])).rows).toEqual([
+      { source: "ws_connect", operation: "ws_connect", done: true },
+      { source: "ws_connect", operation: "ws_connect", done: true },
+    ]);
+    expect((await testDb.pool.query("select holder_token from fansly_page_send_guards where page_id = $1",
+      [f.page.id])).rows).toEqual([{ holder_token: null }]);
   });
 
   it("the actual worker retains capture through replay failure and observes live off within 60 seconds", async () => {
@@ -314,11 +325,29 @@ describe("B0 PostgreSQL ownership and journal", () => {
     const id = await f.capture(); expect(await f.capture()).toBe(id);
     const raw = (await testDb.pool.query("select payload from observations where id=$1", [id])).rows[0].payload;
     expect(raw.frame).toBe(f.frame());
-    expect((await testDb.pool.query("select state from fansly_ws_decode_receipts")).rows).toEqual([{ state: "pending" }]);
-    expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(1);
-    const receipt = (await testDb.pool.query("select state,nodes from fansly_ws_decode_receipts")).rows[0];
+    expect((await testDb.pool.query("select state,live_state from fansly_ws_decode_receipts")).rows)
+      .toEqual([{ state: "pending", live_state: "pending" }]);
+    // The legacy metadata replay leaves overlay-era receipts to the live apply,
+    // which settles the metadata receipt in its own transaction.
+    expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(0);
+    expect(await applyFanslyWsLiveReceipt(testDb.db, { observationId: id })).toMatchObject({ status: "debt" });
+    const receipt = (await testDb.pool.query("select state,nodes,live_state from fansly_ws_decode_receipts")).rows[0];
     expect(receipt.state).toBe("debt"); expect(receipt.nodes[2]).toMatchObject({ path: [1], state: "unknown" });
+    // A service-5 type-1 event without a message is not a message: debt, and
+    // no business event, overlay row or HTTP.
+    expect(receipt.live_state).toBe("debt");
     expect((await testDb.pool.query("select count(*)::int as n from domain_events")).rows[0].n).toBe(0);
+    expect((await testDb.pool.query("select count(*)::int as n from dm_live_messages")).rows[0].n).toBe(0);
+  });
+
+  it("the legacy metadata replay still settles receipts captured before the overlay", async () => {
+    const f = await fixture();
+    const id = await f.capture();
+    await testDb.pool.query("update fansly_ws_decode_receipts set live_state='legacy' where observation_id=$1", [id]);
+    expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(1);
+    expect((await testDb.pool.query("select state,live_state from fansly_ws_decode_receipts")).rows)
+      .toEqual([{ state: "debt", live_state: "legacy" }]);
+    expect(await applyFanslyWsLiveReceipt(testDb.db, { observationId: id })).toEqual({ status: "not_pending" });
   });
 
   it("a receipt insert failure rolls back both raw and its dedup key", async () => {

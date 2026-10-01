@@ -511,6 +511,17 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # Fansly page and grants. The previous image never names either table, so
   # after a rollback it runs unchanged (without the guard, as before).
   "0225_fansly_page_send_guards.sql"
+  # Fansly WS live overlay: one new table (dm_live_messages) and three
+  # columns on fansly_ws_decode_receipts with defaults (the old image's capture
+  # insert names neither, so its rows start 'pending' and the next image
+  # applies them), plus a NOT VALID check and two partial indexes. The previous
+  # image never names the table or the columns, so it runs unchanged after a
+  # rollback; a later re-deploy finds the migration already applied.
+  "0226_fansly_ws_live_overlay.sql"
+  # Send guard checks (plan §2.4/§10): a nullable lease-end column on the
+  # 0225 journal (catalog-only, no default) and the pace check's one-row
+  # cursor table. The previous image names neither, so it runs unchanged.
+  "0227_fansly_send_guard_checks.sql"
   # Fansly Sync Engine core state (design §2.2): three new tables (sync_pages,
   # sync_work, sync_attempts), two pure SQL functions, a seed row per Fansly
   # page (mode 'off') and grants. The previous image never names any of them,
@@ -1243,6 +1254,29 @@ verify_post_deploy_image_labels() {
   verify_service_image_labels scheduler
 }
 
+# Plan §2.5: the per-page Fansly send guard. A request that the recreate cut
+# off (a container killed past its stop grace, a crash) leaves its page closed:
+# an expired lease never opens a page by itself, and the new containers'
+# sweepers cannot see the old containers' processes. Docker can: a holder whose
+# container is not running any more is gone with it. So, once the new stack is
+# healthy, list the hostnames of every running container on the host and let
+# the new api confirm every other holder terminated. The instant is taken
+# BEFORE the listing and only holders captured before it are released, so a
+# container that starts after the listing is never taken for a gone one.
+#
+# Never fails or rolls back the deploy: a failure only leaves a page closed,
+# with its alert, until the same command is run by hand.
+confirm_remote_fansly_send_guard_terminations() {
+  local output
+  output="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
+listed_at=\"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)\"
+running_hosts=\"\$(docker ps -q | xargs -r docker inspect -f '{{.Config.Hostname}}' | paste -sd, -)\"
+test -n \"\$running_hosts\"
+${REMOTE_COMPOSE} exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated --running-hosts \"\$running_hosts\" --include-unexpired --captured-before \"\$listed_at\"")" \
+    || return 1
+  log "Fansly send guard: confirmed the holders of stopped containers terminated: ${output//$'\n'/; }"
+}
+
 ensure_node_base_image() {
   if docker image inspect "$NODE_BASE_IMAGE" >/dev/null 2>&1; then
     local cached_runtime
@@ -1873,6 +1907,8 @@ log "Waiting for the scheduler container healthcheck"
 wait_for_scheduler_health || fail "Scheduler container never reached a healthy state"
 
 verify_post_deploy_image_labels
+confirm_remote_fansly_send_guard_terminations \
+  || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
 finish_phase service-health
 start_phase sync-health
 

@@ -111,6 +111,15 @@ export function notificationPagingPolicyFor(
   kind: NotificationIncidentKind,
   subKey: string | null,
 ): NotificationPagingPolicy {
+  // Plan §2.5/§10: the Fansly send guard's page latches page at once — a
+  // closed page sends nothing, and a pace violation must never happen. Their
+  // kind's default (a 10-minute hold) is for the sync deadman.
+  if (kind === "sync_silent" && subKey === "send_guard_closed") {
+    return immediate(5 * MINUTE_MS);
+  }
+  if (kind === "sync_silent" && subKey === "pace_violation") {
+    return immediate(15 * MINUTE_MS);
+  }
   if (kind === "db_disk_usage" && subKey === "runway_warning") {
     // A 30-day runway that hovers at 29 days flips hourly; the warning is
     // useful once, and its all-clear is only news after a full day.

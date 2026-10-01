@@ -51,8 +51,10 @@ export {
   createDefaultFanslySendOsProbe,
   createPortableFanslySendOsProbe,
   createProcFanslySendOsProbe,
+  FanslySendProbeUnknownError,
   hostnameIsContainerId,
   judgeFanslySendHolderTermination,
+  parseProcStatStartToken,
   type FanslySendHolderRole,
   type FanslySendOsProbe,
   type FanslySendTerminationEvidence,
@@ -136,11 +138,17 @@ export function fanslyUnpacedSendGuard(app: GuardHost, source: FanslySendSource)
 }
 
 export const FANSLY_SEND_GUARD_SWEEP_INTERVAL_MS = 10_000;
+/** stop() waits at most this long for a pass in flight: inside the api's and
+ *  the worker's stop grace, beside the other bounded stops. A pass cut off by
+ *  the exit wrote nothing half-way — each release or close is one statement. */
+export const FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS = 5_000;
 
 export interface FanslySendGuardSweeper {
   /** One pass (tests drive it directly). */
   sweepOnce(): Promise<FanslySendGuardSweepResult>;
-  stop(): Promise<void>;
+  /** Stops the ticks and waits for the pass in flight, bounded by
+   *  `timeoutMs` (default FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS). */
+  stop(options?: { timeoutMs?: number }): Promise<void>;
 }
 
 export interface FanslySendGuardSweepResult {
@@ -241,13 +249,38 @@ export function startFanslySendGuardSweeper(
 
   return {
     sweepOnce,
-    async stop() {
+    async stop(options = {}) {
       stopped = true;
       if (timer) clearTimeout(timer);
       timer = null;
-      await running;
+      const inFlight = running;
+      if (!inFlight) return;
+      const timeoutMs = options.timeoutMs ?? FANSLY_SEND_GUARD_SWEEPER_STOP_TIMEOUT_MS;
+      if (!await settlesWithin(inFlight, timeoutMs)) {
+        app.logger.warn(
+          { component: "fansly_send_guard", timeoutMs },
+          "Fansly send guard sweeper stop timed out on a pass in flight; the next process's sweeper repeats it",
+        );
+      }
     },
   };
+}
+
+/** Whether `promise` settles within `timeoutMs` (it is never rejected here:
+ *  the callers' chains catch their own errors). */
+export async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        deadline = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+        deadline.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 /** `fansly-send-guard status`. */
@@ -259,9 +292,16 @@ export async function readFanslySendGuardStatus(db: Database): Promise<FanslySen
  * `fansly-send-guard confirm-terminated --running-hosts h1,h2,…`: a Docker-level
  * confirmation. Every holder whose host is not among the hostnames of the
  * containers that are running (and is not this process's own host) is gone with
- * its container. By default only holders past their lease are released;
- * `includeUnexpired` also releases fresh ones (a deploy that just removed the
- * containers). `dryRun` reports without writing.
+ * its container. By default only holders past their lease are released: such a
+ * capture is older than the listing of the hostnames, so its container was
+ * listed had it been running.
+ *
+ * `includeUnexpired` also releases holders whose lease still runs (a deploy
+ * that just removed the containers) — but only those captured before
+ * `capturedBefore`, the instant (DB clock = the host's clock) taken right
+ * BEFORE the running containers were listed. A container that started after
+ * the listing, and captured since, is never mistaken for a gone one.
+ * `dryRun` reports without writing.
  */
 export async function confirmFanslySendGuardHostsTerminated(
   db: Database,
@@ -270,6 +310,7 @@ export async function confirmFanslySendGuardHostsTerminated(
     ownHost: string;
     confirmer: string;
     includeUnexpired: boolean;
+    capturedBefore?: Date | null;
     dryRun: boolean;
   },
 ): Promise<Array<{ pageId: number; pageLabel: string | null; holderHost: string | null; released: boolean }>> {
@@ -277,17 +318,25 @@ export async function confirmFanslySendGuardHostsTerminated(
   if (running.size < 2) {
     throw new Error("confirm-terminated needs the hostnames of the running containers (--running-hosts)");
   }
+  const capturedBefore = input.capturedBefore ?? null;
+  if (input.includeUnexpired && (capturedBefore === null || Number.isNaN(capturedBefore.getTime()))) {
+    throw new Error(
+      "--include-unexpired needs --captured-before: the instant taken before the running hostnames were listed",
+    );
+  }
   const rows = await listHeldFanslySendGuards(db, { expiredOnly: !input.includeUnexpired });
   const outcomes: Array<{ pageId: number; pageLabel: string | null; holderHost: string | null; released: boolean }> = [];
   for (const row of rows) {
     if (row.holderToken === null || row.holderHost === null || running.has(row.holderHost)) continue;
+    // A live lease is released only for a capture older than the listing.
+    if (!row.leaseExpired && !(capturedBefore && row.capturedAt && row.capturedAt < capturedBefore)) continue;
     const released = input.dryRun
       ? false
       : await confirmFanslySendGuardTerminated(db, {
         pageId: row.pageId,
         token: row.holderToken,
         evidence: `host_not_running; confirmed by ${input.confirmer}`,
-        requireExpiredLease: !input.includeUnexpired,
+        requireExpiredLease: row.leaseExpired,
       });
     outcomes.push({ pageId: row.pageId, pageLabel: row.pageLabel, holderHost: row.holderHost, released });
   }

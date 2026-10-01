@@ -234,6 +234,8 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
     }
     const pageIds = pageRows.map((row) => Number(row.id));
     const fanId = fanRows[0] ? Number(fanRows[0].id) : null;
+    // The Fansly live overlay names a chat before REST has a thread row for
+    // it: a chat the fan wrote in through the socket is the fan's chat too.
     const fanGroupRows = await rows<{ group_id: string }>(app, sql`
       select distinct platform_conversation_id as group_id
       from page_dm_threads
@@ -243,6 +245,12 @@ async function resolveScope(app: Db, input: ErasureScopeInput): Promise<Resolved
           or platform_conversation_id = ${input.fanRef}
           ${fanId === null ? sql`` : sql`or fan_id = ${fanId}`}
         )
+      union
+      select distinct platform_conversation_id as group_id
+      from dm_live_messages
+      where page_id in ${pageIds}
+        and sender_platform_user_id = ${input.fanRef}
+        and platform_conversation_id is not null
     `);
     return {
       input,
@@ -851,6 +859,10 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   // an explicit `action: "cascade"` target with its own row count, so the rows
   // are erased and reported — just not by a predicate on this column.
   { column: "page_dm_messages.sender_platform_user_id", target: "page_dm_messages", reach: "cascade" },
+  // Fansly live overlay (0226): the socket's sender of a provisional message.
+  // dmLivePred: `sender_platform_user_id = ref or platform_conversation_id in
+  // the fan's chats or the row came from an erased observation`.
+  { column: "dm_live_messages.sender_platform_user_id", target: "dm_live_messages", reach: "predicate" },
   // WP-F2 engagement core (0134). Both are TEXT refs with no FK to `fans`.
   //
   // Captured Fansly purchase/follow/subscription rows name the fan in
@@ -934,6 +946,19 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "fansly_ws_decode_receipts", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from fansly_ws_decode_receipts where ${wsReceiptPred}`),
     run: (tx) => execCount(tx, sql`delete from fansly_ws_decode_receipts where ${wsReceiptPred}`),
+  });
+  // The live overlay holds the fan's words and the creator's replies in the
+  // fan's chats, including chats only the socket has named (resolveScope adds
+  // them to fanGroupIds), and every row an erased frame produced.
+  const dmLiveObservationPred = _lineage.eraseObsIds.length
+    ? sql`or source_observation_id in ${_lineage.eraseObsIds} or delete_observation_id in ${_lineage.eraseObsIds}`
+    : sql``;
+  const dmLivePred = sql`page_id in ${scope.pageIds} and (
+    sender_platform_user_id = ${ref} or platform_conversation_id in ${wsGroupRefs} ${dmLiveObservationPred})`;
+  targets.push({
+    plane: "hot", target: "dm_live_messages", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from dm_live_messages where ${dmLivePred}`),
+    run: (tx) => execCount(tx, sql`delete from dm_live_messages where ${dmLivePred}`),
   });
 
   // Dispatch custody has no scheduled expiry, but explicit erasure reaches
@@ -1517,6 +1542,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["ofapi_request_attempts", "page_id"],
     ["fansly_dm_shadow_sweeps", "page_id"],
     ["fansly_ws_decode_receipts", "page_id"],
+    // Live overlay (0226): provisional socket messages of the page.
+    ["dm_live_messages", "page_id"],
     ["fansly_ws_connections", "page_id"],
     ["fansly_ws_hint_receipts", "page_id"],
     ["fansly_ws_hint_attempts", "page_id"],
