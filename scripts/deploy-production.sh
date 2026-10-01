@@ -511,6 +511,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # Fansly page and grants. The previous image never names either table, so
   # after a rollback it runs unchanged (without the guard, as before).
   "0225_fansly_page_send_guards.sql"
+  # Fansly WS live overlay: one new table (dm_live_messages) and three
+  # columns on fansly_ws_decode_receipts with defaults (the old image's capture
+  # insert names neither, so its rows start 'pending' and the next image
+  # applies them), plus a NOT VALID check and two partial indexes. The previous
+  # image never names the table or the columns, so it runs unchanged after a
+  # rollback; a later re-deploy finds the migration already applied.
+  "0226_fansly_ws_live_overlay.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

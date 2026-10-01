@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readFile } from "node:fs/promises";
 import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
 import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
+import { applyFanslyWsLive, fanslyWsLivePayloadResolver } from "./services/fansly-ws/live-apply.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -19,6 +20,7 @@ import {
   insertDeliveryAttempt,
   insertErasureLog,
   replayFanslyWsDecode,
+  listPendingFanslyWsLiveReceipts,
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
@@ -2021,7 +2023,7 @@ export function buildProgram() {
 
   program
     .command("fansly:decode-ws")
-    .description("B0: settle bounded metadata receipts from durable WS raw; no provider requests")
+    .description("B0: settle bounded metadata receipts and apply pending live-overlay receipts from durable WS raw; no provider requests")
     .requiredOption("--page <label>", "one exact page label")
     .option("--max-batches <n>", "at most 20 retained observations per batch", "50")
     .action(async (options) => {
@@ -2037,7 +2039,25 @@ export function buildProgram() {
           decoded += count;
           if (count < 20) break;
         }
-        console.log(JSON.stringify({ pageId: stored.page.id, decoded }));
+        // The worker timer does the same; this is the offline repair path.
+        const resolvePayload = fanslyWsLivePayloadResolver(app);
+        const live: Record<string, number> = {};
+        // One forward walk: a receipt left pending (failure, erasure in
+        // progress, another applier) is passed, never listed again.
+        let after = 0;
+        for (let batch = 0; batch < limit; batch++) {
+          const pending = await listPendingFanslyWsLiveReceipts(app.db, {
+            pageId: stored.page.id, afterObservationId: after, limit: 20,
+          });
+          for (const observationId of pending) {
+            const result = await applyFanslyWsLive(app, observationId, resolvePayload);
+            const key = result?.status ?? "failed";
+            live[key] = (live[key] ?? 0) + 1;
+          }
+          if (pending.length < 20) break;
+          after = pending.at(-1)!;
+        }
+        console.log(JSON.stringify({ pageId: stored.page.id, decoded, live }));
       } finally { await app.close(); }
     });
 

@@ -6,6 +6,7 @@ import {
   listNotificationIncidents,
   listRecentOpsMetricSamples,
   pruneOpsMetricSamples,
+  readFanslyWsLiveGauges,
   type OpsMetricSampleInput,
   type OpsMetricSampleRow,
 } from "@agency_hub_core/db";
@@ -70,6 +71,14 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   ai_content_bytes: 5_000_000_000,
   // H2: OFAPI delivery-history coverage age (ofapi-delivery-history-signal.ts).
   [OFAPI_DELIVERY_HISTORY_AGE_METRIC]: OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS,
+  // Fansly live overlay (plan §10, §15 step 1): a socket message visible in
+  // Hub, created_at → first_visible_at. The acceptance target is p95 ≤ 5 s;
+  // the latch is the same 10-minute bound as the other lags, so only a stuck
+  // path pages (and golden_signal_lag pages only after 30 sustained minutes).
+  dm_visible_lag: 600_000,
+  // Its wedge gauge: a pending live receipt older than 10 min means no apply
+  // path is acking (absence of visible messages alone is never health).
+  ws_live_pending_age: 600_000,
   // Fast-reply freshness PR3: per-family observation-backlog gauges (health
   // floors) ride the p95 slot so the existing breach latch covers them.
   ...Object.fromEntries(
@@ -267,6 +276,23 @@ export async function computeGoldenSignals(
   const deliveryHistorySamples = await sampleOfapiDeliveryHistoryAge(app);
   if (deliveryHistorySamples === null) failedProbes.push(OFAPI_DELIVERY_HISTORY_AGE_METRIC);
 
+  // Fansly live overlay. dm_visible_lag emits no sample without traffic; the
+  // pending age always emits (0 when idle). Parity (match share in basis
+  // points over the last hour's verdicts) and ws_decode_debt (receipts acked
+  // as debt in 24 h) are threshold-free gauges: visibility, not paging.
+  const liveSamples: OpsMetricSampleInput[] = [];
+  try {
+    const live = await readFanslyWsLiveGauges(app.db, { windowMinutes: SAMPLE_WINDOW_MINUTES });
+    liveSamples.push(
+      ...toSamples("dm_visible_lag", { p50: live.visibleLagP50Ms, p95: live.visibleLagP95Ms }),
+      ...toSamples("ws_live_pending_age", { p50: live.pendingAgeMs, p95: live.pendingAgeMs }),
+      ...toSamples("dm_live_parity_bp", { p50: live.parityBasisPoints, p95: live.parityBasisPoints }),
+      ...toSamples("ws_decode_debt", { p50: live.decodeDebt24h, p95: live.decodeDebt24h }),
+    );
+  } catch {
+    failedProbes.push("ws_live_pending_age");
+  }
+
   return {
     samples: [
       ...toSamples("capture", capture),
@@ -285,6 +311,7 @@ export async function computeGoldenSignals(
       ...toSamples("ai_content_bytes", { p50: aiBytes, p95: aiBytes }),
       ...floorSamples,
       ...(deliveryHistorySamples ?? []),
+      ...liveSamples,
       // H2 (INC-001): threshold-free quarantine counters (health-floors.ts).
       ...await computeQuarantineGaugeSamples(app.db),
     ],
