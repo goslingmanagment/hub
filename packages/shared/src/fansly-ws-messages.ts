@@ -1,4 +1,5 @@
 import { FANSLY_WS_MAX_FRAME_BYTES, wsJson, wsObject } from "./fansly-ws-capture.ts";
+import { sanitizePostgresText } from "./unicode.ts";
 
 /** Version of the live message decoder below. Overlay rows and receipts record
  * the version that wrote them; a change of the decoded field set or of a
@@ -58,6 +59,12 @@ const MAX_ATTACHMENTS = 64;
 const nativeRef = (value: unknown): string | null =>
   typeof value === "string" && /^[0-9]{1,32}$/.test(value) ? value : null;
 
+/** The overlay stores the message type in an `integer` column; a value past
+ * its range is absent, not a write every apply retry would fail. */
+const int32 = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff
+    ? value : null;
+
 /** A WS frame's message createdAt is epoch seconds, usually fractional. Same
  * unit rule as REST normalizeFanslyTimestamp (>= 1e12 is already ms), kept to
  * a whole-ms instant; anything else is absent. */
@@ -83,8 +90,11 @@ function liveMessage(message: Record<string, unknown>): FanslyWsLiveMessage | Fa
     fieldMask |= bit;
     return true;
   };
+  // Socket text is vendor text: an unpaired surrogate (a fan's broken emoji)
+  // or a NUL would make the overlay's text column or the event's jsonb refuse
+  // the frame on every retry, so both become U+FFFD here.
   const content = has("content", FANSLY_WS_LIVE_FIELD.content) && typeof message.content === "string"
-    ? message.content : null;
+    ? sanitizePostgresText(message.content) : null;
   const inReplyTo = has("inReplyTo", FANSLY_WS_LIVE_FIELD.inReplyTo) ? nativeRef(message.inReplyTo) : null;
   const inReplyToRoot = has("inReplyToRoot", FANSLY_WS_LIVE_FIELD.inReplyToRoot)
     ? nativeRef(message.inReplyToRoot) : null;
@@ -99,8 +109,7 @@ function liveMessage(message: Record<string, unknown>): FanslyWsLiveMessage | Fa
       }
     }
   }
-  const type = has("type", FANSLY_WS_LIVE_FIELD.type)
-    && typeof message.type === "number" && Number.isSafeInteger(message.type) ? message.type : null;
+  const type = has("type", FANSLY_WS_LIVE_FIELD.type) ? int32(message.type) : null;
   const correlationId = has("correlationId", FANSLY_WS_LIVE_FIELD.correlationId)
     ? nativeRef(message.correlationId) : null;
   return { id, groupId, senderId, createdAtMs, content, inReplyTo, inReplyToRoot, attachments, type,
@@ -111,7 +120,9 @@ function liveMessage(message: Record<string, unknown>): FanslyWsLiveMessage | Fa
  * names every message created or deleted in it. Same envelope walk and bounds
  * as the hint extractor. A message frame without its required fields (`id`,
  * `groupId`, `senderId`, a parseable `createdAt`; a deletion needs only `id`)
- * is `invalid`, never a partial row. Pure: no I/O, no clock. */
+ * is `invalid`, never a partial row. Every decoded value is one Postgres
+ * stores as is (text sanitized, the type within `integer`). Pure: no I/O, no
+ * clock. */
 export function decodeFanslyWsLiveFrame(frame: string): FanslyWsLiveDecode {
   const items: FanslyWsLiveItem[] = [];
   const decode = { decoderVersion: FANSLY_WS_LIVE_DECODER_VERSION, items };

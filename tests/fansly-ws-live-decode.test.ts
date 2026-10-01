@@ -55,6 +55,34 @@ describe("Fansly live overlay decoder (plan §7.2–7.3)", () => {
     expect(decodeFanslyWsLiveFrame(created({ ...full, ...patch })).items[0]?.kind).toBe("invalid");
   });
 
+  it("keeps socket text storable: an unpaired surrogate or a NUL becomes U+FFFD, a whole emoji stays", () => {
+    // Fansly sends text as JSON, so a fan's broken emoji arrives as a lone
+    // `\ud83d` escape that jsonb refuses, and a NUL as `\u0000` that text refuses.
+    const content = (text: string) => {
+      const [item] = decodeFanslyWsLiveFrame(created({ ...full, content: text })).items;
+      return item?.kind === "message_created" ? item.message.content : undefined;
+    };
+    // The captured frame itself holds only the escape, so capture accepts it.
+    expect(created({ ...full, content: "love you \ud83d" })).not.toMatch(/[\uD800-\uDFFF]/);
+    expect(content("love you \ud83d")).toBe("love you �");
+    expect(content("\udc00 low first")).toBe("� low first");
+    expect(content("nul\u0000byte")).toBe("nul�byte");
+    expect(content("whole 🥰 pair")).toBe("whole 🥰 pair");
+  });
+
+  it("keeps the message type within the overlay's integer column; past it the type is absent", () => {
+    for (const type of [2 ** 31, -(2 ** 31) - 1, 1.5]) {
+      expect(decodeFanslyWsLiveFrame(created({ ...full, type })).items).toEqual([{ kind: "message_created", path: [],
+        message: expect.objectContaining({ type: null, fieldMask: expect.any(Number) }) }]);
+    }
+    const [edge] = decodeFanslyWsLiveFrame(created({ ...full, type: 2 ** 31 - 1 })).items;
+    expect(edge).toMatchObject({ message: { type: 2 ** 31 - 1 } });
+    const [absent] = decodeFanslyWsLiveFrame(created({ ...full, type: 2 ** 31 })).items;
+    // The frame carried the field: the mask says so, the value is unknown.
+    expect(absent?.kind === "message_created" && absent.message.fieldMask & FANSLY_WS_LIVE_FIELD.type)
+      .toBe(FANSLY_WS_LIVE_FIELD.type);
+  });
+
   it("reads deletions with or without a group, and other services as not-a-message", () => {
     const frame = wrapped(10001, [
       serviceFrame({ type: 10, message: { id: "11", groupId: "22", type: 3 } }),

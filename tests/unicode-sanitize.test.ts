@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sanitizeLoneSurrogatesDeep, truncateUtf16Safe } from "@agency_hub_core/shared";
+import { sanitizeLoneSurrogatesDeep, sanitizePostgresText, truncateUtf16Safe } from "@agency_hub_core/shared";
 
 // 2026-07-11 deploy-night find: a reply-preview slice cut an emoji in half;
 // the lone high surrogate made Postgres reject the derived sync_event jsonb
@@ -46,5 +46,17 @@ describe("sanitizeLoneSurrogatesDeep", () => {
     expect(sanitizeLoneSurrogatesDeep(5)).toBe(5);
     expect(sanitizeLoneSurrogatesDeep(null)).toBeNull();
     expect(sanitizeLoneSurrogatesDeep(true)).toBe(true);
+  });
+});
+
+describe("sanitizePostgresText", () => {
+  it("replaces unpaired surrogates and NUL with U+FFFD, keeps pairs and everything else", () => {
+    expect(sanitizePostgresText("love you \ud83d")).toBe("love you \uFFFD");
+    expect(sanitizePostgresText("\udfff low \u0000 nul")).toBe("\uFFFD low \uFFFD nul");
+    expect(sanitizePostgresText("\u0000\u0000")).toBe("\uFFFD\uFFFD");
+    const plain = "whole 🥰 pair, tabs\tand\nlines";
+    expect(sanitizePostgresText(plain)).toBe(plain);
+    // What jsonb refuses: a lone surrogate escape or a NUL escape.
+    expect(JSON.stringify(sanitizePostgresText("a\ud83d\u0000b"))).not.toMatch(/\\u(d[89ab]|0000)/i);
   });
 });

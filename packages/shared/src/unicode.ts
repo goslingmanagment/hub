@@ -67,6 +67,16 @@ export function sanitizeLoneSurrogatesDeep<T>(value: T): T {
   return value;
 }
 
+/** `text` as a value Postgres takes both in a `text` column and inside
+ * `json`/`jsonb`: every unpaired surrogate (jsonb refuses its `\uXXXX`
+ * escape) and every U+0000 (`text` refuses the byte, jsonb the `\u0000`
+ * escape) becomes U+FFFD. Whole surrogate pairs and every other character are
+ * kept, so vendor text (a fan's broken emoji, a stray NUL) never wedges a
+ * writer that stores it in both. */
+export function sanitizePostgresText(text: string): string {
+  return sanitizeString(text).replaceAll("\u0000", "�");
+}
+
 /** How many unpaired surrogates `sanitizeLoneSurrogatesDeep` would replace in
  * `value` (object keys included). Walks the same tree and copies nothing, so a
  * caller can keep the value itself when the answer is 0. */
