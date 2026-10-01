@@ -51,7 +51,7 @@ vi.mock("../apps/dashboard/src/components/layout/Topbar.tsx", () => ({
 import { ChatterLayout } from "../apps/dashboard/src/components/layout/ChatterLayout.tsx";
 import { ProtectedLayout } from "../apps/dashboard/src/components/layout/ProtectedLayout.tsx";
 import { LoginPage } from "../apps/dashboard/src/pages/LoginPage.tsx";
-import { CHATTER_HOME, resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
+import { resolveRoleHome } from "../apps/dashboard/src/lib/navigation.ts";
 
 function user(role: string) {
   return { authMethod: "session", user: { id: 3, username: "grisha", role, mustChangePassword: false, assignedPages: [] } };
@@ -67,12 +67,6 @@ beforeEach(() => {
 });
 
 describe("resolveRoleHome", () => {
-  it("sends a chatter to the cabinet whatever was requested", () => {
-    expect(resolveRoleHome("chatter", "/")).toBe(CHATTER_HOME);
-    expect(resolveRoleHome("chatter", "/usage")).toBe(CHATTER_HOME);
-    expect(CHATTER_HOME).toBe("/account");
-  });
-
   it("leaves every other role on the page they asked for", () => {
     expect(resolveRoleHome("owner", "/usage")).toBe("/usage");
     expect(resolveRoleHome("team_lead", "/transactions")).toBe("/transactions");

@@ -103,7 +103,6 @@
   "tests/ops-retention.integration.test.ts": 14,
   "tests/page-dm.repository.integration.test.ts": 72,
   "tests/page-sync-lease-fencing.integration.test.ts": 62,
-  "tests/parseFanProfile.test.ts": 13,
   "tests/sdk-runtime.test.ts": 12,
   "tests/sdk.integration.test.ts": 5,
   "tests/sync-handlers.test.ts": 1,
