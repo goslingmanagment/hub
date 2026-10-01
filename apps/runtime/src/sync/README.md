@@ -1,0 +1,139 @@
+# Fansly Sync Engine
+
+One long-running process (`sync`) hosts one **actor per Fansly page**. The actor is the page's only sender: every
+physical request of the page passes one pacer, one queue (`sync_work`), one journal row per attempt
+(`sync_attempts`). Plan: `docs/plans/2026-10-01-sync-engine/plan.md`. OnlyFans is not here.
+
+The engine lands in steps: step 2 runs it in **shadow** next to the legacy engine (it plans, paces and journals, but
+never sends); step 3 switches pages one by one; step 4 deletes the legacy code. Until the switch PR no build can send
+as the engine (`LIVE_LOOP_ENABLED = false`, `sync page mode` moves only `off ↔ shadow`, I17).
+
+## Map
+
+```
+sync/
+  main.ts, context.ts        the `sync` runtime role: context, heartbeat, host, signals
+  engine/
+    ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
+    pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
+    scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes
+    errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
+    status.ts                "why waiting" and the page status
+    host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM
+    actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
+    commit.ts                the four transactions of a step and the no-HTTP outcomes
+    shadow.ts                the shadow transport and the shadow demand feed
+    alerts.ts, metrics.ts    plan §10
+  fansly/
+    registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
+    transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
+    resources/               one file per resource family
+    ws/                      decode, router, the post-ack routing hook
+    lib/                     chain rules, walk helpers
+  requests/                  history requests, ETA, enqueue-and-wait
+```
+
+Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet.
+
+One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
+**HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
+it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
+A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
+attempt `unknown` and the read is repeated as a new, counted attempt.
+
+## Invariants
+
+Each is enforced in exactly one place and pinned by a test (design §1). The first is the owner's rule.
+
+| # | Invariant | Enforced in |
+|---|---|---|
+| I1 | Between the actual sends of any two requests of one page: gap ≥ `S × (1 + u)`, `S` = the owner's setting read at the admission of the later request, `u ∈ [0, 0.2)`. A strict minimum, never an average. "Actual send" = undici `onRequestStart`, on the monotonic clock; without that mark, the completion instant. | `engine/pacer.ts` (`waitForSlot`, the synchronous `check`) |
+| I2 | At most one request of a page in flight; the next admission only after the previous completion. | `engine/actor.ts` (sequential loop) + `engine/pacer.ts` (`inFlight`) |
+| I3 | One physical request per admission; no transport retry; no redirect follow (a 3xx is an answer). | `packages/fansly/src/wire/send.ts` |
+| I4 | `S` is re-read before every admission; `S < 2000 ms` is impossible (the test-only `minSettingMs` is never passed by the host). | `engine/ports.ts` `PauseSource` + `engine/pacer.ts` |
+| I5 | First send after a takeover ≥ `1.2 × S` after the latest of: the takeover, the last send recorded in the database, unfinished attempts of the last 10 min + the send window, the legacy guard's last completion. | `engine/host.ts` + `pacer.initTakeover` |
+| I6 | No automatic takeover from a live old process: an unconfirmed stop leaves the page `ownership_unconfirmed`; a lost lock session is never a confirmation, the owner's own safe release is. | `engine/host.ts` |
+| I7 | Every write of an actor is fenced by `owner_generation`. | `repositories/sync/pages.ts` `lockOwnedPage` |
+| I8 | The raw answer is committed before it is parsed; apply is replayable from the observation without HTTP. | `engine/commit.ts` |
+| I9 | The chain columns of a thread have one writer (`writeThreadChain`); the legacy coverage columns are written by the engine only on pages in `handover`/`live` (`syncLegacyThreadSummary`). | `repositories/sync/thread-chain.ts` |
+| I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
+| I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
+| I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |
+| I13 | The Fansly HTTP client exists only inside `sync/` (plus the sanctioned legacy list until step 4). | lint rule + boundary test |
+| I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
+| I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
+| I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
+| I17 | No live sender before the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live`, and the legacy guard row handed to the engine — three independent gates. | `engine/host.ts` + `lockOwnedPage` + CLI |
+| I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
+
+What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
+takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
+second, so raising `S` lengthens a wait in progress. The send check refuses — and nothing is written — a second
+dispatch of one admission (`lease_used`), a dispatch after ownership was lost or the process began stopping
+(`lease_inactive`), after the 15 s send window measured from before the admission commit (`send_deadline_passed`),
+before the takeover floor (`takeover_floor`), or closer than the pause (`pace`, a belt that fires only on a bug).
+Any doubt — an unreadable setting, a pacer without a takeover floor — throws, and nothing is admitted.
+
+## Classes
+
+| Class | What | Order inside |
+|---|---|---|
+| urgent | everything a live event caused: chat confirmation, money head, a new chat, repair after a socket gap, the list head while the socket is down, the socket connect, identity checks, "refresh now" | deadline, then age |
+| requests | history requests of agents and the owner | round robin between requests, then between their fans |
+| planned | registry polls and long walks | due polls by due time first, then round robin by resource key |
+
+The cycle `U R U R U R U R U P` gives 50 / 40 / 10 % under full contention, 80 / 20 % without urgent work, everything
+to a single class; an empty or blocked class is skipped without waiting and earns no credit. The urgent class waits at
+most two slots. The pointer (`sync_pages.cycle_pos`) survives restarts.
+
+## Why waiting
+
+Every open `sync_work` row has one reason from this closed list (`engine/status.ts`), first match wins:
+
+| Reason | Meaning | Lifted by |
+|---|---|---|
+| `running` | admitted; its request or apply is in progress | the step's completion |
+| `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, mode `off`/`handover`, or the previous owner's stop is not confirmed | the host acquiring the page (safe release, OS proof, container restart, `sync ownership confirm-stopped`) |
+| `paused` | the owner paused the page, its requests, or this resource | the owner |
+| `page_hold` | 429 (until `Retry-After`, else 2 → 4 → 8 → 30 min), 401/403 or identity mismatch (until new credentials), network (after 3 failures: 10 s → 5 min) | the hold's end; new credentials |
+| `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
+| `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
+| `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
+| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
+| `dependency` | the resource waits for other work or data | that work |
+| `not_due` | its time has not come (poll period, coalescing window) | the due time |
+| `pacer` | runnable; the page's next slot has not opened yet | the pause |
+| `class_share` | runnable; the slot belongs to another class or to earlier work of its class | its turn |
+
+## Errors
+
+`engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
+transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner.
+A retry after an error is always a new attempt through the same admission.
+
+| Answer | Class | Consequence |
+|---|---|---|
+| 2xx, success envelope, contract accepts | `ok` | streak reset, subject breaker reset, expired holds cleared |
+| 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
+| 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
+| 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 401 / 403 | `auth` | page hold until new credentials, alert 1 |
+| any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
+| a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
+| transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
+| refused before sending | `not_sent` | nothing learned: the work is admitted again |
+
+## Recipes
+
+| Change | Where |
+|---|---|
+| The pause | the owner's console ("Пауза между запросами Fansly"); 0 files |
+| The jitter rule | one line in `engine/pacer.ts` + the invariant tests (`tests/sync-pacer*.test.ts`) |
+| How fresh a resource is | one line in `fansly/registry.ts` |
+| Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
+| The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-errors.test.ts` |
+| A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
+| A new kind of data | the same + schema, repository, migration |
+| A new depth or rule of a history request | `requests/history.ts` (+ the satisfaction rule in `engine/commit.ts`) + the contract |
+| A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
+| "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
