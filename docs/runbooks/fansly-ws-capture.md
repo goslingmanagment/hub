@@ -185,9 +185,8 @@ nothing: the receipt stays `pending` and is applied once by a later path.
   a REST read never clears it. A message deleted before it became visible
   produces no event.
 * Step 1 apply creates no work and makes no HTTP request. The event is not a
-  `message_archive` projection input; the archive and every reader stay
-  REST-confirmed until the per-page reader switch (a later step). Agent Read
-  stays confirmed-only.
+  `message_archive` projection input, so the archive stays REST-confirmed.
+  Which readers show overlay rows is the per-page reader switch below.
 * Passive parity (no HTTP): 30 s after a message became visible, and then
   every 30 s / 2 min / 10 min, the worker timer looks for its REST copy in
   `page_dm_messages`, else `message_archive`, and records `confirm_outcome`
@@ -211,6 +210,35 @@ SELECT page_id, mismatch_fields, count(*) FROM dm_live_messages
 WHERE confirm_outcome = 'mismatch' GROUP BY 1, 2 ORDER BY 3 DESC;
 COMMIT;
 ```
+
+### Readers, page by page
+
+`FANSLY_LIVE_OVERLAY_READ_PAGES` / live key `fanslyLiveOverlayReadPages`
+(console: «Живые сообщения в чатах»): exact page labels, `all`, or `none`
+(the default; a `none` anywhere in the list wins). It is read on every
+request, so a change applies from the next one without a restart.
+
+* A listed page's chatter routes
+  (`GET /api/v1/pages/:page/conversations/:id/messages` and `…/preview`) and
+  its AI kernel context (requests without `clientContext`) read
+  `page_dm_messages` (resp. `message_archive`) ∪ the overlay rows that store
+  does not hold yet, through one function (`readDmLiveUnion`). An overlay row
+  is hidden once the reader's own store has a row with its message id (in any
+  state, so a REST tombstone is never undone by the socket), when it is
+  deleted, and when parity found no REST copy for 24 h (`not_found`: REST
+  wins). A socket deletion also hides the store's copy at once. Chats without
+  a thread row stay invisible. Money is REST-only: an overlay row has tip 0.
+* Each row of a listed page's chatter response carries `source` (`rest` or
+  `live`); a `live` row also carries `apiUnavailable`, true in a chat excluded
+  from REST message sync (no REST copy will ever replace it: «API
+  недоступен»). Pages not listed return exactly the confirmed-only response,
+  without these fields. The AI generation's `contextManifest` records
+  `liveOverlay`, `liveCount` and `liveError` (a failed union read serves the
+  archive).
+* Agent Read, the archive routes, search and timelines read REST-confirmed
+  stores only, on every page.
+* Rollout (plan §15 step 1): `ari-1` first, then the other pages after one
+  hour of observation each; rollback: `none`.
 
 ## Erasure and retained limitations
 
