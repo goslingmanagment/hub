@@ -266,6 +266,26 @@ export async function appendProjectionOnlyDomainEventsInTransaction(
   return appendDomainEventsBatchInTransaction(db, accountId, events, checkpoint);
 }
 
+/** Same append protocol for DELIVERABLE events when the caller already owns
+ * the surrounding transaction: the events, their account-seq slots and the
+ * `domain_events_appended` NOTIFY commit (or roll back) together with the
+ * caller's state change. Used by the Fansly live overlay, whose receipt ack
+ * must never commit without its event. Projection-only types are refused:
+ * they need a checkpoint, which this entry point does not take. */
+export async function appendDomainEventsInTransaction(
+  db: Database,
+  accountId: number,
+  events: readonly DomainEventInput[],
+): Promise<AppendDomainEventsResult> {
+  if (events.some((event) => isProjectionOnlyDomainEventType(event.type, event.schemaVersion))) {
+    throw new Error("In-transaction deliverable append received a projection-only domain event");
+  }
+  if (events.length === 0) {
+    return { appended: 0, deduped: 0, highWater: await getAccountHighWater(db, accountId), events: [] };
+  }
+  return appendDomainEventsBatchInTransaction(db, accountId, events, null);
+}
+
 async function appendDomainEventsBatch(
   db: Database,
   accountId: number,

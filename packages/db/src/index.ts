@@ -1,6 +1,7 @@
 export * from "./repositories/fansly-ws.ts";
 export * from "./repositories/fansly-ws-hints.ts";
 export * from "./repositories/fansly-ws-deletions.ts";
+export * from "./repositories/sync/live-messages.ts";
 export * from "./repositories/fan-earnings-targets.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
