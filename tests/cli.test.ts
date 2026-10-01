@@ -393,11 +393,46 @@ describe("CLI parsing", () => {
       ["--holder-token", "33333333-3333-4333-8333-333333333333", "--include-unexpired"],
       "--include-unexpired applies to --running-hosts only",
     ],
+    [
+      ["--holder-token", "33333333-3333-4333-8333-333333333333", "--captured-before", "2026-10-01T00:00:00Z"],
+      "--include-unexpired applies to --running-hosts only",
+    ],
+    // A live lease is released only for a capture older than the listing of
+    // the running hostnames (the deploy passes the instant it took first).
+    [["--running-hosts", "a,b", "--include-unexpired"], "--include-unexpired and --captured-before go together"],
+    [["--running-hosts", "a,b", "--captured-before", "2026-10-01T00:00:00Z"], "--include-unexpired and --captured-before go together"],
+    [["--running-hosts", "a,b", "--include-unexpired", "--captured-before", "yesterday"], "Expected an ISO date"],
   ])("refuses fansly-send-guard confirm-terminated %j before opening the database", async (args, message) => {
     const { program } = createProgramHarness();
     await expect(program.parseAsync(["fansly-send-guard", "confirm-terminated", ...args], { from: "user" }))
       .rejects.toThrow(message);
     expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("refuses fansly-send-guard report without a window before opening the database", async () => {
+    const { program } = createProgramHarness();
+    program.exitOverride();
+    for (const command of program.commands) command.exitOverride();
+    const sendGuard = program.commands.find((command) => command.name() === "fansly-send-guard");
+    for (const command of sendGuard?.commands ?? []) {
+      command.exitOverride();
+      command.configureOutput({ writeErr: () => undefined });
+    }
+    await expect(program.parseAsync(["fansly-send-guard", "report"], { from: "user" }))
+      .rejects.toThrow(/--since/);
+    await expect(program.parseAsync(["fansly-send-guard", "report", "--since", "not-a-date"], { from: "user" }))
+      .rejects.toThrow("Expected an ISO date");
+    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
+  });
+
+  it("documents the send guard's acceptance report", () => {
+    const sendGuard = buildProgram().commands.find((command) => command.name() === "fansly-send-guard");
+    const report = sendGuard?.commands.find((command) => command.name() === "report");
+    const help = (report?.helpInformation() ?? "").replace(/\s+/g, " ");
+    expect(help).toContain("--since <iso>");
+    expect(help).toContain("--page <label>");
+    expect(help).toContain("pairs closer than the setting (must be 0)");
+    expect(help).toContain("guard triggers (must be non-zero)");
   });
 
   it("documents both Docker-level confirmations of the Fansly send guard", () => {
@@ -407,6 +442,7 @@ describe("CLI parsing", () => {
     expect(help).toContain("--running-hosts <hosts>");
     expect(help).toContain("--holder-token <uuid>");
     expect(help).toContain("only a holder past its lease");
+    expect(help).toContain("--captured-before <iso>");
   });
 
   const attributionCommands = [

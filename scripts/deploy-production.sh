@@ -1248,6 +1248,29 @@ verify_post_deploy_image_labels() {
   verify_service_image_labels scheduler
 }
 
+# Plan §2.5: the per-page Fansly send guard. A request that the recreate cut
+# off (a container killed past its stop grace, a crash) leaves its page closed:
+# an expired lease never opens a page by itself, and the new containers'
+# sweepers cannot see the old containers' processes. Docker can: a holder whose
+# container is not running any more is gone with it. So, once the new stack is
+# healthy, list the hostnames of every running container on the host and let
+# the new api confirm every other holder terminated. The instant is taken
+# BEFORE the listing and only holders captured before it are released, so a
+# container that starts after the listing is never taken for a gone one.
+#
+# Never fails or rolls back the deploy: a failure only leaves a page closed,
+# with its alert, until the same command is run by hand.
+confirm_remote_fansly_send_guard_terminations() {
+  local output
+  output="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}
+listed_at=\"\$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)\"
+running_hosts=\"\$(docker ps -q | xargs -r docker inspect -f '{{.Config.Hostname}}' | paste -sd, -)\"
+test -n \"\$running_hosts\"
+${REMOTE_COMPOSE} exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated --running-hosts \"\$running_hosts\" --include-unexpired --captured-before \"\$listed_at\"")" \
+    || return 1
+  log "Fansly send guard: confirmed the holders of stopped containers terminated: ${output//$'\n'/; }"
+}
+
 ensure_node_base_image() {
   if docker image inspect "$NODE_BASE_IMAGE" >/dev/null 2>&1; then
     local cached_runtime
@@ -1878,6 +1901,8 @@ log "Waiting for the scheduler container healthcheck"
 wait_for_scheduler_health || fail "Scheduler container never reached a healthy state"
 
 verify_post_deploy_image_labels
+confirm_remote_fansly_send_guard_terminations \
+  || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
 finish_phase service-health
 start_phase sync-health
 
