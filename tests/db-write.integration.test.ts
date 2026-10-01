@@ -100,6 +100,7 @@ describe("db write safety", () => {
         serviceEgressProxyPassword: null,
         isProduction: false,
       },
+      logger: testDb.logger,
       adapter: {
         async verifySession(contextInput: unknown) {
           const parsed = await verifySession(contextInput);

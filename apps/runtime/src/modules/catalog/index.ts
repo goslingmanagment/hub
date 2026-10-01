@@ -54,6 +54,7 @@ import {
   listPageSummaries,
 } from "../../services/reporting.ts";
 import { createSyncRateLimitWaiter } from "../../services/sync/rate-limiter.ts";
+import { fanslyUnpacedSendGuard } from "../../services/fansly-send-guard/index.ts";
 import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -426,6 +427,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
           proxy,
           egressKey,
           rateLimitWaiter,
+          // No page: journaled, paced against no page (owner decision №4).
+          sendGuard: fanslyUnpacedSendGuard(appContext, "credentials_verify"),
         });
         return {
           valid: true as const,
@@ -515,7 +518,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
           "OnlyFans pages verify via their OFAPI mapping, not pasted credentials",
         );
       }
-      await refreshPageMetadata(appContext, pageContext, "light");
+      await refreshPageMetadata(appContext, pageContext, "light", undefined, null, "account_me_api");
       const recoveredAt = new Date();
       const recovery = await handleSuccessfulPageVerificationRecovery(appContext, {
         platformAccountId: pageContext.page.id,

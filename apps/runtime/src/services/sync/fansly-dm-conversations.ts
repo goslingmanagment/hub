@@ -93,6 +93,7 @@ import {
   diffConversationHead,
 } from "./fansly-dm-head-diff.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 type DmRunningSweep = DmConversationSweepInProgressState | DmBoundedSweepState;
 
@@ -287,6 +288,7 @@ export async function fanslyDmConversationsChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "dm_conversations");
   await input.telemetry.recordCheckpointLoaded("dm_conversations", summarizeCheckpoint(checkpoint));

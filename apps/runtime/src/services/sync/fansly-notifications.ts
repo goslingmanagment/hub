@@ -105,6 +105,7 @@ import {
   retentionDate,
   trimFanslyNotificationsPayload,
 } from "./shared.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "notifications" as const;
 const OBSERVATION_KIND = "notifications" as const;
@@ -619,6 +620,7 @@ export async function fanslyNotificationsChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createSyncRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const { attemptBudget, complete: completeLane, requestContext, saveProgress } = lane;
 

@@ -7,6 +7,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 // Liveness probe for the endpoints-cover initiative: WP-F9 (`dm_commerce`), [E1],
 // the WP-F3 catalog routes, and [F1]'s month form.
@@ -443,6 +444,7 @@ export async function runFanslyEndpointProbe(
       proxy: context.proxy,
       egressKey: context.egressKey,
       rateLimitWaiter,
+      sendGuard: fanslyPageSendGuard(app, context.page.id, "endpoint_probe"),
     };
 
     const only = options.only?.trim().toLowerCase() ?? "";

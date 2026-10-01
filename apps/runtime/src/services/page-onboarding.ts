@@ -29,8 +29,9 @@ import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
+import { fanslyUnpacedSendGuard } from "./fansly-send-guard/index.ts";
 
-type FanslyOnboardingContext = Pick<AppContext, "db" | "config"> & {
+type FanslyOnboardingContext = Pick<AppContext, "db" | "config" | "logger" | "fanslySendGuards"> & {
   adapter: Pick<AppContext["adapter"], "verifySession">;
 };
 
@@ -102,6 +103,8 @@ export async function onboardFanslyPage(
     proxy,
     egressKey,
     rateLimitWaiter,
+    // No page exists yet: journaled, paced against no page (owner decision №4).
+    sendGuard: fanslyUnpacedSendGuard(app, "onboarding"),
   });
   const verified = verification.parsed;
 

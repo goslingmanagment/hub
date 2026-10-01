@@ -1,6 +1,7 @@
 import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../apps/runtime/src/bootstrap.ts";
+import { createFanslySendGuards } from "../../apps/runtime/src/services/fansly-send-guard/index.ts";
 import type { StartedTestDatabase } from "./db.ts";
 
 export function createTestAppContext(
@@ -12,6 +13,9 @@ export function createTestAppContext(
     encryptionKeyVersion?: number;
     encryptionKeysByVersion?: ReadonlyMap<number, Buffer>;
     fanslyDefaultDelayMs?: number;
+    /** S for the context's Fansly send guards. 0 by default: a test that is
+     *  not about pacing does not wait between its requests. */
+    fanslySendGuardSettingMs?: number;
     fanslyDmConversationsDelayMs?: number;
     fanslyDmMessagesDelayMs?: number;
     fanslyFanEarningsSyncEnabled?: boolean;
@@ -215,16 +219,25 @@ export function createTestAppContext(
       revenueRouteRoleEnforcement: overrides?.revenueRouteRoleEnforcement ?? "log",
     } as AppContext["config"];
 
+  const logger = overrides?.logger ?? testDb.logger;
+  const sendGuardSettingMs = overrides?.fanslySendGuardSettingMs ?? 0;
   return {
     db: testDb.db,
     pool: testDb.pool,
-    logger: overrides?.logger ?? testDb.logger,
+    logger,
     config,
     // Tests apply no boot overrides, so the raw env baseline equals the effective config.
     rawConfig: config,
     adapter: overrides?.adapter ?? ({} as AppContext["adapter"]),
     ofapi: overrides?.ofapi,
     aiGatewayProvider: overrides?.aiGatewayProvider,
+    fanslySendGuards: createFanslySendGuards({
+      db: testDb.db,
+      config,
+      logger,
+      role: "test",
+      readSettingMs: async () => sendGuardSettingMs,
+    }),
     async close() {},
   } satisfies AppContext;
 }

@@ -5,6 +5,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 afterEach(() => {
   cleanupAdapterHarness();
@@ -34,9 +35,9 @@ describe("Fansly subscribers adapter", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     const result = await adapter.getSubscribersPage({
+      sendGuard: createTestFanslySendGuard(),
       session: {
         authorization: "token",
       },

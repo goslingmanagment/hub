@@ -42,6 +42,11 @@ import {
   type VoiceTtsProvider,
 } from "./services/voice-elevenlabs-provider.ts";
 import type { ProviderAdapter } from "./services/provider.ts";
+import {
+  createFanslySendGuards,
+  type FanslySendGuardRegistry,
+  type FanslySendHolderRole,
+} from "./services/fansly-send-guard/index.ts";
 
 export type AdapterLike = ProviderAdapter<
   FanslyRequestContext,
@@ -308,10 +313,20 @@ export interface AppContext {
   // Undefined when either boot dependency is absent (admission then 503s
   // voice_provider_unavailable).
   voiceTtsProvider?: VoiceTtsProvider | undefined;
+  /** The process's Fansly send guards (plan §2.5). createAppContext always
+   *  sets it and drains it on close; optional so AppContext literals (tests)
+   *  need not provide it — `getFanslySendGuards` then builds one on first use. */
+  fanslySendGuards?: FanslySendGuardRegistry | undefined;
   close(): Promise<void>;
 }
 
-export async function createAppContext(): Promise<AppContext> {
+export interface CreateAppContextOptions {
+  /** The role this process holds Fansly send guards as (journal and status).
+   *  The long-lived runtimes pass theirs; everything else is the CLI. */
+  processRole?: FanslySendHolderRole;
+}
+
+export async function createAppContext(options: CreateAppContextOptions = {}): Promise<AppContext> {
   // Env config. loadConfig runs its own boot invariants on the env values here. The
   // logger is built from the env logLevel (runtimeApply: 'none', never boot-applied).
   const rawConfig = loadConfig();
@@ -379,9 +394,12 @@ export async function createAppContext(): Promise<AppContext> {
     const config = applied.config;
     const bootSkipped: SkippedOverride[] = applied.skipped;
 
-    const adapter = new FanslyAdapter({
-      baseUrl: config.fanslyBaseUrl,
-      globalDelayMs: config.fanslyDefaultDelayMs,
+    const adapter = new FanslyAdapter({ baseUrl: config.fanslyBaseUrl });
+    const fanslySendGuards = createFanslySendGuards({
+      db,
+      config,
+      logger,
+      role: options.processRole ?? "cli",
     });
     const ofapi = config.ofapiApiKey
       ? createOfapiClient({
@@ -433,7 +451,11 @@ export async function createAppContext(): Promise<AppContext> {
       aiGatewayProvider,
       aiGatewayOpenrouterProvider,
       voiceTtsProvider,
+      fanslySendGuards,
       async close() {
+        // In-flight Fansly requests finish (each is bounded by its timeout)
+        // and their completions are written before the pool ends.
+        await fanslySendGuards.close();
         await adapter.close?.();
         await pool.end();
       },

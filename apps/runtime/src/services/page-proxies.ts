@@ -10,6 +10,7 @@ import { BadRequestError, NotFoundError } from "./errors.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { createSyncRateLimitWaiter } from "./sync/rate-limiter.ts";
+import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 
 export async function setPageProxy(
   app: AppContext,
@@ -47,6 +48,8 @@ export async function setPageProxy(
     proxy: normalizedProxy,
     egressKey: proxyEgressKey,
     rateLimitWaiter,
+    // The page's own guard, whatever proxy the check rides (plan §2.4).
+    sendGuard: fanslyPageSendGuard(app, pageContext.page.id, "account_me_cli"),
   });
 
   await saveProxy(app, pageContext.page.id, normalizedProxy, {

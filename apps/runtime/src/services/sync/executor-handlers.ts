@@ -207,6 +207,7 @@ import {
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { runFanslyWsHintStep } from "./fansly-ws-hints.ts";
 import { runAiMediaAcceleratorStep } from "./ai-media-accelerator.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
@@ -863,6 +864,7 @@ export async function fanslyTopSpendersChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
 
   let initialState = parseTopSpendersCursorState(checkpoint?.state);
@@ -1421,6 +1423,7 @@ export async function fanslyTransactionsChunk(
         egressKey: input.pageContext.egressKey,
         requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
         rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+        sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
       },
       syncRunId: input.syncRunId,
       telemetry: input.telemetry,
@@ -1626,6 +1629,7 @@ export async function fanslySubscribersChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "subscribers");
   await input.telemetry.recordCheckpointLoaded("subscribers", summarizeCheckpoint(checkpoint));
@@ -2183,6 +2187,7 @@ export async function executeFollowersChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers");
   await input.telemetry.recordCheckpointLoaded("followers", summarizeCheckpoint(checkpoint));
@@ -2484,6 +2489,7 @@ export async function executeFollowersReconcileChunk(
     egressKey: input.pageContext.egressKey,
     requestObserver: composeRequestObservers(input.telemetry.getRequestObserver(), input.budget),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   const checkpoint = await getCheckpoint(app.db, input.pageContext.page.id, "followers_reconcile");
   await input.telemetry.recordCheckpointLoaded("followers_reconcile", summarizeCheckpoint(checkpoint));
@@ -3225,6 +3231,7 @@ export async function fanslyDmMessagesChunk(
       dmMessagesRequestObserver,
     ),
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   };
   // For a failing thread's retry: the adapter clamps its in-process retries
   // to this allowance, so the page costs one physical attempt.
@@ -4267,6 +4274,7 @@ export async function executePurchaseHistoryChunk(
     proxy: input.pageContext.proxy,
     egressKey: input.pageContext.egressKey,
     rateLimitWaiter: createPageRateLimitWaiter(app, input.pageContext),
+    sendGuard: fanslyPageSendGuard(app, input.pageContext.page.id, "sync_stream"),
   });
   const {
     attemptBudget,

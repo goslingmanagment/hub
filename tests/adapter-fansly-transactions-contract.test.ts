@@ -6,6 +6,7 @@ import {
   loadAdapters,
   toJsonResponse,
 } from "./helpers/adapter-harness.ts";
+import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 
 // ONE harness for the whole file (see tests/adapter-fansly-retry.test.ts):
 // calling `loadAdapters` per test leaves the adapter bound to a `fetch` the new
@@ -53,9 +54,9 @@ async function fetchTransactionsPage(response: unknown) {
   fetchMock.mockResolvedValueOnce(toJsonResponse({ success: true, response }));
   const adapter = new FanslyAdapter({
     baseUrl: "https://fansly.example",
-    globalDelayMs: 0,
   });
   const page = await adapter.getTransactionsPage({
+    sendGuard: createTestFanslySendGuard(),
     session: { authorization: "token" },
     proxy: { url: "socks5://proxy.example:1080" },
     rateLimitWaiter: vi.fn(async () => 0),
@@ -80,9 +81,9 @@ describe("Fansly transaction page contract", () => {
 
     const adapter = new FanslyAdapter({
       baseUrl: "https://fansly.example",
-      globalDelayMs: 0,
     });
     const context = {
+      sendGuard: createTestFanslySendGuard(),
       session: { authorization: "token" },
       proxy: { url: "socks5://proxy.example:1080" },
       rateLimitWaiter: vi.fn(async () => 0),

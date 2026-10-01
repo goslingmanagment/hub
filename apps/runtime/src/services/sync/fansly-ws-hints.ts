@@ -20,6 +20,7 @@ import { fetchAndJournalFanslyDmMessagePage, normalizeFanslyDmMessagePage } from
 import { resolveCapturePayloadRow } from "../payload-reader.ts";
 import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 import { createPageRateLimitWaiter } from "./rate-limiter.ts";
+import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 class HintDeferred extends Error {}
 /** A claim the step could serve only with a second request. */
@@ -206,6 +207,7 @@ async function readFanslyWsHintSubject(step: HintStep, selected: HintSelection) 
     session: context.session, proxy: context.proxy, egressKey: context.egressKey,
     requestObserver: observer, remainingAttempts: () => Math.max(0, 1 - admitted),
     rateLimitWaiter: createPageRateLimitWaiter(app, context),
+    sendGuard: fanslyPageSendGuard(app, context.page.id, "ws_hint"),
   };
   const now = () => new Date();
   const defer = (outcome: string, failed = true) => owned((db) => advanceFanslyWsHint(db, claim, {
