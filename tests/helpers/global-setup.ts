@@ -42,6 +42,16 @@ export default async function setup({ provide }: {
   provide("testDbContainerId", null);
 
   try {
+    // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on the PC's shard steps): PGDATA, pg_wal
+    // included, lives in a tmpfs instead of the image's volume on disk. Same
+    // cluster, same tests; only where its files are written, and a WAL cap
+    // that fits the tmpfs. The default max_wal_size (1GB) equals the tmpfs:
+    // a burst of WAL (each CREATE DATABASE ... TEMPLATE clone writes the
+    // template into WAL) could fill it, and Postgres PANICs on ENOSPC, which
+    // fails the whole shard like a flake. 256MB keeps the WAL well inside it
+    // beside the cluster's ~270 MiB peak; fsync is off, so the extra
+    // checkpoints cost little.
+    const tmpfs = process.env.HUB_TEST_PG_TMPFS === "1";
     const postgres = new GenericContainer("postgres:16")
       .withEnvironment({
         POSTGRES_DB: "postgres",
@@ -67,15 +77,13 @@ export default async function setup({ provide }: {
         "-c", "synchronous_commit=off",
         "-c", "full_page_writes=off",
         "-c", "autovacuum=off",
+        ...(tmpfs ? ["-c", "max_wal_size=256MB"] : []),
       ])
       .withStartupTimeout(INTEGRATION_TEST_TIMEOUT_MS)
       .withExposedPorts(5432);
-    // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on the PC's shard steps): PGDATA, pg_wal
-    // included, lives in a tmpfs instead of the image's volume on disk. Same
-    // cluster, same settings, same tests; only where its files are written.
-    // The size only caps it: a shard's cluster peaked at ~270 MiB, and the
-    // memory counts against the CI slice as shmem while it is used.
-    if (process.env.HUB_TEST_PG_TMPFS === "1") {
+    // The size only caps the tmpfs: a shard's cluster peaked at ~270 MiB, and
+    // the memory counts against the CI slice as shmem while it is used.
+    if (tmpfs) {
       postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });
     }
     container = await postgres.start();

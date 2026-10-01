@@ -1455,8 +1455,10 @@ describe("CI integration shards", () => {
       expect(field(expression, eventContext({ runnerEnvironment: environment }))).toBe(value);
     }
     const setup = readFileSync(new URL("./helpers/global-setup.ts", import.meta.url), "utf8");
-    expect(setup).toContain('if (process.env.HUB_TEST_PG_TMPFS === "1") {');
-    expect(setup).toContain('postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });');
+    expect(setup).toContain('const tmpfs = process.env.HUB_TEST_PG_TMPFS === "1";');
+    expect(setup).toContain('if (tmpfs) {\n      postgres.withTmpFs({ "/var/lib/postgresql/data": "rw,size=1024m" });');
+    // The default max_wal_size (1GB) would fill the 1024m tmpfs: ENOSPC is a PANIC.
+    expect(setup).toContain('...(tmpfs ? ["-c", "max_wal_size=256MB"] : []),');
   });
 
   it.each([
