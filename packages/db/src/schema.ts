@@ -7,6 +7,7 @@ import {
   check,
   customType,
   date,
+  doublePrecision,
   foreignKey,
   index,
   integer,
@@ -798,6 +799,74 @@ export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
   retryAfterAt: timestamp("retry_after_at", { withTimezone: true }),
   armedAt: timestamp("armed_at", { withTimezone: true }).notNull(),
 });
+
+// 0225 (plan §2.5): the per-page Fansly send guard shared by every process of
+// the legacy engine. The capture and its completion are conditional UPDATEs by
+// DB clock (repositories/fansly-send-guard.ts); an expired lease never opens
+// the page by itself.
+export const fanslyPageSendGuards = pgTable(
+  "fansly_page_send_guards",
+  {
+    pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
+      onDelete: "cascade",
+    }),
+    holderToken: uuid("holder_token"),
+    holderSource: text("holder_source"),
+    holderOperation: text("holder_operation"),
+    holderHost: text("holder_host"),
+    holderPid: integer("holder_pid"),
+    holderPidStart: text("holder_pid_start"),
+    holderPidNs: text("holder_pid_ns"),
+    holderBootId: text("holder_boot_id"),
+    holderInstance: uuid("holder_instance"),
+    holderRole: text("holder_role"),
+    capturedAt: timestamp("captured_at", { withTimezone: true }),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }).notNull(),
+    nextU: doublePrecision("next_u").notNull(),
+    closedReason: text("closed_reason"),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    nextURange: check("fansly_page_send_guards_next_u_check", sql`${table.nextU} >= 0 and ${table.nextU} <= 0.2`),
+  }),
+);
+
+// 0225 (plan §2.5): every guarded Fansly attempt from any source and process.
+// Telemetry with the sync observability retention, not a captured fact.
+export const fanslySendLog = pgTable(
+  "fansly_send_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "cascade" }),
+    guardToken: uuid("guard_token").notNull(),
+    source: text("source").notNull(),
+    operation: text("operation").notNull(),
+    holderHost: text("holder_host").notNull(),
+    holderPid: integer("holder_pid").notNull(),
+    holderRole: text("holder_role").notNull(),
+    holderInstance: uuid("holder_instance").notNull(),
+    settingMs: integer("setting_ms"),
+    jitterU: doublePrecision("jitter_u"),
+    pauseMs: integer("pause_ms"),
+    previousCompletedAt: timestamp("previous_completed_at", { withTimezone: true }),
+    captureWaitMs: integer("capture_wait_ms").notNull().default(0),
+    captureRefusals: integer("capture_refusals").notNull().default(0),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    sendOffsetMs: integer("send_offset_ms"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    outcome: text("outcome"),
+    outcomeDetail: text("outcome_detail"),
+    httpStatus: integer("http_status"),
+  },
+  (table) => ({
+    guardTokenUidx: uniqueIndex("fansly_send_log_guard_token_uidx").on(table.guardToken),
+    pageCapturedIdx: index("fansly_send_log_page_captured_idx").on(table.pageId, table.capturedAt),
+    capturedIdx: index("fansly_send_log_captured_idx").on(table.capturedAt),
+  }),
+);
 
 export const pageSyncCursors = pgTable(
   "page_sync_cursors",

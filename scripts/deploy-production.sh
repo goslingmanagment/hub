@@ -507,6 +507,10 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # columns, so it runs unchanged after a rollback (and simply looks every fan
   # up again, as it always did).
   "0224_page_fan_account_lookup_stamps.sql"
+  # Fansly per-page send guard (plan §2.5): two new tables, a seed row per
+  # Fansly page and grants. The previous image never names either table, so
+  # after a rollback it runs unchanged (without the guard, as before).
+  "0225_fansly_page_send_guards.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

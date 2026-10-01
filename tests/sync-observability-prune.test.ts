@@ -99,7 +99,7 @@ function flattenSql(node: unknown): string {
 describe("the nightly sync-observability prune", () => {
   it("batches until each table is empty rather than issuing one unbounded delete", async () => {
     const { db, recorded } = fakeDb(
-      { sync_http_attempts: 12, sync_run_events: 25, sync_runs: 3 },
+      { sync_http_attempts: 12, sync_run_events: 25, sync_runs: 3, fansly_send_log: 14 },
       10,
     );
     const result = await deleteExpiredSyncObservability(db, CUTOFF, { batchRows: 10 });
@@ -107,20 +107,21 @@ describe("the nightly sync-observability prune", () => {
     expect(result.deletedAttempts).toBe(12);
     expect(result.deletedEvents).toBe(25);
     expect(result.deletedRuns).toBe(3);
-    // 2 + 3 + 1 delete batches; a short batch ends the table.
-    expect(recorded.transactions).toBe(6);
+    expect(result.deletedSendLog).toBe(14);
+    // 2 + 3 + 1 + 2 delete batches; a short batch ends the table.
+    expect(recorded.transactions).toBe(8);
     expect(result.budgetExhausted).toBe(false);
   });
 
   it("gives every batch its own statement_timeout inside its own transaction", async () => {
-    const { db, recorded } = fakeDb({ sync_http_attempts: 1, sync_run_events: 0, sync_runs: 0 }, 10);
+    const { db, recorded } = fakeDb({ sync_http_attempts: 1, sync_run_events: 0, sync_runs: 0, fansly_send_log: 0 }, 10);
     await deleteExpiredSyncObservability(db, CUTOFF, {
       batchRows: 10,
       statementTimeoutMs: 45_000,
     });
     const timeouts = recorded.statements.filter((text) => text.includes("set local statement_timeout"));
     // One per batch — and one batch per table, since each returns short.
-    expect(timeouts).toHaveLength(3);
+    expect(timeouts).toHaveLength(4);
     expect(timeouts[0]).toContain("45000");
   });
 
@@ -140,13 +141,23 @@ describe("the nightly sync-observability prune", () => {
     expect(runs).toContain("outcome <> 'running'");
   });
 
+  it("sweeps the Fansly send journal by its indexed capture time, never an uncompleted attempt", async () => {
+    const { db, recorded } = fakeDb({ sync_http_attempts: 0, sync_run_events: 0, sync_runs: 0, fansly_send_log: 0 }, 10);
+    await deleteExpiredSyncObservability(db, CUTOFF, { batchRows: 10 });
+    const sendLog = recorded.statements.find((text) => text.includes("from fansly_send_log"));
+    // fansly_send_log_captured_idx is on captured_at; completed_at >= captured_at.
+    // A null completed_at never compares below the cutoff: a holder that is
+    // neither completed nor confirmed keeps its journal row.
+    expect(sendLog).toMatch(/where captured_at <.*and completed_at </);
+  });
+
   it("sweeps children BEFORE the parent, so sync_runs finds its cascades empty", async () => {
     const { db, recorded } = fakeDb({ sync_http_attempts: 0, sync_run_events: 0, sync_runs: 0 }, 10);
     await deleteExpiredSyncObservability(db, CUTOFF, { batchRows: 10 });
     const order = recorded.statements
       .filter((text) => text.includes("delete from"))
       .map((text) => text.match(/delete from (\w+)/)?.[1]);
-    expect(order).toEqual(["sync_http_attempts", "sync_run_events", "sync_runs"]);
+    expect(order).toEqual(["sync_http_attempts", "sync_run_events", "sync_runs", "fansly_send_log"]);
   });
 
   it("stops on its own wall-clock budget and SAYS SO, instead of running into the 900s cap", async () => {
@@ -179,13 +190,13 @@ describe("the nightly sync-observability prune", () => {
       ticks += 1;
       return ticks * 1_000;
     };
-    const { db } = fakeDb({ sync_http_attempts: 1, sync_run_events: 1, sync_runs: 1 }, 10);
+    const { db } = fakeDb({ sync_http_attempts: 1, sync_run_events: 1, sync_runs: 1, fansly_send_log: 1 }, 10);
     const result = await deleteExpiredSyncObservability(db, CUTOFF, {
       batchRows: 10,
       monotonicNowMs,
     });
     expect(result.steps.map((step) => step.table))
-      .toEqual(["sync_http_attempts", "sync_run_events", "sync_runs"]);
+      .toEqual(["sync_http_attempts", "sync_run_events", "sync_runs", "fansly_send_log"]);
     for (const step of result.steps) {
       expect(step.durationMs).toBeGreaterThan(0);
       expect(step.batches).toBe(1);
