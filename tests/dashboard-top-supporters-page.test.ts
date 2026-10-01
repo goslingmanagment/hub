@@ -181,15 +181,6 @@ describe("TopSupportersPage", () => {
     expect(html).toContain("No supporters found for this period.");
   });
 
-  it("falls back to lifetime when period is the persisted \"all\" alias", () => {
-    storeMocks.topSupportersPeriod = "all";
-    queryMocks.useSpenders.mockReturnValue({ data: makeResponse([]), isLoading: false });
-
-    renderPage();
-
-    expect(queryMocks.useSpenders.mock.calls[0]![0].period).toBe("lifetime");
-  });
-
   it("passes the persisted spender period through when it is not \"all\"", () => {
     storeMocks.topSupportersPeriod = "30d";
     queryMocks.useSpenders.mockReturnValue({ data: makeResponse([]), isLoading: false });

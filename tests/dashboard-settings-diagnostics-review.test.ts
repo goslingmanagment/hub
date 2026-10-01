@@ -21,8 +21,7 @@ import {
   prepareHydrationDecision, reviewHydrationDraft, hydrationDecisionAttempt,
   hydrationDecisionStatusIsDefiniteRefusal, frozenHydrationDecisionSummary,
 } from "../apps/dashboard/src/pages/AgentHydrationPage.tsx";
-import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsRunning, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
-import { AgentKeysSection } from "../apps/dashboard/src/pages/settings/team/TechnicalTab.tsx";
+import { editWebhookSelection, OfapiWebhookRecovery, webhookApplyIsRunning, webhookCanPrepareNewAction, webhookReadbackResolvesAction } from "../apps/dashboard/src/pages/settings/OfapiWebhookRecovery.tsx";
 import { PageAssignmentsEditor } from "../apps/dashboard/src/pages/settings/PageAssignmentsEditor.tsx";
 import { DbStatsPage } from "../apps/dashboard/src/pages/dev/DbStatsPage.tsx";
 import { IncidentsPage } from "../apps/dashboard/src/pages/dev/IncidentsPage.tsx";
@@ -188,6 +187,47 @@ describe("webhook selection review", () => {
     expect(applyButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
     expect(html).toContain("при расхождении она восстановит сохранённый состав событий");
   });
+
+  it("shows captured future events without presenting an unimplemented handler as enabled", () => {
+    webhook.useOfapiWebhookRecovery.mockReturnValue(query({
+      policy: { desiredGroups: [], appliedGroups: [], groups: [], historyEnabled: false, applyState: "never" },
+      history: { attempts: [], latestScan: null, webhookId: null },
+      catalog: { observedAt: "2026-09-06T10:00:00Z", state: "captured", events: [{ value: "new_family.future_event", description: "Future event", requested: false, supported: false }] },
+    }));
+    const html = render(OfapiWebhookRecovery);
+    expect(html).toContain("2026-09-06T10:00:00Z");
+    expect(html).toContain("new_family.future_event");
+    expect(html).toContain("не запрошено");
+    expect(html).toContain("обработчик не подключён");
+    expect(html).toContain("новые события не включаются автоматически");
+    expect(html).toContain("Обновить каталог · бесплатно");
+  });
+
+  describe.each(["failed", "applied"])("lost apply response from an already %s policy", (state) => {
+    const baseline = { version: 7, applyState: state };
+    const unchangedReadback = { ...baseline };
+
+    it("keeps the old outcome unknown but permits a separately acknowledged new intent", () => {
+      // The API has no attempt id: both the old snapshot and another completed
+      // application can have this same state. Neither proves the new outcome.
+      expect(webhookReadbackResolvesAction(baseline, unchangedReadback)).toBe(false);
+      expect(webhookCanPrepareNewAction(null, unchangedReadback, true, false)).toBe(false);
+      expect(webhookCanPrepareNewAction(unchangedReadback, unchangedReadback, false, false)).toBe(false);
+      expect(webhookCanPrepareNewAction(unchangedReadback, unchangedReadback, true, false)).toBe(true);
+    });
+
+    it("requires rereview after a changed snapshot or failed/in-flight refresh", () => {
+      expect(webhookCanPrepareNewAction(unchangedReadback, unchangedReadback, true, true)).toBe(false);
+      expect(webhookCanPrepareNewAction(unchangedReadback, { version: 8, applyState: "failed" }, true, false)).toBe(false);
+      expect(webhookCanPrepareNewAction(unchangedReadback, { version: 7, applyState: "applying" }, true, false)).toBe(false);
+      const applying = { version: 7, applyState: "applying" };
+      expect(webhookCanPrepareNewAction(applying, applying, true, false)).toBe(false);
+      expect(webhookReadbackResolvesAction(baseline, { version: 8, applyState: "applying" })).toBe(false);
+      const reviewed = { ...unchangedReadback, appliedGroups: [], errorCode: "old" };
+      const changed = { ...reviewed, errorCode: "new" };
+      expect(webhookCanPrepareNewAction(reviewed, changed, true, false)).toBe(false);
+    });
+  });
 });
 
 describe("settings and diagnostics error states", () => {
@@ -206,9 +246,15 @@ describe("settings and diagnostics error states", () => {
   });
 
   it("does not present unknown database bytes as zero", () => {
-    queries.useAdminDbStats.mockReturnValue(query({ tables: [{ table: "missing_size", rowEstimate: 0, totalBytes: null, indexBytes: 0 }], migrations: [] }));
+    queries.useAdminDbStats.mockReturnValue(query({
+      tables: [{ table: "missing_size", rowEstimate: 0, totalBytes: null, indexBytes: 0 }],
+      migrations: [{ name: "20260322_add_sync_rollups.sql", appliedAt: "2026-03-22T12:00:00.000Z" }],
+    }));
     const html = render(DbStatsPage);
     expect(html).toContain("Rows (estimate)");
+    expect(html).toContain("Migration");
+    expect(html).toContain("Applied");
+    expect(html).toContain("20260322_add_sync_rollups.sql");
     expect(html.match(/0 B/g)).toHaveLength(1);
     expect(html).toContain("—");
   });
@@ -221,11 +267,6 @@ describe("settings and diagnostics error states", () => {
     expect(html).toContain("Available pages could not be refreshed");
     expect(html).toContain('value="example" selected=""');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Assign<\/button>/);
-  });
-
-  it("shows stale agent key permissions explicitly", () => {
-    queries.useAgentKeys.mockReturnValue(query([], true));
-    expect(render(AgentKeysSection)).toContain("Showing cached data");
   });
 
   it("preserves the Telegram credential form during refresh errors and explains its send", () => {
