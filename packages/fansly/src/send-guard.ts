@@ -83,7 +83,16 @@ export interface FanslySendGuard {
   acquire(input: FanslySendGuardAcquireInput): Promise<FanslySendLease>;
 }
 
-export type FanslySendRefusalReason = "lease_inactive" | "lease_used" | "send_deadline_passed";
+/** Why a send check refused a dispatch. The first three are every lease's;
+ *  `pace` (closer than S × (1 + u) to the previous send) and `takeover_floor`
+ *  (before the first-send floor after an ownership takeover) are the Sync
+ *  Engine pacer's, which reuses this check contract (`composeFanslySendCheck`). */
+export type FanslySendRefusalReason =
+  | "lease_inactive"
+  | "lease_used"
+  | "send_deadline_passed"
+  | "pace"
+  | "takeover_floor";
 
 /** A dispatch the lease's send check refused. Nothing was written to the
  *  socket for it. */
