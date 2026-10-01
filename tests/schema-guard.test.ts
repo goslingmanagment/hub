@@ -224,4 +224,29 @@ describe("runtime schema guard", () => {
       await testDb.stop();
     }
   }, 30_000);
+
+  it("fails when the 0230 observation lineage of tip contexts loses its pair check", async () => {
+    const testDb = await acquireTestPrerequisite(
+      () => startTestDatabase(),
+      {
+        prerequisite: "Docker-backed Postgres for schema guard tests",
+        reason: "This test proves the 0230 observation lineage contract is runtime-guarded.",
+      },
+    );
+    if (!testDb) {
+      return;
+    }
+
+    try {
+      await testDb.pool.query(
+        "alter table transaction_tip_contexts drop constraint transaction_tip_contexts_obs_lineage_check",
+      );
+
+      await expect(assertRuntimeSchemaReady(testDb.pool)).rejects.toThrow(
+        "migration 0122 transaction-tip-context constraints do not match the runtime contract",
+      );
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
 });

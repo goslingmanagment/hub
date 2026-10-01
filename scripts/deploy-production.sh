@@ -534,6 +534,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # the owner) is right while every row is 'legacy' — all of step 2; only the
   # step-3 switch flips a row.
   "0229_send_guard_owner_engine.sql"
+  # Observation lineage of Fansly tip contexts (sync engine design §2.4): four
+  # nullable columns on transaction_tip_contexts, no default, a pair check and
+  # a partial index. The previous image never names them and inserts by named
+  # columns, so its rows leave them null (which the check accepts) and it runs
+  # unchanged after a rollback.
+  "0230_tip_context_observation_lineage.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

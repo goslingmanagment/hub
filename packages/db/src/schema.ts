@@ -1233,13 +1233,23 @@ export const transactionTipContexts = pgTable(
      * advances it; a later identical capture may relink it after raw expiry. */
     sourceRawPayloadId: bigint("source_raw_payload_id", { mode: "number" })
       .references(() => syncRawPayloads.id, { onDelete: "set null" }),
-    /** DB capture time of source_raw_payload_id, not provider event time. */
+    /** DB capture time of the identity lineage, not provider event time. */
     capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
     provenance: text("provenance")
       .$type<"fansly_dm_tip_sidecar">()
       .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    /** 0230: identity lineage of a row the Fansly Sync Engine materialized
+     * (it journals observations only). Observations are partitioned by
+     * received_at, so the pair is the address and there is no FK. */
+    sourceObservationId: bigint("source_observation_id", { mode: "number" }),
+    sourceObservationReceivedAt: timestamp("source_observation_received_at", { withTimezone: true }),
+    /** 0230: the observation whose note won the merge (pair, no FK). */
+    tipMessageSourceObservationId: bigint("tip_message_source_observation_id", { mode: "number" }),
+    tipMessageSourceObservationReceivedAt: timestamp("tip_message_source_observation_received_at", {
+      withTimezone: true,
+    }),
   },
   (table) => ({
     accountTipUniq: unique("transaction_tip_contexts_account_tip_uniq").on(
@@ -1292,6 +1302,14 @@ export const transactionTipContexts = pgTable(
     tipMessageSourceRawPayloadIdx: index(
       "transaction_tip_contexts_tip_message_source_raw_payload_idx",
     ).on(table.tipMessageSourceRawPayloadId),
+    observationLineageCheck: check(
+      "transaction_tip_contexts_obs_lineage_check",
+      sql`(${table.sourceObservationId} is null) = (${table.sourceObservationReceivedAt} is null)
+        and (${table.tipMessageSourceObservationId} is null) = (${table.tipMessageSourceObservationReceivedAt} is null)`,
+    ),
+    sourceObservationIdx: index("transaction_tip_contexts_source_observation_idx")
+      .on(table.sourceObservationId)
+      .where(sql`${table.sourceObservationId} is not null`),
   }),
 );
 
