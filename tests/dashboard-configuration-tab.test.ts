@@ -171,6 +171,41 @@ describe("ConfigurationTab boolean live editor rendering", () => {
   });
 });
 
+// Fansly Sync Engine plan §2.1: the Fansly pause turned live, so the console renders an
+// editor for it, with copy that names the range and the 0–20 % jitter.
+describe("ConfigurationTab Fansly pause", () => {
+  it("renders the live numeric editor with the owner-facing copy and server note", () => {
+    const html = renderTab([
+      configItem({
+        key: "fanslyDefaultDelayMs",
+        envName: "FANSLY_DEFAULT_DELAY_MS",
+        configField: "fanslyDefaultDelayMs",
+        kind: "number",
+        label: "Fansly pause between requests (ms)",
+        default: "2500",
+        note: "One pause for every Fansly page, 2000-60000 ms. A value outside the range is rejected, never clamped.",
+        costWarning: "Lowering reduces politeness against Fansly's unofficial API; raises ban/throttle risk.",
+        running: [
+          {
+            role: "api",
+            instanceId: "api-1",
+            value: 2500,
+            masked: false,
+            state: null,
+            lastSeenAt: "2026-07-11T00:00:00.000Z",
+          },
+        ],
+      }),
+    ]);
+    expect(html).toContain('type="number"');
+    expect(html).toContain("Пауза между запросами Fansly");
+    expect(html).toContain("Задаёт наименьшую паузу между двумя запросами одной страницы Fansly.");
+    expect(html).toContain("Допустимо от 2000 до 60000 мс");
+    expect(html).toContain("от 0 до 20 %");
+    expect(html).toContain("A value outside the range is rejected, never clamped.");
+  });
+});
+
 // Click behavior is pinned via the exported resolver (renderToStaticMarkup cannot
 // dispatch events and the repo's root suite is node-env, no DOM): BooleanConfigEditor's
 // onToggle delegates 1:1 to resolveBooleanToggle, so these ARE the click semantics.

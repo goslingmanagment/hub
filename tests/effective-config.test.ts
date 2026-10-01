@@ -22,6 +22,7 @@ function baseConfig(): AppConfig {
     transactionLookbackDays: 7,
     transactionRescanCapDays: 30,
     ofapiDmReconcileIntervalMinutes: 360,
+    fanslyDefaultDelayMs: 2500,
     // A runtimeApply:'none' editable key (must never be overlaid) and a boot/staged key.
     logLevel: "info",
     ofapiDmProjectionEnabled: false,
@@ -71,6 +72,25 @@ describe("applyEffectiveOverrides", () => {
       overrides([["healthSyncLightMaxAgeMinutes", -5]]),
     );
     expect(merged.healthSyncLightMaxAgeMinutes).toBe(1);
+  });
+
+  it("applies an in-range Fansly pause override live", () => {
+    const merged = applyEffectiveOverrides(baseConfig(), overrides([["fanslyDefaultDelayMs", 3000]]));
+    expect(merged.fanslyDefaultDelayMs).toBe(3000);
+    // The bounds themselves are allowed values.
+    expect(applyEffectiveOverrides(baseConfig(), overrides([["fanslyDefaultDelayMs", 2000]])).fanslyDefaultDelayMs)
+      .toBe(2000);
+    expect(applyEffectiveOverrides(baseConfig(), overrides([["fanslyDefaultDelayMs", 60_000]])).fanslyDefaultDelayMs)
+      .toBe(60_000);
+  });
+
+  it("ignores an out-of-range Fansly pause row instead of clamping it, keeping the env value", () => {
+    // A row written past the API (hand SQL) below the owner floor must not lower the pause,
+    // and must not be raised to a bound the owner never chose either: the env value stays.
+    for (const value of [1500, 1999, 60_001, 70_000]) {
+      const merged = applyEffectiveOverrides(baseConfig(), overrides([["fanslyDefaultDelayMs", value]]));
+      expect(merged.fanslyDefaultDelayMs, String(value)).toBe(2500);
+    }
   });
 
   it("ignores a runtimeApply:'none' editable key (logLevel)", () => {
@@ -203,6 +223,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(true);
     }
-    expect(LIVE_CONFIG_KEYS.size).toBe(95);
+    expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(96);
   });
 });

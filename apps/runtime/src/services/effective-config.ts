@@ -25,8 +25,11 @@ export const LIVE_CONFIG_KEYS = new Set<string>(
 
 /** PURE overlay: clone `config` and, for each `runtimeApply === 'live'` key that has a
  *  (re-validated, clamped) override, write the validated value into the matching
- *  AppConfig field. Boot-mode and non-overridable (none) keys are ignored so they never
- *  appear applied via the live overlay. Returns `config` unchanged when nothing applies. */
+ *  AppConfig field. An override the validator rejects — including a hand-written
+ *  out-of-range value of an `outOfRange: 'reject'` key such as the Fansly pause — is
+ *  skipped, so the env value stays. Boot-mode and non-overridable (none) keys are ignored
+ *  so they never appear applied via the live overlay. Returns `config` unchanged when
+ *  nothing applies. */
 export function applyEffectiveOverrides(
   config: AppConfig,
   overrides: Map<string, ConfigOverrideRecord>,
