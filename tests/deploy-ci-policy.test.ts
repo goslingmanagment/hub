@@ -508,7 +508,8 @@ describe("CI runner pool", () => {
 
   // Every job of both workflows follows CI_POOL, the gate's own fingerprint
   // and Quality Gate included: with CI_POOL=pc nothing runs on a billed runner
-  // on a first attempt.
+  // on a first attempt — except Nightly's weekly full suite, which always runs
+  // GitHub-hosted (on the PC it shared the memory cap with PR runs of hub).
   it.each([
     // CI_POOL, run attempt, fingerprint + Quality Gate, static, integration, nightly jobs
     ["pc", "1", control, heavy, heavy, heavy],
@@ -525,9 +526,8 @@ describe("CI runner pool", () => {
       expect(runner(job("static")["runs-on"], context)).toEqual(staticRunner);
       expect(runner(job("integration")["runs-on"], context)).toEqual(integrationRunner);
       expect(Object.keys(nightly.jobs).sort()).toEqual(["api-remainder", "full-suite"]);
-      for (const [name, config] of Object.entries(nightly.jobs)) {
-        expect(runner(config["runs-on"], context), name).toEqual(nightlyRunner);
-      }
+      expect(runner(nightly.jobs["api-remainder"]!["runs-on"], context)).toEqual(nightlyRunner);
+      expect(runner(nightly.jobs["full-suite"]!["runs-on"], context)).toEqual("ubuntu-24.04");
     },
   );
 
@@ -543,9 +543,8 @@ describe("CI runner pool", () => {
     expect(job("quality")).toHaveProperty("timeout-minutes", 5);
     // ubuntu-latest moves to a new release on GitHub's schedule, not ours.
     expect(workflowText).not.toContain("ubuntu-latest");
-    for (const [name, config] of Object.entries(nightly.jobs)) {
-      expect(config["runs-on"], name).toBe(pool("ci-pc", "ubuntu-24.04"));
-    }
+    expect(nightly.jobs["api-remainder"]!["runs-on"]).toBe(pool("ci-pc", "ubuntu-24.04"));
+    expect(nightly.jobs["full-suite"]!["runs-on"]).toBe("ubuntu-24.04");
   });
 
   // Hub's heavy runners carry ci-pc and ci-pc-control, its light gate runners
@@ -561,7 +560,10 @@ describe("CI runner pool", () => {
     const context = eventContext({ pool: "pc", attempt: "1" });
     const jobs: [string, Job][] = [
       ...Object.entries(workflow.jobs).map(([name, config]): [string, Job] => [`ci ${name}`, config]),
-      ...Object.entries(nightly.jobs).map(([name, config]): [string, Job] => [`nightly ${name}`, config]),
+      // The weekly full suite never runs on the PC (pinned above).
+      ...Object.entries(nightly.jobs)
+        .filter(([name]) => name !== "full-suite")
+        .map(([name, config]): [string, Job] => [`nightly ${name}`, config]),
     ];
     const gates = ["ci fingerprint", "ci quality"];
     const onLight: string[] = [];
