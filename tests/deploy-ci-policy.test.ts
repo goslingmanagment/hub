@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { TestSpecification, Vitest } from "vitest/node";
 
-import { mirrorEarlierGate } from "../scripts/ci-mirror-gate.mjs";
+import { FINGERPRINT_CHECK_NAME, GATE_CHECK_NAME, MIRROR_POLL_MS, MIRROR_WAIT_MS, mirrorEarlierGate } from "../scripts/ci-mirror-gate.mjs";
 import { DEFAULT_SHARD_TOTAL, planShards } from "../scripts/ci-shards.mjs";
 import vitestConfig from "../vitest.config.ts";
 import { syncCriticalDbFiles } from "./helpers/sync-critical-files.ts";
@@ -29,6 +29,7 @@ type Job = {
   "runs-on"?: string | string[];
   needs?: string[];
   if?: string;
+  "timeout-minutes"?: number;
   env?: Record<string, string>;
   permissions?: Permissions;
   outputs?: Record<string, string>;
@@ -540,7 +541,8 @@ describe("CI runner pool", () => {
     expect(job("fingerprint")["runs-on"]).toBe(pool("ci-pc-control", "ubuntu-slim"));
     expect(job("quality")["runs-on"]).toBe(pool("ci-pc-control", "ubuntu-slim"));
     expect(job("fingerprint")).toHaveProperty("timeout-minutes", 5);
-    expect(job("quality")).toHaveProperty("timeout-minutes", 5);
+    // The Quality Gate's mirror may wait for a run still working on the head.
+    expect(job("quality")).toHaveProperty("timeout-minutes", 45);
     // ubuntu-latest moves to a new release on GitHub's schedule, not ours.
     expect(workflowText).not.toContain("ubuntu-latest");
     expect(nightly.jobs["api-remainder"]!["runs-on"]).toBe(pool("ci-pc", "ubuntu-24.04"));
@@ -1711,61 +1713,197 @@ describe("Decision 377: every event keeps the required check reported", () => {
     }
   });
 
-  // The mirror confirms an earlier verdict for this exact head; it can never
-  // manufacture one, so a red, pending, foreign or missing gate stays red.
-  it("mirrors only an earlier successful Quality Gate for the same head SHA", async () => {
-    const mirror = step("quality", "An earlier run already passed this head");
-    expect(shell(mirror)).toBe("node scripts/ci-mirror-gate.mjs");
-    expect(mirror.env).toEqual({
-      GH_TOKEN: "${{ github.token }}",
-      IS_DRAFT: "${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}",
-      HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
-    });
-    // Reading check runs on a private repository needs checks:read, and that
-    // job-level block must not widen anything else.
-    expect(job("quality").permissions).toEqual({ checks: "read", contents: "read" });
-    expect(workflow.permissions).toEqual({ contents: "read" });
-
+  // The mirror reports the verdict of the NEWEST Quality Gate another real run
+  // recorded for this exact head; it never manufactures one. A newer red gate
+  // beats an older green one, a run still working on the head is waited for,
+  // and a missing gate, a failed read or a wait that runs out stays red.
+  describe("the metadata-only mirror", () => {
     const headSha = "a".repeat(40);
-    const mirrorEnv = { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "35518904235", HEAD_SHA: headSha, IS_DRAFT: "false" };
-    const earlier = { name: "Quality Gate", app: { slug: "github-actions" }, status: "completed", conclusion: "success",
-      html_url: "https://github.com/owner/repo/actions/runs/35518903414/job/99" };
-    expect(await mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [earlier] }))).toEqual({
-      runId: "35518903414", url: earlier.html_url,
-    });
-    // Everything that is not an EARLIER success from this workflow's app fails.
-    const rejected = [
-      { ...earlier, conclusion: "failure" },
-      { ...earlier, conclusion: null, status: "in_progress" },
-      { ...earlier, app: { slug: "some-other-app" } },
-      { ...earlier, name: "Static checks" },
-      { ...earlier, html_url: "https://github.com/owner/repo/actions/runs/35518904235/job/1" },
-      { ...earlier, html_url: "https://example.invalid/not-a-run" },
-    ];
-    for (const checkRun of rejected) {
-      await expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [checkRun] })), JSON.stringify(checkRun)).rejects.toThrow("No earlier successful");
+    const mirrorEnv = { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "400", HEAD_SHA: headSha, IS_DRAFT: "false" };
+    const runsEndpoint = (page: number) => `repos/owner/repo/actions/runs?head_sha=${headSha}&per_page=100&page=${page}`;
+    const checkRunsEndpoint = (page: number) => `repos/owner/repo/commits/${headSha}/check-runs?filter=all&per_page=100&page=${page}`;
+
+    type CheckRun = { id?: number; name: string; status: string; conclusion: string | null; started_at?: string;
+      app: { slug: string }; html_url: string };
+    function gate(id: number, run: string, conclusion: string | null = "success", status = "completed"): CheckRun {
+      return { id, name: GATE_CHECK_NAME, status, conclusion, app: { slug: "github-actions" },
+        html_url: `https://github.com/owner/repo/actions/runs/${run}/job/${id}` };
     }
-    await expect(mirrorEarlierGate(mirrorEnv, () => ({ check_runs: [] }))).rejects.toThrow("No earlier successful");
-    await expect(mirrorEarlierGate(mirrorEnv, () => { throw new Error("API unavailable"); })).rejects.toThrow("API unavailable");
-    await expect(mirrorEarlierGate(mirrorEnv, () => Promise.reject(new Error("API unavailable")))).rejects.toThrow("API unavailable");
-    // The head must be a real SHA, and a draft fails exactly like the gate does.
-    await expect(mirrorEarlierGate({ ...mirrorEnv, HEAD_SHA: "" }, () => ({ check_runs: [earlier] }))).rejects.toThrow("head SHA");
-    const draftApi = vi.fn(() => ({ check_runs: [earlier] }));
-    await expect(mirrorEarlierGate({ ...mirrorEnv, IS_DRAFT: "true" }, draftApi)).rejects.toThrow("Draft PR");
-    expect(draftApi).not.toHaveBeenCalled();
-    // The query asks GitHub for this head's check runs by the required name.
-    const endpoints: string[] = [];
-    await expect(mirrorEarlierGate(mirrorEnv, endpoint => { endpoints.push(endpoint); return { check_runs: [] }; })).rejects.toThrow();
-    expect(endpoints).toEqual([`repos/owner/repo/commits/${headSha}/check-runs?check_name=Quality%20Gate&filter=all&per_page=100&page=1`]);
-    // A full page is not the end of the list.
-    const pages: string[] = [];
-    const other = { ...earlier, conclusion: "failure" };
-    const paged = await mirrorEarlierGate(mirrorEnv, endpoint => {
-      pages.push(endpoint);
-      return { check_runs: pages.length === 1 ? Array.from({ length: 100 }, () => other) : [earlier] };
+    // A real run executes the fingerprint job; a metadata-only run skips it.
+    function fingerprint(id: number, run: string, conclusion: string | null = "success", status = "completed"): CheckRun {
+      return { ...gate(id, run, conclusion, status), name: FINGERPRINT_CHECK_NAME };
+    }
+    function ciRun(id: string, status = "completed") {
+      return { id: Number(id), path: ".github/workflows/ci.yml", status };
+    }
+    type Head = { runs: object[]; checkRuns: object[] };
+    // The head as each poll sees it: polls[n] answers after the n-th sleep.
+    function fakeHead(...polls: Head[]) {
+      let now = 0;
+      const sleeps: number[] = [];
+      const seen: string[] = [];
+      const api = (endpoint: string) => {
+        seen.push(endpoint);
+        const head = polls[Math.min(sleeps.length, polls.length - 1)] ?? { runs: [], checkRuns: [] };
+        if (endpoint.startsWith("repos/owner/repo/actions/runs?")) return { total_count: head.runs.length, workflow_runs: head.runs };
+        if (endpoint.startsWith(`repos/owner/repo/commits/${headSha}/check-runs?`)) {
+          return { total_count: head.checkRuns.length, check_runs: head.checkRuns };
+        }
+        throw new Error(`Unexpected endpoint ${endpoint}`);
+      };
+      const options = { now: () => now, sleep: async (ms: number) => { sleeps.push(ms); now += ms; } };
+      return { api, options, sleeps, seen };
+    }
+    const mirror = (...polls: Head[]) => {
+      const head = fakeHead(...polls);
+      return { ...head, result: mirrorEarlierGate(mirrorEnv, head.api, head.options) };
+    };
+
+    it("runs the mirror script with read-only access to this head's runs and checks", () => {
+      const mirrorStep = step("quality", "An earlier run already passed this head");
+      expect(shell(mirrorStep)).toBe("node scripts/ci-mirror-gate.mjs");
+      expect(mirrorStep.env).toEqual({
+        GH_TOKEN: "${{ github.token }}",
+        IS_DRAFT: "${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}",
+        HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+      });
+      // Listing the head's workflow runs needs actions:read and its check runs
+      // checks:read on a private repository; nothing else is widened.
+      expect(job("quality").permissions).toEqual({ actions: "read", checks: "read", contents: "read" });
+      expect(workflow.permissions).toEqual({ contents: "read" });
+      // The script recognises the jobs by the names GitHub reports for them.
+      expect(job("quality").name).toBe(GATE_CHECK_NAME);
+      expect(job("fingerprint").name).toBe(FINGERPRINT_CHECK_NAME);
+      // The job outlives the script's wait, so a wait that runs out fails with
+      // the script's message rather than a bare job timeout.
+      expect(MIRROR_POLL_MS).toBeLessThan(MIRROR_WAIT_MS);
+      expect((job("quality")["timeout-minutes"] ?? 0) * 60_000).toBeGreaterThanOrEqual(MIRROR_WAIT_MS + 5 * 60_000);
     });
-    expect(paged.runId).toBe("35518903414");
-    expect(pages).toHaveLength(2);
+
+    it("mirrors the newest finished gate: a newer red one beats an older green one", async () => {
+      // Newest is the higher check-run id, whatever the list order or start time.
+      const older = { ...gate(1, "100", "success"), started_at: "2026-10-01T12:00:00Z" };
+      const newer = { ...gate(3, "300", "failure"), started_at: "2026-10-01T10:00:00Z" };
+      for (const checkRuns of [[newer, older], [older, newer]]) {
+        const { result, sleeps } = mirror({ runs: [ciRun("100"), ciRun("300")], checkRuns });
+        await expect(result).rejects.toThrow(`The newest "Quality Gate" for ${headSha} (run 300) concluded failure`);
+        expect(sleeps).toEqual([]);
+      }
+      for (const conclusion of ["cancelled", "timed_out", "action_required", "neutral", "skipped", "stale", null]) {
+        await expect(mirror({ runs: [], checkRuns: [older, gate(3, "300", conclusion)] }).result, String(conclusion)).rejects.toThrow("(run 300) concluded");
+      }
+      // A later green run on the same head is the verdict again.
+      const fixed = gate(5, "500", "success");
+      await expect(mirror({ runs: [], checkRuns: [newer, fixed, older] }).result).resolves.toEqual({ runId: "500", url: fixed.html_url });
+      // A re-run attempt keeps the run id; its newer gate decides.
+      await expect(mirror({ runs: [], checkRuns: [gate(7, "300", "success"), newer, older] }).result).resolves.toEqual({
+        runId: "300", url: gate(7, "300").html_url,
+      });
+    });
+
+    it("waits for a run still working on this head and mirrors its final verdict", async () => {
+      const older = gate(1, "100", "success");
+      for (const verdict of ["success", "failure"]) {
+        const { result, sleeps } = mirror(
+          // The real run has started: its gate job does not exist until the jobs it needs finish.
+          { runs: [ciRun("100"), ciRun("300", "queued")], checkRuns: [older] },
+          { runs: [ciRun("100"), ciRun("300", "in_progress")], checkRuns: [older, fingerprint(2, "300")] },
+          { runs: [ciRun("100"), ciRun("300", "in_progress")], checkRuns: [older, fingerprint(2, "300"), gate(5, "300", null, "queued")] },
+          { runs: [ciRun("100"), ciRun("300")], checkRuns: [older, fingerprint(2, "300"), gate(5, "300", verdict)] },
+        );
+        if (verdict === "success") await expect(result).resolves.toEqual({ runId: "300", url: gate(5, "300").html_url });
+        else await expect(result).rejects.toThrow("(run 300) concluded failure");
+        expect(sleeps).toEqual([MIRROR_POLL_MS, MIRROR_POLL_MS, MIRROR_POLL_MS]);
+      }
+      // A gate still running counts even when the run list lags behind it.
+      const lagging = mirror(
+        { runs: [], checkRuns: [older, gate(5, "300", null, "in_progress")] },
+        { runs: [], checkRuns: [older, gate(5, "300", "failure")] },
+      );
+      await expect(lagging.result).rejects.toThrow("(run 300) concluded failure");
+      expect(lagging.sleeps).toEqual([MIRROR_POLL_MS]);
+    });
+
+    it("fails red when the run it waits for outlasts the wait", async () => {
+      const { result, sleeps } = mirror({ runs: [ciRun("300", "in_progress")], checkRuns: [gate(1, "100"), fingerprint(2, "300", null, "in_progress")] });
+      await expect(result).rejects.toThrow(`Run 300 is still working on ${headSha} after ${MIRROR_WAIT_MS / 60_000} min`);
+      expect(sleeps.length).toBeGreaterThan(0);
+      expect(sleeps.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(MIRROR_WAIT_MS);
+    });
+
+    it("ignores this run's own gate and other metadata-only runs", async () => {
+      const older = gate(1, "100", "success");
+      const head = {
+        runs: [ciRun("100"), ciRun("400", "in_progress"), ciRun("500"), ciRun("600", "in_progress")],
+        checkRuns: [
+          older,
+          // This run: an earlier attempt's red gate and its own gate in progress.
+          gate(9, "400", "failure"), gate(10, "400", null, "in_progress"),
+          // Other mirrors: one finished red, one still running. Neither is a verdict.
+          fingerprint(11, "500", "skipped"), gate(12, "500", "failure"),
+          fingerprint(13, "600", "skipped"), gate(14, "600", null, "in_progress"),
+        ],
+      };
+      const { result, sleeps } = mirror(head);
+      await expect(result).resolves.toEqual({ runId: "100", url: older.html_url });
+      expect(sleeps).toEqual([]);
+      // A real run (its fingerprint ran) is a verdict, red or green.
+      await expect(mirror({ ...head, checkRuns: [...head.checkRuns, fingerprint(15, "700", "failure"), gate(16, "700", "failure")] }).result)
+        .rejects.toThrow("(run 700) concluded failure");
+    });
+
+    it("stays red without a gate, for foreign checks, and when the API fails", async () => {
+      const earlier = gate(1, "100", "success");
+      await expect(mirror({ runs: [], checkRuns: [] }).result).rejects.toThrow(`No earlier "Quality Gate" for ${headSha}`);
+      // Only github-actions check runs named exactly "Quality Gate" from a workflow run count.
+      const foreign = [
+        { ...earlier, app: { slug: "some-other-app" } },
+        { ...earlier, name: "Static checks" },
+        { ...earlier, html_url: "https://example.invalid/not-a-run" },
+      ];
+      for (const checkRun of foreign) {
+        await expect(mirror({ runs: [], checkRuns: [checkRun] }).result, JSON.stringify(checkRun)).rejects.toThrow("No earlier");
+      }
+      // A gate that cannot be ordered is not skipped over.
+      await expect(mirror({ runs: [], checkRuns: [earlier, { ...gate(3, "300", "failure"), id: undefined }] }).result).rejects.toThrow("Unreadable");
+      // Any failed read is red, on the first poll or in the middle of a wait.
+      await expect(mirrorEarlierGate(mirrorEnv, () => { throw new Error("API unavailable"); })).rejects.toThrow("API unavailable");
+      await expect(mirrorEarlierGate(mirrorEnv, () => Promise.reject(new Error("API unavailable")))).rejects.toThrow("API unavailable");
+      const head = fakeHead({ runs: [ciRun("300", "in_progress")], checkRuns: [earlier] });
+      const failing = (endpoint: string) => {
+        if (head.sleeps.length > 0) throw new Error("API unavailable");
+        return head.api(endpoint);
+      };
+      await expect(mirrorEarlierGate(mirrorEnv, failing, head.options)).rejects.toThrow("API unavailable");
+      expect(head.sleeps).toEqual([MIRROR_POLL_MS]);
+      // The head must be a real SHA, and a draft fails exactly like the gate does.
+      await expect(mirrorEarlierGate({ ...mirrorEnv, HEAD_SHA: "" }, fakeHead({ runs: [], checkRuns: [earlier] }).api)).rejects.toThrow("head SHA");
+      const draftApi = vi.fn(fakeHead({ runs: [], checkRuns: [earlier] }).api);
+      await expect(mirrorEarlierGate({ ...mirrorEnv, IS_DRAFT: "true" }, draftApi)).rejects.toThrow("Draft PR");
+      expect(draftApi).not.toHaveBeenCalled();
+    });
+
+    it("reads every page of this head's runs and check runs", async () => {
+      const { result, seen } = mirror({ runs: [], checkRuns: [] });
+      await expect(result).rejects.toThrow();
+      expect(seen).toEqual([runsEndpoint(1), checkRunsEndpoint(1)]);
+      // A full page is not the end of the list: the newest gate may be on the next.
+      const pages: string[] = [];
+      const newest = gate(1000, "300", "success");
+      const paged = await mirrorEarlierGate(mirrorEnv, endpoint => {
+        pages.push(endpoint);
+        if (endpoint.startsWith("repos/owner/repo/actions/runs?")) {
+          return { workflow_runs: endpoint.endsWith("page=1") ? Array.from({ length: 100 }, (_, index) => ciRun(String(index + 1))) : [] };
+        }
+        return { check_runs: endpoint.endsWith("page=1") ? Array.from({ length: 100 }, (_, index) => gate(index + 1, "100", "failure")) : [newest] };
+      });
+      expect(paged).toEqual({ runId: "300", url: newest.html_url });
+      expect(pages).toEqual([runsEndpoint(1), runsEndpoint(2), checkRunsEndpoint(1), checkRunsEndpoint(2)]);
+      // A head with more than ten full pages is not read partially.
+      const full = { check_runs: Array.from({ length: 100 }, (_, index) => gate(index + 1, "100", "failure")) };
+      await expect(mirrorEarlierGate(mirrorEnv, endpoint => endpoint.includes("/check-runs?") ? full : { workflow_runs: [] }))
+        .rejects.toThrow("more than 1000");
+    });
   });
 });
 
