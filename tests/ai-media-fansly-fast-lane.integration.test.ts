@@ -5,6 +5,7 @@ import {
   claimAiMediaAcceleratorRead,
   createFanslyPage,
   createModel,
+  ensureFanslyPageSendGuard,
   ensureSyncProviderRateLimitProfile,
   insertSyncRequestAttempt,
   requestAiMediaAcceleratorRead,
@@ -316,6 +317,42 @@ describe("Fansly fast lane", () => {
     expect((await reads()).map((row) => [row.lane, row.status, row.outcome, row.dispatched])).toEqual([["chunk", "pending", "handoff_page_cooldown", false]]);
     const admitted = await testDb!.pool.query(`select count(*)::int as n from ai_media_accelerator_reads where admitted_at is not null`);
     expect(admitted.rows[0].n).toBe(0);
+  });
+
+  it("hands the read back as held when the Fansly Sync Engine owns the page's send guard (design §2.7)", async () => {
+    await ensureFanslyPageSendGuard(app.db, pageId);
+    await testDb!.pool.query(
+      `update fansly_page_send_guards set owner_engine = 'fansly_sync_engine', engine_switched_at = clock_timestamp()
+        where page_id = $1`, [pageId],
+    );
+    const captures: string[] = [];
+    const staged = createFanslyFastLane(app, {
+      coalesceMs: 0,
+      sleep: async () => undefined,
+      readGeneration: async () => GENERATION,
+      resolveContext: async () => ({
+        page: page!, platform: "fansly", session: {} as never, proxy: null, egressKey: "socks5://proxy.example.internal:1080",
+      }) as unknown as ResolvedFanslyPageContext,
+      fetchHead: async (context, params) => {
+        captures.push(params.groupId);
+        // What the adapter does before the attempt starts: the page's
+        // send-guard capture, here against the real guard row.
+        const lease = await context.sendGuard.acquire({
+          operation: "messages", requestTimeoutMs: context.requestTimeoutMs ?? 5_000,
+        });
+        await lease.complete({ outcome: "aborted_before_send" });
+        throw new Error("the guard admitted a request for a page the engine owns");
+      },
+    });
+    staged.onCaptured(frameInput(mediaFrame("6301")));
+    await staged.idle();
+    await staged.stop();
+    expect(captures).toEqual([GROUP]);
+    expect((await reads()).map((row) => [row.lane, row.status, row.outcome, row.dispatched]))
+      .toEqual([["chunk", "pending", "handoff_page_held", false]]);
+    const journal = await testDb!.pool.query(`select count(*)::int as n from fansly_send_log where page_id = $1`, [pageId]);
+    expect(journal.rows[0].n).toBe(0);
+    expect(app.fanslySendGuards!.counters).toMatchObject({ captures: 0, engineOwnedRefusals: 1 });
   });
 });
 

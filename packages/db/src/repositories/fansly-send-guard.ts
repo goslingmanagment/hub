@@ -17,11 +17,23 @@ import type { Database } from "../client.ts";
 //     a confirmation that the holder's process is gone (`confirm…`, with
 //     next_u = 0.2, i.e. another 1.2 × S) does;
 //   - each capture and its journal row are one statement, so no capture exists
-//     without its journal row.
+//     without its journal row;
+//   - only a row the legacy engine owns (`owner_engine = 'legacy'`, 0229) can
+//     be captured: once the step-3 switch gave the page to the Fansly Sync
+//     Engine, every legacy capture is refused (`engine_owned`), in every
+//     process and from every source.
 
 /** u after seeding and after a confirmed termination: the next capture waits
  *  1.2 × S. Mirrors the 0225 seed. */
 export const FANSLY_SEND_GUARD_RESTART_U = 0.2;
+
+/** Who may capture a page's guard row (0229 `owner_engine`, its CHECK). Every
+ *  row is `legacy` until the step-3 switch flips it; only the switch and its
+ *  rollback change it. */
+export const FANSLY_SEND_GUARD_OWNER_ENGINES = ["legacy", "fansly_sync_engine"] as const;
+export type FanslySendGuardOwnerEngine = (typeof FANSLY_SEND_GUARD_OWNER_ENGINES)[number];
+/** The owner whose processes this module's capture serves. */
+export const FANSLY_SEND_GUARD_LEGACY_OWNER = "legacy" satisfies FanslySendGuardOwnerEngine;
 
 export interface FanslySendHolderIdentity {
   host: string;
@@ -62,7 +74,10 @@ export type CaptureFanslyPageSendGuardResult =
   | { kind: "pause"; waitMs: number }
   /** Held. `leaseExpired`: the holder overran its lease and the page is
    *  closed until it completes or its death is confirmed. */
-  | { kind: "busy"; leaseExpired: boolean; holder: FanslySendGuardHolderSummary };
+  | { kind: "busy"; leaseExpired: boolean; holder: FanslySendGuardHolderSummary }
+  /** The page belongs to the Fansly Sync Engine (0229): no legacy capture,
+   *  whatever the holder or the pause. Reported before `busy` and `pause`. */
+  | { kind: "engine_owned"; ownerEngine: string; engineSwitchedAt: Date | null };
 
 type HolderRow = {
   holderToken: string | null;
@@ -106,10 +121,11 @@ export async function ensureFanslyPageSendGuard(db: Database, pageId: number): P
 
 /**
  * Try to capture the page. On success the capture and its journal row are
- * written by ONE statement. Otherwise the row is read back to say why: held
- * (and whether the holder overran its lease) or the time left of the pause,
- * computed by the database clock. A page without a row gets one (seeded
- * closed for 1.2 × S) and reports that pause.
+ * written by ONE statement. Otherwise the row is read back to say why: owned
+ * by the Fansly Sync Engine, held (and whether the holder overran its lease)
+ * or the time left of the pause, computed by the database clock. A page
+ * without a row gets one (seeded closed for 1.2 × S, owned by the legacy
+ * engine) and reports that pause. A refusal writes nothing.
  */
 export async function captureFanslyPageSendGuard(
   db: Database,
@@ -135,6 +151,7 @@ export async function captureFanslyPageSendGuard(
              closed_at = null,
              updated_at = clock_timestamp()
        where g.page_id = ${input.pageId}
+         and g.owner_engine = 'legacy'
          and g.holder_token is null
          and clock_timestamp() >= g.last_completed_at
            + (${input.settingMs}::double precision * (1 + g.next_u)) * interval '1 millisecond'
@@ -160,8 +177,15 @@ export async function captureFanslyPageSendGuard(
     return { kind: "captured", journalId: row.journalId, jitterU: Number(row.jitterU), pauseMs: Number(row.pauseMs) };
   }
 
-  const state = await db.execute<HolderRow & { leaseExpired: boolean; remainingMs: number }>(sql`
-    select holder_token as "holderToken",
+  const state = await db.execute<HolderRow & {
+    ownerEngine: string;
+    engineSwitchedAt: Date | string | null;
+    leaseExpired: boolean;
+    remainingMs: number;
+  }>(sql`
+    select owner_engine as "ownerEngine",
+           engine_switched_at as "engineSwitchedAt",
+           holder_token as "holderToken",
            holder_source as "holderSource",
            holder_operation as "holderOperation",
            holder_host as "holderHost",
@@ -182,6 +206,13 @@ export async function captureFanslyPageSendGuard(
   if (!current) {
     await ensureFanslyPageSendGuard(db, input.pageId);
     return { kind: "pause", waitMs: 0 };
+  }
+  if (current.ownerEngine !== FANSLY_SEND_GUARD_LEGACY_OWNER) {
+    return {
+      kind: "engine_owned",
+      ownerEngine: current.ownerEngine,
+      engineSwitchedAt: toDate(current.engineSwitchedAt),
+    };
   }
   if (current.holderToken !== null) {
     return {
@@ -322,15 +353,22 @@ export interface FanslySendGuardRow {
   nextU: number;
   closedReason: string | null;
   closedAt: Date | null;
+  /** 0229: `legacy`, or `fansly_sync_engine` once the switch gave it away. */
+  ownerEngine: string;
+  engineSwitchedAt: Date | null;
   dbNow: Date;
 }
 
-type GuardSqlRow = Omit<FanslySendGuardRow, "pageId" | "capturedAt" | "leaseUntil" | "lastCompletedAt" | "closedAt" | "dbNow"> & {
+type GuardSqlRow = Omit<
+  FanslySendGuardRow,
+  "pageId" | "capturedAt" | "leaseUntil" | "lastCompletedAt" | "closedAt" | "engineSwitchedAt" | "dbNow"
+> & {
   pageId: string | number | bigint;
   capturedAt: Date | string | null;
   leaseUntil: Date | string | null;
   lastCompletedAt: Date | string;
   closedAt: Date | string | null;
+  engineSwitchedAt: Date | string | null;
   dbNow: Date | string;
 };
 
@@ -345,6 +383,7 @@ function normalizeGuardRow(row: GuardSqlRow): FanslySendGuardRow {
     leaseUntil: toDate(row.leaseUntil),
     lastCompletedAt: toDate(row.lastCompletedAt) as Date,
     closedAt: toDate(row.closedAt),
+    engineSwitchedAt: toDate(row.engineSwitchedAt),
     dbNow: toDate(row.dbNow) as Date,
   };
 }
@@ -369,6 +408,8 @@ const guardColumns = sql`
   g.next_u as "nextU",
   g.closed_reason as "closedReason",
   g.closed_at as "closedAt",
+  g.owner_engine as "ownerEngine",
+  g.engine_switched_at as "engineSwitchedAt",
   clock_timestamp() as "dbNow"
 `;
 

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
-import type { FanslySendHolderIdentity } from "../fansly-send-guard.ts";
+import type { FanslySendGuardOwnerEngine, FanslySendHolderIdentity } from "../fansly-send-guard.ts";
 import {
   generationParam,
   jsonParam,
@@ -36,7 +36,7 @@ export type SyncPageHoldKind = (typeof SYNC_PAGE_HOLD_KINDS)[number];
 export const SYNC_PAGE_OWNERSHIP_LOCK_NAMESPACE = 58_215;
 
 /** The step-1 guard row's owner once the switch flipped it (0229). */
-export const SYNC_ENGINE_GUARD_OWNER = "fansly_sync_engine";
+export const SYNC_ENGINE_GUARD_OWNER = "fansly_sync_engine" satisfies FanslySendGuardOwnerEngine;
 
 /** A registry key `<file>.<variant>` (= sync_work.resource). */
 export const SYNC_RESOURCE_KEY_PATTERN = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
@@ -472,7 +472,7 @@ export async function setSyncPageMode(
 export interface LockedSyncPage {
   mode: SyncPageMode;
   /** `fansly_page_send_guards.owner_engine` (0229); null without a guard row,
-   *  or before 0229 added the column. */
+   *  which closes the live gate like a `legacy` owner does. */
   ownerEngine: string | null;
 }
 
@@ -482,10 +482,6 @@ export interface LockedSyncPage {
  * capture) and refuse a foreign generation with `OwnershipLostError`. With
  * `live`, also the live gate (I17): the mode must be `live` and the step-1
  * guard row owned by the engine, else `LiveGateClosedError`.
- *
- * The guard owner is read through `to_jsonb(g)` so this statement stays valid
- * before 0229 adds the column: until then it reads null and every live
- * admission is refused (fail closed).
  */
 export async function lockOwnedPage(
   tx: Database,
@@ -495,7 +491,7 @@ export async function lockOwnedPage(
   const result = await tx.execute<{ mode: SyncPageMode; ownerGeneration: string; ownerEngine: string | null }>(sql`
     select sp.mode,
            sp.owner_generation::text as "ownerGeneration",
-           to_jsonb(g) ->> 'owner_engine' as "ownerEngine"
+           g.owner_engine as "ownerEngine"
       from sync_pages sp
       left join fansly_page_send_guards g on g.page_id = sp.page_id
      where sp.page_id = ${input.pageId}

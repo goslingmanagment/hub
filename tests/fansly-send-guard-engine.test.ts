@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 
 import {
+  FanslyPageOwnedBySyncEngineError,
   FanslyPageSendClosedError,
   FanslySendGuardStoppedError,
   FANSLY_SEND_BUSY_POLL_MS,
   FANSLY_SEND_LEASE_MARGIN_MS,
+  isFanslyPageOwnedBySyncEngineError,
 } from "../apps/runtime/src/services/fansly-send-guard/engine.ts";
 import {
   buildFanslySendHolderIdentity,
@@ -25,7 +27,7 @@ import {
   TEST_FANSLY_SEND_HOLDER,
 } from "./helpers/fansly-send-guard.ts";
 
-// The guard's state machine against an in-memory twin of the 0225 statements,
+// The guard's state machine against an in-memory twin of the 0225/0229 statements,
 // on a fake clock. The database-backed statements and the two-process
 // acceptance run are in tests/fansly-send-guard.integration.test.ts.
 
@@ -225,6 +227,87 @@ describe("one request in flight", () => {
     expect(Date.now() - confirmedAt).toBe(1.2 * S);
     expect(store.journal.find((row) => row.token === token)).toBeUndefined();
     await lease.complete({ outcome: "response", httpStatus: 200 });
+  });
+});
+
+describe("a page the Fansly Sync Engine owns (0229, design §2.7)", () => {
+  it("refuses at once, writes nothing and never loops, whatever the pause or the holder", async () => {
+    const warnings: string[] = [];
+    const store = new InMemoryFanslySendGuardStore(() => Date.now());
+    // Just completed: a legacy capture would have to wait 1.2 × S.
+    store.seed(PAGE, { lastCompletedAt: Date.now(), nextU: 0.2, ownerEngine: "fansly_sync_engine" });
+    const { registry } = createTestFanslySendGuards({
+      store,
+      settingMs: S,
+      clock: globalTimersFanslySendGuardClock,
+      logger: { info: () => undefined, warn: (_object, message) => warnings.push(message), error: () => undefined },
+    });
+    const captureSpy = vi.spyOn(store, "capture");
+    const startedAt = Date.now();
+
+    for (const source of ["sync_stream", "targeted_backfill", "ai_fast_lane", "ws_connect"] as const) {
+      const refused = await registry.forPage(PAGE, source)
+        .acquire({ operation: "messages", requestTimeoutMs: TIMEOUT_MS })
+        .catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(FanslyPageOwnedBySyncEngineError);
+      expect(refused).toMatchObject({ name: "FanslyPageOwnedBySyncEngineError", pageId: PAGE });
+    }
+    // No sleep, no poll: one capture statement per acquire, no time passed.
+    expect(captureSpy).toHaveBeenCalledTimes(4);
+    expect(Date.now()).toBe(startedAt);
+    expect(store.journal).toEqual([]);
+    expect(store.rows.get(PAGE)?.holderToken).toBeNull();
+    expect(registry.inflightCount).toBe(0);
+    expect(registry.counters).toMatchObject({ captures: 0, captureRefusals: 4, engineOwnedRefusals: 4, closedRefusals: 0 });
+    expect(warnings).toEqual(Array(4).fill("Fansly page is owned by the Fansly Sync Engine; the legacy sender stops"));
+  });
+
+  it("reports the engine before a holder or a pause", async () => {
+    const { guard, store, registry } = setup();
+    holdByOtherProcess(store, 60_000);
+    store.rows.get(PAGE)!.ownerEngine = "fansly_sync_engine";
+    await expect(guard.acquire({ operation: "a", requestTimeoutMs: TIMEOUT_MS }))
+      .rejects.toBeInstanceOf(FanslyPageOwnedBySyncEngineError);
+    expect(registry.counters).toMatchObject({ engineOwnedRefusals: 1, closedRefusals: 0 });
+  });
+
+  it("captures again 1.2 × S after a rollback hands the page back", async () => {
+    const { guard, store } = setup();
+    store.rows.get(PAGE)!.ownerEngine = "fansly_sync_engine";
+    await expect(guard.acquire({ operation: "a", requestTimeoutMs: TIMEOUT_MS }))
+      .rejects.toBeInstanceOf(FanslyPageOwnedBySyncEngineError);
+
+    // The rollback flip (design §2.8): last_completed_at = now, next_u = 0.2.
+    Object.assign(store.rows.get(PAGE)!, { ownerEngine: "legacy", lastCompletedAt: Date.now(), nextU: 0.2 });
+    const flippedAt = Date.now();
+    let captured = false;
+    const pending = guard.acquire({ operation: "a", requestTimeoutMs: TIMEOUT_MS }).then((lease) => {
+      captured = true;
+      return lease;
+    });
+    await vi.advanceTimersByTimeAsync(1.2 * S - 1);
+    expect(captured).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const lease = await pending;
+    expect(Date.now() - flippedAt).toBe(1.2 * S);
+    await lease.complete({ outcome: "response", httpStatus: 200 });
+  });
+
+  it("is recognised by name through a cause chain, and nothing else is", () => {
+    const refusal = new FanslyPageOwnedBySyncEngineError(PAGE, new Date("2026-10-01T10:00:00.000Z"));
+    expect(refusal.message).toBe(
+      `Fansly page ${PAGE} is owned by the Fansly Sync Engine since 2026-10-01T10:00:00.000Z: `
+        + "the legacy engine sends nothing for it",
+    );
+    expect(isFanslyPageOwnedBySyncEngineError(refusal)).toBe(true);
+    expect(isFanslyPageOwnedBySyncEngineError(new Error("wrapped", { cause: refusal }))).toBe(true);
+    const copy = Object.assign(new Error("from another module copy"), { name: "FanslyPageOwnedBySyncEngineError" });
+    expect(isFanslyPageOwnedBySyncEngineError(copy)).toBe(true);
+    expect(isFanslyPageOwnedBySyncEngineError(new FanslyPageSendClosedError(PAGE, {
+      token: "t", source: null, operation: null, host: null, pid: null, role: null, instance: null, leaseUntil: null,
+    }))).toBe(false);
+    expect(isFanslyPageOwnedBySyncEngineError("FanslyPageOwnedBySyncEngineError")).toBe(false);
+    expect(isFanslyPageOwnedBySyncEngineError(null)).toBe(false);
   });
 });
 

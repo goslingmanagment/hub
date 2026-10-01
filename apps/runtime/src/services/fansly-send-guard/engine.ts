@@ -35,6 +35,10 @@ import {
 //              poll about every 250 ms — or, when THIS process holds the page,
 //              wait for that request's completion locally. Refused because the
 //              holder overran its lease: the page is closed, and acquire fails.
+//              Refused because the page belongs to the Fansly Sync Engine
+//              (0229, the step-3 switch): acquire fails at once — a page-level
+//              stop of the legacy sender, never a failure of its thread or
+//              subject.
 //   send     — the bound dispatcher checks synchronously, right before the
 //              headers are written, that the lease is still live, unused and
 //              inside its send window, which is measured from the monotonic time
@@ -106,11 +110,13 @@ export interface FanslySendGuardLogger {
 
 export interface FanslySendGuardCounters {
   captures: number;
-  /** Capture attempts the database refused (pause or busy). */
+  /** Capture attempts the database refused (pause, busy or engine-owned). */
   captureRefusals: number;
   /** Dispatches the send check refused. */
   sendRefusals: number;
   closedRefusals: number;
+  /** Captures refused because the Fansly Sync Engine owns the page (0229). */
+  engineOwnedRefusals: number;
 }
 
 export interface FanslySendGuardRegistryDeps {
@@ -141,6 +147,35 @@ export class FanslyPageSendClosedError extends Error {
     );
     this.name = "FanslyPageSendClosedError";
   }
+}
+
+/** The page's guard row belongs to the Fansly Sync Engine (0229
+ *  `owner_engine`, flipped only by the step-3 switch): no legacy sender of any
+ *  process may send for the page. A page-level stop — callers never charge it
+ *  to a thread or subject (no `page_dm_message_sync_health` row). */
+export class FanslyPageOwnedBySyncEngineError extends Error {
+  constructor(readonly pageId: number, readonly engineSwitchedAt: Date | null = null) {
+    super(
+      `Fansly page ${pageId} is owned by the Fansly Sync Engine`
+        + `${engineSwitchedAt ? ` since ${engineSwitchedAt.toISOString()}` : ""}: `
+        + "the legacy engine sends nothing for it",
+    );
+    this.name = "FanslyPageOwnedBySyncEngineError";
+  }
+}
+
+/** Whether `error` (or anything in its cause chain) is the refusal of a page
+ *  the Fansly Sync Engine owns. Matched by name, so a refusal from another
+ *  copy of this module counts. */
+export function isFanslyPageOwnedBySyncEngineError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current.name === "FanslyPageOwnedBySyncEngineError") return true;
+    seen.add(current);
+    current = current.cause;
+  }
+  return false;
 }
 
 /** The process is shutting down: it starts no new Fansly request. */
@@ -303,6 +338,7 @@ export class FanslySendGuardRegistry {
     captureRefusals: 0,
     sendRefusals: 0,
     closedRefusals: 0,
+    engineOwnedRefusals: 0,
   };
   #stopped = false;
   readonly #inflight = new Set<GuardLease>();
@@ -472,6 +508,20 @@ export class FanslySendGuardRegistry {
 
       refusals += 1;
       this.counters.captureRefusals += 1;
+      if (result.kind === "engine_owned") {
+        // No retry loop: the page stays the engine's until a rollback, and
+        // the caller's stream is fenced anyway (design §2.7).
+        this.counters.engineOwnedRefusals += 1;
+        this.deps.logger.warn({
+          component: "fansly_send_guard",
+          pageId,
+          source,
+          operation: input.operation,
+          ownerEngine: result.ownerEngine,
+          engineSwitchedAt: result.engineSwitchedAt?.toISOString() ?? null,
+        }, "Fansly page is owned by the Fansly Sync Engine; the legacy sender stops");
+        throw new FanslyPageOwnedBySyncEngineError(pageId, result.engineSwitchedAt);
+      }
       if (result.kind === "pause") {
         // Exactly what the database says is left; at least 1 ms so a clock
         // edge cannot spin.
