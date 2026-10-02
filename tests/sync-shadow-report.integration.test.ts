@@ -453,9 +453,12 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContainEqual(expect.stringMatching(
       /ceiling 100 ok \(on assumed sizes, no finished run yet: catalog\.fixed 6\/24 h, dm-conversations\.full 1\/24 h, .*stats\.daily 15\/24 h.*; rule A1\.rate-assumed\)/,
     ));
-    // A mark makes one subject due: the next step asks for the walk.
+    // A mark makes one subject due: the next step asks for the walk. Due a
+    // second ago: the database's now() carries microseconds (and its own
+    // clock), the step's `new Date()` whole milliseconds — a mark at now()
+    // can read as not due yet when both fall in the same millisecond.
     await testDb.pool.query(
-      "update subject_refresh_state set next_due_at = now(), updated_at = now() where page_id = $1 and plane = 'fan_earnings_lifetime' and subject_ref = $2",
+      "update subject_refresh_state set next_due_at = now() - interval '1 second', updated_at = now() where page_id = $1 and plane = 'fan_earnings_lifetime' and subject_ref = $2",
       [page.pageId, spenders[0]],
     );
     expect((await step()).map((signal) => signal.resource)).toEqual(["fan-earnings.roster"]);
