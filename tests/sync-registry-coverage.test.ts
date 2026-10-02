@@ -153,10 +153,11 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a (account, subscribers, followers, fan-profiles), S2-09a (notifications, posts, post-replies) and S2-10 (dm-live) have landed; every other entry waits on its dependency", async () => {
+  it("S2-07a/b ship the audience and money resources, S2-09a the content resources, S2-10 dm-live; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
     expect([...new Set(implemented)].sort()).toEqual([
-      "account", "dm-live", "fan-profiles", "followers", "notifications", "post-replies", "posts", "subscribers",
+      "account", "dm-live", "fan-earnings", "fan-profiles", "followers", "notifications", "payouts", "post-replies",
+      "posts", "purchases", "subscribers", "top-spenders", "transactions",
     ]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
@@ -170,14 +171,38 @@ describe("the Fansly registry table", () => {
     expect(metrics.get("sync_not_implemented")).toBe(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).length);
   });
 
-  it("the implemented entries replay and import what design §5.1, §5.11–§5.13 say", async () => {
+  it("the implemented entries replay and import what design §5.1, §5.6–§5.13 say", async () => {
     const registry = createFanslyRegistry();
-    for (const key of ["account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup"]) {
+    for (const key of [
+      "account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup",
+      "transactions.head", "top-spenders.window", "fan-earnings.roster", "purchases.targets", "payouts.daily",
+    ]) {
       expect(typeof (await registry.module(key)).replay, key).toBe("function");
     }
-    for (const key of ["followers.head", "followers.reconcile"]) {
+    for (const key of [
+      "followers.head", "followers.reconcile", "transactions.rescan", "top-spenders.bootstrap", "purchases.targets",
+      "payouts.daily",
+    ]) {
       expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
     }
+    // Every money kind has its replay owner (design §3.12 B5).
+    expect(fanslyReplayOwner("earnings_transactions")?.key).toBe("transactions.head");
+    expect(fanslyReplayOwner("earnings_accounts")?.key).toBe("top-spenders.window");
+    expect(fanslyReplayOwner("fan_earnings_monthly")?.key).toBe("fan-earnings.roster");
+    expect(fanslyReplayOwner("purchase_history")?.key).toBe("purchases.targets");
+    expect(fanslyReplayOwner("payout_requests")?.key).toBe("payouts.daily");
+  });
+
+  it("the money entries: one walk row per purchase target, the earnings roster a queue walk, the 5-min insurance poll", () => {
+    const targets = byKey("purchases.targets");
+    expect(targets).toMatchObject({ subject: "target", kind: "goal", terminalStatuses: [404, 410, 422] });
+    expect(targets.subjectQueue).toBeUndefined();
+    const roster = byKey("fan-earnings.roster");
+    expect(roster).toMatchObject({ subjectQueue: true, terminalStatuses: [400, 404, 410], kind: "goal" });
+    expect(roster.triggers).toContain("apply:transactions.*");
+    expect(byKey("transactions.rescan").triggers).toContain("apply:transactions.head");
+    expect(byKey("top-spenders.window").period?.everyMs).toBe(6 * 3_600_000);
+    expect(byKey("payouts.daily").operations).toEqual(["payouts.methods", "payouts.requests"]);
   });
 
   it("the content entries replay their kinds and import their legacy cursors (design §5.14–§5.16)", async () => {

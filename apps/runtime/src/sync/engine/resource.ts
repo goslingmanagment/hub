@@ -252,14 +252,15 @@ export interface ResourceModule<C = unknown> {
    *  live work starts from. */
   importLegacy?(tx: Database, page: { pageId: number }): Promise<LegacyImport>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue
-   *  row). `request` names the subject(s) the failed step asked for; the
-   *  breaker fields are the work row's ladder, which a queue walk replaces by
-   *  its own queue row's (design §4.3). Runs in the capture transaction. */
+   *  row). `step.request` names the subject(s) the failed step asked for (the
+   *  walk row's own subject is the page's); the breaker fields are the work
+   *  row's ladder, which a queue walk replaces by its own queue row's (design
+   *  §4.3). Runs in the capture transaction. */
   onSubjectOutcome?(
     tx: Database,
     work: SyncWorkRow,
     outcome: { kind: "failure" | "terminal" | "ok"; failureCount: number; breakerUntil: Date | null; blockedByVendorAt: Date | null },
-    request: RequestPlan,
+    step: { request: RequestPlan; attemptId: number },
   ): Promise<void>;
 }
 

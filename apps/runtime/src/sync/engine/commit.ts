@@ -735,8 +735,8 @@ interface OutcomeTarget {
   /** The work's demand revision the attempt served (I11). */
   demandRevision: number;
   subjectQueue: boolean;
-  /** The request the attempt sent (a queue walk's subject is in it). */
-  request: RequestPlan | null;
+  /** The request the attempt sent (a subject-queue walk's subject). */
+  request: RequestPlan;
 }
 
 async function writeOutcomeDecision(
@@ -768,7 +768,7 @@ async function writeOutcomeDecision(
   const work = target.work;
   if (work === null) return;
   const subjectQueue = target.subjectQueue;
-  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined && target.request !== null) {
+  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
     // A breaker reset (an answer after failures) is an `ok`, never a failure.
     const breakerReset = !decision.subjectBreaker.terminal && decision.subjectBreaker.failureCount === 0;
     await module.onSubjectOutcome(tx, work, {
@@ -776,7 +776,7 @@ async function writeOutcomeDecision(
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
-    }, target.request);
+    }, { request: target.request, attemptId: target.attemptId });
   }
   const breaker = !subjectQueue && decision.subjectBreaker !== null
     ? {

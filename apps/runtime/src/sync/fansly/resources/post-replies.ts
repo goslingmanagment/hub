@@ -363,11 +363,11 @@ const walkModule: ResourceModule = {
     };
   },
 
-  async onSubjectOutcome(tx, work, outcome, request): Promise<void> {
+  async onSubjectOutcome(tx, work, outcome, step): Promise<void> {
     // A terminal answer climbs the same ladder: the walk row reopens at once,
     // so a post left due would be asked again and again.
     if (outcome.kind === "ok") return;
-    const { postId } = repliesParams(request);
+    const { postId } = repliesParams(step.request);
     if (postId.length === 0) return;
     await recordQueueSubjectFailures(tx, { pageId: work.pageId, plane: POST_REPLIES_QUEUE.plane, subjectRefs: [postId], now: new Date() });
   },
