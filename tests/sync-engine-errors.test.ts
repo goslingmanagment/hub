@@ -11,11 +11,14 @@ import {
   classifyWireOutcome,
   combinePageHold,
   INDEFINITE_UNTIL,
+  endpointRateGroupOfRoute,
   LIST_RATE_LIMIT_HELD_KEYS,
   LIST_RATE_LIMIT_LADDER_MS,
   LIST_RATE_LIMIT_LADDER_RESET_MS,
   listRateLimitHold,
   listRateLimitStep,
+  MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
+  MEDIA_STATS_SPACING_MS,
   NETWORK_ALERT_AFTER_MS,
   NETWORK_FAILURES_TO_PAUSE,
   NETWORK_PAUSE_LADDER_MS,
@@ -468,6 +471,110 @@ describe("sync errors: a 429 on the conversation list", () => {
 
   it("pins the owner's list constants", () => {
     expect(LIST_RATE_LIMIT_LADDER_MS).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000]);
+  });
+});
+
+// Owner decision №20 (2026-10-02, lilly-1's 429 at 21:12:04 UTC): the media
+// statistics are read like the conversation list (№14) — a 429 on their route
+// holds only the media-stats walk, on the list's ladder, never the page.
+describe("sync errors: a 429 on the media statistics", () => {
+  const statsSpec = fanslyWireSpec("media.offer_stats");
+  const statsParams = { mediaOfferId: "777", beforeMs: NOW.getTime(), afterMs: NOW.getTime() - 31 * 86_400_000, periodMs: 86_400_000 };
+  const statsHold = (entry: Partial<ResourceHoldEntry> & { until: string }): PageErrorState => pageState({
+    resourceHolds: {
+      "media-stats": { step: 1, since: at(-MIN).toISOString(), kind: "rate_limit_media_stats", ...entry },
+    },
+  });
+
+  it("is the media statistics' rate limit; the list's and any other route's 429 stay theirs", () => {
+    const stats = classifyWireOutcome(answer(429, "", { "retry-after": "9" }), statsSpec, statsParams as never, { now: NOW });
+    expect(stats).toMatchObject({ errorClass: "rate_limit_media_stats", httpStatus: 429, retryAfterMs: 9_000 });
+    expect(classifyWireOutcome(answer(429, ""), fanslyWireSpec("messaging.groups"), { offset: 0 }, { now: NOW }).errorClass)
+      .toBe("rate_limit_list");
+    expect(classifyWireOutcome(answer(429, ""), fanslyWireSpec("account.stats"), statsParams as never, { now: NOW }).errorClass)
+      .toBe("rate_limit");
+    // A 5xx naming its deadline is still the page's pace.
+    expect(classifyWireOutcome(answer(503, "", { "retry-after": "30" }), statsSpec, statsParams as never, { now: NOW }).errorClass)
+      .toBe("rate_limit");
+    expect(endpointRateGroupOfRoute("media.offer_stats")).toMatchObject({ spacingMs: MEDIA_STATS_SPACING_MS, file: "media-stats" });
+    expect(MEDIA_STATS_SPACING_MS).toBe(5_000);
+  });
+
+  it("holds only the media-stats walk, never the page: Retry-After, else 5 → 10 → … → 300 s", () => {
+    let entry: ResourceHoldEntry | undefined;
+    const seconds: number[] = [];
+    const alerted: boolean[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const decision = onOutcome(input("rate_limit_media_stats", {
+        resource: "media-stats.walk",
+        subject: "",
+        httpStatus: 429,
+        subjectQueue: true,
+        page: pageState({ resourceHolds: entry === undefined ? {} : { "media-stats": entry } }),
+      }));
+      expect(decision.pageHold).toEqual({ action: "keep" });
+      expect(decision.subjectBreaker).toBeNull();
+      if (decision.resourceHold.action !== "set") throw new Error("no media-stats hold");
+      expect(decision.resourceHold).toMatchObject({ file: "media-stats", kind: "rate_limit_media_stats", lastRateLimitAt: NOW });
+      expect(decision.work).toEqual({
+        action: "reopen", dueAt: decision.resourceHold.until, waitingReason: "resource_hold", waitingUntil: decision.resourceHold.until,
+      });
+      seconds.push((decision.resourceHold.until.getTime() - NOW.getTime()) / 1_000);
+      alerted.push(decision.alerts.length > 0);
+      entry = {
+        until: at(-1).toISOString(), step: decision.resourceHold.step, since: NOW.toISOString(),
+        kind: "rate_limit_media_stats", lastRateLimitAt: at(-1_000).toISOString(),
+      };
+    }
+    expect(seconds).toEqual([5, 10, 20, 40, 80, 160, 300, 300]);
+    expect(alerted).toEqual([false, false, false, false, false, false, true, true]);
+    const top = onOutcome(input("rate_limit_media_stats", { resource: "media-stats.walk", httpStatus: 429, page: statsHold({
+      until: at(-1).toISOString(), step: 6, lastRateLimitAt: at(-1_000).toISOString(),
+    }) }));
+    expect(top.alerts).toEqual([{ subKey: "page_stopped", detail: "rate_limit_media_stats" }]);
+    // Retry-After as stated; a hold in force is never shortened.
+    const stated = onOutcome(input("rate_limit_media_stats", { resource: "media-stats.walk", httpStatus: 429, retryAfterMs: 42_000 }));
+    expect(stated.resourceHold).toMatchObject({ action: "set", file: "media-stats", until: at(42_000), step: 1 });
+    const short = onOutcome(input("rate_limit_media_stats", {
+      resource: "media-stats.walk", httpStatus: 429, retryAfterMs: 1_000,
+      page: statsHold({ until: at(30_000).toISOString(), lastRateLimitAt: at(-1_000).toISOString() }),
+    }));
+    expect(short.resourceHold).toMatchObject({ action: "set", until: at(30_000), step: 2 });
+    // A list hold of the page is another group's: the media-stats ladder starts at its own first step.
+    const besideList = onOutcome(input("rate_limit_media_stats", { resource: "media-stats.walk", httpStatus: 429, page: pageState({
+      resourceHolds: { "dm-conversations": { until: at(MIN).toISOString(), step: 5, since: NOW.toISOString(), kind: "rate_limit_list", lastRateLimitAt: NOW.toISOString() } },
+    }) }));
+    expect(besideList.resourceHold).toMatchObject({ action: "set", file: "media-stats", until: at(5_000), step: 1 });
+  });
+
+  it("stops only the media-stats walk; the list, live messages and money are not held", () => {
+    const holds = { "media-stats": { until: at(5_000).toISOString(), step: 1, since: NOW.toISOString(), kind: "rate_limit_media_stats" as const } };
+    for (const key of MEDIA_STATS_RATE_LIMIT_HELD_KEYS) {
+      expect(activeResourceHold(holds, key, NOW), key)
+        .toEqual({ file: "media-stats", until: at(5_000), step: 1, kind: "rate_limit_media_stats" });
+    }
+    for (const key of ["dm-messages.head", "transactions.head", "dm-conversations.head", "stats.daily", "catalog.vault"]) {
+      expect(activeResourceHold(holds, key, NOW), key).toBeNull();
+    }
+    expect(activeResourceHold(holds, "media-stats.walk", at(5_000))).toBeNull();
+    // The list's own hold is unchanged by the media-stats one.
+    expect(listRateLimitHold(holds, NOW)).toBeNull();
+  });
+
+  it("an expired media-stats hold stays until its ladder resets; a breaker of the file replaces it", () => {
+    const recent = statsHold({ until: at(-1).toISOString(), lastRateLimitAt: at(-MIN).toISOString() });
+    expect(onOutcome(input("ok", { resource: "media-stats.walk", page: recent })).resourceHold).toEqual({ action: "keep" });
+    const quiet = statsHold({ until: at(-1).toISOString(), lastRateLimitAt: at(-LIST_RATE_LIMIT_LADDER_RESET_MS).toISOString() });
+    expect(onOutcome(input("ok", { resource: "media-stats.walk", page: quiet })).resourceHold).toEqual({ action: "clear", file: "media-stats" });
+    expect(listRateLimitStep({ until: at(-1).toISOString(), step: 3, since: NOW.toISOString(), kind: "rate_limit_media_stats", lastRateLimitAt: at(-MIN).toISOString() }, NOW))
+      .toBe(3);
+    const inForce = statsHold({ until: at(10_000).toISOString(), lastRateLimitAt: NOW.toISOString() });
+    const escalated = onOutcome(input("subject_failure", { resource: "media-stats.walk", recentFailedSubjects: 5, page: inForce }));
+    expect(escalated.resourceHold).toEqual({ action: "set", file: "media-stats", until: at(30 * MIN), step: 1 });
+    const breaker = pageState({ resourceHolds: { "media-stats": { until: at(20 * MIN).toISOString(), step: 1, since: NOW.toISOString() } } });
+    const kept = onOutcome(input("rate_limit_media_stats", { resource: "media-stats.walk", httpStatus: 429, page: breaker }));
+    expect(kept.resourceHold).toEqual({ action: "keep" });
+    expect(kept.work).toEqual({ action: "reopen", dueAt: at(20 * MIN), waitingReason: "resource_hold", waitingUntil: at(20 * MIN) });
   });
 });
 

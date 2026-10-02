@@ -1,6 +1,7 @@
 import type { FanslyWireOutcome, FanslyWireRead, FanslyWireSpec } from "@agency_hub_core/fansly";
 import { readFanslyWireResponse } from "@agency_hub_core/fansly";
 import { parseRetryAfterDelayMsUnclamped } from "@agency_hub_core/shared";
+import type { SyncEndpointHoldKind } from "@agency_hub_core/db";
 
 import type { SyncAlertSubKey } from "./ports.ts";
 
@@ -15,8 +16,9 @@ import type { SyncAlertSubKey } from "./ports.ts";
 //
 // The commit transactions write the decisions; nothing here touches the
 // database. The pause setting S is never changed by the engine: a 429 holds
-// the page and alerts the owner, who decides — except a 429 on the
-// conversation list, which holds only the list (owner decision 2026-10-02).
+// the page and alerts the owner, who decides — except a 429 on an endpoint
+// group with a quota of its own (the conversation list, owner decision №14;
+// the media statistics, owner decision №20), which holds only that group.
 //
 // Changing the reaction to 429 / 5xx is this file plus tests/sync-errors.test.ts
 // (plan §12).
@@ -78,6 +80,82 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Owner decision №20 (2026-10-02, after lilly-1's 429 at 21:12:04 UTC: the
+ * walk read `/it/moie/statsnew` at the page pace, ≈ 22 a minute): per-media
+ * statistics are read like the conversation list (№14). A 429 on this route
+ * holds only the keys that read it — `resource_holds['media-stats']` with kind
+ * `rate_limit_media_stats`, the list's ladder — never the page; and two
+ * requests on it are at least `MEDIA_STATS_SPACING_MS` apart on one page, on
+ * top of the page pause S.
+ */
+export const MEDIA_STATS_RATE_LIMIT_ROUTE = "media.offer_stats";
+/** The `resource_holds` entry the media-stats hold lives in. */
+export const MEDIA_STATS_RATE_LIMIT_FILE = "media-stats";
+/** The keys a media-stats hold stops: every key that reads the route (pinned
+ *  against the registry by tests/sync-registry-coverage.test.ts). */
+export const MEDIA_STATS_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set(["media-stats.walk"]);
+/** One request on the media-stats route per this long per page, at most. */
+export const MEDIA_STATS_SPACING_MS = 5_000;
+
+/** The kind of an endpoint group's own 429 hold, and its error class. */
+export type EndpointRateLimitKind = SyncEndpointHoldKind;
+
+/**
+ * An endpoint group with a quota of its own (owner decisions №14, №20): a 429
+ * on any of its routes holds only its keys (until `Retry-After`, else
+ * `LIST_RATE_LIMIT_LADDER_MS` by consecutive 429s of the group), in its own
+ * `resource_holds` entry; with `spacingMs`, the engine admits a request on its
+ * routes no sooner than that after the page's previous one there (the
+ * attempt journal is the clock: demand bumps, a restarted walk and a process
+ * restart all read it).
+ */
+export interface EndpointRateGroup {
+  kind: EndpointRateLimitKind;
+  /** Wire spec ids. */
+  routes: ReadonlySet<string>;
+  /** The `resource_holds` entry its hold lives in. */
+  file: string;
+  /** The keys its hold stops. */
+  heldKeys: ReadonlySet<string>;
+  /** The engine's spacing of two requests on its routes per page; null: none
+   *  (the list's is `repair.ws-gap`'s own, owner decision №14 unchanged). */
+  spacingMs: number | null;
+}
+
+export const LIST_RATE_GROUP: EndpointRateGroup = {
+  kind: "rate_limit_list",
+  routes: new Set([LIST_RATE_LIMIT_ROUTE]),
+  file: LIST_RATE_LIMIT_FILE,
+  heldKeys: LIST_RATE_LIMIT_HELD_KEYS,
+  spacingMs: null,
+};
+
+export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
+  kind: "rate_limit_media_stats",
+  routes: new Set([MEDIA_STATS_RATE_LIMIT_ROUTE]),
+  file: MEDIA_STATS_RATE_LIMIT_FILE,
+  heldKeys: MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
+  spacingMs: MEDIA_STATS_SPACING_MS,
+};
+
+export const ENDPOINT_RATE_GROUPS: readonly EndpointRateGroup[] = [LIST_RATE_GROUP, MEDIA_STATS_RATE_GROUP];
+
+export function isEndpointRateLimitKind(value: unknown): value is EndpointRateLimitKind {
+  return ENDPOINT_RATE_GROUPS.some((group) => group.kind === value);
+}
+
+/** The endpoint group of a wire route, or null. */
+export function endpointRateGroupOfRoute(route: string): EndpointRateGroup | null {
+  return ENDPOINT_RATE_GROUPS.find((group) => group.routes.has(route)) ?? null;
+}
+
+export function endpointRateGroupOfKind(kind: EndpointRateLimitKind): EndpointRateGroup {
+  const group = ENDPOINT_RATE_GROUPS.find((candidate) => candidate.kind === kind);
+  if (group === undefined) throw new Error(`No endpoint group of kind ${kind}`);
+  return group;
+}
+
+/**
  * The identity checks (step-3 §3.5 item 3, G1/G14): the only keys the live
  * transport sends while the page's stored credentials are not the ones the
  * engine verified — they are the check — and the actor picks nothing else
@@ -95,6 +173,7 @@ export type ErrorClass =
   | "ok"
   | "rate_limit"
   | "rate_limit_list"
+  | "rate_limit_media_stats"
   | "auth"
   | "identity_mismatch"
   | "subject_failure"
@@ -138,6 +217,7 @@ export interface ClassifiedOutcome<R> {
  * | the dispatch was refused / cancelled before sending | `not_sent` |
  * | transport error, timeout, 408                       | `network` |
  * | 429 on the conversation list (`messaging.groups`)   | `rate_limit_list` (the list's quota, the list only) |
+ * | 429 on the media statistics (`media.offer_stats`)   | `rate_limit_media_stats` (their quota, the walk only) |
  * | 429; a 5xx naming its own deadline (`Retry-After`)  | `rate_limit` (the provider's pace, page-wide) |
  * | 401 / 403 the resource declares about its subject   | `subject_terminal` (design G16: a CDN hop's signed URL, an excluded chat) |
  * | 401 / 403                                           | `auth` |
@@ -182,7 +262,7 @@ export function classifyWireOutcome<P, R>(
     retryAfterMs,
     read,
   });
-  if (status === 429) return classified(spec.id === LIST_RATE_LIMIT_ROUTE ? "rate_limit_list" : "rate_limit");
+  if (status === 429) return classified(endpointRateGroupOfRoute(spec.id)?.kind ?? "rate_limit");
   if (status === 401 || status === 403) {
     // Before the page-wide `auth`: a status the resource declares about its
     // subject closes that subject with a receipt and holds nothing (G16).
@@ -211,18 +291,18 @@ export function classifyWireOutcome<P, R>(
 // ── decisions ───────────────────────────────────────────────────────────────
 
 /** `sync_pages.resource_holds[<file>]`: the §9 resource breaker of the file
- *  (no `kind`), or the list's own 429 hold (`kind: 'rate_limit_list'`, which
- *  stops only `LIST_RATE_LIMIT_HELD_KEYS`). */
+ *  (no `kind`), or an endpoint group's own 429 hold (its `kind`, which stops
+ *  only the group's `heldKeys`). */
 export interface ResourceHoldEntry {
   until: string;
   step: number;
   since: string;
-  kind?: "rate_limit_list";
-  /** The newest list 429 (the ladder's reset clock); list holds only. */
+  kind?: EndpointRateLimitKind;
+  /** The group's newest 429 (the ladder's reset clock); group holds only. */
   lastRateLimitAt?: string;
 }
 
-export type ResourceHoldKind = "breaker" | "rate_limit_list";
+export type ResourceHoldKind = "breaker" | EndpointRateLimitKind;
 
 /** The page fields `onOutcome` reads; names follow the `sync_pages` row. */
 export interface PageErrorState {
@@ -311,7 +391,7 @@ export type ResourceHoldDecision =
     until: Date;
     step: number;
     /** Absent for the resource breaker. */
-    kind?: "rate_limit_list";
+    kind?: EndpointRateLimitKind;
     lastRateLimitAt?: Date;
   }
   | { action: "clear"; file: string };
@@ -352,30 +432,40 @@ function inForce(entry: ResourceHoldEntry | undefined, now: Date): Date | null {
   return Number.isNaN(until.getTime()) || until.getTime() <= now.getTime() ? null : until;
 }
 
+/** An endpoint group's own 429 hold in force now, or null. */
+export function endpointRateLimitHold(
+  holds: Readonly<Record<string, ResourceHoldEntry>>,
+  group: EndpointRateGroup,
+  now: Date,
+): { until: Date; step: number } | null {
+  const entry = holds[group.file];
+  if (entry?.kind !== group.kind) return null;
+  const until = inForce(entry, now);
+  return until === null ? null : { until, step: entry.step };
+}
+
 /** The list's own 429 hold in force now, or null. */
 export function listRateLimitHold(
   holds: Readonly<Record<string, ResourceHoldEntry>>,
   now: Date,
 ): { until: Date; step: number } | null {
-  const entry = holds[LIST_RATE_LIMIT_FILE];
-  if (entry?.kind !== "rate_limit_list") return null;
-  const until = inForce(entry, now);
-  return until === null ? null : { until, step: entry.step };
+  return endpointRateLimitHold(holds, LIST_RATE_GROUP, now);
 }
 
-/** The list ladder position to use now: the entry's, or 0 after
- *  `LIST_RATE_LIMIT_LADDER_RESET_MS` without a list 429 (or with no list
- *  entry at all). */
+/** An endpoint group's ladder position to use now: the entry's, or 0 after
+ *  `LIST_RATE_LIMIT_LADDER_RESET_MS` without a 429 of the group (or with no
+ *  group entry at all). */
 export function listRateLimitStep(entry: ResourceHoldEntry | undefined, now: Date): number {
-  if (entry?.kind !== "rate_limit_list" || entry.lastRateLimitAt === undefined) return 0;
+  if (!isEndpointRateLimitKind(entry?.kind) || entry?.lastRateLimitAt === undefined) return 0;
   const last = new Date(entry.lastRateLimitAt);
   if (Number.isNaN(last.getTime()) || now.getTime() - last.getTime() >= LIST_RATE_LIMIT_LADDER_RESET_MS) return 0;
   return Math.max(0, Math.trunc(entry.step));
 }
 
 /** The resource hold that stops `resource` now, or null: its file's breaker
- *  (exempt keys are never stopped by it), or the list's 429 hold for the keys
- *  that can only read the list. */
+ *  (exempt keys are never stopped by it), or an endpoint group's 429 hold for
+ *  the group's keys (the keys that can only read the list; the media-stats
+ *  walk). */
 export function activeResourceHold(
   holds: Readonly<Record<string, ResourceHoldEntry>>,
   resource: string,
@@ -384,13 +474,14 @@ export function activeResourceHold(
   if (isResourceHoldExempt(resource)) return null;
   const file = resourceFileOf(resource);
   const entry = holds[file];
-  if (entry !== undefined && entry.kind !== "rate_limit_list") {
+  if (entry !== undefined && !isEndpointRateLimitKind(entry.kind)) {
     const until = inForce(entry, now);
     if (until !== null) return { file, until, step: entry.step, kind: "breaker" };
   }
-  if (LIST_RATE_LIMIT_HELD_KEYS.has(resource)) {
-    const list = listRateLimitHold(holds, now);
-    if (list !== null) return { file: LIST_RATE_LIMIT_FILE, until: list.until, step: list.step, kind: "rate_limit_list" };
+  for (const group of ENDPOINT_RATE_GROUPS) {
+    if (!group.heldKeys.has(resource)) continue;
+    const held = endpointRateLimitHold(holds, group, now);
+    if (held !== null) return { file: group.file, until: held.until, step: held.step, kind: group.kind };
   }
   return null;
 }
@@ -605,9 +696,9 @@ const KEEP_RESOURCE: ResourceHoldDecision = { action: "keep" };
  * (plan §9): the resource breaker, and a wrong transactions writer found by an
  * apply (design §3.7.3, §5.6). A hold still in force is kept; an expired entry
  * still on the row means the trouble came back before any success cleared it,
- * so the ladder climbs. Exempt keys never take a hold. A list 429 hold in the
- * same entry is replaced: the breaker stops the whole file, the list included,
- * for longer than the list ladder's top.
+ * so the ladder climbs. Exempt keys never take a hold. An endpoint group's 429
+ * hold in the same entry is replaced: the breaker stops the whole file, the
+ * group's keys included, for longer than the group ladder's top.
  */
 export function escalateResourceHold(
   holds: Readonly<Record<string, ResourceHoldEntry>>,
@@ -617,7 +708,7 @@ export function escalateResourceHold(
   if (isResourceHoldExempt(resource)) return KEEP_RESOURCE;
   const file = resourceFileOf(resource);
   const entry = holds[file];
-  const current = entry?.kind === "rate_limit_list" ? undefined : entry;
+  const current = isEndpointRateLimitKind(entry?.kind) ? undefined : entry;
   if (inForce(current, now) !== null) return KEEP_RESOURCE;
   const step = current === undefined ? 0 : Math.max(0, current.step);
   return { action: "set", file, until: later(now, ladder(RESOURCE_HOLD_LADDER_MS, step)), step: step + 1 };
@@ -657,10 +748,11 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       const staleHold = page.holdKind !== null && !holdInForce;
       const file = resourceFileOf(input.resource);
       const entry = page.resourceHolds[file];
-      // An expired list hold stays on the row until its ladder resets: the
-      // next list 429 within the reset window climbs from where it was.
+      // An expired endpoint group hold stays on the row until its ladder
+      // resets: the group's next 429 within the reset window climbs from
+      // where it was.
       const resourceExpired = entry !== undefined && inForce(entry, now) === null &&
-        (entry.kind !== "rate_limit_list" || listRateLimitStep(entry, now) === 0);
+        (!isEndpointRateLimitKind(entry.kind) || listRateLimitStep(entry, now) === 0);
       const breakerSet = input.subjectState.failureCount !== 0 ||
         input.subjectState.breakerUntil !== null ||
         input.subjectState.blockedByVendorAt !== null;
@@ -740,12 +832,15 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       };
     }
 
-    case "rate_limit_list": {
-      // The list's quota, not the page's: only the list waits. A breaker hold
-      // of the file in force already stops more, for longer: it stays.
-      const held = LIST_RATE_LIMIT_HELD_KEYS.has(input.resource);
-      const current = page.resourceHolds[LIST_RATE_LIMIT_FILE];
-      const breakerUntil = current?.kind === "rate_limit_list" ? null : inForce(current, now);
+    case "rate_limit_list":
+    case "rate_limit_media_stats": {
+      // The group's quota, not the page's: only the group's keys wait (the
+      // list's; the media-stats walk). A breaker hold of the file in force
+      // already stops more, for longer: it stays.
+      const group = endpointRateGroupOfKind(input.errorClass);
+      const held = group.heldKeys.has(input.resource);
+      const current = page.resourceHolds[group.file];
+      const breakerUntil = current?.kind === group.kind ? null : inForce(current, now);
       if (breakerUntil !== null) {
         return {
           ...base,
@@ -755,29 +850,29 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
             : reopenNow,
         };
       }
-      const step = listRateLimitStep(current, now);
+      const step = listRateLimitStep(current?.kind === group.kind ? current : undefined, now);
       const holdMs = input.retryAfterMs ?? ladder(LIST_RATE_LIMIT_LADDER_MS, step);
-      const listInForce = listRateLimitHold(page.resourceHolds, now);
+      const groupInForce = endpointRateLimitHold(page.resourceHolds, group, now);
       let until = later(now, Math.max(0, holdMs));
-      if (listInForce !== null && listInForce.until.getTime() > until.getTime()) until = listInForce.until;
+      if (groupInForce !== null && groupInForce.until.getTime() > until.getTime()) until = groupInForce.until;
       // Alert 1 only when the hold reaches the ladder's top (sustained), never
-      // on a single list 429.
+      // on a single 429 of the group.
       const sustained = step >= LIST_RATE_LIMIT_LADDER_MS.length - 1;
       return {
         ...base,
         networkFailureStreak: streakReset,
         resourceHold: {
           action: "set",
-          file: LIST_RATE_LIMIT_FILE,
+          file: group.file,
           until,
           step: step + 1,
-          kind: "rate_limit_list",
+          kind: group.kind,
           lastRateLimitAt: now,
         },
-        // A key that can only read the list is due again at the hold's end (no
-        // immediate retry); `.find` goes on to `group.detail` at once.
+        // A key the hold stops is due again at the hold's end (no immediate
+        // retry); `.find` goes on to `group.detail` at once.
         work: held ? { action: "reopen", dueAt: until, waitingReason: "resource_hold", waitingUntil: until } : reopenNow,
-        alerts: sustained ? [{ subKey: "page_stopped", detail: "rate_limit_list" }] : [],
+        alerts: sustained ? [{ subKey: "page_stopped", detail: group.kind }] : [],
       };
     }
 

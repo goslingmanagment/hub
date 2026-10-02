@@ -655,6 +655,28 @@ export async function commitNoHttp(
   }
 }
 
+/**
+ * A request an endpoint group's spacing puts off (owner decision №20): nothing
+ * is admitted or sent, the slot stays open for other work, and the row is due
+ * again when the spacing ends (`waiting_reason = 'pacer'`: it waits for its
+ * endpoint's pace, not for its schedule). A demand bump pulls it forward; its
+ * next plan meets the same spacing.
+ */
+export async function deferForEndpointSpacing(d: CommitDeps, work: SyncWorkRow, until: Date): Promise<void> {
+  await inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    await settleWork(tx, {
+      workId: work.id,
+      generation: d.generation,
+      servedRevision: work.demandRevision,
+      satisfiesRevision: false,
+      nextDueAt: until,
+      waitingReason: "pacer",
+      waitingUntil: until,
+    });
+  });
+}
+
 /** A `local` step whose erasure fence is busy waits this long (an erasure in
  *  flight holds the fence for seconds). */
 export const LOCAL_FENCE_BUSY_RETRY_MS = 1_000;
@@ -1028,6 +1050,9 @@ export async function capture(
   if (committed.decision === null) return { applyNow: false, inMemory: null };
   if (committed.decision.errorClass === "rate_limit_list") {
     d.metrics.increment("sync_list_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
+  }
+  if (committed.decision.errorClass === "rate_limit_media_stats") {
+    d.metrics.increment("sync_media_stats_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
   }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4): this send against the page's previous

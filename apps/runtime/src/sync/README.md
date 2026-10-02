@@ -401,7 +401,11 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
 transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
-except a 429 on the conversation list, which holds only the list (owner decision 2026-10-02).
+except a 429 on an endpoint group with a quota of its own (`ENDPOINT_RATE_GROUPS`): the conversation list (owner
+decision №14) and the media statistics (owner decision №20), which holds only that group's keys. The media
+statistics are also spaced: the actor admits a request on `media.offer_stats` no sooner than 5 s after the page's
+previous one there (by the attempt journal, on top of `S`; a put-off row waits with `waiting_reason = 'pacer'`
+while other work takes the slot).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -410,6 +414,7 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
 | 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
+| 429 on the media statistics (`media.offer_stats`) | `rate_limit_media_stats` | `media-stats.walk` only (`resource_holds['media-stats']`): the list's rule and ladder — until `Retry-After`, else 5 s → … → 300 s, reset after 10 min without one; alert 1 only at the 300 s step |
 | any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
 | 401 / 403 | `auth` | page hold until new credentials, alert 1 |

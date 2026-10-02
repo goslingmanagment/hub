@@ -186,6 +186,18 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(list(LIST_RATE_LIMIT_LADDER_MS.length))).toEqual({ page_stopped: "rate_limit_list" });
   });
 
+  it("alert 1: the media statistics' 429 hold pages only at the top of its ladder (owner decision №20)", () => {
+    const stats = (step: number) => facts({
+      page: {
+        resourceHolds: {
+          "media-stats": { kind: "rate_limit_media_stats", until: at(MINUTE).toISOString(), step, since: at(-10 * MINUTE).toISOString() },
+        },
+      },
+    });
+    expect(evaluate(stats(LIST_RATE_LIMIT_LADDER_MS.length - 1))).toEqual({});
+    expect(evaluate(stats(LIST_RATE_LIMIT_LADDER_MS.length))).toEqual({ page_stopped: "rate_limit_media_stats" });
+  });
+
   it("alert 1: '10 min clean' — a stop answer within the window keeps the alert after its hold ended", () => {
     const answeredAt = at(-SYNC_ALERT_CLEAN_MS + MINUTE);
     const recent = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: answeredAt } } });

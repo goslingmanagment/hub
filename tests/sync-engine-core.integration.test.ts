@@ -12,6 +12,7 @@ import {
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
+  endpointSpacingRemainingMs,
   ensurePollRows,
   ensureSyncPage,
   getSyncAttempt,
@@ -49,6 +50,7 @@ import {
   settleAttemptWithoutCapture,
   settleWork,
   supersedeShadowWork,
+  SYNC_ENDPOINT_SPACING_LOOKBACK_MS,
   SYNC_PACE_AUDIT_LOOKBACK_MS,
   upsertDemand,
   upsertDemands,
@@ -1206,5 +1208,51 @@ describe("the capture's reads of the journal (under the page row lock)", () => {
     // Admitted just past the bound: forgotten.
     await insert(false, new Date(now - withinMs - 60_000), 429);
     expect(await lastRateLimitAt(db(), { pageId, withinMs })).toBeNull();
+  }, 120_000);
+
+  it("reads an endpoint group's spacing (owner decision №20) inside its look-back, however long the journal is", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("endpoint-spacing");
+    const generation = await own(pageId);
+    const spacing = { pageId, shadow: false, operations: ["media.offer_stats"], spacingMs: 5_000 };
+    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                     admitted_at, sent_at, completed_at, send_mark, operation, request, outcome, http_status`;
+    // 30 days of answers (one every 2 min), every fifth one a media-stats read,
+    // all older than the look-back.
+    await query(
+      `insert into sync_attempts (${columns})
+       select $1, false, case when n % 5 = 0 then 'media-stats.walk' else 'posts.refresh' end, 'subject-' || n, 'planned',
+              $2, 2000, 0.1, 2200, t, t, t + interval '1 second', 'request_start',
+              case when n % 5 = 0 then 'media.offer_stats' else 'posts.page' end, '{}'::jsonb, 'response', 200
+         from generate_series(1, 21600) n, lateral (select clock_timestamp() - n * interval '2 minutes') s(t)
+        where t < clock_timestamp() - interval '1 hour'`,
+      [pageId, generation.toString()],
+    );
+    await query("analyze sync_attempts");
+
+    const idle = await captureStatement(() => endpointSpacingRemainingMs(db(), spacing));
+    expect(idle.result).toBe(0);
+    expect(await heapVisits(idle, "sync_attempts")).toBeLessThan(50);
+
+    // A media-stats answer completed a second ago: the next one waits ≈ 4 s;
+    // another route's answer, a shadow one, or one past the look-back does not count.
+    const insertRecent = async (shadow: boolean, operation: string, agoMs: number): Promise<void> => {
+      await query(
+        `insert into sync_attempts (${columns})
+         select $1, $2::boolean, 'media-stats.walk', '', 'planned', $3, 2000, 0.1, 2200, t, t, t, 'request_start',
+                $4, '{}'::jsonb, 'response', 200
+           from (select clock_timestamp() - $5::double precision * interval '1 millisecond') s(t)`,
+        [pageId, shadow, generation.toString(), operation, agoMs],
+      );
+    };
+    await insertRecent(true, "media.offer_stats", 500);
+    await insertRecent(false, "posts.page", 500);
+    await insertRecent(false, "media.offer_stats", SYNC_ENDPOINT_SPACING_LOOKBACK_MS + 60_000);
+    expect(await endpointSpacingRemainingMs(db(), spacing)).toBe(0);
+    await insertRecent(false, "media.offer_stats", 1_000);
+    const spaced = await captureStatement(() => endpointSpacingRemainingMs(db(), spacing));
+    expect(spaced.result).toBeGreaterThan(3_000);
+    expect(spaced.result).toBeLessThanOrEqual(4_000);
+    expect(await heapVisits(spaced, "sync_attempts")).toBeLessThan(50);
   }, 120_000);
 });
