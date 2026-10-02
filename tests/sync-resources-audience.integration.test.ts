@@ -141,7 +141,7 @@ async function makeDue(pageId: number, shadow: boolean, resource: string, extra:
 
 async function seedPage(
   mode: "live" | "shadow",
-  facts: { followerCount?: number; subscriberCount?: number; verifiedAgoMs?: number; externalId?: string | null } = {},
+  facts: { followerCount?: number | null; subscriberCount?: number; verifiedAgoMs?: number; externalId?: string | null } = {},
 ) {
   const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, {
     mode,
@@ -151,7 +151,8 @@ async function seedPage(
     `update pages set external_page_id = $2, follower_count = $3, subscriber_count = $4,
             last_verified_at = clock_timestamp() - $5::double precision * interval '1 millisecond'
       where id = $1`,
-    [pageId, facts.externalId === undefined ? OWN_ID : facts.externalId, facts.followerCount ?? 0, facts.subscriberCount ?? 0, facts.verifiedAgoMs ?? 60_000],
+    [pageId, facts.externalId === undefined ? OWN_ID : facts.externalId, facts.followerCount === undefined ? 0 : facts.followerCount,
+      facts.subscriberCount ?? 0, facts.verifiedAgoMs ?? 60_000],
   );
   return pageId;
 }
@@ -262,6 +263,41 @@ describe("account.poll", () => {
     const page = await testDb.pool.query("select external_page_id from pages where id = $1", [pageId]);
     expect(page.rows[0].external_page_id).toBe(OWN_ID);
     expect(alerts.opened.map((alert) => alert.detail)).toEqual(expect.arrayContaining(["identity_mismatch", "quarantined"]));
+  });
+});
+
+describe("account.identity", () => {
+  it("judges the candidate's answer against the page and writes nothing else: no counters, no identity, no hold", async (context) => {
+    if (!testDb) return context.skip();
+    const cases = [
+      { externalId: OWN_ID, answer: OWN_ID, closeReason: "identity_matches", matches: true },
+      { externalId: "300000000000000002", answer: "399999999999999999", closeReason: "identity_differs", matches: false },
+    ];
+    for (const { externalId, answer, closeReason, matches } of cases) {
+      const pageId = await seedPage("live", { externalId, followerCount: 5, subscriberCount: 4, verifiedAgoMs: 3 * 3_600_000 });
+      await makeDue(pageId, false, "account.identity", { params: { candidate: { generation: "candidate-1" } } });
+      const { hits } = await runLive(pageId, () => okResponse(accountMe(answer, { followCount: 42, subscriberCount: 7 })),
+        async () => (await workRow(pageId, "account.identity"))?.state === "done");
+
+      expect(hits).toEqual(["account.me"]);
+      const work = await testDb.pool.query(
+        "select close_reason, result from sync_work where page_id = $1 and resource = 'account.identity'",
+        [pageId],
+      );
+      expect(work.rows).toHaveLength(1);
+      expect(work.rows[0]).toMatchObject({ close_reason: closeReason, result: { accountId: answer, username: "model", matches } });
+      const page = await testDb.pool.query(
+        `select external_page_id, follower_count, subscriber_count,
+                last_verified_at < clock_timestamp() - interval '2 hours' as stale
+           from pages where id = $1`,
+        [pageId],
+      );
+      expect(page.rows[0]).toEqual({ external_page_id: externalId, follower_count: 5, subscriber_count: 4, stale: true });
+      const sync = await testDb.pool.query("select identity_account_id, hold_kind from sync_pages where page_id = $1", [pageId]);
+      expect(sync.rows[0]).toEqual({ identity_account_id: null, hold_kind: null });
+      // The answer is journaled like every served response.
+      expect(await countRows(testDb.pool, "select count(*)::int as n from observations where account_id = $1 and kind = 'account_me'", [pageId])).toBe(1);
+    }
   });
 });
 
@@ -380,6 +416,120 @@ describe("subscribers.poll", () => {
     // Nothing was retired by the abandoned walk.
     expect(await countRows(testDb.pool, "select count(*)::int as n from page_subscriptions where platform_account_id = $1 and is_current", [pageId])).toBe(100);
   });
+
+  it("a one-page answer short of its own total restarts at most twice, then closes withheld at the poll's period", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live", { subscriberCount: 3 });
+    // A current subscription the short answer leaves out: never retired.
+    const [unseen] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "530000000000000009" }]);
+    await testDb.pool.query(
+      `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id, raw_status, canonical_status,
+              price_mills, renew_price_mills, is_current, last_seen_at)
+       values ('sub-unseen', $1, $2, 3, 'active', 0, 0, true, clock_timestamp() - interval '2 days')`,
+      [pageId, unseen!.id],
+    );
+    await makeDue(pageId, false, "subscribers.poll");
+    const served = [subscription("sub-1", "530000000000000001"), subscription("sub-2", "530000000000000002")];
+    const restarts: unknown[] = [];
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "subscribers.page") return okResponse(subscribersPage(served, served.length + 1));
+      if (req.spec === "accounts.by_ids") return okResponse([]);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => {
+      // Skip each restart's 60 s delay (the actor re-reads its rows every
+      // second); the withheld close resets the count, so its due stays.
+      const pulled = await testDb!.pool.query<{ result: unknown }>(
+        `update sync_work set due_at = clock_timestamp()
+          where page_id = $1 and resource = 'subscribers.poll' and not shadow
+            and (cursor->>'restartCount')::int > 0 and due_at > clock_timestamp()
+          returning result`,
+        [pageId],
+      );
+      restarts.push(...pulled.rows.map((row) => row.result));
+      return (await workRow(pageId, "fan-profiles.lookup"))?.state === "done";
+    });
+
+    // The first read and two restarts; the lookup runs once, after the close.
+    expect(hits).toEqual(["subscribers.page", "subscribers.page", "subscribers.page", "accounts.by_ids"]);
+    expect(await appliedAttempts(pageId, "subscribers.poll")).toBe(3);
+    expect(restarts).toEqual([
+      expect.objectContaining({ restartReason: "partial_result", restartCount: 1, providerReportedTotal: 3, observedCount: 2 }),
+      expect.objectContaining({ restartReason: "partial_result", restartCount: 2, providerReportedTotal: 3, observedCount: 2 }),
+    ]);
+    const poll = await workRow(pageId, "subscribers.poll");
+    expect(poll!.state).toBe("open");
+    expect(poll!.cursor).toMatchObject({
+      generation: 3,
+      walk: null,
+      restartCount: 0,
+      last: { destructiveFinalization: false, withheldReason: "partial_result", restartCount: 2, pageCount: 1, observedCount: 2 },
+    });
+    expect(poll!.due_at.getTime() - Date.now()).toBeGreaterThan(50 * 60_000);
+    // What the walk saw is kept; nothing is retired.
+    const subscriptions = await testDb.pool.query(
+      "select platform_subscription_id as id, is_current from page_subscriptions where platform_account_id = $1 order by 1",
+      [pageId],
+    );
+    expect(subscriptions.rows).toEqual([
+      { id: "sub-1", is_current: true },
+      { id: "sub-2", is_current: true },
+      { id: "sub-unseen", is_current: true },
+    ]);
+  });
+
+  it("a row served on two pages restarts the walk twice, then closes withheld with its membership evidence", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live", { subscriberCount: 150 });
+    const [unseen] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "540000000000000999" }]);
+    await testDb.pool.query(
+      `insert into page_subscriptions (platform_subscription_id, platform_account_id, fan_id, raw_status, canonical_status,
+              price_mills, renew_price_mills, is_current, last_seen_at)
+       values ('sub-unseen', $1, $2, 3, 'active', 0, 0, true, clock_timestamp() - interval '2 days')`,
+      [pageId, unseen!.id],
+    );
+    await makeDue(pageId, false, "subscribers.poll");
+    const all = Array.from({ length: 150 }, (_, index) => subscription(`sub-${index}`, `54${String(index).padStart(16, "0")}`));
+    // The second page repeats the first row in place of the 150th: 150 rows
+    // served, as stated, but only 149 distinct.
+    const second = [all[0]!, ...all.slice(100, 149)];
+    const restarts: unknown[] = [];
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "subscribers.page") {
+        return okResponse(subscribersPage(requestParam(req, "offset") === "0" ? all.slice(0, 100) : second, 150));
+      }
+      if (req.spec === "accounts.by_ids") return okResponse([]);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => {
+      const pulled = await testDb!.pool.query<{ result: unknown }>(
+        `update sync_work set due_at = clock_timestamp()
+          where page_id = $1 and resource = 'subscribers.poll' and not shadow
+            and (cursor->>'restartCount')::int > 0 and due_at > clock_timestamp()
+          returning result`,
+        [pageId],
+      );
+      restarts.push(...pulled.rows.map((row) => row.result));
+      const poll = await workRow(pageId, "subscribers.poll");
+      return (poll?.cursor.last as { withheldReason?: unknown } | null | undefined)?.withheldReason !== undefined;
+    });
+
+    expect(hits.filter((spec) => spec === "subscribers.page")).toHaveLength(6);
+    const membership = { generationCurrentCount: 149, expectedCount: 150 };
+    expect(restarts).toEqual([
+      expect.objectContaining({ restartReason: "offset_duplicates", restartCount: 1, pageCount: 2, membership }),
+      expect.objectContaining({ restartReason: "offset_duplicates", restartCount: 2, pageCount: 2, membership }),
+    ]);
+    const poll = await workRow(pageId, "subscribers.poll");
+    expect(poll!.state).toBe("open");
+    expect(poll!.cursor).toMatchObject({
+      generation: 3,
+      walk: null,
+      restartCount: 0,
+      last: { destructiveFinalization: false, withheldReason: "offset_duplicates", membership, pageCount: 2, observedCount: 150 },
+    });
+    expect(poll!.due_at.getTime() - Date.now()).toBeGreaterThan(50 * 60_000);
+    // The unseen subscription stays current: a withheld walk retires nothing.
+    expect(await countRows(testDb.pool, "select count(*)::int as n from page_subscriptions where platform_account_id = $1 and is_current", [pageId])).toBe(150);
+  });
 });
 
 describe("followers", () => {
@@ -437,6 +587,31 @@ describe("followers", () => {
     expect(reconcile!.due_at.getTime() - Date.now()).toBeGreaterThan(22 * 3_600_000);
   });
 
+  it("head: a follower count /account/me omitted stays unknown — no stated total today, no count mismatch", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live", { followerCount: null });
+    await upsertDemand(db(), { pageId, shadow: false, resource: "followers.head", kind: "poll", class: "planned" });
+    const now = new Date();
+    const follows = [followId(now, 2), followId(new Date(now.getTime() - 1_000), 1)];
+    const page = {
+      followers: follows.map((id, index) => ({ id, followerId: `61000000000000000${index}` })),
+      aggregationData: { accounts: follows.map((_, index) => fanAccount(`61000000000000000${index}`)) },
+    };
+    await runLive(pageId, (req) => {
+      if (req.spec === "followers.page") return okResponse(page);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await appliedAttempts(pageId, "followers.head")) === 1);
+
+    const head = await workRow(pageId, "followers.head");
+    expect(head!.proof).toMatchObject({ sourceFollowerCount: null, activeFollowerCount: 2, reconcile: { countMismatch: false, requested: false } });
+    const rollups = await testDb.pool.query(
+      "select new_followers, known_total_followers from daily_followers where platform_account_id = $1",
+      [pageId],
+    );
+    expect(rollups.rows).toEqual([{ new_followers: 2, known_total_followers: null }]);
+    expect(await workRow(pageId, "followers.reconcile")).toBeNull();
+  });
+
   it("reconcile: account, every page, terminal account — membership proven, the unseen follow retired", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live", { followerCount: 3 });
@@ -472,6 +647,62 @@ describe("followers", () => {
     expect(work!.proof).toMatchObject({ outcome: "complete", membershipProof: "exact_generation", deactivatedCount: 1, generationObservedCount: 2 });
     expect(work!.cursor).toMatchObject({ generation: 1, walk: null });
     expect(typeof (work!.cursor as { lastFullSweepStartedAt?: unknown }).lastFullSweepStartedAt).toBe("string");
+  });
+
+  it("reconcile: a count the walk cannot reproduce restarts twice after 15 min, then closes without retiring anything", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live", { followerCount: 5 });
+    const [kept] = await upsertFans(db(), [{ platform: "fansly", platformUserId: "615000000000000009" }]);
+    await testDb.pool.query(
+      `insert into page_follows (platform_account_id, fan_id, platform_follow_id, followed_at, first_seen_at, last_seen_at, is_active)
+       values ($1, $2, '1000', clock_timestamp() - interval '30 days', clock_timestamp() - interval '30 days', clock_timestamp() - interval '2 days', true)`,
+      [pageId, kept!.id],
+    );
+    await makeDue(pageId, false, "followers.reconcile", { reason: "owner" });
+    const now = Date.now();
+    const served = {
+      followers: [
+        { id: followId(new Date(now - 60_000), 1), followerId: "615000000000000001" },
+        { id: followId(new Date(now - 120_000), 2), followerId: "615000000000000002" },
+      ],
+      aggregationData: { accounts: [fanAccount("615000000000000001"), fanAccount("615000000000000002")] },
+    };
+    const restarts: unknown[] = [];
+    const { hits } = await runLive(pageId, (req) => {
+      // Fansly keeps stating 5 while serving 2: no membership proof.
+      if (req.spec === "account.me") return okResponse(accountMe(OWN_ID, { followCount: 5 }));
+      if (req.spec === "followers.page") return okResponse(served);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => {
+      const pulled = await testDb!.pool.query<{ result: unknown }>(
+        `update sync_work set due_at = clock_timestamp()
+          where page_id = $1 and resource = 'followers.reconcile' and not shadow and state = 'open'
+            and (cursor->>'snapshotRestartCount')::int > 0 and due_at > clock_timestamp()
+          returning result`,
+        [pageId],
+      );
+      restarts.push(...pulled.rows.map((row) => row.result));
+      return (await workRow(pageId, "followers.reconcile"))?.state === "done";
+    });
+
+    const walk = ["account.me", "followers.page", "account.me"];
+    expect(hits).toEqual([...walk, ...walk, ...walk]);
+    expect(restarts).toEqual([
+      expect.objectContaining({ outcome: "restart", generation: 1, sourceFollowerCount: 5, generationObservedCount: 2, snapshotRestartCount: 0 }),
+      expect.objectContaining({ outcome: "restart", generation: 2, sourceFollowerCount: 5, generationObservedCount: 2, snapshotRestartCount: 1 }),
+    ]);
+    const work = await workRow(pageId, "followers.reconcile");
+    expect(work!.proof).toMatchObject({
+      outcome: "non_destructive_complete",
+      membershipCertified: false,
+      destructiveFinalization: false,
+      generation: 3,
+      snapshotRestartCount: 2,
+    });
+    expect(work!.cursor).toMatchObject({ generation: 3, walk: null, snapshotRestartCount: 0 });
+    // The walk started a sweep: the daily floor anchors on it.
+    expect(typeof (work!.cursor as { lastFullSweepStartedAt?: unknown }).lastFullSweepStartedAt).toBe("string");
+    expect(await countRows(testDb.pool, "select count(*)::int as n from page_follows where platform_account_id = $1 and is_active", [pageId])).toBe(3);
   });
 
   it("reconcile: a deactivation past the safety ceiling is quarantined, nothing retired", async (context) => {

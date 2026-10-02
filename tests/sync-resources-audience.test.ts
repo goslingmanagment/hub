@@ -128,6 +128,16 @@ describe("the engine's Fansly journal", () => {
     expect(body).toMatchObject({ contractAccepted: false });
   });
 
+  it("wraps a refused subscribers body as legacy's {contractAccepted: false, raw}; an accepted one stays verbatim", () => {
+    const subscribers = { spec: "subscribers.page" as const, params: { status: "3,4" as const, offset: 0 } };
+    const refused = { stats: { totalActive: "x" }, subscriptions: [] };
+    const wrapped = fanslyCaptureCodec.prepare({ spec: "subscribers.page", kind: "subscribers", response: refused, contractAccepted: false, request: subscribers, module });
+    expect(wrapped).toEqual({ contractAccepted: false, raw: refused });
+    const accepted = { stats: { totalActive: 0 }, subscriptions: [] };
+    expect(fanslyCaptureCodec.prepare({ spec: "subscribers.page", kind: "subscribers", response: accepted, contractAccepted: true, request: subscribers, module }))
+      .toEqual(accepted);
+  });
+
   it("names the reply walk from the request", () => {
     const replies = { spec: "post.replies" as const, params: { postId: "p1", before: null } };
     const body = fanslyCaptureCodec.prepare({ spec: "post.replies", kind: "post_replies", response: { posts: [] }, contractAccepted: true, request: replies, module });

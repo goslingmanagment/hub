@@ -1,6 +1,7 @@
 import type { SyncStream } from "@agency_hub_core/db";
 import type { FanslyObservationKind, FanslySendSource, FanslyWireId } from "@agency_hub_core/fansly";
 
+import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../../services/sync/followers-reconcile-floor.ts";
 import type { Metrics } from "../engine/ports.ts";
 import {
   createEngineRegistry,
@@ -81,9 +82,6 @@ const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
-
-/** Followers reconcile: one full walk a day after the previous start (#330). */
-export const FOLLOWERS_RECONCILE_MIN_INTERVAL_MS = DAY;
 
 const stream = (name: SyncStream): LegacyRef => ({ stream: name });
 const sender = (name: FanslySendSource): LegacyRef => ({ sender: name });
@@ -344,6 +342,8 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "followers.reconcile", file: "followers", subject: "page", kind: "goal", class: "planned",
+    // One full walk a day after the previous start (#330), the floor both
+    // engines keep.
     triggers: ["apply:followers.head", "owner"], minIntervalMs: FOLLOWERS_RECONCILE_MIN_INTERVAL_MS,
     slo: { staleAfterMs: 3 * DAY },
     proof: "reconcile_membership", walk: "offset-walk", http: true, evidence: false, fence: "none",

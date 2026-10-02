@@ -39,6 +39,7 @@ import {
 } from "../../../services/sync/audience-rules.ts";
 import { upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
 import { followersReconcileDecision } from "../../../services/sync/followers-reconcile-decision.ts";
+import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../../../services/sync/followers-reconcile-floor.ts";
 import { followersReconcileDeactivationLimit } from "../../../services/sync/followers-reconcile-safety.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
@@ -55,7 +56,6 @@ import type {
   StepPlan,
 } from "../../engine/resource.ts";
 import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
-import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../registry.ts";
 import { accountCountersFresh, accountCountersReadAt, readFanslyPageFacts } from "../lib/page-facts.ts";
 import { ACCOUNT_ME_REQUEST, applyAccountMeToPage } from "./account.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
@@ -254,7 +254,9 @@ interface HeadWalk {
   newestFollowId: string | null;
   offset: number;
   pageCount: number;
-  sourceFollowerCount: number;
+  /** `pages.follower_count` at the walk's start; null when `/account/me`
+   *  omitted the count (the rollup then states no total for today). */
+  sourceFollowerCount: number | null;
   sawKnownCheckpoint: boolean;
   crossedKnownBoundary: boolean;
   processed: number;
@@ -275,7 +277,7 @@ export function parseFollowersHeadCursor(value: unknown): FollowersHeadCursor {
     newestFollowId: text(walkRecord.newestFollowId),
     offset,
     pageCount: count(walkRecord.pageCount) ?? 0,
-    sourceFollowerCount: count(walkRecord.sourceFollowerCount) ?? 0,
+    sourceFollowerCount: count(walkRecord.sourceFollowerCount),
     sawKnownCheckpoint: walkRecord.sawKnownCheckpoint === true,
     crossedKnownBoundary: walkRecord.crossedKnownBoundary === true,
     processed: count(walkRecord.processed) ?? 0,
@@ -315,7 +317,7 @@ export const followersHeadModule: ResourceModule = {
       newestFollowId: null,
       offset: 0,
       pageCount: 0,
-      sourceFollowerCount: (await readFanslyPageFacts(tx, pageId))?.followerCount ?? 0,
+      sourceFollowerCount: (await readFanslyPageFacts(tx, pageId))?.followerCount ?? null,
       sawKnownCheckpoint: false,
       crossedKnownBoundary: false,
       processed: 0,
@@ -379,7 +381,8 @@ export const followersHeadModule: ResourceModule = {
     const activeFollowerCount = Number(await countActivePageFollows(tx, pageId));
     const decision = followersReconcileDecision({
       activeFollowerCount,
-      sourceFollowerCount: walk.sourceFollowerCount,
+      // An unknown count proves no mismatch (the shadow head judges alike).
+      sourceFollowerCount: walk.sourceFollowerCount ?? activeFollowerCount,
       knownFollowId: cursor.knownFollowId,
       newestFollowId,
       pageDone,

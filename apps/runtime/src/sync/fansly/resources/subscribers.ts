@@ -53,9 +53,10 @@ import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 // page transaction (executor-handlers.ts `fanslySubscribersChunk`) with its
 // cursor in the work row and its throws turned into outcomes:
 //
-// - restart  — the total moved, a multi-page walk came back short, or rows
-//              were served twice: a fresh generation from offset 0 after
-//              60 s, at most twice per walk;
+// - restart  — the total moved, the walk came back short of its total, or
+//              rows were served twice: a fresh generation from offset 0 after
+//              60 s, at most twice per walk (a one-page walk too: legacy's
+//              retry of it had a growing backoff, a fixed 60 s needs a bound);
 // - withheld — past that bound: the walk closes and retires nothing;
 // - refused  — an empty first page the walk cannot vouch for: nothing
 //              retired, the poll waits for its next period (legacy retried it
@@ -150,13 +151,19 @@ function statusOf(variant: SubscribersVariant): FanslySubscribersStatus {
 
 /** A walk that cannot be certified starts over from offset 0 under a fresh
  *  generation (taken at its first page) after `SUBSCRIBERS_WALK_RESTART_DELAY_MS`. */
-function restartOutcome(cursor: SubscribersCursor, walk: SubscribersWalk, reason: WithheldReason, now: Date): WorkOutcome {
+function restartOutcome(
+  cursor: SubscribersCursor,
+  walk: SubscribersWalk,
+  reason: WithheldReason,
+  now: Date,
+  detail: Record<string, unknown> = {},
+): WorkOutcome {
   return {
     satisfiesRevision: false,
     nextDueAt: new Date(now.getTime() + SUBSCRIBERS_WALK_RESTART_DELAY_MS),
     waitingReason: "not_due",
     cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount + 1, shadow: null },
-    result: { restartReason: reason, restartCount: walk.restartCount + 1, pageCount: walk.pageCount },
+    result: { restartReason: reason, restartCount: walk.restartCount + 1, pageCount: walk.pageCount, ...detail },
   };
 }
 
@@ -234,25 +241,20 @@ export function subscribersModule(variant: SubscribersVariant): ResourceModule {
       const finalObservedCount = walk.observedCount + items.length;
       const partialResult = !totalChanged && done && walk.providerReportedTotal !== null &&
         finalObservedCount !== walk.providerReportedTotal;
-      if (partialResult) {
-        // One response is one snapshot: a single-page walk reads it again
-        // from offset 0 (legacy: a transient retry of the same read).
-        if (walk.pageCount === 1) {
-          return {
-            work: {
-              satisfiesRevision: false,
-              nextDueAt: new Date(now.getTime() + SUBSCRIBERS_WALK_RESTART_DELAY_MS),
-              waitingReason: "not_due",
-              cursor: { ...cursor, generation: walk.generation, walk: null, restartCount: walk.restartCount, shadow: null },
-              result: { retryReason: "partial_result", providerReportedTotal: walk.providerReportedTotal, observedCount: finalObservedCount },
-            },
-            followups: [],
-            counters: { walk_partial_single_page: 1 },
-          };
-        }
-        if (walk.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
-          return { work: restartOutcome(cursor, walk, "partial_result", now), followups: [], counters: { walk_restart_partial_result: 1 } };
-        }
+      // Short of the stated total: read the list again from offset 0, bounded
+      // like every restart. A one-page walk is no exception — legacy retried
+      // it as a transient error on a growing backoff; at a fixed 60 s, an
+      // answer that keeps disagreeing with its own total would cost a request
+      // a minute for good. Past the bound the walk closes withheld below.
+      if (partialResult && walk.restartCount < SUBSCRIBERS_MAX_WALK_RESTARTS) {
+        return {
+          work: restartOutcome(cursor, walk, "partial_result", now, {
+            providerReportedTotal: walk.providerReportedTotal,
+            observedCount: finalObservedCount,
+          }),
+          followups: [],
+          counters: { walk_restart_partial_result: 1 },
+        };
       }
       // Past the restart bound, keep what this walk saw and retire nothing.
       const withheldReason: WithheldReason | null = totalChanged ? "total_changed" : partialResult ? "partial_result" : null;
