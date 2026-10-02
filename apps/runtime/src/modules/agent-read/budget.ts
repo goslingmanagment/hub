@@ -53,7 +53,7 @@ export function resetAgentConcurrencyForTests(): void {
 /**
  * Per-route request-per-minute ceilings (§8).
  *
- * Only three operations have one; the rest are bounded by the concurrency gauge
+ * Only a few operations have one; the rest are bounded by the concurrency gauge
  * and the daily budget. A route without a number here is deliberately unlimited
  * per minute, not accidentally so.
  */
@@ -64,6 +64,10 @@ export const AGENT_ROUTE_RPM = {
   /** Slice C: filing an intent is cheap, but it is the ONE write an agent has,
    *  and a flood of intents is a flood of owner decisions to make. */
   agentHydrationRequestCreate: 10,
+  /** The Sync Engine's history requests keep the same ceiling (plan §4.2 p.8):
+   *  one request holds up to 1000 fans of a page, so 10 a minute is plenty. */
+  agentHistoryRequestCreate: 10,
+  agentHistoryRequestCancel: 10,
 } as const satisfies Readonly<Record<string, number>>;
 
 /**

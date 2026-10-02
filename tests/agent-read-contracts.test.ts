@@ -58,10 +58,16 @@ const AGENT_OPERATIONS = [
   "agentHydrationRequestGet",
   "agentHydrationRequestDecide",
   "agentHydrationRequestList",
+  // The Fansly Sync Engine's history requests (design §7.4): all four agentKey;
+  // the owner's half lives in routes-sync.ts, outside this plane.
+  "agentHistoryRequestCreate",
+  "agentHistoryRequestGet",
+  "agentHistoryRequestCancel",
+  "agentHistoryRequestList",
 ] as const;
 
 describe("agent read plane: the operation surface", () => {
-  it("lands exactly the routes of operations 1-13 (9 splits into 9a/9b, plus the owner queue)", () => {
+  it("lands exactly the routes of operations 1-13 (9 splits into 9a/9b, plus the owner queue) and the history requests", () => {
     expect(Object.keys(agentRouteSchemas).sort()).toEqual([...AGENT_OPERATIONS].sort());
     for (const key of AGENT_OPERATIONS) {
       expect(routeSchemas).toHaveProperty(key);
@@ -96,6 +102,7 @@ describe("agent read plane: the operation surface", () => {
       .sort();
     expect(pageScoped).toEqual([
       "agentDatasetQuery",
+      "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       "agentThreadMessages",
     ]);
@@ -111,11 +118,14 @@ describe("agent read plane: the operation surface", () => {
       "agentDatasetQuery",
     ]);
     // The plane's MUTATIONS are enumerated separately (§17.15.4) — a body is
-    // allowed on a read POST from the allowlist, or on one of these two, and
-    // nowhere else.
+    // allowed on a read POST from the allowlist, or on one of these, and
+    // nowhere else. History cancel carries a body (an optional reason) for
+    // exactly this reason.
     expect([...AGENT_POST_MUTATION_OPERATIONS]).toEqual([
       "agentHydrationRequestCreate",
       "agentHydrationRequestDecide",
+      "agentHistoryRequestCreate",
+      "agentHistoryRequestCancel",
     ]);
     for (const key of AGENT_OPERATIONS) {
       const schema = agentRouteSchemas[key] as { body?: unknown };
@@ -134,7 +144,13 @@ describe("agent read plane: the operation surface", () => {
       expect(Object.keys(responses)).not.toContain("404");
     }
     // The path-addressed ones DO declare it.
-    for (const key of ["agentThreadMessages", "agentDatasetQuery"] as const) {
+    for (const key of [
+      "agentThreadMessages",
+      "agentDatasetQuery",
+      "agentHistoryRequestCreate",
+      "agentHistoryRequestGet",
+      "agentHistoryRequestCancel",
+    ] as const) {
       const responses = (agentRouteSchemas[key] as { response: Record<string, unknown> }).response;
       expect(Object.keys(responses)).toContain("404");
     }

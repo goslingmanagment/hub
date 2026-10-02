@@ -13,6 +13,7 @@ import {
   type KeysetDirection,
 } from "./agent-keyset.ts";
 import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-witness.ts";
+import { effectiveHistoryStateSql, type ThreadHistoryState } from "./sync/thread-chain.ts";
 
 /**
  * Every read the Agent Read Plane performs, except the transcript union (its own
@@ -106,6 +107,63 @@ function textList(values: readonly string[]): SQL {
 
 function date(value: unknown): Date | null {
   return value == null ? null : new Date(value as string | Date);
+}
+
+// ---------------------------------------------------------------------------
+// A chat's proven coverage (the Sync Engine's chain columns, 0231)
+// ---------------------------------------------------------------------------
+
+/**
+ * One chat's coverage by its proven chain, as `hub threads`, #3's threads and
+ * the transcript report it (design §7.7). `historyState` is the EFFECTIVE
+ * state (`effectiveHistoryStateSql`): a thread legacy stored messages into
+ * after 0231's one-time marking reads `unverified`, never `none`.
+ */
+export interface AgentThreadCoverageRow {
+  historyState: ThreadHistoryState;
+  /** `first_second` is reserved and never written (owner decision №3). */
+  historyProof: "empty_page" | null;
+  contiguousOldestAt: Date | null;
+  contiguousCount: number;
+  headConfirmedAt: Date | null;
+}
+
+/** The coverage columns of thread alias `t`, under fixed `cov_*` names. */
+const THREAD_COVERAGE_COLUMNS = sql`
+  ${effectiveHistoryStateSql("t")} as cov_history_state,
+  t.history_proof as cov_history_proof,
+  t.contiguous_oldest_at as cov_contiguous_oldest_at,
+  t.contiguous_count as cov_contiguous_count,
+  t.head_confirmed_at as cov_head_confirmed_at`;
+
+function threadCoverageOf(row: Record<string, unknown>): AgentThreadCoverageRow {
+  return {
+    historyState: String(row.cov_history_state ?? "none") as ThreadHistoryState,
+    historyProof: row.cov_history_proof === "empty_page" ? "empty_page" : null,
+    contiguousOldestAt: date(row.cov_contiguous_oldest_at),
+    contiguousCount: Number(row.cov_contiguous_count ?? 0),
+    headConfirmedAt: date(row.cov_head_confirmed_at),
+  };
+}
+
+/** The transcript's coverage block: null when this page holds no thread under
+ *  the conversation ref. */
+export async function readAgentThreadCoverage(
+  db: Database,
+  input: { pageId: number; conversationRef: string },
+): Promise<{ coverage: AgentThreadCoverageRow | null; witnesses: PlaneReadWitness[] }> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select ${THREAD_COVERAGE_COLUMNS}
+    from page_dm_threads t
+    where t.platform_account_id = ${input.pageId}
+      and t.platform_conversation_id = ${input.conversationRef}
+    limit 1
+  `);
+  const row = result.rows[0];
+  return {
+    coverage: row === undefined ? null : threadCoverageOf(row),
+    witnesses: [witnessFor("page_dm_threads")],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +518,7 @@ export interface AgentFanThreadRow {
   conversationRef: string;
   storedMessageCount: number;
   coverageStatusRaw: string;
+  coverage: AgentThreadCoverageRow;
 }
 
 export async function listAgentFanThreads(
@@ -473,7 +532,8 @@ export async function listAgentFanThreads(
   const result = await db.execute<Record<string, unknown>>(sql`
     select t.fan_id, t.platform_account_id, p.label, p.platform::text as platform,
            t.platform_conversation_id, t.stored_message_count,
-           t.message_coverage_status::text as coverage_status
+           t.message_coverage_status::text as coverage_status,
+           ${THREAD_COVERAGE_COLUMNS}
     from page_dm_threads t
     join pages p on p.id = t.platform_account_id
     where t.platform_account_id in ${pageIdList(input.pageIds)}
@@ -490,6 +550,7 @@ export async function listAgentFanThreads(
       conversationRef: String(row.platform_conversation_id),
       storedMessageCount: Number(row.stored_message_count ?? 0),
       coverageStatusRaw: String(row.coverage_status),
+      coverage: threadCoverageOf(row),
     })),
     witnesses: witnessesFor(["page_dm_threads"]),
   };
@@ -1239,6 +1300,7 @@ export interface AgentThreadRow {
   lastMessageSyncAt: Date | null;
   quarantineUntil: Date | null;
   lifetimeSpendMills: bigint | null;
+  coverage: AgentThreadCoverageRow;
   /** Rendered by SQL, at SQL's precision. Never re-derived in JavaScript. */
   sortValue: string | null;
   keysetKey: string;
@@ -1331,6 +1393,7 @@ export async function listAgentThreads(
              t.oldest_stored_message_id, t.newest_stored_message_id,
              t.message_coverage_status::text as coverage_status, t.last_message_sync_at,
              h.quarantine_until,
+             ${THREAD_COVERAGE_COLUMNS},
              ${query.includeLifetimeSpend
                ? sql`fsl.creator_net_amount_mills::text`
                : sql`null::text`} as lifetime_spend_mills,
@@ -1382,6 +1445,7 @@ export async function listAgentThreads(
       lifetimeSpendMills: row.lifetime_spend_mills == null
         ? null
         : BigInt(String(row.lifetime_spend_mills)),
+      coverage: threadCoverageOf(row),
       sortValue: row.k_sort == null ? null : String(row.k_sort),
       keysetKey: String(row.k_key),
     })),

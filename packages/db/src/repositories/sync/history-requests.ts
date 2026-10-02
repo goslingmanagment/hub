@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
+import { witnessFor, type PlaneReadWitness } from "../agent-read-witness.ts";
 import { effectiveHistoryStateSql, type ThreadHistoryState } from "./thread-chain.ts";
 import { HISTORY_ITEM_OPEN_STATES } from "./work.ts";
 import { jsonParam, nullableJsonParam, textArrayParam, timestampParam, toDate, toNumber, toRequiredDate } from "./values.ts";
@@ -447,6 +448,57 @@ export async function getHistoryRequestsByIds(db: Database, ids: readonly number
      order by r.id
   `);
   return result.rows.map(normalizeRequestRow);
+}
+
+/**
+ * Requests newest first by id, over a keyset (the agent list, design §7.4):
+ * of these pages, optionally of one state, below `beforeId` (the previous
+ * page's last id) and at or below `maxId` (the traversal's frozen high water,
+ * so a request filed mid-walk never joins a later page).
+ */
+export async function listHistoryRequestsKeyset(
+  db: Database,
+  input: { pageIds: readonly number[]; state?: HistoryRequestState; beforeId?: number; maxId?: number; limit: number },
+): Promise<HistoryRequestRow[]> {
+  if (input.pageIds.length === 0) return [];
+  const filters: SQL[] = [sql`r.page_id = any(${idsParam(input.pageIds)})`];
+  if (input.state !== undefined) filters.push(sql`r.state = ${input.state}`);
+  if (input.beforeId !== undefined) filters.push(sql`r.id < ${input.beforeId}`);
+  if (input.maxId !== undefined) filters.push(sql`r.id <= ${input.maxId}`);
+  const result = await db.execute<RequestSqlRow>(sql`
+    select ${requestColumns}
+      from history_requests r
+      join pages p on p.id = r.page_id
+     where ${sql.join(filters, sql` and `)}
+     order by r.id desc
+     limit ${Math.max(1, Math.min(1_000, input.limit))}
+  `);
+  return result.rows.map(normalizeRequestRow);
+}
+
+/** How many requests `listHistoryRequestsKeyset` would walk in total (no
+ *  `beforeId`): the list's exact `matchedInScope`. */
+export async function countHistoryRequests(
+  db: Database,
+  input: { pageIds: readonly number[]; state?: HistoryRequestState; maxId?: number },
+): Promise<number> {
+  if (input.pageIds.length === 0) return 0;
+  const filters: SQL[] = [sql`r.page_id = any(${idsParam(input.pageIds)})`];
+  if (input.state !== undefined) filters.push(sql`r.state = ${input.state}`);
+  if (input.maxId !== undefined) filters.push(sql`r.id <= ${input.maxId}`);
+  const result = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n from history_requests r where ${sql.join(filters, sql` and `)}
+  `);
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/** The newest request id of these pages (the agent list's frozen high water). */
+export async function readHistoryRequestsHighWater(db: Database, pageIds: readonly number[]): Promise<number> {
+  if (pageIds.length === 0) return 0;
+  const result = await db.execute<{ maxId: string | null }>(sql`
+    select max(r.id)::text as "maxId" from history_requests r where r.page_id = any(${idsParam(pageIds)})
+  `);
+  return Number(result.rows[0]?.maxId ?? 0);
 }
 
 /** Requests newest first, optionally of one page and state. */
@@ -987,6 +1039,7 @@ export interface HistoryThreadCandidates {
 export async function findHistoryThreadCandidates(
   db: Database,
   input: { pageId: number; groupIds: readonly string[]; fanRefs: readonly string[] },
+  planeReads?: PlaneReadWitness[],
 ): Promise<HistoryThreadCandidates> {
   const byGroupId = new Map<string, HistoryThreadFacts>();
   const byFanRef = new Map<string, HistoryThreadFacts[]>();
@@ -1001,6 +1054,7 @@ export async function findHistoryThreadCandidates(
          and t.is_visible
     `);
     for (const row of result.rows) byGroupId.set(row.groupId, normalizeThreadFacts(row));
+    planeReads?.push(witnessFor("page_dm_threads"));
   }
   const fanRefs = [...new Set(input.fanRefs)];
   if (fanRefs.length > 0) {
@@ -1027,12 +1081,22 @@ export async function findHistoryThreadCandidates(
       list.push(normalizeThreadFacts(row));
       byFanRef.set(row.fanRef, list);
     }
+    planeReads?.push(witnessFor("page_dm_threads"));
   }
   return { byGroupId, byFanRef };
 }
 
-/** The request facts of chats by id (views, the satisfaction hook). */
-export async function readHistoryThreadFacts(db: Database, threadIds: readonly number[]): Promise<Map<number, HistoryThreadFacts>> {
+/**
+ * The request facts of chats by id (views, the satisfaction hook). A reader
+ * that reports what it read (the agent plane's envelope) passes `planeReads`:
+ * it receives the `page_dm_threads` witness when, and only when, the
+ * statement ran.
+ */
+export async function readHistoryThreadFacts(
+  db: Database,
+  threadIds: readonly number[],
+  planeReads?: PlaneReadWitness[],
+): Promise<Map<number, HistoryThreadFacts>> {
   const facts = new Map<number, HistoryThreadFacts>();
   if (threadIds.length === 0) return facts;
   const result = await db.execute<ThreadFactsSqlRow>(sql`
@@ -1042,6 +1106,7 @@ export async function readHistoryThreadFacts(db: Database, threadIds: readonly n
      where t.id = any(${idsParam(threadIds)})
   `);
   for (const row of result.rows) facts.set(Number(row.threadId), normalizeThreadFacts(row));
+  planeReads?.push(witnessFor("page_dm_threads"));
   return facts;
 }
 

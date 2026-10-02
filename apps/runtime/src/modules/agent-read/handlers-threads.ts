@@ -24,6 +24,7 @@ import {
   readAgentPostTipParseDebt,
   readAgentJournalFloor,
   readAgentThreadArchiveFloor,
+  readAgentThreadCoverage,
   readAgentThreadsHighWater,
   searchAgentArchive,
   type AgentTranscriptFilters,
@@ -60,6 +61,8 @@ import {
   observedRowFloorOf,
   operationPlanesFor,
   retentionLimitFor,
+  threadCaptureFloor,
+  threadCoverage,
   tryAgentTimeout,
   withAgentTimeout,
   writeAgentAudit,
@@ -636,9 +639,11 @@ export async function handleAgentThreads(
         lastMessageSyncAt: isoOrNull(row.lastMessageSyncAt),
         breakerOpen: row.quarantineUntil !== null && row.quarantineUntil.getTime() > Date.now(),
         quarantineUntil: isoOrNull(row.quarantineUntil),
-        // Per-thread floors would be one extra scan per row; the inventory says
-        // `unknown` and #6/#8 establish the real floor for a named thread.
-        captureFloor: { at: null, kind: "unknown" as const },
+        // The floor of the chat's PROVEN chain, read from its own row (no extra
+        // scan); `unknown` until the chat has one, and #6/#8 then establish the
+        // archive floor for a named thread.
+        captureFloor: threadCaptureFloor(row.coverage),
+        ...threadCoverage(row.coverage),
         // The overview lesson: predict what the detail call will return, using the
         // SAME predicate, so a caller never chases a thread that answers nothing.
         transcriptWillReturnRows: row.storedMessageCount > 0,
@@ -811,6 +816,14 @@ export async function handleAgentThreadMessages(
         pageId: page.id,
         conversationRef: params.conversationRef,
       }), "agent_transcript_floor");
+    // The chat's PROVEN coverage (design §7.7): a separate fact from the archive
+    // floor above — the floor says where this store's record begins, the chain
+    // says whether it is whole down to there.
+    const coverage = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readAgentThreadCoverage(tx, {
+        pageId: page.id,
+        conversationRef: params.conversationRef,
+      }), "agent_transcript_coverage");
 
     const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const transcriptInput = {
@@ -842,6 +855,7 @@ export async function handleAgentThreadMessages(
     );
 
     const operationPlanes = operationPlanesFor(MESSAGE_PLANES, claimFields);
+    const planeReads = [...result.witnesses, ...coverage.witnesses];
 
     const hasMore = result.rows.length === limit;
     const last = result.rows.at(-1);
@@ -872,10 +886,10 @@ export async function handleAgentThreadMessages(
       planeMode: scope.planeMode,
       claimFields,
       operationPlanes,
-      planeReads: result.witnesses,
+      planeReads,
       planesNotRead: planesNotRead({
         operationPlanes,
-        witnesses: result.witnesses,
+        witnesses: planeReads,
         overrides: messagePlaneOverrides([page.platform as Platform]),
       }),
       delivery: { snapshotExhausted, nextCursor },
@@ -930,6 +944,7 @@ export async function handleAgentThreadMessages(
         fanPlatformUserId: result.rows.at(0)?.fanPlatformUserId ?? null,
       },
       window: { from, to },
+      threadCoverage: coverage.coverage === null ? null : threadCoverage(coverage.coverage),
       items: result.rows.map((row) => ({
         pageLabel: page.pageLabel,
         platform: page.platform as Platform,
