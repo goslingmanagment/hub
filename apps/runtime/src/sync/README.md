@@ -469,7 +469,10 @@ run on schedule (its `shadow()` estimate, A1.rate-assumed; a key that ran before
 window end (`fan-earnings.roster`, A1.floor-queue), and `dueAtLook` re-runs a standing walk's look over the subjects
 nobody changed since and probes its due rule 5 years on (A1.floor-idle: the look was on time and the rule reads at all
 — which subjects it takes is not verified while legacy reads the same queue first); the registry test pins that every
-such key implements its question.
+such key implements its question. The checks read the live settings as the engine host does (the report requires a
+`SettingsSource`; the CLI builds it from the env config and the database's overrides): `post-replies.walk`'s pick reads
+`fanslyRepliesRewalkCycleDays` live (prod 30 d, registry 14 d), so its look check fails without them rather than re-run
+another pick.
 
 ## Recipes
 

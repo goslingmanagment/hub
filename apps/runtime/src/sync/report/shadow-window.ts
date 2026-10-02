@@ -1373,7 +1373,10 @@ export interface ShadowWindowInput {
    *  `queueNextDueAt`); absent or not implemented: the rule they serve does
    *  not apply (an unknown run size, an unverified look, a queue not read). */
   registry?: Pick<EngineRegistry, "module">;
-  /** The live settings those checks read (absent: the registry defaults). */
+  /** The live settings those checks read, as the engine host reads them
+   *  (`createEffectiveConfigSettingsSource`); absent, a check whose plan reads
+   *  live config fails rather than re-run another pick (`post-replies.walk`'s
+   *  look check: the re-walk cycle). */
   settings?: SettingsSource;
 }
 

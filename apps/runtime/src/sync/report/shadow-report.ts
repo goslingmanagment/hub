@@ -57,9 +57,11 @@ export interface ShadowReportInput {
   } | null;
   maxListed: number;
   resolvePayload?: FanslyWsLivePayloadResolver;
-  /** The live settings part A's module checks read (rule A1.floor-idle: the
-   *  replies' re-walk cycle); absent: the registry defaults. */
-  settings?: SettingsSource;
+  /** The live settings part A's module checks read, as the engine host reads
+   *  them (`createEffectiveConfigSettingsSource`): a look check re-runs the
+   *  plan's own pick, and the replies' re-walk cycle is live config (rule
+   *  A1.floor-idle; the registry's 14 d is not prod's 30 d). */
+  settings: SettingsSource;
 }
 
 export interface ShadowReportVerdict {
@@ -107,7 +109,7 @@ async function windowPart(
       registry: input.registry,
       logger: ctx.logger,
       ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
-      ...(input.settings === undefined ? {} : { settings: input.settings }),
+      settings: input.settings,
     });
   });
 }
