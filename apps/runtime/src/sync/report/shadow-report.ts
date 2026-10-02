@@ -14,7 +14,7 @@ import {
   type ChainCheckReport,
   type ReplayKindReport,
 } from "./shadow-journal.ts";
-import { reportShadowWindow, type ShadowWindowReport } from "./shadow-window.ts";
+import { reportShadowWindow, STEADY_STATE_BAND_PER_HOUR, type PageDemand, type ShadowWindowReport } from "./shadow-window.ts";
 import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 
 // `pnpm cli sync shadow report` (design §3.12): the shadow acceptance's
@@ -180,6 +180,38 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
   return { ...verdict, accepted };
 }
 
+/** One page's A1 line: the steady state at its rate against the ceiling and
+ *  the band, the floor's exception below it, the polls' schedule. */
+function demandLine(page: PageDemand): string {
+  const perHour = page.band.max / STEADY_STATE_BAND_PER_HOUR.max;
+  const rated = page.resources
+    .filter((row) => row.rate !== null && row.rate.counted !== null && row.rate.runSize !== null && row.rate.runSize > 0)
+    .map((row) => `${row.resource} ${row.rate!.runSize}/${row.rate!.periodMs / 3_600_000} h`);
+  const parts = [
+    `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
+      + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
+    page.ceiling === "unknown"
+      ? `ceiling ${page.band.max}: UNKNOWN — no finished run yet of ${page.unknownRunSize.join(", ")} (rule A1.rate)`
+      : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"}`,
+  ];
+  if (!page.floor.below) {
+    parts.push(page.inBand ? `band ${page.band.min}–${page.band.max}` : `above the band ${page.band.min}–${page.band.max}`);
+  } else {
+    const { counterparts } = page.floor;
+    const notInShadow = counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`;
+    parts.push(page.floor.holds === true
+      ? `below ${page.band.min}: the floor's exception holds (rule A1.floor: every modelled resource at its expectation, every legacy stream with a shadow counterpart${notInShadow})`
+      : `below ${page.band.min}: the floor's exception FAILS (rule A1.floor${page.floor.outside.length === 0 ? "" : `; outside: ${page.floor.outside.join(", ")}`}`
+        + `${counterparts.lacking.length === 0 ? "" : `; no shadow counterpart: ${counterparts.lacking.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}${notInShadow})`);
+  }
+  parts.push(page.scheduleFaults.length === 0 ? "polls on schedule" : `polls OFF SCHEDULE (rule A1.poll-schedule): ${page.scheduleFaults.join("; ")}`);
+  // Rows outside their expectation other than a poll off schedule (named above).
+  const offSchedule = new Set(page.scheduleFaults.map((fault) => fault.slice(0, fault.indexOf(":"))));
+  const outsideRows = page.outside.filter((row) => !offSchedule.has(row.resource));
+  if (!page.floor.below && outsideRows.length > 0) parts.push(`outside 0.5×–2×: ${outsideRows.map((row) => row.resource).join(", ")}`);
+  return `A1 ${page.page}: ${parts.join("; ")} — ${page.passes ? "ok" : "FAIL"}`;
+}
+
 function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journal"], verdict: ShadowReportVerdict): string[] {
   const lines: string[] = [];
   if (window !== null) {
@@ -190,12 +222,13 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
       : `Coverage: NOT an acceptance window — ${uncovered.map((page) => `${page.page} ${page.reason}`
         + `${page.firstShadowAdmissionAt === null ? "" : ` (first shadow admission ${page.firstShadowAdmissionAt.toISOString()})`}`).join(", ")}; `
         + "the window must start once every page has run in shadow for 10 min");
-    for (const page of window.demand) {
-      lines.push(`A1 ${page.page}: steady ${page.steadyState} (band ${page.band.min}–${page.band.max}) ${page.inBand ? "ok" : "OUTSIDE"}`
-        + `${page.outside.length === 0 ? "" : `; outside 0.5×–2×: ${page.outside.map((row) => row.resource).join(", ")}`}`);
-    }
-    const unexplained = window.legacy.filter((row) => !row.explained).map((row) => row.ref);
-    lines.push(`A2 legacy volume: ${unexplained.length === 0 ? "every stream and sender explained" : `unexplained: ${unexplained.join(", ")}`}`);
+    for (const rule of window.rules) lines.push(`Rule ${rule.id}: ${rule.text}`);
+    for (const page of window.demand) lines.push(demandLine(page));
+    const unexplained = window.legacy.filter((row) => !row.explained).map((row) => `${row.ref} (${row.basis}: legacy ${row.legacy}, `
+      + `shadow ${row.shadow}${row.ratio === null ? "" : `, ratio ${row.ratio.toFixed(2)}`})`);
+    const liveOnly = window.legacy.filter((row) => row.basis === "live_only" && row.legacy > 0).map((row) => `${row.ref} ${row.legacy}`);
+    lines.push(`A2 legacy volume: ${unexplained.length === 0 ? "every stream and sender explained" : `unexplained: ${unexplained.join(", ")}`}`
+      + `${liveOnly.length === 0 ? "" : `; live-only, not in shadow (rule A2.live-only): ${liveOnly.join(", ")}`}`);
     const { fanMessages, transactions, offline } = window.livePath;
     lines.push(`A3 fan messages: ${fanMessages.frames} frames to read (${fanMessages.withoutShadowAdmission} without a shadow read, `
       + `${fanMessages.notRead} needing none), shadow p95 ${seconds(fanMessages.shadowAdmissionLagMs?.p95)} `

@@ -369,14 +369,18 @@ page status already shows.
 
 `pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only):
 part A over the live hour in one repeatable-read transaction — the coverage (every page in shadow, its actor running,
-from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (poll periods
-plus the reads the hour's socket frames imply after coalescing; walks listed apart), the legacy engine's volume of
-the hour per stream and sender with the reason it differs, the live-path decisions (a fan message or a new ledger
+from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (polls
+judged in runs against their schedule, the reads the hour's socket frames imply after coalescing; keys on a period
+longer than the hour counted at their rate; one-time backlog walks listed apart), the legacy engine's volume per
+stream and sender with the reason it differs (the hour, or 7-day rates for streams slower than the hour; live-only
+senders listed apart), the live-path decisions (a fan message or a new ledger
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
 the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
-step-3 switch.
+step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
+`report/shadow-window.ts`: A1.rate, A1.ceiling, A1.floor, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only),
+every report prints the rule it applied.
 
 ## Recipes
 

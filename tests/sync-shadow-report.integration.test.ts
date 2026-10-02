@@ -56,12 +56,15 @@ async function shadowPage(): Promise<WsCapturePage> {
   return page;
 }
 
-async function shadowAttempt(pageId: number, input: { resource: string; workClass: string; subject?: string; at: Date }): Promise<void> {
+async function shadowAttempt(
+  pageId: number,
+  input: { resource: string; workClass: string; subject?: string; at: Date; workId?: number },
+): Promise<void> {
   await testDb!.pool.query(
-    `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+    `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                                 admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
-     values ($1, true, $2, $3, $4, 1, 2000, 0, 2000, $5, $5::timestamptz + interval '50 milliseconds', 'shadow', 'x', '{}'::jsonb, 'shadow', 'skipped')`,
-    [pageId, input.resource, input.subject ?? "", input.workClass, input.at],
+     values ($1, true, $6, $2, $3, $4, 1, 2000, 0, 2000, $5, $5::timestamptz + interval '50 milliseconds', 'shadow', 'x', '{}'::jsonb, 'shadow', 'skipped')`,
+    [pageId, input.resource, input.subject ?? "", input.workClass, input.at, input.workId ?? null],
   );
 }
 
@@ -70,7 +73,8 @@ async function seedWindow(page: WsCapturePage, start: Date): Promise<void> {
   const at = (ms: number) => new Date(start.getTime() + ms);
   // The page ran in shadow before the window (its settling).
   await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-30 * MINUTE) });
-  // Two notification polls (period 30 min: 2 expected in the hour).
+  // Notification polls every 30 min: one before the window, two in it.
+  await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(-20 * MINUTE) });
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(10 * MINUTE) });
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(40 * MINUTE) });
   // A fan message on the socket, read 6 s later.
@@ -132,6 +136,28 @@ describe("the shadow report (design §3.12)", () => {
       pageId: page.pageId, groupId: fresh, fanRef: "200000000000000007", firstSeenAt: at(27 * MINUTE),
     });
     await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: fresh, at: at(25 * MINUTE + 4_000) });
+    // The daily stats: one snapshot sequence of 11 requests, 3 s apart.
+    for (let i = 0; i < 11; i += 1) {
+      await shadowAttempt(page.pageId, { resource: "stats.daily", workClass: "planned", at: at(15 * MINUTE + i * 3_000) });
+    }
+    // The hourly followers head: its run done 4.5 min before the window, none in it.
+    await shadowAttempt(page.pageId, { resource: "followers.head", workClass: "planned", at: at(-4.5 * MINUTE) });
+    // The daily follower reconcile: one walk of 24 steps, its row closed in the window.
+    const walk = await testDb.pool.query<{ id: string }>(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, closed_at, close_reason)
+       values ($1, true, 'followers.reconcile', '', 'goal', 'planned', 'done', $2, 'shadow') returning id`,
+      [page.pageId, at(50 * MINUTE)],
+    );
+    for (let i = 0; i < 24; i += 1) {
+      await shadowAttempt(page.pageId, { resource: "followers.reconcile", workClass: "planned", at: at(48 * MINUTE + i * 4_000), workId: Number(walk.rows[0]!.id) });
+    }
+    // The describer's CDN download of the legacy engine: live-only in the registry.
+    await testDb.pool.query(
+      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
+                                    captured_at, sent_at)
+       values ($1, $2, 'media_download', 'media.download', 'worker-1', 1, 'worker', $3, $4, $4)`,
+      [page.pageId, randomUUID(), randomUUID(), at(33 * MINUTE)],
+    );
     const report = await buildShadowReport(ctx(), {
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -145,17 +171,35 @@ describe("the shadow report (design §3.12)", () => {
     }]);
     const demand = window.demand[0]!;
     const row = (resource: string) => demand.resources.find((entry) => entry.resource === resource);
-    expect(row("notifications.forward")).toMatchObject({ observed: 2, expected: 2, verdict: "ok" });
+    // Polls are judged in runs (rule A1.poll-schedule).
+    expect(row("notifications.forward")).toMatchObject({ observed: 2, runs: { runs: 2, attemptsPerRun: [1, 1], early: [], late: [], overdue: null }, verdict: "ok" });
+    // A snapshot sequence of 11 requests is one run.
+    expect(row("stats.daily")).toMatchObject({ observed: 11, runs: { runs: 1, attemptsPerRun: [11] }, rate: { runSize: 11 }, verdict: "ok" });
+    // An hourly run just before the window, none in it: on schedule.
+    expect(row("followers.head")).toMatchObject({ observed: 0, runs: { runs: 0, overdue: null }, verdict: "ok" });
     expect(row("dm-messages.head")).toMatchObject({ class: "urgent", observed: 1, expected: 1, verdict: "ok" });
     expect(row("transactions.head")).toMatchObject({ observed: 1, expected: 1, verdict: "ok" });
     // The new chat's frame implies finding the chat, not reading its head.
     expect(row("dm-conversations.find")).toMatchObject({ class: "urgent", observed: 1, expected: 1, verdict: "ok" });
     // A 30-minute poll that never ran is listed with its reason.
-    expect(row("dm-conversations.head")).toMatchObject({ observed: 0, expected: 2, verdict: "outside" });
+    expect(row("dm-conversations.head")).toMatchObject({ observed: 0, verdict: "outside", reason: expect.stringContaining("overdue: ") });
+    expect(demand.scheduleFaults).toContainEqual(expect.stringMatching(/^dm-conversations\.head: overdue: /));
+    // The daily reconcile counts at its rate: 24 steps per 24 h (rule A1.rate).
+    expect(row("followers.reconcile")).toMatchObject({ observed: 24, rate: { runSize: 24, counted: 1 }, verdict: "not_modelled" });
     expect(demand.walks).toContainEqual({ resource: "media-stats.walk", observed: 3, oneTimeBacklog: true });
-    expect(demand.attempts).toEqual({ urgent: 3, requests: 0, planned: 5 });
-    expect(demand.steadyState).toBe(5);
-    expect(demand.inBand).toBe(false);
+    expect(demand.attempts).toEqual({ urgent: 3, requests: 0, planned: 40 });
+    // urgent 3 + notifications 2 + stats.daily 11 + the reconcile 24 observed;
+    // at their rates 3 + 2 + 11/24 + 24/24.
+    expect(demand.steadyStateRaw).toBe(40);
+    expect(demand.steadyState).toBe(6.46);
+    // The longer polls that never ran leave the ceiling unknown.
+    expect(demand.unknownRunSize).toEqual(["catalog.fixed", "dm-conversations.full", "payouts.daily", "posts.refresh", "stats.hourly", "top-spenders.window"]);
+    expect(demand).toMatchObject({ ceiling: "unknown", inBand: false, passes: false });
+    expect(demand.floor).toMatchObject({
+      below: true,
+      holds: false,
+      counterparts: { lacking: [], notInShadow: [{ ref: "sender:media_download", why: "live_only" }] },
+    });
 
     expect(window.livePath.fanMessages).toMatchObject({
       frames: 2,
@@ -178,10 +222,25 @@ describe("the shadow report (design §3.12)", () => {
     const hints = window.legacy.find((entry) => entry.ref === "sender:ws_hint")!;
     expect(hints).toMatchObject({ basis: "window", legacy: 4, explained: true });
     expect(hints.shadowKeys).toEqual(expect.arrayContaining(["dm-messages.head"]));
+    // A stream of daily keys is compared as rates (rule A2.rate): the shadow
+    // over its 1.5 h of history, in requests.
+    expect(window.legacy.find((entry) => entry.ref === "stream:stats_snapshot")).toMatchObject({
+      basis: "7d_rate", legacy: 0, shadow: 7.33, shadowHours: 1.5, explained: false,
+    });
+    // A live-only sender is listed, never unexplained (rule A2.live-only).
+    expect(window.legacy.find((entry) => entry.ref === "sender:media_download")).toMatchObject({
+      basis: "live_only", legacy: 1, shadow: 0, ratio: null, explained: true,
+    });
 
-    expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 8, violations: 0 }] });
-    expect(window.verdict).toMatchObject({ covered: true, a1: false, a3: true, a4: true });
+    expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 43, violations: 0 }] });
+    expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
+    expect(window.rules.map((rule) => rule.id)).toEqual(["A1.rate", "A1.ceiling", "A1.floor", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only"]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
+    expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
+    expect(report.summary).toContainEqual(expect.stringMatching(
+      /^A1 lilly-1: steady 6\.46 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run yet of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; polls OFF SCHEDULE \(rule A1\.poll-schedule\): .* — FAIL$/,
+    ));
+    expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\).*; live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
   });

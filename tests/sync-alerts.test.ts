@@ -20,12 +20,33 @@ import {
 import { LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
+import { POLL_JITTER } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { TIMELINE_PAGE_ESTIMATE } from "../apps/runtime/src/sync/fansly/resources/posts.ts";
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 import { routeThreadAt } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { REPLAY_EXCUSED_REASONS, scoreReplayKind } from "../apps/runtime/src/sync/report/shadow-journal.ts";
-import { isOneTimeWalk, SHADOW_SETTLE_MS, shadowWindowCoverage, simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
+import {
+  demandOfPage,
+  isOneTimeWalk,
+  judgePollRuns,
+  LEGACY_REGIME_SINCE,
+  legacyComparisonBasis,
+  legacyCounterparts,
+  legacyVolumeRow,
+  POLL_RUN_GAP_MS,
+  pollScheduleFault,
+  rateCount,
+  runsOf,
+  SHADOW_SETTLE_MS,
+  SHADOW_WINDOW_RULES,
+  shadowWindowCoverage,
+  simulateCoalescedReads,
+  type CounterpartCheck,
+  type KeyRun,
+  type RunAttempt,
+} from "../apps/runtime/src/sync/report/shadow-window.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
 // their incident wiring (titles, keys, paging) and the report's pure parts.
@@ -322,7 +343,8 @@ describe("the report's and the sampler's pure parts", () => {
       "catalog.vault", "fan-profiles.alias-backfill", "media-stats.walk", "notifications.backfill", "posts.backfill",
       "stats.backfill", "subscribers.history", "top-spenders.bootstrap", "transactions.backfill",
     ]);
-    // The recurring walks count in the 40–100/h band.
+    // The recurring walks count in the steady state (at their rate where
+    // they run on a minimum interval, rule A1.rate).
     expect(goals.filter((spec) => !isOneTimeWalk(spec)).map((spec) => spec.key)).toEqual(expect.arrayContaining([
       "fan-earnings.roster", "post-replies.walk", "purchases.targets", "fan-profiles.lookup", "posts.engagement",
       "followers.reconcile", "payouts.walk",
@@ -431,5 +453,335 @@ describe("the report's and the sampler's pure parts", () => {
     expect(quantileOf([5, 1, 3, 2, 4], 0.95)).toBe(5);
     expect(syncMetricsDue(new Date("2026-10-02T12:05:30Z"))).toBe(true);
     expect(syncMetricsDue(new Date("2026-10-02T12:06:30Z"))).toBe(false);
+  });
+});
+
+// ── shadow report part A: the rules A1.rate, A1.ceiling, A1.floor,
+// A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only (design §3.12),
+// pinned on the production numbers of 2026-10-02 ──────────────────────────────
+
+const HOUR = 60 * MINUTE;
+const T = (iso: string) => new Date(iso).getTime();
+/** The acceptance hour of the first production report. */
+const WINDOW = { startMs: T("2026-10-02T11:50:00Z"), endMs: T("2026-10-02T12:50:00Z") };
+
+/** One attempt: sent at `sentMs`, done 500 ms later. */
+function attempt(sentMs: number, extra: Partial<RunAttempt> = {}): RunAttempt {
+  return { workId: null, demandRevision: 1, sentMs, doneMs: sentMs + 500, workClosedMs: null, ...extra };
+}
+
+/** A run of `steps` attempts `stepMs` apart from `startMs`. */
+function steps(startMs: number, count: number, stepMs = 3_000, extra: Partial<RunAttempt> = {}): RunAttempt[] {
+  return Array.from({ length: count }, (_, index) => attempt(startMs + index * stepMs, extra));
+}
+
+/** Runs of one request every `everyMs` from `firstMs` while before `untilMs`. */
+function periodic(firstMs: number, everyMs: number, untilMs: number): KeyRun[] {
+  const attempts: RunAttempt[] = [];
+  for (let at = firstMs; at < untilMs; at += everyMs) attempts.push(attempt(at));
+  return runsOf(attempts, "poll");
+}
+
+const shadowPage = (label: string, registryOverrides: Record<string, unknown> = {}) =>
+  ({ pageId: 5, pageLabel: label, mode: "shadow" as const, registryOverrides });
+const NO_GAPS: CounterpartCheck = { lacking: [], notInShadow: [] };
+
+/**
+ * lilly-2 in 2026-10-02 11:50–12:50: 20 poll requests, its daily follower
+ * reconcile (186 steps, 12:32:28–12:48:02, its row closed at 12:48:02) and
+ * every longer poll's newest run before the window, every poll on schedule.
+ */
+function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRun?: string; extraObserved?: Record<string, { class: string; attempts: number }> } = {}) {
+  const reconcileAt = options.reconcileAt ?? T("2026-10-02T12:32:28Z");
+  const reconcile = runsOf(steps(reconcileAt, 186, 5_000, { workId: 5316, workClosedMs: reconcileAt + 186 * 5_000 + 2_000 }), "walk");
+  const runs = new Map<string, readonly KeyRun[]>([
+    ["transactions.insurance", options.insurance ?? periodic(T("2026-10-02T11:46:00Z"), 5 * MINUTE, WINDOW.endMs)],
+    ["notifications.forward", periodic(T("2026-10-02T11:45:00Z"), 30 * MINUTE, WINDOW.endMs)],
+    ["dm-conversations.head", periodic(T("2026-10-02T11:48:00Z"), 30 * MINUTE, WINDOW.endMs)],
+    ["account.poll", periodic(T("2026-10-02T11:20:00Z"), HOUR, WINDOW.endMs)],
+    ["followers.head", periodic(T("2026-10-02T11:30:00Z"), HOUR, WINDOW.endMs)],
+    ["subscribers.poll", periodic(T("2026-10-02T11:40:00Z"), HOUR, WINDOW.endMs)],
+    ["transactions.rescan", periodic(T("2026-10-02T11:25:00Z"), HOUR, WINDOW.endMs)],
+    ["followers.reconcile", reconcile],
+    // Each longer poll's newest run (its requests in lilly-2's journal).
+    ["dm-conversations.full", runsOf(steps(T("2026-10-01T20:00:00Z"), 152), "poll")],
+    ["posts.refresh", runsOf(steps(T("2026-10-02T10:52:03Z"), 2), "poll")],
+    ["stats.daily", runsOf(steps(T("2026-10-01T14:00:00Z"), 11), "poll")],
+    ["stats.hourly", runsOf(steps(T("2026-10-01T22:00:00Z"), 1), "poll")],
+    ["catalog.fixed", runsOf(steps(T("2026-10-01T18:00:00Z"), 6), "poll")],
+    ["payouts.daily", runsOf(steps(T("2026-10-01T19:00:00Z"), 2), "poll")],
+    ["top-spenders.window", runsOf(steps(T("2026-10-02T10:30:00Z"), 1), "poll")],
+  ]);
+  if (options.withoutRun !== undefined) runs.delete(options.withoutRun);
+  const inWindow = (key: string) => (runs.get(key) ?? []).flatMap((run) => run.sentMs).filter((ms) => ms >= WINDOW.startMs && ms < WINDOW.endMs).length;
+  const observed = new Map<string, { class: string; attempts: number }>();
+  for (const key of runs.keys()) {
+    const n = inWindow(key);
+    if (n > 0) observed.set(key, { class: "planned", attempts: n });
+  }
+  for (const [key, row] of Object.entries(options.extraObserved ?? {})) observed.set(key, row);
+  return { runs, observed };
+}
+
+describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
+  it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
+    expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
+      "A1.rate", "A1.ceiling", "A1.floor", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
+    ]);
+    expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A1.ceiling")!.text).toContain("at most 100 an hour");
+    for (const ref of Object.keys(LEGACY_REGIME_SINCE)) {
+      expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A2.legacy-regime")!.text).toContain(ref);
+    }
+  });
+
+  it("a run is a poll's consecutive steps; a gap or a new demand revision starts the next; a walk's run is its row", () => {
+    // lora-2 stats.daily 12:05:02–12:05:30: 11 requests, one run.
+    expect(runsOf(steps(T("2026-10-02T12:05:02Z"), 11, 2_800), "poll").map((run) => run.sentMs.length)).toEqual([11]);
+    // ari-1 subscribers.poll: the period, then two socket bumps 5 s apart.
+    const subscribers = runsOf([
+      attempt(T("2026-10-02T11:32:26.756Z"), { demandRevision: 1 }),
+      attempt(T("2026-10-02T11:56:44.283Z"), { demandRevision: 2 }),
+      attempt(T("2026-10-02T11:56:49.494Z"), { demandRevision: 3 }),
+    ], "poll");
+    expect(subscribers).toHaveLength(3);
+    // Two walks of one key, one row each, however close.
+    const walks = runsOf([...steps(0, 3, 1_000, { workId: 1 }), ...steps(4_000, 2, 1_000, { workId: 2 })], "walk");
+    expect(walks.map((run) => [run.workId, run.sentMs.length])).toEqual([[1, 3], [2, 2]]);
+    // The run gap stays below the shortest poll period's earliest re-run.
+    const shortest = Math.min(...FANSLY_RESOURCE_SPECS.filter((entry) => entry.kind === "poll").map((entry) => entry.period!.everyMs));
+    expect(POLL_RUN_GAP_MS).toBeLessThan((1 - POLL_JITTER) * shortest);
+  });
+
+  it("judges polls in runs: a multi-request run is one run; a window between two hourly runs is no fault", () => {
+    // ari-1 transactions.rescan: runs done 11:45:31.28 and at 12:51:15 — none in the window.
+    const rescan = judgePollRuns({
+      periodMs: HOUR,
+      window: WINDOW,
+      placementMs: T("2026-10-02T10:05:21Z"),
+      runs: runsOf([attempt(T("2026-10-02T10:50:15.612Z")), { ...attempt(T("2026-10-02T11:45:29.9Z")), doneMs: T("2026-10-02T11:45:31.28Z") }], "poll"),
+    });
+    expect(rescan).toMatchObject({ runs: 0, expectedRuns: { min: 0, max: 2 }, early: [], late: [], overdue: null });
+    expect(pollScheduleFault(rescan)).toBeNull();
+    // lora-1 posts.refresh: 6 requests 2.6–3 s apart, its row placed 10:05:31.
+    const refresh = judgePollRuns({
+      periodMs: 6 * HOUR,
+      window: WINDOW,
+      placementMs: T("2026-10-02T10:05:31.56Z"),
+      runs: runsOf(steps(T("2026-10-02T12:37:18.308Z"), 6, 2_740), "poll"),
+    });
+    expect(refresh).toMatchObject({ runs: 1, attemptsPerRun: [6], early: [], late: [], overdue: null });
+    // lora-2 stats.daily: one run of 11.
+    const daily = judgePollRuns({
+      periodMs: 24 * HOUR,
+      window: WINDOW,
+      placementMs: T("2026-10-02T10:05:29Z"),
+      runs: runsOf(steps(T("2026-10-02T12:05:02.439Z"), 11, 2_790), "poll"),
+    });
+    expect(daily).toMatchObject({ runs: 1, attemptsPerRun: [11] });
+    expect(pollScheduleFault(daily)).toBeNull();
+  });
+
+  it("a poll off schedule is named: overdue, re-run in a loop, late after its placement; a demand bump is no fault", () => {
+    // The rescan's last run done at 11:30: due by 12:38 at the latest.
+    const overdue = judgePollRuns({ periodMs: HOUR, window: WINDOW, placementMs: null, runs: runsOf([attempt(T("2026-10-02T11:29:59.5Z"))], "poll") });
+    expect(overdue.overdue).toEqual({ dueBy: new Date(T("2026-10-02T11:30:00Z") + 1.1 * HOUR + 2 * MINUTE) });
+    expect(pollScheduleFault(overdue)).toMatch(/^overdue: no run since one was due by 2026-10-02T12:38:00\.000Z/);
+    // An hourly poll re-run 5 min after its completion at the same revision: a loop.
+    const loop = judgePollRuns({
+      periodMs: HOUR,
+      window: WINDOW,
+      placementMs: null,
+      runs: runsOf([attempt(T("2026-10-02T11:40:00Z")), attempt(T("2026-10-02T11:55:00Z")), attempt(T("2026-10-02T12:00:00Z"))], "poll"),
+    });
+    expect(loop.early.map((run) => run.at)).toEqual([new Date(T("2026-10-02T11:55:00Z")), new Date(T("2026-10-02T12:00:00Z"))]);
+    expect(pollScheduleFault(loop)).toMatch(/^early: /);
+    // ari-1 subscribers.poll: bumps at 11:56:44 (rev 2) and 11:56:49 (rev 3).
+    const bumped = judgePollRuns({
+      periodMs: HOUR,
+      window: WINDOW,
+      placementMs: null,
+      runs: runsOf([
+        attempt(T("2026-10-02T11:32:26.756Z"), { demandRevision: 1 }),
+        attempt(T("2026-10-02T11:56:44.283Z"), { demandRevision: 2 }),
+        attempt(T("2026-10-02T11:56:49.494Z"), { demandRevision: 3 }),
+      ], "poll"),
+    });
+    expect(bumped).toMatchObject({ runs: 2, demandRuns: 2, early: [], late: [], overdue: null });
+    // A 30-minute poll placed 40 min before its first run, and one that never ran.
+    const placed = T("2026-10-02T11:20:00Z");
+    expect(judgePollRuns({ periodMs: 30 * MINUTE, window: WINDOW, placementMs: placed, runs: runsOf([attempt(placed + 40 * MINUTE)], "poll") }).late)
+      .toEqual([{ at: new Date(placed + 40 * MINUTE), afterMs: 40 * MINUTE }]);
+    expect(judgePollRuns({ periodMs: 30 * MINUTE, window: WINDOW, placementMs: placed, runs: [] }).overdue)
+      .toEqual({ dueBy: new Date(placed + 32 * MINUTE) });
+  });
+
+  it("a daily walk counts at its rate whatever hour it lands in: lilly-2's 186-step reconcile is 7.75 an hour", () => {
+    const reconcile = (startMs: number) => runsOf(steps(startMs, 186, 5_000, { workId: 5316, workClosedMs: startMs + 932_000 }), "walk");
+    const at = (startMs: number) => rateCount({ periodMs: 24 * HOUR, window: WINDOW, runs: reconcile(startMs), kind: "interval" });
+    expect(at(T("2026-10-02T12:32:28Z"))).toMatchObject({ runSize: 186, extra: 0, counted: 7.75 });
+    expect(at(T("2026-10-02T06:32:28Z"))).toMatchObject({ runSize: 186, extra: 0, counted: 7.75 });
+    // Still running at the window end: not a size yet.
+    expect(rateCount({
+      periodMs: 24 * HOUR,
+      window: WINDOW,
+      runs: runsOf(steps(T("2026-10-02T12:40:00Z"), 100, 5_000, { workId: 9, workClosedMs: T("2026-10-02T12:58:00Z") }), "walk"),
+      kind: "interval",
+    })).toMatchObject({ runSize: null, counted: null });
+    // An owner's walk within the interval counts besides the rate.
+    const owner = rateCount({
+      periodMs: 24 * HOUR,
+      window: WINDOW,
+      runs: [...reconcile(T("2026-10-02T06:32:28Z")), ...runsOf(steps(T("2026-10-02T12:00:00Z"), 10, 5_000, { workId: 7, workClosedMs: T("2026-10-02T12:01:00Z") }), "walk")],
+      kind: "interval",
+    });
+    expect(owner).toMatchObject({ runSize: 10, extra: 10 });
+  });
+
+  it("lilly-2's hour: 206 observed is 35.42 an hour at the rates, under the ceiling; below 40 the floor's exception holds", () => {
+    const { runs, observed } = lilly2();
+    const demand = demandOfPage(shadowPage("lilly-2"), {
+      window: WINDOW, observed, reads: undefined,
+      facts: { runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:23Z") },
+      counterparts: { lacking: [], notInShadow: [{ ref: "sender:ws_connect", why: "live_only" }] },
+    });
+    expect(demand.steadyStateRaw).toBe(206);
+    // 20 + 186/24 + 152/24 + 2/6 + 11/24 + 1/22 + 6/24 + 2/24 + 1/6
+    expect(demand.steadyState).toBe(35.42);
+    expect(demand).toMatchObject({ unknownRunSize: [], ceiling: "ok", inBand: false, scheduleFaults: [], passes: true });
+    expect(demand.floor).toMatchObject({ below: true, holds: true, outside: [] });
+    expect(demand.resources.find((row) => row.resource === "followers.reconcile")).toMatchObject({
+      observed: 186, rate: { runSize: 186, counted: 7.75 }, verdict: "not_modelled",
+    });
+    // The same walk 6 h before the window: the same steady state.
+    const earlier = lilly2({ reconcileAt: T("2026-10-02T06:32:28Z") });
+    const phased = demandOfPage(shadowPage("lilly-2"), {
+      window: WINDOW, observed: earlier.observed, reads: undefined,
+      facts: { runs: earlier.runs, placements: new Map(), firstShadowMs: null }, counterparts: NO_GAPS,
+    });
+    expect(phased).toMatchObject({ steadyStateRaw: 20, steadyState: 35.42, passes: true });
+  });
+
+  it("A1 fails: a key without a finished run, a starved poll, over the ceiling, below the floor with an unmet expectation or a legacy stream without a counterpart", () => {
+    const judge = (fixture: ReturnType<typeof lilly2>, extra: { reads?: Map<string, { reads: number; dueLagsMs: number[] }>; counterparts?: CounterpartCheck } = {}) =>
+      demandOfPage(shadowPage("lilly-2"), {
+        window: WINDOW, observed: fixture.observed, reads: extra.reads,
+        facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z") },
+        counterparts: extra.counterparts ?? NO_GAPS,
+      });
+    // The daily list sweep has not run yet: its size, so the ceiling, is unknown.
+    expect(judge(lilly2({ withoutRun: "dm-conversations.full" }))).toMatchObject({
+      unknownRunSize: ["dm-conversations.full"], ceiling: "unknown", scheduleFaults: [], passes: false,
+    });
+    // The insurance poll's last run ended a minute before the window; nothing since.
+    const starved = judge(lilly2({ insurance: periodic(T("2026-10-02T11:44:00Z"), 5 * MINUTE, WINDOW.startMs) }));
+    expect(starved.scheduleFaults).toEqual([expect.stringMatching(/^transactions\.insurance: overdue: /)]);
+    expect(starved.passes).toBe(false);
+    // 70 chat reads on 70 socket reads: 105.42 an hour, over the ceiling.
+    const busy = judge(
+      lilly2({ extraObserved: { "dm-messages.head": { class: "urgent", attempts: 70 } } }),
+      { reads: new Map([["dm-messages.head", { reads: 70, dueLagsMs: [] }]]) },
+    );
+    expect(busy).toMatchObject({ steadyState: 105.42, ceiling: "over", inBand: false, passes: false });
+    expect(busy.floor.below).toBe(false);
+    // Below the floor with four chat reads the frames imply and none made.
+    const missed = judge(lilly2(), { reads: new Map([["dm-messages.head", { reads: 4, dueLagsMs: [] }]]) });
+    expect(missed.floor).toMatchObject({ below: true, holds: false, outside: ["dm-messages.head"] });
+    expect(missed.passes).toBe(false);
+    // Below the floor with a legacy stream the shadow never matched.
+    const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 0.41, the shadow none (7d_rate)" }], notInShadow: [] } });
+    expect(lacking.floor).toMatchObject({ below: true, holds: false });
+    expect(lacking.passes).toBe(false);
+  });
+
+  it("lilly-1 at the registry's floor (19 requests) passes on schedule with its walks sized", () => {
+    const fixture = lilly2({
+      reconcileAt: T("2026-10-01T22:00:00Z"),
+      // 11 insurance polls in the hour (the ±10 % jitter).
+      insurance: runsOf([
+        ...[0, 5.4, 10.8, 16.2, 21.6, 27, 32.4, 37.8, 43.2, 48.6, 54].map((minute) => attempt(WINDOW.startMs + 2 * MINUTE + minute * MINUTE)),
+        attempt(WINDOW.startMs - 3 * MINUTE),
+      ], "poll"),
+    });
+    const demand = demandOfPage(shadowPage("lilly-1"), {
+      window: WINDOW, observed: fixture.observed, reads: undefined,
+      facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: null }, counterparts: NO_GAPS,
+    });
+    expect(demand.steadyStateRaw).toBe(19);
+    expect(demand).toMatchObject({ ceiling: "ok", scheduleFaults: [], floor: { below: true, holds: true }, passes: true });
+  });
+});
+
+describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
+  const pages = Array.from({ length: 6 }, () => ({ registryOverrides: {} as Record<string, unknown> }));
+  const specsOf = (ref: string) => FANSLY_RESOURCE_SPECS.filter((entry) => entry.legacy.some((legacy) =>
+    ("stream" in legacy ? `stream:${legacy.stream}` : `sender:${legacy.sender}`) === ref));
+  const basis = (ref: string, on = pages) => legacyComparisonBasis(specsOf(ref), on, HOUR).basis;
+
+  it("compares a stream as a rate when every key that runs in shadow recurs less often than the window", () => {
+    for (const ref of [
+      "stream:payouts", "stream:posts", "stream:stats_snapshot", "stream:fan_earnings", "stream:top_spenders",
+      "stream:post_replies", "stream:catalog", "stream:media_stats", "stream:followers_reconcile",
+    ]) expect([ref, basis(ref)]).toEqual([ref, "7d_rate"]);
+    for (const ref of [
+      "stream:light", "stream:transactions", "stream:dm_messages", "stream:dm_conversations", "stream:followers",
+      "stream:purchase_history", "sender:ws_hint", "sender:account_me_api",
+    ]) expect([ref, basis(ref)]).toEqual([ref, "window"]);
+    for (const ref of ["sender:media_download", "sender:ws_connect", "sender:binding_preflight"]) expect([ref, basis(ref)]).toEqual([ref, "live_only"]);
+    // A page that polls the stats hourly puts the stream back on the window.
+    expect(basis("stream:stats_snapshot", [...pages, { registryOverrides: { "stats.daily": { everyMs: HOUR } } }])).toBe("window");
+  });
+
+  it("counts physical attempts on both sides: legacy over its week, the shadow over each page's history", () => {
+    const historyMs = [2.733, 2.695, 2.708, 2.673, 2.686, 2.743].map((hours) => hours * HOUR);
+    const row = (ref: string, week: number, shadow: number[], note: string | null = null) => legacyVolumeRow({
+      ref, keys: specsOf(ref).map((entry) => entry.key), basis: "7d_rate", liveOnlyKeys: [], windowMs: HOUR,
+      legacy: { window: 0, rate: { attempts: week, from: new Date(WINDOW.endMs - 168 * HOUR), ms: 168 * HOUR } },
+      shadow: { window: 0, history: shadow.map((attempts, index) => ({ attempts, historyMs: historyMs[index]! })) },
+      note, regime: null,
+    });
+    // One stats.daily run of 11 requests counts 11, not one run.
+    expect(row("stream:stats_snapshot", 582, [0, 11, 0, 0, 0, 0])).toMatchObject({ basis: "7d_rate", legacy: 3.46, shadow: 4.08, explained: true });
+    expect(row("stream:payouts", 84, [0, 0, 2, 0, 0, 0])).toMatchObject({ legacy: 0.5, shadow: 0.74, explained: true });
+    expect(row("stream:posts", 912, [6, 1, 0, 0, 2, 9])).toMatchObject({ legacy: 5.43, shadow: 6.59, explained: true });
+    // Legacy's one-time lifetime re-walk in its week: outside unless its regime is cut off.
+    const fanEarnings = row("stream:fan_earnings", 10_376, [12, 2, 4, 0, 2, 16]);
+    expect(fanEarnings.ratio).toBeCloseTo(0.214, 2);
+    expect(fanEarnings.explained).toBe(false);
+    expect(LEGACY_REGIME_SINCE["stream:fan_earnings"]!.since).toEqual(new Date("2026-09-30T00:00:00Z"));
+  });
+
+  it("lists a live-only sender with its legacy volume, never as unexplained", () => {
+    const keys = specsOf("sender:media_download").map((entry) => entry.key);
+    expect(legacyVolumeRow({
+      ref: "sender:media_download", keys, basis: "live_only", liveOnlyKeys: keys, windowMs: HOUR,
+      legacy: { window: 5, rate: null }, shadow: { window: 0, history: [] }, note: null, regime: null,
+    })).toMatchObject({ basis: "live_only", legacy: 5, shadow: 0, ratio: null, explained: true, note: expect.stringContaining("media-download.fetch") });
+  });
+
+  it("the floor's counterparts: a stream the shadow never matched lacks one; live-only and history requests are listed apart", () => {
+    const specsByRef = new Map(["stream:post_replies", "sender:media_download", "sender:targeted_backfill", "stream:notifications", "stream:light"]
+      .map((ref) => [ref, specsOf(ref)] as const));
+    const rows = new Map([
+      ["stream:post_replies", { legacy: 0.41, shadow: 0, basis: "7d_rate" as const }],
+      ["stream:notifications", { legacy: 12, shadow: 11, basis: "window" as const }],
+      ["stream:light", { legacy: 6, shadow: 6, basis: "window" as const }],
+    ]);
+    const legacy = new Map([
+      ["stream:post_replies", 3], ["sender:media_download", 5], ["sender:targeted_backfill", 2], ["stream:notifications", 2], ["stream:light", 1],
+    ]);
+    expect(legacyCounterparts({ page: shadowPage("ari-1"), legacy, specsByRef, rows })).toEqual({
+      lacking: [{ ref: "stream:post_replies", why: "legacy 0.41, the shadow none (7d_rate)" }],
+      notInShadow: [{ ref: "sender:media_download", why: "live_only" }, { ref: "sender:targeted_backfill", why: "history_requests" }],
+    });
+    // The owner switched the account poll off on the page: its legacy stream lacks a counterpart there.
+    expect(legacyCounterparts({
+      page: shadowPage("ari-1", { "account.poll": { enabled: false } }), legacy: new Map([["stream:light", 1]]), specsByRef, rows,
+    }).lacking).toEqual([{ ref: "stream:light", why: "every key is switched off on the page" }]);
+    // A page without legacy traffic on a stream is not judged on it.
+    expect(legacyCounterparts({ page: shadowPage("lilly-1"), legacy: new Map([["stream:post_replies", 0]]), specsByRef, rows }).lacking).toEqual([]);
+  });
+
+  it("the shadow's timeline estimate is the page size legacy measured (15 posts a page)", () => {
+    expect(TIMELINE_PAGE_ESTIMATE).toBe(15);
   });
 });
