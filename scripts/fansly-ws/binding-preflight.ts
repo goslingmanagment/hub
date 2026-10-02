@@ -3,6 +3,7 @@ import { createDb } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 import { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { inspectFanslyBinding, isNativeAccountId } from "../../apps/runtime/src/services/egress/fansly-binding-preflight.ts";
+import { refuseEngineOwnedPage } from "./engine-owned.ts";
 import { withFanslyScriptSendGuard } from "./send-guard.ts";
 
 /** The send guard's wait plus the request, inside the CLI's 35 s process
@@ -28,7 +29,9 @@ export async function runBindingPreflight(pageLabel: "lilly-1", signal: AbortSig
   pool.on("error", () => controller.abort());
   let context: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
   try {
-    context = await readProbeSnapshot(createDb(pool), config, pageLabel);
+    const db = createDb(pool);
+    await refuseEngineOwnedPage(db, pageLabel);
+    context = await readProbeSnapshot(db, config, pageLabel);
     const snapshot = context;
     const startedAt = new Date().toISOString();
     // Plan §2.5: the request waits for the page's send guard (source

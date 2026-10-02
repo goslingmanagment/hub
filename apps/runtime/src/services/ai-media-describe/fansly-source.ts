@@ -1,6 +1,7 @@
 import {
   findLatestMediaOfferObservation,
   getFirstAiMediaDescriptionLink,
+  isFanslyPageEngineOwned,
   requestAiMediaAcceleratorRead,
   requestPageSync,
   type AiMediaDescriptionRow,
@@ -145,7 +146,10 @@ async function maybeAccelerate(app: AppContext, row: AiMediaDescriptionRow, grou
   if (!groupRef || !messageRef) return;
   const effective = await loadEffectiveConfig(app.db, app.config);
   if (effective.aiMediaDescribeFanslyAcceleratorEnabled !== true) return;
-  if (await requestAiMediaAcceleratorRead(app.db, { pageId: row.pageId, groupRef, messageRef, now: new Date() })) {
+  if (await requestAiMediaAcceleratorRead(app.db, { pageId: row.pageId, groupRef, messageRef, now: new Date() })
+    // A page the Fansly Sync Engine owns: its legacy DM stream is fenced, and
+    // the head read there is the WS confirmation's (step-3 design §3.1 item 7).
+    && !(await isFanslyPageEngineOwned(app.db, row.pageId)).owned) {
     await requestPageSync(app.db, { pageId: row.pageId, streams: ["dm_messages"], source: "event" });
   }
 }

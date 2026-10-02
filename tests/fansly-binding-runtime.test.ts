@@ -7,6 +7,7 @@ import { bindingGeneration, bindingReceipt } from "./helpers/fansly-binding-fixt
 const spies = vi.hoisted(() => ({
   snapshot: vi.fn(), generation: vi.fn(), destroy: vi.fn(), end: vi.fn(), socket: vi.fn(),
   inspect: vi.fn(), short: vi.fn(), long: vi.fn(), guard: vi.fn(), acquire: vi.fn(), complete: vi.fn(),
+  refuse: vi.fn(),
 }));
 // Plan §2.5: the W0 scripts send through the page's send guard on a writable
 // connection of their own (scripts/fansly-ws/send-guard.ts, tested on a real
@@ -15,6 +16,10 @@ vi.mock("../scripts/fansly-ws/send-guard.ts", () => ({
   PROBE_HANDSHAKE_WINDOW_MS: 20_000,
   withFanslyScriptSendGuard: spies.guard,
 }));
+// Step-3 design §3.1 item 11: the read-only check of a page the Fansly Sync
+// Engine owns, through the script's own pool (tested on a real database in
+// tests/sync-legacy-fence.integration.test.ts).
+vi.mock("../scripts/fansly-ws/engine-owned.ts", () => ({ refuseEngineOwnedPage: spies.refuse }));
 vi.mock("pg", () => ({ Pool: class { on() {} end = spies.end; } }));
 vi.mock("@agency_hub_core/db", () => ({ createDb: () => ({}) }));
 vi.mock("@agency_hub_core/shared", () => ({ loadConfig: () => ({ databaseUrl: "unused" }) }));
@@ -52,6 +57,7 @@ beforeEach(async () => {
   spies.inspect.mockResolvedValue({ identityMatched: true, observedAccountId: "123", restRequests: 1,
     httpStatus: 200, reason: "matched" });
   spies.complete.mockResolvedValue(undefined);
+  spies.refuse.mockResolvedValue(undefined);
   spies.acquire.mockResolvedValue(lease);
   spies.guard.mockImplementation(async (_config: unknown, _input: unknown, work: (guard: unknown) => Promise<unknown>) =>
     work(sendGuard));
@@ -169,6 +175,20 @@ describe("W0 preflight and receiver boundary", () => {
     expect(spies.socket).not.toHaveBeenCalled();
     expect(spies.end).toHaveBeenCalledOnce();
   });
+
+  it.each(["short", "long", "preflight"] as const)(
+    "%s refuses a page the Fansly Sync Engine owns before its snapshot (step-3 S3-01)", async (kind) => {
+      spies.refuse.mockRejectedValue(new Error("Page lilly-1 is on the Fansly Sync Engine (mode live)"));
+      const attempt = kind === "preflight" ? runBindingPreflight("lilly-1", new AbortController().signal) : run(kind);
+      await expect(attempt).rejects.toThrow("on the Fansly Sync Engine");
+      expect(spies.refuse).toHaveBeenCalledWith(expect.anything(), "lilly-1");
+      expect(spies.snapshot).not.toHaveBeenCalled();
+      expect(spies.guard).not.toHaveBeenCalled();
+      expect(spies.socket).not.toHaveBeenCalled();
+      expect(spies.inspect).not.toHaveBeenCalled();
+      expect(spies.end).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preflight still closes the DB pool if owned dispatcher cleanup fails", async () => {
     spies.destroy.mockRejectedValue(new Error("fixture_cleanup_failure"));

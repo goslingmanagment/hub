@@ -186,6 +186,23 @@ lock session alone is never a confirmation. The first send after a takeover wait
 database knows of (I5). Until the switch PR no build runs a live loop (`LIVE_LOOP_ENABLED = false`): a page written
 `live` is reported and never acquired; `sync page mode` moves pages only between `off` and `shadow`.
 
+## Legacy fences (step 3)
+
+While the engine owns a page (`handover` or `live`) no legacy component even tries to send for it (step-3 design
+§3.1); the step-1 guard row (`owner_engine`, 0229) stays the catch-all at the wire. One predicate,
+`legacyOwnsFanslyPageSql` (`repositories/sync/pages.ts`), gates the legacy planner and leases
+(`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
+`sync_silent` deadman, the AI fast lane (`page_held`), hydration dispatch and auto-approval, and the deletion
+reconcile's window drift pass. The legacy processes ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS
+supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector files
+its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM stream wake; a deletion keeps its
+`mutation_debt` receipt, so a frame captured before the switch is still marked), the AI describer neither downloads nor
+wakes the DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
+`scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
+command to use instead. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
+reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query, so leaving to `off`
+restores the legacy engine with no other action.
+
 ## Invariants
 
 Each is enforced in exactly one place and pinned by a test (design §1). The first is the owner's rule.

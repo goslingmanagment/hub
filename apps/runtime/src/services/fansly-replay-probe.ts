@@ -3,6 +3,7 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
+import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 
 // Stage 6 — Fansly server-replay gate.
 // Fires one read-only call per endpoint family against an owner-chosen page,
@@ -114,6 +115,9 @@ export async function runFanslyReplayProbe(
   if (options.transactionsParity && !options.transactionsAfter) {
     throw new Error("transactions parity requires a non-empty --transactions-after bound");
   }
+  // Step-3 design §3.1 item 11: a page the Fansly Sync Engine owns is
+  // refused before any named page sends (dry runs included).
+  await assertLegacyOwnsFanslyPageLabels(app, options.pageLabels, SYNC_ENGINE_HINTS.probe);
   const now = new Date();
   const results: ReplayProbeResult[] = [];
   const families = options.transactionsParity ? TRANSACTION_PARITY_FAMILIES : FAMILIES;

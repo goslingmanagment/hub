@@ -56,6 +56,7 @@ import {
   getPageSyncState,
   getSyncStreamsForPlatform,
   heartbeatPageSyncLease,
+  isFanslyPageEngineOwned,
   isConversationSyncHealthExcluded,
   listPageSyncStates,
   PageSyncLeaseLostError,
@@ -720,7 +721,10 @@ export async function runTargetedThreadBackfill(
         !own ||
         own.status === "paused" ||
         own.blockerKind !== null ||
-        (own.retryAt !== null && own.retryAt.getTime() >= deadline)
+        (own.retryAt !== null && own.retryAt.getTime() >= deadline) ||
+        // The Fansly Sync Engine owns the page (step-3 design §3.1): its
+        // legacy lease stays refused until a rollback, so waiting is useless.
+        (await isFanslyPageEngineOwned(app.db, result.platformAccountId)).owned
       ) {
         return result;
       }

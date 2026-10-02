@@ -8,6 +8,7 @@ import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services
 import { readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyContinuity, type parseContinuityArgs } from "./continuity.ts";
 import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
+import { refuseEngineOwnedPage } from "./engine-owned.ts";
 import { PROBE_HANDSHAKE_WINDOW_MS, withFanslyScriptSendGuard } from "./send-guard.ts";
 
 export async function runStoredFanslyContinuity(
@@ -29,6 +30,7 @@ export async function runStoredFanslyContinuity(
   const db = createDb(pool);
   let context: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
   try {
+    await refuseEngineOwnedPage(db, args.pageLabel);
     context = await readProbeSnapshot(db, config, args.pageLabel);
     const bindingPreflight = await verifyBindingBeforeConnect(binding, context, args.pageLabel,
       () => readProbeGeneration(db, args.pageLabel));

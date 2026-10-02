@@ -9,6 +9,7 @@ import {
   pages,
 } from "../schema.ts";
 import { egressKeySql } from "./egress.ts";
+import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | bigint | null | undefined;
@@ -919,7 +920,10 @@ export function pageSyncRunnableSinceSql(tableAlias: string) {
 }
 
 /** True unless the page is inside a provider hold at `now`
- * (armPageSyncProviderHold): then none of its streams may start. */
+ * (armPageSyncProviderHold): then none of its streams may start. The planner,
+ * the executor's lease and the targeted lease also carry
+ * `legacyOwnsFanslyPageSql` (sync/pages.ts): no stream of a page the Fansly
+ * Sync Engine owns (`handover`/`live`) is enqueued or leased. */
 function pageSyncProviderHoldClearSql(pageIdColumn: string, now: Date) {
   return sql`not exists (
     select 1 from ${pageSyncProviderHolds} ph
@@ -2183,6 +2187,7 @@ export async function listRunnablePageSync(
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
         and ${pageSyncProviderHoldClearSql("st.page_id", now)}
+        and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
     )
     select rs."pageId" as "pageId",
            rs."platform" as "platform",
@@ -2222,6 +2227,7 @@ export async function markPageSyncEnqueued(
       and blocker_kind is null
       and leased_seq is null
       and (retry_at is null or retry_at <= ${now})
+      and ${legacyOwnsFanslyPageSql(sql`${pageId}`)}
   `);
 }
 
@@ -2264,6 +2270,7 @@ export async function acquirePageSyncLease(
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
         and ${pageSyncProviderHoldClearSql("st.page_id", now)}
+        and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
     ), candidate as (
       select r."pageId", r."stream", r."requestSeq"
       from runnable r
@@ -2372,8 +2379,8 @@ export interface TargetedPageSyncLease {
  *    request (`applied_seq` is never advanced here, so a queued scheduled
  *    request survives the run untouched).
  * Everything that guards the regular acquire still guards this one: paused,
- * blocked, retry-backoff, already-leased, provider-held and non-active pages
- * all refuse.
+ * blocked, retry-backoff, already-leased, provider-held, non-active and
+ * engine-owned pages all refuse.
  * `started_at` is left alone — this run is not the stream's scheduled chunk.
  */
 export async function acquireTargetedPageSyncLease(
@@ -2410,6 +2417,7 @@ export async function acquireTargetedPageSyncLease(
       and st.leased_seq is null
       and (st.retry_at is null or st.retry_at <= ${now})
       and ${pageSyncProviderHoldClearSql("st.page_id", now)}
+      and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
       and exists (
         select 1 from ${pages} p
         where p.id = st.page_id and p.status = 'active'

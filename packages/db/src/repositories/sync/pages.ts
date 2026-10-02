@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import type { FanslySendGuardOwnerEngine, FanslySendHolderIdentity } from "../fansly-send-guard.ts";
@@ -371,20 +371,6 @@ export async function listSyncPages(
   return result.rows.map(normalizePageRow);
 }
 
-/** Whether the engine owns the page (`handover`/`live`) and its mode. A page
- *  without a `sync_pages` row (OnlyFans, a just-onboarded Fansly page) is
- *  legacy-owned by construction: `{ owned: false, mode: null }`. */
-export async function isFanslyPageEngineOwned(
-  db: Database,
-  pageId: number,
-): Promise<{ owned: boolean; mode: SyncPageMode | null }> {
-  const result = await db.execute<{ mode: SyncPageMode }>(sql`
-    select sp.mode from sync_pages sp where sp.page_id = ${pageId}
-  `);
-  const mode = result.rows[0]?.mode ?? null;
-  return { owned: mode === "handover" || mode === "live", mode };
-}
-
 // ── mode ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -505,6 +491,72 @@ export async function setSyncPageMode(
       modeChangedAt: toRequiredDate(updated.rows[0]!.modeChangedAt),
     };
   });
+}
+
+// ── legacy fences (step 3) ────────────────────────────────────────────────────
+//
+// Step-3 design §3.1 (S3-01): while the Fansly Sync Engine owns a page —
+// `handover` (the switch fences the legacy engine before the engine's first
+// send) or `live` — no legacy component even tries to send for it. The legacy
+// schedulers carry `legacyOwnsFanslyPageSql` next to their other gates and the
+// legacy processes ask `isFanslyPageEngineOwned` /
+// `listEngineOwnedFanslyPages`; the step-1 guard row (`owner_engine`, 0229)
+// stays the catch-all at the wire. `off` and `shadow` fence nothing (J8). A
+// page without a `sync_pages` row (OnlyFans, a Fansly page onboarded after the
+// host last listed its pages) is legacy-owned by construction. Every check is
+// evaluated per query, so leaving to `off` restores the legacy engine with no
+// other action.
+
+/** The modes in which the Fansly Sync Engine owns a page. */
+export const ENGINE_OWNED_SYNC_PAGE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
+export type EngineOwnedSyncPageMode = (typeof ENGINE_OWNED_SYNC_PAGE_MODES)[number];
+
+function isEngineOwnedMode(mode: SyncPageMode | null): mode is EngineOwnedSyncPageMode {
+  return mode !== null && (ENGINE_OWNED_SYNC_PAGE_MODES as readonly string[]).includes(mode);
+}
+
+/** True while the Fansly Sync Engine owns the page (handover or live).
+ *  `pageIdColumn` is a qualified column or a bound value; the subquery's own
+ *  alias cannot shadow a caller's. */
+export function engineOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
+  return sql`exists (
+    select 1 from sync_pages engine_owned_page
+     where engine_owned_page.page_id = ${pageIdColumn}
+       and engine_owned_page.mode in ('handover', 'live')
+  )`;
+}
+
+/** True unless the Fansly Sync Engine owns the page: the gate of every legacy
+ *  scheduler query (OnlyFans pages and pages without a row pass). */
+export function legacyOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
+  return sql`not ${engineOwnsFanslyPageSql(pageIdColumn)}`;
+}
+
+/** The pages the engine owns now, for the legacy processes' page lists. */
+export async function listEngineOwnedFanslyPages(
+  db: Database,
+): Promise<Array<{ pageId: number; label: string; mode: EngineOwnedSyncPageMode }>> {
+  const result = await db.execute<{ pageId: string | number; label: string; mode: EngineOwnedSyncPageMode }>(sql`
+    select sp.page_id as "pageId", p.label, sp.mode
+      from sync_pages sp
+      join pages p on p.id = sp.page_id
+     where sp.mode in ('handover', 'live')
+     order by sp.page_id
+  `);
+  return result.rows.map((row) => ({ pageId: Number(row.pageId), label: row.label, mode: row.mode }));
+}
+
+/** Whether the engine owns this page now, and the page's mode (null without a
+ *  `sync_pages` row). */
+export async function isFanslyPageEngineOwned(
+  db: Database,
+  pageId: number,
+): Promise<{ owned: boolean; mode: SyncPageMode | null }> {
+  const result = await db.execute<{ mode: SyncPageMode }>(sql`
+    select mode from sync_pages where page_id = ${pageId}
+  `);
+  const mode = result.rows[0]?.mode ?? null;
+  return { owned: isEngineOwnedMode(mode), mode };
 }
 
 // ── ownership ─────────────────────────────────────────────────────────────────

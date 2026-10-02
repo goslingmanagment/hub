@@ -1,5 +1,6 @@
 import { parseProbeArgs, runStoredFanslyProbe } from "./probe.ts";
 import { bindingRefusalReceipt } from "./binding-receipt.ts";
+import { engineOwnedRefusalLine } from "./engine-owned.ts";
 
 const controller = new AbortController();
 process.once("SIGINT", () => controller.abort());
@@ -31,6 +32,11 @@ try {
       process.stdout.write(JSON.stringify(refusal) + "\n", (failure) => failure ? reject(failure) : resolve());
     });
     process.exit(2);
+  }
+  const engineOwned = engineOwnedRefusalLine(error);
+  if (engineOwned) {
+    process.stderr.write(engineOwned);
+    process.exit(1);
   }
   // Provider, parser, filesystem, config and SQL errors may contain credentials.
   process.stderr.write("Fansly probe failed; no credential or provider error text was exported.\n");
