@@ -18,6 +18,9 @@ const REQUIRED_TABLE_NAMES = [
   "sync_pages",
   "sync_work",
   "sync_attempts",
+  // Fansly Sync Engine history requests (0232).
+  "history_requests",
+  "history_request_items",
 ] as const;
 const LEGACY_TABLE_NAMES = [
   ["platform", "accounts"].join("_"),

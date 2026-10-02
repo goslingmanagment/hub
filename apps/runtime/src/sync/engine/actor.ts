@@ -6,6 +6,7 @@ import {
   nextOpenWorkDueAt,
   OwnershipLostError,
   pickPlanned,
+  pickRequests,
   pickUrgent,
   SYNC_WORK_PICK_LIMIT,
   type Database,
@@ -30,6 +31,7 @@ import {
   type AdmissionRecord,
   type CommitDeps,
   type PickedWork,
+  type RequestTurn,
   type SyncFaultPoint,
 } from "./commit.ts";
 import {
@@ -372,22 +374,28 @@ export class SyncActor {
     const shadow = d.mode === "shadow";
     const eligible = (work: SyncWorkRow): boolean =>
       activeResourceHold(page.resourceHolds as Record<string, ResourceHoldEntry>, work.resource, now) === null;
-    const source: ClassWorkSource<SyncWorkRow> = {
+    const source: ClassWorkSource<{ work: SyncWorkRow; requestTurn: RequestTurn | null }> = {
       async pickInClass(workClass: WorkClass) {
         // Due times are written by the database clock: compare by it too.
         const filter = { pageId: d.pageId, shadow, now: null, ...exclusions };
         switch (workClass) {
           case "urgent": {
             const rows = await pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT });
-            return rows.find(eligible) ?? null;
+            const work = rows.find(eligible);
+            return work === undefined ? null : { work, requestTurn: null };
           }
-          case "requests":
-            // History requests land with their own tables (S2-11a): the class
-            // is empty until then and its slots go to the others.
-            return null;
+          case "requests": {
+            // History requests exist only on live pages (the intake refuses
+            // every other page): a shadow page has no requests class.
+            if (shadow) return null;
+            const picked = await pickRequests(d.db, filter);
+            return picked !== null && eligible(picked.work)
+              ? { work: picked.work, requestTurn: { requestId: picked.requestId, itemId: picked.itemId } }
+              : null;
+          }
           case "planned": {
             const picked = await pickPlanned(d.db, { ...filter, plannedRr: page.plannedRr });
-            return picked !== null && eligible(picked.work) ? picked.work : null;
+            return picked !== null && eligible(picked.work) ? { work: picked.work, requestTurn: null } : null;
           }
         }
       },
@@ -400,7 +408,13 @@ export class SyncActor {
       holdUntil: hold === null ? null : hold.until,
     }, now);
     if (picked === null) return null;
-    return { work: picked.work, workClass: picked.workClass, slot: picked.slot, nextCyclePos: picked.nextCyclePos };
+    return {
+      work: picked.work.work,
+      workClass: picked.workClass,
+      slot: picked.slot,
+      nextCyclePos: picked.nextCyclePos,
+      requestTurn: picked.work.requestTurn,
+    };
   }
 
   async #ensurePolls(): Promise<void> {
@@ -432,15 +446,17 @@ export class SyncActor {
  * files under a live resource hold — except a key a hold never stops
  * (`dm-messages.head`): its file's other known keys are listed one by one.
  * The conversation list's own 429 hold stops only the keys that can only
- * read the list (`LIST_RATE_LIMIT_HELD_KEYS`), whatever their file.
+ * read the list (`LIST_RATE_LIMIT_HELD_KEYS`), whatever their file. The
+ * owner's requests pause leaves the whole requests class out.
  */
 export interface PickExclusions {
   excludeResources: string[];
   excludeFiles: string[];
+  excludeClasses: WorkClass[];
 }
 
 export function pickExclusions(
-  page: Pick<SyncPageRow, "pausedResources" | "registryOverrides" | "resourceHolds">,
+  page: Pick<SyncPageRow, "pausedResources" | "registryOverrides" | "resourceHolds"> & Partial<Pick<SyncPageRow, "pausedRequests">>,
   registry: EngineRegistry,
   shadow: boolean,
   now: Date,
@@ -471,5 +487,9 @@ export function pickExclusions(
       files.push(file);
     }
   }
-  return { excludeResources: [...resources].sort(), excludeFiles: files.sort() };
+  return {
+    excludeResources: [...resources].sort(),
+    excludeFiles: files.sort(),
+    excludeClasses: page.pausedRequests === true ? ["requests"] : [],
+  };
 }

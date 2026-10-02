@@ -29,6 +29,7 @@ import {
   type SyncFaultHook,
   type SyncLogger,
   type ThreadChainChangedHook,
+  type WorkClosedHook,
 } from "./commit.ts";
 import { PgOwnershipSession, PgWake } from "./host-ports.ts";
 import { createPacer, type Pacer, type PacerDeps } from "./pacer.ts";
@@ -119,6 +120,7 @@ export interface SyncHostOptions {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  onWorkClosed?: WorkClosedHook;
   modeLoopIntervalMs?: number;
   /** TESTS ONLY: run the live loop although `LIVE_LOOP_ENABLED` is false
    *  (tests/sync-live-gate.integration.test.ts). `main.ts` never passes it
@@ -455,6 +457,7 @@ export class SyncEngineHost {
       ...(this.#o.capture === undefined ? {} : { capture: this.#o.capture }),
       ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
+      ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
     });
