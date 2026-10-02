@@ -14,6 +14,7 @@ import {
   type Database,
 } from "@agency_hub_core/db";
 
+import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { HistoryRequestsUnavailableError, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import { SYNC_ROLLBACK_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
@@ -21,6 +22,7 @@ import { SwitchRefusedError } from "../apps/runtime/src/sync/switch/context.ts";
 import { checkSwitchPreconditions } from "../apps/runtime/src/sync/switch/preconditions.ts";
 import { runSyncSwitch, runSyncSwitchOpenRequests } from "../apps/runtime/src/sync/switch/switch.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
   ensureHarnessSettingTable,
@@ -517,6 +519,50 @@ describe("sync switch", () => {
     await expect(switchOf(r, page.pageLabel)).rejects.toThrow(/a rollback stopped at step 2_released; a switch never resumes it/);
     expect((await getSyncPage(db(), page.pageId))!.mode).toBe("handover");
   }, 60_000);
+
+  it("(k) a legacy 429 hold and a legacy auth block are both carried: nothing goes out before the 429 ends, the owner's renewal lifts only the auth hold", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig(["switch-k"]);
+    const page = r.pages[0]!;
+    const host = await startHost(r, 19);
+    await shadowRunning(host, page.pageId);
+    // The legacy engine is waiting out a 429 and has a stream blocked on its credentials.
+    await testDb.pool.query(
+      `insert into page_sync_states (page_id, stream, status, blocker_kind, blocker_code, blocked_at, cadence_seconds, slot_offset_seconds)
+       values ($1, 'light', 'idle', 'auth', 'http_401', clock_timestamp(), 300, 0)
+       on conflict (page_id, stream) do update set blocker_kind = 'auth'`,
+      [page.pageId],
+    );
+    const legacyUntil = (await testDb.pool.query<{ until: Date }>(
+      `insert into page_sync_provider_holds (page_id, hold_until, reason, stream, armed_at)
+       values ($1, clock_timestamp() + interval '10 seconds', 'rate_limited', 'light', clock_timestamp())
+       returning hold_until as until`,
+      [page.pageId],
+    )).rows[0]!.until;
+
+    expect(await switchOf(r, page.pageLabel)).toMatchObject({ exitCode: 0, phase: "done" });
+    const held = (await getSyncPage(db(), page.pageId))!;
+    expect(held.holdKind).toBe("auth");
+    expect(held.holdDetail.timedHold).toMatchObject({ kind: "rate_limit", until: legacyUntil.toISOString() });
+
+    // The owner renews the credentials at once: the identity check (the only
+    // work an auth hold lets through) waits for the 429's end.
+    const app = createTestAppContext(testDb, { fanslySendGuardSettingMs: S });
+    const renewed = await updatePageCredentials(app, page.pageLabel, {
+      platform: "fansly",
+      session: { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" },
+    });
+    expect(renewed).toMatchObject({ updated: true, verified: true });
+    const engineArrivals = r.server.arrivals.filter((arrival) => !arrival.path.startsWith(LEGACY_PATH));
+    expect(engineArrivals[0]!.path.split("?")[0]).toBe("/api/v1/account/me");
+    // The 429 hold's end is the database's instant; the origin's clock is this
+    // process's (a small skew allowed — without the carried hold the check
+    // went out seconds earlier).
+    expect(engineArrivals[0]!.wallMs).toBeGreaterThanOrEqual(legacyUntil.getTime() - 250);
+    // The renewal lifted the auth hold: the engine's reads go out.
+    await until(async () => r.server.arrivalsAt("/api/v1/polls").length >= 1, 20_000, "engine reads after the renewal");
+    expect(gaps(r.server.arrivals).filter((gap) => gap < S)).toEqual([]);
+  }, 120_000);
 
   it("B waits while the page's socket lock is held by a legacy receiver", async (context) => {
     if (!testDb) return context.skip();

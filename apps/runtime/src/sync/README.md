@@ -275,8 +275,13 @@ Credentials (step 3): every live API request carries the digest of the stored se
 (`account.verify`, `account.identity`) and the actor asks for one verify. An auth/identity hold names the digest that
 failed: stored credentials that change out of band lift it for one verify; otherwise only an `account.identity`
 check of a candidate session/proxy (the owner's credentials or proxy change, sealed in the work's secret) passes it,
-and storing a matching candidate makes its digest the trusted one, which lifts the hold. The egress follows the
-digest (a changed proxy is resolved again before the next request).
+and storing a matching candidate makes its digest the trusted one, which lifts the hold. The socket's Upgrade
+(`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
+hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
+hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
+check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
+it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
+auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
 
 ## Legacy fences (step 3)
 
@@ -318,7 +323,8 @@ stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
-engine with its floor past the engine's last send and the end of an engine 429/list/network hold, live work
+engine with its floor past the engine's last send and the end of an engine 429/list/network hold (also one an auth
+hold carries), live work
 cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
 state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
 auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
@@ -441,14 +447,18 @@ page status already shows.
 
 `pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only):
 part A over the live hour in one repeatable-read transaction — the coverage (every page in shadow, its actor running,
-from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (poll periods
-plus the reads the hour's socket frames imply after coalescing; walks listed apart), the legacy engine's volume of
-the hour per stream and sender with the reason it differs, the live-path decisions (a fan message or a new ledger
+from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (polls
+judged in runs against their schedule, the reads the hour's socket frames imply after coalescing; keys on a period
+longer than the hour counted at their rate; one-time backlog walks listed apart), the legacy engine's volume per
+stream and sender with the reason it differs (the hour, or 7-day rates for streams slower than the hour; live-only
+senders listed apart), the live-path decisions (a fan message or a new ledger
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
 the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
-step-3 switch.
+step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
+`report/shadow-window.ts`: A1.rate, A1.ceiling, A1.floor, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only),
+every report prints the rule it applied.
 
 ## Recipes
 

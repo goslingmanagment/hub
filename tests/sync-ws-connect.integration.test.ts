@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { upsertDemand, type Database } from "@agency_hub_core/db";
+import { storeFanslySession, upsertDemand, type Database } from "@agency_hub_core/db";
+import { encryptJson } from "@agency_hub_core/shared";
 
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import type { LivePageSocket } from "../apps/runtime/src/sync/engine/ports.ts";
+import type { EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { RecordingAlerts } from "./helpers/sync-engine-host.ts";
 import {
@@ -11,6 +13,7 @@ import {
   ensureHarnessSettingTable,
   FakeChats,
   FakeFanslyServer,
+  HARNESS_ENCRYPTION_KEY,
   HarnessSocket,
   harnessConfig,
   harnessHostOptions,
@@ -18,10 +21,12 @@ import {
   harnessRoutes,
   HARNESS_KEY,
   seedHarnessPage,
+  stampVerifiedCredentials,
   until,
   type FakeArrival,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
+import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // `ws.connect` (design S3-04 item 4, §5.2): the page's WebSocket Upgrade as an
 // admitted request of a live page, through the production host, page
@@ -82,7 +87,12 @@ async function rig(): Promise<Rig> {
   return { server, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl) };
 }
 
-async function startHost(r: Rig, options: { seed: number; alerts?: RecordingAlerts; socket?: () => LivePageSocket | null }) {
+async function startHost(r: Rig, options: {
+  seed: number;
+  alerts?: RecordingAlerts;
+  socket?: () => LivePageSocket | null;
+  registry?: EngineRegistry;
+}) {
   const host = new SyncEngineHost(harnessHostOptions({
     db: db(),
     pool: testDb!.pool,
@@ -91,6 +101,7 @@ async function startHost(r: Rig, options: { seed: number; alerts?: RecordingAler
     rng: harnessRng(options.seed),
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
     ...(options.socket === undefined ? {} : { liveSocket: options.socket }),
+    ...(options.registry === undefined ? {} : { registry: options.registry }),
   }));
   hosts.push(host);
   await host.start();
@@ -137,8 +148,13 @@ describe("ws.connect on a live page", () => {
       "select request, http_status, apply_state, observation_id, send_mark from sync_attempts where page_id = $1 and resource = 'ws.connect' order by id",
       [pageId],
     );
+    // The Upgrade names the verified digest of the stored credentials it was
+    // admitted under (not a secret).
+    const verified = (await rows<{ generation: string }>(
+      "select credentials_generation as generation from sync_pages where page_id = $1", [pageId],
+    ))[0]!.generation;
     expect(attempts).toEqual(Array.from({ length: 3 }, () => ({
-      request: { spec: "ws.upgrade", host: "ws", params: {} },
+      request: { spec: "ws.upgrade", host: "ws", params: {}, credentialsGeneration: verified },
       http_status: 101,
       apply_state: "applied",
       observation_id: null,
@@ -163,6 +179,42 @@ describe("ws.connect on a live page", () => {
     await until(async () => (await wsWork(pageId)).some((work) => work.state === "open" && work.waiting_reason === "dependency"), 30_000, "the waiting Upgrade work");
     expect(r.server.arrivals.filter((arrival) => arrival.upgrade)).toEqual([]);
   }, 90_000);
+
+  it("an Upgrade goes out only with the verified credentials: changed stored ones raise the verify, and the Upgrade follows it", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const { pageId } = r.page;
+    const verified = (await rows<{ generation: string }>(
+      "select credentials_generation as generation from sync_pages where page_id = $1", [pageId],
+    ))[0]!.generation;
+    // The stored session changed out of band since the engine verified it.
+    const rotated = { authorization: "rotated-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
+    await storeFanslySession(db(), pageId, JSON.stringify(encryptJson(rotated, HARNESS_ENCRYPTION_KEY, 1)), 1);
+    await demand(pageId, HARNESS_KEY.ws, "");
+    await startHost(r, { seed: 87, registry: switchRegistry() });
+    await until(async () => (await wsWork(pageId))[0]?.state === "done", 30_000, "the Upgrade after the verify");
+
+    // The verify of the rotated session first, the Upgrade only after it.
+    expect(r.server.arrivals.map((arrival) => [arrival.path.split("?")[0], arrival.upgrade])).toEqual([
+      ["/api/v1/account/me", false],
+      ["/ws", true],
+    ]);
+    const verify = await rows<{ reasons: string[] }>(
+      "select demand -> 'reasons' as reasons from sync_work where page_id = $1 and resource = 'account.verify'", [pageId],
+    );
+    expect(verify[0]!.reasons).toContain("credentials_changed");
+    // The verify proved the rotated session: its digest is the trusted one now.
+    const now = (await rows<{ generation: string }>(
+      "select credentials_generation as generation from sync_pages where page_id = $1", [pageId],
+    ))[0]!.generation;
+    expect(now).not.toBe(verified);
+    expect(now).toBe(await stampVerifiedCredentials({ db: db(), pool: testDb.pool }, r.page));
+    // The Upgrade's attempt names the digest it was admitted under.
+    const upgrade = await rows<{ generation: string }>(
+      "select request ->> 'credentialsGeneration' as generation from sync_attempts where page_id = $1 and resource = 'ws.connect'", [pageId],
+    );
+    expect(upgrade).toEqual([{ generation: now }]);
+  }, 60_000);
 
   it("a 401 at the handshake holds the page auth: nothing else goes out", async (context) => {
     if (!testDb) return context.skip();

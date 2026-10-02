@@ -50,7 +50,8 @@ import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 //   nowhere else, design J7), its host must be a Fansly media CDN, no session
 //   headers, the body capped at the describer's 5 MiB;
 // - ws: the socket's Upgrade, sent by the page's socket owner (the slot's
-//   `FanslyWsSource`) through its handshake with this admission's check.
+//   `FanslyWsSource`) through its handshake with this admission's check —
+//   only with the verified stored credentials, like an API request.
 //
 // Credentials (G1, G2, G18): every API request is built from a read-only
 // snapshot of the stored session and its digest (`readFanslyPageGeneration`,
@@ -240,6 +241,35 @@ export async function createPageTransport(
     return { spec: request.spec, url: url.toString(), headers: {}, timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS };
   }
 
+  /**
+   * The socket's Upgrade (`ws.connect`): a marker — the socket owner builds
+   * and sends it with the page's stored session — under the same
+   * verified-credentials check as every API request (G2): unless the stored
+   * digest is the one the engine verified, nothing is admitted and the actor
+   * raises the verify. The marker names the digest it checked: the owner's
+   * handshake refuses to open the socket with any other stored credentials
+   * (they changed after this check), and an auth hold of the Upgrade is keyed
+   * on it.
+   */
+  async function prepareWs(request: RequestPlan): Promise<FanslyWireRequest> {
+    const snapshot = await ctx.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      const generation = await readFanslyPageGeneration(tx, page.pageLabel);
+      const verified = (await getSyncPage(tx, page.pageId))?.credentialsGeneration ?? null;
+      return { generation, verified };
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+    if (snapshot.verified !== snapshot.generation) {
+      throw new CredentialsGenerationChangedError(page.pageId, snapshot.generation, snapshot.verified);
+    }
+    return {
+      spec: request.spec,
+      url: SOCKET_OWNER_URL,
+      headers: {},
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      credentialsGeneration: snapshot.generation,
+    };
+  }
+
   async function storedGeneration(): Promise<string | null> {
     try {
       return await ctx.db.transaction(
@@ -260,8 +290,7 @@ export async function createPageTransport(
         case "cdn":
           return prepareCdn(request, context?.work);
         case "ws":
-          // A marker: the socket owner builds and sends the Upgrade itself.
-          return { spec: request.spec, url: SOCKET_OWNER_URL, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS };
+          return prepareWs(request);
       }
     },
     async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
@@ -285,7 +314,7 @@ export async function createPageTransport(
           // Without a socket owner nothing is sent (its plan waits for one).
           const socket = options.socket?.() ?? null;
           if (socket === null) return { kind: "aborted_before_send", refusal: "lease_inactive" };
-          return socket.handshake(hooks, signal);
+          return socket.handshake(hooks, signal, { credentialsGeneration: req.credentialsGeneration ?? null });
         }
       }
     },

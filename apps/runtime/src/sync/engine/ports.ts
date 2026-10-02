@@ -265,8 +265,16 @@ export interface LivePageSocket {
   readonly connectNotBefore?: Date | null;
   /** The Upgrade of one admitted `ws.upgrade` step: `hooks.check` runs at
    *  undici's `onRequestStart`; resolves when the handshake settles (101 or
-   *  another status, an error, a refusal). Never throws for an outcome. */
-  handshake(hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+   *  another status, an error, a refusal). Never throws for an outcome.
+   *  `expect.credentialsGeneration`: the digest of the stored credentials the
+   *  transport checked against the verified one before the admission — the
+   *  socket opens only with those (other stored credentials: nothing is
+   *  sent, `aborted_before_send`). */
+  handshake(
+    hooks: SendHooks,
+    signal: AbortSignal,
+    expect?: { credentialsGeneration: string | null },
+  ): Promise<TransportOutcome>;
 }
 
 /** The live page's socket owner now, or null (none in this process). */

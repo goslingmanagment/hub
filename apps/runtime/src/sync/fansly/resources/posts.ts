@@ -75,9 +75,11 @@ const ENGAGEMENT_KEY = "posts.engagement";
 const DAY_MS = 86_400_000;
 /** A shadow walk of a page without its native id re-checks this often. */
 const IDENTITY_RECHECK_MS = 60 * 60 * 1000;
-/** Shadow only: the timeline's page size is the server's and not measured;
- *  the walk length is estimated from the stored posts at this many a page. */
-export const TIMELINE_PAGE_ESTIMATE = 10;
+/** Shadow only: the timeline's page size is the server's; the walk length is
+ *  estimated from the stored posts at this many a page — measured on the
+ *  legacy journal (`sync_http_attempts.response_shape.returnedItems` of every
+ *  `timeline_posts` read, 2026-09-29 … 10-02: 15, 168 of 168). */
+export const TIMELINE_PAGE_ESTIMATE = 15;
 /** The engagement walk looks at its queue again this long after it found
  *  nothing due (the legacy phase ran once per 6-hour posts cadence). */
 export const POST_ENGAGEMENT_RECHECK_MS = 6 * 60 * 60 * 1000;

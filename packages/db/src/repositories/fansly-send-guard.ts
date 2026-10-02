@@ -617,6 +617,19 @@ const ENGINE_AUTH_HOLD_IN_FORCE = sql`coalesce(
            and sp.hold_detail ->> 'credentialsGeneration' <> sp.credentials_generation),
   false)`;
 
+/**
+ * The end of a 429/network hold an engine auth/identity hold carries beside
+ * itself (`hold_detail.timedHold`, the engine's `combinePageHold`) while it is
+ * in force, else null: it crosses to the legacy engine like the engine's own
+ * 429 hold (G20), also when the owner rolls back with `--with-auth-hold`.
+ */
+const ENGINE_CARRIED_TIMED_HOLD_UNTIL = sql`case
+  when sp.hold_kind in ('auth', 'identity_mismatch')
+   and jsonb_typeof(sp.hold_detail -> 'timedHold') = 'object'
+   and sp.hold_detail -> 'timedHold' ->> 'kind' in ('rate_limit', 'network')
+   and (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz > clock_timestamp()
+  then (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz end`;
+
 /** Engine → legacy (rollback step 3): the flip, or why not. */
 export async function handFanslySendGuardBackToLegacy(
   db: Database,
@@ -636,6 +649,7 @@ export async function handFanslySendGuardBackToLegacy(
              clock_timestamp(),
              case when sp.hold_kind in ('rate_limit', 'network') and sp.hold_until > clock_timestamp()
                   then sp.hold_until end,
+             ${ENGINE_CARRIED_TIMED_HOLD_UNTIL},
              (select max((h.value ->> 'until')::timestamptz)
                 from jsonb_each(sp.resource_holds) h
                where h.value ->> 'kind' = 'rate_limit_list'

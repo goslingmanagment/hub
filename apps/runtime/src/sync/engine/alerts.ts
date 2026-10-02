@@ -27,7 +27,7 @@ import {
 } from "../../services/notification-incidents.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
 import type { SyncLogger } from "./commit.ts";
-import { LIST_RATE_LIMIT_FILE, LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
+import { carriedTimedHold, LIST_RATE_LIMIT_FILE, LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
 import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 
@@ -173,10 +173,19 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   if (holdInForce && page.holdKind === "identity_mismatch") stopped.push({ detail: "identity_mismatch", since: page.holdSince });
   if (holdInForce && page.holdKind === "auth") stopped.push({ detail: "auth", since: page.holdSince });
   if (holdInForce && page.holdKind === "rate_limit") stopped.push({ detail: "rate_limit", since: page.holdSince });
+  // A 429/network hold an auth/identity hold carries beside itself stops the
+  // page too (`combinePageHold`).
+  const carried = carriedTimedHold(page);
+  const carriedInForce = carried !== null && carried.until.getTime() > now.getTime() ? carried : null;
+  if (carriedInForce?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: dateOf(carriedInForce.detail.lastRateLimitAt) });
   const listSince = sustainedListHold(page, now);
   if (listSince !== null) stopped.push({ detail: "rate_limit_list", since: listSince });
   if (holdInForce && page.holdKind === "network") {
     const networkSince = dateOf(page.holdDetail.networkSince) ?? page.holdSince;
+    if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
+  }
+  if (carriedInForce?.kind === "network") {
+    const networkSince = dateOf(carriedInForce.detail.networkSince);
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
   }
   if (page.mode === "handover") {

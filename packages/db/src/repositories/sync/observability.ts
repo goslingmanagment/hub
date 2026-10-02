@@ -508,6 +508,149 @@ export async function countSyncAttemptsByKey(
   return result.rows.map((row) => ({ pageId: Number(row.pageId), class: row.class, resource: row.resource, attempts: Number(row.attempts) }));
 }
 
+/** One sent attempt of a key, for grouping a key's attempts into runs. */
+export interface SyncRunAttempt {
+  pageId: number;
+  resource: string;
+  subject: string;
+  workId: number | null;
+  sentAt: Date;
+  /** `completed_at`, else `sent_at`. */
+  doneAt: Date;
+  demandRevision: number | null;
+  /** When the attempt's work row closed (null: open, or no row). */
+  workClosedAt: Date | null;
+}
+
+/**
+ * The attempts of `resources` sent in [from, to), by page, key and send time
+ * (the shadow report's runs of a poll or of a walk with a minimum interval,
+ * design §3.12 A1). Served by `sync_attempts_page_sent`.
+ */
+export async function listSyncRunAttempts(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; resources: readonly string[]; from: Date; to: Date },
+): Promise<SyncRunAttempt[]> {
+  if (input.pageIds.length === 0 || input.resources.length === 0) return [];
+  const result = await db.execute<{
+    pageId: string;
+    resource: string;
+    subject: string;
+    workId: string | null;
+    sentAt: Date | string;
+    doneAt: Date | string;
+    demandRevision: string | null;
+    workClosedAt: Date | string | null;
+  }>(sql`
+    select a.page_id::text as "pageId", a.resource, a.subject, a.work_id::text as "workId", a.sent_at as "sentAt",
+           coalesce(a.completed_at, a.sent_at) as "doneAt", a.demand_revision::text as "demandRevision",
+           w.closed_at as "workClosedAt"
+      from sync_attempts a
+      left join sync_work w on w.id = a.work_id
+     where a.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and a.shadow = ${input.shadow}::boolean
+       and a.resource = any(${textArrayParam(input.resources)})
+       and a.sent_at >= ${input.from}::timestamptz
+       and a.sent_at < ${input.to}::timestamptz
+     order by a.page_id, a.resource, a.subject, a.sent_at, a.id
+  `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    workId: row.workId === null ? null : Number(row.workId),
+    sentAt: toRequiredDate(row.sentAt),
+    doneAt: toRequiredDate(row.doneAt),
+    demandRevision: row.demandRevision === null ? null : Number(row.demandRevision),
+    workClosedAt: toDate(row.workClosedAt),
+  }));
+}
+
+/** When each page's newest poll row of a key created before `before` was
+ *  placed (`created_at`; its first run is due within one period of it). */
+export async function readSyncPollPlacements(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; before: Date },
+): Promise<Array<{ pageId: number; resource: string; createdAt: Date }>> {
+  if (input.pageIds.length === 0) return [];
+  const result = await db.execute<{ pageId: string; resource: string; createdAt: Date | string }>(sql`
+    select w.page_id::text as "pageId", w.resource, max(w.created_at) as "createdAt"
+      from sync_work w
+     where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and w.shadow = ${input.shadow}::boolean
+       and w.kind = 'poll'
+       and w.subject = ''
+       and w.created_at < ${input.before}::timestamptz
+     group by w.page_id, w.resource
+  `);
+  return result.rows.map((row) => ({ pageId: Number(row.pageId), resource: row.resource, createdAt: toRequiredDate(row.createdAt) }));
+}
+
+/** A work row of a key that was open at an instant, with its first attempt's
+ *  admission (the shadow report's schedule of a key not run yet, rule
+ *  A1.floor-scheduled). `dueAt` is the row's due time now: a read moves it. */
+export interface SyncWorkOpenAt {
+  pageId: number;
+  resource: string;
+  subject: string;
+  state: string;
+  createdAt: Date;
+  dueAt: Date;
+  closedAt: Date | null;
+  updatedAt: Date;
+  /** Why it waits, as its last plan set it (`not_due`: nothing due). */
+  waitingReason: string | null;
+  /** The admission of the row's first attempt (null before one). */
+  firstAdmittedAt: Date | null;
+}
+
+/**
+ * The work rows of `resources` open at `at` (created by then, not closed by
+ * then), by page, key and row id, each with its first attempt's admission.
+ * Served by `sync_work_key_recent` and `sync_attempts_work`.
+ */
+export async function listSyncWorkOpenAt(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; resources: readonly string[]; at: Date },
+): Promise<SyncWorkOpenAt[]> {
+  if (input.pageIds.length === 0 || input.resources.length === 0) return [];
+  const result = await db.execute<{
+    pageId: string;
+    resource: string;
+    subject: string;
+    state: string;
+    createdAt: Date | string;
+    dueAt: Date | string;
+    closedAt: Date | string | null;
+    updatedAt: Date | string;
+    waitingReason: string | null;
+    firstAdmittedAt: Date | string | null;
+  }>(sql`
+    select w.page_id::text as "pageId", w.resource, w.subject, w.state, w.created_at as "createdAt", w.due_at as "dueAt",
+           w.closed_at as "closedAt", w.updated_at as "updatedAt", w.waiting_reason as "waitingReason",
+           (select a.admitted_at from sync_attempts a where a.work_id = w.id order by a.id limit 1) as "firstAdmittedAt"
+      from sync_work w
+     where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = any(${textArrayParam(input.resources)})
+       and w.created_at <= ${input.at}::timestamptz
+       and (w.closed_at is null or w.closed_at > ${input.at}::timestamptz)
+     order by w.page_id, w.resource, w.id
+  `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    state: row.state,
+    createdAt: toRequiredDate(row.createdAt),
+    dueAt: toRequiredDate(row.dueAt),
+    closedAt: toDate(row.closedAt),
+    updatedAt: toRequiredDate(row.updatedAt),
+    waitingReason: row.waitingReason,
+    firstAdmittedAt: toDate(row.firstAdmittedAt),
+  }));
+}
+
 /** The admissions of `resources` in [from, to) (admission order). */
 export async function listSyncAdmissions(
   db: Database,

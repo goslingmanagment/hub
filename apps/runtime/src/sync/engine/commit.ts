@@ -60,6 +60,7 @@ import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../se
 import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import {
+  afterCredentialsHold,
   classifyWireOutcome,
   escalateResourceHold,
   onOutcome,
@@ -333,7 +334,11 @@ export function requestJsonOf(
 } {
   const host = fanslyWireSpec(request.spec).host;
   const step = request.step === undefined ? {} : { step: request.step };
-  if (host === "ws") return { spec: request.spec, host, params: {}, ...step };
+  // Not a secret: the sha256 of the stored (or candidate) credentials, so an
+  // auth hold names the credentials that failed (step-3 §3.5 item 3) — the
+  // Upgrade is sent with the page's stored session too.
+  const credentials = sent?.credentialsGeneration === undefined ? {} : { credentialsGeneration: sent.credentialsGeneration };
+  if (host === "ws") return { spec: request.spec, host, params: {}, ...step, ...credentials };
   if (host === "cdn") {
     const hop = Number((request.params as { hop?: unknown }).hop ?? 0);
     let pathSha256: string | null = null;
@@ -355,9 +360,7 @@ export function requestJsonOf(
     path: target.pathname,
     query,
     ...(request.step === undefined ? {} : { step: request.step }),
-    // Not a secret: the sha256 of the stored (or candidate) credentials, so
-    // an auth hold names the credentials that failed (step-3 §3.5 item 3).
-    ...(sent?.credentialsGeneration === undefined ? {} : { credentialsGeneration: sent.credentialsGeneration }),
+    ...credentials,
   };
 }
 
@@ -808,7 +811,13 @@ export async function liftHoldForChangedCredentials(
     if (page === null || page.holdKind !== input.holdKind) return false;
     const heldUnder = page.holdDetail.credentialsGeneration;
     if ((typeof heldUnder === "string" ? heldUnder : page.credentialsGeneration) !== input.failedGeneration) return false;
-    await clearPageHold(tx, { pageId: d.pageId, generation: d.generation });
+    // A 429/network hold the auth hold carried beside itself stays until its end.
+    const left = afterCredentialsHold(pageErrorState(page), now);
+    if (left.action === "set") {
+      await setPageHold(tx, { pageId: d.pageId, generation: d.generation, kind: left.kind, until: left.until, step: left.step, detail: left.detail });
+    } else {
+      await clearPageHold(tx, { pageId: d.pageId, generation: d.generation });
+    }
     const upserts = upsertsOf(d, [{ resource: "account.verify", demand: { reason: "credentials_changed" } }], page, now);
     if (upserts.length > 0) await upsertDemands(tx, upserts);
     return true;

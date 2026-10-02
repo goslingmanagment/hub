@@ -1123,8 +1123,13 @@ export async function importWorkCursor(
  * A subject breaker the legacy engine had armed, carried by the switch's
  * import (design step 3 §3.5 item 7, I.3): a CLOSED live row of the key
  * (`cancelled`, `legacy_import`) holding the failures and `breaker_until`,
- * which the key's next demand inherits (`upsertDemand`). Idempotent: a key
- * that already has its imported row is left alone.
+ * which the key's next demand inherits (`upsertDemand`: the newest closed row
+ * of the key). Idempotent within a switch: when the key's newest closed row
+ * is already this very import (same failures, same `breaker_until`) nothing
+ * is written. Any other newest row — the engine's own rows of an earlier live
+ * period, the work a rollback closed, an older import — means a later legacy
+ * breaker: a switch after a rollback imports it (never skipped because an
+ * earlier switch imported one for the key).
  */
 export async function importClosedWorkBreaker(
   db: Database,
@@ -1151,9 +1156,16 @@ export async function importClosedWorkBreaker(
            ${Math.max(0, Math.trunc(input.failureCount))}::int, ${timestampParam(input.breakerUntil)},
            ${input.lastErrorClass}::text
      where not exists (
-       select 1 from sync_work w
-        where w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
-          and w.subject = ${input.subject} and w.close_reason = 'legacy_import'
+       select 1
+         from (select w.close_reason, w.failure_count, w.breaker_until
+                 from sync_work w
+                where w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
+                  and w.subject = ${input.subject} and w.closed_at is not null
+                order by w.id desc
+                limit 1) newest
+        where newest.close_reason = 'legacy_import'
+          and newest.failure_count = ${Math.max(0, Math.trunc(input.failureCount))}::int
+          and newest.breaker_until is not distinct from ${timestampParam(input.breakerUntil)}
      )
   `);
   return (result.rowCount ?? 0) > 0;

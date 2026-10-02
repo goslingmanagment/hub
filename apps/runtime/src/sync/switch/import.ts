@@ -17,6 +17,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
+import { combinePageHold, type PageHoldDecision, type ResourceHoldEntry } from "../engine/errors.ts";
 import { demandToUpsert, type DemandSignal, type EngineRegistry, type ResourceModule } from "../engine/resource.ts";
 import { readSwitchStartedAt } from "./audit.ts";
 import type { SwitchContext } from "./context.ts";
@@ -43,6 +44,25 @@ export interface LegacyImportReport {
 
 async function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
   return db.transaction(async (raw) => body(raw as unknown as Database));
+}
+
+/** One imported page hold, combined with the hold the row holds now (read in
+ *  the same transaction, by the database clock): a hold in force is never
+ *  overwritten by another kind (I.4). */
+async function writeImportedHold(tx: Database, pageId: number, hold: Extract<PageHoldDecision, { action: "set" }>): Promise<void> {
+  const current = await getSyncPage(tx, pageId);
+  if (current === null) throw new Error(`page ${pageId} has no sync_pages row`);
+  const combined = combinePageHold({
+    holdKind: current.holdKind,
+    holdUntil: current.holdUntil,
+    holdSince: current.holdSince,
+    holdStep: current.holdStep,
+    holdDetail: current.holdDetail,
+    networkFailureStreak: current.networkFailureStreak,
+    resourceHolds: current.resourceHolds as Record<string, ResourceHoldEntry>,
+    credentialsGeneration: current.credentialsGeneration,
+  }, hold, current.dbNow);
+  await setPageHold(tx, { pageId, kind: combined.kind, until: combined.until, step: combined.step, detail: combined.detail });
 }
 
 /** Demand signals → upserts of the page's live journal (unknown or
@@ -151,11 +171,15 @@ export async function importLegacyState(
   // (same end); a legacy auth block an auth hold keyed on the stored
   // credentials that failed — it lifts when the owner's identity-checked
   // credentials change them, never on a takeover verify of the same session.
+  // Both at once are both kept (`combinePageHold`): the auth hold carries the
+  // 429 hold beside itself — as it does a 429 or network hold the engine
+  // left on the row before a rollback — and the page is held until the later
+  // of them ends. Never a list hold either: that lives in `resource_holds`.
   await inTx(db, async (tx) => {
     const providerHold = await readActiveLegacyProviderHold(tx, page.pageId);
     if (providerHold !== null) {
-      await setPageHold(tx, {
-        pageId: page.pageId,
+      await writeImportedHold(tx, page.pageId, {
+        action: "set",
         kind: "rate_limit",
         until: providerHold.holdUntil,
         step: page.holdStep,
@@ -166,8 +190,8 @@ export async function importLegacyState(
     const authBlocker = await readLegacyAuthBlocker(tx, page.pageId);
     if (authBlocker !== null && page.pageLabel !== null) {
       const failed = await readFanslyPageGeneration(tx, page.pageLabel).catch(() => null);
-      await setPageHold(tx, {
-        pageId: page.pageId,
+      await writeImportedHold(tx, page.pageId, {
+        action: "set",
         kind: "auth",
         until: "infinity",
         step: page.holdStep,
