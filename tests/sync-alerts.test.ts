@@ -14,6 +14,7 @@ import {
   SYNC_HANDOVER_STUCK_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
   SYNC_SOCKET_DOWN_MS,
+  syncAlertResolveAfterMs,
   type PageAlertFacts,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import { LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
@@ -23,6 +24,7 @@ import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.t
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 import { routeThreadAt } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { REPLAY_EXCUSED_REASONS, scoreReplayKind } from "../apps/runtime/src/sync/report/shadow-journal.ts";
 import { isOneTimeWalk, simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
@@ -131,10 +133,36 @@ describe("alert rules (design §9.6)", () => {
   });
 
   it("alert 1: '10 min clean' — a stop answer within the window keeps the alert after its hold ended", () => {
-    const recent = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: at(-SYNC_ALERT_CLEAN_MS + MINUTE) } } });
+    const answeredAt = at(-SYNC_ALERT_CLEAN_MS + MINUTE);
+    const recent = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: answeredAt } } });
     expect(evaluate(recent)).toEqual({ page_stopped: "rate_limit" });
+    // It holds as of the answer, not now: the latch resolves 10 min after it.
+    expect(evaluatePageAlerts(recent, registry)).toEqual([expect.objectContaining({ subKey: "page_stopped", seenAt: answeredAt })]);
+    // A hold in force holds now, whatever the journal says.
+    const held = facts({
+      page: { holdKind: "rate_limit", holdUntil: at(MINUTE), holdSince: at(-MINUTE) },
+      journal: { lastStopAttempt: { errorClass: "rate_limit", at: answeredAt } },
+    });
+    expect(evaluatePageAlerts(held, registry)).toEqual([expect.objectContaining({ detail: "rate_limit", seenAt: NOW })]);
     const clean = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: at(-SYNC_ALERT_CLEAN_MS - MINUTE) } } });
     expect(evaluate(clean)).toEqual({});
+  });
+
+  it("alerts 1–3 resolve after 10 clean minutes, alert 4 as soon as progress resumes", () => {
+    expect(syncAlertResolveAfterMs("page_stopped")).toBe(SYNC_ALERT_CLEAN_MS);
+    expect(syncAlertResolveAfterMs("live_degraded")).toBe(10 * MINUTE);
+    expect(syncAlertResolveAfterMs("freshness")).toBe(10 * MINUTE);
+    expect(syncAlertResolveAfterMs("stuck")).toBe(0);
+    // Every other condition holds as of now.
+    const conditions = evaluatePageAlerts(facts({
+      live: { socket: { up: false, lastAliveAt: null }, unconfirmed: { count: 1, oldestVisibleAt: at(-20 * MINUTE) } },
+      journal: { ledgerIncomplete: { missing: 3, at: at(-MINUTE) } },
+    }), registry);
+    expect(conditions.map((entry) => [entry.subKey, entry.seenAt])).toEqual([
+      ["live_degraded", NOW],
+      ["freshness", NOW],
+      ["stuck", NOW],
+    ]);
   });
 
   it("alert 1: an owner that stopped beating is ownership_unconfirmed after 2 min; a fresh mode gets its grace", () => {
@@ -317,6 +345,24 @@ describe("the report's and the sampler's pure parts", () => {
     // As it stands (the live router): the facts of the row.
     expect(routeThreadAt({ ...thread, headConfirmedAt: new Date(frameMs + 1), firstSeenAt: new Date(frameMs + 1) }, null))
       .toEqual({ known: true, bound: true, excluded: false, headConfirmedId: "900" });
+  });
+
+  it("B5 scores matched over every observation but legacy's own refusals; nothing judged fails", () => {
+    const score = (counts: { total: number; matched: number; reasons?: Record<string, number> }) =>
+      scoreReplayKind({ total: counts.total, matched: counts.matched, notReplayableReasons: counts.reasons ?? {} });
+    // A kind without a single observation: listed as not replayable, not judged.
+    expect(score({ total: 0, matched: 0 })).toEqual({ excused: 0, ratio: null, meetsTarget: null });
+    expect(score({ total: 1_000, matched: 999 })).toEqual({ excused: 0, ratio: 0.999, meetsTarget: true });
+    // Not judged for want of a body or an identity: not matched.
+    expect(score({ total: 1_000, matched: 998, reasons: { body_unavailable: 1, page_account_unknown: 1 } }))
+      .toMatchObject({ ratio: 0.998, meetsTarget: false });
+    // Legacy's own refusals leave the denominator …
+    expect(score({ total: 1_000, matched: 990, reasons: { legacy_refused_body_trimmed: 6, legacy_rejection_receipt: 4 } }))
+      .toEqual({ excused: 10, ratio: 1, meetsTarget: true });
+    // … but a kind of nothing else is no pass, nor is one where nothing was judged.
+    expect(score({ total: 3, matched: 0, reasons: { legacy_refused_body_trimmed: 3 } })).toEqual({ excused: 3, ratio: null, meetsTarget: false });
+    expect(score({ total: 3, matched: 0, reasons: { page_without_identity: 3 } })).toEqual({ excused: 0, ratio: 0, meetsTarget: false });
+    expect([...REPLAY_EXCUSED_REASONS].sort()).toEqual(["legacy_refused_body_trimmed", "legacy_rejection_receipt"]);
   });
 
   it("parses the report window", () => {

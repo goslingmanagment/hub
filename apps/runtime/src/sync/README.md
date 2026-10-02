@@ -236,9 +236,10 @@ Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch p
 `live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
 transaction (a 429, a refused credential, another identity, a pace violation); `engine/alerts.ts` re-derives every
 condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
-view. A pace violation has its own latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the
-evaluator also re-reads the journal's new live sends, so a violation the capture path could not report still opens
-it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
+view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes since the latch last saw it (alert 4 as
+soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own
+latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
+journal's new live sends, so a violation the capture path could not report still opens it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
 never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
 process cannot report its own death. `pnpm cli sync alerts status` shows what holds per page.
 

@@ -11,6 +11,7 @@ import {
   acknowledgeSyncPaceViolations,
   createIncidentAlertSink,
   readSyncAlertStatus,
+  SYNC_ALERT_CLEAN_MS,
   SyncAlertEvaluator,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import { computeSyncMetrics, sampleSyncEngineMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
@@ -21,9 +22,9 @@ import { quietLogger, setModeDirect, testConfig } from "./helpers/sync-engine-ho
 
 // The Fansly Sync Engine's alerts and golden signals against a real database
 // (plan §10, design §9.5, §9.6): the evaluator opens and resolves latches of
-// handover/live pages only, alert 1 waits 10 clean minutes, the pace latch is
-// the owner's to close, alert 5 is the api watchdog's, and the sampler's
-// compact set.
+// handover/live pages only, alerts 1–3 wait 10 clean minutes (alert 4 none),
+// the pace latch is the owner's to close, alert 5 is the api watchdog's, and
+// the sampler's compact set.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -78,6 +79,17 @@ async function incident(subKey: Parameters<typeof syncEngineIncidentKey>[0]["sub
   return getNotificationIncidentByKey(db(), syncEngineIncidentKey({ subKey, pageId }));
 }
 
+/** Time passes for a latch: its condition was last seen `ms` earlier. */
+async function ageLatch(subKey: Parameters<typeof syncEngineIncidentKey>[0]["subKey"], pageId: number, ms: number): Promise<void> {
+  await testDb!.pool.query(
+    `update notification_incidents
+        set opened_at = opened_at - make_interval(secs => $2::double precision / 1000),
+            last_seen_at = last_seen_at - make_interval(secs => $2::double precision / 1000)
+      where incident_key = $1`,
+    [syncEngineIncidentKey({ subKey, pageId }), ms],
+  );
+}
+
 async function attempt(input: {
   pageId: number;
   shadow: boolean;
@@ -121,10 +133,79 @@ describe("the alert evaluator (design §9.6)", () => {
     expect((await pass()).resolved).toEqual([]);
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
 
-    // Ten clean minutes.
+    // The 429 is 11 min old, but the hold was seen in force moments ago: the
+    // ten clean minutes count from there.
     await testDb.pool.query("update sync_attempts set admitted_at = admitted_at - interval '6 minutes' where page_id = $1", [page.pageId]);
+    expect((await pass()).resolved).toEqual([]);
+    expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
+
+    // Ten clean minutes.
+    await ageLatch("page_stopped", page.pageId, SYNC_ALERT_CLEAN_MS);
     expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "page_stopped" }]);
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "resolved" });
+  });
+
+  it("alert 1 opened from the journal alone (the capture path's open lost) resolves 10 min after the 429", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 9 * 60, errorClass: "rate_limit" });
+    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "rate_limit" }]);
+    // The latch holds as of the answer, not of the pass.
+    const latch = await incident("page_stopped", page.pageId);
+    const answeredAt = (await query<{ answeredAt: Date }>(
+      "select coalesce(completed_at, admitted_at) as \"answeredAt\" from sync_attempts where page_id = $1",
+      [page.pageId],
+    ))[0]!.answeredAt;
+    expect(Math.abs(latch!.lastSeenAt.getTime() - answeredAt.getTime())).toBeLessThan(2);
+    await testDb.pool.query("update sync_attempts set admitted_at = admitted_at - interval '2 minutes' where page_id = $1", [page.pageId]);
+    await ageLatch("page_stopped", page.pageId, 2 * 60_000);
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "page_stopped" }]);
+  });
+
+  it("alerts 2 and 3 resolve only after 10 clean minutes, so a condition that comes and goes keeps one page; alert 4 resolves at once", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state)
+       values ($1, false, 'dm-messages.head', '1', 'trigger', 'urgent', 'quarantined')`,
+      [page.pageId],
+    );
+    const quarantine = (on: boolean) => testDb!.pool.query(
+      `update sync_work set state = $2, closed_at = case when $2 = 'done' then clock_timestamp() end
+        where page_id = $1 and resource = 'dm-messages.head'`,
+      [page.pageId, on ? "quarantined" : "done"],
+    );
+    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "live_degraded", detail: "quarantined" }]);
+
+    // Clear for nine minutes, then back: the same standing latch, no second page.
+    await quarantine(false);
+    expect(await pass()).toMatchObject({ opened: [], resolved: [] });
+    await ageLatch("live_degraded", page.pageId, SYNC_ALERT_CLEAN_MS - 60_000);
+    expect(await pass()).toMatchObject({ opened: [], resolved: [] });
+    await quarantine(true);
+    expect(await pass()).toMatchObject({ opened: [], resolved: [] });
+    const latch = await incident("live_degraded", page.pageId);
+    expect(latch).toMatchObject({ status: "open", resolvedAt: null });
+    // Never reopened: it was opened before the nine clear minutes.
+    expect(Date.now() - latch!.openedAt.getTime()).toBeGreaterThan(SYNC_ALERT_CLEAN_MS - 2 * 60_000);
+
+    // Ten clean minutes resolve it, measured from the last pass that saw it.
+    await quarantine(false);
+    await ageLatch("live_degraded", page.pageId, SYNC_ALERT_CLEAN_MS - 60_000);
+    expect((await pass()).resolved).toEqual([]);
+    await ageLatch("live_degraded", page.pageId, 60_000);
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "live_degraded" }]);
+
+    // Alert 4: progress resumes ⇒ resolved on the next pass.
+    const rescan = (proof: Record<string, unknown>) => testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, proof, closed_at)
+       values ($1, false, 'transactions.rescan', '', 'goal', 'planned', 'done', $2::jsonb, clock_timestamp())`,
+      [page.pageId, JSON.stringify(proof)],
+    );
+    await rescan({ ledgerIncomplete: 3 });
+    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "stuck", detail: "transactions_ledger_incomplete" }]);
+    await rescan({});
+    expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "stuck" }]);
   });
 
   it("pages nothing for a shadow page, and resolves the latches of a page set back to shadow or off", async (context) => {
@@ -166,16 +247,24 @@ describe("the alert evaluator (design §9.6)", () => {
        values ($1, '777000000000000001', '2110', 'tip', 'posted', '1', 0, 0, 0, clock_timestamp(), 'fansly:rest')`,
       [page.pageId],
     );
+    // In the ledger now: resolved after ten clean minutes.
+    expect((await pass()).resolved).toEqual([]);
+    await ageLatch("freshness", page.pageId, SYNC_ALERT_CLEAN_MS);
     expect((await pass()).resolved).toEqual([{ pageId: page.pageId, subKey: "freshness" }]);
 
     // A fan message the socket showed 20 min ago that no REST read confirmed.
-    const liveMessage = (id: string, groupId: string) => testDb!.pool.query(
+    // The parity pass has looked and found no copy, so its next look is
+    // minutes ahead (`confirm_due_at` is that look, not a deadline).
+    const liveMessage = (id: string, groupId: string, visibleMinutesAgo = 20) => testDb!.pool.query(
       `insert into dm_live_messages (page_id, platform_message_id, platform_conversation_id, sender_platform_user_id,
                                      is_sent_by_page, created_at, decoder_version, first_visible_at, confirm_due_at)
-       values ($1, $2, $3, $4, false, clock_timestamp() - interval '21 minutes', 1,
-               clock_timestamp() - interval '20 minutes', clock_timestamp() - interval '10 minutes')`,
-      [page.pageId, id, groupId, FAN],
+       values ($1, $2, $3, $4, false, clock_timestamp() - make_interval(mins => $5::int + 1), 1,
+               clock_timestamp() - make_interval(mins => $5::int), clock_timestamp() + interval '194 seconds')`,
+      [page.pageId, id, groupId, FAN, visibleMinutesAgo],
     );
+    // Shown 10 min ago: not late yet.
+    await liveMessage("910000000000000100", GROUP, 10);
+    expect((await pass()).opened).toEqual([]);
     // In an excluded chat it does not count.
     await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: page.pageId, groupId: "300000000000000002", fanRef: "200000000000000002", excluded: true });
     await liveMessage("910000000000000101", "300000000000000002");

@@ -237,6 +237,70 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.verdict).toMatchObject({ a1: null, b5: false, b6: true, b7: true, accepted: false });
   });
 
+  it("part B: a kind with observations of which none was judged fails B5; legacy's own refusals leave the ratio", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const now = Date.now();
+    const observe = async (kind: string, verdict: string, minutesAgo: number) => {
+      const payload = { verdict, nonce: randomUUID() };
+      await insertObservation(db(), {
+        source: "pull",
+        producer: "test",
+        platform: "fansly",
+        accountId: page.pageId,
+        nativeAccountRef: OWN,
+        kind,
+        payload,
+        payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+        idempotencyKey: `test:${randomUUID()}`,
+        receivedAt: new Date(now - minutesAgo * MINUTE),
+      });
+    };
+    const report = async () => buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: null,
+      journal: {
+        replaySince: new Date(now - 2 * 3_600_000),
+        replayMinPerKind: 1,
+        replayMaxPerKind: 1_000,
+        chainsSince: new Date(now - 24 * 3_600_000),
+        pacing: { batchRows: 10, sleepMs: 0, maxDurationMs: null, forceWindow: true },
+        expectedCounterexampleRawIds: [],
+      },
+      maxListed: 10,
+    });
+    // Three matches and one body legacy itself refused: 3 / 3.
+    for (const [i, verdict] of ["match", "match", "skip:legacy_refused_body_trimmed", "match"].entries()) {
+      await observe("account_me", verdict, 10 + i);
+    }
+    const passing = await report();
+    expect(passing.journal!.replay.find((row) => row.kind === "account_me")).toMatchObject({
+      total: 4, matched: 3, mismatched: 0, notReplayable: 1, excused: 1, ratio: 1, meetsTarget: true,
+    });
+    expect(passing.verdict).toMatchObject({ b5: true, b6: true, b7: true });
+
+    // A kind whose every observation was not judged (here: no page identity)
+    // is no pass, whatever the other kinds say.
+    await observe("followers", "skip:page_account_unknown", 5);
+    await observe("followers", "skip:page_account_unknown", 6);
+    const failing = await report();
+    expect(failing.journal!.replay.find((row) => row.kind === "followers")).toMatchObject({
+      total: 2, matched: 0, notReplayable: 2, excused: 0, ratio: 0, meetsTarget: false,
+      notReplayableReasons: { page_account_unknown: 2 },
+    });
+    expect(failing.verdict).toMatchObject({ b5: false, accepted: false });
+    expect(failing.summary).toContainEqual(expect.stringMatching(/below 99\.9 %: followers 0\.00 %/));
+    expect(failing.summary).toContainEqual(
+      "B5 not replayable: account_me legacy_refused_body_trimmed 1 (legacy refusal, left out); followers page_account_unknown 2",
+    );
+
+    // Not judged counts as not matched: 3 matches of 4 observations.
+    await observe("account_me", "skip:body_unavailable", 1);
+    const partial = (await report()).journal!.replay.find((row) => row.kind === "account_me");
+    expect(partial).toMatchObject({ total: 5, matched: 3, excused: 1, ratio: 0.75, meetsTarget: false });
+  });
+
   it("the CLI: `sync shadow report --part a` and `sync alerts ack`", async (context) => {
     if (!testDb) return context.skip();
     const page = await shadowPage();
@@ -264,13 +328,14 @@ describe("the shadow report (design §3.12)", () => {
   });
 });
 
-/** Every key replays by the fixture payload's `verdict`. */
+/** Every key replays by the fixture payload's `verdict` (`skip:<reason>`: not replayable). */
 function createStubRegistry(): Pick<EngineRegistry, "module"> {
   const module = {
     async replay(observation: ReplayObservation, replayCtx: ReplayContext) {
       const verdict = (observation.payload as { verdict?: string } | null)?.verdict;
       if (verdict === "throw") throw new Error("boom");
       if (verdict === "write") await insertAuditEvent(replayCtx.db, { source: "test", eventType: "test.replay_write" });
+      if (verdict?.startsWith("skip:") === true) return { kind: "not_replayable" as const, reason: verdict.slice("skip:".length) };
       return verdict === "match" ? { kind: "match" as const } : { kind: "mismatch" as const, reason: "differs" };
     },
   } as unknown as ResourceModule;

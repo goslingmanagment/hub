@@ -8,6 +8,7 @@ import { ScanGovernor, type ScanPacing } from "../fansly/lib/chain-rebuild.ts";
 import {
   backtestEta,
   checkChains,
+  REPLAY_EXCUSED_REASONS,
   replayResources,
   SEPTEMBER_16_COUNTEREXAMPLE_RAW_IDS,
   type ChainCheckReport,
@@ -22,9 +23,11 @@ import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 // consistent picture of the hour); part B reads the past journal in batches
 // (read-only transactions for the replay; the chain checks and the ETA
 // backtest are the dry-run scans of `sync chain …` and `sync history
-// eta-backtest`). Acceptance = A1–A4 hold, B5 ≥ 99.9 % per resource with
-// every mismatch listed for explanation, B6 lists the 16.09 counterexamples
-// and no empty-page soundness hit, B7 printed.
+// eta-backtest`). Acceptance = A1–A4 hold, B5 ≥ 99.9 % per resource
+// (matched over every observation but legacy's own refusals; a kind with
+// observations and nothing judged fails) with every mismatch listed for
+// explanation, B6 lists the 16.09 counterexamples and no empty-page soundness
+// hit, B7 printed.
 
 export interface ShadowReportInput {
   pages: readonly SyncPageRow[];
@@ -140,9 +143,11 @@ export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">,
 }
 
 function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journal"], pages: number): ShadowReportVerdict {
+  // A kind passes only on its own ratio; null is a kind without a single
+  // legacy observation (listed as not replayable, design §3.12).
   const b5 = journal === null
     ? null
-    : journal.replay.every((row) => row.stoppedBy === null && (row.meetsTarget ?? true));
+    : journal.replay.every((row) => row.stoppedBy === null && row.meetsTarget !== false);
   const chainsComplete = journal !== null && journal.chains.length === pages && journal.chains.every((row) =>
     !("error" in row.rebuild) && row.rebuild.scan.completed && !("error" in row.endRule) && row.endRule.scan.completed);
   const b6 = journal === null
@@ -193,11 +198,19 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the setting`);
   }
   if (journal !== null) {
-    const below = journal.replay.filter((row) => row.meetsTarget === false).map((row) => `${row.kind} ${percent(row.ratio)}`);
-    const none = journal.replay.filter((row) => row.total === 0).map((row) => row.kind);
+    const below = journal.replay.filter((row) => row.meetsTarget === false).map((row) => `${row.kind} `
+      + (row.ratio !== null ? percent(row.ratio) : row.notReplayableReasons.no_replay === undefined ? "nothing judged" : "no replay"));
+    const none = journal.replay.filter((row) => row.meetsTarget === null).map((row) => row.kind);
     lines.push(`B5 replay: ${journal.replay.reduce((total, row) => total + row.total, 0)} observations; `
       + `${below.length === 0 ? "every resource ≥ 99.9 %" : `below 99.9 %: ${below.join(", ")}`}`
       + `${none.length === 0 ? "" : `; not replayable (no observation): ${none.join(", ")}`}`);
+    // What was not compared, per kind and reason: legacy's own refusals are
+    // left out of the ratio, every other reason counts as not matched.
+    const skipped = journal.replay.filter((row) => row.notReplayable > 0).map((row) => `${row.kind} `
+      + Object.entries(row.notReplayableReasons)
+        .map(([reason, count]) => `${reason} ${count}${REPLAY_EXCUSED_REASONS.has(reason) ? " (legacy refusal, left out)" : ""}`)
+        .join(", "));
+    if (skipped.length > 0) lines.push(`B5 not replayable: ${skipped.join("; ")}`);
     const hits = journal.chains.reduce((total, row) => total + ("error" in row.endRule ? 0 : row.endRule.emptyPageSoundness.hits.length), 0);
     lines.push(`B6 chains: 16.09 counterexamples listed ${journal.septemberSixteen.listed.length}/${journal.septemberSixteen.expected.length}, `
       + `empty-page soundness hits ${hits}`);

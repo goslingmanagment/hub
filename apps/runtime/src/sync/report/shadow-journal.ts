@@ -27,6 +27,12 @@ import { backtestPageEta, type EtaBacktestPageReport } from "../requests/eta-bac
 
 /** The share of each resource's replayed observations that must match. */
 export const REPLAY_MATCH_TARGET = 0.999;
+/** Not-replayable reasons that are legacy's own refusals: legacy journaled
+ *  only a trimmed refused body or a rejection receipt, so it stored no fact to
+ *  compare with. Only these leave B5's denominator. Every other not-replayable
+ *  observation (no body, a page without identity, nothing parsed, no replay at
+ *  all) was not compared, and counts as not matched. */
+export const REPLAY_EXCUSED_REASONS: ReadonlySet<string> = new Set(["legacy_refused_body_trimmed", "legacy_rejection_receipt"]);
 /** The 16.09 end-of-history counterexamples (raw 2975891 and 2975902: a head
  *  of 24 of 25 between full pages, design §8.3). */
 export const SEPTEMBER_16_COUNTEREXAMPLE_RAW_IDS: readonly number[] = [2975891, 2975902];
@@ -40,8 +46,15 @@ export interface ReplayKindReport {
   matched: number;
   mismatched: number;
   notReplayable: number;
-  /** matched / (matched + mismatched); null when nothing was comparable. */
+  /** Not-replayable observations that are legacy's own refusals
+   *  (`REPLAY_EXCUSED_REASONS`), left out of the ratio. */
+  excused: number;
+  /** matched / (total − excused): design §3.12 B5's matched / total; null
+   *  when nothing is left to judge. */
   ratio: number | null;
+  /** Null only for a kind without a single observation (listed as not
+   *  replayable, design §3.12); a kind with observations of which none was
+   *  judged, or one without a replay, fails. */
   meetsTarget: boolean | null;
   oldestReceivedAt: Date | null;
   stoppedBy: ScanStop | null;
@@ -79,6 +92,19 @@ function errorName(error: unknown): string {
   return error instanceof Error ? error.name : "unknown";
 }
 
+/** B5's metric of one kind from its counts. */
+export function scoreReplayKind(
+  report: Pick<ReplayKindReport, "total" | "matched" | "notReplayableReasons">,
+): Pick<ReplayKindReport, "excused" | "ratio" | "meetsTarget"> {
+  let excused = 0;
+  for (const reason of REPLAY_EXCUSED_REASONS) excused += report.notReplayableReasons[reason] ?? 0;
+  if (report.total === 0) return { excused, ratio: null, meetsTarget: null };
+  const judged = report.total - excused;
+  if (judged <= 0) return { excused, ratio: null, meetsTarget: false };
+  const ratio = report.matched / judged;
+  return { excused, ratio, meetsTarget: ratio >= REPLAY_MATCH_TARGET };
+}
+
 /** B5: every kind a resource owns, replayed newest first. */
 export async function replayResources(
   ctx: JournalContext,
@@ -99,6 +125,7 @@ export async function replayResources(
         matched: 0,
         mismatched: 0,
         notReplayable: 0,
+        excused: 0,
         ratio: null,
         meetsTarget: null,
         oldestReceivedAt: null,
@@ -109,7 +136,10 @@ export async function replayResources(
       reports.push(report);
       const module = await input.registry.module(spec.key);
       if (module.replay === undefined) {
+        // The kind is the resource's to replay (design §3.12 B5): no
+        // comparator is a failure, not a pass.
         report.notReplayableReasons.no_replay = 1;
+        report.meetsTarget = false;
         continue;
       }
       const replay = module.replay.bind(module);
@@ -169,9 +199,7 @@ export async function replayResources(
         if (rows.length < input.batchRows) break;
         await governor.pause();
       }
-      const comparable = report.matched + report.mismatched;
-      report.ratio = comparable === 0 ? null : report.matched / comparable;
-      report.meetsTarget = report.ratio === null ? null : report.ratio >= REPLAY_MATCH_TARGET;
+      Object.assign(report, scoreReplayKind(report));
       if (report.total === 0) report.notReplayableReasons.no_observation = 1;
     }
   }

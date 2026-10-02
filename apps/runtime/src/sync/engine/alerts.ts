@@ -40,10 +40,11 @@ import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from
 // at once on a 429, a refused credential, another identity or a pace
 // violation (the incident sink below), and the evaluator re-derives every
 // condition from the database every 30 s — opening what holds, resolving what
-// no longer does. The evaluator is the only one that resolves, so a latch
-// never flips on one path's partial view. Alert 1's pace violation has its own
-// latch (`page_stopped:pace_violation`), resolved only by the owner (`pnpm cli
-// sync alerts ack`).
+// has stayed clear long enough (alerts 1–3: 10 min; alert 4: at once). The
+// evaluator is the only one that resolves, so a latch never flips on one
+// path's partial view. Alert 1's pace violation has its own latch
+// (`page_stopped:pace_violation`), resolved only by the owner (`pnpm cli sync
+// alerts ack`).
 //
 // Pages: `handover` and `live` page the owner. A `shadow` page's alerts are
 // metrics only (D14): the golden-signal sampler counts them
@@ -56,7 +57,9 @@ export const SYNC_ALERT_EVAL_INTERVAL_MS = 30_000;
 /** Alert 1: a page in the engine without a beating owner for this long (the
  *  host's own waiting alert uses the same bound). */
 export const SYNC_OWNERSHIP_UNCONFIRMED_MS = 2 * 60_000;
-/** Alert 1 resolves only after this long without a page-stopping answer. */
+/** Alerts 1–3 resolve only after their condition has stayed false this long
+ *  (alert 1: "hold cleared and 10 min clean"; alerts 2 and 3: "condition false
+ *  10 min"), so a condition that comes and goes keeps one standing page. */
 export const SYNC_ALERT_CLEAN_MS = 10 * 60_000;
 /** Alert 1: a handover older than this is stuck. */
 export const SYNC_HANDOVER_STUCK_MS = 10 * 60_000;
@@ -87,6 +90,13 @@ const PACE_AUDIT_FIRST_LOOKBACK_MS = 60 * 60_000;
 export const SYNC_PAGE_ALERT_SUB_KEYS = ["page_stopped", "live_degraded", "freshness", "stuck"] as const satisfies readonly SyncEngineAlertSubKey[];
 export type SyncPageAlertSubKey = (typeof SYNC_PAGE_ALERT_SUB_KEYS)[number];
 
+/** How long a page alert's condition must stay false before the evaluator
+ *  resolves its latch (design §9.6): alerts 1–3 after 10 clean minutes, alert
+ *  4 as soon as progress resumes. */
+export function syncAlertResolveAfterMs(subKey: SyncPageAlertSubKey): number {
+  return subKey === "stuck" ? 0 : SYNC_ALERT_CLEAN_MS;
+}
+
 /** One alert whose condition holds, with why (`detail`, the closed
  *  vocabulary of design §9.6) and every reason that held. */
 export interface SyncAlertCondition {
@@ -94,6 +104,10 @@ export interface SyncAlertCondition {
   detail: string;
   /** When the condition began, when known. */
   since: Date | null;
+  /** The newest instant the condition is known to hold: `now`, except alert
+   *  1's clean tail alone (a page-stopping answer after its hold ended), which
+   *  holds as of that answer — its latch resolves 10 min after it. */
+  seenAt: Date;
   reasons: Array<{ detail: string; since: Date | null; context?: Record<string, unknown> }>;
 }
 
@@ -135,9 +149,13 @@ function resourceExplained(page: PageAlertFacts["page"], resource: string, now: 
   return hold !== undefined && inForce(dateOf(hold.until), now);
 }
 
-function condition(subKey: SyncPageAlertSubKey, reasons: SyncAlertCondition["reasons"]): SyncAlertCondition | null {
+function condition(
+  subKey: SyncPageAlertSubKey,
+  reasons: SyncAlertCondition["reasons"],
+  seenAt: Date,
+): SyncAlertCondition | null {
   const first = reasons[0];
-  return first === undefined ? null : { subKey, detail: first.detail, since: first.since, reasons };
+  return first === undefined ? null : { subKey, detail: first.detail, since: first.since, seenAt, reasons };
 }
 
 /**
@@ -173,11 +191,15 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     }
   }
   // "Hold cleared and 10 min clean": a page-stopping answer within the window
-  // keeps the alert although its hold has ended.
+  // keeps the alert although its hold has ended (and opens it when the
+  // capture path's own open was lost). It holds as of the answer, so the
+  // latch resolves 10 min after the later of the hold's end and the answer.
+  let stoppedSeenAt = now;
   if (stopped.length === 0 && journal.lastStopAttempt !== null && msSince(journal.lastStopAttempt.at, now) <= SYNC_ALERT_CLEAN_MS) {
     stopped.push({ detail: journal.lastStopAttempt.errorClass, since: journal.lastStopAttempt.at, context: { clean: false } });
+    stoppedSeenAt = journal.lastStopAttempt.at;
   }
-  conditions.push(condition("page_stopped", stopped));
+  conditions.push(condition("page_stopped", stopped, stoppedSeenAt));
 
   // 2. The live path degraded.
   const degraded: SyncAlertCondition["reasons"] = [];
@@ -191,7 +213,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   if (quarantined.length > 0) {
     degraded.push({ detail: "quarantined", since: null, context: { byResource: Object.fromEntries(quarantined) } });
   }
-  conditions.push(condition("live_degraded", degraded));
+  conditions.push(condition("live_degraded", degraded, now));
 
   // 3. Freshness. The owner's pause and a page hold explain a wait (alert 1
   // or the owner's own lever), so they do not page twice.
@@ -214,7 +236,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
       });
     }
   }
-  conditions.push(condition("freshness", late));
+  conditions.push(condition("freshness", late, now));
 
   // 4. Stuck.
   const stuck: SyncAlertCondition["reasons"] = [];
@@ -247,7 +269,7 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
       context: { missing: journal.ledgerIncomplete.missing },
     });
   }
-  conditions.push(condition("stuck", stuck));
+  conditions.push(condition("stuck", stuck, now));
 
   return conditions.filter((entry): entry is SyncAlertCondition => entry !== null);
 }
@@ -369,11 +391,14 @@ export interface SyncAlertEvaluatorOptions {
 
 /**
  * The 30-second evaluator of the `sync` process. Each pass: every
- * `handover`/`live` page's alerts 1–4 are derived from the database and their
- * latches opened or resolved; the latches of every other page are resolved
- * (a page set back to `off` or `shadow` pages nothing); the pace backstop
- * re-reads the journal's new sends (a violation the capture path could not
- * report, e.g. across a crash, still opens the pace latch).
+ * `handover`/`live` page's alerts 1–4 are derived from the database; a
+ * condition that holds opens or refreshes its latch (`last_seen_at`), and a
+ * latch whose condition has stayed false for `syncAlertResolveAfterMs` since
+ * its `last_seen_at` is resolved — the clean time lives in the latch, so it
+ * survives a restart of the evaluator. The latches of every other page are
+ * resolved at once (a page set back to `off` or `shadow` pages nothing). The
+ * pace backstop re-reads the journal's new sends (a violation the capture
+ * path could not report, e.g. across a crash, still opens the pace latch).
  */
 export class SyncAlertEvaluator {
   readonly #o: SyncAlertEvaluatorOptions;
@@ -416,9 +441,10 @@ export class SyncAlertEvaluator {
     const { db } = this.#o;
     const pages = await listSyncPages(db);
     const result: SyncAlertPassResult = { pages: pages.length, opened: [], resolved: [], paceViolations: 0 };
-    const open = new Set((await listNotificationIncidents(db, { status: "open" }))
+    // Open latches by key, with the last instant their condition was seen.
+    const open = new Map((await listNotificationIncidents(db, { status: "open" }))
       .filter((incident) => incident.kind === "fansly_sync_engine")
-      .map((incident) => incident.incidentKey));
+      .map((incident) => [incident.incidentKey, incident.lastSeenAt] as const));
     const owned = pages.filter(pagesOwnerAlerts);
     const now = pages[0]?.dbNow ?? new Date();
     const money = await readMissingMoneyFrames(db, {
@@ -434,6 +460,7 @@ export class SyncAlertEvaluator {
       for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
         const held = holding.get(subKey);
         const key = syncEngineIncidentKey({ subKey, pageId: page.pageId });
+        const lastSeenAt = open.get(key);
         if (held !== undefined) {
           await notifySyncEngineIncident(this.#app, {
             subKey,
@@ -441,10 +468,12 @@ export class SyncAlertEvaluator {
             pageLabel: page.pageLabel,
             detail: held.detail,
             errorSummary: summaryOf(held.detail, held.since, { reasons: held.reasons.map((reason) => reason.detail) }),
-            occurredAt: page.dbNow,
+            occurredAt: held.seenAt,
           });
-          if (!open.has(key)) result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
-        } else if (open.has(key)) {
+          if (lastSeenAt === undefined) result.opened.push({ pageId: page.pageId, subKey, detail: held.detail });
+        } else if (lastSeenAt !== undefined) {
+          const cleanMs = pagesOwnerAlerts(page) ? syncAlertResolveAfterMs(subKey) : 0;
+          if (page.dbNow.getTime() - lastSeenAt.getTime() < cleanMs) continue;
           await resolveSyncEngineIncident(this.#app, { subKey, pageId: page.pageId, pageLabel: page.pageLabel, recoveredAt: page.dbNow });
           result.resolved.push({ pageId: page.pageId, subKey });
         }
@@ -541,9 +570,16 @@ export async function readSyncAlertStatus(
       // A shadow page's conditions are metrics; only handover/live page the owner.
       pages: pagesOwnerAlerts(page),
       conditions,
+      // A latch whose condition no longer holds resolves 10 clean minutes
+      // after `lastSeenAt` (alert 4 at once).
       openLatches: incidents
         .filter((incident) => incident.platformAccountId === page.pageId)
-        .map((incident) => ({ key: incident.incidentKey, openedAt: incident.openedAt, summary: incident.errorSummary })),
+        .map((incident) => ({
+          key: incident.incidentKey,
+          openedAt: incident.openedAt,
+          lastSeenAt: incident.lastSeenAt,
+          summary: incident.errorSummary,
+        })),
     });
   }
   return {

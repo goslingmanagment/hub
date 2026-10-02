@@ -147,7 +147,8 @@ export interface SyncLivePathFacts {
    *  acked as decode debt. */
   decode: { receipts: number; debt: number };
   /** Fan messages the socket showed that no REST read confirmed for longer
-   *  than `unconfirmedAfterMs` (excluded and hidden chats left out). */
+   *  than `unconfirmedAfterMs` (excluded and hidden chats left out), whenever
+   *  the parity pass looks next. */
   unconfirmed: { count: number; oldestVisibleAt: Date | null };
 }
 
@@ -175,6 +176,11 @@ export async function readSyncLivePathFacts(
      where r.observation_id > ${receiptIdFloorSql(sql`statement_timestamp() - ${input.decodeWindowMs}::double precision * interval '1 millisecond'`)}
        and r.page_id = ${input.pageId}
   `);
+  // `confirm_due_at` is not a deadline but the parity pass's next look: every
+  // look that finds no REST copy moves it 30 s … 10 min ahead, so a message
+  // that stays unconfirmed is almost never past it. Its age is
+  // `first_visible_at`; `confirm_due_at is not null` only leaves out deletion
+  // stubs (and keeps the partial index `dm_live_messages_confirm_due`).
   const unconfirmed = await db.execute<{ n: number; oldest: Date | string | null }>(sql`
     select count(*)::int as n, min(m.first_visible_at) as oldest
       from dm_live_messages m
@@ -183,7 +189,6 @@ export async function readSyncLivePathFacts(
      where m.page_id = ${input.pageId}
        and m.confirmed_at is null
        and m.confirm_due_at is not null
-       and m.confirm_due_at < statement_timestamp()
        and m.deleted_at is null
        and m.is_sent_by_page is false
        and m.first_visible_at < statement_timestamp() - ${input.unconfirmedAfterMs}::double precision * interval '1 millisecond'
