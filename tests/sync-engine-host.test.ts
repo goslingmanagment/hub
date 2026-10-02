@@ -172,6 +172,21 @@ describe("what a pick leaves out", () => {
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 
+  it("a media-stats 429 hold leaves out only the media-stats walk, never the file of anything else (owner decision №20)", () => {
+    const exclusions = pickExclusions(page({
+      resourceHolds: {
+        "media-stats": { until: later, step: 1, since: NOW.toISOString(), kind: "rate_limit_media_stats" },
+      },
+    }), registry, false, NOW);
+    expect(exclusions).toEqual({ excludeResources: ["media-stats.walk"], excludeFiles: [], excludeClasses: [] });
+    // Expired: nothing left out.
+    expect(pickExclusions(page({
+      resourceHolds: {
+        "media-stats": { until: new Date(NOW.getTime() - 1).toISOString(), step: 1, since: NOW.toISOString(), kind: "rate_limit_media_stats" },
+      },
+    }), registry, false, NOW)).toEqual({ excludeResources: [], excludeFiles: [], excludeClasses: [] });
+  });
+
   it("unverified credentials: only the identity checks, until the verified digest moved (to the refused one or any other)", () => {
     const exclusions = pickExclusions(page(), registry, false, NOW, { checksOnly: true });
     expect(exclusions.excludeClasses).toEqual(["requests"]);

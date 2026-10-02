@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import { getSyncStreamsForPlatform } from "@agency_hub_core/db";
 import { FANSLY_SEND_SOURCES, fanslyWireSpec, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 
-import { LIST_RATE_LIMIT_HELD_KEYS, LIST_RATE_LIMIT_ROUTE } from "../apps/runtime/src/sync/engine/errors.ts";
+import {
+  ENDPOINT_RATE_GROUPS,
+  LIST_RATE_LIMIT_HELD_KEYS,
+  LIST_RATE_LIMIT_ROUTE,
+  MEDIA_STATS_RATE_GROUP,
+  MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
+  MEDIA_STATS_RATE_LIMIT_ROUTE,
+} from "../apps/runtime/src/sync/engine/errors.ts";
 import { NOT_IMPLEMENTED_RECHECK_MS } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
@@ -140,6 +147,37 @@ describe("the Fansly registry table", () => {
     expect([...LIST_RATE_LIMIT_HELD_KEYS].sort()).toEqual(listOnly);
     // `.find` reads the list too, but goes on through the group detail.
     expect(byKey("dm-conversations.find").operations).toEqual([LIST_RATE_LIMIT_ROUTE, "group.detail"]);
+  });
+
+  it("a media-stats 429 holds, and the 5 s spacing paces, exactly the keys that read the media-stats endpoint (owner decision №20)", () => {
+    // Every wire route on the endpoint is in the group: whatever key reads
+    // `/it/moie/statsnew`, the group's hold and spacing cover it.
+    const onEndpoint = Object.values(FANSLY_WIRE_SPECS)
+      .filter((spec) => spec.endpointTemplate === FANSLY_WIRE_SPECS[MEDIA_STATS_RATE_LIMIT_ROUTE].endpointTemplate)
+      .map((spec) => spec.id)
+      .sort();
+    expect(FANSLY_WIRE_SPECS[MEDIA_STATS_RATE_LIMIT_ROUTE].endpointTemplate).toBe("/it/moie/statsnew");
+    expect(onEndpoint).toEqual([...MEDIA_STATS_RATE_GROUP.routes].sort());
+    const readers = FANSLY_RESOURCE_SPECS
+      .filter((spec) => spec.operations.some((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)))
+      .map((spec) => spec.key)
+      .sort();
+    expect([...MEDIA_STATS_RATE_LIMIT_HELD_KEYS].sort()).toEqual(readers);
+    expect(readers).toEqual(["media-stats.walk"]);
+    // The held keys read nothing else: the hold stops no other endpoint.
+    for (const key of readers) {
+      expect(byKey(key).operations.every((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)), key).toBe(true);
+    }
+    // The groups: the list keeps owner decision №14 as it was (its spacing
+    // is `repair.ws-gap`'s own cursor), the media statistics are spaced 5 s.
+    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file, group.spacingMs])).toEqual([
+      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations", null],
+      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats", 5_000],
+    ]);
+    // No two groups share a route or a hold entry.
+    const routes = ENDPOINT_RATE_GROUPS.flatMap((group) => [...group.routes]);
+    expect(new Set(routes).size).toBe(routes.length);
+    expect(new Set(ENDPOINT_RATE_GROUPS.map((group) => group.file)).size).toBe(ENDPOINT_RATE_GROUPS.length);
   });
 
   it("I12: a history walk only on a request", () => {

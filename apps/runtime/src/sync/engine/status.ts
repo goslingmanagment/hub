@@ -1,9 +1,11 @@
 import {
   activePageHold,
   activeResourceHold,
+  isEndpointRateLimitKind,
   isIndefinite,
   type PageHoldKind,
   type ResourceHoldEntry,
+  type ResourceHoldKind,
 } from "./errors.ts";
 import { TAKEOVER_FACTOR } from "./pacer.ts";
 import { WORK_CLASSES, type WorkClass } from "./scheduler.ts";
@@ -12,7 +14,8 @@ import { WORK_CLASSES, type WorkClass } from "./scheduler.ts";
 // piece of work is not being served, and the page status the owner API, the
 // agent CLI and `pnpm cli sync status` show. Durable reasons (written on the
 // work row when they arise) are `running`, `quarantined`, `blocked_by_vendor`,
-// `subject_breaker`, `dependency` and `not_due`; the dynamic ones (pauses,
+// `subject_breaker`, `dependency` and `not_due` — and `pacer` for a request
+// an endpoint group's spacing put off (owner decision №20); the dynamic ones (pauses,
 // holds, ownership, pacer, class share) are computed here, so serving a slot
 // never writes a row just to say why the others wait.
 
@@ -155,6 +158,8 @@ export function explainWork(
   if (work.waitingReason === "dependency" && after(work.dueAt)) {
     return { reason: "dependency", until: work.waitingUntil ?? work.dueAt, detail: {} };
   }
+  // An endpoint group's spacing (owner decision №20): due again when it ends.
+  if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { spacing: true } };
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
   if (after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
@@ -247,7 +252,7 @@ export interface PageStatus {
      *  that only new credentials lift. */
     page: { kind: PageHoldKind; until: string; since: string | null } | null;
     /** `kind`: the file's breaker, or the conversation list's own 429 hold. */
-    resources: Array<{ file: string; until: string; step: number; kind: "breaker" | "rate_limit_list" }>;
+    resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
   breakers: { open: number; blockedByVendor: number };
   quarantined: number;
@@ -287,7 +292,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
       file,
       until: new Date(entry.until).toISOString(),
       step: entry.step,
-      kind: entry.kind === "rate_limit_list" ? "rate_limit_list" as const : "breaker" as const,
+      kind: isEndpointRateLimitKind(entry.kind) ? entry.kind : "breaker" as const,
     }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   let breakersOpen = 0;

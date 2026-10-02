@@ -868,6 +868,40 @@ export async function markAttemptQuarantined(
   return (result.rowCount ?? 0) > 0;
 }
 
+/** How far back `endpointSpacingRemainingMs` looks for the previous
+ *  request: its spacing plus the longest admission → completion span. */
+export const SYNC_ENDPOINT_SPACING_LOOKBACK_MS = 10 * 60_000;
+
+/**
+ * How long until the page may admit its next request on these wire routes
+ * (an endpoint group's spacing, owner decision №20): its newest attempt there
+ * — by the latest instant it has, admission, send or completion — plus
+ * `spacingMs`, less the database clock now; ≤ 0 (or none within the
+ * look-back) means now. Shadow and live attempts are each other's strangers
+ * (`shadow`). The look-back keeps it a short range scan of
+ * `sync_attempts_page_admitted`.
+ */
+export async function endpointSpacingRemainingMs(
+  db: Database,
+  input: { pageId: number; shadow: boolean; operations: readonly string[]; spacingMs: number },
+): Promise<number> {
+  if (input.operations.length === 0) return 0;
+  const lookbackMs = Math.max(0, input.spacingMs) + SYNC_ENDPOINT_SPACING_LOOKBACK_MS;
+  const result = await db.execute<{ remainingMs: number | string | null }>(sql`
+    select (extract(epoch from (
+             max(greatest(a.admitted_at, a.sent_at, a.completed_at))
+             + ${Math.max(0, input.spacingMs)}::double precision * interval '1 millisecond'
+             - clock_timestamp())) * 1000)::double precision as "remainingMs"
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.admitted_at > statement_timestamp() - ${lookbackMs}::double precision * interval '1 millisecond'
+       and a.shadow = ${input.shadow}
+       and a.operation in (${sql.join(input.operations.map((operation) => sql`${operation}`), sql`, `)})
+  `);
+  const remaining = Number(result.rows[0]?.remainingMs ?? 0);
+  return Number.isFinite(remaining) ? Math.max(0, Math.ceil(remaining)) : 0;
+}
+
 /**
  * The newest 429 of a page before this outcome (the [A8] ladder decay), among
  * the attempts admitted within the last `withinMs`; null when there is none.
@@ -889,9 +923,10 @@ export async function lastRateLimitAt(
        and a.admitted_at > statement_timestamp() - ${Math.max(0, input.withinMs)}::double precision * interval '1 millisecond'
        and not a.shadow
        and a.http_status = 429
-       -- A conversation-list 429 holds only the list (its own ladder): it
-       -- never keeps the page's ladder up.
-       and a.error_class is distinct from 'rate_limit_list'
+       -- A 429 of an endpoint group with a quota of its own (the conversation
+       -- list, the media statistics) holds only that group (its own ladder):
+       -- it never keeps the page's ladder up.
+       and (a.error_class is null or a.error_class not in ('rate_limit_list', 'rate_limit_media_stats'))
        and a.id is distinct from ${input.excludeAttemptId ?? null}::bigint
   `);
   return toDate(result.rows[0]?.at);
