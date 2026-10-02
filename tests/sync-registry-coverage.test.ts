@@ -153,9 +153,11 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a ships account, subscribers, followers and fan-profiles, S2-10 dm-live; every other entry waits on its dependency", async () => {
+  it("S2-07a (account, subscribers, followers, fan-profiles), S2-10 (dm-live) and S2-09a (notifications, posts, post-replies) have landed; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
-    expect([...new Set(implemented)].sort()).toEqual(["account", "dm-live", "fan-profiles", "followers", "subscribers"]);
+    expect([...new Set(implemented)].sort()).toEqual([
+      "account", "dm-live", "fan-profiles", "followers", "notifications", "post-replies", "posts", "subscribers",
+    ]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
     for (const spec of FANSLY_RESOURCE_SPECS) {
@@ -175,6 +177,33 @@ describe("the Fansly registry table", () => {
     }
     for (const key of ["followers.head", "followers.reconcile"]) {
       expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
+    }
+  });
+
+  it("the content entries replay their kinds and import their legacy cursors (design §5.14–§5.16)", async () => {
+    const registry = createFanslyRegistry();
+    for (const key of ["notifications.forward", "posts.refresh", "post-replies.walk"]) {
+      expect(typeof (await registry.module(key)).replay, key).toBe("function");
+    }
+    for (const key of [
+      "notifications.forward", "notifications.backfill", "posts.refresh", "posts.backfill", "posts.engagement", "post-replies.walk",
+    ]) {
+      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
+    }
+    expect(fanslyReplayOwner("notifications")?.key).toBe("notifications.forward");
+    expect(fanslyReplayOwner("posts")?.key).toBe("posts.refresh");
+    expect(fanslyReplayOwner("post_tips")?.key).toBe("posts.refresh");
+    expect(fanslyReplayOwner("post_replies")?.key).toBe("post-replies.walk");
+  });
+
+  it("the subject-queue walks over projector-fed queues are standing goals with a queue breaker (design §4.3)", async () => {
+    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined);
+    expect(standing.map((spec) => spec.key).sort()).toEqual(["post-replies.walk", "posts.engagement"]);
+    for (const spec of standing) {
+      expect(spec.kind, spec.key).toBe("goal");
+      expect(spec.subjectQueue, spec.key).toBe(true);
+      expect(spec.standing!.recheckMs, spec.key).toBe(6 * 3_600_000);
+      expect(typeof (await createFanslyRegistry().module(spec.key)).onSubjectOutcome, spec.key).toBe("function");
     }
   });
 });

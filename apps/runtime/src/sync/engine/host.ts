@@ -34,6 +34,7 @@ import { PgOwnershipSession, PgWake } from "./host-ports.ts";
 import { createPacer, type Pacer, type PacerDeps } from "./pacer.ts";
 import {
   createEffectiveConfigPauseSource,
+  createEffectiveConfigSettingsSource,
   cryptoRng,
   noopMetrics,
   systemClock,
@@ -41,6 +42,7 @@ import {
   type Clock,
   type Metrics,
   type PauseSource,
+  type SettingsSource,
   type Rng,
   type Wake,
 } from "./ports.ts";
@@ -105,6 +107,9 @@ export interface SyncHostOptions {
    *  previous owner (rules (c)/(d)). */
   probe?: FanslySendOsProbe;
   pause?: PauseSource;
+  /** The live settings resources read; default: the effective config over
+   *  `rawConfig`, as the pause. */
+  settings?: SettingsSource;
   alerts?: AlertSink;
   metrics?: Metrics;
   /** Default: one PgWake on `fansly_sync_work`. */
@@ -156,6 +161,7 @@ export class SyncEngineHost {
   readonly #probe: FanslySendOsProbe;
   readonly #identity: FanslySendHolderIdentity;
   readonly #pause: PauseSource;
+  readonly #settings: SettingsSource;
   readonly #metrics: Metrics;
   readonly #alerts: AlertSink;
   readonly #wake: Wake & { start?(): Promise<void>; close?(): Promise<void> };
@@ -179,6 +185,7 @@ export class SyncEngineHost {
     this.#probe = options.probe ?? createDefaultFanslySendOsProbe();
     this.#identity = buildFanslySendHolderIdentity(this.#probe, "sync");
     this.#pause = options.pause ?? createEffectiveConfigPauseSource(options.db, options.rawConfig);
+    this.#settings = options.settings ?? createEffectiveConfigSettingsSource(options.db, options.rawConfig);
     this.#metrics = options.metrics ?? noopMetrics;
     this.#alerts = options.alerts ?? createLoggingAlertSink(options.logger);
     this.#wake = options.wake ?? new PgWake({ connectionString: options.connectionString, logger: options.logger });
@@ -444,6 +451,7 @@ export class SyncEngineHost {
       transport,
       ownership: session,
       wake: this.#wake,
+      settings: this.#settings,
       ...(this.#o.capture === undefined ? {} : { capture: this.#o.capture }),
       ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),

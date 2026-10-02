@@ -433,7 +433,9 @@ export function compareNotificationRefs(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function pageRefBounds(
+/** The newest and oldest walkable ids of a page (exported for the Fansly
+ *  Sync Engine's `notifications` resource; unchanged here). */
+export function pageRefBounds(
   rows: readonly Record<string, unknown>[],
 ): { newest: string | null; oldest: string | null } {
   let newest: string | null = null;
