@@ -12,10 +12,13 @@ import { jsonParam, nullableJsonParam, textArrayParam, timestampParam, toDate, t
 // the request knows (inputs, refusals, anchors, reads spent, terminal
 // counters).
 //
-// Lock order (design §3.7): … → sync_work → history_requests →
-// history_request_items. Every writer here runs after the transaction's
-// sync_work rows are locked, and locks request rows before item rows
-// (`lockRequestsOfOpenItems`).
+// Lock order (design §3.7): … → page_dm_threads → sync_work →
+// history_requests → history_request_items. Every writer here runs after the
+// transaction's sync_work rows are locked, and locks request rows before item
+// rows (`lockRequestsOfOpenItems`). A new item references its chat (FK, a key
+// share on the thread row), so intake takes its chats before any sync_work
+// row (`lockThreadsForHistoryItems`): a DM apply holds the chat it writes
+// before the works it settles.
 
 export const HISTORY_REQUESTER_KINDS = [
   "agent_key",
@@ -693,16 +696,25 @@ export async function countHistoryItems(db: Database, requestIds: readonly numbe
 
 /** Open items of a request (cancel), of chats, or of a work row, with what
  *  their requests ask. `lock` takes their rows FOR UPDATE in id order — call
- *  `lockRequestsOfOpenItems` first (requests before items, §3.7). */
+ *  `lockRequestsOfOpenItems` first (requests before items, §3.7) and pass the
+ *  ids it locked as `requestIds`: an item of a request filed after that lock
+ *  is not this transaction's to write. */
 export async function listOpenHistoryItems(
   db: Database,
-  input: { requestId?: number; threadIds?: readonly number[]; workId?: number; lock?: boolean },
+  input: {
+    requestId?: number;
+    threadIds?: readonly number[];
+    workId?: number;
+    requestIds?: readonly number[];
+    lock?: boolean;
+  },
 ): Promise<OpenHistoryItem[]> {
   const filters: SQL[] = [sql`i.state in ${OPEN_STATES}`];
   if (input.requestId !== undefined) filters.push(sql`i.request_id = ${input.requestId}`);
   if (input.threadIds !== undefined) filters.push(sql`i.thread_id = any(${idsParam(input.threadIds)})`);
   if (input.workId !== undefined) filters.push(sql`i.work_id = ${input.workId}`);
   if (filters.length === 1) throw new Error("listOpenHistoryItems needs a request, a thread or a work");
+  if (input.requestIds !== undefined) filters.push(sql`i.request_id = any(${idsParam(input.requestIds)})`);
   const result = await db.execute<OpenItemSqlRow>(sql`
     select ${openItemColumns}
       from history_request_items i
@@ -735,6 +747,21 @@ export async function lockRequestsOfOpenItems(
        for update of r
   `);
   return result.rows.map((row) => Number(row.id));
+}
+
+/** Take the chats new items will reference (`for key share`, id order) —
+ *  before any sync_work row (§3.7: page_dm_threads before sync_work). The
+ *  items' foreign key takes the same lock at insert, too late in the order:
+ *  a DM apply holds the chat it writes and then the chat's work. */
+export async function lockThreadsForHistoryItems(db: Database, threadIds: readonly number[]): Promise<void> {
+  const ids = [...new Set(threadIds)].sort((a, b) => a - b);
+  if (ids.length === 0) return;
+  await db.execute(sql`
+    select t.id from page_dm_threads t
+     where t.id = any(${idsParam(ids)})
+     order by t.id
+       for key share of t
+  `);
 }
 
 /** Which of these work rows still carry an open item. */

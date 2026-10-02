@@ -82,8 +82,10 @@ was deleted or excluded since) ends its fans through `onHistoryWorkClosed`. No h
 fan (I12): the plan closes such a work, and the actor's idle wait does not count it. Requests are accepted only on a
 `live` page whose `requests_enabled_at` has passed — every other page answers 409
 `history_requests_unavailable_on_page`, so in step 2 the class is empty. Intake, cancel, the admission and the apply
-take `sync_work` rows before `history_requests` before `history_request_items`
-(`tests/sync-history-lock-order.integration.test.ts`). The ETA (`requests/eta.ts`) reads thread columns only and
+take `sync_work` rows before `history_requests` before `history_request_items`; intake takes the chats its fans
+reference (`page_dm_threads`) before any work row, as the DM apply holds the chat it writes before its works, and the
+hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it)
+(`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
 always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
 
 ## WebSocket demand

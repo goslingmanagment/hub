@@ -306,6 +306,14 @@ describe("erasure of the engine's state (design §2.9)", () => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("erase-history");
     const request = await insertHistoryRequest(pageId, 6);
+    // A request whose last open fan is the erased one: nothing else would
+    // ever settle it (its chat's work goes with the fan) — the erasure does.
+    const lastOpen = await insertHistoryRequest(pageId, 2);
+    await insertHistoryItem(lastOpen, pageId, 0, { input_kind: "conversation_ref", input_ref: "group-fan", conversation_ref: "group-fan" });
+    await insertHistoryItem(lastOpen, pageId, 1, {
+      input_kind: "fan_platform_user_id", input_ref: OTHER_FAN, fan_platform_user_id: OTHER_FAN, state: "ready",
+      satisfied_by: "already_satisfied",
+    });
     const erased = [
       await insertHistoryItem(request, pageId, 0, { input_kind: "fan_platform_user_id", input_ref: FAN, fan_platform_user_id: FAN }),
       await insertHistoryItem(request, pageId, 1, { input_kind: "conversation_ref", input_ref: "group-fan", conversation_ref: "group-fan" }),
@@ -326,14 +334,76 @@ describe("erasure of the engine's state (design §2.9)", () => {
       const scope = { scopeType: "fan" as const, platform: "fansly" as const, fanRef: FAN };
       const plan = await planErasure(app, scope);
       const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
-      expect(targets.get("hot:history_request_items:delete")).toBe(erased.length);
+      expect(targets.get("hot:history_request_items:delete")).toBe(erased.length + 1);
       const result = await executeErasure(app, scope, { initiatedBy: operatorId });
-      expect(result.executedCounts["hot:history_request_items:delete"]).toBe(erased.length);
+      expect(result.executedCounts["hot:history_request_items:delete"]).toBe(erased.length + 1);
     });
-    expect((await query<{ id: string }>("select id::text from history_request_items order by id")).map((row) => Number(row.id)))
+    expect((await query<{ id: string }>(
+      "select id::text from history_request_items where request_id = $1 order by id", [request])).map((row) => Number(row.id)))
       .toEqual(kept);
-    // The request keeps only digests and counts: it stays.
-    expect(await query("select id::int from history_requests")).toEqual([{ id: request }]);
+    // The requests keep only digests and counts: they stay, settled again —
+    // one still has open fans of other chats, the other none left (done).
+    expect(await query(
+      `select id::int, state, items_terminal, done_at is not null as "doneAt" from history_requests order by id`,
+    )).toEqual([
+      { id: request, state: "open", items_terminal: 0, doneAt: false },
+      { id: lastOpen, state: "done", items_terminal: 1, doneAt: true },
+    ]);
+  });
+
+  it("a fan erasure takes the fan's chats before their work rows, as a history intake does: the two never deadlock", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("erase-order");
+    const thread = await query<{ id: string }>(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, $2, $2) returning id::text`,
+      [pageId, FAN],
+    );
+    const threadId = Number(thread[0]!.id);
+    const workId = await insertWork(pageId, { resource: "dm-messages.history", subject: FAN, kind: "goal", class: "requests" });
+    const attemptId = await insertAttempt(pageId, { subject: FAN });
+    const waiters = async () => (await query<{ n: number }>(
+      `select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`))[0]!.n;
+    const waitFor = async (n: number) => {
+      for (let attempt = 0; attempt < 250 && await waiters() < n; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await waiters()).toBeGreaterThanOrEqual(n);
+    };
+    const code = (error: unknown): string => String((error as { code?: unknown; cause?: { code?: unknown } }).code
+      ?? (error as { cause?: { code?: unknown } }).cause?.code ?? error);
+
+    // A blocker on the fan's attempt row parks the erasure inside its run
+    // (after the work target); an intake-ordered transaction then takes the
+    // chat (`for key share`, as the fans' foreign key does) and the chat's
+    // work. Were the erasure to reach the chat only when it deletes it, after
+    // the work, each would wait for the other.
+    const blocker = await testDb.pool.connect();
+    const intake = await testDb.pool.connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select id from sync_attempts where id = $1 for update", [attemptId]);
+      const erasure = withEraser((app, operatorId) => executeErasure(app, { scopeType: "fan", platform: "fansly", fanRef: FAN }, {
+        initiatedBy: operatorId,
+      })).then(() => "ok", code);
+      await waitFor(1);
+      await intake.query("begin");
+      const intakeOrder = (async () => {
+        await intake.query("select id from page_dm_threads where id = $1 for key share", [threadId]);
+        await intake.query("select id from sync_work where id = $1 for update", [workId]);
+        await intake.query("commit");
+        return "ok";
+      })().catch(async (error: unknown) => {
+        await intake.query("rollback");
+        return code(error);
+      });
+      await waitFor(2);
+      await blocker.query("commit");
+      expect(await Promise.all([erasure, intakeOrder])).toEqual(["ok", "ok"]);
+    } finally {
+      blocker.release();
+      intake.release();
+    }
+    expect(await query("select id from sync_work")).toEqual([]);
+    expect(await query("select id from page_dm_threads")).toEqual([]);
   });
 
   it("a page erasure removes the page's engine row, work and attempts, and only that page's", async (context) => {

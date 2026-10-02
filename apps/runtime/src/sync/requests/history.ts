@@ -23,6 +23,7 @@ import {
   listOpenHistoryItems,
   listOpenRequestsForPage,
   lockRequestsOfOpenItems,
+  lockThreadsForHistoryItems,
   lockWorkRows,
   markHistoryItemsReady,
   markHistoryRequestCancelled,
@@ -551,8 +552,11 @@ export async function submitHistoryRequest(
   try {
     created = await ctx.db.transaction(async (raw) => {
       const tx = raw as unknown as Database;
-      // (2) The chats' shared work rows: the existing ones locked in id order,
-      //     then the demand upserted by group id (new rows in key order).
+      // (2) The chats the fans reference first (page_dm_threads before
+      //     sync_work, §3.7), then their shared work rows: the existing ones
+      //     locked in id order, then the demand upserted by group id (new
+      //     rows in key order).
+      await lockThreadsForHistoryItems(tx, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
       const groups = [...needWork.keys()].sort();
       const existing = await openWorkIdsForSubjects(tx, {
         pageId: input.pageId, shadow: false, resource: HISTORY_WORK_RESOURCE, subjects: groups,
@@ -656,8 +660,15 @@ function finalOf(
  * DM read, and intake): an anchor of another epoch is cleared, a fan without
  * one is anchored once a head was accepted after it was filed, a satisfied fan
  * becomes `ready`, its request `done` when no fan is left open, and a chat's
- * work closes `goal_satisfied` when no fan rides on it. Runs inside the
- * caller's transaction after its sync_work rows; locks requests before items.
+ * work closes `goal_satisfied` when no fan rides on it.
+ *
+ * Runs inside the caller's transaction after its own sync_work writes, in the
+ * lock order of §3.7 whoever calls it: the chats' history works (id order)
+ * before any request, requests before items. A `.head` or `.catchup` apply
+ * reaches here without holding the chat's `.history` work, so the hook takes
+ * it itself. Only fans of the requests it locked are written, and only works
+ * it locked are closed: a fan filed (or a work created) after those locks is
+ * left to its own intake and to the work's own plan (`no_open_items`).
  */
 export async function settleOpenItemsOfThreads(
   tx: Database,
@@ -666,12 +677,19 @@ export async function settleOpenItemsOfThreads(
   const threadIds = [...new Set(input.threadIds)];
   const nothing = { anchored: 0, ready: 0, closedWorks: [] as number[] };
   if (threadIds.length === 0) return nothing;
+  // sync_work first: the works the chats' open fans ride on, read without a
+  // lock, then locked in id order (a no-op for the rows the caller holds).
+  const riding = await listOpenHistoryItems(tx, { threadIds });
+  if (riding.length === 0) return nothing;
+  const lockedWorks = await lockWorkRows(tx, riding.flatMap((item) => (item.workId === null ? [] : [item.workId])));
   const requestIds = await lockRequestsOfOpenItems(tx, { threadIds });
   if (requestIds.length === 0) return nothing;
-  const items = await listOpenHistoryItems(tx, { threadIds, lock: true });
+  const items = await listOpenHistoryItems(tx, { threadIds, requestIds, lock: true });
   if (items.length === 0) return nothing;
   const facts = await readHistoryThreadFacts(tx, threadIds);
-  const works = await getSyncWorkRows(tx, items.flatMap((item) => (item.workId === null ? [] : [item.workId])));
+  const works = new Map(lockedWorks.map((work) => [work.id, work]));
+  const unlocked = items.flatMap((item) => (item.workId === null || works.has(item.workId) ? [] : [item.workId]));
+  for (const [id, work] of await getSyncWorkRows(tx, unlocked)) works.set(id, work);
 
   const toClear: number[] = [];
   const toSet = new Map<number, { anchor: Omit<HistoryItemAnchor, "fixedAt">; itemIds: number[] }>();
@@ -711,9 +729,10 @@ export async function settleOpenItemsOfThreads(
   for (const entry of toSet.values()) anchored += await setHistoryItemAnchors(tx, entry);
   await markHistoryItemsReady(tx, ready);
   await refreshHistoryRequestCompletion(tx, requestIds);
-  // A work no open fan rides on any more is done (only an open one: a running
-  // read's own apply runs this again).
-  const workIds = [...new Set(items.flatMap((item) => (item.workId === null ? [] : [item.workId])))];
+  // A work no open fan rides on any more is done (only an open one this
+  // transaction locked: a running read's own apply runs this again).
+  const lockedWorkIds = new Set(lockedWorks.map((work) => work.id));
+  const workIds = [...new Set(items.flatMap((item) => (item.workId !== null && lockedWorkIds.has(item.workId) ? [item.workId] : [])))];
   const stillNeeded = await workIdsWithOpenHistoryItems(tx, workIds);
   const closedWorks = await closeWorkRows(tx, {
     workIds: workIds.filter((id) => !stillNeeded.has(id)),
@@ -741,9 +760,10 @@ export async function onHistoryWorkClosed(
   input: { pageId: number; workId: number; resource: string; closeReason: string | null },
 ): Promise<void> {
   if (input.resource !== HISTORY_WORK_RESOURCE) return;
+  // The caller closed (so holds) the work: requests, then their fans.
   const requestIds = await lockRequestsOfOpenItems(tx, { workIds: [input.workId] });
   if (requestIds.length === 0) return;
-  const items = await listOpenHistoryItems(tx, { workId: input.workId, lock: true });
+  const items = await listOpenHistoryItems(tx, { workId: input.workId, requestIds, lock: true });
   const facts = await readHistoryThreadFacts(tx, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])));
   const ready: Parameters<typeof markHistoryItemsReady>[1][number][] = [];
   const ended: Array<{ item: OpenHistoryItem; state: "refused" | "cancelled"; refusal: HistoryItemRefusal | null; excludedReason: string | null; thread: HistoryThreadFacts | null }> = [];
