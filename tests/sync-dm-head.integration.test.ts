@@ -794,6 +794,28 @@ describe("dm-messages.head for a chat without a thread row (D5, step 3 import I.
     expect((await workRow(pageId, "dm-messages.head", 33))?.close_reason).toBe("thread_missing");
     expect(await scalar("select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-conversations.find'", [pageId])).toBe(0);
   });
+
+  it("never asks for an excluded or unbound chat, even on the socket's evidence of a chat", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await seedThread(pageId, { n: 34, stored: range(1, 3), excluded: true });
+    await seedThread(pageId, { n: 35, bound: false });
+    const registry = await registryFor(pageId);
+    await liveOverlay(pageId, 34, 5);
+    await liveOverlay(pageId, 35, 7);
+    await demand(pageId, "dm-messages.head", 34, [msg(5)]);
+    await demand(pageId, "dm-messages.head", 35, [msg(7)]);
+    const { requests } = await runLive(pageId, registry, () => {
+      throw new Error("no request expected");
+    }, async () => {
+      const rows = await Promise.all([workRow(pageId, "dm-messages.head", 34), workRow(pageId, "dm-messages.head", 35)]);
+      return rows.every((row) => row?.state === "done");
+    });
+    expect(requests).toHaveLength(0);
+    expect((await workRow(pageId, "dm-messages.head", 34))?.close_reason).toBe("excluded");
+    expect((await workRow(pageId, "dm-messages.head", 35))?.close_reason).toBe("unbound");
+    expect(await scalar("select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-conversations.find'", [pageId])).toBe(0);
+  });
 });
 
 describe("dm-messages refusals", () => {
