@@ -3230,6 +3230,32 @@ export function buildProgram() {
     });
 
   program
+    .command("ofapi-message-material-replay")
+    .description("Replay captured OFAPI chat messages locally (read-only preview by default; no vendor calls)")
+    .requiredOption("--page <label>", "one OnlyFans page label")
+    .requiredOption("--from <date>", "inclusive capture receipt time", parseDateOption)
+    .requiredOption("--to <date>", "exclusive capture receipt time", parseDateOption)
+    .option("--limit <n>", "max observations to examine, 1–500", parsePositiveInt, 100)
+    .option("--after-id <id>", "resume after this observation id", parsePositiveInt)
+    .option("--execute", "actually materialize; default is a read-only preview")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const stored = await findPageByLabel(app.db, options.page);
+        if (!stored) throw new Error("Page not found");
+        const { replayOfapiMessageMaterial } = await import("./services/ofapi-message-material-replay.ts");
+        const result = await replayOfapiMessageMaterial(app, {
+          pageId: stored.page.id, from: options.from, to: options.to,
+          limit: options.limit, afterId: options.afterId, execute: options.execute === true,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        if (result.stoppedAt !== null) process.exitCode = 1;
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ofapi-transactions-backfill")
     .description("Dry-run or apply OFAPI REST transaction backfill for OFAPI-only OnlyFans pages")
     .option("--page <label>", "page label; may be repeated", collectStringOption, [])

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseStrictOfapiMessagePage,
+  parseOfapiMessageMaterial,
   validateOfapiInteractiveResponseShape,
 } from "../apps/runtime/src/services/ofapi-capture-contract.ts";
 
@@ -10,6 +11,23 @@ function item(id: string, createdAt: string) {
 }
 
 describe("strict OFAPI message-page contract", () => {
+  it("stores ascending interactive facts without granting a history certificate", () => {
+    const data = [
+      item("100", "2026-07-16T11:50:44Z"),
+      item("101", "2026-07-16T11:53:52Z"),
+      item("102", "2026-07-16T11:54:40Z"),
+    ];
+    // Material is independent of direction and pagination evidence; the exact
+    // same page remains invalid as a backward history-completeness proof.
+    expect(parseOfapiMessageMaterial({ data })).toEqual({ accepted: true, items: data });
+    expect(parseStrictOfapiMessagePage({ data, _pagination: { next_page: null } }, {
+      requiredBoundaryCursor: "100", boundaryIsDuplicate: false,
+    })).toMatchObject({ accepted: false, reason: "message_order_invalid" });
+    expect(parseOfapiMessageMaterial({ data: [...data, data[0]] }))
+      .toMatchObject({ accepted: false, reason: "message_id_duplicate" });
+    expect(parseOfapiMessageMaterial({ data: [...data, { id: "103" }] }))
+      .toMatchObject({ accepted: false, reason: "message_item_invalid" });
+  });
   it("accepts a descending boundary-linked page", () => {
     expect(parseStrictOfapiMessagePage({
       data: [

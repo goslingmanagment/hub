@@ -323,6 +323,31 @@ export function parseStrictOfapiPostPage(
   };
 }
 
+/** Message facts are independent of a history page's traversal/certificate.
+ * Interactive last_id tails arrive ascending, historical first_id pages
+ * descending. Both carry the same material; neither proves coverage merely
+ * by being stored. Keep the strict certificate parser below for history jobs. */
+export function parseOfapiMessageMaterial(body: unknown):
+  | { accepted: true; items: Record<string, unknown>[] }
+  | { accepted: false; reason: string } {
+  const root = asRecord(body);
+  if (!root || !Array.isArray(root.data)) return { accepted: false, reason: "data_not_array" };
+  const items: Record<string, unknown>[] = [];
+  const ids = new Set<string>();
+  for (const raw of root.data) {
+    const item = asRecord(raw);
+    const id = itemId(item?.id);
+    if (!item || !id || typeof item.isSentByMe !== "boolean"
+      || typeof item.createdAt !== "string" || !Number.isFinite(Date.parse(item.createdAt))) {
+      return { accepted: false, reason: "message_item_invalid" };
+    }
+    if (ids.has(id)) return { accepted: false, reason: "message_id_duplicate" };
+    ids.add(id);
+    items.push(item);
+  }
+  return { accepted: true, items };
+}
+
 /**
  * The certificate boundary for List Messages. Only the production-proven
  * `{data: [...], _pagination: {next_page: string|null}}` shape is accepted.

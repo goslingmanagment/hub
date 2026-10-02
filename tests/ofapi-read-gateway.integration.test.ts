@@ -20,6 +20,8 @@ import {
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { loadTranscriptContext } from "../apps/runtime/src/modules/ai/index.ts";
+import { runOfapiCaptureMaterialization } from "../apps/runtime/src/services/ofapi-capture-materialization.ts";
 import {
   createUserAccount,
 } from "../apps/runtime/src/services/auth.ts";
@@ -262,6 +264,10 @@ function inject(path: string, readIntent?: string) {
   });
 }
 
+function messageFixture(id: number) {
+  return { id, isSentByMe: false, createdAt: `2026-07-16T12:0${id % 10}:00.000Z`, text: `message-${id}` };
+}
+
 async function seedCertifiedHistory(chatId = "123") {
   appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
   appContext.config.ofapiMessageHistoryShadowEnabled = true;
@@ -378,6 +384,57 @@ async function seedUncertifiedHistory(chatId = "456", frozenHeadId = "203") {
 }
 
 describe("OFAPI read gateway integration", () => {
+  it("serves an ascending live tail only after the same messages are available to AI", async () => {
+    await seedUncertifiedHistory();
+    const data = [
+      { id: 201, isSentByMe: true, createdAt: "2026-07-16T13:01Z", text: "previous reply" },
+      { id: 202, isSentByMe: false, createdAt: "2026-07-16T13:02Z", text: "new question" },
+      { id: 203, isSentByMe: false, createdAt: "2026-07-16T13:03Z", text: "latest question" },
+    ];
+    // Live material does not require a backward-history pagination certificate.
+    scriptedResponses.push({ status: 200, body: { data } });
+    const response = await inject(`${ACCOUNT_ONE}/chats/456/messages?order=asc&last_id=201&limit=100`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data).toEqual(data);
+    const context = await loadTranscriptContext(appContext, {
+      pageId: assignedPageId, conversationRef: "456", unionMode: "serve",
+    });
+    expect(context.contextManifest).toMatchObject({
+      archiveCount: 3, unionCount: 3, archiveHeadRef: "203", unionHeadRef: "203", staleContext: false,
+    });
+    expect(context.messages).toHaveLength(3);
+    expect(upstreamRequests).toHaveLength(1);
+    expect((await testDb!.pool.query("select 1 from projection_seq_watermarks")).rows).toHaveLength(0);
+    expect((await testDb!.pool.query("select 1 from ofapi_message_coverage")).rows).toHaveLength(0);
+  });
+
+  it("refuses a captured message response if serving fails, then recovers locally without another vendor request", async () => {
+    await seedUncertifiedHistory();
+    scriptedResponses.push({ status: 200, body: { data: [
+      { id: 203, isSentByMe: false, createdAt: "2026-07-16T13:03Z", text: "latest question" },
+    ] } });
+    await testDb!.pool.query(`create function test_gateway_serving_failure() returns trigger language plpgsql as $$
+      begin raise exception 'injected serving failure'; end $$;
+      create trigger test_gateway_serving_failure before insert on message_archive
+      for each row execute function test_gateway_serving_failure()`);
+    try {
+      const response = await inject(`${ACCOUNT_ONE}/chats/456/messages?order=asc&last_id=202`);
+      expect(response.statusCode, response.body).toBe(503);
+      const state = await testDb!.pool.query(`select r.state, a.parser_outcome, o.parse_version
+        from ofapi_interactive_requests r join ofapi_request_attempts a on a.interactive_request_id = r.id
+        join observations o on o.id = a.response_observation_id`);
+      expect(state.rows).toEqual([{ state: "failed", parser_outcome: "failed", parse_version: 0 }]);
+    } finally {
+      await testDb!.pool.query("drop trigger test_gateway_serving_failure on message_archive; drop function test_gateway_serving_failure()");
+    }
+    expect(await runOfapiCaptureMaterialization(appContext)).toMatchObject({ stamped: 1, errored: 0 });
+    const context = await loadTranscriptContext(appContext, {
+      pageId: assignedPageId, conversationRef: "456", unionMode: "serve",
+    });
+    expect(context.contextManifest).toMatchObject({ unionHeadRef: "203", unionCount: 1 });
+    expect(upstreamRequests).toHaveLength(1);
+  });
+
   it("synthesizes only assigned accounts and a sanitized whoami", async () => {
     const accounts = await inject("accounts");
     expect(accounts.statusCode, accounts.body).toBe(200);
@@ -678,8 +735,8 @@ describe("OFAPI read gateway integration", () => {
   it("keeps repeated explicit no-certificate misses as separate capture-first intents", async () => {
     await seedUncertifiedHistory();
     scriptedResponses.push(
-      { status: 200, body: { data: [{ id: 202 }], _pagination: { next_page: null } } },
-      { status: 200, body: { data: [{ id: 202 }], _pagination: { next_page: null } } },
+      { status: 200, body: { data: [messageFixture(202)], _pagination: { next_page: null } } },
+      { status: 200, body: { data: [messageFixture(202)], _pagination: { next_page: null } } },
     );
 
     const first = await inject(
@@ -732,11 +789,11 @@ describe("OFAPI read gateway integration", () => {
     scriptedResponses.push(
       {
         status: 200,
-        body: { data: [{ id: 102 }], _pagination: { next_page: null } },
+        body: { data: [messageFixture(102)], _pagination: { next_page: null } },
       },
       {
         status: 200,
-        body: { data: [{ id: 102 }], _pagination: { next_page: null } },
+        body: { data: [messageFixture(102)], _pagination: { next_page: null } },
       },
     );
 
@@ -792,7 +849,7 @@ describe("OFAPI read gateway integration", () => {
     );
     scriptedResponses.push({
       status: 200,
-      body: { data: [{ id: 100 }], _pagination: { next_page: null } },
+      body: { data: [messageFixture(100)], _pagination: { next_page: null } },
     });
 
     const response = await inject(
@@ -815,7 +872,7 @@ describe("OFAPI read gateway integration", () => {
     scriptedResponses.push({
       status: 200,
       body: {
-        data: [{ id: 102 }, { id: 101 }],
+        data: [messageFixture(102), messageFixture(101)],
         _pagination: { next_page: "vendor-next" },
       },
     });
