@@ -310,13 +310,13 @@ describe("the shadow report (design §3.12)", () => {
     expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 43, violations: 0 }] });
     expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
     expect(window.rules.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle", "A1.poll-schedule",
-      "A2.rate", "A2.legacy-regime", "A2.live-only",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
+      "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
     ]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /^A1 lilly-1: steady 6\.67 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run to size it and no assumed size of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; OFF SCHEDULE or RUNAWAY \(rules A1\.poll-schedule, A1\.rate\): .* — FAIL$/,
+      /^A1 lilly-1: steady 6\.67 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); socket demand 3 reads\/h, 0\.2 % of capacity 1636\/h \(dm-conversations\.find 1 on 1 socket read, dm-messages\.head 1 on 1 socket read, transactions\.head 1 on 1 socket read, out of the ceiling, rule A1\.ceiling-demand\); ceiling 100: UNKNOWN, at least 3\.67 — no finished run to size it and no assumed size of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; OFF SCHEDULE or RUNAWAY \(rules A1\.poll-schedule, A1\.rate\): .* — FAIL$/,
     ));
     expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
@@ -451,7 +451,7 @@ describe("the shadow report (design §3.12)", () => {
     // ceiling is known, on assumed sizes (rule A1.rate-assumed).
     expect(report.window!.demand[0]).toMatchObject({ unknownRunSize: [], ceiling: "ok", ceilingBasis: "assumed" });
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /ceiling 100 ok \(on assumed sizes, no finished run yet: catalog\.fixed 6\/24 h, dm-conversations\.full 1\/24 h, .*stats\.daily 15\/24 h.*; rule A1\.rate-assumed\)/,
+      /ceiling 100 ok at [\d.]+ \(on assumed sizes, no finished run yet: catalog\.fixed 6\/24 h, dm-conversations\.full 1\/24 h, .*stats\.daily 15\/24 h.*; rule A1\.rate-assumed\)/,
     ));
     // A mark makes one subject due: the next step asks for the walk. Due a
     // second ago: the database's now() carries microseconds (and its own
@@ -557,7 +557,7 @@ describe("the shadow report (design §3.12)", () => {
       `a walk at most every 24 h: no finished walk to size it yet and not counted at its estimate, followers.reconcile: a run of it closed ${
         closedAt.toISOString()} — a key that ran is sized by its runs (rule A1.rate-assumed)`,
     );
-    expect(ran.summary).toContainEqual(expect.stringMatching(/ceiling 100: UNKNOWN — no finished run to size it and no assumed size of followers\.reconcile \(rules A1\.rate, A1\.rate-assumed\)/));
+    expect(ran.summary).toContainEqual(expect.stringMatching(/ceiling 100: UNKNOWN, at least [\d.]+ — no finished run to size it and no assumed size of followers\.reconcile \(rules A1\.rate, A1\.rate-assumed\)/));
   });
 
   it("part A: a standing walk that looked and found nothing due is idle; its pick re-run at the look naming a due subject untouched since lacks a counterpart (rule A1.floor-idle)", async (context) => {

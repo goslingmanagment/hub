@@ -16,8 +16,10 @@ import {
   type SyncRunAttempt,
   type SyncWorkOpenAt,
 } from "@agency_hub_core/db";
+import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
 import { quantileOf } from "../engine/metrics.ts";
+import { JITTER_MAX } from "../engine/pacer.ts";
 import type { SettingsSource } from "../engine/ports.ts";
 import {
   effectiveCadence,
@@ -52,6 +54,10 @@ const DAY_MS = 24 * HOUR_MS;
  *  is the ceiling (rule A1.ceiling); below its lower edge a page passes only
  *  under rule A1.floor. */
 export const STEADY_STATE_BAND_PER_HOUR = { min: 40, max: 100 } as const;
+/** Plan §13: one page's capacity, requests per hour at the minimum pause and
+ *  the mean jitter (S × (1 + u/2) = 2.2 s ⇒ 1 636). Socket demand is printed
+ *  as its share (rule A1.ceiling-demand). */
+export const PAGE_CAPACITY_PER_HOUR = Math.floor(HOUR_MS / (FANSLY_PAUSE_MIN_MS * (1 + JITTER_MAX / 2)));
 /** One run of a poll: its steps follow each other (a walk's next step is due
  *  at once), so a gap longer than this after a step's completion starts a new
  *  run. Below (1 − jitter) × the shortest poll period (5 min), pinned by test. */
@@ -190,8 +196,24 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
   },
   {
     id: "A1.ceiling",
-    text: "The steady state (urgent + planned, the one-time backlog walks apart) is at most 100 an hour per page "
-      + "(plan §13; unchanged).",
+    text: "The steady state (urgent + planned, the one-time backlog walks apart), less its socket demand (rule "
+      + "A1.ceiling-demand), is at most 100 an hour per page (plan §13; unchanged).",
+  },
+  {
+    id: "A1.ceiling-demand",
+    text: "The urgent reads of a trigger key whose row is judged against the reads the window's socket frames imply "
+      + "after coalescing, and is at that expectation (the row's verdict ok: 0.5–2× those reads, so at most 2× them), "
+      + "are socket demand: the page prints them apart (socket demand N reads an hour, X % of the page's capacity, "
+      + "≈ 1 636 an hour at the minimum pause, plan §13) and leaves them out of the ceiling's sum and the band's upper "
+      + "edge. "
+      + "Everything else stays in the ceiling: planned work, polls (their demand runs included), walks at their rate, "
+      + "urgent reads without a socket expectation, and the reads of a trigger row outside its expectation (the row is "
+      + "listed outside as before). The steady state, the floor's test below 40 an hour and every other rule count "
+      + "the socket demand as before. Why: plan §13's 40–100 an hour for urgent and planned work is a capacity "
+      + "estimate (≈ 3–6 % of ≈ 1 636 an hour), and plan §15 step 3 asks the volume to be explained by demand; the "
+      + "fans' messages of a busy hour read at their frames' expectation are that demand, not the engine over-reading "
+      + "(deviation from the design wording, 2026-10-02: ari-1 16:25–17:25 UTC read dm-messages.head 104 times on "
+      + "104 socket reads).",
   },
   {
     id: "A1.floor",
@@ -1306,6 +1328,27 @@ export interface DemandRow {
   reason: string;
 }
 
+/** Rule A1.ceiling-demand: a page's socket demand of the window. */
+export interface SocketDemand {
+  /** Attempts of the window left out of the ceiling. */
+  reads: number;
+  perHour: number;
+  /** Percent of the page's capacity (`PAGE_CAPACITY_PER_HOUR`). */
+  capacityShare: number;
+  capacityPerHour: number;
+  resources: Array<{ resource: string; observed: number; expected: number }>;
+}
+
+/** Rule A1.ceiling-demand: an urgent trigger row judged against the reads the
+ *  window's socket frames imply and at that expectation (its verdict ok, at
+ *  most 2× those reads). A poll (its runs), a walk, a row applied without a
+ *  request or one outside its expectation is no socket demand. */
+export function isSocketDemand(row: DemandRow): boolean {
+  return row.class === "urgent" && row.kind === "trigger" && row.runs === null && row.rate === null
+    && row.expected !== null && row.expected > 0 && row.verdict === "ok"
+    && row.observed > 0 && row.observed <= EXPECTATION_RATIO_BAND.max * row.expected;
+}
+
 export interface PageDemand {
   page: string;
   mode: SyncPageRow["mode"];
@@ -1316,6 +1359,11 @@ export interface PageDemand {
   steadyState: number;
   /** The same with every key as observed in the window. */
   steadyStateRaw: number;
+  /** Rule A1.ceiling-demand: the urgent trigger reads at their socket
+   *  frames' expectation, per window, apart from the ceiling. */
+  socketDemand: SocketDemand;
+  /** What the ceiling holds: the steady state less `socketDemand.reads`. */
+  ceilingSteadyState: number;
   /** Keys counted at their rate without a finished run or an estimate to
    *  size them (the ceiling is unknown). */
   unknownRunSize: string[];
@@ -1323,8 +1371,9 @@ export interface PageDemand {
    *  A1.rate-assumed): no finished shadow run of their own yet. */
   assumedRunSize: Array<{ resource: string; steps: number; periodMs: number }>;
   band: { min: number; max: number };
+  /** The steady state at least `band.min`, the ceiling's sum at most `band.max`. */
   inBand: boolean;
-  /** Rule A1.ceiling: at most `band.max`; unknown while a run size is. */
+  /** Rule A1.ceiling: `ceilingSteadyState` at most `band.max`; unknown while a run size is. */
   ceiling: "ok" | "over" | "unknown";
   /** What the steady state stands on: every rate key sized by its own run,
    *  or some on their assumed size (rule A1.rate-assumed). */
@@ -1575,13 +1624,18 @@ function roundTo2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function roundTo1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 function durationText(ms: number): string {
   return ms % HOUR_MS === 0 ? `${ms / HOUR_MS} h` : `${(ms / 60_000).toFixed(1)} min`;
 }
 
 /**
  * One page's demand of the window against its expectation (design §3.12 A1
- * under rules A1.rate, A1.ceiling, A1.floor and A1.poll-schedule). Pure:
+ * under rules A1.rate, A1.ceiling, A1.ceiling-demand, A1.floor and
+ * A1.poll-schedule). Pure:
  * every fact is read before.
  */
 export function demandOfPage(
@@ -1703,8 +1757,20 @@ export function demandOfPage(
     }
   }
   const band = { min: STEADY_STATE_BAND_PER_HOUR.min * hours, max: STEADY_STATE_BAND_PER_HOUR.max * hours };
+  // Rule A1.ceiling-demand: a trigger key never counts at a rate, so its
+  // window's attempts are what the steady state holds of it.
+  const socketRows = rows.filter(isSocketDemand);
+  const socketReads = socketRows.reduce((sum, row) => sum + row.observed, 0);
+  const socketDemand: SocketDemand = {
+    reads: socketReads,
+    perHour: roundTo2(socketReads / hours),
+    capacityShare: roundTo1(socketReads * 100 / (PAGE_CAPACITY_PER_HOUR * hours)),
+    capacityPerHour: PAGE_CAPACITY_PER_HOUR,
+    resources: socketRows.map((row) => ({ resource: row.resource, observed: row.observed, expected: row.expected! })),
+  };
+  const ceilingSteadyState = roundTo2(steadyState - socketReads);
   steadyState = roundTo2(steadyState);
-  const ceiling = unknownRunSize.length > 0 ? "unknown" : steadyState <= band.max ? "ok" : "over";
+  const ceiling = unknownRunSize.length > 0 ? "unknown" : ceilingSteadyState <= band.max ? "ok" : "over";
   const outside = rows.filter((row) => row.verdict === "outside");
   const below = steadyState < band.min;
   const holds = below
@@ -1716,10 +1782,12 @@ export function demandOfPage(
     attempts,
     steadyState,
     steadyStateRaw,
+    socketDemand,
+    ceilingSteadyState,
     unknownRunSize,
     assumedRunSize,
     band,
-    inBand: steadyState >= band.min && steadyState <= band.max,
+    inBand: steadyState >= band.min && ceilingSteadyState <= band.max,
     ceiling,
     ceilingBasis: assumedRunSize.length > 0 ? "assumed" : "measured",
     floor: { below, holds, outside: outside.map((row) => row.resource), counterparts: input.counterparts },

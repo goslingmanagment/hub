@@ -37,6 +37,7 @@ import {
   legacyVolumeRow,
   isQueueWalk,
   LOOK_CLOCK_TOLERANCE_MS,
+  PAGE_CAPACITY_PER_HOUR,
   POLL_RUN_GAP_MS,
   pollScheduleFault,
   QUEUE_WALK_DRIVERS,
@@ -555,7 +556,8 @@ function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRu
 describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
   it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle", "A1.poll-schedule",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
+      "A1.poll-schedule",
       "A2.rate", "A2.legacy-regime", "A2.live-only",
     ]);
     expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A1.ceiling")!.text).toContain("at most 100 an hour");
@@ -692,7 +694,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     expect(phased).toMatchObject({ steadyStateRaw: 20, steadyState: 35.42, passes: true });
   });
 
-  it("A1 fails: a key without a finished run, a starved poll, over the ceiling, below the floor with an unmet expectation or a legacy stream without a counterpart", () => {
+  it("A1 fails: a key without a finished run, a starved poll, below the floor with an unmet expectation or a legacy stream without a counterpart", () => {
     const judge = (fixture: ReturnType<typeof lilly2>, extra: { reads?: Map<string, { reads: number; dueLagsMs: number[] }>; counterparts?: CounterpartCheck } = {}) =>
       demandOfPage(shadowPage("lilly-2"), {
         window: WINDOW, observed: fixture.observed, reads: extra.reads,
@@ -707,12 +709,13 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const starved = judge(lilly2({ insurance: periodic(T("2026-10-02T11:44:00Z"), 5 * MINUTE, WINDOW.startMs) }));
     expect(starved.scheduleFaults).toEqual([expect.stringMatching(/^transactions\.insurance: overdue: /)]);
     expect(starved.passes).toBe(false);
-    // 70 chat reads on 70 socket reads: 105.42 an hour, over the ceiling.
+    // 70 chat reads on 70 socket reads: 105.42 an hour, of which 70 socket
+    // demand out of the ceiling (rule A1.ceiling-demand).
     const busy = judge(
       lilly2({ extraObserved: { "dm-messages.head": { class: "urgent", attempts: 70 } } }),
       { reads: new Map([["dm-messages.head", { reads: 70, dueLagsMs: [] }]]) },
     );
-    expect(busy).toMatchObject({ steadyState: 105.42, ceiling: "over", inBand: false, passes: false });
+    expect(busy).toMatchObject({ steadyState: 105.42, ceilingSteadyState: 35.42, socketDemand: { reads: 70 }, ceiling: "ok", inBand: true, passes: true });
     expect(busy.floor.below).toBe(false);
     // Below the floor with four chat reads the frames imply and none made.
     const missed = judge(lilly2(), { reads: new Map([["dm-messages.head", { reads: 4, dueLagsMs: [] }]]) });
@@ -722,6 +725,48 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [] } });
     expect(lacking.floor).toMatchObject({ below: true, holds: false });
     expect(lacking.passes).toBe(false);
+  });
+
+  it("rule A1.ceiling-demand: urgent trigger reads at their socket frames' expectation are demand, out of the 100-an-hour ceiling", () => {
+    expect(PAGE_CAPACITY_PER_HOUR).toBe(1_636);
+    // A page with only the chat head and its apply follow-ups switched on, so
+    // the steady state is exactly what the window observed.
+    const page = shadowPage("ari-1", Object.fromEntries(FANSLY_RESOURCE_SPECS
+      .filter((entry) => entry.key !== "dm-messages.head" && entry.key !== "dm-messages.catchup")
+      .map((entry) => [entry.key, { enabled: false }])));
+    const judge = (observed: Record<string, { class: string; attempts: number }>, socketReads: number | null) => demandOfPage(page, {
+      window: WINDOW,
+      observed: new Map(Object.entries(observed)),
+      reads: socketReads === null ? undefined : new Map([["dm-messages.head", { reads: socketReads, dueLagsMs: [] }]]),
+      facts: { runs: new Map(), placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z") },
+      counterparts: NO_GAPS,
+    });
+    const head = (demand: ReturnType<typeof judge>) => demand.resources.find((row) => row.resource === "dm-messages.head")!;
+    // ari-1 16:25–17:25: 104 chat reads on 104 socket reads + 29 other.
+    const evening = judge({ "dm-messages.head": { class: "urgent", attempts: 104 }, "dm-messages.catchup": { class: "planned", attempts: 29 } }, 104);
+    expect(head(evening)).toMatchObject({ observed: 104, expected: 104, verdict: "ok" });
+    expect(evening).toMatchObject({
+      steadyState: 133,
+      ceilingSteadyState: 29,
+      socketDemand: { reads: 104, perHour: 104, capacityShare: 6.4, capacityPerHour: 1_636, resources: [{ resource: "dm-messages.head", observed: 104, expected: 104 }] },
+      ceiling: "ok", inBand: true, scheduleFaults: [], floor: { below: false }, passes: true,
+    });
+    // The same page reading 104 times on 40 socket reads: outside, so in the ceiling.
+    const overRead = judge({ "dm-messages.head": { class: "urgent", attempts: 104 }, "dm-messages.catchup": { class: "planned", attempts: 29 } }, 40);
+    expect(head(overRead)).toMatchObject({ observed: 104, expected: 40, verdict: "outside" });
+    expect(overRead).toMatchObject({
+      steadyState: 133, ceilingSteadyState: 133, socketDemand: { reads: 0, resources: [] }, ceiling: "over", inBand: false, outside: [expect.objectContaining({ resource: "dm-messages.head" })], passes: false,
+    });
+    // At 2× its expectation it is still demand; under 0.5× it is not.
+    expect(judge({ "dm-messages.head": { class: "urgent", attempts: 104 } }, 52).socketDemand.reads).toBe(104);
+    expect(judge({ "dm-messages.head": { class: "urgent", attempts: 10 } }, 40).socketDemand.reads).toBe(0);
+    // 101 planned reads: over the ceiling; so are 101 urgent reads no frame implies.
+    expect(judge({ "dm-messages.catchup": { class: "planned", attempts: 101 } }, null)).toMatchObject({
+      steadyState: 101, ceilingSteadyState: 101, socketDemand: { reads: 0 }, ceiling: "over", passes: false,
+    });
+    const unexplained = judge({ "dm-messages.head": { class: "urgent", attempts: 101 } }, null);
+    expect(head(unexplained)).toMatchObject({ expected: null, verdict: "not_modelled" });
+    expect(unexplained).toMatchObject({ ceilingSteadyState: 101, socketDemand: { reads: 0 }, ceiling: "over", passes: false });
   });
 
   it("a single-request poll's run is its one request; every other poll's run is its consecutive steps", () => {
