@@ -727,6 +727,34 @@ export async function confirmDmLiveMessagesInTransaction(
   return counts;
 }
 
+/**
+ * Whether the socket showed one of these messages in this chat and nothing
+ * has settled it yet: an overlay row of the page, in this chat, not deleted,
+ * still unconfirmed, and not one of the page's own messages of type
+ * `ownContainerType` (its mass-message container, never a chat). The Sync
+ * Engine's `dm-messages.head` asks for a chat it has no thread row for only
+ * on this evidence (design §5.3 D5, step 3 import I.3b).
+ */
+export async function hasUnconfirmedDmLiveChatMessage(
+  db: Database,
+  input: { pageId: number; groupId: string; messageIds: readonly string[]; ownContainerType: number },
+): Promise<boolean> {
+  const ids = [...new Set(input.messageIds)].filter((id) => /^[0-9]{1,32}$/.test(id));
+  if (ids.length === 0) return false;
+  const result = await db.execute<{ found: boolean }>(sql`
+    select exists (
+      select 1 from dm_live_messages m
+       where m.page_id = ${input.pageId}
+         and m.platform_message_id = any(${sql.param(ids)}::text[])
+         and m.platform_conversation_id = ${input.groupId}
+         and m.deleted_at is null
+         and m.confirmed_at is null
+         and not (coalesce(m.is_sent_by_page, false) and m.message_type is not distinct from ${input.ownContainerType}::int)
+    ) as found
+  `);
+  return result.rows[0]?.found === true;
+}
+
 // ---------------------------------------------------------------------------
 // Golden-signal gauges (services/golden-signals.ts samples them minutely).
 

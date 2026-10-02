@@ -155,7 +155,9 @@ export async function importLegacyState(
   }
 
   // 3b. Confirmations the legacy engine owed (G22): one urgent head read per
-  // chat with an unconfirmed overlay row of the last 24 h.
+  // chat with an unconfirmed overlay row of the last 24 h. A chat legacy never
+  // made a thread for (it deferred the socket's hint until its list showed
+  // the chat) is found by the head first (`dm-conversations.find`, D5).
   await inTx(db, async (tx) => {
     const chats = await listUnconfirmedOverlayChats(tx, { pageId: page.pageId });
     const upserts = upsertsOf(input.registry, page, chats.map((chat) => ({
