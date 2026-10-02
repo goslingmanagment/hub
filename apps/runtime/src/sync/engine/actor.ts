@@ -2,6 +2,7 @@ import {
   endpointSpacingRemainingMs,
   ensurePollRows,
   getSyncPage,
+  hasRunnableUrgentWork,
   LiveGateClosedError,
   lockOwnedPage,
   nextOpenWorkDueAt,
@@ -282,12 +283,12 @@ export class SyncActor {
     // Owner decisions №14, №20: an endpoint group with a quota of its own
     // (the conversation list, the media statistics) takes at most one request
     // per its spacing on this page, on top of the pause S — whatever key,
-    // demand or restart asks. Nothing is admitted; the slot stays open for
-    // other work.
-    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now, picked.work.class);
-    if (spacedUntil !== null) {
-      d.metrics.increment("sync_endpoint_spaced", { resource: picked.work.resource, shadow });
-      await deferForEndpointSpacing(d, picked.work, spacedUntil);
+    // demand or restart asks — and a non-urgent read yields it to a due
+    // urgent reader. Nothing is admitted; the slot stays open for other work.
+    const spaced = await this.#endpointSpacedUntil(plan.request.spec, now, picked.work.class, exclusions);
+    if (spaced !== null) {
+      d.metrics.increment(spaced.yielded ? "sync_endpoint_yielded" : "sync_endpoint_spaced", { resource: picked.work.resource, shadow });
+      await deferForEndpointSpacing(d, picked.work, spaced.until);
       return null;
     }
 
@@ -422,24 +423,44 @@ export class SyncActor {
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
   }
 
-  /** When the page may next admit a request on `route`'s endpoint group, if
-   *  that is later than now; null: now (or the route has no spacing). Read
-   *  from the attempt journal by the database clock, so a demand bump, a
-   *  restarted walk or a restarted process never shortens it. A non-urgent
-   *  row comes due the group's head start later, so an urgent row put off by
-   *  the same spacing is due first and takes the route. */
-  async #endpointSpacedUntil(route: string, now: Date, workClass: SyncWorkRow["class"]): Promise<Date | null> {
+  /** When the page may next admit this work's request on `route`'s endpoint
+   *  group, if that is later than now; null: now (or the route has no
+   *  spacing). Read from the attempt journal by the database clock, so a
+   *  demand bump, a restarted walk or a restarted process never shortens it.
+   *  A non-urgent row comes due the group's head start later, so an urgent
+   *  row put off by the same spacing is due first and takes the route. A
+   *  non-urgent row that finds the route free while an urgent reader of the
+   *  group is runnable (`yielded`) waits one spacing plus the head start:
+   *  the cycle serves the planned class first at its P slot, so without this
+   *  a walk page could take the list ahead of a due `.find` and put it off
+   *  one more spacing. */
+  async #endpointSpacedUntil(
+    route: string,
+    now: Date,
+    workClass: SyncWorkRow["class"],
+    exclusions: PickExclusions,
+  ): Promise<{ until: Date; yielded: boolean } | null> {
     const d = this.#d;
     const group = endpointRateGroupOfRoute(route);
     if (group === null || group.spacingMs === null) return null;
+    const shadow = d.mode === "shadow";
     const remainingMs = await endpointSpacingRemainingMs(d.db, {
       pageId: d.pageId,
-      shadow: d.mode === "shadow",
+      shadow,
       operations: [...group.routes],
       spacingMs: group.spacingMs,
     });
-    if (remainingMs <= 0) return null;
-    return new Date(now.getTime() + remainingMs + (workClass === "urgent" ? 0 : group.urgentHeadStartMs));
+    const headStartMs = workClass === "urgent" ? 0 : group.urgentHeadStartMs;
+    if (remainingMs > 0) return { until: new Date(now.getTime() + remainingMs + headStartMs), yielded: false };
+    if (workClass === "urgent" || group.urgentReaders.size === 0) return null;
+    const urgentDue = await hasRunnableUrgentWork(d.db, {
+      pageId: d.pageId,
+      shadow,
+      now: null,
+      ...exclusions,
+      resources: [...group.urgentReaders],
+    });
+    return urgentDue ? { until: new Date(now.getTime() + group.spacingMs + headStartMs), yielded: true } : null;
   }
 
   async #gate(): Promise<Gate> {

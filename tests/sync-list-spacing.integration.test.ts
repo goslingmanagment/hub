@@ -27,7 +27,9 @@ import {
 // of one page are never admitted closer than 5 s, whatever key reads it,
 // while other work keeps the page pace in between; a new fan's `.find`
 // arriving during the walk takes the list before the walk's next page (urgent
-// first), waits one spacing at most and is found inside its 12 s.
+// first), waits one spacing at most and is found inside its 12 s; a burst of
+// `.find`s shares one list read; a walk page whose P slot comes up while a
+// `.find` is due yields the list to it.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -204,6 +206,7 @@ async function demand(reg: EngineRegistry, pageId: number, resource: string, sub
 interface Attempt {
   id: number;
   resource: string;
+  subject: string;
   operation: string;
   admitted_at: Date;
   sent_at: Date | null;
@@ -213,7 +216,7 @@ interface Attempt {
 
 async function attemptsOf(pageId: number): Promise<Attempt[]> {
   const result = await testDb!.pool.query<Attempt>(
-    `select id::int as id, resource, operation, admitted_at, sent_at, completed_at, http_status
+    `select id::int as id, resource, subject, operation, admitted_at, sent_at, completed_at, http_status
        from sync_attempts where page_id = $1 order by id`,
     [pageId],
   );
@@ -227,6 +230,18 @@ async function workRow(pageId: number, resource: string) {
     `select state, cursor, close_reason, first_demand_at, closed_at
        from sync_work where page_id = $1 and resource = $2 and not shadow order by id desc limit 1`,
     [pageId, resource],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function workRowOf(pageId: number, resource: string, subject: string) {
+  const result = await testDb!.pool.query<{
+    state: string; class: string; close_reason: string | null; first_demand_at: Date; closed_at: Date | null;
+    demand: { reasons?: string[] };
+  }>(
+    `select state, class, close_reason, first_demand_at, closed_at, demand
+       from sync_work where page_id = $1 and resource = $2 and subject = $3 and not shadow order by id desc limit 1`,
+    [pageId, resource, subject],
   );
   return result.rows[0] ?? null;
 }
@@ -338,4 +353,146 @@ describe("list spacing (owner decision №14)", () => {
     expect(detail!.admitted_at.getTime() - findList.completed_at!.getTime()).toBeLessThan(LIST_SPACING_MS / 2);
     expect(find!.closed_at!.getTime() - find!.first_demand_at.getTime()).toBeLessThan(fanslyResourceSpec(FIND)!.slo!.resultMs!);
   }, 90_000);
+  it("a burst of .finds shares one list read: every chat it listed is found with no request, the rest go to their detail, all inside 12 s", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const at = NOW_MS - 2 * HOUR;
+    const known = Array.from({ length: 30 }, (_, index) => ({ n: 1000 + index, headId: messageOf(1000 + index), headAtMs: at }));
+    await seedThreads(pageId, known);
+    const reg = await registry(pageId);
+    await demand(reg, pageId, "dm-conversations.head");
+    await demand(reg, pageId, "transactions.head");
+
+    // Three new fans write while the head walk's list read is in flight: two
+    // chats the list serves on top from then on, one it does not show.
+    const listedNew = [5001, 5002].map((n) => ({ n, headId: messageOf(n, 7), headAtMs: NOW_MS - 30_000 }));
+    const hidden = 5003;
+    const burst = [...listedNew.map((chat) => chat.n), hidden];
+    let newChatsFrom = Number.POSITIVE_INFINITY;
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req, index): FanslyWireOutcome => {
+      if (req.spec === "messaging.groups") {
+        const served = index >= newChatsFrom ? [...listedNew, ...known] : known;
+        const offset = offsetOf(req);
+        return okResponse(listPage(served.slice(offset, offset + 100)));
+      }
+      if (req.spec === "group.detail") {
+        const groupId = new URL(req.url).pathname.split("/").pop()!;
+        const n = burst.find((candidate) => groupOf(candidate) === groupId)!;
+        return okResponse(groupDetail(n, { id: messageOf(n, 7), atMs: NOW_MS - 30_000 }));
+      }
+      return okResponse();
+    };
+    transport.onHit = async (req) => {
+      if (req.spec === "messaging.groups" && newChatsFrom === Number.POSITIVE_INFINITY) {
+        newChatsFrom = transport.hits.length;
+        for (const n of burst) await demand(reg, pageId, FIND, groupOf(n));
+      }
+    };
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts: new RecordingAlerts(),
+    });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => {
+        const finds = await Promise.all(burst.map((n) => workRowOf(pageId, FIND, groupOf(n))));
+        return finds.every((find) => find?.state === "done") ? true : null;
+      }, 30_000, "the burst's finds to settle");
+    } finally {
+      stop.abort();
+      await running;
+    }
+
+    const all = await attemptsOf(pageId);
+    const list = all.filter((attempt) => attempt.operation === "messaging.groups");
+    // One list read for the whole burst, after the head walk's, spaced.
+    expect(list.map((attempt) => attempt.resource)).toEqual(["dm-conversations.head", FIND]);
+    expectSpaced(list);
+    // Whichever find the pick served first read the list (the three came due
+    // together); the hidden chat's find read its detail, nothing else.
+    const reader = list[1]!.subject;
+    const findAttempts = all.filter((attempt) => attempt.resource === FIND);
+    expect(findAttempts.map((attempt) => [attempt.operation, attempt.subject])).toEqual([
+      ["messaging.groups", reader],
+      ["group.detail", groupOf(hidden)],
+    ]);
+
+    const slo = fanslyResourceSpec(FIND)!.slo!.resultMs!;
+    for (const n of burst) {
+      const find = await workRowOf(pageId, FIND, groupOf(n));
+      const reason = n === hidden ? "found_by_detail" : groupOf(n) === reader ? "found_in_list" : "found_by_other_read";
+      expect(find, `find ${n}`).toMatchObject({ state: "done", close_reason: reason });
+      expect(find!.closed_at!.getTime() - find!.first_demand_at.getTime(), `find ${n}`).toBeLessThan(slo);
+      // Every new chat's message is read urgently — a chat found by another
+      // `.find`'s read too, never a planned catch-up.
+      const head = await workRowOf(pageId, "dm-messages.head", groupOf(n));
+      expect(head, `head ${n}`).toMatchObject({ class: "urgent" });
+      expect(head!.demand.reasons, `head ${n}`).toContain("list_head:dm-conversations.find");
+      expect(await workRowOf(pageId, "dm-messages.catchup", groupOf(n)), `catchup ${n}`).toBeNull();
+    }
+  }, 60_000);
+
+  it("a walk page whose P slot comes up while a .find is due yields the list to it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const at = NOW_MS - 2 * HOUR;
+    const known = Array.from({ length: 130 }, (_, index) => ({ n: 1000 + index, headId: messageOf(1000 + index), headAtMs: at }));
+    await seedThreads(pageId, known);
+    const reg = await registry(pageId);
+    const NEW_CHAT = 5000;
+    const fresh = { n: NEW_CHAT, headId: messageOf(NEW_CHAT, 7), headAtMs: NOW_MS - 30_000 };
+    // The walk is past its first page (its next one, at offset 100, does not
+    // show the new chat). Both are due on a free list and the cycle is at its
+    // P slot: the planned class is asked first, and the walk is its
+    // earliest-due poll.
+    await demand(reg, pageId, FULL);
+    await testDb!.pool.query(
+      `update sync_work set cursor = $3::jsonb where page_id = $1 and resource = $2 and state = 'open'`,
+      [pageId, FULL, JSON.stringify({
+        generation: 1,
+        walk: {
+          generation: 1, startedAt: new Date(NOW_MS - 60_000).toISOString(), offset: 100, pageCount: 1, observedCount: 100,
+          repeatsCountedOnce: 0, repeatOnlyPageStreak: 0, restartCount: 0,
+        },
+        restartCount: 0, last: null, shadow: null,
+      })],
+    );
+    await demand(reg, pageId, FIND, groupOf(NEW_CHAT));
+    await testDb!.pool.query("update sync_pages set cycle_pos = 9 where page_id = $1", [pageId]);
+
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req): FanslyWireOutcome => {
+      if (req.spec === "messaging.groups") {
+        const offset = offsetOf(req);
+        return okResponse(listPage([fresh, ...known].slice(offset, offset + 100)));
+      }
+      return okResponse();
+    };
+    const metrics = new RecordingMetrics();
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts: new RecordingAlerts(), metrics,
+    });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => {
+        const walk = await workRow(pageId, FULL);
+        const find = await workRow(pageId, FIND);
+        return walk?.cursor.last != null && find?.state === "done" ? true : null;
+      }, 30_000, "the walk and the find to settle");
+    } finally {
+      stop.abort();
+      await running;
+    }
+
+    const list = (await attemptsOf(pageId)).filter((attempt) => attempt.operation === "messaging.groups");
+    expect(list.map((attempt) => attempt.resource)).toEqual([FIND, FULL]);
+    expectSpaced(list);
+    expect((await workRow(pageId, FULL))!.cursor).toMatchObject({ walk: null, last: { pageCount: 2 } });
+    expect(metrics.get("sync_endpoint_yielded")).toBeGreaterThan(0);
+    const find = await workRow(pageId, FIND);
+    expect(find).toMatchObject({ state: "done", close_reason: "found_in_list" });
+    // No spacing in front of the find: the walk never took the list first.
+    expect(list[0]!.admitted_at.getTime() - find!.first_demand_at.getTime()).toBeLessThan(LIST_SPACING_MS);
+    expect(find!.closed_at!.getTime() - find!.first_demand_at.getTime()).toBeLessThan(fanslyResourceSpec(FIND)!.slo!.resultMs!);
+  }, 60_000);
 });

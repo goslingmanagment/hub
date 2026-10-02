@@ -406,8 +406,13 @@ decision №14) and the media statistics (owner decision №20), which holds onl
 spaced: the actor admits a request on `messaging.groups` (the head and full walks, `.find`, `.ws-down`,
 `repair.ws-gap`) or on `media.offer_stats` no sooner than 5 s after the page's previous one on that route (by the
 attempt journal, on top of `S`; a put-off row waits with `waiting_reason = 'pacer'` while other work takes the
-slot). A non-urgent list read put off this way comes due 0.5 s after an urgent one would, so a new fan's `.find`
-waiting on the list takes it before the walk's next page and waits one spacing at most.
+slot). Urgent reads go first: a non-urgent list read put off this way comes due 0.5 s after an urgent one would, and
+one that finds the list free while an urgent reader (`.find`, `.ws-down`, `repair.ws-gap`) is due yields it for one
+spacing plus 0.5 s, so the walk's next page never takes the list ahead of a waiting `.find`. A `.find` counts any list
+read admitted since its first demand as its own, so a burst of new chats takes one list read, not one per chat: a chat
+that read listed closes with no request (its urgent message read asked by that read's apply), a chat that list head
+did not show goes straight to its group detail. A `.find` thus waits for the list one spacing at most, a burst
+included (plus its turn among other urgent work).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |

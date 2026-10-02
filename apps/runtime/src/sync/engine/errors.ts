@@ -84,11 +84,23 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
 ]);
 /** One request on the list route per this long per page, at most. */
 export const LIST_SPACING_MS = 5_000;
+/** The urgent keys that read the list: a non-urgent list read yields the
+ *  route to them (pinned against the registry by
+ *  tests/sync-registry-coverage.test.ts). */
+export const LIST_URGENT_READER_KEYS: ReadonlySet<string> = new Set([
+  "dm-conversations.find",
+  "dm-conversations.ws-down",
+  "repair.ws-gap",
+]);
 /** A non-urgent list read the spacing puts off comes due this much after an
  *  urgent one would: a new fan's `.find` (urgent, 12 s) waiting on the route
  *  takes it before the walk's next page. The pick serves urgent work first
  *  only among due rows, and two rows put off by the same spacing come due a
- *  few milliseconds apart in either order. */
+ *  few milliseconds apart in either order. The cycle still serves the
+ *  planned class first at its P slot, so a non-urgent read that finds the
+ *  route free while an urgent reader is due yields it too (the actor). A
+ *  burst of `.find`s shares one list read (the module), so none of them
+ *  waits a spacing per chat ahead of it. */
 export const LIST_SPACING_URGENT_HEAD_START_MS = 500;
 
 /**
@@ -131,6 +143,11 @@ export interface EndpointRateGroup {
   heldKeys: ReadonlySet<string>;
   /** The engine's spacing of two requests on its routes per page; null: none. */
   spacingMs: number | null;
+  /** The urgent keys that read its routes: a non-urgent read on the group
+   *  that finds one of them due yields the route to it, for one spacing plus
+   *  `urgentHeadStartMs` (the cycle serves the planned class first at its P
+   *  slot, whatever is due). */
+  urgentReaders: ReadonlySet<string>;
   /** How much later than an urgent row a non-urgent row the spacing puts off
    *  comes due (0: no urgent key reads the group's routes). */
   urgentHeadStartMs: number;
@@ -142,6 +159,7 @@ export const LIST_RATE_GROUP: EndpointRateGroup = {
   file: LIST_RATE_LIMIT_FILE,
   heldKeys: LIST_RATE_LIMIT_HELD_KEYS,
   spacingMs: LIST_SPACING_MS,
+  urgentReaders: LIST_URGENT_READER_KEYS,
   urgentHeadStartMs: LIST_SPACING_URGENT_HEAD_START_MS,
 };
 
@@ -151,6 +169,7 @@ export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
   file: MEDIA_STATS_RATE_LIMIT_FILE,
   heldKeys: MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
   spacingMs: MEDIA_STATS_SPACING_MS,
+  urgentReaders: new Set(),
   urgentHeadStartMs: 0,
 };
 

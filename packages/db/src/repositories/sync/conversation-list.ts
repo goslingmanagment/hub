@@ -288,3 +288,45 @@ export async function upsertPageDmConversationListFields(
     inserted: row.inserted,
   };
 }
+
+export interface DmListReadsSinceDemand {
+  /** A list read admitted since the work's first demand, or a read after it,
+   *  wrote the chat's thread (its `last_seen_at`; the actor is sequential, so
+   *  nothing admitted before that read writes after it). */
+  listed: boolean;
+  /** A list head read (offset 0) admitted since the work's first demand was
+   *  applied. */
+  headReadApplied: boolean;
+}
+
+/**
+ * What the page's live list reads admitted since one work's first demand (a
+ * `dm-conversations.find` row) know of its chat — by the database clock, from
+ * the attempt journal: a read admitted before the demand may have been served
+ * before the chat existed, so only the later ones count.
+ */
+export async function readDmListReadsSinceDemand(
+  db: Database,
+  input: { workId: number; pageId: number; platformConversationId: string; listOperation: string },
+): Promise<DmListReadsSinceDemand> {
+  const result = await db.execute<{ listed: boolean; headReadApplied: boolean }>(sql`
+    with reads as (
+      select a.admitted_at, a.apply_state, a.request -> 'params' ->> 'offset' as list_offset
+        from sync_attempts a
+       where a.page_id = ${input.pageId}
+         and not a.shadow
+         and a.operation = ${input.listOperation}
+         and a.admitted_at >= (select w.first_demand_at from sync_work w where w.id = ${input.workId})
+    )
+    select exists (
+             select 1
+               from page_dm_threads t
+              where t.platform_account_id = ${input.pageId}
+                and t.platform_conversation_id = ${input.platformConversationId}
+                and t.last_seen_at >= (select min(r.admitted_at) from reads r)
+           ) as listed,
+           exists (select 1 from reads r where r.apply_state = 'applied' and r.list_offset = '0') as "headReadApplied"
+  `);
+  const row = result.rows[0];
+  return { listed: row?.listed === true, headReadApplied: row?.headReadApplied === true };
+}

@@ -578,6 +578,27 @@ export async function pickUrgent(
 }
 
 /**
+ * Whether urgent work of one of these keys is runnable now: what `pickUrgent`
+ * would pick among them (due, no open breaker, not paused, switched off or
+ * held). An endpoint group's non-urgent read yields the route to it.
+ */
+export async function hasRunnableUrgentWork(
+  db: Database,
+  filter: SyncWorkPickFilter & { resources: readonly string[] },
+): Promise<boolean> {
+  if (filter.resources.length === 0) return false;
+  const result = await db.execute<{ found: boolean }>(sql`
+    select exists (
+      select 1
+        from sync_work w
+       where ${runnablePredicate(filter, "urgent")}
+         and w.resource = any(${textArrayParam(filter.resources)})
+    ) as found
+  `);
+  return result.rows[0]?.found === true;
+}
+
+/**
  * The work an auth/identity page hold lets through (step-3 §3.5 item 3 (b),
  * E16): a live `account.identity` check that carries a candidate session or
  * proxy (`secret_params`) and is due — its request uses the candidate, not

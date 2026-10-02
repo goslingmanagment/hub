@@ -256,6 +256,8 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: [
       "ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down",
       "apply:dm-conversations.find", "ws_gap",
+      // A chat a `.find` is open for, whichever list read (or detail) lists it.
+      "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ],
     coalesce: { quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND } },
     slo: { resultMs: 30 * SECOND },

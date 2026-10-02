@@ -128,8 +128,12 @@ describe("the Fansly registry table", () => {
 
   it("the conversation list's follow-ups are triggers of the entries they create (design §5.3)", () => {
     // A list read asks for a chat's messages (urgent from find and ws-down,
-    // planned from head, full and detail), a group detail, a probe.
-    expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining(["apply:dm-conversations.find", "apply:dm-conversations.ws-down"]));
+    // planned from head, full and detail — urgent from them too for a chat a
+    // `.find` is open for), a group detail, a probe.
+    expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining([
+      "apply:dm-conversations.find", "apply:dm-conversations.ws-down",
+      "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
+    ]));
     expect(byKey("dm-messages.catchup").triggers).toEqual(expect.arrayContaining([
       "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ]));
@@ -170,8 +174,11 @@ describe("the Fansly registry table", () => {
       ["repair.ws-gap", "urgent"],
     ]);
     // Urgent and planned keys share the route: a planned read the spacing
-    // puts off comes due after an urgent one. `.find` waits one spacing at
+    // puts off comes due after an urgent one, and one that finds the route
+    // free yields it to a due urgent reader. `.find` waits one spacing at
     // most, which leaves half its 12 s for the group detail after it.
+    expect([...LIST_RATE_GROUP.urgentReaders].sort())
+      .toEqual(readers.filter(([, workClass]) => workClass === "urgent").map(([key]) => key).sort());
     expect(LIST_RATE_GROUP.urgentHeadStartMs).toBeGreaterThan(0);
     expect(LIST_RATE_GROUP.spacingMs).toBe(5_000);
     expect(LIST_RATE_GROUP.spacingMs! + LIST_RATE_GROUP.urgentHeadStartMs).toBeLessThan((byKey("dm-conversations.find").slo?.resultMs ?? 0) / 2);
@@ -203,8 +210,12 @@ describe("the Fansly registry table", () => {
       ["rate_limit_media_stats", ["media.offer_stats"], "media-stats", 5_000, 0],
     ]);
     for (const group of ENDPOINT_RATE_GROUPS) {
-      const urgentReader = FANSLY_RESOURCE_SPECS.some((spec) => spec.class === "urgent" && spec.operations.some((operation) => group.routes.has(operation)));
-      expect(group.urgentHeadStartMs > 0, group.kind).toBe(urgentReader);
+      const urgentReaders = FANSLY_RESOURCE_SPECS
+        .filter((spec) => spec.class === "urgent" && spec.operations.some((operation) => group.routes.has(operation)))
+        .map((spec) => spec.key)
+        .sort();
+      expect([...group.urgentReaders].sort(), group.kind).toEqual(urgentReaders);
+      expect(group.urgentHeadStartMs > 0, group.kind).toBe(urgentReaders.length > 0);
     }
     // No two groups share a route or a hold entry.
     const routes = ENDPOINT_RATE_GROUPS.flatMap((group) => [...group.routes]);
