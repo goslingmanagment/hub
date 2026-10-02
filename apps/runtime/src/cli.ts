@@ -13,6 +13,8 @@ import { PgBoss } from "pg-boss";
 import {
   assertDomainEventTargetMonthsAttached,
   createModel,
+  createDb,
+  createPool,
   DomainEventTargetMonthsUnattachedError,
   findPageByLabel,
   findUserById,
@@ -25,6 +27,8 @@ import {
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
+  createLogger,
+  loadConfig,
   createRequestDispatcher,
   creatableUserRoles,
   formatMaskedProxyUrl,
@@ -3239,7 +3243,11 @@ export function buildProgram() {
     .option("--after-id <id>", "resume after this observation id", parsePositiveInt)
     .option("--execute", "actually materialize; default is a read-only preview")
     .action(async (options) => {
-      const app = await createAppContext();
+      // Local replay must not run the provider credential preflight (or its
+      // accounting writes) that belongs to the full application bootstrap.
+      const config = loadConfig();
+      const pool = createPool(config.databaseUrl);
+      const app = { db: createDb(pool), logger: createLogger(config.logLevel) };
       try {
         const stored = await findPageByLabel(app.db, options.page);
         if (!stored) throw new Error("Page not found");
@@ -3251,7 +3259,7 @@ export function buildProgram() {
         console.log(JSON.stringify(result, null, 2));
         if (result.stoppedAt !== null) process.exitCode = 1;
       } finally {
-        await app.close();
+        await pool.end();
       }
     });
 
