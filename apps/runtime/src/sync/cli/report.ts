@@ -108,7 +108,12 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
         + "legacy volume, live-path decisions, pacer), part B over the past journal (resource replay ≥ 99.9 %, "
         + "chain rebuild and end-of-history check, ETA backtest); part B not between 00:00 and 05:00 UTC unless forced",
     )
-    .option("--window <start/end>", "part A's window, e.g. 2026-10-03T09:00Z/2026-10-03T10:00Z (a start alone: one hour)", parseReportWindow)
+    .option(
+      "--window <start/end>",
+      "part A's window, e.g. 2026-10-03T09:00Z/2026-10-03T10:00Z (a start alone: one hour); it must start once every page "
+        + "has run in shadow for 10 min, else the report is no acceptance",
+      parseReportWindow,
+    )
     .option("--part <part>", "a, b or all", "all")
     .option("--page <label>", "one page (default: every Fansly page)")
     .option("--replay-since <iso>", "B5: replay the observations since (default: 7 days before the window end, or now)", isoDate)

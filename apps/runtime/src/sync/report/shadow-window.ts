@@ -2,6 +2,7 @@ import {
   countLegacyFanslyAttempts,
   countSyncAttemptsByKey,
   listSyncAdmissions,
+  readFirstShadowAdmissions,
   readLedgerTransactionsCreatedAt,
   readLegacyMessageArrivals,
   readSyncJournalMetrics,
@@ -35,6 +36,11 @@ export const LIVE_PATH_TARGET_P95_MS = { messages: 30_000, transactions: 15_000 
 export const LIVE_PATH_MIN_SAMPLE = { messages: 50, transactions: 5 } as const;
 /** The offline decision replay reads the receipts of this long before the window. */
 export const OFFLINE_DECISIONS_LOOKBACK_MS = 24 * HOUR_MS;
+/** The window starts once every page has been in shadow this long (design
+ *  §3.12: polls placed, backlog walks started). */
+export const SHADOW_SETTLE_MS = 10 * 60_000;
+/** A page's first shadow admission is looked for from this long before the window. */
+export const SHADOW_START_LOOKBACK_MS = 24 * HOUR_MS;
 /** A frame's shadow admission is looked for up to this long after the window. */
 const ADMISSION_SEARCH_MS = 15 * 60_000;
 /** One-time backlogs of a first shadow run (design §3.12 A1): the media-stats
@@ -240,13 +246,61 @@ export interface OfflineDecisions {
   byResource: Array<{ resource: string; signals: number; reads: number; dueLagMs: Quantiles }>;
 }
 
+/** Whether a page ran in shadow, settled, through the whole window. */
+export interface PageCoverage {
+  page: string;
+  mode: SyncPageRow["mode"];
+  /** The page's first shadow admission from `SHADOW_START_LOOKBACK_MS` before
+   *  the window to its end; null without one. */
+  firstShadowAdmissionAt: Date | null;
+  covered: boolean;
+  /** Why not (null when covered): the page is `off`; its mode changed inside
+   *  the window or its settling; it has no shadow admission; its first one
+   *  is less than `SHADOW_SETTLE_MS` before the window. */
+  reason: "off" | "mode_changed" | "no_shadow_admission" | "shadow_began_late" | null;
+}
+
 export interface ShadowWindowReport {
   window: { start: Date; end: Date };
+  /** Every page in shadow, settled, through the window; a window that starts
+   *  before the deploy or a page's switch to shadow is no acceptance window. */
+  coverage: PageCoverage[];
   demand: PageDemand[];
   legacy: LegacyVolumeRow[];
   livePath: { fanMessages: LiveDecision; transactions: LiveDecision; unreadableReceipts: number; offline: OfflineDecisions | null };
   pacer: { pages: Array<{ page: string; sends: number; minGapMs: number | null; violations: number }>; violations: number };
-  verdict: { a1: boolean; a2: boolean; a3: boolean | null; a4: boolean };
+  verdict: { covered: boolean; a1: boolean; a2: boolean; a3: boolean | null; a4: boolean };
+}
+
+/**
+ * Whether a page ran in shadow, settled, through the window (design §3.12:
+ * the window starts once every page has been `shadow` for 10 minutes). From
+ * the page row (its current mode and since when) and the journal (its first
+ * shadow admission): a window that starts before the deploy or the page's
+ * switch to shadow covers time without a shadow actor, so it is no acceptance
+ * window whatever its checks say. A page whose mode changed only after the
+ * window is judged by the journal alone.
+ */
+export function shadowWindowCoverage(
+  page: Pick<SyncPageRow, "pageId" | "pageLabel" | "mode" | "modeChangedAt">,
+  firstShadowAdmissionAt: Date | null,
+  window: { start: Date; end: Date },
+): PageCoverage {
+  const settledBy = window.start.getTime() - SHADOW_SETTLE_MS;
+  const changedMs = page.modeChangedAt.getTime();
+  const changedBeforeEnd = changedMs < window.end.getTime();
+  let reason: PageCoverage["reason"] = null;
+  if (page.mode === "off" && changedBeforeEnd) reason = "off";
+  else if (changedMs > settledBy && changedBeforeEnd) reason = "mode_changed";
+  else if (firstShadowAdmissionAt === null) reason = "no_shadow_admission";
+  else if (firstShadowAdmissionAt.getTime() > settledBy) reason = "shadow_began_late";
+  return {
+    page: page.pageLabel ?? String(page.pageId),
+    mode: page.mode,
+    firstShadowAdmissionAt,
+    covered: reason === null,
+    reason,
+  };
 }
 
 /** A socket frame of the window: its page, time, the work keys that read it
@@ -605,6 +659,10 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   const pageIds = input.pages.map((page) => page.pageId);
   const resolve = input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload };
 
+  // Every page in shadow, settled, through the window.
+  const firstShadow = await readFirstShadowAdmissions(db, { pageIds, from: new Date(start.getTime() - SHADOW_START_LOOKBACK_MS), to: end });
+  const coverage = input.pages.map((page) => shadowWindowCoverage(page, firstShadow.get(page.pageId) ?? null, input.window));
+
   // A1: demand against its expectation.
   const observed = new Map<number, Map<string, { class: string; attempts: number }>>();
   for (const row of await countSyncAttemptsByKey(db, { pageIds, shadow: true, from: start, to: end })) {
@@ -662,11 +720,13 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   const decisions = [fanMessages.meetsTarget, transactions.meetsTarget].filter((value): value is boolean => value !== null);
   return {
     window: input.window,
+    coverage,
     demand: demand.map((page) => ({ ...page, outside: page.outside.slice(0, input.maxListed) })),
     legacy,
     livePath: { fanMessages, transactions, unreadableReceipts: frames.unreadable, offline },
     pacer: { pages: pacerPages, violations },
     verdict: {
+      covered: coverage.every((page) => page.covered),
       a1: demand.every((page) => page.inBand),
       a2: legacy.every((row) => row.explained),
       a3: decisions.length === 0 ? null : decisions.every(Boolean),

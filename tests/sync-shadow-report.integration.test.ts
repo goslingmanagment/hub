@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { insertAuditEvent, insertObservation, listSyncPages, type Database } from "@agency_hub_core/db";
+import { createDb, createPool, insertAuditEvent, insertObservation, listSyncPages, type Database } from "@agency_hub_core/db";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { buildSyncReportCommandGroup } from "../apps/runtime/src/sync/cli/report.ts";
@@ -10,7 +10,7 @@ import type { EngineRegistry, ReplayContext, ReplayObservation, ResourceModule }
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
-import { setModeDirect } from "./helpers/sync-engine-host.ts";
+import { changedTables, setModeDirect, tableCounts } from "./helpers/sync-engine-host.ts";
 
 // `pnpm cli sync shadow report` (design §3.12) over a fixture: part A in its
 // read-only window transaction (demand vs the computed expectation, the legacy
@@ -68,6 +68,8 @@ async function shadowAttempt(pageId: number, input: { resource: string; workClas
 /** The live hour of the fixture: [start, start + 1 h), one hour ago. */
 async function seedWindow(page: WsCapturePage, start: Date): Promise<void> {
   const at = (ms: number) => new Date(start.getTime() + ms);
+  // The page ran in shadow before the window (its settling).
+  await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-30 * MINUTE) });
   // Two notification polls (period 30 min: 2 expected in the hour).
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(10 * MINUTE) });
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(40 * MINUTE) });
@@ -138,6 +140,9 @@ describe("the shadow report (design §3.12)", () => {
       maxListed: 50,
     });
     const window = report.window!;
+    expect(window.coverage).toEqual([{
+      page: "lilly-1", mode: "shadow", firstShadowAdmissionAt: new Date(start.getTime() - 30 * MINUTE), covered: true, reason: null,
+    }]);
     const demand = window.demand[0]!;
     const row = (resource: string) => demand.resources.find((entry) => entry.resource === resource);
     expect(row("notifications.forward")).toMatchObject({ observed: 2, expected: 2, verdict: "ok" });
@@ -175,7 +180,8 @@ describe("the shadow report (design §3.12)", () => {
     expect(hints.shadowKeys).toEqual(expect.arrayContaining(["dm-messages.head"]));
 
     expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 8, violations: 0 }] });
-    expect(window.verdict).toMatchObject({ a1: false, a3: true, a4: true });
+    expect(window.verdict).toMatchObject({ covered: true, a1: false, a3: true, a4: true });
+    expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
   });
@@ -299,6 +305,71 @@ describe("the shadow report (design §3.12)", () => {
     await observe("account_me", "skip:body_unavailable", 1);
     const partial = (await report()).journal!.replay.find((row) => row.kind === "account_me");
     expect(partial).toMatchObject({ total: 5, matched: 3, excused: 1, ratio: 0.75, meetsTarget: false });
+  });
+
+  it("a window that starts before the deploy is no acceptance window; the whole report runs on a read-only connection", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seedWsCapturePage({ db: db(), pool: testDb.pool }, { ownRef: OWN, label: "lilly-1" });
+    await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: page.pageId, groupId: GROUP, fanRef: FAN, firstSeenAt: LISTED_BEFORE() });
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    // The legacy receiver captured the whole hour; the deploy put the page in
+    // shadow 25 min in, and its actor routed the frames of the routing horizon
+    // on its first lap.
+    for (const minute of [5, 15, 30, 50]) {
+      await page.capture(wsCreated(wsMessage({ groupId: GROUP, senderId: FAN })), at(minute * MINUTE));
+    }
+    await page.capture(wsTransaction(TX, 1), at(8 * MINUTE));
+    const deploy = at(25 * MINUTE);
+    await testDb.pool.query("update sync_pages set mode = 'shadow', mode_changed_at = $2, mode_changed_by = 'test' where page_id = $1", [page.pageId, deploy]);
+    for (const minute of [26, 30, 50]) {
+      await shadowAttempt(page.pageId, { resource: "dm-messages.head", workClass: "urgent", subject: GROUP, at: at(minute * MINUTE + 5_000) });
+    }
+    await shadowAttempt(page.pageId, { resource: "transactions.head", workClass: "urgent", at: at(26 * MINUTE) });
+    // A legacy observation for part B's replay.
+    const payload = { nonce: randomUUID() };
+    await insertObservation(db(), {
+      source: "pull", producer: "test", platform: "fansly", accountId: page.pageId, nativeAccountRef: OWN, kind: "account_me",
+      payload, payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(), idempotencyKey: `test:${randomUUID()}`,
+      receivedAt: at(MINUTE),
+    });
+
+    // The production command (real registry, both parts) on a connection
+    // whose every transaction is read-only: any write would fail the run.
+    const url = new URL(testDb.connectionString);
+    url.searchParams.set("options", "-c default_transaction_read_only=on");
+    const readOnlyPool = createPool(url.toString());
+    await expect(readOnlyPool.query("update sync_pages set updated_at = updated_at")).rejects.toThrow(/read-only transaction/);
+    const before = await tableCounts(testDb.pool);
+    const printed: string[] = [];
+    try {
+      await buildSyncReportCommandGroup({
+        openContext: async () => ({ db: createDb(readOnlyPool) as unknown as Database, logger, close: async () => undefined }),
+        print: (line) => void printed.push(line),
+        writeFile: async () => undefined,
+        now: () => new Date(),
+      }).parseAsync([
+        "shadow", "report", "--window", `${start.toISOString()}/${at(60 * MINUTE).toISOString()}`, "--force-window",
+        "--sleep-ms", "0", "--replay-min", "1", "--journal-since", at(-24 * 60 * MINUTE).toISOString(),
+      ], { from: "user" });
+    } finally {
+      await readOnlyPool.end();
+    }
+    expect(changedTables(before, await tableCounts(testDb.pool))).toEqual([]);
+
+    const report = JSON.parse(printed.at(-1)!) as ShadowReport;
+    expect(report.window!.coverage).toEqual([{
+      page: "lilly-1", mode: "shadow", firstShadowAdmissionAt: at(26 * MINUTE).toISOString(), covered: false, reason: "mode_changed",
+    }]);
+    // Frames before the deploy were read only when the actor started: their
+    // lag is the deploy's, which the coverage names.
+    expect(report.window!.livePath.fanMessages).toMatchObject({ frames: 4, withoutShadowAdmission: 0, meetsTarget: false });
+    expect(report.journal!.replay.find((row) => row.kind === "account_me")).toMatchObject({ total: 1 });
+    expect(report.verdict).toMatchObject({ covered: false, accepted: false });
+    expect(report.summary).toContainEqual(expect.stringMatching(
+      /^Coverage: NOT an acceptance window — lilly-1 mode_changed \(first shadow admission .+\); the window must start once every page has run in shadow for 10 min$/,
+    ));
+    expect(report.summary.at(-1)).toMatch(/^Verdict: coverage FAIL, .* — not accepted$/);
   });
 
   it("the CLI: `sync shadow report --part a` and `sync alerts ack`", async (context) => {

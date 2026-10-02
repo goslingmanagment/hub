@@ -251,7 +251,8 @@ for switched pages, `sync_shadow_*` for shadow ones) — per-page series would d
 page status already shows.
 
 `pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only):
-part A over the live hour in one repeatable-read transaction — demand against a computed expectation (poll periods
+part A over the live hour in one repeatable-read transaction — the coverage (every page in shadow, its actor running,
+from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (poll periods
 plus the reads the hour's socket frames imply after coalescing; walks listed apart), the legacy engine's volume of
 the hour per stream and sender with the reason it differs, the live-path decisions (a fan message or a new ledger
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when

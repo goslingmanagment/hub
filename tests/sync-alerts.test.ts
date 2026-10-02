@@ -25,7 +25,7 @@ import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-fra
 import { routeThreadAt } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { REPLAY_EXCUSED_REASONS, scoreReplayKind } from "../apps/runtime/src/sync/report/shadow-journal.ts";
-import { isOneTimeWalk, simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
+import { isOneTimeWalk, SHADOW_SETTLE_MS, shadowWindowCoverage, simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
 // their incident wiring (titles, keys, paging) and the report's pure parts.
@@ -372,6 +372,34 @@ describe("the report's and the sampler's pure parts", () => {
     });
     expect(parseReportWindow("2026-10-03T09:00:00Z").end).toEqual(new Date("2026-10-03T10:00:00Z"));
     expect(() => parseReportWindow("2026-10-03T10:00:00Z/2026-10-03T09:00:00Z")).toThrow();
+  });
+
+  it("a window covers only pages in shadow, settled, from 10 min before its start (not one begun before the deploy)", () => {
+    const window = { start: at(-60 * MINUTE), end: NOW };
+    const settledBy = window.start.getTime() - SHADOW_SETTLE_MS;
+    const page = (mode: "off" | "shadow" | "handover" | "live", modeChangedAt: Date) => ({ pageId: 7, pageLabel: "lilly-1", mode, modeChangedAt });
+    const coverage = (...args: Parameters<typeof shadowWindowCoverage>) => {
+      const { covered, reason } = shadowWindowCoverage(...args);
+      return { covered, reason };
+    };
+    const longAgo = at(-30 * 60 * MINUTE);
+    // In shadow and running well before the window.
+    expect(coverage(page("shadow", longAgo), longAgo, window)).toEqual({ covered: true, reason: null });
+    expect(coverage(page("shadow", longAgo), new Date(settledBy), window)).toEqual({ covered: true, reason: null });
+    // Switched to shadow (the deploy) inside the window or its 10-minute settling.
+    expect(coverage(page("shadow", at(-35 * MINUTE)), at(-34 * MINUTE), window)).toEqual({ covered: false, reason: "mode_changed" });
+    expect(coverage(page("shadow", new Date(settledBy + 1)), at(-65 * MINUTE), window)).toEqual({ covered: false, reason: "mode_changed" });
+    // Set to shadow long before, but the shadow actor began only later (the
+    // process deployed after the mode was set), or never ran.
+    expect(coverage(page("shadow", longAgo), at(-25 * MINUTE), window)).toEqual({ covered: false, reason: "shadow_began_late" });
+    expect(coverage(page("shadow", longAgo), new Date(settledBy + 1), window)).toEqual({ covered: false, reason: "shadow_began_late" });
+    expect(coverage(page("shadow", longAgo), null, window)).toEqual({ covered: false, reason: "no_shadow_admission" });
+    // Off during the window.
+    expect(coverage(page("off", longAgo), null, window)).toEqual({ covered: false, reason: "off" });
+    expect(coverage(page("off", at(-10 * MINUTE)), longAgo, window)).toEqual({ covered: false, reason: "off" });
+    // Switched on after the window: judged by the journal alone.
+    expect(coverage(page("live", at(5 * MINUTE)), longAgo, window)).toEqual({ covered: true, reason: null });
+    expect(coverage(page("handover", at(5 * MINUTE)), at(-30 * MINUTE), window)).toEqual({ covered: false, reason: "shadow_began_late" });
   });
 
   it("money frames missing per page after 5 min; nearest-rank quantiles; the sampler's cadence", () => {

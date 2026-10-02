@@ -487,6 +487,30 @@ export async function listSyncAdmissions(
   }));
 }
 
+/** Each page's first shadow admission in [from, to) (pages without one are
+ *  absent): when its shadow actor began to run within the range. */
+export async function readFirstShadowAdmissions(
+  db: Database,
+  input: { pageIds: readonly number[]; from: Date; to: Date },
+): Promise<Map<number, Date>> {
+  if (input.pageIds.length === 0) return new Map();
+  const result = await db.execute<{ pageId: string; admittedAt: Date | string }>(sql`
+    select p.page_id::text as "pageId", f.admitted_at as "admittedAt"
+      from unnest(${sql.param([...new Set(input.pageIds)])}::bigint[]) as p(page_id)
+      cross join lateral (
+        select a.admitted_at
+          from sync_attempts a
+         where a.page_id = p.page_id
+           and a.shadow
+           and a.admitted_at >= ${input.from}::timestamptz
+           and a.admitted_at < ${input.to}::timestamptz
+         order by a.admitted_at
+         limit 1
+      ) f
+  `);
+  return new Map(result.rows.map((row) => [Number(row.pageId), toRequiredDate(row.admittedAt)]));
+}
+
 /** The legacy engine's physical attempts of the pages in [from, to): stream
  *  chunks by stream and operation (`sync_http_attempts`), and the guarded
  *  senders outside stream runs by source (`fansly_send_log`). */

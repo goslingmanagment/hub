@@ -23,7 +23,9 @@ import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 // consistent picture of the hour); part B reads the past journal in batches
 // (read-only transactions for the replay; the chain checks and the ETA
 // backtest are the dry-run scans of `sync chain …` and `sync history
-// eta-backtest`). Acceptance = A1–A4 hold, B5 ≥ 99.9 % per resource
+// eta-backtest`). Acceptance = every page in shadow, settled, through the
+// window (a window that starts before the deploy or a page's switch to shadow
+// is no acceptance window), A1–A4 hold, B5 ≥ 99.9 % per resource
 // (matched over every observation but legacy's own refusals; a kind with
 // observations and nothing judged fails) with every mismatch listed for
 // explanation, B6 lists the 16.09 counterexamples and no empty-page soundness
@@ -50,6 +52,8 @@ export interface ShadowReportInput {
 }
 
 export interface ShadowReportVerdict {
+  /** Every page in shadow, settled, through part A's window. */
+  covered: boolean | null;
   a1: boolean | null;
   a2: boolean | null;
   a3: boolean | null;
@@ -158,6 +162,7 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
     ? null
     : journal.eta.length === pages && journal.eta.every((row) => !("error" in row) && row.scan.completed);
   const verdict = {
+    covered: window?.verdict.covered ?? null,
     a1: window?.verdict.a1 ?? null,
     a2: window?.verdict.a2 ?? null,
     a3: window?.verdict.a3 ?? null,
@@ -169,6 +174,7 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
   // A3 without a single sampled frame is decided by the offline replay, which
   // the owner reads; every other check must hold and both parts must have run.
   const accepted = window !== null && journal !== null
+    && verdict.covered === true
     && verdict.a1 === true && verdict.a2 === true && verdict.a3 !== false && verdict.a4 === true
     && b5 === true && b6 === true && b7 === true;
   return { ...verdict, accepted };
@@ -178,6 +184,12 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
   const lines: string[] = [];
   if (window !== null) {
     lines.push(`Window ${window.window.start.toISOString()} … ${window.window.end.toISOString()}`);
+    const uncovered = window.coverage.filter((page) => !page.covered);
+    lines.push(uncovered.length === 0
+      ? "Coverage: every page in shadow from at least 10 min before the start"
+      : `Coverage: NOT an acceptance window — ${uncovered.map((page) => `${page.page} ${page.reason}`
+        + `${page.firstShadowAdmissionAt === null ? "" : ` (first shadow admission ${page.firstShadowAdmissionAt.toISOString()})`}`).join(", ")}; `
+        + "the window must start once every page has run in shadow for 10 min");
     for (const page of window.demand) {
       lines.push(`A1 ${page.page}: steady ${page.steadyState} (band ${page.band.min}–${page.band.max}) ${page.inBand ? "ok" : "OUTSIDE"}`
         + `${page.outside.length === 0 ? "" : `; outside 0.5×–2×: ${page.outside.map((row) => row.resource).join(", ")}`}`);
@@ -217,7 +229,7 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     lines.push(`B7 ETA: ${journal.eta.length} pages backtested`);
     if (journal.stoppedBy !== null) lines.push(`Part B stopped early: ${journal.stoppedBy}`);
   }
-  lines.push(`Verdict: A1 ${mark(verdict.a1)}, A2 ${mark(verdict.a2)}, A3 ${mark(verdict.a3)}, A4 ${mark(verdict.a4)}, `
+  lines.push(`Verdict: coverage ${mark(verdict.covered)}, A1 ${mark(verdict.a1)}, A2 ${mark(verdict.a2)}, A3 ${mark(verdict.a3)}, A4 ${mark(verdict.a4)}, `
     + `B5 ${mark(verdict.b5)}, B6 ${mark(verdict.b6)}, B7 ${mark(verdict.b7)} — ${verdict.accepted ? "ACCEPTED" : "not accepted"}`);
   return lines;
 }
