@@ -56,6 +56,10 @@ export type SyncWaitingReason = (typeof SYNC_WAITING_REASONS)[number];
 /** Caps of the merged demand (`sync_work_merge_demand`, 0228). */
 export const SYNC_WORK_DEMAND_ID_CAP = 200;
 export const SYNC_WORK_DEMAND_REASON_CAP = 20;
+/** Cap of a batch work's merged subject ids (`params.ids`, `mergeParamIds`):
+ *  ten `/account?ids=` batches. Ids past it are dropped; their producer asks
+ *  again on its next read. */
+export const SYNC_WORK_PARAM_IDS_CAP = 1_000;
 
 /** LISTEN/NOTIFY channel that wakes a page's actor; the payload is the page id. */
 export const SYNC_WORK_NOTIFY_CHANNEL = "fansly_sync_work";
@@ -271,8 +275,13 @@ export interface UpsertDemandInput {
     reasons?: readonly string[];
     overflow?: boolean;
   };
-  /** Non-secret request parameters; written when the row is created only. */
+  /** Non-secret request parameters; written when the row is created only
+   *  (except the id list of `mergeParamIds`). */
   params?: unknown;
+  /** Subject ids a batch work serves (fan ids of `fan-profiles.lookup`): kept
+   *  under `params[key]` as a set, the ids already there first, at most `cap`;
+   *  merged into an open row of the key like its demand. */
+  mergeParamIds?: { key: string; ids: readonly string[]; cap: number };
   /** Ciphertext (page credentials box); written when the row is created only. */
   secretParams?: string | null;
 }
@@ -302,6 +311,21 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
     reasons: [...(input.demand?.reasons ?? [])],
     overflow: input.demand?.overflow === true,
   };
+  const merge = input.mergeParamIds;
+  if (merge !== undefined && (!/^[a-z][a-zA-Z0-9]*$/.test(merge.key) || !(merge.cap > 0))) {
+    throw new Error(`Not a work id list (key ${merge.key}, cap ${merge.cap})`);
+  }
+  const mergedIds = (base: SQL): SQL => merge === undefined ? base : sql`jsonb_set(coalesce(${base}, '{}'::jsonb),
+      array[${merge.key}::text],
+      (select coalesce(jsonb_agg(ids.v order by ids.ord), '[]'::jsonb)
+         from (select e.v, min(e.ord) as ord
+                 from jsonb_array_elements_text(
+                        case when jsonb_typeof(${base} -> ${merge.key}::text) = 'array'
+                          then ${base} -> ${merge.key}::text else '[]'::jsonb end
+                        || ${jsonParam(merge.ids)}) with ordinality as e(v, ord)
+                group by e.v
+                order by min(e.ord)
+                limit ${merge.cap}) ids))`;
   const result = await db.execute<{ id: string; demandRevision: string; created: boolean }>(sql`
     insert into sync_work (
       page_id, shadow, resource, subject, kind, class, due_at, coalesce_until, deadline_at, demand, params,
@@ -313,7 +337,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
            ${timestampParam(input.coalesceUntil)},
            ${timestampParam(input.deadlineAt)},
            sync_work_merge_demand('{}'::jsonb, ${jsonParam(demand)}),
-           ${jsonParam(input.params ?? {})},
+           ${mergedIds(jsonParam(input.params ?? {}))},
            ${input.secretParams ?? null}::text,
            coalesce(prev.failure_count, 0),
            prev.breaker_until,
@@ -335,6 +359,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
     do update set
       demand_revision = sync_work.demand_revision + 1,
       demand = sync_work_merge_demand(sync_work.demand, excluded.demand),
+      params = ${mergedIds(sql`sync_work.params`)},
       due_at = case
         when ${input.extendOnSignal === true}
           then least(sync_work.coalesce_until, greatest(sync_work.due_at, excluded.due_at))
