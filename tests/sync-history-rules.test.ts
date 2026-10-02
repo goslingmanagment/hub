@@ -114,6 +114,9 @@ describe("inputs", () => {
     expect(() => normalizeHistoryDepth({ kind: "before_boundary", at: T0, messageRef: "1" })).toThrow(/exactly one/);
     expect(normalizeHistoryDepth({ kind: "before_boundary", messageRef: "123" })).toEqual({ kind: "before_boundary", at: null, messageRef: "123" });
     expect(() => normalizeHistoryDepth({ kind: "everything" } as never)).toThrow();
+    // The depth is mandatory (plan §4.1): no default when it is left out.
+    expect(() => normalizeHistoryDepth(undefined as never)).toThrow(/depth\.kind must be/);
+    expect(() => normalizeHistoryDepth({} as never)).toThrow(/depth\.kind must be/);
   });
 
   it("the CLI's list file: a chat link, a conversation ref, or a fan id per line", () => {
