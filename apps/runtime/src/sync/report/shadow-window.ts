@@ -202,11 +202,13 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
   {
     id: "A1.ceiling-demand",
     text: "The urgent reads of a trigger key whose row is judged against the reads the window's socket frames imply "
-      + "after coalescing, and is at that expectation (the row's verdict ok: 0.5–2× those reads, so at most 2× them), "
-      + "are socket demand: the page prints them apart (socket demand N reads an hour, X % of the page's capacity, "
-      + "≈ 1 636 an hour at the minimum pause, plan §13) and leaves them out of the ceiling's sum and the band's upper "
-      + "edge. "
-      + "Everything else stays in the ceiling: planned work, polls (their demand runs included), walks at their rate, "
+      + "after coalescing, and is at that expectation (the row's verdict ok: 0.5–2× those reads), are socket demand up "
+      + "to that expectation: at most as many reads as the frames imply. The page prints them apart (socket demand N "
+      + "reads an hour, X % of the page's capacity, ≈ 1 636 an hour at the minimum pause, plan §13) and leaves them "
+      + "out of the ceiling's sum and the band's upper edge. "
+      + "Everything else stays in the ceiling: a trigger row's reads over the frames' reads (duplicates, retries, "
+      + "reads not coalesced, the further pages of a head walk the simulation counts as one read; printed per key "
+      + "as over the expectation), planned work, polls (their demand runs included), walks at their rate, "
       + "urgent reads without a socket expectation, and the reads of a trigger row outside its expectation (the row is "
       + "listed outside as before). The steady state, the floor's test below 40 an hour and every other rule count "
       + "the socket demand as before. Why: plan §13's 40–100 an hour for urgent and planned work is a capacity "
@@ -1328,25 +1330,54 @@ export interface DemandRow {
   reason: string;
 }
 
+/** Rule A1.ceiling-demand: one trigger row's socket demand. */
+export interface SocketDemandRow {
+  resource: string;
+  /** Attempts of the window. */
+  observed: number;
+  /** The reads its socket frames imply after coalescing. */
+  expected: number;
+  /** Attempts left out of the ceiling: at most `expected`. */
+  demand: number;
+  /** Attempts over `expected`, kept in the ceiling. */
+  overExpectation: number;
+}
+
 /** Rule A1.ceiling-demand: a page's socket demand of the window. */
 export interface SocketDemand {
-  /** Attempts of the window left out of the ceiling. */
+  /** Attempts of the window left out of the ceiling (each row's `demand`). */
   reads: number;
   perHour: number;
   /** Percent of the page's capacity (`PAGE_CAPACITY_PER_HOUR`). */
   capacityShare: number;
   capacityPerHour: number;
-  resources: Array<{ resource: string; observed: number; expected: number }>;
+  resources: SocketDemandRow[];
 }
 
 /** Rule A1.ceiling-demand: an urgent trigger row judged against the reads the
  *  window's socket frames imply and at that expectation (its verdict ok, at
- *  most 2× those reads). A poll (its runs), a walk, a row applied without a
- *  request or one outside its expectation is no socket demand. */
+ *  most 2× those reads). Only its reads up to that expectation are socket
+ *  demand (`socketDemandOf`). A poll (its runs), a walk, a row applied
+ *  without a request or one outside its expectation is no socket demand. */
 export function isSocketDemand(row: DemandRow): boolean {
   return row.class === "urgent" && row.kind === "trigger" && row.runs === null && row.rate === null
     && row.expected !== null && row.expected > 0 && row.verdict === "ok"
     && row.observed > 0 && row.observed <= EXPECTATION_RATIO_BAND.max * row.expected;
+}
+
+/** Rule A1.ceiling-demand: a socket demand row's attempts, at most the reads
+ *  the frames imply (a head walk of several pages, a duplicate or a retry is
+ *  one simulated read and several attempts: the rest stays in the ceiling). */
+export function socketDemandOf(row: DemandRow): SocketDemandRow {
+  const expected = row.expected!;
+  const demand = Math.min(row.observed, expected);
+  return { resource: row.resource, observed: row.observed, expected, demand, overExpectation: row.observed - demand };
+}
+
+/** Rule A1.ceiling-demand: one row as the page's A1 line prints it. */
+export function socketDemandText(entry: SocketDemandRow): string {
+  return `${entry.resource} ${entry.observed} on ${entry.expected} socket read${entry.expected === 1 ? "" : "s"}`
+    + `${entry.overExpectation === 0 ? "" : ` (${entry.overExpectation} over the expectation kept in the ceiling)`}`;
 }
 
 export interface PageDemand {
@@ -1360,7 +1391,7 @@ export interface PageDemand {
   /** The same with every key as observed in the window. */
   steadyStateRaw: number;
   /** Rule A1.ceiling-demand: the urgent trigger reads at their socket
-   *  frames' expectation, per window, apart from the ceiling. */
+   *  frames' expectation, up to it, per window, apart from the ceiling. */
   socketDemand: SocketDemand;
   /** What the ceiling holds: the steady state less `socketDemand.reads`. */
   ceilingSteadyState: number;
@@ -1758,15 +1789,16 @@ export function demandOfPage(
   }
   const band = { min: STEADY_STATE_BAND_PER_HOUR.min * hours, max: STEADY_STATE_BAND_PER_HOUR.max * hours };
   // Rule A1.ceiling-demand: a trigger key never counts at a rate, so its
-  // window's attempts are what the steady state holds of it.
-  const socketRows = rows.filter(isSocketDemand);
-  const socketReads = socketRows.reduce((sum, row) => sum + row.observed, 0);
+  // window's attempts are what the steady state holds of it; of those, the
+  // reads up to the frames' expectation leave the ceiling.
+  const socketRows = rows.filter(isSocketDemand).map(socketDemandOf);
+  const socketReads = socketRows.reduce((sum, row) => sum + row.demand, 0);
   const socketDemand: SocketDemand = {
     reads: socketReads,
     perHour: roundTo2(socketReads / hours),
     capacityShare: roundTo1(socketReads * 100 / (PAGE_CAPACITY_PER_HOUR * hours)),
     capacityPerHour: PAGE_CAPACITY_PER_HOUR,
-    resources: socketRows.map((row) => ({ resource: row.resource, observed: row.observed, expected: row.expected! })),
+    resources: socketRows,
   };
   const ceilingSteadyState = roundTo2(steadyState - socketReads);
   steadyState = roundTo2(steadyState);

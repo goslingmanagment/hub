@@ -50,6 +50,7 @@ import {
   SHADOW_WINDOW_RULES,
   shadowWindowCoverage,
   simulateCoalescedReads,
+  socketDemandText,
   standingWalkOnSchedule,
   type CounterpartCheck,
   type AssumedRun,
@@ -748,17 +749,43 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     expect(evening).toMatchObject({
       steadyState: 133,
       ceilingSteadyState: 29,
-      socketDemand: { reads: 104, perHour: 104, capacityShare: 6.4, capacityPerHour: 1_636, resources: [{ resource: "dm-messages.head", observed: 104, expected: 104 }] },
+      socketDemand: {
+        reads: 104, perHour: 104, capacityShare: 6.4, capacityPerHour: 1_636,
+        resources: [{ resource: "dm-messages.head", observed: 104, expected: 104, demand: 104, overExpectation: 0 }],
+      },
       ceiling: "ok", inBand: true, scheduleFaults: [], floor: { below: false }, passes: true,
     });
+    expect(socketDemandText(evening.socketDemand.resources[0]!)).toBe("dm-messages.head 104 on 104 socket reads");
     // The same page reading 104 times on 40 socket reads: outside, so in the ceiling.
     const overRead = judge({ "dm-messages.head": { class: "urgent", attempts: 104 }, "dm-messages.catchup": { class: "planned", attempts: 29 } }, 40);
     expect(head(overRead)).toMatchObject({ observed: 104, expected: 40, verdict: "outside" });
     expect(overRead).toMatchObject({
       steadyState: 133, ceilingSteadyState: 133, socketDemand: { reads: 0, resources: [] }, ceiling: "over", inBand: false, outside: [expect.objectContaining({ resource: "dm-messages.head" })], passes: false,
     });
-    // At 2× its expectation it is still demand; under 0.5× it is not.
-    expect(judge({ "dm-messages.head": { class: "urgent", attempts: 104 } }, 52).socketDemand.reads).toBe(104);
+    // At 2× its expectation the row is still demand, but only up to the
+    // expectation: the 52 reads over it stay in the ceiling.
+    const doubled = judge({ "dm-messages.head": { class: "urgent", attempts: 104 } }, 52);
+    expect(head(doubled)).toMatchObject({ observed: 104, expected: 52, verdict: "ok" });
+    expect(doubled).toMatchObject({
+      steadyState: 104, ceilingSteadyState: 52,
+      socketDemand: { reads: 52, perHour: 52, resources: [{ resource: "dm-messages.head", observed: 104, expected: 52, demand: 52, overExpectation: 52 }] },
+      ceiling: "ok",
+    });
+    expect(socketDemandText(doubled.socketDemand.resources[0]!)).toBe("dm-messages.head 104 on 52 socket reads (52 over the expectation kept in the ceiling)");
+    // Every read doubled (or two pages of each head walk): 208 on 104 + 29
+    // planned is 237 an hour, 133 of it in the ceiling: over.
+    const twice = judge({ "dm-messages.head": { class: "urgent", attempts: 208 }, "dm-messages.catchup": { class: "planned", attempts: 29 } }, 104);
+    expect(head(twice)).toMatchObject({ observed: 208, expected: 104, verdict: "ok" });
+    expect(twice).toMatchObject({
+      steadyState: 237, ceilingSteadyState: 133,
+      socketDemand: { reads: 104, resources: [{ resource: "dm-messages.head", demand: 104, overExpectation: 104 }] },
+      ceiling: "over", inBand: false, passes: false,
+    });
+    // Under its expectation every read is demand; under 0.5× the row is
+    // outside and none is.
+    expect(judge({ "dm-messages.head": { class: "urgent", attempts: 30 } }, 40).socketDemand).toMatchObject({
+      reads: 30, resources: [{ demand: 30, overExpectation: 0 }],
+    });
     expect(judge({ "dm-messages.head": { class: "urgent", attempts: 10 } }, 40).socketDemand.reads).toBe(0);
     // 101 planned reads: over the ceiling; so are 101 urgent reads no frame implies.
     expect(judge({ "dm-messages.catchup": { class: "planned", attempts: 101 } }, null)).toMatchObject({

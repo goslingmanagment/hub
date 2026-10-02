@@ -15,7 +15,13 @@ import {
   type ChainCheckReport,
   type ReplayKindReport,
 } from "./shadow-journal.ts";
-import { reportShadowWindow, STEADY_STATE_BAND_PER_HOUR, type PageDemand, type ShadowWindowReport } from "./shadow-window.ts";
+import {
+  reportShadowWindow,
+  socketDemandText,
+  STEADY_STATE_BAND_PER_HOUR,
+  type PageDemand,
+  type ShadowWindowReport,
+} from "./shadow-window.ts";
 import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 
 // `pnpm cli sync shadow report` (design §3.12): the shadow acceptance's
@@ -202,7 +208,7 @@ function demandLine(page: PageDemand): string {
     `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
       + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
     `socket demand ${socketDemand.perHour} reads/h, ${socketDemand.capacityShare} % of capacity ${socketDemand.capacityPerHour}/h (`
-      + socketDemand.resources.map((entry) => `${entry.resource} ${entry.observed} on ${entry.expected} socket read${entry.expected === 1 ? "" : "s"}, `).join("")
+      + socketDemand.resources.map((entry) => `${socketDemandText(entry)}, `).join("")
       + "out of the ceiling, rule A1.ceiling-demand)",
     page.ceiling === "unknown"
       ? `ceiling ${page.band.max}: UNKNOWN, at least ${page.ceilingSteadyState} — no finished run to size it and no assumed size of ${page.unknownRunSize.join(", ")} (rules A1.rate, A1.rate-assumed)`
