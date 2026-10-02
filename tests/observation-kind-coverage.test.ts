@@ -115,6 +115,9 @@ const DIRECT_WRITERS = [
   // The Sync Engine's capture (design §3.7.2): the wire spec's kind — today's
   // kinds, each pinned registered by the wire-spec test — or `<kind>:failed`.
   "apps/runtime/src/sync/engine/commit.ts",
+  // The engine's catalog walk: the synthetic `vault_album_walk_completed`
+  // proof record the legacy catalog lane journals (design §5.17, D16).
+  "apps/runtime/src/sync/fansly/resources/catalog.ts",
 ];
 
 describe("(1) coverage — every written kind is owned by something", () => {

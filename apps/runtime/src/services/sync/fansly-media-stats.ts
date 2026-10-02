@@ -221,7 +221,8 @@ const OBSERVATION_KIND = "media_offer_stats";
  *  table whose contract is "how far back does this plane reach". */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const DAILY_PERIOD_MS = 86_400_000;
+export const MEDIA_STATS_DAILY_PERIOD_MS = 86_400_000;
+const DAILY_PERIOD_MS = MEDIA_STATS_DAILY_PERIOD_MS;
 
 /**
  * THE STEADY WINDOW PER TIER — every tier reads DAILY buckets.
@@ -245,7 +246,7 @@ const DAILY_PERIOD_MS = 86_400_000;
  */
 const FRESH_TRAILING_DAYS = MEDIA_STATS_FRESH_SPAN_DAYS;
 const MID_TRAILING_DAYS = MEDIA_STATS_MID_SPAN_DAYS;
-const LONG_TAIL_TRAILING_DAYS = MEDIA_STATS_LONG_TAIL_SPAN_DAYS;
+export const LONG_TAIL_TRAILING_DAYS = MEDIA_STATS_LONG_TAIL_SPAN_DAYS;
 
 /**
  * The span the provider is PROVEN to honour on this route (HAR 2026-08-19: a
@@ -253,8 +254,8 @@ const LONG_TAIL_TRAILING_DAYS = MEDIA_STATS_LONG_TAIL_SPAN_DAYS;
  * 2026-07-31`, exact). Every backfill window and every split long-tail window is
  * this wide.
  */
-const BACKFILL_WINDOW_DAYS = 31;
-const BACKFILL_OVERLAP_DAYS = 1;
+export const BACKFILL_WINDOW_DAYS = 31;
+export const BACKFILL_OVERLAP_DAYS = 1;
 /**
  * Two consecutive all-empty windows, then ONE probe of the item's FIRST month.
  *
@@ -263,7 +264,7 @@ const BACKFILL_OVERLAP_DAYS = 1;
  * had no traffic before. The first month after publication is where most of an
  * item's views fall, so that is where the one probe looks. See `runBackfill`.
  */
-const BACKFILL_EMPTY_STREAK_LIMIT = 2;
+export const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 /**
  * How far past an item's own creation the walk may still ask.
  *
@@ -288,10 +289,10 @@ const MEDIA_STAT_COUNTER_KEYS = [
 /** How many 31-day backfill windows ONE media may take in one visit. Bounded so
  *  a single item with years of history cannot spend a whole chunk, while a
  *  newest-first depth-first walk still finishes an item in a few dispatches. */
-const BACKFILL_WINDOWS_PER_VISIT = 4;
+export const BACKFILL_WINDOWS_PER_VISIT = 4;
 /** The three 31-day windows a long-tail refresh falls back to when the provider
  *  refuses the 90-day span. 3 × 31 = 93 ≥ 90. */
-const LONG_TAIL_SPLIT_WINDOWS = 3;
+export const LONG_TAIL_SPLIT_WINDOWS = 3;
 /** The most windows ONE steady refresh takes, the hole below its span
  *  included (`steadyRefreshPlan`). A refresh that closes a hole is reserved
  *  whole, so it has to fit a five-request chunk, with room for a retry: one
@@ -307,7 +308,7 @@ const REFRESH_WINDOWS_PER_VISIT = 4;
  * 2.6 calls on average, the chunk's five requests cutting some short — and the
  * rest of the walk is spent on the item's next visits anyway.
  */
-const FIRST_VISIT_REQUESTS = {
+export const FIRST_VISIT_REQUESTS = {
   fresh: 2,
   mid: BACKFILL_WINDOWS_PER_VISIT,
   longTail: BACKFILL_WINDOWS_PER_VISIT,
@@ -319,9 +320,9 @@ const MEDIA_PER_CHUNK = 25;
 /** Media seeded per dispatch on first enable. Bounded so a page with thousands
  *  of media does not hold a write lock, and keyset so the next batch resumes
  *  exactly where this one stopped. */
-const SEED_BATCH_SIZE = 500;
+export const SEED_BATCH_SIZE = 500;
 /** The platform's own top-N page size. */
-const TOP_MEDIA_MARK_LIMIT = 50;
+export const TOP_MEDIA_MARK_LIMIT = 50;
 /** A cycle longer than this is QUARTERLY OR WORSE and the log line says so. */
 const QUARTERLY_DAYS = 90;
 
@@ -363,7 +364,7 @@ export interface FanslyMediaStatsCursorState {
 
 /** The per-MEDIA first-sight backfill, stored in
  *  `subject_refresh_state.backfill_cursor`. */
-interface MediaBackfillCursor {
+export interface MediaBackfillCursor {
   version: 1;
   /** Exclusive upper bound of the NEXT window, epoch ms. */
   nextBeforeMs: number;
@@ -587,7 +588,7 @@ export function mediaStatsWindowIsEmpty(payload: unknown): boolean {
   return true;
 }
 
-function backfillCursorJson(cursor: MediaBackfillCursor): Record<string, unknown> {
+export function backfillCursorJson(cursor: MediaBackfillCursor): Record<string, unknown> {
   return { ...cursor } as unknown as Record<string, unknown>;
 }
 
@@ -784,7 +785,7 @@ export function servedWindowSpansRequest(
 
 /** What a failed window was failed WITH: the provider's HTTP status when it
  *  answered at all, and whether it asked us to come back later. */
-interface WindowFailure {
+export interface WindowFailure {
   httpStatus: number | null;
   retryAfter: boolean;
 }
@@ -804,7 +805,7 @@ const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
  * a journaled body we could not read. Only a refusal can be evidence about what
  * the ROUTE honours.
  */
-function isProviderRefusal(failure: WindowFailure): boolean {
+export function isProviderRefusal(failure: WindowFailure): boolean {
   return failure.httpStatus !== null
     && failure.httpStatus >= 400
     && failure.httpStatus !== 429
@@ -813,7 +814,7 @@ function isProviderRefusal(failure: WindowFailure): boolean {
 }
 
 /** The per-visit repeat guard's key: the identical `(period, after, before)`. */
-function windowKey(window: { periodMs: number; afterMs: number; beforeMs: number }): string {
+export function windowKey(window: { periodMs: number; afterMs: number; beforeMs: number }): string {
   return `${window.periodMs}:${window.afterMs}:${window.beforeMs}`;
 }
 
@@ -911,7 +912,7 @@ interface VisitWindows {
 /** A hole window the refresh did not close: the day's budget or the chunk's
  *  ran out first, the visit had asked for it already, or the route served
  *  something other than the window asked for. */
-interface HoleLeftOpen {
+export interface HoleLeftOpen {
   reason: "daily_call_budget" | "chunk_budget" | "repeat_request" | "window_not_honoured";
   requested: { afterMs: number; beforeMs: number };
   served: { afterMs: number | null; beforeMs: number | null } | null;

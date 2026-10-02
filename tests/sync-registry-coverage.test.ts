@@ -10,6 +10,7 @@ import {
   FANSLY_LEGACY_UNMAPPED,
   FANSLY_RESOURCE_SPECS,
   fanslyReplayOwner,
+  fanslyResourceSpec,
   type LegacyRef,
   type ResourceSpec,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -180,11 +181,12 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a/b ship the audience and money resources, S2-08a/b dm-conversations and dm-messages, S2-09a the content resources, S2-10 dm-live; every other entry waits on its dependency", async () => {
+  it("S2-07a/b ship the audience and money resources, S2-08a/b dm-conversations and dm-messages, S2-09a/b the content resources, S2-10 dm-live; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
     expect([...new Set(implemented)].sort()).toEqual([
-      "account", "dm-conversations", "dm-live", "dm-messages", "fan-earnings", "fan-profiles", "followers", "notifications",
-      "payouts", "post-replies", "posts", "purchases", "subscribers", "top-spenders", "transactions",
+      "account", "catalog", "dm-conversations", "dm-live", "dm-messages", "fan-earnings", "fan-profiles", "followers",
+      "media-stats", "notifications", "payouts", "post-replies", "posts", "probe", "purchases", "stats", "subscribers",
+      "top-spenders", "transactions",
     ]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
@@ -250,13 +252,46 @@ describe("the Fansly registry table", () => {
   });
 
   it("the subject-queue walks over projector-fed queues are standing goals with a queue breaker (design §4.3)", async () => {
-    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined);
-    expect(standing.map((spec) => spec.key).sort()).toEqual(["post-replies.walk", "posts.engagement"]);
+    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue === true);
+    expect(standing.map((spec) => spec.key).sort()).toEqual(["media-stats.walk", "post-replies.walk", "posts.engagement"]);
     for (const spec of standing) {
       expect(spec.kind, spec.key).toBe("goal");
-      expect(spec.subjectQueue, spec.key).toBe(true);
       expect(spec.standing!.recheckMs, spec.key).toBe(6 * 3_600_000);
       expect(typeof (await createFanslyRegistry().module(spec.key)).onSubjectOutcome, spec.key).toBe("function");
+    }
+  });
+
+  it("only the owner-protected walks take a page override of their cadence or tiers (owner decision №6)", () => {
+    const overridable = FANSLY_RESOURCE_SPECS.filter((spec) => spec.pageOverride !== undefined);
+    expect(overridable.map((spec) => [spec.key, spec.pageOverride])).toEqual([["catalog.vault", "cadence"], ["media-stats.walk", "tiers"]]);
+    for (const spec of overridable) {
+      expect(spec.ownerProtected, spec.key).toBe(true);
+      expect(spec.pageOverride === "cadence" ? spec.cadence : spec.tiers, spec.key).toBeDefined();
+    }
+  });
+
+  it("the vault walk stands over the projected album list, re-checked daily (design §5.17, owner decision №6)", () => {
+    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue !== true);
+    expect(standing.map((spec) => [spec.key, spec.kind, spec.standing!.recheckMs])).toEqual([["catalog.vault", "goal", 86_400_000]]);
+    expect(fanslyResourceSpec("catalog.vault")!.ownerProtected).toBe(true);
+  });
+
+  it("the content-b entries replay their kinds and import their legacy cursors (design §5.17–§5.19, §5.22)", async () => {
+    const registry = createFanslyRegistry();
+    for (const key of ["catalog.fixed", "catalog.vault", "catalog.hydrate", "media-stats.walk", "stats.daily"]) {
+      expect(typeof (await registry.module(key)).replay, key).toBe("function");
+    }
+    for (const key of ["catalog.fixed", "catalog.vault", "media-stats.walk", "stats.daily", "stats.hourly", "stats.backfill"]) {
+      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
+    }
+    for (const kind of ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"]) {
+      expect(fanslyReplayOwner(kind)?.key, kind).toBe("catalog.fixed");
+    }
+    expect(fanslyReplayOwner("vault_media")?.key).toBe("catalog.vault");
+    expect(fanslyReplayOwner("account_media_batch")?.key).toBe("catalog.hydrate");
+    expect(fanslyReplayOwner("media_offer_stats")?.key).toBe("media-stats.walk");
+    for (const kind of ["account_stats", "earnings_stats_snapshot", "discovery_feed", "broadcast_stats_deleted", "recapstats"]) {
+      expect(fanslyReplayOwner(kind)?.key, kind).toBe("stats.daily");
     }
   });
 });

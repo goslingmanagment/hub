@@ -60,6 +60,14 @@ the page's message events. When the chat was deleted, unbound or excluded betwee
 last part runs, under the same fence, so the minutely sweep never appends the page unfenced. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
 head; a demanded id the vendor's head does not show yet is read again after 15 s and 60 s, then settled `not_found`.
 
+A plan is read-only, so a decision it takes that the apply must fold into — a media visit's windows, an album walk's
+proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
+stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
+journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
+one visit of the legacy lane becomes one window per step with the same windows in the same order. A visit in flight
+across a deploy that changed a visit rule no longer replays: it is abandoned (the next due item starts afresh, the
+item it served backs off on its queue-row ladder), never a failed plan or a quarantined walk.
+
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
@@ -219,6 +227,7 @@ holds the resource file (30 min → 2 h → 6 h).
 | The pause | the owner's console ("Пауза между запросами Fansly"); 0 files |
 | The jitter rule | one line in `engine/pacer.ts` + the invariant tests (`tests/sync-pacer*.test.ts`) |
 | How fresh a resource is | one line in `fansly/registry.ts` |
+| How fresh a resource is on one page, without a deploy | `pnpm cli sync page override --page <label> --resource <key>` with `--period-ms` (a poll), `--period-ms`/`--full-period-ms` (`catalog.vault`) or `--tiers '<json>'` (`media-stats.walk`); owner decision №6 keys need `--owner-approved` |
 | Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
 | The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
@@ -226,3 +235,4 @@ holds the resource file (30 min → 2 h → 6 h).
 | A new depth or rule of a history request | `requests/history-rules.ts` (satisfaction, anchors) + `requests/history.ts` + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
+| One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
