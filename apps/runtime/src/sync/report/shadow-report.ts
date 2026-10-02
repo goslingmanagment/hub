@@ -15,7 +15,13 @@ import {
   type ChainCheckReport,
   type ReplayKindReport,
 } from "./shadow-journal.ts";
-import { reportShadowWindow, STEADY_STATE_BAND_PER_HOUR, type PageDemand, type ShadowWindowReport } from "./shadow-window.ts";
+import {
+  reportShadowWindow,
+  socketDemandText,
+  STEADY_STATE_BAND_PER_HOUR,
+  type PageDemand,
+  type ShadowWindowReport,
+} from "./shadow-window.ts";
 import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 
 // `pnpm cli sync shadow report` (design §3.12): the shadow acceptance's
@@ -186,8 +192,9 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
   return { ...verdict, accepted };
 }
 
-/** One page's A1 line: the steady state at its rate against the ceiling and
- *  the band, the floor's exception below it, the polls' schedule. */
+/** One page's A1 line: the steady state at its rate, its socket demand apart
+ *  (rule A1.ceiling-demand), the rest against the ceiling and the band, the
+ *  floor's exception below it, the polls' schedule. */
 function demandLine(page: PageDemand): string {
   const perHour = page.band.max / STEADY_STATE_BAND_PER_HOUR.max;
   const rated = page.resources
@@ -196,12 +203,16 @@ function demandLine(page: PageDemand): string {
     .map((row) => `${row.resource} ${row.rate!.runSize}/${row.rate!.periodMs / 3_600_000} h`
       + `${row.rate!.extra + row.rate!.beyond > 0 ? ` + ${row.rate!.extra + row.rate!.beyond}` : ""}`);
   const assumed = page.assumedRunSize.map((entry) => `${entry.resource} ${entry.steps}/${entry.periodMs / 3_600_000} h`);
+  const { socketDemand } = page;
   const parts = [
     `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
       + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
+    `socket demand ${socketDemand.perHour} reads/h, ${socketDemand.capacityShare} % of capacity ${socketDemand.capacityPerHour}/h (`
+      + socketDemand.resources.map((entry) => `${socketDemandText(entry)}, `).join("")
+      + "out of the ceiling, rule A1.ceiling-demand)",
     page.ceiling === "unknown"
-      ? `ceiling ${page.band.max}: UNKNOWN — no finished run to size it and no assumed size of ${page.unknownRunSize.join(", ")} (rules A1.rate, A1.rate-assumed)`
-      : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"}`
+      ? `ceiling ${page.band.max}: UNKNOWN, at least ${page.ceilingSteadyState} — no finished run to size it and no assumed size of ${page.unknownRunSize.join(", ")} (rules A1.rate, A1.rate-assumed)`
+      : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"} at ${page.ceilingSteadyState}`
         + `${assumed.length === 0 ? "" : ` (on assumed sizes, no finished run yet: ${assumed.join(", ")}; rule A1.rate-assumed)`}`,
   ];
   if (!page.floor.below) {
