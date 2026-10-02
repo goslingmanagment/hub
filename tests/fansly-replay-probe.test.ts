@@ -2,6 +2,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
+import type * as SyncEngineGuardModule from "../apps/runtime/src/services/sync-engine-guard.ts";
+
+// The step-3 legacy fence (S3-01) reads `sync_pages` before any page is
+// resolved; these tests run without a database, on legacy-owned pages unless
+// a case says otherwise.
+const guardMocks = vi.hoisted(() => ({ assertLabels: vi.fn(async () => undefined) }));
+vi.mock("../apps/runtime/src/services/sync-engine-guard.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof SyncEngineGuardModule>(),
+  assertLegacyOwnsFanslyPageLabels: guardMocks.assertLabels,
+}));
+
 vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
   resolvePageContext: vi.fn(async (_app: unknown, label: string) => ({
     page: { id: 1, label },
@@ -159,6 +170,22 @@ describe("runFanslyReplayProbe", () => {
     await expect(
       runFanslyReplayProbe(fakeApp({}), { pageLabels: ["of-page"], calls: 1 }),
     ).rejects.toThrow(/not a Fansly page/);
+  });
+
+  it("refuses a page the Fansly Sync Engine owns before resolving or calling anything (step-3 S3-01)", async () => {
+    const { FanslyPageOnSyncEngineError } = await import("../apps/runtime/src/services/sync-engine-guard.ts");
+    const mod = await import("../apps/runtime/src/services/page-context.ts");
+    guardMocks.assertLabels.mockRejectedValueOnce(
+      new FanslyPageOnSyncEngineError({ pageId: 4, pageLabel: "lilly-1", mode: "live" }),
+    );
+    const call = vi.fn();
+    const app = fakeApp({ getEarningsStatsAccountsPage: call, getMediaOrderHistoryPage: call });
+
+    await expect(runFanslyReplayProbe(app, { pageLabels: ["lilly-1"], calls: 1 }))
+      .rejects.toMatchObject({ statusCode: 409, code: "fansly_page_on_sync_engine" });
+    expect(guardMocks.assertLabels).toHaveBeenCalledWith(app, ["lilly-1"], expect.any(Function));
+    expect(mod.resolvePageContext).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("rejects a non-positive calls count instead of silently firing zero probes (review R1-5)", async () => {

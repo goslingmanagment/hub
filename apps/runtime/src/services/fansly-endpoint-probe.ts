@@ -7,6 +7,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
+import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 
 // Liveness probe for the endpoints-cover initiative: WP-F9 (`dm_commerce`), [E1],
 // the WP-F3 catalog routes, and [F1]'s month form.
@@ -428,6 +429,9 @@ export async function runFanslyEndpointProbe(
   if (options.pageLabels.length === 0) {
     throw new Error("fansly:endpoint-probe requires at least one --page <label>");
   }
+  // Step-3 design §3.1 item 11: a page the Fansly Sync Engine owns is
+  // refused before any named page sends (dry runs included).
+  await assertLegacyOwnsFanslyPageLabels(app, options.pageLabels, SYNC_ENGINE_HINTS.probe);
 
   const results: EndpointProbeResult[] = [];
 

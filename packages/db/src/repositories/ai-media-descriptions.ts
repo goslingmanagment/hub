@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import type { AiMediaDescriptionStatus } from "../schema.ts";
 import { isDmArchiveScopeFenced, tryAcquireDmArchiveWriterFenceLock } from "./erasure-fence.ts";
+import { engineOwnsFanslyPageSql } from "./sync/pages.ts";
 
 // AI media describer (0212, docs/runbooks/ai-media-describe.md). Restricted
 // class: description text and where a file appeared. Nothing here stores or
@@ -864,8 +865,9 @@ export async function hasUnfinishedFanslySyncAttempt(
 }
 
 /** Whether ordinary sync would hold off this page now: any stream cooling
- * down after a 429/5xx, the page under a provider hold (0219), or the DM
- * stream paused or blocked. */
+ * down after a 429/5xx, the page under a provider hold (0219), the DM
+ * stream paused or blocked, or the page owned by the Fansly Sync Engine
+ * (`handover`/`live`: the legacy lane hands the read off as `page_held`). */
 export async function getFanslyFastLanePageSyncGate(
   db: Database,
   input: { pageId: number; now: Date; peerPageIds?: readonly number[] },
@@ -886,7 +888,7 @@ export async function getFanslyFastLanePageSyncGate(
         select 1 from page_sync_states
         where page_id = ${input.pageId} and stream = 'dm_messages'
           and (status in ('paused', 'blocked') or blocker_kind is not null)
-      ) as held
+      ) or ${engineOwnsFanslyPageSql(sql`${input.pageId}`)} as held
   `);
   const row = result.rows[0];
   return { cooldown: row?.cooldown === true, held: row?.held === true };

@@ -1,4 +1,5 @@
 import { parseBindingPreflightArgs, runBindingPreflight } from "./binding-preflight.ts";
+import { engineOwnedRefusalLine } from "./engine-owned.ts";
 
 const controller = new AbortController();
 process.once("SIGINT", () => controller.abort());
@@ -11,7 +12,12 @@ try {
     process.stdout.write(JSON.stringify(receipt) + "\n", (error) => error ? reject(error) : resolve());
   });
   process.exit(receipt.identityMatched ? 0 : 2);
-} catch {
+} catch (error) {
+  const engineOwned = engineOwnedRefusalLine(error);
+  if (engineOwned) {
+    process.stderr.write(engineOwned);
+    process.exit(1);
+  }
   process.stderr.write("Binding preflight failed; no credential or provider error text was exported.\n");
   process.exit(1);
 } finally { clearTimeout(deadline); }

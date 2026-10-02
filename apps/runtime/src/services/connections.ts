@@ -21,6 +21,7 @@ import { handleSuccessfulPageVerificationRecovery } from "./notification-inciden
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
+import { assertLegacyOwnsFanslyPage, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -224,6 +225,10 @@ export async function updatePageCredentials(
       `OnlyFans pages have no stored credentials to update: page "${stored.page.label}" syncs via its OFAPI account mapping`,
     );
   }
+  // Step-3 design §3.1 item 10: the session check below is a request of the
+  // page; a page the Fansly Sync Engine owns refuses it (409) before anything
+  // is sent or stored.
+  await assertLegacyOwnsFanslyPage(app, stored.page, { hint: SYNC_ENGINE_HINTS.credentials(stored.page.label) });
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);

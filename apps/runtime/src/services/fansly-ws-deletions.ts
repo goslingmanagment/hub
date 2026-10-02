@@ -26,6 +26,17 @@
 //    never scheduled: dry-run is the DEFAULT and is provably read-only (a READ
 //    ONLY transaction); `--execute` opts in; a re-run reports zeros.
 //
+// On a page the Fansly Sync Engine owns (`handover`/`live`, step-3 design
+// §3.1 item 12) both shapes still write the marks — sticky and idempotent, the
+// same `markFanslyWsHotDeletion` the engine's `dm-live.deletions` uses. The
+// hint projector keeps filing `mutation_debt` receipts on those pages, so a
+// deletion frame the legacy socket captured before the switch (acked in
+// shadow, where the engine writes nothing) is marked even when its receipt is
+// filed after the switch, and a switch reverted in phase B still gets its
+// handover hour's deletions. They never write a thread's stored window there:
+// on those pages the window is the engine's
+// (`syncLegacyThreadSummaryAfterDeletion`, I9).
+//
 // Neither shape inserts a row or calls Fansly: they read Hub's own receipts.
 // A mark is sticky. A later REST read of the message cannot clear it
 // (upsertPageDmMessages skips marked rows), as with OnlyFans tombstones, and
@@ -35,6 +46,7 @@ import { sql } from "drizzle-orm";
 
 import {
   countFanslyWsDeletionsByPage,
+  listEngineOwnedFanslyPages,
   listFanslyWsDeletionWindowDrift,
   listFanslyWsHotDeletionTargets,
   markFanslyWsArchiveDeletions,
@@ -59,7 +71,8 @@ import type { AppContext } from "../bootstrap.ts";
 export const RECENT_WS_DELETION_WINDOW_MS = 60 * 60 * 1000;
 
 export interface FanslyWsDeletionApplyCounts {
-  /** page_dm_messages rows marked deleted (thread window refreshed). */
+  /** page_dm_messages rows marked deleted (thread window refreshed, except on
+   * a page the Fansly Sync Engine owns). */
   hotMarked: number;
   /** message_archive rows marked deleted. */
   archiveMarked: number;
@@ -88,6 +101,9 @@ async function applyFanslyWsDeletions(
   scope: FanslyWsDeletionScope,
 ): Promise<FanslyWsDeletionApplyCounts> {
   let hotMarked = 0;
+  // The engine's pages, read once per pass: their marks are written, their
+  // windows are not (see the header).
+  const engineOwned = new Set((await listEngineOwnedFanslyPages(db)).map((page) => page.pageId));
   // One short transaction per row: the mark and the stored-window bookkeeping
   // (count, newest/oldest ids, last fan/model times) commit together, and no
   // thread lock is held across rows. The thread HEAD is left alone: the
@@ -101,7 +117,9 @@ async function applyFanslyWsDeletions(
       if (!await markFanslyWsHotDeletion(database, target)) {
         return false;
       }
-      await refreshPageDmConversationWindow(database, { conversationId: target.conversationId });
+      if (!engineOwned.has(target.pageId)) {
+        await refreshPageDmConversationWindow(database, { conversationId: target.conversationId });
+      }
       return true;
     });
     if (marked) {
@@ -111,7 +129,8 @@ async function applyFanslyWsDeletions(
   const archiveMarked = await markFanslyWsArchiveDeletions(db, scope);
   // The refreshes above run outside the page sync lease; a list chunk that
   // read the thread before a mark writes the old window back. Re-derive any
-  // window that still counts a marked row (a no-op when nothing raced).
+  // window that still counts a marked row (a no-op when nothing raced; never
+  // a thread of a page the engine owns — the drift list leaves those out).
   let windowsRepaired = 0;
   for (const conversationId of await listFanslyWsDeletionWindowDrift(db, scope)) {
     await refreshPageDmConversationWindow(db, { conversationId });

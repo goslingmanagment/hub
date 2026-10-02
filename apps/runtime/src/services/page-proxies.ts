@@ -10,12 +10,17 @@ import { BadRequestError, NotFoundError } from "./errors.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
+import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 
 export async function setPageProxy(
   app: AppContext,
   pageLabel: string,
   proxy: ProxyConfig,
 ) {
+  // Step-3 design §3.1 item 10: the session check below is a request of the
+  // page; a page the Fansly Sync Engine owns refuses it (409) before anything
+  // is resolved or sent.
+  await assertLegacyOwnsFanslyPageLabels(app, [pageLabel], SYNC_ENGINE_HINTS.credentials);
   const normalizedProxy = normalizeProxyConfig(proxy);
   await assertAllowedProxyTarget(normalizedProxy);
   // allowMissingProxy: assigning a proxy is the REPAIR for the fail-closed

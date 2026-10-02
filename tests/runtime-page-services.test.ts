@@ -8,6 +8,9 @@ const repoMocks = vi.hoisted(() => ({
   getPageConversationMessages: vi.fn(),
   getPageDmSyncCoverage: vi.fn(),
   listFanslyFanPageIdentityBackfillTargets: vi.fn(),
+  // Step-3 legacy fences (S3-01): no page is the Fansly Sync Engine's here.
+  findPageByLabel: vi.fn(async () => null),
+  listEngineOwnedFanslyPages: vi.fn(async () => []),
   millsToNumber: (value: bigint) => Number(value),
 }));
 
