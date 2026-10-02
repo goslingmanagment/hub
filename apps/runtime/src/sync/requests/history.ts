@@ -46,6 +46,7 @@ import {
   type HistoryThreadFacts,
   type NewHistoryItem,
   type OpenHistoryItem,
+  type PlaneReadWitness,
   type SyncPageRow,
   type SyncWorkRow,
   type UpsertDemandInput,
@@ -145,6 +146,12 @@ export interface HistoryServiceContext {
   db: Database;
   /** The env config the live pause key is layered over (the ETA's S). */
   rawConfig: AppConfig;
+  /**
+   * Set by a reader that reports what it read (the agent plane's envelope):
+   * every `page_dm_threads` read a view or a resolution runs leaves its
+   * witness here. Writes inside transactions never report.
+   */
+  planeReads?: PlaneReadWitness[];
 }
 
 export type HistoryRequester =
@@ -306,7 +313,12 @@ function exclusionOf(thread: HistoryThreadFacts): string | null {
   return thread.fanId === null ? "unbound" : null;
 }
 
-async function resolveInputs(db: Database, pageId: number, inputs: readonly NormalizedHistoryInput[]): Promise<Resolved[]> {
+async function resolveInputs(
+  db: Database,
+  pageId: number,
+  inputs: readonly NormalizedHistoryInput[],
+  planeReads?: PlaneReadWitness[],
+): Promise<Resolved[]> {
   if (await isPageErased(db, pageId)) {
     return inputs.map((input) => ({ kind: "refused", input, refusal: "page_erased", excludedReason: null, thread: null }));
   }
@@ -314,7 +326,7 @@ async function resolveInputs(db: Database, pageId: number, inputs: readonly Norm
     pageId,
     groupIds: inputs.flatMap((input) => (input.groupId === null ? [] : [input.groupId])),
     fanRefs: inputs.flatMap((input) => (input.fanRef === null ? [] : [input.fanRef])),
-  });
+  }, planeReads);
   const taken = new Set<number>();
   return inputs.map((input): Resolved => {
     const thread = input.groupId !== null
@@ -446,7 +458,7 @@ export async function submitHistoryRequest(
   }
 
   // (1) Resolve and classify every input — reads only.
-  const resolved = await resolveInputs(ctx.db, input.pageId, inputs);
+  const resolved = await resolveInputs(ctx.db, input.pageId, inputs, ctx.planeReads);
   const threads = resolved.flatMap((entry) => (entry.kind === "thread" ? [entry.thread] : []));
   const latest = await latestWorkForSubjects(ctx.db, {
     pageId: input.pageId,
@@ -1007,7 +1019,11 @@ async function loadViewInputs(
   const pages = new Map<number, PageEtaContext>();
   for (const pageId of new Set(requests.map((request) => request.pageId))) pages.set(pageId, await pageEtaContext(ctx, pageId));
   return {
-    facts: await readHistoryThreadFacts(ctx.db, items.flatMap((item) => (item.threadId === null ? [] : [item.threadId]))),
+    facts: await readHistoryThreadFacts(
+      ctx.db,
+      items.flatMap((item) => (item.threadId === null ? [] : [item.threadId])),
+      ctx.planeReads,
+    ),
     works: await getSyncWorkRows(ctx.db, items.flatMap((item) => (item.workId === null ? [] : [item.workId]))),
     pages,
   };

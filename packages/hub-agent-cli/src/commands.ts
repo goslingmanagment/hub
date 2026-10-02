@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
+
 import {
   AGENT_CLAIM_FIELDS,
   agentCoverageStatusEnum,
   agentDatasetEnum,
   agentDatasetFilterOpEnum,
+  agentHistoryItemStateEnum,
+  agentHistoryRequestStateEnum,
   agentMessageDirectionEnum,
   agentObservationSourceEnum,
   agentResolveHintEnum,
@@ -11,8 +15,10 @@ import {
   agentTimelineLaneEnum,
   platformEnum,
   sortDirEnum,
+  type AgentHistoryDepth,
+  type AgentHistoryFanRef,
 } from "@agency_hub_core/contracts";
-import type { KernelClient } from "@kernel/sdk";
+import { KernelApiError, type KernelClient } from "@kernel/sdk";
 
 /**
  * The command table: exactly one command per agentKey operation, and nothing else.
@@ -22,6 +28,12 @@ import type { KernelClient } from "@kernel/sdk";
  * into three calls would put a second, undocumented API between the agent and the
  * evidence envelope, and the envelope is the whole point. Composite rituals
  * (`investigate`, `customs-scan`) are a later slice, built ON these, never instead.
+ *
+ * THE COMPOSITES THAT EXIST are marked `composite: true` and say COMPOSITE in
+ * their summary: `history-request-batch` (one create per page and 1000 fans)
+ * and `history-status --wait` (polls one request until it ends). Each makes
+ * several calls of ONE documented operation and nothing else, so the evidence
+ * envelope of every call is still the operation's own.
  *
  * WHAT IS NOT HERE, and why it never will be: operation 9b (observation payloads)
  * and #13 (hydration decisions) are OWNER-SESSION. An agent key cannot call them
@@ -315,13 +327,186 @@ const PAGING_OPTIONS: Record<string, HubOption> = {
 
 // --- the commands --------------------------------------------------------
 
+/** What a command may touch besides the client: injected, so tests stay hermetic. */
+export interface HubRunDeps {
+  /** A local file's text, or null when it cannot be read. */
+  readFile(path: string): string | null;
+  sleep(ms: number): Promise<void>;
+  /** Milliseconds since the epoch. */
+  now(): number;
+  randomUUID(): string;
+}
+
+/**
+ * The answer of a COMPOSITE command: the document to print as `data`, how many
+ * of its calls failed (any failure exits 4, with the document still printed so
+ * the calls that did land are not lost), and what the composite itself adds.
+ */
+export class HubCompositeResult {
+  constructor(
+    readonly data: unknown,
+    readonly failed: number,
+    readonly meta: Record<string, unknown>,
+  ) {}
+}
+
 export interface HubCommand {
   name: string;
   operation: string;
   summary: string;
   options: Record<string, HubOption>;
-  run(client: KernelClient, values: HubOptionValues): Promise<unknown>;
+  /** Several calls of `operation` (see the header). */
+  composite?: true;
+  /** A next step to print beside a refusal this command expects. */
+  hint?(error: { status: number | null; code: string | null }): string | null;
+  run(client: KernelClient, values: HubOptionValues, deps: HubRunDeps): Promise<unknown>;
 }
+
+// --- history requests (the Fansly Sync Engine, plan §4) ---------------------
+
+const HISTORY_UNAVAILABLE_CODE = "history_requests_unavailable_on_page";
+/** At most this many fans per request (the contract's own ceiling). */
+export const HUB_HISTORY_MAX_FANS = 1000;
+const HISTORY_MIN_POLL_SECONDS = 15;
+
+/**
+ * The fallback a 409 `history_requests_unavailable_on_page` points at. History
+ * requests open page by page as pages switch to the Fansly Sync Engine; until
+ * then the hydration route is the remedy (docs/agent-read-skill.md).
+ */
+export const HUB_HISTORY_FALLBACK_HINT =
+  "History requests work only on pages switched to the Fansly Sync Engine. On this page ask as before:"
+  + " POST /api/v1/agent/pages/<pageLabel>/threads/<conversationRef>/hydration-requests, one thread per request"
+  + " (docs/agent-read-skill.md, \"Asking for more data\").";
+
+function historyHint(error: { status: number | null; code: string | null }): string | null {
+  return error.code === HISTORY_UNAVAILABLE_CODE ? HUB_HISTORY_FALLBACK_HINT : null;
+}
+
+/** A fan ref as a list line spells it: a chat link, `conversation:<id>`, or a
+ *  fan's Fansly account id. */
+export function parseHubFanRef(raw: string): AgentHistoryFanRef {
+  const ref = raw.trim();
+  if (ref.toLowerCase().includes("fansly.com/")) return { kind: "chat_url", url: ref };
+  if (ref.startsWith("conversation:")) return { kind: "conversation", conversationRef: ref.slice("conversation:".length) };
+  return { kind: "fan", platformUserId: ref };
+}
+
+/** One fan per line; blank lines and `#` comments are skipped. */
+export function parseHubFanList(text: string): AgentHistoryFanRef[] {
+  return text.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .map(parseHubFanRef);
+}
+
+function fanKey(fan: AgentHistoryFanRef): string {
+  const ref = fan.kind === "fan" ? fan.platformUserId : fan.kind === "conversation" ? fan.conversationRef : fan.url;
+  return `${fan.kind}\u0000${ref.trim()}`;
+}
+
+/** The same fan twice is one fan (the hub refuses a duplicate). */
+function uniqueFans(fans: readonly AgentHistoryFanRef[]): AgentHistoryFanRef[] {
+  const seen = new Set<string>();
+  return fans.filter((fan) => {
+    const key = fanKey(fan);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function readTextFile(deps: HubRunDeps, path: string): string {
+  const text = deps.readFile(path);
+  if (text === null) {
+    throw new HubUsageError(`--file ${path} cannot be read`);
+  }
+  return text;
+}
+
+/** `--all` XOR `--latest N`: the depth is required (plan §4.1). */
+function historyDepth(values: HubOptionValues): AgentHistoryDepth {
+  const all = readFlag(values, "all");
+  const latest = readNumber(values, "latest");
+  if (all === (latest !== undefined)) {
+    throw new HubUsageError("say the depth: --all (to the first message) or --latest <n>");
+  }
+  if (latest !== undefined) {
+    if (!Number.isInteger(latest) || latest < 1 || latest > 1_000_000) {
+      throw new HubUsageError(`--latest must be an integer in 1..1000000, got "${String(latest)}"`);
+    }
+    return { kind: "latest", count: latest };
+  }
+  return { kind: "all" };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readIdempotencyKey(values: HubOptionValues): string | undefined {
+  const key = readString(values, "idempotency-key");
+  if (key !== undefined && !UUID.test(key)) {
+    throw new HubUsageError(`--idempotency-key must be a uuid, got "${key}"`);
+  }
+  return key;
+}
+
+/**
+ * A chunk's own key, derived from the batch key: re-running the same batch
+ * with the same `--idempotency-key` re-files the same requests (each answers
+ * `coalesced`), never a second copy. Shaped as a version-4 uuid.
+ */
+export function hubChunkIdempotencyKey(base: string, pageLabel: string, chunk: number): string {
+  const hex = createHash("sha256").update(`${base.toLowerCase()}\u0000${pageLabel}\u0000${chunk}`).digest("hex");
+  const variant = ((Number.parseInt(hex.charAt(16), 16) & 0x3) | 0x8).toString(16);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** Error METADATA of one failed call of a composite, never its body. */
+function compositeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof KernelApiError)) {
+    throw error;
+  }
+  const hint = historyHint(error);
+  return {
+    status: error.status,
+    code: error.code,
+    message: error.message.length <= 500 ? error.message : `${error.message.slice(0, 500)}... (truncated)`,
+    ...(hint === null ? {} : { hint }),
+  };
+}
+
+/** `pageLabel<TAB>fan` lines, grouped by page in first-seen order. */
+export function parseHubBatchFile(text: string): Map<string, AgentHistoryFanRef[]> {
+  const byPage = new Map<string, AgentHistoryFanRef[]>();
+  text.split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) return;
+    const tab = rawLine.indexOf("\t");
+    const pageLabel = tab < 0 ? "" : rawLine.slice(0, tab).trim();
+    const ref = tab < 0 ? "" : rawLine.slice(tab + 1).trim();
+    if (pageLabel === "" || ref === "") {
+      throw new HubUsageError(`--file line ${index + 1}: expected pageLabel<TAB>fan`);
+    }
+    const fans = byPage.get(pageLabel) ?? [];
+    fans.push(parseHubFanRef(ref));
+    byPage.set(pageLabel, fans);
+  });
+  return byPage;
+}
+
+const HISTORY_DEPTH_OPTIONS: Record<string, HubOption> = {
+  all: { kind: "boolean", describe: "Read each chat to its first message (proven by an empty page)" },
+  latest: { kind: "number", describe: "Read the latest N messages of each chat (fan's and model's)" },
+};
+
+const HISTORY_FILING_OPTIONS: Record<string, HubOption> = {
+  ...HISTORY_DEPTH_OPTIONS,
+  reason: { kind: "string", describe: "Why (required, 1-1000 chars; the hub stores a digest only)" },
+  "idempotency-key": {
+    kind: "string",
+    describe: "A uuid making the call repeat-safe: the same key and fans answer the same request (default: a new key)",
+  },
+};
 
 export const HUB_COMMANDS: readonly HubCommand[] = [
   {
@@ -649,6 +834,195 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         },
       });
     },
+  },
+  {
+    name: "history-request",
+    operation: "agentHistoryRequestCreate",
+    summary:
+      "File a history request: up to 1000 fans of ONE page and a depth. Works on pages switched to the Fansly"
+      + " Sync Engine; elsewhere the hub answers 409 and the document carries the hydration fallback.",
+    options: {
+      "page-label": { kind: "string", describe: "The page whose chats to read (required)" },
+      fan: { kind: "list", describe: "A fan's Fansly account id (repeatable)" },
+      conversation: { kind: "list", describe: "A chat's conversation ref (repeatable)" },
+      "chat-url": { kind: "list", describe: "A chat link https://fansly.com/messages/<id> (repeatable)" },
+      file: {
+        kind: "string",
+        describe: "A file with one fan per line: account id, chat link, or conversation:<ref>",
+      },
+      ...HISTORY_FILING_OPTIONS,
+      ...CLAIM_OPTION,
+    },
+    hint: historyHint,
+    run: (client, values, deps) => {
+      const path = readString(values, "file");
+      const fans = uniqueFans([
+        ...(readList(values, "fan") ?? []).map((platformUserId): AgentHistoryFanRef => ({ kind: "fan", platformUserId })),
+        ...(readList(values, "conversation") ?? [])
+          .map((conversationRef): AgentHistoryFanRef => ({ kind: "conversation", conversationRef })),
+        ...(readList(values, "chat-url") ?? []).map((url): AgentHistoryFanRef => ({ kind: "chat_url", url })),
+        ...(path === undefined ? [] : parseHubFanList(readTextFile(deps, path))),
+      ]);
+      if (fans.length === 0) {
+        throw new HubUsageError("name at least one fan: --fan, --conversation, --chat-url or --file");
+      }
+      if (fans.length > HUB_HISTORY_MAX_FANS) {
+        throw new HubUsageError(
+          `at most ${HUB_HISTORY_MAX_FANS} fans per request (got ${fans.length}); use history-request-batch`,
+        );
+      }
+      return client.agentHistoryRequestCreate({
+        params: { pageLabel: requireString(values, "page-label") },
+        body: {
+          fans,
+          depth: historyDepth(values),
+          reason: requireString(values, "reason"),
+          idempotencyKey: readIdempotencyKey(values) ?? deps.randomUUID(),
+          ...claimBody(values),
+        },
+      });
+    },
+  },
+  {
+    name: "history-request-batch",
+    operation: "agentHistoryRequestCreate",
+    composite: true,
+    summary:
+      "COMPOSITE (several calls): file history requests from a pageLabel<TAB>fan list, one request per page"
+      + " and per 1000 fans. Prints one result per request; any refused request exits 4.",
+    options: {
+      file: { kind: "string", describe: "Lines pageLabel<TAB>fan (account id, chat link, or conversation:<ref>); required" },
+      ...HISTORY_FILING_OPTIONS,
+    },
+    hint: historyHint,
+    run: async (client, values, deps) => {
+      const byPage = parseHubBatchFile(readTextFile(deps, requireString(values, "file")));
+      if (byPage.size === 0) {
+        throw new HubUsageError("--file names no fan");
+      }
+      const depth = historyDepth(values);
+      const reason = requireString(values, "reason");
+      const baseKey = readIdempotencyKey(values);
+      const requests: Array<Record<string, unknown>> = [];
+      let failed = 0;
+      for (const [pageLabel, pageFans] of byPage) {
+        const fans = uniqueFans(pageFans);
+        for (let chunk = 0; chunk * HUB_HISTORY_MAX_FANS < fans.length; chunk += 1) {
+          const part = fans.slice(chunk * HUB_HISTORY_MAX_FANS, (chunk + 1) * HUB_HISTORY_MAX_FANS);
+          const key = baseKey === undefined ? deps.randomUUID() : hubChunkIdempotencyKey(baseKey, pageLabel, chunk);
+          try {
+            const response = await client.agentHistoryRequestCreate({
+              params: { pageLabel },
+              body: { fans: part, depth, reason, idempotencyKey: key },
+            });
+            requests.push({
+              pageLabel,
+              chunk,
+              fans: part.length,
+              ok: true,
+              disposition: response.disposition,
+              request: response.request,
+            });
+          } catch (error) {
+            failed += 1;
+            requests.push({ pageLabel, chunk, fans: part.length, ok: false, error: compositeError(error) });
+          }
+        }
+      }
+      return new HubCompositeResult({ requests }, failed, {
+        calls: requests.length,
+        failed,
+        pages: byPage.size,
+      });
+    },
+  },
+  {
+    name: "history-status",
+    operation: "agentHistoryRequestGet",
+    summary:
+      "One history request: counts, reads, ETA, why it waits, and a page of its fans. With --wait it is"
+      + " COMPOSITE: polls until the request is done or cancelled and prints only the last answer.",
+    options: {
+      request: { kind: "string", describe: "The request ref (uuid; required)" },
+      state: { kind: "string", describe: "Only fans in this state (refused | queued | loading | ready | blocked | cancelled)" },
+      ...PAGING_OPTIONS,
+      wait: { kind: "boolean", describe: "Poll until the request is done or cancelled (each poll is one call)" },
+      "poll-seconds": { kind: "number", describe: `Seconds between polls with --wait (at least ${HISTORY_MIN_POLL_SECONDS}, default 30)` },
+      "max-wait-seconds": {
+        kind: "number",
+        describe: "Stop waiting after this long and print the last answer (default 7200)",
+      },
+    },
+    run: async (client, values, deps) => {
+      const input = {
+        params: { requestRef: requireString(values, "request") },
+        query: defined({
+          state: readEnum(values, "state", agentHistoryItemStateEnum.options),
+          limit: readNumber(values, "limit"),
+          cursor: readString(values, "cursor"),
+        }),
+      };
+      if (!readFlag(values, "wait")) {
+        return client.agentHistoryRequestGet(input);
+      }
+      if (input.query.cursor !== undefined) {
+        throw new HubUsageError("--wait polls the first page; it takes no --cursor");
+      }
+      const pollSeconds = readNumber(values, "poll-seconds") ?? 30;
+      if (pollSeconds < HISTORY_MIN_POLL_SECONDS) {
+        throw new HubUsageError(`--poll-seconds must be at least ${HISTORY_MIN_POLL_SECONDS}: every poll spends the key's budget`);
+      }
+      const maxWaitSeconds = readNumber(values, "max-wait-seconds") ?? 7200;
+      if (maxWaitSeconds < 0) {
+        throw new HubUsageError("--max-wait-seconds must not be negative");
+      }
+      const started = deps.now();
+      for (let polls = 1; ; polls += 1) {
+        const data = await client.agentHistoryRequestGet(input);
+        const state: unknown = (data as { request?: { state?: unknown } }).request?.state;
+        const finished = state === "done" || state === "cancelled";
+        const waitedMs = deps.now() - started;
+        if (finished || waitedMs + pollSeconds * 1000 > maxWaitSeconds * 1000) {
+          return new HubCompositeResult(data, 0, {
+            calls: polls,
+            finished,
+            waitedSeconds: Math.round(waitedMs / 1000),
+          });
+        }
+        await deps.sleep(pollSeconds * 1000);
+      }
+    },
+  },
+  {
+    name: "history-cancel",
+    operation: "agentHistoryRequestCancel",
+    summary: "Cancel a history request: its fans stop being read; loaded messages stay. Idempotent.",
+    options: {
+      request: { kind: "string", describe: "The request ref (uuid; required)" },
+      reason: { kind: "string", describe: "Why (the hub stores a digest only)" },
+    },
+    run: (client, values) => client.agentHistoryRequestCancel({
+      params: { requestRef: requireString(values, "request") },
+      body: defined({ reason: readString(values, "reason") }),
+    }),
+  },
+  {
+    name: "history-list",
+    operation: "agentHistoryRequestList",
+    summary: "History requests on your pages, newest first, from every requester.",
+    options: {
+      "page-label": { kind: "string", describe: "Narrow to one page" },
+      state: { kind: "string", describe: "open | done | cancelled" },
+      ...PAGING_OPTIONS,
+    },
+    run: (client, values) => client.agentHistoryRequestList({
+      query: defined({
+        pageLabel: readString(values, "page-label"),
+        state: readEnum(values, "state", agentHistoryRequestStateEnum.options),
+        limit: readNumber(values, "limit"),
+        cursor: readString(values, "cursor"),
+      }),
+    }),
   },
 ];
 

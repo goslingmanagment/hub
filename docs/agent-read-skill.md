@@ -110,6 +110,27 @@ inventory (`hub threads`) additionally carries a `captureFloor` on every ITEM:
 that one is the floor for that single conversation, which is usually the number
 you want to quote when you report an absence for one fan.
 
+That item floor comes from the chat's PROVEN chain. Each thread item (and each
+thread in `hub person`, and the transcript's `threadCoverage` block) carries the
+chat's coverage as the Fansly Sync Engine proves it:
+
+- `historyState`: `none` (nothing stored), `unverified` (messages stored by the
+  old sync, never proven contiguous: there may be holes), `partial` (a
+  contiguous chain down from a confirmed head, the start not reached yet) or
+  `complete` (the chain reached the chat's first message);
+- `historyProof`: `empty_page` when `complete` was proven by Fansly returning an
+  empty page below the oldest message. That is the ONLY proof of completeness;
+  a short page or a meeting with already-stored messages is not;
+- `contiguousOldestAt` / `contiguousCount`: where the proven chain ends and how
+  many messages it holds; `headConfirmedAt`: when its newest end was confirmed.
+
+`captureFloor` is `{ "kind": "proven_chain", "at": <contiguousOldestAt> }` once
+the chat has a chain (`partial` or `complete`): every message from `at` up to
+the head is held, without a hole. Otherwise it stays `unknown`. On an
+`unverified` chat no floor is claimed at all, because the old sync's windows
+have holes. `messageCoverageStatusRaw` and `retentionLimit` are the OLD sync's
+fields, kept for compatibility: `complete` there does not mean complete.
+
 **`fieldStates`** is about ONE FIELD on ONE RECORD, plus `capture.scopeFieldStates`
 for the scope as a whole, computed before any row is fetched. A field can be
 observed, unobservable on this platform, or not captured. A null that is
@@ -239,6 +260,98 @@ to do by hand: report the specific gap (page, thread, conversation ref, window,
 and the `remedy` the response carried) and hand it to the owner, who can run the
 backfill directly. That report IS the request.
 
+## History requests (pages on the Fansly Sync Engine)
+
+History requests are the Fansly Sync Engine's way to read whole chats, or their
+newest N messages, for many fans at once. **They work page by page: only on a
+page switched to the Fansly Sync Engine.** On every other page the hub answers
+**409 `history_requests_unavailable_on_page`**; use the hydration route above,
+as before, and `hub history-request` prints that fallback in `error.hint` beside
+the refusal. Pages switch one at a time, so a script written against these
+commands keeps working as they do.
+
+What a request is:
+
+- one page, 1 to 1000 fans, and a depth that is REQUIRED: `--all` (each chat to
+  its first message) or `--latest N` (the newest N messages of each chat, the
+  fan's and the model's). A fan is named by its Fansly account id (`--fan`), a
+  chat's conversation ref (`--conversation`) or a chat link
+  (`--chat-url https://fansly.com/messages/<id>`);
+- a `--reason` (the hub keeps a digest only) and an idempotency key: the same key
+  with the same fans answers the same request (`disposition: "coalesced"`), the
+  same key with other fans is 409 `idempotency_mismatch`. Without
+  `--idempotency-key` every call files a new request;
+- answered at once, from the database alone: each fan's chat or why it was
+  refused (`not_found`, `excluded` with `excludedReason`, `page_erased`,
+  `duplicate`), what is already held, an estimate, and a state: `ready` (already
+  satisfied, nothing to read), `queued`, `loading`, or `blocked` (Fansly keeps
+  refusing that chat; `probeAt` says when it is asked again). A fan that cannot
+  be resolved never fails the request.
+
+Reading progress (`hub history-status`):
+
+- `request.counts`, `request.reads` (`done`, `remainingMin`,
+  `remainingEstimate`) and `request.eta`. The ETA is always TWO numbers:
+  `lowerBoundSeconds` ("not less than") and `estimateSeconds`, labelled
+  `basis: "estimate"`. Fansly does not say how long a chat is, so there is no
+  upper bound: never quote the estimate as a promise.
+- `waitingReason` / `waitingUntil` say why the request, or one fan, waits right
+  now (`pacer`, `class_share`, `paused`, `page_hold`, `ownership_unconfirmed`,
+  ...). They are body fields, never blockers.
+- a fan is `ready` once satisfied: `all` only when its chat is `complete` with
+  `historyProof: "empty_page"`; `latest N` once the contiguous chain from the
+  anchor (the chat's head when the request was filed) holds N messages, or the
+  whole chat is proven shorter. Every loaded message is in the transcript as soon
+  as it is read; nothing waits for the request to finish.
+
+Who sees what: you see, and may cancel, the requests of EVERY requester on your
+pages (other agents and the owner), shown by `requesterKind` only. A request on
+a page outside your grant is the plane's one static 404. Filing and cancelling
+need `request:hydration`; everything that returns fans' chat refs (filing,
+status, list) also needs `read:messages`.
+
+These answers always carry `claim_not_declared` and `capture_floor_unknown` (a
+request is a statement about work, not about how far back the store reaches),
+so `--fail-on-partial` would turn every one of them into exit 3. Do not use it
+here; read `data.request.state` and the counts.
+
+```
+hub history-request --page-label lora-1 --fan 438766025723355136 \
+  --chat-url https://fansly.com/messages/810272281019305984 \
+  --all --reason "spend audit for the July campaign"
+hub history-request --page-label lora-1 --file fans.txt --latest 200 \
+  --reason "context before outreach" --idempotency-key 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f
+hub history-status --request 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f --state blocked
+hub history-list --page-label lora-1 --state open
+hub history-cancel --request 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f --reason "superseded"
+```
+
+`--file` holds one fan per line: an account id, a chat link, or
+`conversation:<ref>`; blank lines and `#` comments are skipped, and a fan named
+twice is sent once. A create answers with the first 200 fans; page the rest with
+`hub history-status --cursor` (the create's `delivery.nextCursor` works as is).
+
+Two commands are COMPOSITE: several calls of one operation, one document.
+
+```
+hub history-request-batch --file pages.tsv --all --reason "Q3 whale review" \
+  --idempotency-key 0c6f5e1a-2b3d-4e5f-8a9b-1c2d3e4f5a6b
+hub history-status --request 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f --wait --poll-seconds 60
+```
+
+- `history-request-batch` reads `pageLabel<TAB>fan` lines, files one request per
+  page and per 1000 fans, and prints one result per request (`ok`,
+  `disposition`, `request`, or the refusal's metadata with its `hint`). If any
+  request was refused it exits 4, and the others are still filed and listed. With
+  `--idempotency-key` a re-run files nothing twice: every chunk derives its own
+  key from it.
+- `history-status --wait` polls, every `--poll-seconds` (at least 15, default
+  30; each poll is one call of your budget), until the request is `done` or
+  `cancelled` or `--max-wait-seconds` (default 7200) runs out, and prints only the
+  last answer with `composite.finished`. A request with a `blocked` fan stays
+  open while Fansly keeps refusing that chat, so `finished: false` at the end is
+  a normal outcome: read the counts.
+
 ## The CLI
 
 ```
@@ -339,6 +452,11 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub coverage` | The capture axis on its own: what was ever captured for a scope and window. |
 | `hub observations` | Capture journal ENVELOPES (kind, source, timing, sizes). Never payload bodies. |
 | `hub dataset` | A typed query over one registered dataset for one page. |
+| `hub history-request` | File a history request: up to 1000 fans of one page and a depth. Pages on the Fansly Sync Engine only; elsewhere 409 with the hydration fallback. |
+| `hub history-request-batch` | COMPOSITE: history requests from a `pageLabel<TAB>fan` list, one per page and 1000 fans. |
+| `hub history-status` | One history request: counts, reads, ETA, why it waits, a page of its fans. `--wait` (COMPOSITE) polls until it ends. |
+| `hub history-cancel` | Cancel a history request; loaded messages stay. |
+| `hub history-list` | History requests on your pages, newest first, from every requester. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

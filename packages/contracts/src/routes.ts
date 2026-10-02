@@ -32,6 +32,9 @@ import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
 // the read plane: issuing a credential carries no evidence envelope, and folding
 // it into agentRouteSchemas would have meant loosening that module's pins.
 import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
+// The Fansly Sync Engine's owner routes (history requests). Owner-session, no
+// agent envelope, so a sibling module for the same reason as the keys above.
+import { syncRouteSchemas } from "./routes-sync.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -5562,6 +5565,7 @@ const baseRouteSchemas = {
   ...ofapiCollectionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
+  ...syncRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

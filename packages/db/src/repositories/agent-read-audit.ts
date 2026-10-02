@@ -66,6 +66,12 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   policyVersion: "count",
   maxCalls: "count",
   budgetDate: "instant",
+  /** The Sync Engine's history requests: which request (its public uuid ref),
+   *  what came of the call, how many fans it named and its depth kind. */
+  requestRef: "identifier",
+  disposition: "identifier",
+  fans: "count",
+  depthKind: "identifier",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

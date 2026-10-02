@@ -33,6 +33,12 @@ import {
   handleAgentHydrationRequestGet,
   handleAgentHydrationRequestList,
 } from "./handlers-hydration.ts";
+import {
+  handleAgentHistoryRequestCancel,
+  handleAgentHistoryRequestCreate,
+  handleAgentHistoryRequestGet,
+  handleAgentHistoryRequestList,
+} from "./handlers-history.ts";
 
 /**
  * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
@@ -254,6 +260,45 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
       request.body,
     );
   });
+
+  // --- The Fansly Sync Engine's history requests (plan §4, design §7.4) ---
+  //
+  // Agent keys file, read and cancel requests; the engine reads the chats at
+  // its own pace and nothing here talks to a platform. A page not switched to
+  // the engine answers 409 history_requests_unavailable_on_page, and the
+  // hydration routes above stay the remedy there.
+
+  server.post("/api/v1/agent/pages/:pageLabel/history-requests", {
+    schema: routeSchemas.agentHistoryRequestCreate,
+    config: rateLimit("agentHistoryRequestCreate"),
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHistoryRequestCreate(appContext, principal, request.params, request.body);
+  });
+
+  // A uuid path, so no declarative page scope: the handler checks the grant,
+  // and a request on another page is the plane's one static 404.
+  server.get("/api/v1/agent/history-requests/:requestRef", {
+    schema: routeSchemas.agentHistoryRequestGet,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHistoryRequestGet(appContext, principal, request.params, request.query);
+  });
+
+  server.post("/api/v1/agent/history-requests/:requestRef/cancel", {
+    schema: routeSchemas.agentHistoryRequestCancel,
+    config: rateLimit("agentHistoryRequestCancel"),
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHistoryRequestCancel(appContext, principal, request.params, request.body);
+  });
+
+  server.get("/api/v1/agent/history-requests", {
+    schema: routeSchemas.agentHistoryRequestList,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentHistoryRequestList(appContext, principal, request.query);
+  });
 }
 
 /**
@@ -307,6 +352,8 @@ export {
   hydrationRemedy,
   operationPlanesFor,
   retentionLimitFor,
+  threadCaptureFloor,
+  threadCoverage,
 } from "./runtime.ts";
 export { staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";
 export { normalizeResolveInput } from "./handlers-core.ts";

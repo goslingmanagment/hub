@@ -96,6 +96,14 @@ hook takes the chat's history work itself before any request (a `.head` or `.cat
 (`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
 always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
 
+Three clients share these service functions and nothing else: the agent plane (`agentHistoryRequestCreate|Get|Cancel|
+List` under `/api/v1/agent/`, `modules/agent-read/handlers-history.ts`, the `hub history-*` commands), the owner routes
+(`/api/v1/sync/history-requests…`, `modules/sync-engine/index.ts`, contracts in `routes-sync.ts`) and the owner CLI
+(`pnpm cli sync history …`). The wire shape is one (`requests/wire.ts`) for agents and the owner. An agent key sees and
+may cancel every requester's requests on its granted pages (design D10); filing and cancelling need
+`request:hydration`, everything that returns chat refs `read:messages` too (D9). A refused page answers the 409 above;
+the agent docs keep the hydration route as the remedy there.
+
 ## WebSocket demand
 
 The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is
