@@ -436,8 +436,9 @@ export type SetSyncPageModeResult =
  * is possible, and only from those modes (I17); every other change needs the
  * capability issued for this page and must be a transition of the switch or the
  * rollback. `expectFrom` makes the change conditional on the current mode.
- * Leaving to `off` clears `legacy_imported_at` (the legacy cursors are the
- * truth again, §11.2).
+ * Leaving to `off` or `shadow` clears `legacy_imported_at` (the legacy cursors
+ * are the truth again, §11.2; an import made before an aborted switch is
+ * never reused by a later one, step-3 §3.5 item 9).
  */
 export async function setSyncPageMode(
   db: Database,
@@ -479,7 +480,7 @@ export async function setSyncPageMode(
          set mode = ${input.to},
              mode_changed_at = clock_timestamp(),
              mode_changed_by = ${input.changedBy},
-             legacy_imported_at = case when ${input.to} = 'off' then null else legacy_imported_at end,
+             legacy_imported_at = case when ${input.to} in ('off', 'shadow') then null else legacy_imported_at end,
              updated_at = clock_timestamp()
        where page_id = ${input.pageId}
       returning mode_changed_at as "modeChangedAt"
@@ -557,6 +558,89 @@ export async function isFanslyPageEngineOwned(
   `);
   const mode = result.rows[0]?.mode ?? null;
   return { owned: isEngineOwnedMode(mode), mode };
+}
+
+// ── the step-3 switch (design step 3 §3.5) ────────────────────────────────────
+
+/**
+ * The legacy import is complete (switch phase I, step 7): the host's live loop
+ * starts only with it (J3). Written only in `handover`, with the switch
+ * capability. False: the page is not in `handover`.
+ */
+export async function markSyncPageLegacyImported(
+  db: Database,
+  input: { pageId: number; capability: SyncSwitchCapability },
+): Promise<boolean> {
+  if (!holdsSwitchCapability(input.capability, input.pageId)) {
+    throw new Error(`markSyncPageLegacyImported needs the switch capability of page ${input.pageId}`);
+  }
+  const result = await db.execute(sql`
+    update sync_pages
+       set legacy_imported_at = clock_timestamp(),
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+       and mode = 'handover'
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * When the page's history requests open (`requests_enabled_at`, switch phase
+ * C): one hour after the first switch, at once on later pages; null closes
+ * them again (rollback step 4). Opening needs the switch capability and a
+ * page in `live`; closing works in any mode. False: the page is not live (or
+ * has no row).
+ */
+export async function setSyncRequestsEnabledAt(
+  db: Database,
+  input: { pageId: number; at: Date | null; capability: SyncSwitchCapability },
+): Promise<boolean> {
+  if (!holdsSwitchCapability(input.capability, input.pageId)) {
+    throw new Error(`setSyncRequestsEnabledAt needs the switch capability of page ${input.pageId}`);
+  }
+  const result = input.at === null
+    ? await db.execute(sql`
+      update sync_pages
+         set requests_enabled_at = null,
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+    `)
+    : await db.execute(sql`
+      update sync_pages
+         set requests_enabled_at = ${input.at}::timestamptz,
+             updated_at = clock_timestamp()
+       where page_id = ${input.pageId}
+         and mode = 'live'
+    `);
+  if ((result.rowCount ?? 0) === 0) return false;
+  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return true;
+}
+
+/**
+ * The digest of the page's stored credentials the engine trusts
+ * (`sync_pages.credentials_generation`, G1): written by the credentials and
+ * proxy flows right after they stored what an identity check proved to be
+ * this page's account (step-3 §3.5 item 6). A different trusted digest lifts
+ * an auth/identity hold taken under another one (`activePageHold`). Not an
+ * actor write (no generation fence); wakes the page's actor.
+ */
+export async function setSyncCredentialsGeneration(
+  db: Database,
+  input: { pageId: number; generation: string },
+): Promise<boolean> {
+  if (!/^[0-9a-f]{64}$/.test(input.generation)) {
+    throw new Error("A credentials generation is a sha256 hex digest");
+  }
+  const result = await db.execute(sql`
+    update sync_pages
+       set credentials_generation = ${input.generation},
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+  `);
+  if ((result.rowCount ?? 0) === 0) return false;
+  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return true;
 }
 
 // ── ownership ─────────────────────────────────────────────────────────────────
@@ -899,18 +983,22 @@ export async function clearPageHold(
 
 /**
  * The account the page's credentials answer for (`/account/me`, design §5.1):
- * `identity_account_id` and the instant it was read. Written by the `account`
- * resource's live apply, fenced like every actor write.
+ * `identity_account_id` and the instant it was read, and — G1 — the digest of
+ * the stored credentials that request carried (`credentials_generation`: the
+ * engine has now verified them). Written by the `account` resource's live
+ * apply, fenced like every actor write.
  */
 export async function recordSyncPageIdentity(
   db: Database,
-  input: { pageId: number; generation: bigint; accountId: string },
+  input: { pageId: number; generation: bigint; accountId: string; credentialsGeneration?: string | null },
 ): Promise<void> {
   if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
+  const credentials = input.credentialsGeneration ?? null;
   const result = await db.execute(sql`
     update sync_pages
        set identity_account_id = ${input.accountId},
            identity_checked_at = clock_timestamp(),
+           credentials_generation = coalesce(${credentials}::text, credentials_generation),
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
        ${ownedPageFilter(input.generation)}

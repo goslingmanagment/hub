@@ -7921,8 +7921,9 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
     description:
-      "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live), "
-      + "which verifies its session itself; nothing was sent.",
+      "On a page the Fansly Sync Engine runs (`live`) the verify is the engine's `account.verify`, answered "
+      + "within 30 s; 409 `fansly_sync_work_queued` (with `statusUrl`) when it is still queued, 409 "
+      + "`fansly_page_switching` while the page is being switched (nothing was sent).",
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
@@ -7938,8 +7939,10 @@ const baseRouteSchemas = {
     tags: ["admin"],
     summary: "Update credentials for an existing page",
     description:
-      "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live); "
-      + "nothing was sent and nothing was stored.",
+      "On a page the Fansly Sync Engine runs (`live`) the candidate session/proxy is checked by the engine's "
+      + "`account.identity` (≤ 30 s) before anything is stored; 409 `fansly_sync_work_queued` (with `statusUrl`) "
+      + "when the check is still queued, 409 `fansly_page_switching` while the page is being switched "
+      + "(nothing was sent and nothing was stored).",
     params: pageParamsSchema,
     body: updateCredentialsBodySchema,
     response: {

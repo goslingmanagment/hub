@@ -20,12 +20,13 @@ import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 // never call Fansly: they put work on the page's queue and wait for the
 // actor's answer — up to 15–30 s, then "queued" with the work's status link.
 //
-// A page that is not `live` answers `not_live` before anything is written:
-// the caller takes its legacy path. That includes a page with no `sync_pages`
-// row yet (onboarded since the host started) and a page of another platform;
-// only an id that names no page at all is refused (`no_page`). In step 2
-// every page is `off` or `shadow`, so every call answers `not_live` (the
-// engine cannot send before the step-3 switch, I17). Which keys a caller may
+// A page that is not `live` answers before anything is written: `switching`
+// while the step-3 switch (or a rollback) holds it in `handover` — neither
+// engine sends for it then, so the caller answers 409 `fansly_page_switching`
+// (E10, G9) — and `not_live` otherwise: the caller takes its legacy path. That
+// includes a page with no `sync_pages` row yet (onboarded since the host
+// started) and a page of another platform; only an id that names no page at
+// all is refused (`no_page`). Which keys a caller may
 // enqueue is the registry's word: an entry with the `api` trigger
 // (`account.verify`, `account.identity`, `media-download.fetch`); its class,
 // coalescing and deadline come from the entry, as for any other demand.
@@ -49,7 +50,10 @@ export type EnqueueAndWaitResult =
   /** Still waiting (or quarantined) when the wait ended: follow `statusUrl`. */
   | { state: "queued"; workId: number; statusUrl: string }
   /** The page is not on the engine: use the legacy path. */
-  | { state: "not_live" };
+  | { state: "not_live" }
+  /** The page is being switched (or rolled back): neither engine sends for
+   *  it now. Callers answer 409 `fansly_page_switching`. */
+  | { state: "switching" };
 
 export type UrgentRefusal =
   | "not_api_resource" | "bad_subject" | "bad_wait" | "no_page" | "disabled_for_page" | "secret_busy";
@@ -108,6 +112,7 @@ export function apiResourceSpec(resource: string): ResourceSpec {
 
 type Enqueued =
   | { kind: "not_live" }
+  | { kind: "switching" }
   | { kind: "queued"; workId: number; revision: number; pageLabel: string };
 
 async function enqueue(db: Database, spec: ResourceSpec, input: EnqueueAndWaitInput): Promise<Enqueued> {
@@ -127,6 +132,7 @@ async function enqueue(db: Database, spec: ResourceSpec, input: EnqueueAndWaitIn
       if (known.rows.length > 0) return { kind: "not_live" };
       throw new UrgentWorkRefusedError("no_page", `No page ${input.pageId}`);
     }
+    if (mode === "handover") return { kind: "switching" };
     if (mode !== "live") return { kind: "not_live" };
     const page = await getSyncPage(txDb, input.pageId);
     if (page === null) throw new UrgentWorkRefusedError("no_page", `No Fansly sync page ${input.pageId}`);
@@ -203,6 +209,7 @@ export async function enqueueAndWait(ctx: UrgentContext, input: EnqueueAndWaitIn
   }
   const enqueued = await enqueue(ctx.db, spec, input);
   if (enqueued.kind === "not_live") return { state: "not_live" };
+  if (enqueued.kind === "switching") return { state: "switching" };
 
   const clock = ctx.clock ?? systemClock;
   const queued: EnqueueAndWaitResult = {

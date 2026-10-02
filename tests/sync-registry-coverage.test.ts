@@ -152,9 +152,10 @@ describe("the Fansly registry table", () => {
   it("only the keys whose 401/403 is never the page session's scope them to the subject (G16, E8)", async () => {
     const scoped = FANSLY_RESOURCE_SPECS.filter((spec) => spec.subjectScopedAuthStatuses !== undefined)
       .map((spec) => [spec.key, spec.subjectScopedAuthStatuses]);
-    // A CDN hop carries no session: its 401/403 is the signed URL's. (S3-06
-    // adds probe.excluded-chat with [403].)
-    expect(scoped).toEqual([["media-download.fetch", [401, 403]]]);
+    // A CDN hop carries no session: its 401/403 is the signed URL's; an
+    // identity check carries a candidate: its 401/403 is the candidate's
+    // (S3-05). (S3-06 adds probe.excluded-chat with [403].)
+    expect(scoped).toEqual([["account.identity", [401, 403]], ["media-download.fetch", [401, 403]]]);
     expect(byKey("ws.connect").operations).toEqual(["ws.upgrade"]);
     expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
     expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);

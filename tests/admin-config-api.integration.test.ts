@@ -128,8 +128,8 @@ describe("admin config api", () => {
     const ofapi = body.subsystems.find((group) => group.subsystem === "OFAPI");
     expect(ofapi).toBeTruthy();
 
-    // With no process having reported in this test, both expected roles are missing.
-    expect(body.roleStatuses.map((r) => r.role)).toEqual(expect.arrayContaining(["api", "worker"]));
+    // With no process having reported in this test, every expected role is missing.
+    expect(body.roleStatuses.map((r) => r.role)).toEqual(expect.arrayContaining(["api", "worker", "sync"]));
 
     const dmSync = findItem(body, "ofapiDmSyncEnabled");
     expect(dmSync.editability).toBe("staged");

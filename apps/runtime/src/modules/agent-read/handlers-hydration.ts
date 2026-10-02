@@ -15,11 +15,16 @@ import type {
 import {
   createAgentHydrationRequest,
   decideAgentHydrationRequest,
+  FANSLY_SYNC_ENGINE_HYDRATION_LANE,
   findAgentHydrationRequestByRef,
   findAgentHydrationThread,
+  getSyncPage,
   hydrationCoverageFingerprint,
+  isFanslyPageEngineOwned,
   listAgentHydrationRequests,
+  markAgentHydrationEngineManaged,
   type AgentHydrationRequestRecord,
+  type Database,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
@@ -30,7 +35,10 @@ import {
   evaluateHydrationLanes,
 } from "../../services/agent-hydration.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { BadRequestError } from "../../services/errors.ts";
+import { AppError, BadRequestError } from "../../services/errors.ts";
+import { FanslyPageSwitchingError } from "../../services/sync-engine-levers.ts";
+import { getHistoryRequest, HistoryRequestError, submitHistoryRequest } from "../../sync/requests/history.ts";
+import { historyIntakeOfLegacyHydration, mirrorLegacyHydrationState } from "../../sync/requests/legacy-hydration.ts";
 import { buildAgentEvidence, type AgentPlaneMode } from "./epistemics.ts";
 import {
   AgentHydrationConflictError,
@@ -237,6 +245,79 @@ async function assertHydrationEnabled(appContext: AppContext): Promise<AgentPlan
 }
 
 // ---------------------------------------------------------------------------
+// The wrapper on a live Fansly page (design S2 §7.5, step 3 §3.5 item 10)
+// ---------------------------------------------------------------------------
+
+/** A wrapper row: the Fansly Sync Engine serves it as a history request. */
+export function isEngineManagedHydration(record: Pick<AgentHydrationRequestRecord, "executionLane" | "executionRef">): boolean {
+  // `execution_lane` has no CHECK (0117): the engine's lane is beside the
+  // legacy lanes of the type.
+  return (record.executionLane as string | null) === FANSLY_SYNC_ENGINE_HYDRATION_LANE && record.executionRef !== null;
+}
+
+function historyServiceError(error: unknown): unknown {
+  return error instanceof HistoryRequestError ? new AppError(error.message, error.status, error.code) : error;
+}
+
+/**
+ * On a live Fansly page whose history requests are open, a hydration request
+ * is a one-fan history request (requester `legacy_hydration_wrapper`, the
+ * boundary of the body, idempotent by the legacy ref) and the legacy row
+ * points at it (`dispatching`, lane `fansly_sync_engine`). Before the
+ * requests open the row stays `requested` (the switch's `--open-requests`
+ * converts it). Null: nothing to wrap.
+ */
+async function wrapHydrationOnEngine(
+  appContext: AppContext,
+  db: Database,
+  request: AgentHydrationRequestRecord,
+  reason: string,
+): Promise<AgentHydrationRequestRecord | null> {
+  if (request.state !== "requested" || request.executionLane !== null) return null;
+  const syncPage = await getSyncPage(db, request.pageId);
+  if (syncPage === null || syncPage.mode !== "live" || syncPage.requestsEnabledAt === null
+    || syncPage.requestsEnabledAt.getTime() > syncPage.dbNow.getTime()) {
+    return null;
+  }
+  let historyRef: string;
+  try {
+    const result = await submitHistoryRequest(
+      { db, rawConfig: appContext.config },
+      historyIntakeOfLegacyHydration(request, { kind: "legacy_hydration_wrapper", legacyRequestId: request.id }, reason),
+    );
+    historyRef = result.request.ref;
+  } catch (error) {
+    throw historyServiceError(error);
+  }
+  const marked = await markAgentHydrationEngineManaged(db, {
+    id: request.id,
+    expectedVersion: request.rowVersion,
+    historyRequestRef: historyRef,
+  });
+  return marked.request;
+}
+
+/** A wrapper row as the agent reads it: the state of its history request's
+ *  fan, in the legacy vocabulary (S2 §7.5). */
+async function mirroredWireRequest(
+  appContext: AppContext,
+  db: Database,
+  record: AgentHydrationRequestRecord,
+): Promise<AgentHydrationRequest> {
+  const wire = toWireHydrationRequest(record);
+  if (!isEngineManagedHydration(record)) return wire;
+  let document;
+  try {
+    document = await getHistoryRequest({ db, rawConfig: appContext.config }, record.executionRef!, { limit: 1 });
+  } catch (error) {
+    if (error instanceof HistoryRequestError && error.status === 404) return wire;
+    throw error;
+  }
+  const mirrored = mirrorLegacyHydrationState(document);
+  return { ...wire, state: mirrored.state, progress: { ...wire.progress, lastError: mirrored.lastError } };
+}
+
+// ---------------------------------------------------------------------------
 // #11 agentHydrationRequestCreate
 // ---------------------------------------------------------------------------
 
@@ -298,6 +379,9 @@ export async function handleAgentHydrationRequestCreate(
     }
 
     const platform = page.platform as Platform;
+    // A Fansly page being switched to the engine: neither engine reads it now.
+    const engine = await isFanslyPageEngineOwned(scope.db, page.id);
+    if (engine.mode === "handover") throw new FanslyPageSwitchingError(page.pageLabel);
     const admissibility = evaluateHydrationLanes(platform);
     if (!admissibility.admissible || admissibility.selected === null) {
       throw new AgentHydrationNotAdmissibleError("no hydration lane serves this platform");
@@ -349,6 +433,11 @@ export async function handleAgentHydrationRequestCreate(
     if (!created && request.requestFingerprint !== requestFingerprint) {
       throw new AgentIdempotencyMismatchError();
     }
+    // A live engine page: the row becomes a history request's wrapper (a
+    // coalesced row still `requested` is wrapped now, idempotently).
+    const served = engine.mode === "live"
+      ? (await wrapHydrationOnEngine(appContext, scope.db, request, body.reason)) ?? request
+      : request;
 
     await writeAgentAudit(scope.db, {
       agentKeyId: principal.agentKeyId,
@@ -373,7 +462,7 @@ export async function handleAgentHydrationRequestCreate(
     });
 
     return {
-      request: toWireHydrationRequest(request),
+      request: await mirroredWireRequest(appContext, scope.db, served),
       disposition: created ? "created" : "coalesced",
       delivery: singletonDelivery(1),
       capture: evidence.capture,
@@ -420,7 +509,7 @@ export async function handleAgentHydrationRequestGet(
     });
 
     return {
-      request: toWireHydrationRequest(request),
+      request: await mirroredWireRequest(appContext, scope.db, request),
       delivery: singletonDelivery(1),
       capture: evidence.capture,
       conclusion: evidence.conclusion,
@@ -475,6 +564,15 @@ export async function applyHydrationDecision(
     findAgentHydrationRequestByRef(tx, input.requestRef), "agent_hydration_decide");
   if (!request) {
     throw staticNotFound();
+  }
+  // A wrapper row is served by the Fansly Sync Engine as a history request,
+  // which needs no decision (plan §4).
+  if (isEngineManagedHydration(request)) {
+    throw new AppError(
+      "this hydration request is served by the Fansly Sync Engine as a history request; it takes no decision",
+      409,
+      "engine_managed",
+    );
   }
 
   const decisionFingerprint = hydrationDecisionFingerprint(body);

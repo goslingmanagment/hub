@@ -627,6 +627,29 @@ function latestAt(rows: readonly LegacySummaryInsertedRow[], role: LegacySummary
 }
 
 /**
+ * The 0231 marking for one page at its switch (design step 3 §3.5 item 7,
+ * I.5): messages the legacy engine stored are not proof (plan §6.3), so a
+ * thread with stored messages and no chain yet is `unverified` until a read
+ * proves one. Runs only while the switch holds the page in `handover`; the
+ * chain columns keep their one writer module (I9). Returns how many threads
+ * it marked.
+ */
+export async function markPageThreadsUnverified(tx: Database, pageId: number): Promise<number> {
+  const result = await tx.execute(sql`
+    update page_dm_threads t
+       set history_state = 'unverified',
+           updated_at = clock_timestamp()
+      from sync_pages sp
+     where t.platform_account_id = ${pageId}
+       and sp.page_id = t.platform_account_id
+       and sp.mode = 'handover'
+       and t.history_state = 'none'
+       and t.stored_message_count > 0
+  `);
+  return result.rowCount ?? 0;
+}
+
+/**
  * Keep the legacy coverage columns honest for legacy readers on a page the
  * engine owns (design §5.4 step 6), in the DM apply's transaction after
  * `writeThreadChain`. Asserts in the same statement that the thread's page is

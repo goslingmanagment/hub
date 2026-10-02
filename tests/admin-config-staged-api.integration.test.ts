@@ -48,12 +48,12 @@ async function seedUsers() {
   await createUserAccount(appContext, { username: "lead", role: "team_lead", password: "lead-secret" }, { source: "cli" });
 }
 
-/** Seed BOTH expected roles (api + worker) reporting the given boot flags as running-on,
- *  so getRunningFlagState sees an all-active fleet that has the prerequisite applied. */
+/** Seed EVERY expected role (api + worker + sync) reporting the given boot flags as
+ *  running-on, so getRunningFlagState sees an all-active fleet that has the prerequisite applied. */
 async function seedRunningFlags(flags: Partial<AppConfig>) {
   const config = { ...appContext.config, ...flags } as AppConfig;
   const snapshot = buildRunningSnapshot(config);
-  for (const role of ["api", "worker"]) {
+  for (const role of ["api", "worker", "sync"]) {
     await upsertInstanceHeartbeat(appContext.db, {
       role,
       instanceId: `${role}-1`,

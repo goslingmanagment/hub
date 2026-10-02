@@ -165,11 +165,22 @@ export async function seedSyncPage(
 }
 
 /** Write a mode without the switch capability (tests only: `live` and
- *  `handover` are otherwise reachable only through the step-3 switch). */
-export async function setModeDirect(pool: Pool, pageId: number, mode: SyncPageMode): Promise<void> {
+ *  `handover` are otherwise reachable only through the step-3 switch). A
+ *  `live` page gets the legacy import stamped, as the switch leaves it (the
+ *  host starts no live loop without it, S3-05); `importedLegacy: false` leaves
+ *  it out. */
+export async function setModeDirect(
+  pool: Pool,
+  pageId: number,
+  mode: SyncPageMode,
+  options: { importedLegacy?: boolean } = {},
+): Promise<void> {
+  const imported = mode === "live" && options.importedLegacy !== false;
   await pool.query(
-    "update sync_pages set mode = $1, mode_changed_at = clock_timestamp(), mode_changed_by = 'test' where page_id = $2",
-    [mode, pageId],
+    `update sync_pages set mode = $1, mode_changed_at = clock_timestamp(), mode_changed_by = 'test',
+            legacy_imported_at = case when $3::boolean then coalesce(legacy_imported_at, clock_timestamp()) else null end
+      where page_id = $2`,
+    [mode, pageId, imported],
   );
 }
 

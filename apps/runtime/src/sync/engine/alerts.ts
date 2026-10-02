@@ -3,8 +3,8 @@ import { sql } from "drizzle-orm";
 import {
   getNotificationIncidentByKey,
   insertAuditEvent,
+  listCombinedFanslySendsForPaceAudit,
   listNotificationIncidents,
-  listSendsForPaceAudit,
   listSyncPages,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
@@ -486,7 +486,10 @@ export class SyncAlertEvaluator {
     return result;
   }
 
-  /** The pace backstop: the page's live sends since the last pass. */
+  /** The pace backstop: the page's sends since the last pass over BOTH
+   *  journals — the engine's live attempts and the legacy send log — so a
+   *  pair straddling the handover or a rollback is seen too (step-3 §3.5
+   *  item 2, G4, E12). */
   async #auditPace(page: SyncPageRow): Promise<number> {
     // From the last pass (with an overlap), never further back than the first
     // pass reads (a page back in the engine after a while starts there).
@@ -495,15 +498,21 @@ export class SyncAlertEvaluator {
       page.dbNow.getTime() - PACE_AUDIT_FIRST_LOOKBACK_MS,
       last === undefined ? Number.NEGATIVE_INFINITY : last.getTime() - PACE_AUDIT_OVERLAP_MS,
     ));
-    const sends = await listSendsForPaceAudit(this.#o.db, { pageId: page.pageId, since, shadow: false });
-    const violations = sends.filter((send) => send.gapMs !== null && send.gapMs < send.settingMs);
+    const sends = await listCombinedFanslySendsForPaceAudit(this.#o.db, { pageId: page.pageId, since });
+    const violations = sends.filter((send) => send.violation);
     for (const send of violations) {
       await notifySyncEngineIncident(this.#app, {
         subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
         pageId: page.pageId,
         pageLabel: page.pageLabel,
         detail: "pace_violation",
-        errorSummary: summaryOf("pace_violation", send.sentAt, { attemptId: send.attemptId, gapMs: Math.round(send.gapMs!), settingMs: send.settingMs }),
+        errorSummary: summaryOf("pace_violation", send.sentAt, {
+          journal: send.journal,
+          ref: send.ref,
+          previous: send.prevJournal,
+          gapMs: Math.round(send.gapMs!),
+          settingMs: send.settingMs,
+        }),
         occurredAt: send.sentAt,
       });
     }

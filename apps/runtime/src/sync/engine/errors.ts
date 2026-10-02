@@ -77,6 +77,16 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
   "repair.ws-gap",
 ]);
 
+/**
+ * The identity checks (step-3 §3.5 item 3, G1/G14): the only keys the live
+ * transport sends while the page's stored credentials are not the ones the
+ * engine verified — they are the check — and the actor picks nothing else
+ * meanwhile. `account.identity` work that carries a candidate is also the
+ * only work an auth/identity page hold lets through (its request uses the
+ * candidate, not the stored credentials that failed, E16).
+ */
+export const CREDENTIALS_CHECK_KEYS: ReadonlySet<string> = new Set(["account.verify", "account.identity"]);
+
 /** Statuses that are never a subject's terminal answer, whatever a resource
  *  declares: they are about the page or the wire. */
 const NEVER_TERMINAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
@@ -255,6 +265,12 @@ export interface OutcomeInput {
    *  request failed with `subject_failure` within RESOURCE_BREAKER_WINDOW_MS,
    *  this one included. Read only for `subject_failure`. */
   recentFailedSubjects: number;
+  /** The digest of the credentials the request carried
+   *  (`sync_attempts.request.credentialsGeneration`): an auth/identity hold
+   *  is keyed on the digest that FAILED (step-3 §3.5 item 3, G1/G14), so it
+   *  lifts when the stored credentials the engine trusts change. Absent: the
+   *  page's verified digest. */
+  requestCredentialsGeneration?: string | null;
 }
 
 export type PageHoldDecision =
@@ -381,9 +397,11 @@ export function activeResourceHold(
 
 /**
  * The page hold in force now, or null. An auth or identity hold is
- * indefinite until the page's credentials generation differs from the one
- * the hold was taken under (`hold_detail.credentialsGeneration`); the actor
- * then lifts it and queues an urgent identity check (plan §9).
+ * indefinite until the credentials digest the engine trusts
+ * (`credentials_generation`, written after a matching identity check) differs
+ * from the one whose request failed (`hold_detail.credentialsGeneration`,
+ * step-3 §3.5 item 3). A stored digest that changed out of band is the
+ * actor's to notice (`SyncActor` lifts the hold for one `account.verify`).
  */
 export function activePageHold(
   page: Pick<PageErrorState, "holdKind" | "holdUntil" | "holdDetail" | "credentialsGeneration">,
@@ -622,7 +640,7 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
           kind: "auth",
           until: "infinity",
           step: page.holdStep,
-          detail: { status: input.httpStatus, credentialsGeneration: page.credentialsGeneration },
+          detail: { status: input.httpStatus, credentialsGeneration: failedGeneration(input) },
         },
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: null },
         alerts: [{ subKey: "page_stopped", detail: "auth" }],
@@ -637,7 +655,7 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
           kind: "identity_mismatch",
           until: "infinity",
           step: page.holdStep,
-          detail: { credentialsGeneration: page.credentialsGeneration },
+          detail: { credentialsGeneration: failedGeneration(input) },
         },
         work: { action: "quarantine", reason: "identity_mismatch" },
         quarantineAttempt: true,
@@ -687,6 +705,12 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       };
     }
   }
+}
+
+/** The digest an auth/identity hold is keyed on: the request's, else the
+ *  page's verified one. */
+function failedGeneration(input: OutcomeInput): string | null {
+  return input.requestCredentialsGeneration ?? input.page.credentialsGeneration;
 }
 
 function sinceOf(value: unknown): Date | null {

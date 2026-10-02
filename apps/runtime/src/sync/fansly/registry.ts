@@ -163,9 +163,15 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: accountModule("verify"),
   },
   {
+    // A candidate session/proxy checked before it is stored (step-3 §3.5
+    // item 6). Its 401/403 is the CANDIDATE's refusal, not the stored
+    // session's: the check closes with it and holds nothing (G16 mechanism,
+    // step-3 deviation); it runs under an auth hold of the stored session
+    // (E16) and so must never re-arm one.
     key: "account.identity", file: "account", subject: "page", kind: "trigger", class: "urgent",
     triggers: ["api", "owner"], slo: { resultMs: 30 * SECOND },
     proof: "snapshot", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
+    subjectScopedAuthStatuses: [401, 403],
     operations: ["account.me"],
     legacy: [sender("account_me_api"), sender("account_me_cli"), sender("binding_preflight")],
     module: accountModule("identity"),

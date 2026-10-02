@@ -13,10 +13,11 @@ import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/his
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
 // §8, §12; design §3.6, §9.1). It hosts one actor per Fansly page in `shadow`
-// (step 2): context, CAS settings, heartbeat and health file, then the engine
-// host; on SIGTERM the host finishes the step in flight and releases every
-// page before the process exits. No build of step 2 can send to Fansly
-// (`LIVE_LOOP_ENABLED = false`, I17).
+// or `live`: context, CAS settings, heartbeat and health file, then the engine
+// host; on SIGTERM the host finishes the step in flight, drains the live
+// sockets and releases every page before the process exits. A page sends to
+// Fansly only after the step-3 switch made it `live`, handed it the step-1
+// guard row and imported the legacy state (I17, J1, J3).
 
 /** The `sync` heartbeat cadence. Alert 5 (design §9.6) fires when no `sync`
  *  heartbeat is younger than 2 minutes, and the compose healthcheck wants the
@@ -164,7 +165,7 @@ export async function runSyncRuntime(): Promise<void> {
   }
   context.logger.info(
     { instanceId: runtime.instanceId, heartbeatIntervalMs: SYNC_HEARTBEAT_INTERVAL_MS },
-    "Sync runtime started (engine host: shadow pages only; no live loop in this build)",
+    "Sync runtime started (engine host: shadow pages and live pages run; a page is live only after the switch)",
   );
 
   const shutdown = async () => {

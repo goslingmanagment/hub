@@ -16,7 +16,7 @@ vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ KernelApiError: class exten
 import { FeaturesTab } from "../apps/dashboard/src/pages/settings/FeaturesTab.tsx";
 import { ConfigurationTab } from "../apps/dashboard/src/pages/settings/ConfigurationTab.tsx";
 
-const roles = ["api", "worker", "scheduler"];
+const roles = ["api", "worker", "scheduler", "sync"];
 function view(values: Record<string, string | number | boolean>): ConfigViewResponse {
   const items: ConfigItem[] = Object.entries(values).map(([key, value]) => {
     const descriptor = CONFIG_DESCRIPTORS.find((item) => item.key === key)!;

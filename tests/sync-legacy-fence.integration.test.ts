@@ -836,7 +836,11 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     pageLabel: label, mode,
   });
 
-  it.each(ENGINE_MODES)("the owner routes answer 409 on a %s page", async (mode) => {
+  // S3-05: on a `live` page these routes go through the engine
+  // (tests/sync-account-routing.integration.test.ts); a page being switched
+  // answers 409 `fansly_page_switching` before anything is resolved or sent.
+  it("the owner routes answer 409 on a handover page", async () => {
+    const mode = "handover";
     const f = await engineFixture(mode);
     await createUserAccount(f.app, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
     const server = await buildApiServer(f.app);
@@ -853,15 +857,15 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
         method: "POST", url: `/api/v1/admin/pages/${f.page.label}/verify`, headers: { cookie },
       });
       expect(verify.statusCode).toBe(409);
-      expect(verify.json()).toMatchObject({ error: FANSLY_PAGE_ON_SYNC_ENGINE_CODE, statusCode: 409 });
-      expect(verify.json().message).toContain(`Page ${f.page.label} is on the Fansly Sync Engine (mode ${mode})`);
+      expect(verify.json()).toMatchObject({ error: "fansly_page_switching", statusCode: 409 });
+      expect(verify.json().message).toContain(`${f.page.label} is being switched to the Fansly Sync Engine (${mode})`);
 
       const credentials = await server.inject({
         method: "PATCH", url: `/api/v1/admin/pages/${f.page.label}/credentials`, headers: { cookie },
         payload: { platform: "fansly" },
       });
       expect(credentials.statusCode).toBe(409);
-      expect(credentials.json()).toMatchObject({ error: FANSLY_PAGE_ON_SYNC_ENGINE_CODE });
+      expect(credentials.json()).toMatchObject({ error: "fansly_page_switching" });
     } finally {
       await server.close();
     }
@@ -893,8 +897,9 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
 
   it("the services behind the CLIs refuse before anything is resolved or sent", async () => {
     const f = await engineFixture("handover");
+    const switching = expect.objectContaining({ name: "FanslyPageSwitchingError", statusCode: 409, code: "fansly_page_switching" });
     await expect(setPageProxy(f.app, f.page.label, { url: "http://proxy.example.test:8080" }))
-      .rejects.toThrow(refusal(f.page.label, "handover"));
+      .rejects.toThrow(switching);
     await expect(backfillFanslyPageAliases(f.app, { pageLabels: [f.page.label] }))
       .rejects.toThrow(refusal(f.page.label, "handover"));
     await expect(runFanslyEndpointProbe(f.app, { pageLabels: [f.page.label], dryRun: true }))
@@ -905,7 +910,7 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       id: randomUUID(), pageLabel: f.page.label, pageId: f.page.id, nativeAccountId: "999",
       fromGeneration: "a".repeat(64), toGeneration: "b".repeat(64), fingerprint: "c".repeat(64),
       policyVersion: 0, expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    })).rejects.toThrow(refusal(f.page.label, "handover"));
+    })).rejects.toThrow(switching);
     expect(f.adapter.verifySession).not.toHaveBeenCalled();
     expect(f.adapter.getAccountsByIdsPage).not.toHaveBeenCalled();
     expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
@@ -1008,7 +1013,7 @@ describe("(g) the runtime CLI", () => {
     return program;
   }
 
-  it.each(ENGINE_MODES)("`page verify` and `dm backfill-thread` refuse a %s page", async (mode) => {
+  it.each(ENGINE_MODES)("`page verify` refuses a page being switched and `dm backfill-thread` refuses a %s page", async (mode) => {
     const getAccountMe = vi.fn(async () => { throw new Error("must not send"); });
     const app = createTestAppContext(db(), { adapter: { getAccountMe } as unknown as AppContext["adapter"] });
     const page = await seedPage(app, "fence-cli");
@@ -1016,9 +1021,12 @@ describe("(g) the runtime CLI", () => {
     const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
     const expected = expect.objectContaining({ code: FANSLY_PAGE_ON_SYNC_ENGINE_CODE, statusCode: 409 });
     try {
-      const verify = await loadCliProgram(app);
-      await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
-        .rejects.toThrow(expected);
+      if (mode === "handover") {
+        // S3-05: a live page's verify is the engine's (sync-account-routing).
+        const verify = await loadCliProgram(app);
+        await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
+          .rejects.toThrow(expect.objectContaining({ code: "fansly_page_switching", statusCode: 409 }));
+      }
       const backfill = await loadCliProgram(app);
       await expect(backfill.parseAsync(["dm", "backfill-thread", "--thread", String(thread.id)], { from: "user" }))
         .rejects.toThrow(expected);

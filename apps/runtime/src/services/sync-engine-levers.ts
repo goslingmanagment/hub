@@ -19,7 +19,8 @@ import { fanslyFilesForStreams, fanslyKeysForStreams } from "../sync/fansly/lega
 import { fanslyResourceSpec } from "../sync/fansly/registry.ts";
 import { OWNER_DEMAND_REASON } from "../sync/fansly/resources/followers.ts";
 import { refreshSyncPage } from "../sync/inspect.ts";
-import { AppError, ConflictError } from "./errors.ts";
+import { ConflictError } from "./errors.ts";
+import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 
 // The owner's legacy levers on a page the Fansly Sync Engine owns (design
 // step 3 §3.2 item 4). The Settings buttons and the admin routes speak in
@@ -40,16 +41,7 @@ import { AppError, ConflictError } from "./errors.ts";
 export type EngineOwnedMode = "handover" | "live";
 
 /** A lever that would make the engine read, asked during the switch. */
-export class FanslyPageSwitchingError extends AppError {
-  constructor(label: string) {
-    super(
-      `${label} is being switched to the Fansly Sync Engine (handover): neither engine reads it until the switch completes`,
-      409,
-      "fansly_page_switching",
-    );
-    this.name = "FanslyPageSwitchingError";
-  }
-}
+export { FanslyPageSwitchingError };
 
 /** What an engine lever did: the keys or files it acted on and how many rows
  *  or keys it moved. */

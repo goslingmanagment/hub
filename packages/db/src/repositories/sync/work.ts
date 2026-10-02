@@ -577,6 +577,30 @@ export async function pickUrgent(
   return result.rows.map(normalizeWorkRow);
 }
 
+/**
+ * The work an auth/identity page hold lets through (step-3 §3.5 item 3 (b),
+ * E16): a live `account.identity` check that carries a candidate session or
+ * proxy (`secret_params`) and is due — its request uses the candidate, not
+ * the stored credentials that failed. Oldest demand first. A 429 or network
+ * hold exempts nothing (the caller checks the hold's kind).
+ */
+export async function pickHoldExemptIdentity(db: Database, input: { pageId: number }): Promise<SyncWorkRow | null> {
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns}
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.resource = 'account.identity'
+       and not w.shadow
+       and w.state = 'open'
+       and w.secret_params is not null
+       and w.due_at <= clock_timestamp()
+     order by w.first_demand_at, w.id
+     limit 1
+  `);
+  const row = result.rows[0];
+  return row ? normalizeWorkRow(row) : null;
+}
+
 export interface PlannedPick {
   work: SyncWorkRow;
   /** `due_poll`: a poll whose due time passed (level 1); `round_robin`: the
@@ -1055,6 +1079,109 @@ export async function countUnservedWorkForKeys(
        and w.applied_revision < w.demand_revision
   `);
   return Number(result.rows[0]?.n ?? 0);
+}
+
+/**
+ * The switch's legacy import of one key (step-3 §3.5 item 7, phase I.2): the
+ * live row of `(resource, subject)` starts from the cursor the legacy engine
+ * left — created when the key has no open row, or the open row's cursor
+ * replaced (`dueAt` moves it when given, else it keeps its schedule).
+ * Idempotent: a re-run of an interrupted import writes the same values.
+ */
+export async function importWorkCursor(
+  db: Database,
+  input: {
+    pageId: number;
+    resource: string;
+    subject?: string;
+    kind: SyncWorkKind;
+    class: SyncEngineWorkClass;
+    cursor: unknown;
+    dueAt?: Date | null;
+  },
+): Promise<{ id: number; created: boolean }> {
+  const subject = input.subject ?? "";
+  assertResourceKey(input.resource);
+  assertSubject(subject);
+  const result = await db.execute<{ id: string; created: boolean }>(sql`
+    insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at, cursor)
+    values (${input.pageId}::bigint, false, ${input.resource}::text, ${subject}::text, ${input.kind}::text,
+            ${input.class}::text, coalesce(${timestampParam(input.dueAt)}, clock_timestamp()), ${jsonParam(input.cursor ?? {})})
+    on conflict (page_id, shadow, resource, subject) where state in ('open', 'running', 'quarantined')
+    do update set cursor = excluded.cursor,
+                  due_at = case when ${input.dueAt === undefined || input.dueAt === null}
+                                then sync_work.due_at else excluded.due_at end,
+                  updated_at = clock_timestamp()
+    returning id::text as id, (xmax = 0) as created
+  `);
+  const row = result.rows[0];
+  if (!row) throw new Error(`sync_work import of ${input.resource} returned no row`);
+  return { id: Number(row.id), created: row.created === true };
+}
+
+/**
+ * A subject breaker the legacy engine had armed, carried by the switch's
+ * import (design step 3 §3.5 item 7, I.3): a CLOSED live row of the key
+ * (`cancelled`, `legacy_import`) holding the failures and `breaker_until`,
+ * which the key's next demand inherits (`upsertDemand`). Idempotent: a key
+ * that already has its imported row is left alone.
+ */
+export async function importClosedWorkBreaker(
+  db: Database,
+  input: {
+    pageId: number;
+    resource: string;
+    subject: string;
+    kind: SyncWorkKind;
+    class: SyncEngineWorkClass;
+    failureCount: number;
+    breakerUntil: Date | null;
+    lastErrorClass: string | null;
+  },
+): Promise<boolean> {
+  assertResourceKey(input.resource);
+  assertSubject(input.subject);
+  const result = await db.execute(sql`
+    insert into sync_work (
+      page_id, shadow, resource, subject, kind, class, state, due_at, closed_at, close_reason,
+      failure_count, breaker_until, last_error_class
+    )
+    select ${input.pageId}::bigint, false, ${input.resource}::text, ${input.subject}::text, ${input.kind}::text,
+           ${input.class}::text, 'cancelled', clock_timestamp(), clock_timestamp(), 'legacy_import',
+           ${Math.max(0, Math.trunc(input.failureCount))}::int, ${timestampParam(input.breakerUntil)},
+           ${input.lastErrorClass}::text
+     where not exists (
+       select 1 from sync_work w
+        where w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
+          and w.subject = ${input.subject} and w.close_reason = 'legacy_import'
+     )
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** What a rollback (or a switch reverted at B) closes: every live work of the
+ *  page that is still open, but the history works — open history requests
+ *  keep their works and wait `paused` (plan §15, E11). */
+export async function cancelLiveWorkForRollback(
+  db: Database,
+  input: { pageId: number; closeReason: string },
+): Promise<number> {
+  if (input.closeReason.trim().length === 0) throw new Error("A rollback cancel needs its close reason");
+  const result = await db.execute(sql`
+    update sync_work
+       set state = 'cancelled',
+           closed_at = clock_timestamp(),
+           close_reason = ${input.closeReason},
+           secret_params = null,
+           waiting_reason = null,
+           waiting_until = null,
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+       and not shadow
+       and state in ('open', 'running', 'quarantined')
+       and resource <> 'dm-messages.history'
+  `);
+  return result.rowCount ?? 0;
 }
 
 /** The end of a page's shadow (step 3 takeover, §11.1 C.1): every shadow row

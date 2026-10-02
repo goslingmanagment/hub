@@ -32,6 +32,7 @@ import {
 } from "@agency_hub_core/fansly";
 import { encryptJson, loadConfig, type AppConfig } from "@agency_hub_core/shared";
 
+import { readFanslyPageGeneration } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { resolveEgress, type AppEgressContext } from "../../apps/runtime/src/services/egress/resolver.ts";
 import { resolveCapturePayloadRow } from "../../apps/runtime/src/services/payload-reader.ts";
 import type { SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
@@ -499,7 +500,9 @@ export interface HarnessPage {
  * A Fansly page as the switch would leave it: encrypted session, the page
  * proxy (`proxyUrl`, or none), its engine row in `mode`, the step-1 guard row
  * handed to the engine for a live page, the legacy import stamped, history
- * requests open.
+ * requests open, and — with a proxy — the stored credentials verified by the
+ * engine (`credentials_generation`, as the takeover `account.verify` leaves
+ * it; S3-05: the live transport sends nothing else before it).
  */
 export async function seedHarnessPage(
   handles: HarnessHandles,
@@ -527,8 +530,21 @@ export async function seedHarnessPage(
   if (options.mode === "live") {
     await ensureFanslyPageSendGuard(handles.db, pageId);
     await handles.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
+    if (options.proxyUrl !== undefined && options.proxyUrl !== null) await stampVerifiedCredentials(handles, { pageId, pageLabel });
   }
   return { pageId, pageLabel };
+}
+
+/** The stored credentials digest as the engine's verified one (what an
+ *  applied `account.verify` writes): a test that changed the page's session
+ *  or proxy re-stamps it. */
+export async function stampVerifiedCredentials(handles: HarnessHandles, page: HarnessPage): Promise<string> {
+  const generation = await handles.db.transaction(
+    async (raw) => readFanslyPageGeneration(raw as unknown as Database, page.pageLabel),
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+  await handles.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [page.pageId, generation]);
+  return generation;
 }
 
 // ── synthetic chats ─────────────────────────────────────────────────────────

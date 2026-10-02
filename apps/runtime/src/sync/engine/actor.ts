@@ -5,6 +5,7 @@ import {
   lockOwnedPage,
   nextOpenWorkDueAt,
   OwnershipLostError,
+  pickHoldExemptIdentity,
   pickPlanned,
   pickRequests,
   pickUrgent,
@@ -23,7 +24,9 @@ import {
   commitNoHttp,
   deferAfterPlanError,
   drainDueApplies,
+  enqueueOwnDemand,
   errorName,
+  liftHoldForChangedCredentials,
   markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
@@ -38,13 +41,21 @@ import {
 import {
   activePageHold,
   activeResourceHold,
+  CREDENTIALS_CHECK_KEYS,
   isResourceHoldExempt,
   LIST_RATE_LIMIT_HELD_KEYS,
   resourceFileOf,
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
-import { UnsendableRequestError, type LivePageSocketRef, type OwnershipSession, type TransportOutcome, type Wake } from "./ports.ts";
+import {
+  CredentialsGenerationChangedError,
+  UnsendableRequestError,
+  type LivePageSocketRef,
+  type OwnershipSession,
+  type TransportOutcome,
+  type Wake,
+} from "./ports.ts";
 import {
   pollsFor,
   resourceDisabled,
@@ -55,7 +66,7 @@ import {
   type ShadowResult,
   type StepPlan,
 } from "./resource.ts";
-import { pick, type ClassWorkSource, type WorkClass } from "./scheduler.ts";
+import { CYCLE, pick, type ClassWorkSource, type WorkClass } from "./scheduler.ts";
 import type { PageTransport } from "./shadow.ts";
 
 // One page's actor (plan §3, §8; design §3.5): recover → loop (plan → admit →
@@ -125,7 +136,9 @@ function exitOf(committed: Committed<unknown>): ActorExit | null {
 }
 
 type Gate =
-  | { open: true; page: SyncPageRow }
+  /** `exemptIdentity`: an auth/identity hold is in force; only a candidate
+   *  identity check may take the slot (E16). */
+  | { open: true; page: SyncPageRow; exemptIdentity: boolean }
   | { open: false; waitMs: number }
   | { open: false; exit: ActorExit };
 
@@ -136,6 +149,10 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
+  /** The stored credentials digest the transport refused because the engine
+   *  has not verified it (G1/G2): while set, the actor picks only the
+   *  identity checks; cleared once the page's verified digest is it. */
+  #unverified: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -210,8 +227,11 @@ export class SyncActor {
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
     const now = d.clock.wallNow();
-    const exclusions = pickExclusions(page, d.registry, shadow, now);
-    const picked = await this.#pick(page, now, exclusions);
+    if (this.#unverified !== null && page.credentialsGeneration === this.#unverified) this.#unverified = null;
+    const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly: this.#unverified !== null });
+    const picked = gate.exemptIdentity && activePageHold(page, now) !== null
+      ? await this.#pickExemptIdentity(page)
+      : await this.#pick(page, now, exclusions);
     if (picked === null) {
       // Idle until the next work this pick could take: a paused, switched-off
       // or held row is never "due" here, or the actor would lap without
@@ -262,6 +282,10 @@ export class SyncActor {
     try {
       request = await d.transport.prepare(plan.request, { work: picked.work });
     } catch (error) {
+      if (error instanceof CredentialsGenerationChangedError) {
+        await this.#credentialsUnverified(error, signals.stop);
+        return null;
+      }
       if (!(error instanceof UnsendableRequestError)) throw error;
       // Nothing can ever send it (no secret, a host the engine never calls):
       // the work closes with that answer, nothing is admitted.
@@ -386,8 +410,67 @@ export class SyncActor {
     if (page.pausedAll) return { open: false, waitMs: ACTOR_IDLE_WAIT_MS };
     const now = d.clock.wallNow();
     const hold = activePageHold(page, now);
-    if (hold !== null) return { open: false, waitMs: hold.until.getTime() - now.getTime() };
-    return { open: true, page };
+    if (hold === null) return { open: true, page, exemptIdentity: false };
+    if (d.mode === "live" && (hold.kind === "auth" || hold.kind === "identity_mismatch")) {
+      // G14: an auth/identity hold names the credentials that failed. (a)
+      // Stored credentials that changed since (out of band) lift it for one
+      // `account.verify`; (b) otherwise only a candidate identity check —
+      // another session or proxy than the one that failed — takes a slot.
+      if (await this.#liftIfCredentialsChanged(page, hold.kind)) return { open: false, waitMs: 0 };
+      if ((await pickHoldExemptIdentity(d.db, { pageId: d.pageId })) !== null) {
+        return { open: true, page, exemptIdentity: true };
+      }
+    }
+    return { open: false, waitMs: hold.until.getTime() - now.getTime() };
+  }
+
+  /** G14 (a): one read-only snapshot of the stored credentials digest per
+   *  gate pass while held. True: the hold was lifted. */
+  async #liftIfCredentialsChanged(page: SyncPageRow, holdKind: "auth" | "identity_mismatch"): Promise<boolean> {
+    const d = this.#d;
+    if (d.transport.storedCredentialsGeneration === undefined) return false;
+    const stored = await d.transport.storedCredentialsGeneration();
+    const heldUnder = page.holdDetail.credentialsGeneration;
+    const failed = typeof heldUnder === "string" ? heldUnder : page.credentialsGeneration;
+    if (stored === null || failed === null || stored === failed) return false;
+    const lifted = await liftHoldForChangedCredentials(d, { holdKind, failedGeneration: failed, storedGeneration: stored });
+    if (lifted) this.#unverified = stored;
+    return lifted;
+  }
+
+  /** The transport refused a request because the stored credentials are not
+   *  the ones the engine verified (G2): one `account.verify` per stored
+   *  digest, and only identity checks are picked until it passed — never a
+   *  lap error, never a spin. */
+  async #credentialsUnverified(error: CredentialsGenerationChangedError, stop: AbortSignal): Promise<void> {
+    const d = this.#d;
+    const first = this.#unverified !== error.storedGeneration;
+    this.#unverified = error.storedGeneration;
+    if (first) {
+      d.metrics.increment("sync_credentials_unverified", { pageId: d.pageId });
+      d.logger.info({ pageId: d.pageId, verified: error.verifiedGeneration !== null },
+        "Fansly sync actor: the stored credentials are not verified; only the identity check goes out until it passes");
+      await enqueueOwnDemand(d, [{ resource: "account.verify", demand: { reason: "credentials_changed" } }]);
+      return;
+    }
+    // The check itself was refused (it never is) or is not due: wait.
+    await this.#sleep(LIVE_GATE_RECHECK_MS, stop);
+  }
+
+  /** The slot under an auth/identity hold: the oldest candidate identity
+   *  check, at the next urgent position of the cycle (E16). */
+  async #pickExemptIdentity(page: SyncPageRow): Promise<PickedWork | null> {
+    const work = await pickHoldExemptIdentity(this.#d.db, { pageId: this.#d.pageId });
+    if (work === null) return null;
+    let slot = page.cyclePos;
+    for (let k = 0; k < CYCLE.length; k += 1) {
+      const at = (page.cyclePos + k) % CYCLE.length;
+      if (CYCLE[at] === "U") {
+        slot = at;
+        break;
+      }
+    }
+    return { work, workClass: "urgent", slot, nextCyclePos: (slot + 1) % CYCLE.length, requestTurn: null };
   }
 
   async #pick(page: SyncPageRow, now: Date, exclusions: PickExclusions): Promise<PickedWork | null> {
@@ -481,10 +564,14 @@ export function pickExclusions(
   registry: EngineRegistry,
   shadow: boolean,
   now: Date,
+  /** `checksOnly`: the page's stored credentials are not verified — only the
+   *  identity checks may be picked (G2). */
+  options: { checksOnly?: boolean } = {},
 ): PickExclusions {
   const resources = new Set(page.pausedResources);
   for (const spec of registry.specs) {
     if (!runsIn(spec, shadow) || resourceDisabled(page, spec.key)) resources.add(spec.key);
+    if (options.checksOnly === true && !CREDENTIALS_CHECK_KEYS.has(spec.key)) resources.add(spec.key);
   }
   for (const key of Object.keys(page.registryOverrides)) {
     if (resourceDisabled(page, key)) resources.add(key);
@@ -511,6 +598,6 @@ export function pickExclusions(
   return {
     excludeResources: [...resources].sort(),
     excludeFiles: files.sort(),
-    excludeClasses: page.pausedRequests === true ? ["requests"] : [],
+    excludeClasses: page.pausedRequests === true || options.checksOnly === true ? ["requests"] : [],
   };
 }

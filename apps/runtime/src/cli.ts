@@ -61,6 +61,8 @@ import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
+import { registerSyncSwitchCommands } from "./sync/cli/switch.ts";
+import { verifyPageOnEngine } from "./services/sync-engine-account.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -70,11 +72,7 @@ import {
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
-import {
-  assertLegacyOwnsFanslyPageId,
-  assertLegacyOwnsFanslyPageLabels,
-  SYNC_ENGINE_HINTS,
-} from "./services/sync-engine-guard.ts";
+import { assertLegacyOwnsFanslyPageId, SYNC_ENGINE_HINTS } from "./services/sync-engine-guard.ts";
 import {
   removeVoiceProfile,
   setVoiceProfile,
@@ -581,6 +579,22 @@ async function queueInitialFullSyncAfterPageCreate(
     );
   } finally {
     await boss.stop().catch(() => undefined);
+  }
+}
+
+/** The step-3 rollback's last step (design step 3 §3.5 item 7): the legacy
+ *  engine runs every stream of the page it owns again. */
+async function queueLegacyRecoverySync(pageLabel: string) {
+  const app = await createAppContext();
+  const boss = new PgBoss({ connectionString: app.config.databaseUrl });
+  attachCliPgBossErrorLogger(boss);
+  try {
+    await boss.start();
+    await ensureSyncQueues(boss);
+    await requestPageSync(app, boss, { pageLabel, scope: "all", reason: "recovery" });
+  } finally {
+    await boss.stop().catch(() => undefined);
+    await app.close();
   }
 }
 
@@ -1724,8 +1738,13 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        // Step-3 design §3.1 item 10: the engine verifies its own pages.
-        await assertLegacyOwnsFanslyPageLabels(app, [options.page], SYNC_ENGINE_HINTS.verify);
+        // Step-3 design §3.5 item 6: a live page is verified by its engine
+        // actor; a page being switched refuses (409).
+        const onEngine = await verifyPageOnEngine(app, options.page);
+        if (onEngine !== null) {
+          console.log(`Verified page ${options.page} through the Fansly Sync Engine (${onEngine.username ?? "?"})`);
+          return;
+        }
         const context = await resolvePageContext(app, options.page);
         const egressSummaryPromise = resolvePageEgressSummary({
           pageLabel: context.page.label,
@@ -3328,6 +3347,9 @@ export function buildProgram() {
   // Fansly Sync Engine observability (design §3.12, §9.6): `sync shadow report`,
   // `sync alerts status | ack`.
   registerSyncReportCommands(sync);
+  // Fansly Sync Engine step 3 (step-3 design §3.5 item 8): `sync switch`,
+  // `sync switch check`, `sync rollback`.
+  registerSyncSwitchCommands(sync, { requestLegacyRecovery: queueLegacyRecoverySync });
 
   queue
     .command("planner-recover")

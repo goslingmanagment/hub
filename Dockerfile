@@ -106,5 +106,9 @@ ARG APP_SOURCE_REVISION=unknown
 
 LABEL agency-hub.dependency-checksum="${APP_DEPENDENCY_CHECKSUM}"
 LABEL agency-hub.source-revision="${APP_SOURCE_REVISION}"
+# The build identity every role reports in its heartbeat
+# (`runtime_instances.image_tag`) and the CLI inside the api compares with the
+# sync role's (the step-3 switch precondition "same build").
+ENV GIT_SHA=${APP_SOURCE_REVISION}
 
 CMD ["node", "apps/runtime/dist/startup.js", "worker"]

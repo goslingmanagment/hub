@@ -298,6 +298,10 @@ export interface FanslyWireRequest {
   /** Total budget of the call: connect and proxy tunnel, headers and the
    *  whole body. */
   timeoutMs: number;
+  /** The digest (sha256 hex, not a secret) of the credentials the request
+   *  carries — the page's stored session and proxy, or an identity check's
+   *  candidate. Journaled with the attempt; an auth hold is keyed on it. */
+  credentialsGeneration?: string;
 }
 
 /** The send hooks of one admission. `check` runs synchronously at undici's

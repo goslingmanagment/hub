@@ -509,3 +509,174 @@ export async function confirmFanslySendGuardTerminated(
   `);
   return Number(result.rows[0]?.released ?? 0) > 0;
 }
+
+// ── the step-3 handover (design §2.8, step-3 §3.5 item 1, J1/J2) ─────────────
+//
+// The switch and its rollback are the only writers of `owner_engine`. Both
+// flips are ONE conditional statement on the row, timed by the database clock:
+//   - to the engine only while no legacy request is in flight (`holder_token
+//     is null`) and the row is not closed by an overrun lease (`closed_reason
+//     is null`: such a holder is never assumed dead, J4); the engine's first
+//     send then waits ≥ 1.2 × S after `last_completed_at` (`paceFloorFromDb`
+//     reads it);
+//   - back to the legacy engine only after the engine's owner released the
+//     page safely or was confirmed stopped, with `last_completed_at` moved to
+//     the latest instant the engine could have sent — or later, to the end of
+//     an engine 429/network/list hold in force (G20) — and `next_u = 0.2`, so
+//     the first legacy capture waits ≥ 1.2 × S after it (and never inside the
+//     hold). An auth/identity hold is not carried: the flip refuses unless the
+//     owner allows it.
+
+/** The guard row's owner on the engine's side (0229). */
+const FANSLY_SEND_GUARD_ENGINE_OWNER = "fansly_sync_engine" satisfies FanslySendGuardOwnerEngine;
+
+export type HandFanslySendGuardToEngineResult =
+  | { kind: "handed"; lastCompletedAt: Date }
+  /** A legacy request holds the page: wait for its completion (null: it
+   *  completed between the flip and the read-back — just try again). */
+  | { kind: "busy"; holder: FanslySendGuardHolderSummary | null }
+  /** The holder overran its lease and is not confirmed gone, or the row is
+   *  missing: never flipped (`fansly-send-guard confirm-terminated`). */
+  | { kind: "closed"; reason: string }
+  /** The engine owns the row already. */
+  | { kind: "already"; lastCompletedAt: Date };
+
+/** Legacy → engine (switch phase A): the flip, or why not. */
+export async function handFanslySendGuardToEngine(
+  db: Database,
+  input: { pageId: number },
+): Promise<HandFanslySendGuardToEngineResult> {
+  const flipped = await db.execute<{ lastCompletedAt: Date | string }>(sql`
+    update fansly_page_send_guards g
+       set owner_engine = ${FANSLY_SEND_GUARD_ENGINE_OWNER},
+           engine_switched_at = clock_timestamp(),
+           updated_at = clock_timestamp()
+     where g.page_id = ${input.pageId}
+       and g.owner_engine = ${FANSLY_SEND_GUARD_LEGACY_OWNER}
+       and g.holder_token is null
+       and g.closed_reason is null
+    returning g.last_completed_at as "lastCompletedAt"
+  `);
+  const row = flipped.rows[0];
+  if (row) return { kind: "handed", lastCompletedAt: toDate(row.lastCompletedAt) as Date };
+  const state = await db.execute<HolderRow & {
+    ownerEngine: string;
+    closedReason: string | null;
+    lastCompletedAt: Date | string;
+  }>(sql`
+    select owner_engine as "ownerEngine",
+           closed_reason as "closedReason",
+           last_completed_at as "lastCompletedAt",
+           holder_token::text as "holderToken",
+           holder_source as "holderSource",
+           holder_operation as "holderOperation",
+           holder_host as "holderHost",
+           holder_pid as "holderPid",
+           holder_role as "holderRole",
+           holder_instance::text as "holderInstance",
+           lease_until as "leaseUntil"
+      from fansly_page_send_guards
+     where page_id = ${input.pageId}
+  `);
+  const current = state.rows[0];
+  if (!current) return { kind: "closed", reason: "no_guard_row" };
+  if (current.ownerEngine === FANSLY_SEND_GUARD_ENGINE_OWNER) {
+    return { kind: "already", lastCompletedAt: toDate(current.lastCompletedAt) as Date };
+  }
+  if (current.closedReason !== null) return { kind: "closed", reason: current.closedReason };
+  if (current.holderToken !== null) {
+    return { kind: "busy", holder: holderSummary({ ...current, holderToken: current.holderToken }) };
+  }
+  // Released between the two statements: the caller simply tries again.
+  return { kind: "busy", holder: null };
+}
+
+export type HandFanslySendGuardBackToLegacyResult =
+  | { kind: "handed"; lastCompletedAt: Date }
+  /** The engine's last owner neither released the page nor was confirmed
+   *  stopped (or the page is not in `handover`): never flipped (J4). */
+  | { kind: "not_released"; mode: string | null }
+  /** An auth/identity hold is in force: the rollback refuses unless the
+   *  owner allowed it (`--with-auth-hold`). */
+  | { kind: "auth_hold"; holdKind: string }
+  /** The legacy engine owns the row already. */
+  | { kind: "already"; lastCompletedAt: Date };
+
+/** Engine → legacy (rollback step 3): the flip, or why not. */
+export async function handFanslySendGuardBackToLegacy(
+  db: Database,
+  input: { pageId: number; allowAuthHold?: boolean },
+): Promise<HandFanslySendGuardBackToLegacyResult> {
+  const allowAuthHold = input.allowAuthHold === true;
+  const flipped = await db.execute<{ lastCompletedAt: Date | string }>(sql`
+    update fansly_page_send_guards g
+       set owner_engine = ${FANSLY_SEND_GUARD_LEGACY_OWNER},
+           engine_switched_at = clock_timestamp(),
+           updated_at = clock_timestamp(),
+           next_u = ${FANSLY_SEND_GUARD_RESTART_U},
+           last_completed_at = greatest(
+             g.last_completed_at,
+             sp.last_completed_at,
+             sp.last_send_at,
+             clock_timestamp(),
+             case when sp.hold_kind in ('rate_limit', 'network') and sp.hold_until > clock_timestamp()
+                  then sp.hold_until end,
+             (select max((h.value ->> 'until')::timestamptz)
+                from jsonb_each(sp.resource_holds) h
+               where h.value ->> 'kind' = 'rate_limit_list'
+                 and (h.value ->> 'until')::timestamptz > clock_timestamp()))
+      from sync_pages sp
+     where g.page_id = ${input.pageId}
+       and sp.page_id = g.page_id
+       and g.owner_engine = ${FANSLY_SEND_GUARD_ENGINE_OWNER}
+       and sp.mode = 'handover'
+       and ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
+            or sp.owner_stop_confirmed_at > sp.owner_acquired_at)
+       and (${allowAuthHold}::boolean
+            or sp.hold_kind is null
+            or sp.hold_kind not in ('auth', 'identity_mismatch')
+            or sp.hold_until <= clock_timestamp())
+    returning g.last_completed_at as "lastCompletedAt"
+  `);
+  const row = flipped.rows[0];
+  if (row) return { kind: "handed", lastCompletedAt: toDate(row.lastCompletedAt) as Date };
+  const state = await db.execute<{
+    ownerEngine: string | null;
+    lastCompletedAt: Date | string | null;
+    mode: string | null;
+    released: boolean | null;
+    authHold: string | null;
+  }>(sql`
+    select g.owner_engine as "ownerEngine",
+           g.last_completed_at as "lastCompletedAt",
+           sp.mode,
+           ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
+             or coalesce(sp.owner_stop_confirmed_at > sp.owner_acquired_at, false)) as released,
+           case when sp.hold_kind in ('auth', 'identity_mismatch') and sp.hold_until > clock_timestamp()
+                then sp.hold_kind end as "authHold"
+      from fansly_page_send_guards g
+      left join sync_pages sp on sp.page_id = g.page_id
+     where g.page_id = ${input.pageId}
+  `);
+  const current = state.rows[0];
+  if (!current) return { kind: "not_released", mode: null };
+  if (current.ownerEngine === FANSLY_SEND_GUARD_LEGACY_OWNER) {
+    return { kind: "already", lastCompletedAt: toDate(current.lastCompletedAt) as Date };
+  }
+  if (current.mode === "handover" && current.released === true && current.authHold !== null && !allowAuthHold) {
+    return { kind: "auth_hold", holdKind: current.authHold };
+  }
+  return { kind: "not_released", mode: current.mode };
+}
+
+/** The guard row of one page (the switch's phase derivation and checks). */
+export async function getFanslySendGuard(db: Database, pageId: number): Promise<FanslySendGuardRow | null> {
+  const result = await db.execute<GuardSqlRow>(sql`
+    select ${guardColumns}
+      from fansly_page_send_guards g
+      left join pages p on p.id = g.page_id
+     where g.page_id = ${pageId}
+  `);
+  const row = result.rows[0];
+  return row ? normalizeGuardRow(row) : null;
+}

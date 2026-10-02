@@ -3,6 +3,7 @@ import {
   listVisiblePages,
   findPageByLabel,
   storePlatformCredentials,
+  type Database,
 } from "@agency_hub_core/db";
 import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
 import {
@@ -11,6 +12,7 @@ import {
   encryptJson,
   normalizeProxyConfig,
   redactSensitiveText,
+  type FanslySessionBundle,
   type StoredPlatformCredentialBundle,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
@@ -21,7 +23,7 @@ import { handleSuccessfulPageVerificationRecovery } from "./notification-inciden
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
-import { assertLegacyOwnsFanslyPage, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
+import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, trustStoredFanslyCredentials } from "./sync-engine-account.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -225,10 +227,10 @@ export async function updatePageCredentials(
       `OnlyFans pages have no stored credentials to update: page "${stored.page.label}" syncs via its OFAPI account mapping`,
     );
   }
-  // Step-3 design §3.1 item 10: the session check below is a request of the
-  // page; a page the Fansly Sync Engine owns refuses it (409) before anything
-  // is sent or stored.
-  await assertLegacyOwnsFanslyPage(app, stored.page, { hint: SYNC_ENGINE_HINTS.credentials(stored.page.label) });
+  // Step-3 design §3.5 item 6: on a live page the session check is the
+  // engine's (`account.identity` with the candidate); a page being switched
+  // refuses (409) before anything is sent or stored.
+  const route = await fanslyAccountRoute(app, stored.page);
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
   const storedEgressKey = resolveStoredProxyEgressKey(stored.proxy);
@@ -266,6 +268,15 @@ export async function updatePageCredentials(
   );
   if (!session) {
     throw new BadRequestError(`Page "${stored.page.label}" has no stored Fansly session`);
+  }
+
+  if (route === "engine") {
+    return updateEnginePageCredentials(app, stored.page, {
+      // A parsed JSON body never carries an `undefined` member.
+      session: (body.session ?? null) as FanslySessionBundle | null,
+      proxy: explicitProxy && proxy ? proxy : null,
+      rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey ?? null : null,
+    });
   }
 
   const verification = await app.adapter.verifySession({
@@ -313,5 +324,48 @@ export async function updatePageCredentials(
     recoveredAt,
   });
 
+  return { updated: true, verified: true, syncUnblocked: recovery.syncUnblocked };
+}
+
+/**
+ * The credentials change of a live engine page (design step 3 §3.5 item 6):
+ * the candidate is checked through the page's actor, then stored as the
+ * legacy path stores it and trusted by the engine in ONE transaction (the
+ * new digest lifts an auth hold of the old one). Nothing is stored when the
+ * check does not match.
+ */
+async function updateEnginePageCredentials(
+  app: AppContext,
+  page: { id: number; label: string; platform: string },
+  candidate: { session: FanslySessionBundle | null; proxy: ProxyConfig | null; rateLimitScopeKey: string | null },
+) {
+  await checkFanslyIdentityThroughEngine(app, page, { session: candidate.session, proxy: candidate.proxy });
+  await app.db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    if (candidate.session !== null) {
+      const encrypted = encryptJson(
+        { platform: "fansly", session: candidate.session } satisfies StoredPlatformCredentialBundle,
+        app.config.encryptionKey,
+        app.config.encryptionKeyVersion,
+      );
+      await storePlatformCredentials(tx, {
+        platformAccountId: page.id,
+        encryptedSession: JSON.stringify(encrypted),
+        keyVersion: app.config.encryptionKeyVersion,
+      });
+    }
+    if (candidate.proxy !== null) {
+      await saveProxy({ config: app.config, db: tx }, page.id, candidate.proxy,
+        candidate.rateLimitScopeKey === null ? {} : { rateLimitScopeKey: candidate.rateLimitScopeKey });
+    }
+    await trustStoredFanslyCredentials(tx, page);
+  });
+  const recovery = await handleSuccessfulPageVerificationRecovery(app, {
+    platformAccountId: page.id,
+    pageLabel: page.label,
+    platform: "fansly",
+    recoveredAt: new Date(),
+    unblockLegacyStreams: false,
+  });
   return { updated: true, verified: true, syncUnblocked: recovery.syncUnblocked };
 }

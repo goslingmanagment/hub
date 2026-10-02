@@ -55,6 +55,7 @@ import {
   type RoutePolicyEntry,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
+import { FanslySyncWorkQueuedError } from "../services/sync-engine-account.ts";
 import { formatRequestValidationMessage } from "./error-boundary.ts";
 import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
@@ -529,6 +530,18 @@ export async function buildApiServer(appContext: AppContext) {
         statusCode: error.statusCode,
         reason: error.reason,
         retryAfterMs: error.retryAfterMs,
+      });
+      return;
+    }
+
+    if (error instanceof FanslySyncWorkQueuedError) {
+      // Documented structured extension (docs/error-handling.md §3): the
+      // status link of the Fansly Sync Engine work the request waits in.
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        statusUrl: error.statusUrl,
       });
       return;
     }

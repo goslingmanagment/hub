@@ -40,6 +40,11 @@ export interface PageTransport {
   prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
   /** At most one physical request (none in shadow). */
   send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+  /** Live: the digest of the page's stored credentials now (the session and
+   *  the proxy; `readFanslyPageGeneration`), from a read-only snapshot. The
+   *  actor compares it with the digest an auth/identity hold was taken under
+   *  (step-3 §3.5 item 3, G14). Absent where the transport stores none. */
+  storedCredentialsGeneration?(): Promise<string | null>;
   close(): Promise<void>;
 }
 
