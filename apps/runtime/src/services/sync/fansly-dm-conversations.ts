@@ -32,7 +32,6 @@ import { FANSLY_MAPPER_VERSION, isFanslyGroupDetailIdentity, type FanslyAccount 
 import {
   buildFanslyDmConversationMetadata,
   getFanslyDmMessageSyncExcludedReason,
-  normalizeDmMessageText,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   type FanslyDmMessageSyncExcludedReason,
@@ -74,6 +73,7 @@ import {
   normalizeFanslyTimestamp,
 } from "./shared.ts";
 import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
+import { truncateDmPreview } from "./dm-preview.ts";
 import { createDmShadowState } from "./dm-shadow-state.ts";
 import { readDmShadowMaterial } from "./dm-shadow-material.ts";
 import { persistDmShadowReport } from "./dm-shadow-report.ts";
@@ -170,17 +170,6 @@ const DM_CONVERSATIONS_MEMBERSHIP_RETRY_DELAY_MS = 15 * 60_000;
 
 function hasUnresolvedIdentityMetadata(metadata: Record<string, unknown> | null | undefined) {
   return metadata?.unresolvedIdentity === true;
-}
-
-function truncateDmPreview(content: string | null | undefined, maxLength = 280) {
-  const normalized = normalizeDmMessageText(content);
-  if (!normalized) {
-    return null;
-  }
-
-  return normalized.length <= maxLength
-    ? normalized
-    : `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 /**

@@ -46,6 +46,20 @@ or a plan that waits on `dependency` and makes the other work due. Fan profiles 
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
 to 100 of them not looked up through the page within the day.
 
+A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
+`upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
+membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
+pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary`). A list head newer than what the message
+reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
+
+A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
+into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
+writes the page's rows minus any an executed erasure fences, the chain, the legacy coverage columns (engine-owned
+pages only), the overlay confirmation, and — last — the inline canonicalization and the `message_archive` rows of
+the page's message events. When the chat was deleted, unbound or excluded between the plan and the apply, only that
+last part runs, under the same fence, so the minutely sweep never appends the page unfenced. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
+head; a demanded id the vendor's head does not show yet is read again after 15 s and 60 s, then settled `not_found`.
+
 A plan is read-only, so a decision it takes that the apply must fold into — a media visit's windows, an album walk's
 proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
 stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
@@ -149,7 +163,7 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
-| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
+| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`); or the conversation list answered 429: only the keys that can only read the list wait, 5 s → 10 s → … → 300 s | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
 | `pacer` | runnable; the page's next slot has not opened yet | the pause |
@@ -158,7 +172,8 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 ## Errors
 
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
-transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner.
+transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
+except a 429 on the conversation list, which holds only the list (owner decision 2026-10-02).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -166,7 +181,8 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx, success envelope, contract accepts | `ok` | streak reset, subject breaker reset, expired holds cleared |
 | 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
-| 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
+| any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
 | 401 / 403 | `auth` | page hold until new credentials, alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
@@ -188,7 +204,7 @@ holds the resource file (30 min → 2 h → 6 h).
 | The jitter rule | one line in `engine/pacer.ts` + the invariant tests (`tests/sync-pacer*.test.ts`) |
 | How fresh a resource is | one line in `fansly/registry.ts` |
 | Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
-| The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-errors.test.ts` |
+| The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
 | A new kind of data | the same + schema, repository, migration |
 | A new depth or rule of a history request | `requests/history.ts` (+ the satisfaction rule in `engine/commit.ts`) + the contract |

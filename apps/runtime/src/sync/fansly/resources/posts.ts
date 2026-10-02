@@ -485,14 +485,14 @@ const engagementModule: ResourceModule = {
     };
   },
 
-  async onSubjectOutcome(tx, work, outcome, request): Promise<void> {
+  async onSubjectOutcome(tx, work, outcome, step): Promise<void> {
     // A terminal answer climbs the same ladder: the walk row reopens at once,
     // so a subject left due would be asked again and again.
     if (outcome.kind === "ok") return;
     await recordQueueSubjectFailures(tx, {
       pageId: work.pageId,
       plane: POST_ENGAGEMENT_QUEUE.plane,
-      subjectRefs: idsOf(request),
+      subjectRefs: idsOf(step.request),
       now: new Date(),
     });
   },

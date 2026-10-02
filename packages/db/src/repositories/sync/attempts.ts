@@ -757,6 +757,9 @@ export async function lastRateLimitAt(
        and a.admitted_at > statement_timestamp() - ${Math.max(0, input.withinMs)}::double precision * interval '1 millisecond'
        and not a.shadow
        and a.http_status = 429
+       -- A conversation-list 429 holds only the list (its own ladder): it
+       -- never keeps the page's ladder up.
+       and a.error_class is distinct from 'rate_limit_list'
        and a.id is distinct from ${input.excludeAttemptId ?? null}::bigint
   `);
   return toDate(result.rows[0]?.at);

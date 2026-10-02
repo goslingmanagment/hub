@@ -729,6 +729,9 @@ export async function capture(
   });
 
   if (committed.decision === null) return { applyNow: false, inMemory: null };
+  if (committed.decision.errorClass === "rate_limit_list") {
+    d.metrics.increment("sync_list_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
+  }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4): this send against the page's previous
   // recorded send of ANY owner; closer than the setting opens alert 1.
@@ -753,8 +756,8 @@ interface OutcomeTarget {
   /** The work's demand revision the attempt served (I11). */
   demandRevision: number;
   subjectQueue: boolean;
-  /** The request the attempt sent (a queue walk's subject is in it). */
-  request: RequestPlan | null;
+  /** The request the attempt sent (a subject-queue walk's subject). */
+  request: RequestPlan;
 }
 
 async function writeOutcomeDecision(
@@ -776,7 +779,16 @@ async function writeOutcomeDecision(
   }
   const resourceHold = decision.resourceHold;
   if (resourceHold.action === "set") {
-    await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: { until: resourceHold.until, step: resourceHold.step } });
+    await setResourceHold(tx, {
+      ...fenced,
+      file: resourceHold.file,
+      hold: {
+        until: resourceHold.until,
+        step: resourceHold.step,
+        ...(resourceHold.kind === undefined ? {} : { kind: resourceHold.kind }),
+        ...(resourceHold.lastRateLimitAt === undefined ? {} : { lastRateLimitAt: resourceHold.lastRateLimitAt }),
+      },
+    });
   } else if (resourceHold.action === "clear") {
     await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: null });
   }
@@ -786,7 +798,7 @@ async function writeOutcomeDecision(
   const work = target.work;
   if (work === null) return;
   const subjectQueue = target.subjectQueue;
-  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined && target.request !== null) {
+  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
     // A breaker reset (an answer after failures) is an `ok`, never a failure.
     const breakerReset = !decision.subjectBreaker.terminal && decision.subjectBreaker.failureCount === 0;
     await module.onSubjectOutcome(tx, work, {
@@ -794,7 +806,7 @@ async function writeOutcomeDecision(
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
-    }, target.request);
+    }, { request: target.request, attemptId: target.attemptId });
   }
   const breaker = !subjectQueue && decision.subjectBreaker !== null
     ? {
@@ -1011,7 +1023,7 @@ export async function apply(
         fenced,
         ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
-      if (d.canonicalize !== undefined) {
+      if (d.canonicalize !== undefined && result.canonicalized !== true) {
         await d.canonicalize(tx, {
           pageId: d.pageId,
           ownRef: d.ownRef,

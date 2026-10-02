@@ -962,9 +962,9 @@ export const mediaStatsWalkModule: ResourceModule = {
     return { work: { satisfiesRevision: true, nextDueAt: now, cursor: next, result: receipt }, followups: [], counters };
   },
 
-  async onSubjectOutcome(tx, work, outcome, request): Promise<void> {
+  async onSubjectOutcome(tx, work, outcome, step): Promise<void> {
     if (outcome.kind === "ok") return;
-    const visit = stepOf(request).visit;
+    const visit = stepOf(step.request).visit;
     if (visit === undefined) return;
     const subjectRef = visit.snapshot.subjectRef;
     await recordQueueSubjectFailures(tx, { pageId: work.pageId, plane: PLANE, subjectRefs: [subjectRef], now: new Date() });

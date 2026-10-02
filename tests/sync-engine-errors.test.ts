@@ -8,6 +8,11 @@ import {
   BLOCKED_PROBE_EVERY_MS,
   classifyWireOutcome,
   INDEFINITE_UNTIL,
+  LIST_RATE_LIMIT_HELD_KEYS,
+  LIST_RATE_LIMIT_LADDER_MS,
+  LIST_RATE_LIMIT_LADDER_RESET_MS,
+  listRateLimitHold,
+  listRateLimitStep,
   NETWORK_ALERT_AFTER_MS,
   NETWORK_FAILURES_TO_PAUSE,
   NETWORK_PAUSE_LADDER_MS,
@@ -23,6 +28,7 @@ import {
   type OutcomeClass,
   type OutcomeInput,
   type PageErrorState,
+  type ResourceHoldEntry,
 } from "../apps/runtime/src/sync/engine/errors.ts";
 
 // Plan §9 / design §3.8: what each answer means and what it does. The
@@ -297,6 +303,143 @@ describe("sync errors: rate limit", () => {
   });
 });
 
+// Owner decision 2026-10-02 «редко + мягкий 429» (design §3.8 `rate_limit_list`,
+// §5.3): the conversation list's quota is stricter than the page pause, so a
+// 429 on it holds only the list; any other 429 still holds the page.
+describe("sync errors: a 429 on the conversation list", () => {
+  const listSpec = fanslyWireSpec("messaging.groups");
+  const listHold = (entry: Partial<ResourceHoldEntry> & { until: string }): PageErrorState => pageState({
+    resourceHolds: {
+      "dm-conversations": { step: 1, since: at(-MIN).toISOString(), kind: "rate_limit_list", ...entry },
+    },
+  });
+
+  it("is the list's rate limit; a 429 on any other route stays the page's", () => {
+    const list = classifyWireOutcome(answer(429, "", { "retry-after": "7" }), listSpec, { offset: 0 }, { now: NOW });
+    expect(list).toMatchObject({ errorClass: "rate_limit_list", httpStatus: 429, retryAfterMs: 7_000 });
+    for (const id of ["group.detail", "messages.page", "transactions.page"] as const) {
+      const params = id === "group.detail" ? { groupId: "1" } : id === "messages.page" ? { groupId: "1", before: null } : { limit: 20, offset: 0 };
+      expect(classifyWireOutcome(answer(429, ""), fanslyWireSpec(id), params as never, { now: NOW }).errorClass, id).toBe("rate_limit");
+    }
+    // A list 5xx is still the subject's, and a list 5xx naming its deadline the page's pace.
+    expect(classifyWireOutcome(answer(500, ""), listSpec, { offset: 0 }, { now: NOW }).errorClass).toBe("subject_failure");
+    expect(classifyWireOutcome(answer(503, "", { "retry-after": "30" }), listSpec, { offset: 0 }, { now: NOW }).errorClass)
+      .toBe("rate_limit");
+  });
+
+  it("holds only the list, never the page: 5 → 10 → 20 → 40 → 80 → 160 → 300 s by consecutive list 429s", () => {
+    let entry: ResourceHoldEntry | undefined;
+    const seconds: number[] = [];
+    const alerted: boolean[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      const decision = onOutcome(input("rate_limit_list", {
+        resource: "dm-conversations.full",
+        subject: "",
+        httpStatus: 429,
+        page: pageState({ resourceHolds: entry === undefined ? {} : { "dm-conversations": entry } }),
+      }));
+      expect(decision.pageHold).toEqual({ action: "keep" });
+      if (decision.resourceHold.action !== "set") throw new Error("no list hold");
+      expect(decision.resourceHold).toMatchObject({ file: "dm-conversations", kind: "rate_limit_list", lastRateLimitAt: NOW });
+      // Due again at the hold's end, not before: the held row never looks due to the idle actor.
+      expect(decision.work).toEqual({
+        action: "reopen", dueAt: decision.resourceHold.until, waitingReason: "resource_hold", waitingUntil: decision.resourceHold.until,
+      });
+      seconds.push((decision.resourceHold.until.getTime() - NOW.getTime()) / 1_000);
+      alerted.push(decision.alerts.length > 0);
+      // The hold ran out before the next try (the next try is never sooner).
+      entry = {
+        until: at(-1).toISOString(),
+        step: decision.resourceHold.step,
+        since: NOW.toISOString(),
+        kind: "rate_limit_list",
+        lastRateLimitAt: at(-1_000).toISOString(),
+      };
+    }
+    expect(seconds).toEqual([5, 10, 20, 40, 80, 160, 300, 300, 300]);
+    // Alert 1 only once the hold reaches the top step (sustained).
+    expect(alerted).toEqual([false, false, false, false, false, false, true, true, true]);
+    const top = onOutcome(input("rate_limit_list", { resource: "dm-conversations.head", httpStatus: 429, page: pageState({
+      resourceHolds: { "dm-conversations": { ...entry!, step: 6 } },
+    }) }));
+    expect(top.alerts).toEqual([{ subKey: "page_stopped", detail: "rate_limit_list" }]);
+  });
+
+  it("starts the list ladder over after 10 minutes without a list 429", () => {
+    expect(LIST_RATE_LIMIT_LADDER_RESET_MS).toBe(10 * MIN);
+    const entry = (lastAgoMs: number): ResourceHoldEntry => ({
+      until: at(-lastAgoMs + 5_000).toISOString(), step: 4, since: at(-HOUR).toISOString(),
+      kind: "rate_limit_list", lastRateLimitAt: at(-lastAgoMs).toISOString(),
+    });
+    expect(listRateLimitStep(entry(LIST_RATE_LIMIT_LADDER_RESET_MS - 1), NOW)).toBe(4);
+    expect(listRateLimitStep(entry(LIST_RATE_LIMIT_LADDER_RESET_MS), NOW)).toBe(0);
+    expect(listRateLimitStep(undefined, NOW)).toBe(0);
+    // A breaker entry of the file is not a list ladder.
+    expect(listRateLimitStep({ until: at(MIN).toISOString(), step: 2, since: NOW.toISOString() }, NOW)).toBe(0);
+    const decision = onOutcome(input("rate_limit_list", {
+      resource: "dm-conversations.head", httpStatus: 429,
+      page: pageState({ resourceHolds: { "dm-conversations": entry(LIST_RATE_LIMIT_LADDER_RESET_MS) } }),
+    }));
+    expect(decision.resourceHold).toMatchObject({ action: "set", until: at(5_000), step: 1 });
+  });
+
+  it("honours Retry-After as stated, and never shortens a list hold in force", () => {
+    const stated = onOutcome(input("rate_limit_list", { resource: "dm-conversations.head", httpStatus: 429, retryAfterMs: 42_000 }));
+    expect(stated.resourceHold).toMatchObject({ action: "set", until: at(42_000), step: 1 });
+    const short = onOutcome(input("rate_limit_list", {
+      resource: "dm-conversations.find", httpStatus: 429, retryAfterMs: 1_000,
+      page: listHold({ until: at(30_000).toISOString(), lastRateLimitAt: at(-1_000).toISOString() }),
+    }));
+    expect(short.resourceHold).toMatchObject({ action: "set", until: at(30_000), step: 2 });
+  });
+
+  it("lets .find go on at once: its next step is the group detail", () => {
+    const decision = onOutcome(input("rate_limit_list", { resource: "dm-conversations.find", subject: "g1", httpStatus: 429 }));
+    expect(decision.work).toEqual({ action: "reopen", dueAt: null, waitingReason: null, waitingUntil: null });
+    expect(decision.resourceHold).toMatchObject({ action: "set", kind: "rate_limit_list" });
+  });
+
+  it("stops only the keys that can only read the list", () => {
+    const holds = { "dm-conversations": { until: at(5_000).toISOString(), step: 1, since: NOW.toISOString(), kind: "rate_limit_list" as const } };
+    for (const key of LIST_RATE_LIMIT_HELD_KEYS) {
+      expect(activeResourceHold(holds, key, NOW), key)
+        .toEqual({ file: "dm-conversations", until: at(5_000), step: 1, kind: "rate_limit_list" });
+    }
+    for (const key of ["dm-conversations.find", "dm-conversations.detail", "dm-messages.head", "dm-messages.catchup", "transactions.head"]) {
+      expect(activeResourceHold(holds, key, NOW), key).toBeNull();
+    }
+    expect(activeResourceHold(holds, "dm-conversations.head", at(5_000))).toBeNull();
+    expect(listRateLimitHold(holds, NOW)).toEqual({ until: at(5_000), step: 1 });
+    expect(listRateLimitHold(holds, at(5_000))).toBeNull();
+  });
+
+  it("keeps an expired list hold on the row until its ladder resets", () => {
+    const recent = listHold({ until: at(-1).toISOString(), lastRateLimitAt: at(-MIN).toISOString() });
+    expect(onOutcome(input("ok", { resource: "dm-conversations.head", page: recent })).resourceHold).toEqual({ action: "keep" });
+    const quiet = listHold({ until: at(-1).toISOString(), lastRateLimitAt: at(-LIST_RATE_LIMIT_LADDER_RESET_MS).toISOString() });
+    expect(onOutcome(input("ok", { resource: "dm-conversations.detail", page: quiet })).resourceHold)
+      .toEqual({ action: "clear", file: "dm-conversations" });
+  });
+
+  it("a breaker of the file stops more for longer: a list 429 keeps it, the breaker replaces a list hold", () => {
+    const breaker = pageState({
+      resourceHolds: { "dm-conversations": { until: at(20 * MIN).toISOString(), step: 1, since: NOW.toISOString() } },
+    });
+    const kept = onOutcome(input("rate_limit_list", { resource: "dm-conversations.find", httpStatus: 429, page: breaker }));
+    expect(kept.resourceHold).toEqual({ action: "keep" });
+    const keptHead = onOutcome(input("rate_limit_list", { resource: "dm-conversations.head", httpStatus: 429, page: breaker }));
+    expect(keptHead.resourceHold).toEqual({ action: "keep" });
+    expect(keptHead.work).toEqual({ action: "reopen", dueAt: at(20 * MIN), waitingReason: "resource_hold", waitingUntil: at(20 * MIN) });
+    const listInForce = listHold({ until: at(10_000).toISOString(), lastRateLimitAt: NOW.toISOString() });
+    const escalated = onOutcome(input("subject_failure", { resource: "dm-conversations.detail", recentFailedSubjects: 5, page: listInForce }));
+    expect(escalated.resourceHold).toEqual({ action: "set", file: "dm-conversations", until: at(30 * MIN), step: 1 });
+  });
+
+  it("pins the owner's list constants", () => {
+    expect(LIST_RATE_LIMIT_LADDER_MS).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000]);
+  });
+});
+
 describe("sync errors: auth and identity", () => {
   it("auth holds the page until new credentials and alerts at once", () => {
     const decision = onOutcome(input("auth", { httpStatus: 401 }));
@@ -421,7 +564,8 @@ describe("sync errors: resource breaker", () => {
     expect(catchup.resourceHold).toMatchObject({ action: "set", file: "dm-messages" });
     const holds = { "dm-messages": { until: at(MIN).toISOString(), step: 1, since: NOW.toISOString() } };
     expect(activeResourceHold(holds, "dm-messages.head", NOW)).toBeNull();
-    expect(activeResourceHold(holds, "dm-messages.catchup", NOW)).toEqual({ file: "dm-messages", until: at(MIN), step: 1 });
+    expect(activeResourceHold(holds, "dm-messages.catchup", NOW))
+      .toEqual({ file: "dm-messages", until: at(MIN), step: 1, kind: "breaker" });
     expect(activeResourceHold(holds, "dm-messages.catchup", at(MIN))).toBeNull();
   });
 });

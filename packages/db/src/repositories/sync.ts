@@ -606,6 +606,31 @@ export interface FanslyPurchaseHistoryCaptureRow {
 }
 
 /**
+ * The content ids the legacy purchase-history lane has captured on a page (any
+ * answer, either namespace) — the ones its discovery skips. Request parameters
+ * only: no body is read.
+ */
+export async function listFanslyPurchaseHistoryCapturedContentIds(
+  db: Database,
+  pageId: number,
+): Promise<string[]> {
+  const result = await db.execute<{ contentId: string }>(sql`
+    select distinct coalesce(
+             nullif(rp.request_params ->> 'accountMediaId', ''),
+             nullif(rp.request_params ->> 'accountMediaBundleId', '')
+           ) as "contentId"
+    from ${syncRawPayloads} rp
+    where rp.page_id = ${pageId}
+      and rp.endpoint = 'purchase_history'
+      and (
+        nullif(rp.request_params ->> 'accountMediaId', '') is not null
+        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
+      )
+  `);
+  return result.rows.map((row) => row.contentId);
+}
+
+/**
  * Returns the durable target-specific facts for local purchase-history
  * reconciliation. Capture alone prevents another provider request; the
  * runtime classifier decides from status + raw payload whether that fact is
