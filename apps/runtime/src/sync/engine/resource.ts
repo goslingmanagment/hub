@@ -291,11 +291,17 @@ export interface LocalApplyInput {
 }
 
 /** A standing walk's look re-run (`ResourceModule.dueAtLook`): how many
- *  subjects were due at the look and untouched since, and a few of them. */
+ *  subjects were due at the look and untouched since, a few of them, and how
+ *  many subjects its queue holds at all (null: the check did not pick, e.g.
+ *  a pass that has ended or a visit in flight). */
 export interface LookCheck {
   count: number;
   examples: string[];
+  queued: number | null;
 }
+
+/** A queue walk's queue at an instant (`ResourceModule.queueNextDueAt`). */
+export type QueueNextDue = { nextDueAt: Date | null } | { unjudgeable: string };
 
 export interface ShadowResult<C = unknown> {
   work: WorkOutcome<C>;
@@ -399,10 +405,11 @@ export interface ResourceModule<C = unknown> {
   dueAtLook?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<LookCheck>;
   /** Read-only, a subject-queue walk without a standing row (the shadow
    *  report, rule A1.floor-queue): the earliest instant from which the
-   *  shadow's driver asks for a walk of the page's queue as it stands at
-   *  `ctx.now` (in the past: a subject is due already); null when no subject
-   *  comes due without a new write. */
-  queueNextDueAt?(ctx: ShadowContext): Promise<Date | null>;
+   *  shadow's driver asks for a walk of the page's queue as it stood at
+   *  `ctx.now` (in the past: a subject is due already; null: no subject comes
+   *  due without a new write) — or why the queue at that instant cannot be
+   *  told from the rows as they stand now (a writer changed them since). */
+  queueNextDueAt?(ctx: ShadowContext): Promise<QueueNextDue>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
   /** Read-only: one legacy observation of a kind this resource owns through

@@ -460,7 +460,7 @@ const engagementModule: ResourceModule = {
   async dueAtLook(work, ctx) {
     const cursor = parseEngagementCursor(work.cursor);
     const pass = currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
-    if (pass.ended) return { count: 0, examples: [] };
+    if (pass.ended) return { count: 0, examples: [], queued: null };
     return dueAtLookOf(ctx.db, {
       pageId: ctx.pageId,
       plane: POST_ENGAGEMENT_QUEUE.plane,

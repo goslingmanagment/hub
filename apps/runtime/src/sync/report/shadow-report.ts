@@ -200,7 +200,7 @@ function demandLine(page: PageDemand): string {
     `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
       + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
     page.ceiling === "unknown"
-      ? `ceiling ${page.band.max}: UNKNOWN — no finished run yet and no estimate of ${page.unknownRunSize.join(", ")} (rule A1.rate)`
+      ? `ceiling ${page.band.max}: UNKNOWN — no finished run to size it and no assumed size of ${page.unknownRunSize.join(", ")} (rules A1.rate, A1.rate-assumed)`
       : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"}`
         + `${assumed.length === 0 ? "" : ` (on assumed sizes, no finished run yet: ${assumed.join(", ")}; rule A1.rate-assumed)`}`,
   ];
@@ -209,7 +209,7 @@ function demandLine(page: PageDemand): string {
   } else {
     const { counterparts } = page.floor;
     const listed = `${counterparts.scheduled.length === 0 ? "" : `; scheduled, first run not yet due (rule A1.floor-scheduled): ${counterparts.scheduled.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
-      + `${counterparts.idle.length === 0 ? "" : `; idle, nothing due on the page (rules A1.floor-queue, A1.floor-idle): ${counterparts.idle.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
+      + `${counterparts.idle.length === 0 ? "" : `; idle, nothing due on the page — looked on time, which subjects a due rule takes not verified while legacy reads first (rules A1.floor-queue, A1.floor-idle): ${counterparts.idle.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
       + `${counterparts.onDemand.length === 0 ? "" : `; on demand, none due on the page: ${counterparts.onDemand.map((entry) => entry.ref).join(", ")}`}`
       + `${counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`;
     parts.push(page.floor.holds === true

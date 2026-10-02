@@ -256,7 +256,7 @@ const walkModule: ResourceModule = {
   async dueAtLook(work, ctx) {
     const cursor = parsePostRepliesCursor(work.cursor);
     const pass = currentShadowPass(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS);
-    if (pass.ended) return { count: 0, examples: [] };
+    if (pass.ended) return { count: 0, examples: [], queued: null };
     const cycleDays = await rewalkCycleDays(ctx.settings);
     return dueAtLookOf(ctx.db, {
       pageId: ctx.pageId,

@@ -884,7 +884,7 @@ export const mediaStatsWalkModule: ResourceModule = {
     const cursor = parseMediaStatsWalkCursor(work.cursor);
     const visit = cursor.shadowVisit;
     // A visit in flight asks its next window: such a look reads, never waits.
-    if (visit !== null && visit.done < visit.steps) return { count: 0, examples: [] };
+    if (visit !== null && visit.done < visit.steps) return { count: 0, examples: [], queued: null };
     const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
     const tiers = mediaStatsOwnerTiers(ctx.page);
     return dueAtLookOf(ctx.db, {

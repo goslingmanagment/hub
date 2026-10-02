@@ -586,6 +586,29 @@ export async function readSyncPollPlacements(
   return result.rows.map((row) => ({ pageId: Number(row.pageId), resource: row.resource, createdAt: toRequiredDate(row.createdAt) }));
 }
 
+/** When each page's newest page-level work row (subject '') of a key closed
+ *  by `before` after at least one attempt: a run of the key finished (the
+ *  shadow report, rule A1.rate-assumed). Served by `sync_work_key_recent`
+ *  and `sync_attempts_work`. */
+export async function readSyncClosedRuns(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; resources: readonly string[]; before: Date },
+): Promise<Array<{ pageId: number; resource: string; closedAt: Date }>> {
+  if (input.pageIds.length === 0 || input.resources.length === 0) return [];
+  const result = await db.execute<{ pageId: string; resource: string; closedAt: Date | string }>(sql`
+    select w.page_id::text as "pageId", w.resource, max(w.closed_at) as "closedAt"
+      from sync_work w
+     where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = any(${textArrayParam(input.resources)})
+       and w.subject = ''
+       and w.closed_at <= ${input.before}::timestamptz
+       and exists (select 1 from sync_attempts a where a.work_id = w.id)
+     group by w.page_id, w.resource
+  `);
+  return result.rows.map((row) => ({ pageId: Number(row.pageId), resource: row.resource, closedAt: toRequiredDate(row.closedAt) }));
+}
+
 /** A work row of a key that was open at an instant, with its first attempt's
  *  admission (the shadow report's schedule of a key not run yet, rule
  *  A1.floor-scheduled). `dueAt` is the row's due time now: a read moves it. */

@@ -146,14 +146,18 @@ const LOOK_CHECK_EXAMPLES = 5;
  * subjects its own pick finds due at that instant (`pick`, in walk order, at
  * most `LOOK_CHECK_LIMIT`), less every subject a writer changed after it — a
  * subject legacy read, dirtied or seeded since stands as it does now, not as
- * the look saw it. Read-only.
+ * the look saw it — and the subjects its queue holds at all. Read-only.
  */
 export async function dueAtLookOf(
   db: Database,
   input: { pageId: number; plane: string; at: Date; pick: (limit: number) => Promise<ReadonlyArray<{ subjectRef: string }>> },
 ): Promise<LookCheck> {
+  const queuedRows = await db.execute<{ queued: number | string }>(sql`
+    select count(*) as queued from subject_refresh_state where page_id = ${input.pageId} and plane = ${input.plane}
+  `);
+  const queued = Number(queuedRows.rows[0]?.queued ?? 0);
   const picked = [...new Set((await input.pick(LOOK_CHECK_LIMIT)).map((subject) => subject.subjectRef))];
-  if (picked.length === 0) return { count: 0, examples: [] };
+  if (picked.length === 0) return { count: 0, examples: [], queued };
   const result = await db.execute<{ subjectRef: string }>(sql`
     select subject_ref as "subjectRef"
       from subject_refresh_state
@@ -164,5 +168,5 @@ export async function dueAtLookOf(
   `);
   const untouched = new Set(result.rows.map((row) => row.subjectRef));
   const due = picked.filter((ref) => untouched.has(ref));
-  return { count: due.length, examples: due.slice(0, LOOK_CHECK_EXAMPLES) };
+  return { count: due.length, examples: due.slice(0, LOOK_CHECK_EXAMPLES), queued };
 }

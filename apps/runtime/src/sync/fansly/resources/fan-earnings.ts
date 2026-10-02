@@ -20,6 +20,7 @@ import type {
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
+  QueueNextDue,
   RequestPlan,
   ResourceModule,
   ShadowResult,
@@ -229,20 +230,42 @@ export async function fanEarningsRosterFollowups(
 
 /**
  * When the transactions steps of the page next ask for a roster walk, the
- * queue as it stands at `at` (read-only; the shadow report, rule
+ * queue as it stood at `at` (read-only; the shadow report, rule
  * A1.floor-queue): the earliest instant `fanEarningsRosterFollowups` finds a
- * subject due — a mark or retry at its `next_due_at`, a spender of the page
- * never read at once, one read before at its last read + the roster age, each
- * no earlier than its open claim or retry hold. Shadow also keeps its pass
- * rhythm: while a pass runs, at once; within a day of the last pass, a mark
- * newer than it at its time and everything else when the day is over. Null:
- * no subject comes due without a new write.
+ * subject due — a mark or retry at its `next_due_at`, one read before at its
+ * last read + the roster age, each no earlier than its open claim or retry
+ * hold. Shadow also keeps its pass rhythm: while a pass runs, at once; within
+ * a day of the last pass, a mark newer than it at its time and everything else
+ * when the day is over. `nextDueAt` null: no subject comes due without a new
+ * write.
+ *
+ * The subject rows are read as they stand now, so the queue at `at` is told
+ * only while no writer has touched them since (`updated_at`, `last_visited_at`
+ * no later than `at`): a subject legacy read, marked or claimed after `at`
+ * leaves it `unjudgeable`. A spender never read is due at once since it was
+ * queued (its row's creation); one without a queue row since an instant
+ * nothing dates — `unjudgeable` too.
  */
 export async function fanEarningsRosterNextDueAt(
   db: Database,
   input: { pageId: number; at: Date; shadow: boolean; maxAgeMs?: number },
-): Promise<Date | null> {
+): Promise<QueueNextDue> {
   const at = input.at;
+  const changed = await db.execute<{ changed: number | string; newest: Date | string | null }>(sql`
+    select count(*) as changed, max(greatest(s.updated_at, s.last_visited_at)) as newest
+      from subject_refresh_state s
+     where s.page_id = ${input.pageId}
+       and s.plane in ('fan_earnings_lifetime', 'fan_earnings_monthly')
+       and (s.updated_at > ${at} or s.last_visited_at > ${at})
+  `);
+  const touched = Number(changed.rows[0]?.changed ?? 0);
+  if (touched > 0) {
+    const newest = changed.rows[0]?.newest;
+    return {
+      unjudgeable: `${touched} roster subject row${touched === 1 ? "" : "s"} changed after ${at.toISOString()}`
+        + `${newest ? ` (the newest ${new Date(newest).toISOString()})` : ""}: the queue as it stood then is not known`,
+    };
+  }
   let passClosedAt: Date | null = null;
   if (input.shadow) {
     const pass = await db.execute<{ open: boolean; closedAt: Date | string | null }>(sql`
@@ -251,7 +274,7 @@ export async function fanEarningsRosterNextDueAt(
        where page_id = ${input.pageId} and shadow and resource = ${FAN_EARNINGS_ROSTER_KEY} and created_at <= ${at}
     `);
     const row = pass.rows[0];
-    if (row?.open === true) return at;
+    if (row?.open === true) return { nextDueAt: at };
     const closedAt = row?.closedAt ? new Date(row.closedAt) : null;
     passClosedAt = closedAt !== null && at.getTime() - closedAt.getTime() < FAN_EARNINGS_SHADOW_PASS_EVERY_MS ? closedAt : null;
   }
@@ -267,9 +290,15 @@ export async function fanEarningsRosterNextDueAt(
        where pf.platform_account_id = ${input.pageId}
          and pf.total_creator_net_mills > 0
     ), subjects as (
-      -- Each spender of the page in both windows (never read: due at once).
+      -- Each spender of the page in both windows: read before, due at its
+      -- read + the roster age; never read, due at once — since it was queued
+      -- (its row's creation), or undated without a row.
       select s.next_due_at as marked,
-             coalesce(s.last_visited_at + make_interval(secs => ${ageMs / 1000}), '-infinity'::timestamptz) as aged,
+             case
+               when s.subject_ref is null then '-infinity'::timestamptz
+               when s.last_visited_at is null then s.created_at
+               else s.last_visited_at + make_interval(secs => ${ageMs / 1000})
+             end as aged,
              greatest(case when s.claim_token is not null then s.claim_expires_at end, s.retry_after_at) as held
         from roster r
        cross join planes p
@@ -298,10 +327,13 @@ export async function fanEarningsRosterNextDueAt(
     select min(due_at) as "dueAt" from due where due_at is not null
   `);
   const raw = result.rows[0]?.dueAt ?? null;
-  if (raw === null) return null;
+  if (raw === null) return { nextDueAt: null };
   const dueAt = raw instanceof Date ? raw : new Date(raw);
-  // '-infinity' (a spender never read): due at once.
-  return Number.isFinite(dueAt.getTime()) ? dueAt : at;
+  // '-infinity': a spender without a queue row, due at once since an instant
+  // nothing dates.
+  return Number.isFinite(dueAt.getTime())
+    ? { nextDueAt: dueAt }
+    : { unjudgeable: "a spender of the page without a queue row: due at once since it became a spender, which nothing dates" };
 }
 
 /** The page's open claim of one subject (the actor is its only claimant). */

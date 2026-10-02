@@ -449,10 +449,11 @@ const vaultModule: ResourceModule = {
     const fullEveryMs = vaultCadence(ctx.page).fullEveryMs;
     const day = fanslyUtcDayKey(ctx.now);
     const changed = await albumsChangedSince(ctx.db, ctx.pageId, ctx.now);
-    const due = (await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId))
+    const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
+    const due = albums
       .filter((album) => !changed.has(album.albumRef) && chooseVaultAlbum([album], cursor, day, fullEveryMs) !== null)
       .map((album) => album.albumRef);
-    return { count: due.length, examples: due.slice(0, 5) };
+    return { count: due.length, examples: due.slice(0, 5), queued: albums.length };
   },
 
   async plan(work, ctx): Promise<StepPlan> {
