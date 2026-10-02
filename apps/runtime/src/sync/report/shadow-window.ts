@@ -38,6 +38,8 @@ import { decodedReceiptsInWindow } from "../fansly/ws/money-frames.ts";
 import { routeReceiptsOffline } from "../fansly/ws/route-receipt.ts";
 import { FANSLY_PAYOUT_TRANSACTION_TYPE, FANSLY_TRANSACTION_STATUS_NEW } from "../fansly/ws/router.ts";
 import type { WsItem } from "../fansly/ws/decode.ts";
+import type { AppContext } from "../../bootstrap.ts";
+import { checkPurchaseAnnouncements, purchaseAnnouncementNote, type PurchaseAnnouncementCheck } from "./purchase-announcements.ts";
 
 // The shadow report, part A (design §3.12): the live one-hour window of all
 // pages in shadow. A1 demand against a computed expectation, A2 the legacy
@@ -124,6 +126,15 @@ const LEGACY_VOLUME_NOTES: Readonly<Record<string, string>> = {
   "sender:ai_fast_lane": "readers' fast lanes read the chat head the engine keeps fresh; no request of their own",
   "sender:targeted_backfill": "history is read only for history requests (none in shadow)",
 };
+/**
+ * Legacy streams a scheduled poll drives whose every engine counterpart only
+ * demand drives — the live part of that demand never in shadow (rule
+ * A2.demand-replaced): `stream:purchase_history` → `purchases.targets`, asked
+ * for by the socket's order frames and, live, by the transactions apply for
+ * every new PPV sale (the shadow transactions step names no target). Each is
+ * judged by what the poll read in the window (`checkPurchaseAnnouncements`).
+ */
+export const DEMAND_REPLACED_STREAMS: ReadonlySet<string> = new Set(["stream:purchase_history"]);
 /**
  * Legacy streams whose volume changed within the legacy week (measured on the
  * production journal): their rate is taken from the change on (rule
@@ -309,6 +320,25 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
     id: "A2.live-only",
     text: "A sender whose every registry key is live-only (the socket connect, the CDN download, the identity check) "
       + "is listed with its legacy volume and compared after the switch: it never runs in shadow (design §3.12).",
+  },
+  {
+    id: "A2.demand-replaced",
+    text: "A legacy stream a scheduled poll drives while its every registry key runs only on demand, the live part of "
+      + "that demand never in shadow — stream:purchase_history: legacy walks the order history of the PPV media its "
+      + "lane found since its last run (new ledger sales, chat pages) every 4 hours per page; purchases.targets has no "
+      + "schedule, a walk is asked for by a socket order frame and, on a live page, by the transactions apply for every "
+      + "new PPV sale (raw type 2010/2110 single, 2016/2116 bundle), which in shadow names no target (design §3.12, "
+      + "§5.6, §5.9) — is listed with its legacy volume and compared after the switch, like A2.live-only, once the "
+      + "report has read what the poll read in the window: every order in the bodies of the window's legacy captures "
+      + "of the stream (captured in the window or within 1 min after it, read through the payload seam) must be "
+      + "announced to the engine on its page — a PPV ledger row of the same content, buyer and second as the report "
+      + "reads the ledger, or a socket order frame with its order id received in the 7 days before the window or in "
+      + "it. A target read without an order (PPV media legacy found in a chat before any sale) needs no engine read: "
+      + "its sale's announcement walks it. An order neither announces — a purchase only the poll found — or a capture "
+      + "body the report cannot read leaves the stream unexplained. Why: legacy's poll exists to find sales; the "
+      + "engine hears of every sale and reads its target then, so the poll's volume has no counterpart in shadow by "
+      + "design, while a sale it alone found would be live coverage lost (production, 7 days to 2026-10-02: 66 orders "
+      + "read, every one announced by its ledger row and its socket frame; 416 targets answered empty).",
   },
 ];
 
@@ -786,11 +816,14 @@ export function isQueueWalk(spec: Pick<ResourceSpec, "subjectQueue" | "standing"
   return spec.subjectQueue === true && spec.standing === undefined;
 }
 
-export type LegacyBasis = "window" | "7d_rate" | "live_only";
+export type LegacyBasis = "window" | "7d_rate" | "live_only" | "demand_replaced";
 
 /**
- * A legacy stream's or sender's comparison basis (rules A2.rate, A2.live-only):
- * `live_only` when none of its keys runs in shadow; `7d_rate` when every key
+ * A legacy stream's or sender's comparison basis (rules A2.rate, A2.live-only,
+ * A2.demand-replaced): `live_only` when none of its keys runs in shadow;
+ * `demand_replaced` for a stream of `DEMAND_REPLACED_STREAMS` whose every key
+ * that runs in shadow recurs on no page by itself (no period, interval,
+ * re-check or cadence: demand alone asks for it); `7d_rate` when every key
  * that runs in shadow and recurs by itself does so less often than the window
  * on every page; else `window`.
  */
@@ -798,10 +831,15 @@ export function legacyComparisonBasis(
   specs: readonly ResourceSpec[],
   pages: ReadonlyArray<Pick<SyncPageRow, "registryOverrides">>,
   windowMs: number,
+  ref?: string,
 ): { basis: LegacyBasis; liveOnlyKeys: string[] } {
   const liveOnlyKeys = specs.filter((spec) => !runsIn(spec, true)).map((spec) => spec.key);
   const running = specs.filter((spec) => runsIn(spec, true));
   if (running.length === 0) return { basis: "live_only", liveOnlyKeys };
+  if (ref !== undefined && DEMAND_REPLACED_STREAMS.has(ref)
+    && pages.every((page) => running.every((spec) => (recurrenceMs(spec, page) ?? 0) === 0))) {
+    return { basis: "demand_replaced", liveOnlyKeys };
+  }
   const recurrences = pages.flatMap((page) => running.map((spec) => recurrenceMs(spec, page))).filter((ms): ms is number => ms !== null);
   return { basis: recurrences.length > 0 && recurrences.every((ms) => ms > windowMs) ? "7d_rate" : "window", liveOnlyKeys };
 }
@@ -819,8 +857,32 @@ export function legacyVolumeRow(input: {
   shadow: { window: number; history: ReadonlyArray<{ attempts: number; historyMs: number }> };
   note: string | null;
   regime: string | null;
+  /** `demand_replaced`: what the poll read in the window, judged (null: the
+   *  stream has no legacy attempt in the window, nothing to judge). */
+  announcements?: PurchaseAnnouncementCheck | null;
 }): LegacyVolumeRow {
   const round = (value: number) => Math.round(value * 100) / 100;
+  if (input.basis === "demand_replaced") {
+    const check = input.announcements ?? null;
+    return {
+      ref: input.ref,
+      shadowKeys: [...input.keys],
+      basis: "demand_replaced",
+      legacy: input.legacy.window,
+      shadow: input.shadow.window,
+      ratio: null,
+      note: check === null
+        ? "rule A2.demand-replaced: no legacy attempt in the window, nothing read to judge"
+        : purchaseAnnouncementNote(check),
+      // A window attempt with nothing judged is no explanation.
+      explained: check === null ? input.legacy.window === 0 : check.passes,
+      legacyFrom: null,
+      legacyRegime: null,
+      shadowHours: null,
+      liveOnlyKeys: [...input.liveOnlyKeys],
+      announcements: check,
+    };
+  }
   if (input.basis === "live_only") {
     return {
       ref: input.ref,
@@ -835,6 +897,7 @@ export function legacyVolumeRow(input: {
       legacyRegime: null,
       shadowHours: null,
       liveOnlyKeys: [...input.liveOnlyKeys],
+      announcements: null,
     };
   }
   let legacy = input.legacy.window;
@@ -863,6 +926,7 @@ export function legacyVolumeRow(input: {
     legacyRegime: input.basis === "7d_rate" ? input.regime : null,
     shadowHours,
     liveOnlyKeys: [...input.liveOnlyKeys],
+    announcements: null,
   };
 }
 
@@ -1301,6 +1365,9 @@ export interface ShadowWindowInput {
   /** The pages the report covers (all six in shadow for the acceptance). */
   pages: readonly SyncPageRow[];
   resolvePayload?: FanslyWsLivePayloadResolver;
+  /** The payload seam's logger for the legacy capture bodies (rule
+   *  A2.demand-replaced); absent: its warnings are dropped. */
+  logger?: AppContext["logger"];
   maxListed: number;
   /** The modules' read-only report checks (`estimateRunSteps`, `dueAtLook`,
    *  `queueNextDueAt`); absent or not implemented: the rule they serve does
@@ -1438,6 +1505,9 @@ export interface LegacyVolumeRow {
   /** `7d_rate`: the pages' mean shadow history in hours. */
   shadowHours: number | null;
   liveOnlyKeys: string[];
+  /** `demand_replaced`: the orders the poll read in the window against their
+   *  announcements (rule A2.demand-replaced); else null. */
+  announcements: PurchaseAnnouncementCheck | null;
 }
 
 export interface LiveDecision {
@@ -2106,6 +2176,9 @@ async function legacyVolume(
     observed: Map<number, Map<string, { class: string; attempts: number }>>;
     registry?: Pick<EngineRegistry, "module">;
     settings?: SettingsSource;
+    maxListed: number;
+    resolvePayload?: FanslyWsLivePayloadResolver;
+    logger?: AppContext["logger"];
   },
 ): Promise<LegacyVolume> {
   const pageIds = input.pages.map((page) => page.pageId);
@@ -2116,7 +2189,7 @@ async function legacyVolume(
   for (const spec of FANSLY_RESOURCE_SPECS) {
     for (const ref of spec.legacy) specsByRef.set(refKey(ref), [...(specsByRef.get(refKey(ref)) ?? []), spec]);
   }
-  const bases = new Map([...specsByRef].map(([ref, specs]) => [ref, legacyComparisonBasis(specs, input.pages, windowMs)]));
+  const bases = new Map([...specsByRef].map(([ref, specs]) => [ref, legacyComparisonBasis(specs, input.pages, windowMs, ref)]));
   const rateFromMs = (ref: string) => Math.max(weekFromMs, LEGACY_REGIME_SINCE[ref]?.since.getTime() ?? weekFromMs);
 
   const inWindow = await countLegacyFanslyAttempts(db, { pageIds, from: input.window.start, to: input.window.end });
@@ -2158,6 +2231,17 @@ async function legacyVolume(
       return [{ attempts, historyMs: endMs - from.getTime() }];
     });
     const regime = LEGACY_REGIME_SINCE[ref];
+    const legacyWindow = legacyOf(inWindow, ref);
+    // Rule A2.demand-replaced: what the poll read in the window, judged.
+    const announcements = basis === "demand_replaced" && legacyWindow > 0
+      ? await checkPurchaseAnnouncements(db, {
+        pages: input.pages,
+        window: input.window,
+        maxListed: input.maxListed,
+        ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
+        ...(input.logger === undefined ? {} : { logger: input.logger }),
+      })
+      : null;
     rows.push(legacyVolumeRow({
       ref,
       keys,
@@ -2165,12 +2249,13 @@ async function legacyVolume(
       liveOnlyKeys,
       windowMs,
       legacy: {
-        window: legacyOf(inWindow, ref),
+        window: legacyWindow,
         rate: rate === null ? null : { attempts: legacyOf(rate, ref), from: new Date(fromMs), ms: endMs - fromMs },
       },
       shadow: { window: shadowWindow, history },
       note: LEGACY_VOLUME_NOTES[ref] ?? null,
       regime: regime !== undefined && regime.since.getTime() > weekFromMs ? `from ${regime.since.toISOString()}: ${regime.why}` : null,
+      announcements,
     }));
     for (const pageId of pageIds) {
       byPage.get(pageId)!.set(ref, legacyOf(rate ?? inWindow, ref, pageId));
@@ -2376,7 +2461,15 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
     ...(input.registry === undefined ? {} : { registry: input.registry }),
     ...(input.settings === undefined ? {} : { settings: input.settings }),
   };
-  const legacy = await legacyVolume(db, { pages: input.pages, window: input.window, observed, ...checks });
+  const legacy = await legacyVolume(db, {
+    pages: input.pages,
+    window: input.window,
+    observed,
+    maxListed: input.maxListed,
+    ...resolve,
+    ...(input.logger === undefined ? {} : { logger: input.logger }),
+    ...checks,
+  });
 
   const runFacts = await readRunFacts(db, { pages: input.pages, window: input.window, firstShadow, ...checks });
   const demand = input.pages.map((page) => demandOfPage(page, {

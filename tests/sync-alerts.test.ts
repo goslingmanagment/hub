@@ -26,8 +26,10 @@ import { TIMELINE_PAGE_ESTIMATE } from "../apps/runtime/src/sync/fansly/resource
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 import { routeThreadAt } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
+import type { PurchaseAnnouncementCheck } from "../apps/runtime/src/sync/report/purchase-announcements.ts";
 import { REPLAY_EXCUSED_REASONS, scoreReplayKind } from "../apps/runtime/src/sync/report/shadow-journal.ts";
 import {
+  DEMAND_REPLACED_STREAMS,
   demandOfPage,
   isOneTimeWalk,
   judgePollRuns,
@@ -559,7 +561,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
       "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
       "A1.poll-schedule",
-      "A2.rate", "A2.legacy-regime", "A2.live-only",
+      "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
     ]);
     expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A1.ceiling")!.text).toContain("at most 100 an hour");
     for (const ref of Object.keys(LEGACY_REGIME_SINCE)) {
@@ -935,7 +937,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
   const pages = Array.from({ length: 6 }, () => ({ registryOverrides: {} as Record<string, unknown> }));
   const specsOf = (ref: string) => FANSLY_RESOURCE_SPECS.filter((entry) => entry.legacy.some((legacy) =>
     ("stream" in legacy ? `stream:${legacy.stream}` : `sender:${legacy.sender}`) === ref));
-  const basis = (ref: string, on = pages) => legacyComparisonBasis(specsOf(ref), on, HOUR).basis;
+  const basis = (ref: string, on = pages) => legacyComparisonBasis(specsOf(ref), on, HOUR, ref).basis;
 
   it("compares a stream as a rate when every key that runs in shadow recurs less often than the window", () => {
     for (const ref of [
@@ -944,9 +946,16 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     ]) expect([ref, basis(ref)]).toEqual([ref, "7d_rate"]);
     for (const ref of [
       "stream:light", "stream:transactions", "stream:dm_messages", "stream:dm_conversations", "stream:followers",
-      "stream:purchase_history", "sender:ws_hint", "sender:account_me_api",
+      "sender:ws_hint", "sender:account_me_api",
     ]) expect([ref, basis(ref)]).toEqual([ref, "window"]);
     for (const ref of ["sender:media_download", "sender:ws_connect", "sender:binding_preflight"]) expect([ref, basis(ref)]).toEqual([ref, "live_only"]);
+    // Rule A2.demand-replaced: legacy's scheduled purchase poll against a key only demand drives.
+    expect(DEMAND_REPLACED_STREAMS).toEqual(new Set(["stream:purchase_history"]));
+    expect(basis("stream:purchase_history")).toBe("demand_replaced");
+    // Without its ref (a caller that names no stream) the stream is compared on the window as before.
+    expect(legacyComparisonBasis(specsOf("stream:purchase_history"), pages, HOUR).basis).toBe("window");
+    // Other demand-driven streams are never exempted by it.
+    expect(legacyComparisonBasis(specsOf("stream:dm_messages"), pages, HOUR, "stream:dm_messages").basis).toBe("window");
     // A page that polls the stats hourly puts the stream back on the window.
     expect(basis("stream:stats_snapshot", [...pages, { registryOverrides: { "stats.daily": { everyMs: HOUR } } }])).toBe("window");
   });
@@ -976,6 +985,32 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
       ref: "sender:media_download", keys, basis: "live_only", liveOnlyKeys: keys, windowMs: HOUR,
       legacy: { window: 5, rate: null }, shadow: { window: 0, history: [] }, note: null, regime: null,
     })).toMatchObject({ basis: "live_only", legacy: 5, shadow: 0, ratio: null, explained: true, note: expect.stringContaining("media-download.fetch") });
+  });
+
+  it("lists the legacy purchase poll with its volume when every order it read is announced; an order only it found leaves it unexplained (rule A2.demand-replaced)", () => {
+    const keys = specsOf("stream:purchase_history").map((entry) => entry.key);
+    const row = (legacyWindow: number, announcements: PurchaseAnnouncementCheck | null) => legacyVolumeRow({
+      ref: "stream:purchase_history", keys, basis: "demand_replaced", liveOnlyKeys: [], windowMs: HOUR,
+      legacy: { window: legacyWindow, rate: null }, shadow: { window: 0, history: [] }, note: null, regime: null, announcements,
+    });
+    const check = (overrides: Partial<PurchaseAnnouncementCheck> = {}): PurchaseAnnouncementCheck => ({
+      captures: 3, targets: 3, targetsWithOrders: 0, orders: 0, ledger: 0, socketOnly: 0,
+      unannounced: [], unannouncedCount: 0, unreadable: [], passes: true, ...overrides,
+    });
+    // Production, 2026-10-02 17:42–18:42: lora-1's poll read three empty targets.
+    expect(row(3, check())).toMatchObject({
+      basis: "demand_replaced", legacy: 3, shadow: 0, ratio: null, explained: true,
+      note: expect.stringMatching(/^rule A2\.demand-replaced: purchases\.targets runs on demand only .*; the poll read 3 targets in 3 captures/),
+      announcements: { passes: true },
+    });
+    const unannounced = check({
+      targetsWithOrders: 1, orders: 1, passes: false, unannouncedCount: 1,
+      unannounced: [{ page: "lora-1", pageId: 1, target: "media:5", orderId: "6", orderedAt: null }],
+    });
+    expect(row(3, unannounced)).toMatchObject({ explained: false, note: expect.stringContaining("1 NOT announced, a purchase only the poll found (lora-1 media:5 order 6)") });
+    // Legacy attempts with nothing judged are no explanation; no attempt is nothing to explain.
+    expect(row(3, null)).toMatchObject({ explained: false });
+    expect(row(0, null)).toMatchObject({ explained: true, announcements: null });
   });
 
   it("the floor's counterparts: a stream the page's own shadow never served lacks one; live-only and history requests are listed apart", () => {

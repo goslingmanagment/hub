@@ -6,6 +6,7 @@ import type { SyncContext } from "../context.ts";
 import type { SettingsSource } from "../engine/ports.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { ScanGovernor, type ScanPacing } from "../fansly/lib/chain-rebuild.ts";
+import { purchaseAnnouncementSummary } from "./purchase-announcements.ts";
 import {
   backtestEta,
   checkChains,
@@ -91,8 +92,12 @@ export interface ShadowReport {
 }
 
 /** Part A inside one read-only, repeatable-read transaction. */
-async function windowPart(db: Database, input: ShadowReportInput, window: { start: Date; end: Date }): Promise<ShadowWindowReport> {
-  return db.transaction(async (raw) => {
+async function windowPart(
+  ctx: Pick<SyncContext, "db" | "logger">,
+  input: ShadowReportInput,
+  window: { start: Date; end: Date },
+): Promise<ShadowWindowReport> {
+  return ctx.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await tx.execute(sql`set transaction isolation level repeatable read, read only`);
     return reportShadowWindow(tx, {
@@ -100,6 +105,7 @@ async function windowPart(db: Database, input: ShadowReportInput, window: { star
       pages: input.pages,
       maxListed: input.maxListed,
       registry: input.registry,
+      logger: ctx.logger,
       ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
       ...(input.settings === undefined ? {} : { settings: input.settings }),
     });
@@ -119,7 +125,7 @@ function mark(value: boolean | null): string {
 }
 
 export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">, input: ShadowReportInput): Promise<ShadowReport> {
-  const window = input.window === null ? null : await windowPart(ctx.db, input, input.window);
+  const window = input.window === null ? null : await windowPart(ctx, input, input.window);
 
   let journal: ShadowReport["journal"] = null;
   if (input.journal !== null) {
@@ -252,10 +258,16 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     for (const rule of window.rules) lines.push(`Rule ${rule.id}: ${rule.text}`);
     for (const page of window.demand) lines.push(demandLine(page));
     const unexplained = window.legacy.filter((row) => !row.explained).map((row) => `${row.ref} (${row.basis}: legacy ${row.legacy}, `
-      + `shadow ${row.shadow}${row.ratio === null ? "" : `, ratio ${row.ratio.toFixed(2)}`})`);
+      + `shadow ${row.shadow}${row.ratio === null ? "" : `, ratio ${row.ratio.toFixed(2)}`})`
+      + `${row.basis === "demand_replaced" && row.note !== null ? ` — ${row.note}` : ""}`);
     const liveOnly = window.legacy.filter((row) => row.basis === "live_only" && row.legacy > 0).map((row) => `${row.ref} ${row.legacy}`);
+    // Rule A2.demand-replaced: listed with the legacy volume and what the poll read.
+    const demandReplaced = window.legacy.filter((row) => row.basis === "demand_replaced" && row.explained && row.legacy > 0)
+      .map((row) => `${row.ref} ${row.legacy} (shadow ${row.shadow}; `
+        + `${row.announcements === null ? "no legacy attempt to judge" : purchaseAnnouncementSummary(row.announcements)})`);
     lines.push(`A2 legacy volume: ${unexplained.length === 0 ? "every stream and sender explained" : `unexplained: ${unexplained.join(", ")}`}`
-      + `${liveOnly.length === 0 ? "" : `; live-only, not in shadow (rule A2.live-only): ${liveOnly.join(", ")}`}`);
+      + `${liveOnly.length === 0 ? "" : `; live-only, not in shadow (rule A2.live-only): ${liveOnly.join(", ")}`}`
+      + `${demandReplaced.length === 0 ? "" : `; demand-replaced, compared after the switch (rule A2.demand-replaced): ${demandReplaced.join(", ")}`}`);
     const { fanMessages, transactions, offline } = window.livePath;
     lines.push(`A3 fan messages: ${fanMessages.frames} frames to read (${fanMessages.withoutShadowAdmission} without a shadow read, `
       + `${fanMessages.notRead} needing none), shadow p95 ${seconds(fanMessages.shadowAdmissionLagMs?.p95)} `
