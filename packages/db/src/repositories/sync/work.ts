@@ -766,6 +766,83 @@ export async function listOpenWorkSubjects(
   return new Set(result.rows.map((row) => row.subject));
 }
 
+/** The open (or running, or quarantined) row of one key in this journal, if
+ *  any — plain read, no lock (`lockWorkRows` takes it before a write). */
+export async function getOpenWorkForKey(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subject: string },
+): Promise<SyncWorkRow | null> {
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns}
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.subject = ${input.subject}
+       and w.state in ('open', 'running', 'quarantined')
+  `);
+  const row = result.rows[0];
+  return row ? normalizeWorkRow(row) : null;
+}
+
+/**
+ * Drop demanded message ids a step resolved (found, or settled not found)
+ * from the row's `demand.messageIds` (design §5.4 step 10). Correct whatever
+ * the revision: an id a read showed is confirmed, even if its signal came
+ * again meanwhile. The revision is unchanged (resolution is not demand).
+ * The caller holds the row (`lockWorkRows`), after its event appends.
+ */
+export async function resolveWorkDemandMessageIds(
+  db: Database,
+  input: { workId: number; generation: bigint; messageIds: readonly string[] },
+): Promise<string[] | null> {
+  const ids = [...new Set(input.messageIds)];
+  if (ids.length === 0) return null;
+  const result = await db.execute<{ messageIds: unknown }>(sql`
+    update sync_work w
+       set demand = jsonb_set(coalesce(w.demand, '{}'::jsonb), '{messageIds}', coalesce((
+             select jsonb_agg(e.v order by e.ord)
+               from jsonb_array_elements(coalesce(w.demand->'messageIds', '[]'::jsonb)) with ordinality as e(v, ord)
+              where not (e.v #>> '{}' = any(${textArrayParam(ids)}))
+           ), '[]'::jsonb)),
+           owner_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where w.id = ${input.workId}
+       and w.state in ('open', 'running')
+    returning w.demand->'messageIds' as "messageIds"
+  `);
+  const row = result.rows[0];
+  if (!row) return null;
+  return Array.isArray(row.messageIds) ? row.messageIds.filter((id): id is string => typeof id === "string") : [];
+}
+
+/**
+ * Close an OPEN row whose goal another step reached (a `dm-messages.head`
+ * that confirmed past a `.catchup` target, design §5.4 step 10). Never a
+ * running row (its step is in flight or its apply deferred) nor a
+ * quarantined one. The caller holds the row (`lockWorkRows`). False: not open.
+ */
+export async function closeOpenWork(
+  db: Database,
+  input: { workId: number; generation: bigint; closeReason: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_work
+       set state = 'done',
+           closed_at = clock_timestamp(),
+           close_reason = ${input.closeReason},
+           applied_revision = demand_revision,
+           secret_params = null,
+           waiting_reason = null,
+           waiting_until = null,
+           owner_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where id = ${input.workId}
+       and state = 'open'
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** Lock several work rows in id order (the lock order of §3.7). */
 export async function lockWorkRows(db: Database, ids: readonly number[]): Promise<SyncWorkRow[]> {
   if (ids.length === 0) return [];

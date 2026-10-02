@@ -975,7 +975,7 @@ export async function apply(
         observation: { id: attempt.observationId!, receivedAt: attempt.observationReceivedAt! },
         fenced,
       });
-      if (d.canonicalize !== undefined) {
+      if (d.canonicalize !== undefined && result.canonicalized !== true) {
         await d.canonicalize(tx, {
           pageId: d.pageId,
           ownRef: d.ownRef,

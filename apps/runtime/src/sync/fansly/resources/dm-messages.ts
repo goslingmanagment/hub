@@ -1,0 +1,969 @@
+import {
+  applyMessageEventsToArchive,
+  clearConversationSyncHealth,
+  closeOpenWork,
+  confirmDmLiveMessagesInTransaction,
+  getOpenWorkForKey,
+  isDmArchiveScopeFenced,
+  listDomainEventsByDedupKeys,
+  listPageDmThreadListStates,
+  listStoredDmMessagesForReplay,
+  listUnrecordedMediaOrders,
+  lockWorkRows,
+  readThreadChain,
+  readThreadStoredFacts,
+  resolveWorkDemandMessageIds,
+  syncLegacyThreadSummary,
+  tryAcquireDmArchiveWriterFenceLock,
+  upsertPageDmMessages,
+  writeThreadChain,
+  type Database,
+  type PageDmThreadListState,
+  type SidecarOrderKey,
+  type SyncWorkRow,
+} from "@agency_hub_core/db";
+import {
+  FANSLY_MESSAGES_PAGE_LIMIT,
+  parseFanslyMessagesPage,
+  type FanslyMessage,
+  type FanslyMessagesPage,
+} from "@agency_hub_core/fansly";
+import { compareFanslySnowflakeIds, getFanslyDmMessageSyncExcludedReason } from "@agency_hub_core/shared";
+
+import { familyForObservation } from "../../../services/canonicalize/index.ts";
+import type { CanonicalEventDraft } from "../../../services/canonicalize/types.ts";
+import { normalizeFanslyDmMessages } from "../../../services/sync/fansly-dm-messages.ts";
+import { materializeFanslyDmTipContexts } from "../../../services/sync/fansly-tip-contexts.ts";
+import { replaceJournalLoneSurrogates } from "../../../services/sync/journal-lone-surrogates.ts";
+import { normalizeFanslyTimestamp } from "../../../services/sync/shared.ts";
+import { canonicalizeObservationInTransaction } from "../../engine/canonicalize.ts";
+import { ApplyDeferred, ApplyQuarantine, FanslyContractViolationError } from "../../engine/commit.ts";
+import type {
+  ApplyInput,
+  ApplyResult,
+  DemandSignal,
+  ReplayContext,
+  ReplayObservation,
+  ReplayVerdict,
+  RequestPlan,
+  ResourceModule,
+  ShadowResult,
+  StepPlan,
+  WorkOutcome,
+} from "../../engine/resource.ts";
+import {
+  chainPageNeedsStoredFacts,
+  emptyChain,
+  foldChainPage,
+  sameMessageId,
+  snowflakeMs,
+  validateChainPage,
+  type ChainAnomalyReason,
+  type ChainPage,
+  type ChainVerdict,
+  type Segment,
+  type ThreadChain,
+} from "../lib/chain.ts";
+import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
+import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";
+
+// `dm-messages.head`, `.catchup`, `.history` (plan §6.2, §7 p.4, §4; design
+// §5.4): one `/message?groupId=<g>&limit=25[&before=<id>]` page a step,
+// journaled verbatim as `dm_messages` (never CDN-stripped: the AI describer
+// downloads from those URLs); the request parameters are coverage evidence
+// in `sync_attempts.request` (D1).
+//
+// - head (urgent; WS `message_created`, the socket-down list, repair): the
+//   chat's head, then `before` reads while a staged walk (§8.1: a head page
+//   whose every id is above the confirmed head) has not met the chain. A
+//   demanded id the walk shows is confirmed; one newer than the vendor's head
+//   is retried after 15 s and 60 s, then settled `not_found` (plan §7 p.4).
+// - catchup (planned; a list head newer than what the reads reached): the
+//   same reads; closed without a request once the chain's head reached its
+//   target, and by any `.head` walk that reaches it.
+// - history (requests class; only from a history request, I12): `before =
+//   contiguous_oldest_id` down to the EMPTY page that proves the start
+//   (owner decision №3); a thread without a chain reads its head first.
+//   Whether the attached request items are satisfied is the history hook's
+//   (S2-11a, `onThreadChainChanged`).
+//
+// The apply (one transaction, the commit holds the erasure fence): the page
+// contract → the chain fold (pure, before any write; an anomaly the design
+// sends to review quarantines the step with nothing written) → per-message
+// erasure fence → `page_dm_messages` → tip contexts → the chain
+// (`writeThreadChain`, the only chain writer, I9) and the legacy coverage
+// columns (`syncLegacyThreadSummary`, engine-owned pages only) → sync health →
+// the overlay confirmation → the inline canonicalization and the archive feed
+// by dedup keys → the work rows (demand ids resolved, a covered `.catchup`
+// closed). Excluded and unbound threads are never read (decision №8 has its
+// own probe).
+
+export type DmMessagesVariant = "head" | "catchup" | "history";
+
+const HEAD_KEY = "dm-messages.head";
+const CATCHUP_KEY = "dm-messages.catchup";
+const HISTORY_KEY = "dm-messages.history";
+
+const KEY_OF: Readonly<Record<DmMessagesVariant, string>> = {
+  head: HEAD_KEY,
+  catchup: CATCHUP_KEY,
+  history: HISTORY_KEY,
+};
+
+const LIMIT = FANSLY_MESSAGES_PAGE_LIMIT;
+
+/** A demanded id the vendor's head does not show yet is read again after
+ *  these delays, then settled `not_found` (plan §7 p.4: 15 s, 60 s). */
+export const DM_HEAD_NOT_FOUND_RETRY_MS: readonly number[] = [15_000, 60_000];
+
+/** Chain anomalies the design sends to review (§8.1): the step is quarantined
+ *  with its raw page kept and nothing folded or written. `head_regressed`
+ *  is not among them: the newest messages vanished (a deletion), the messages
+ *  still apply and the chain stays as it is. */
+const QUARANTINED_ANOMALIES: ReadonlySet<ChainAnomalyReason> = new Set([
+  "empty_head_with_chain",
+  "empty_head_with_stored",
+  "old_chain_vanished_with_stored",
+  "messages_below_proven_end",
+]);
+
+/** Verdicts whose fold moved the chain (written by `writeThreadChain`). */
+const CHAIN_WRITING_VERDICTS: ReadonlySet<ChainVerdict["kind"]> = new Set([
+  "started",
+  "head_unchanged",
+  "joined",
+  "extended_down",
+  "completed",
+]);
+
+const DECIMAL_ID = /^[0-9]{1,30}$/;
+
+function recordOf(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function decimalId(value: unknown): string | null {
+  return typeof value === "string" && DECIMAL_ID.test(value) ? value : null;
+}
+
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Snowflake order; ids that are not plain decimals never compare above. */
+function above(left: string, right: string): boolean {
+  return compareFanslySnowflakeIds(left, right) === 1;
+}
+
+function atMost(left: string, right: string): boolean {
+  const order = compareFanslySnowflakeIds(left, right);
+  return order === -1 || order === 0;
+}
+
+function maxId(ids: readonly string[]): string | null {
+  let best: string | null = null;
+  for (const id of ids) {
+    if (!DECIMAL_ID.test(id)) continue;
+    if (best === null || above(id, best)) best = id;
+  }
+  return best;
+}
+
+function bump(counters: Record<string, number>, name: string, by = 1): void {
+  if (by > 0) counters[name] = (counters[name] ?? 0) + by;
+}
+
+function messagesRequest(groupId: string, before: string | null): RequestPlan<"messages.page"> {
+  return { spec: "messages.page", params: { groupId, before } };
+}
+
+function requestedParams(request: RequestPlan): { groupId: string | null; before: string | null } {
+  const params = recordOf(request.params);
+  return {
+    groupId: typeof params.groupId === "string" ? params.groupId : null,
+    before: typeof params.before === "string" ? params.before : null,
+  };
+}
+
+// ── cursor ──────────────────────────────────────────────────────────────────
+
+export interface DmMessagesCursor {
+  /** A staged head walk (§8.1) read down until it meets the chain. */
+  segment: Segment | null;
+  /** Pages the current walk has read (a walk: from a head read to its end). */
+  walkPages: number;
+  /** Demanded ids a finished walk did not show yet: misses so far. */
+  misses: Record<string, number>;
+  shadow: ShadowWalkProgress | null;
+  /** The receipt of the last finished walk. */
+  last: Record<string, unknown> | null;
+}
+
+function parseSegment(value: unknown): Segment | null {
+  const record = recordOf(value);
+  const headId = decimalId(record.headId);
+  const oldestId = decimalId(record.oldestId);
+  const headAt = typeof record.headAt === "string" ? new Date(record.headAt) : null;
+  const segmentCount = count(record.count);
+  const baseHeadId = record.baseHeadId === null ? null : decimalId(record.baseHeadId);
+  if (headId === null || oldestId === null || headAt === null || Number.isNaN(headAt.getTime()) || segmentCount === null) {
+    return null;
+  }
+  if (record.baseHeadId !== null && baseHeadId === null) return null;
+  const oldestCreatedAtMs = typeof record.oldestCreatedAtMs === "number" && Number.isFinite(record.oldestCreatedAtMs)
+    ? record.oldestCreatedAtMs
+    : null;
+  return { baseHeadId, headId, headAt, oldestId, oldestCreatedAtMs, count: segmentCount };
+}
+
+function segmentJson(segment: Segment | null): Record<string, unknown> | null {
+  return segment === null ? null : { ...segment, headAt: segment.headAt.toISOString() };
+}
+
+export function parseDmMessagesCursor(value: unknown): DmMessagesCursor {
+  const record = recordOf(value);
+  const misses: Record<string, number> = {};
+  for (const [id, n] of Object.entries(recordOf(record.misses))) {
+    const misses_ = count(n);
+    if (DECIMAL_ID.test(id) && misses_ !== null && misses_ > 0) misses[id] = misses_;
+  }
+  const shadow = recordOf(record.shadow);
+  const steps = count(shadow.steps);
+  const done = count(shadow.done);
+  return {
+    segment: parseSegment(record.segment),
+    walkPages: count(record.walkPages) ?? 0,
+    misses,
+    shadow: steps === null || done === null ? null : { steps, done },
+    last: typeof record.last === "object" && record.last !== null && !Array.isArray(record.last)
+      ? record.last as Record<string, unknown>
+      : null,
+  };
+}
+
+function cursorJson(cursor: DmMessagesCursor): Record<string, unknown> {
+  return {
+    segment: segmentJson(cursor.segment),
+    walkPages: cursor.walkPages,
+    misses: cursor.misses,
+    shadow: cursor.shadow,
+    last: cursor.last,
+  };
+}
+
+/** The staged walk still continues the chain (its base is the chain's head). */
+function liveSegment(segment: Segment | null, chain: ThreadChain): Segment | null {
+  return segment !== null && sameMessageId(segment.baseHeadId, chain.headId) ? segment : null;
+}
+
+// ── the thread ──────────────────────────────────────────────────────────────
+
+interface DmThread {
+  state: PageDmThreadListState;
+  chain: ThreadChain;
+}
+
+async function readThread(db: Database, pageId: number, groupId: string): Promise<DmThread | null> {
+  const [state] = await listPageDmThreadListStates(db, { platformAccountId: pageId, platformConversationIds: [groupId] });
+  if (state === undefined) return null;
+  const chain = await readThreadChain(db, state.id);
+  return { state, chain: chain?.chain ?? emptyChain() };
+}
+
+type ThreadSkip = "thread_missing" | "unbound" | "excluded";
+
+/** Threads the engine never reads (design §5.4): gone, unbound, excluded. */
+function threadSkip(thread: DmThread | null): ThreadSkip | null {
+  if (thread === null) return "thread_missing";
+  if (getFanslyDmMessageSyncExcludedReason(thread.state.metadata) !== null) return "excluded";
+  if (thread.state.fanId === null) return "unbound";
+  return null;
+}
+
+// ── plan ────────────────────────────────────────────────────────────────────
+
+/** Every demanded id is at or below the confirmed head: a read would add
+ *  nothing (an overflowed list may hide newer ids). */
+function demandWithinChain(demand: SyncWorkRow["demand"], chain: ThreadChain): boolean {
+  if (demand.overflow || demand.messageIds.length === 0 || chain.headId === null) return false;
+  return demand.messageIds.every((id) => atMost(id, chain.headId!));
+}
+
+async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
+  db: Database; pageId: number; shadow: boolean; now: Date;
+}): Promise<StepPlan> {
+  const groupId = work.subject;
+  if (!DECIMAL_ID.test(groupId)) return { kind: "quarantine", reason: "dm_messages_subject_invalid" };
+  const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
+  if (facts === null) return { kind: "quarantine", reason: "page_missing" };
+  if (facts.externalId === null) return waitForPageIdentity(KEY_OF[variant], ctx.shadow, ctx.now);
+  const thread = await readThread(ctx.db, ctx.pageId, groupId);
+  const skip = threadSkip(thread);
+  if (skip !== null || thread === null) return { kind: "done", reason: skip ?? "thread_missing" };
+  const segment = liveSegment(parseDmMessagesCursor(work.cursor).segment, thread.chain);
+  switch (variant) {
+    case "head":
+      if (segment === null && demandWithinChain(work.demand, thread.chain)) return { kind: "done", reason: "already_confirmed" };
+      return { kind: "request", request: messagesRequest(groupId, segment?.oldestId ?? null) };
+    case "catchup":
+      // Any read that reached the target covered it (design §5.4).
+      if (segment === null && demandWithinChain(work.demand, thread.chain)) return { kind: "done", reason: "covered" };
+      return { kind: "request", request: messagesRequest(groupId, segment?.oldestId ?? null) };
+    case "history": {
+      if (thread.chain.state === "complete") return { kind: "done", reason: "history_complete" };
+      const before = segment?.oldestId ?? (thread.chain.state === "partial" ? thread.chain.oldestId : null);
+      return { kind: "request", request: messagesRequest(groupId, before) };
+    }
+  }
+}
+
+// ── demand ──────────────────────────────────────────────────────────────────
+
+export interface DemandResolutionInput {
+  variant: DmMessagesVariant;
+  /** `demand.messageIds` of the work row now. */
+  demandIds: readonly string[];
+  /** This page's ids. */
+  pageIds: readonly string[];
+  /** The walk ended with this page (no staged segment, no re-read). */
+  walkDone: boolean;
+  /** The newest id the walk's head read showed (null: an empty head). */
+  restHeadId: string | null;
+  /** The chain after the fold. */
+  chain: ThreadChain;
+  misses: Readonly<Record<string, number>>;
+  /** The read's send instant (an id created later cannot be on its page). */
+  sentAtMs: number | null;
+}
+
+export interface DemandResolution {
+  /** Shown by this page: confirmed against what the apply wrote. */
+  found: string[];
+  /** Within the confirmed chain yet never shown (deleted, or never there):
+   *  `not_found` unless a stored copy exists. */
+  covered: string[];
+  /** Missed after every retry: `not_found`. */
+  expired: string[];
+  /** Below what the chain proves, or not the confirmation's business
+   *  (a list target): no verdict here — the passive parity pass decides. */
+  dropped: string[];
+  /** Still awaited (the walk goes on, or the vendor's head is behind). */
+  pending: string[];
+  /** The pending ids created after the read was sent: newer demand than the
+   *  read served (its revision is satisfied without them, I11). */
+  late: string[];
+  misses: Record<string, number>;
+  /** When the vendor's head is read again for the pending ids; null when
+   *  nothing waits on it. */
+  retryInMs: number | null;
+}
+
+/**
+ * What one read did for the ids the work was demanded for (design §5.4 step
+ * 10, plan §7 p.4). While a walk goes on, only the ids it showed resolve.
+ * When it ends: a `.head` id newer than the vendor's head waits for the next
+ * read (15 s, then 60 s, then `not_found`; an id created after the read was
+ * sent is not a miss); one inside the confirmed chain that no page showed is
+ * covered; one below the chain is left to the passive pass. A `.catchup` or
+ * `.history` read resolves its ids when its walk ends.
+ */
+export function resolveDemand(input: DemandResolutionInput): DemandResolution {
+  const onPage = new Set(input.pageIds);
+  const resolution: DemandResolution = {
+    found: [], covered: [], expired: [], dropped: [], pending: [], late: [], misses: {}, retryInMs: null,
+  };
+  const head = input.chain.headId;
+  const oldest = input.chain.oldestId;
+  for (const id of new Set(input.demandIds)) {
+    if (onPage.has(id)) {
+      resolution.found.push(id);
+      continue;
+    }
+    if (!input.walkDone) {
+      resolution.pending.push(id);
+      if (input.misses[id] !== undefined) resolution.misses[id] = input.misses[id]!;
+      continue;
+    }
+    if (input.variant !== "head") {
+      resolution.dropped.push(id);
+      continue;
+    }
+    if (input.restHeadId === null || above(id, input.restHeadId)) {
+      const createdMs = snowflakeMs(id);
+      const lateSignal = createdMs !== null && input.sentAtMs !== null && createdMs > input.sentAtMs;
+      const misses = (input.misses[id] ?? 0) + (lateSignal ? 0 : 1);
+      if (misses > DM_HEAD_NOT_FOUND_RETRY_MS.length) {
+        resolution.expired.push(id);
+      } else {
+        resolution.pending.push(id);
+        if (lateSignal) resolution.late.push(id);
+        if (misses > 0) resolution.misses[id] = misses;
+      }
+      continue;
+    }
+    if (head !== null && oldest !== null && atMost(id, head) && atMost(oldest, id)) {
+      resolution.covered.push(id);
+      continue;
+    }
+    resolution.dropped.push(id);
+  }
+  if (resolution.pending.length > 0 && input.walkDone) {
+    const missed = resolution.pending.map((id) => resolution.misses[id] ?? 0).filter((n) => n > 0);
+    const step = missed.length === 0 ? 0 : Math.min(...missed) - 1;
+    resolution.retryInMs = DM_HEAD_NOT_FOUND_RETRY_MS[Math.max(0, step)]!;
+  }
+  return resolution;
+}
+
+// ── erasure fence (design §5.4 step 1) ──────────────────────────────────────
+
+interface FenceCheck {
+  /** Messages an executed erasure covers: dropped from every write. */
+  fencedIds: Set<string>;
+  /** The page-wide check found nothing: no ref of `checkedRefs` is fenced for
+   *  material at or after `checkedFrom`. */
+  clear: boolean;
+  checkedRefs: ReadonlySet<string>;
+  checkedFrom: Date;
+}
+
+function messageMaterialAt(message: FanslyMessage, receivedAt: Date): Date {
+  const raw = message.createdAt as unknown;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return receivedAt;
+  const at = normalizeFanslyTimestamp(raw);
+  return at.getTime() < receivedAt.getTime() ? at : receivedAt;
+}
+
+async function checkFence(
+  tx: Database,
+  input: { pageId: number; groupId: string; partnerId: string | null; messages: readonly FanslyMessage[]; receivedAt: Date },
+): Promise<FenceCheck> {
+  const refsOf = (message: FanslyMessage) => [input.groupId, message.senderId];
+  const allRefs = [input.groupId, input.partnerId, ...input.messages.map((message) => message.senderId)];
+  const earliest = input.messages.reduce(
+    (min, message) => {
+      const at = messageMaterialAt(message, input.receivedAt);
+      return at.getTime() < min.getTime() ? at : min;
+    },
+    input.receivedAt,
+  );
+  // One query in the common case: nothing covers the page at its earliest
+  // material instant, so nothing covers any later one either.
+  const checkedRefs = new Set(allRefs.filter((ref): ref is string => typeof ref === "string" && ref.length > 0));
+  if (!(await isDmArchiveScopeFenced(tx, { pageId: input.pageId, platform: "fansly", refs: allRefs, materialAt: earliest }))) {
+    return { fencedIds: new Set(), clear: true, checkedRefs, checkedFrom: earliest };
+  }
+  const fencedIds = new Set<string>();
+  for (const message of input.messages) {
+    const fenced = await isDmArchiveScopeFenced(tx, {
+      pageId: input.pageId,
+      platform: "fansly",
+      refs: refsOf(message),
+      materialAt: messageMaterialAt(message, input.receivedAt),
+    });
+    if (fenced) fencedIds.add(message.id);
+  }
+  return { fencedIds, clear: false, checkedRefs, checkedFrom: earliest };
+}
+
+// ── purchases (design §5.4 step 5) ──────────────────────────────────────────
+
+/** The order sidecars of a page (`accountMediaOrders`) as media-plane keys
+ *  and the target each one names. */
+function sidecarOrders(page: FanslyMessagesPage, receivedAt: Date): Array<{ key: SidecarOrderKey; target: PurchaseTarget }> {
+  const orders: Array<{ key: SidecarOrderKey; target: PurchaseTarget }> = [];
+  for (const order of page.accountMediaOrders ?? []) {
+    const record = recordOf(order);
+    const bundleId = decimalId(record.accountMediaBundleId);
+    const mediaId = decimalId(record.accountMediaId);
+    const buyer = typeof record.accountId === "string" && record.accountId.length > 0 ? record.accountId : null;
+    const raw = record.createdAt;
+    if (buyer === null || (bundleId === null && mediaId === null)) continue;
+    const orderedAt = typeof raw === "number" && Number.isFinite(raw) ? normalizeFanslyTimestamp(raw) : receivedAt;
+    orders.push({
+      key: { mediaOfferRef: (bundleId ?? mediaId)!, buyerPlatformUserId: buyer, orderedAt },
+      target: bundleId !== null ? { kind: "bundle", id: bundleId } : { kind: "media", id: mediaId! },
+    });
+  }
+  return orders;
+}
+
+/**
+ * The purchase walks a page asks for: the targets of the order sidecars the
+ * media plane has not recorded yet (an order already in `media_orders` was
+ * seen before; re-signalling it on every read of the chat would re-read its
+ * history each time). One `purchases.targets` walk per target, subject
+ * `media:<id>` | `bundle:<id>` (S2-07b).
+ */
+async function purchaseFollowups(
+  tx: Database,
+  input: { pageId: number; page: FanslyMessagesPage; receivedAt: Date; reason: string },
+): Promise<DemandSignal[]> {
+  const orders = sidecarOrders(input.page, input.receivedAt);
+  if (orders.length === 0) return [];
+  const unrecorded = await listUnrecordedMediaOrders(tx, { pageId: input.pageId, orders: orders.map((order) => order.key) });
+  const targets = new Map<string, PurchaseTarget>();
+  for (const index of unrecorded) {
+    const target = orders[index]!.target;
+    targets.set(purchaseTargetSubject(target), target);
+  }
+  const sorted = [...targets.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, target]) => target);
+  return purchaseTargetFollowups(sorted, input.reason);
+}
+
+// ── apply ───────────────────────────────────────────────────────────────────
+
+function chainPageOf(messages: readonly FanslyMessage[], before: string | null, input: ApplyInput): ChainPage {
+  return {
+    before,
+    limit: LIMIT,
+    // A non-string id fails the contract as `bad_id` (never coerced).
+    ids: messages.map((message) => (typeof message.id === "string" ? message.id : "")),
+    createdAtMs: messages.map((message) => {
+      const raw = message.createdAt as unknown;
+      return typeof raw === "number" && Number.isFinite(raw) ? normalizeFanslyTimestamp(raw).getTime() : null;
+    }),
+    capturedAt: input.observation.receivedAt,
+    witness: {
+      kind: "attempt",
+      attemptId: input.attempt.id,
+      observationId: input.observation.id,
+      receivedAt: input.observation.receivedAt,
+    },
+  };
+}
+
+/** The walk this page belongs to goes on (another read follows now). */
+function walkContinues(variant: DmMessagesVariant, verdict: ChainVerdict, segment: Segment | null, chain: ThreadChain): boolean {
+  if (segment !== null) return true;
+  if (verdict.kind === "segment_stale" || verdict.kind === "not_continuing") return true;
+  return variant === "history" && chain.state !== "complete";
+}
+
+const DM_SYNC_FAMILY = familyForObservation({ source: "pull", kind: "dm_messages", platform: "fansly" });
+
+async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input: ApplyInput): Promise<ApplyResult> {
+  const key = KEY_OF[variant];
+  const groupId = input.work.subject;
+  const requested = requestedParams(input.request);
+  if (requested.groupId !== groupId) {
+    throw new ApplyQuarantine("dm_messages_subject_mismatch", { subject: groupId, requested: requested.groupId });
+  }
+  const before = requested.before;
+  // The registry's fence is `dm_archive`: the commit took it. A direct caller
+  // takes it here (a busy fence defers the apply).
+  if (!input.fenced && !(await tryAcquireDmArchiveWriterFenceLock(tx, input.pageId))) throw new ApplyDeferred("erasure_busy");
+
+  const facts = await readFanslyPageFacts(tx, input.pageId);
+  if (facts === null) throw new ApplyQuarantine("page_missing");
+  if (facts.externalId === null) throw new ApplyQuarantine("page_account_unknown");
+  const thread = await readThread(tx, input.pageId, groupId);
+  const skip = threadSkip(thread);
+  if (skip !== null || thread === null) {
+    // Erased, unbound or excluded since the plan: nothing of the page is
+    // written, the work is over.
+    return {
+      work: { satisfiesRevision: true, close: "done", closeReason: skip ?? "thread_missing" },
+      followups: [],
+      counters: { [`skipped_${skip ?? "thread_missing"}`]: 1 },
+    };
+  }
+  const page = input.parsed as FanslyMessagesPage;
+  const messages = page.messages;
+  // The wire contract checks the container only (per-message drift is the
+  // lane's): an item that is not an object breaks the page contract here.
+  const notObject = messages.findIndex((message) => typeof message !== "object" || message === null || Array.isArray(message));
+  if (notObject !== -1) throw new FanslyContractViolationError(`messages[${notObject}]`, "not an object");
+  const foreign = messages.filter((message) => typeof message.groupId === "string" && message.groupId !== groupId).length;
+  if (foreign > 0) throw new ApplyQuarantine("dm_messages_foreign_group", { groupId, foreign });
+
+  // 1. The page contract and the fold — pure, before anything is written.
+  const chainPage = chainPageOf(messages, before, input);
+  const violation = validateChainPage(chainPage);
+  if (violation !== null && violation.kind === "contract_violation") {
+    throw new FanslyContractViolationError(`messages.${violation.reason}`, `group ${groupId} before ${before ?? "head"}`);
+  }
+  const cursor = parseDmMessagesCursor(input.work.cursor);
+  const stored = chainPageNeedsStoredFacts(chainPage) ? await readThreadStoredFacts(tx, thread.state.id) : null;
+  const fold = foldChainPage(thread.chain, cursor.segment, chainPage, stored);
+  if (fold.verdict.kind === "anomaly" && QUARANTINED_ANOMALIES.has(fold.verdict.reason)) {
+    throw new ApplyQuarantine(`chain_${fold.verdict.reason}`, {
+      groupId, before, served: messages.length, headId: thread.chain.headId, state: thread.chain.state,
+    });
+  }
+  const counters: Record<string, number> = { messages_served: messages.length };
+  bump(counters, `chain_${fold.verdict.kind}`);
+  if (fold.verdict.kind === "anomaly") bump(counters, `chain_anomaly_${fold.verdict.reason}`);
+  for (const reported of fold.reported) {
+    bump(counters, reported.kind === "anomaly" ? `chain_anomaly_${reported.reason}` : `chain_${reported.kind}`);
+  }
+
+  // 2. Erasure fence per message: a fenced row reaches no write below.
+  const fence = await checkFence(tx, {
+    pageId: input.pageId,
+    groupId,
+    partnerId: thread.state.partnerPlatformUserId,
+    messages,
+    receivedAt: input.observation.receivedAt,
+  });
+  bump(counters, "messages_fenced", fence.fencedIds.size);
+  const kept = fence.fencedIds.size === 0 ? messages : messages.filter((message) => !fence.fencedIds.has(message.id));
+
+  // 3. The hot table (sticky deletes) and the tip contexts.
+  const normalized = normalizeFanslyDmMessages(kept, {
+    conversationId: thread.state.id,
+    platformAccountId: input.pageId,
+    platform: "fansly",
+    pageAccountId: facts.externalId,
+    partnerPlatformUserId: thread.state.partnerPlatformUserId,
+    now: input.now,
+  });
+  bump(counters, "messages_unparseable", normalized.unparseable.length);
+  bump(counters, "timestamps_implausible", normalized.implausible.length);
+  const insertedIds = new Set(await upsertPageDmMessages(tx, normalized.rows));
+  bump(counters, "messages_inserted", insertedIds.size);
+  const tips = await materializeFanslyDmTipContexts(tx, {
+    accountId: input.pageId,
+    requestParams: { groupId, limit: LIMIT, before },
+    responsePayload: input.response,
+    capturedAt: input.observation.receivedAt,
+    lineage: {
+      kind: "observation",
+      sourceObservationId: input.observation.id,
+      sourceObservationReceivedAt: input.observation.receivedAt,
+    },
+  });
+  bump(counters, "tip_contexts_upserted", tips.upserted);
+
+  // 4. The chain (its one writer) and the legacy coverage columns.
+  const chainMoved = CHAIN_WRITING_VERDICTS.has(fold.verdict.kind);
+  if (chainMoved) await writeThreadChain(tx, thread.state.id, { chain: fold.chain, source: "engine" });
+  await syncLegacyThreadSummary(tx, thread.state.id, {
+    inserted: normalized.rows
+      .filter((row) => insertedIds.has(row.platformMessageId))
+      .map((row) => ({ platformMessageId: row.platformMessageId, createdAt: row.createdAt, senderRole: row.senderRole })),
+    headReadAt: before === null ? input.attempt.sentAt ?? input.observation.receivedAt : null,
+  });
+  await clearConversationSyncHealth(tx, thread.state.id);
+
+  // 5. The demanded ids and the overlay (before the event appends, §3.7).
+  const done = !walkContinues(variant, fold.verdict, fold.segment, fold.chain);
+  const restHeadId = before === null
+    ? chainPage.ids[0] ?? null
+    : cursor.segment !== null && sameMessageId(before, cursor.segment.oldestId) ? cursor.segment.headId : thread.chain.headId;
+  const written = new Set(normalized.rows.map((row) => row.platformMessageId));
+  const resolution = resolveDemand({
+    variant,
+    demandIds: input.work.demand.messageIds,
+    // Shown is confirmed visible, also when the row stays unwritten (fenced,
+    // no date): only the overlay verdict below needs the written copy.
+    pageIds: chainPage.ids,
+    walkDone: done,
+    restHeadId,
+    chain: fold.chain,
+    misses: cursor.misses,
+    sentAtMs: input.attempt.sentAt?.getTime() ?? null,
+  });
+  const overlay = await confirmDmLiveMessagesInTransaction(tx, {
+    pageId: input.pageId,
+    // Every id this page wrote: a read confirms what it shows, demanded or
+    // not (an own broadcast's row is confirmed by any read of its chat, D22).
+    messageIds: [...written],
+    notFoundMessageIds: [...resolution.covered, ...resolution.expired],
+  });
+  bump(counters, "live_confirm_match", overlay.match);
+  bump(counters, "live_confirm_mismatch", overlay.mismatch);
+  bump(counters, "live_not_found", overlay.notFound);
+  for (const [field, n] of Object.entries(overlay.mismatchFields)) bump(counters, `live_mismatch_${field}`, n);
+  bump(counters, "demand_dropped", resolution.dropped.length);
+
+  // 6. Purchase walks of new order sidecars.
+  const followups = await purchaseFollowups(tx, {
+    pageId: input.pageId,
+    page,
+    receivedAt: input.observation.receivedAt,
+    reason: `apply:${key}`,
+  });
+  bump(counters, "followup_purchase_targets", followups.length);
+
+  // 7. The inline canonicalization (family pull/sync) and the archive feed:
+  //    REST confirmation reaches message_archive in this commit even when the
+  //    minutely driver appended the events first (dedup keys, §3.7.3).
+  await canonicalizeAndFeedArchive(tx, {
+    pageId: input.pageId,
+    ownRef: facts.externalId,
+    key,
+    observation: input.observation,
+    response: input.response,
+    fence,
+    now: input.now,
+    counters,
+  });
+
+  // 8. The work rows, after every append (lock order): resolved ids leave
+  //    the demand; a `.catchup` the walk reached is closed.
+  const resolvedIds = [...resolution.found, ...resolution.covered, ...resolution.expired, ...resolution.dropped];
+  const catchup = variant === "head" && done && fold.chain.headId !== null
+    ? await getOpenWorkForKey(tx, { pageId: input.pageId, shadow: false, resource: CATCHUP_KEY, subject: groupId })
+    : null;
+  const closeCatchup = catchup !== null && catchup.state === "open" && catchupReachedBy(catchup, fold.chain);
+  if (resolvedIds.length > 0 || closeCatchup) {
+    await lockWorkRows(tx, closeCatchup ? [input.work.id, catchup!.id] : [input.work.id]);
+    if (resolvedIds.length > 0) {
+      await resolveWorkDemandMessageIds(tx, { workId: input.work.id, generation: input.attempt.ownerGeneration, messageIds: resolvedIds });
+    }
+    if (closeCatchup && await closeOpenWork(tx, { workId: catchup!.id, generation: input.attempt.ownerGeneration, closeReason: "covered_by_head" })) {
+      bump(counters, "catchup_closed_by_head");
+    }
+  }
+
+  const next: DmMessagesCursor = {
+    segment: fold.segment,
+    walkPages: done ? 0 : cursor.walkPages + 1,
+    misses: resolution.misses,
+    shadow: null,
+    last: done
+      ? {
+        completedAt: input.now.toISOString(),
+        pages: cursor.walkPages + 1,
+        verdict: fold.verdict.kind,
+        headId: fold.chain.headId,
+        state: fold.chain.state,
+      }
+      : cursor.last,
+  };
+  return {
+    work: workOutcome(variant, { done, resolution, chain: fold.chain, cursor: next, now: input.now }),
+    followups,
+    counters,
+    canonicalized: true,
+    ...(chainMoved ? { threadChainChanged: { threadId: thread.state.id } } : {}),
+  };
+}
+
+function catchupReachedBy(catchup: SyncWorkRow, chain: ThreadChain): boolean {
+  if (catchup.demand.overflow) return false;
+  const target = maxId(catchup.demand.messageIds);
+  return target === null || (chain.headId !== null && atMost(target, chain.headId));
+}
+
+function workOutcome(variant: DmMessagesVariant, input: {
+  done: boolean; resolution: DemandResolution; chain: ThreadChain; cursor: DmMessagesCursor; now: Date;
+}): WorkOutcome<Record<string, unknown>> {
+  const cursor = cursorJson(input.cursor);
+  if (!input.done) return { satisfiesRevision: false, nextDueAt: input.now, cursor };
+  const proof = {
+    state: input.chain.state,
+    headId: input.chain.headId,
+    oldestId: input.chain.oldestId,
+    count: input.chain.count,
+    proof: input.chain.proof,
+  };
+  if (variant === "head" && input.resolution.pending.length > 0) {
+    const late = new Set(input.resolution.late);
+    if (input.resolution.pending.every((id) => late.has(id))) {
+      // Only messages created after the read was sent wait: the read did
+      // everything its revision asked (I11); their own, newer revision keeps
+      // the row open and decides when it runs.
+      return {
+        satisfiesRevision: true,
+        nextDueAt: new Date(input.now.getTime() + DM_HEAD_NOT_FOUND_RETRY_MS[0]!),
+        cursor,
+        proof,
+      };
+    }
+    // The vendor's head is behind the socket: read it again (plan §7 p.4).
+    return {
+      satisfiesRevision: false,
+      nextDueAt: new Date(input.now.getTime() + (input.resolution.retryInMs ?? DM_HEAD_NOT_FOUND_RETRY_MS[0]!)),
+      waitingReason: "not_due",
+      cursor,
+      proof,
+    };
+  }
+  const closeReason = variant === "history" ? "history_complete" : variant === "catchup" ? "caught_up" : "confirmed";
+  return { satisfiesRevision: true, close: "done", closeReason, cursor, proof };
+}
+
+async function canonicalizeAndFeedArchive(tx: Database, input: {
+  pageId: number;
+  ownRef: string;
+  key: string;
+  observation: { id: number; receivedAt: Date };
+  response: unknown;
+  fence: FenceCheck;
+  now: Date;
+  counters: Record<string, number>;
+}): Promise<void> {
+  if (DM_SYNC_FAMILY === null) throw new Error("no canonicalizer family claims Fansly dm_messages");
+  const draftFenced = new Map<string, boolean>();
+  const excludeDraft = async (draft: CanonicalEventDraft): Promise<boolean> => {
+    const messageRef = draft.messageRef ?? null;
+    // Material of a message: decided by that message's own fence check.
+    if (messageRef !== null) return input.fence.fencedIds.has(messageRef);
+    const refs = [draft.fanIdentityRef, draft.conversationRef].filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+    if (refs.length === 0) return false;
+    const materialAt = draft.occurredAt.getTime() < input.observation.receivedAt.getTime() ? draft.occurredAt : input.observation.receivedAt;
+    if (input.fence.clear && materialAt.getTime() >= input.fence.checkedFrom.getTime()
+      && refs.every((ref) => input.fence.checkedRefs.has(ref))) return false;
+    const cacheKey = `${refs.join(",")}@${materialAt.toISOString()}`;
+    let fenced = draftFenced.get(cacheKey);
+    if (fenced === undefined) {
+      fenced = await isDmArchiveScopeFenced(tx, { pageId: input.pageId, platform: "fansly", refs, materialAt });
+      draftFenced.set(cacheKey, fenced);
+    }
+    return fenced;
+  };
+  const canon = await canonicalizeObservationInTransaction(tx, DM_SYNC_FAMILY, {
+    id: input.observation.id,
+    source: "pull",
+    producer: `fansly-sync:${input.key}`,
+    platform: "fansly",
+    accountId: input.pageId,
+    kind: "dm_messages",
+    // The body as journaled (§3.11): dm_messages is never CDN-stripped.
+    payload: replaceJournalLoneSurrogates(input.response).value,
+    observedAt: null,
+    receivedAt: input.observation.receivedAt,
+  }, {
+    nativeAccountRefByAccountId: new Map([[input.pageId, input.ownRef]]),
+    now: input.now,
+    excludeDraft,
+  });
+  bump(input.counters, `canonicalize_${canon.outcome}`);
+  if (canon.outcome === "rejected") return;
+  bump(input.counters, "drafts_fenced", canon.excluded);
+  if (canon.outcome === "stamped") bump(input.counters, "events_appended", canon.appended);
+  if (canon.messageDedupKeys.length === 0) return;
+  const events = await listDomainEventsByDedupKeys(tx, input.pageId, canon.messageDedupKeys);
+  const archived = await applyMessageEventsToArchive(tx, { accountId: input.pageId, platform: "fansly", events });
+  bump(input.counters, "archive_inserted", archived.inserted);
+}
+
+// ── shadow ──────────────────────────────────────────────────────────────────
+
+/**
+ * Shadow (design §3.12, §5.4): `.head`/`.catchup` take ⌈demanded ids / 25⌉
+ * reads (at least one) — a burst of new messages above the head is read down
+ * page by page; `.history` never exists in shadow (requests are refused on
+ * pages that are not live). Writes nothing but the work.
+ */
+async function shadowStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: { now: Date }): Promise<ShadowResult> {
+  const cursor = parseDmMessagesCursor(work.cursor);
+  if (variant === "history") {
+    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow" }, followups: [] };
+  }
+  const step = advanceShadowWalk(cursor.shadow, () => Math.max(1, Math.ceil(work.demand.messageIds.length / LIMIT)));
+  if (step.finished) {
+    return {
+      work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: cursorJson({ ...cursor, shadow: null }) },
+      followups: [],
+      counters: { simulated_pages: 1 },
+    };
+  }
+  return {
+    work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: cursorJson({ ...cursor, shadow: step.progress }) },
+    followups: [],
+    counters: { simulated_pages: 1 },
+  };
+}
+
+// ── replay (design §3.12 B5) ────────────────────────────────────────────────
+
+/**
+ * Replay of a legacy `dm_messages` observation: the new contract and the
+ * chain page rules accept the journaled page (a body legacy refused is
+ * journaled as `{contractAccepted: false, raw}` and must be refused again),
+ * and every normalized row is in `page_dm_messages` with the same sender role,
+ * `created_at`, tip cents and content — a row re-read later (newer
+ * `synced_at`) or deleted since counts as a match.
+ */
+async function replayMessagesPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
+  const payload = recordOf(observation.payload);
+  if (payload.contractAccepted === false) {
+    return parseFanslyMessagesPage(payload.raw) === null
+      ? { kind: "match", detail: { legacyRefused: true } }
+      : { kind: "mismatch", reason: "legacy_refused_new_accepts" };
+  }
+  const page = parseFanslyMessagesPage(observation.payload);
+  if (page === null) return { kind: "mismatch", reason: "contract_refused" };
+  if (page.messages.length === 0) return { kind: "match", detail: { served: 0 } };
+  if (page.messages.some((message) => typeof message !== "object" || message === null || Array.isArray(message))) {
+    return { kind: "mismatch", reason: "item_not_object" };
+  }
+  const groups = new Set(page.messages.map((message) => message.groupId));
+  if (groups.size !== 1) return { kind: "mismatch", reason: "mixed_groups", detail: { groups: groups.size } };
+  const groupId = page.messages[0]!.groupId;
+  // The journal row carries no request: the page is checked for order and
+  // ids only (its own limit is unknown — legacy also read with 1, 5, 20, 100).
+  const violation = validateChainPage({
+    before: null,
+    limit: page.messages.length,
+    ids: page.messages.map((message) => (typeof message.id === "string" ? message.id : "")),
+    createdAtMs: page.messages.map(() => null),
+    capturedAt: observation.receivedAt,
+    witness: { kind: "attempt", attemptId: 0, observationId: observation.id, receivedAt: observation.receivedAt },
+  });
+  if (violation !== null && violation.kind === "contract_violation") {
+    return { kind: "mismatch", reason: `chain_${violation.reason}` };
+  }
+  const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
+  if (facts?.externalId == null) return { kind: "not_replayable", reason: "page_account_unknown" };
+  const [thread] = await listPageDmThreadListStates(ctx.db, { platformAccountId: ctx.pageId, platformConversationIds: [groupId] });
+  if (thread === undefined) return { kind: "mismatch", reason: "thread_missing", detail: { groupId } };
+  const normalized = normalizeFanslyDmMessages(page.messages, {
+    conversationId: thread.id,
+    platformAccountId: ctx.pageId,
+    platform: "fansly",
+    pageAccountId: facts.externalId,
+    partnerPlatformUserId: thread.partnerPlatformUserId,
+  });
+  const stored = new Map((await listStoredDmMessagesForReplay(ctx.db, {
+    conversationId: thread.id,
+    platformMessageIds: normalized.rows.map((row) => row.platformMessageId),
+  })).map((row) => [row.platformMessageId, row] as const));
+  const missing: string[] = [];
+  const differs: string[] = [];
+  for (const row of normalized.rows) {
+    const copy = stored.get(row.platformMessageId);
+    if (copy === undefined) {
+      missing.push(row.platformMessageId);
+      continue;
+    }
+    if (copy.deletedAt !== null || copy.syncedAt.getTime() > observation.receivedAt.getTime()) continue;
+    if (copy.senderRole !== row.senderRole || copy.createdAt.getTime() !== row.createdAt.getTime()
+      || copy.totalTipAmountCents !== row.totalTipAmountCents || copy.content !== row.content) {
+      differs.push(row.platformMessageId);
+    }
+  }
+  if (missing.length === 0 && differs.length === 0) {
+    return { kind: "match", detail: { served: page.messages.length, unparseable: normalized.unparseable.length } };
+  }
+  return {
+    kind: "mismatch",
+    reason: missing.length > 0 ? "rows_missing" : "rows_differ",
+    detail: { served: page.messages.length, missing: missing.length, differs: differs.length, examples: [...missing, ...differs].slice(0, 5) },
+  };
+}
+
+// ── modules ─────────────────────────────────────────────────────────────────
+
+function variantModule(variant: DmMessagesVariant): ResourceModule {
+  return {
+    plan: (work, ctx) => planStep(variant, work, ctx),
+    apply: (tx, input) => applyMessagesPage(variant, tx, input),
+    shadow: (work, _request, ctx) => shadowStep(variant, work, ctx),
+    replay: replayMessagesPage,
+  };
+}
+
+const MODULES: Readonly<Record<DmMessagesVariant, ResourceModule>> = {
+  head: variantModule("head"),
+  catchup: variantModule("catchup"),
+  history: variantModule("history"),
+};
+
+export function dmMessagesModule(variant: DmMessagesVariant): ResourceModule {
+  return MODULES[variant];
+}

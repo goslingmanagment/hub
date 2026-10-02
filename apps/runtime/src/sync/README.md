@@ -52,6 +52,13 @@ membership generation and the list's two metadata keys — never an unbinding), 
 pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary`). A list head newer than what the message
 reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
 
+A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
+into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
+writes the page's rows minus any an executed erasure fences, the chain, the legacy coverage columns (engine-owned
+pages only), the overlay confirmation, and — last — the inline canonicalization and the `message_archive` rows of
+the page's message events. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
+head; a demanded id the vendor's head does not show yet is read again after 15 s and 60 s, then settled `not_found`.
+
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).

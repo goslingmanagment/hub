@@ -104,6 +104,8 @@ const purchasesModule = async (): Promise<ResourceModule> =>
   (await import("./resources/purchases.ts")).purchasesTargetsModule;
 const payoutsModule = (variant: "daily" | "walk") => async (): Promise<ResourceModule> =>
   (await import("./resources/payouts.ts")).payoutsModule(variant);
+const dmMessagesModule = (variant: "head" | "catchup" | "history") => async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-messages.ts")).dmMessagesModule(variant);
 const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => async (): Promise<ResourceModule> => {
   const resources = await import("./resources/fan-profiles.ts");
   switch (variant) {
@@ -232,6 +234,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"], replayKinds: ["dm_messages"],
     legacy: [stream("dm_messages"), sender("ws_hint"), sender("ai_accelerator"), sender("ai_fast_lane")],
+    module: dmMessagesModule("head"),
   },
   {
     key: "dm-messages.catchup", file: "dm-messages", subject: "thread", kind: "trigger", class: "planned",
@@ -240,6 +243,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
     legacy: [stream("dm_messages"), stream("dm_conversations")],
+    module: dmMessagesModule("catchup"),
   },
   {
     // I12: no history walk without a request (owner decision №2).
@@ -248,6 +252,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "chain_empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
     legacy: [stream("dm_messages"), sender("targeted_backfill")],
+    module: dmMessagesModule("history"),
   },
 
   // ── transactions (S2-07b) ─────────────────────────────────────────────────

@@ -175,6 +175,11 @@ export interface ApplyResult<C = unknown> {
   followups: readonly DemandSignal[];
   /** A thread's chain moved: history requests re-check satisfaction (S2-11a). */
   threadChainChanged?: { threadId: number };
+  /** The apply canonicalized its own observation in this transaction (the DM
+   *  apply: its erasure fence drops drafts the generic hook cannot know of,
+   *  and the overlay confirmation must precede the appends): the commit's
+   *  `canonicalize` hook does not run for it. */
+  canonicalized?: true;
   /** Outcomes worth counting that are not work (a refused empty snapshot, a
    *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
   counters?: Readonly<Record<string, number>>;
