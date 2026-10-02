@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark,
   hasRecentAiGenerationInConversation,
+  isFanslyPageEngineOwned,
   listEventAccounts,
   listEventsSince,
   requestAiMediaAcceleratorRead,
@@ -252,9 +253,11 @@ export async function runAiMediaCandidatesProjection(
       await setProjectionWatermark(app.db, AI_MEDIA_CANDIDATES_PROJECTION, accountId, watermark);
       if (events.length < EVENT_PAGE_SIZE) break;
     }
-    if (wakeDm) {
-      // Wakes an idle DM stream for the addressed read only; busy streams run
-      // the accelerator step inside their ordinary chunk.
+    // Wakes an idle DM stream for the addressed read only; busy streams run
+    // the accelerator step inside their ordinary chunk. Never on a page the
+    // Fansly Sync Engine owns: its legacy DM stream is fenced, and the head
+    // read there is the WS confirmation's (step-3 design §3.1 item 7).
+    if (wakeDm && !(await isFanslyPageEngineOwned(app.db, accountId)).owned) {
       await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
     }
   }

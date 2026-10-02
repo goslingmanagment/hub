@@ -10,6 +10,7 @@ import { inspectFanslyBinding } from "./egress/fansly-binding-preflight.ts";
 import { readFanslyPageGeneration, readProbeSnapshot } from "./egress/fansly-probe-context.ts";
 import { assertFanslyPage } from "./fansly-page.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
+import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 
 const POLICY_KEY = "fanslyWsHintsPolicies";
 const GATE_KEYS = ["fanslyWsCaptureEnabled", "fanslyWsCapturePageAllowlist", "fanslyWsHintsEnabled",
@@ -62,8 +63,11 @@ async function readPolicySnapshot(db: Database, config: AppContext["config"], la
 
 /** The socket's verified_at is only an auth-shaped frame. Independently check
  * account/me through the exact snapshotted page dispatcher, then close it. The
- * request waits for the page's send guard (source `binding_preflight`). */
+ * request waits for the page's send guard (source `binding_preflight`). A page
+ * the Fansly Sync Engine owns is refused (409) before its egress is resolved
+ * (step-3 design §3.1 item 11). */
 async function inspectBinding(app: BindingApp, label: string) {
+  await assertLegacyOwnsFanslyPageLabels(app, [label], SYNC_ENGINE_HINTS.socket);
   const context = await readProbeSnapshot(app.db, app.config, label);
   try {
     return { pageId: context.pageId, generation: context.generation,
