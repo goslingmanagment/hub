@@ -542,12 +542,13 @@ export async function settleShadow(
 
 // ── no-HTTP outcomes ────────────────────────────────────────────────────────
 
-/** A plan that needs no request: done, wait, quarantine (design §3.5). The
- *  slot is not consumed. */
+/** A plan that needs no request and writes nothing of its own: done, wait,
+ *  quarantine (design §3.5). The slot is not consumed. A `local` plan is
+ *  `applyLocal`'s. */
 export async function commitNoHttp(
   d: CommitDeps,
   work: SyncWorkRow,
-  plan: Exclude<StepPlan, { kind: "request" }>,
+  plan: Exclude<StepPlan, { kind: "request" | "local" }>,
 ): Promise<void> {
   const now = d.clock.wallNow();
   const spec = d.registry.spec(work.resource);
@@ -590,6 +591,120 @@ export async function commitNoHttp(
   if (plan.kind === "quarantine") {
     await openAlerts(d, [{ subKey: "live_degraded", detail: "quarantined" }], { resource: work.resource });
   }
+}
+
+/** A `local` step whose erasure fence is busy waits this long (an erasure in
+ *  flight holds the fence for seconds). */
+export const LOCAL_FENCE_BUSY_RETRY_MS = 1_000;
+
+/** A `local` plan on a page that is not live: a module bug (a shadow page
+ *  never writes, I14). */
+export class LocalStepRefusedError extends Error {
+  constructor(readonly resource: string, readonly why: string) {
+    super(`Fansly sync: ${resource} planned a local write ${why}`);
+    this.name = "LocalStepRefusedError";
+  }
+}
+
+export type LocalOutcome = "applied" | "fence_busy" | "nothing" | ApplyErrorKind;
+
+/**
+ * Commit a `local` step (design §3.3 item 3, E6): ONE transaction —
+ * `lockOwnedPage` (I7) → the erasure fence when the entry declares one (busy:
+ * the work waits a second on `dependency`) → the module's `applyLocal` → the
+ * work row (`settleWork`, I11 against the revision the plan read) → its
+ * follow-ups → the work-closed hook (lock order of §3.7). Nothing is admitted
+ * or sent, so the slot the pick waited for stays open. A failing write rolls
+ * back whole and is classified like an apply error: retried (deferred,
+ * transient, other) or quarantined (deterministic).
+ */
+export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<LocalOutcome> {
+  try {
+    if (d.mode !== "live") throw new LocalStepRefusedError(work.resource, "on a page that is not live");
+    const write = module.applyLocal;
+    if (write === undefined) throw new LocalStepRefusedError(work.resource, "but has no applyLocal");
+    const spec = d.registry.spec(work.resource);
+    if (spec === null) throw new ApplyDeferred("no_registry_entry");
+    const settled = await inTx(d.db, async (tx): Promise<LocalOutcome> => {
+      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+      const now = d.clock.wallNow();
+      if (spec.fence === "dm_archive" && !(await tryAcquireDmArchiveWriterFenceLock(tx, d.pageId))) {
+        const until = new Date(now.getTime() + LOCAL_FENCE_BUSY_RETRY_MS);
+        const busy = await settleWork(tx, {
+          workId: work.id,
+          generation: d.generation,
+          servedRevision: work.demandRevision,
+          satisfiesRevision: false,
+          nextDueAt: until,
+          waitingReason: "dependency",
+          waitingUntil: until,
+          lastErrorClass: "local:erasure_busy",
+        });
+        return busy === null ? "nothing" : "fence_busy";
+      }
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+      const result = await write(tx, { pageId: d.pageId, work, now, ownRef: d.ownRef });
+      const done = await settleWork(tx, {
+        ...settleInputOf(d, work, spec, result.work, work.demandRevision, page, now),
+        lastErrorClass: null,
+      });
+      if (done === null) throw new ApplyDeferred("work_not_open");
+      const upserts = upsertsOf(d, result.followups, page, now);
+      if (upserts.length > 0) await upsertDemands(tx, upserts);
+      if (result.threadChainChanged !== undefined && d.onThreadChainChanged !== undefined) {
+        await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
+      }
+      await afterSettle(tx, d, work, done, result.work.closeReason ?? null);
+      for (const [name, by] of Object.entries(result.counters ?? {})) {
+        d.metrics.increment("sync_apply_effect", { resource: work.resource, effect: name }, by);
+      }
+      return "applied";
+    });
+    if (settled === "fence_busy") d.metrics.increment("sync_local_fence_busy", { resource: work.resource });
+    return settled;
+  } catch (error) {
+    if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
+    return recordLocalError(d, work, error);
+  }
+}
+
+/** A failed `local` step: the transaction rolled back; the work retries, or
+ *  is quarantined when the same write would fail every time. */
+async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown): Promise<ApplyErrorKind> {
+  const kind = error instanceof LocalStepRefusedError ? "other" : classifyApplyError(error);
+  const name = errorName(error);
+  const now = d.clock.wallNow();
+  let quarantined = false;
+  await inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    if (kind === "deterministic") {
+      quarantined = await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: `local:${name}` });
+      return;
+    }
+    const retryInMs = kind === "other"
+      ? WAIT_RECHECK_MS
+      : deferredRetryInMs(Math.max(0, now.getTime() - work.firstDemandAt.getTime()));
+    const until = new Date(now.getTime() + retryInMs);
+    await settleWork(tx, {
+      workId: work.id,
+      generation: d.generation,
+      servedRevision: work.demandRevision,
+      satisfiesRevision: false,
+      nextDueAt: until,
+      waitingReason: "dependency",
+      waitingUntil: until,
+      lastErrorClass: `local:${name}`,
+    });
+  });
+  d.metrics.increment("sync_apply_errors", { kind, error: name, local: true });
+  const log = kind === "transient" || kind === "deferred" ? d.logger.warn.bind(d.logger) : d.logger.error.bind(d.logger);
+  log({ pageId: d.pageId, workId: work.id, resource: work.resource, kind, error: name, quarantined },
+    "Fansly sync: a local step failed");
+  if (quarantined) {
+    await openAlerts(d, [{ subKey: "live_degraded", detail: "quarantined" }], { resource: work.resource, workId: work.id });
+  }
+  return kind;
 }
 
 /** A plan threw: the work waits a minute (an unexpected error of a module

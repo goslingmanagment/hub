@@ -187,7 +187,7 @@ describe("I17: source pins", () => {
 
   it("the production runtime passes none of the host's test-only options", () => {
     const main = read("apps/runtime/src/sync/main.ts");
-    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "faults", "minSettingMs"]) {
+    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "faults", "minSettingMs"]) {
       expect(main).not.toContain(option);
     }
   });

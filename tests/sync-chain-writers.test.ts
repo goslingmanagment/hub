@@ -89,15 +89,19 @@ describe("DM thread chain writers (I9)", () => {
     expect(engine.filter((path) => threadWrites(readFileSync(join(root, path), "utf8")).length > 0)).toEqual([]);
   });
 
-  it("writes legacy coverage columns from the engine's repositories only through syncLegacyThreadSummary", () => {
+  it("writes legacy coverage columns from the engine's repositories only through syncLegacyThreadSummary and syncLegacyThreadSummaryAfterDeletion", () => {
     const syncRepositories = SOURCES.filter((path) => path.startsWith("packages/db/src/repositories/sync/"));
     const legacyAssignment = /\b(stored_message_count|message_coverage_status|message_backfill_complete|last_message_sync_at)\s*=\s*[^=]/;
     expect(syncRepositories.filter((path) => threadWrites(readFileSync(join(root, path), "utf8"))
       .some((chunk) => legacyAssignment.test(chunk)))).toEqual([WRITER]);
     const writer = readFileSync(join(root, WRITER), "utf8");
     const legacyChunks = threadWrites(writer).filter((chunk) => legacyAssignment.test(chunk));
-    expect(legacyChunks).toHaveLength(1);
-    // The one statement asserts the page mode in its own WHERE (no read-then-write).
-    expect(writer.slice(writer.indexOf(legacyChunks[0]!))).toMatch(/and sp\.mode in \('handover', 'live'\)/);
+    // A read's stored rows, a socket deletion's marked row (design §3.3 item 4, E7).
+    expect(legacyChunks).toHaveLength(2);
+    for (const name of ["syncLegacyThreadSummary", "syncLegacyThreadSummaryAfterDeletion"]) {
+      expect(writer).toMatch(new RegExp(`export async function ${name}\\(`));
+    }
+    // Each statement asserts the page mode in its own WHERE (no read-then-write).
+    for (const chunk of legacyChunks) expect(chunk).toMatch(/and sp\.mode in \('handover', 'live'\)/);
   });
 });

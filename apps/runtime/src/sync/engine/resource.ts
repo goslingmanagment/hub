@@ -164,6 +164,10 @@ export type StepPlan<C = unknown> =
   | { kind: "request"; request: RequestPlan }
   /** The goal is met without a request. */
   | { kind: "done"; cursor?: C; proof?: unknown; result?: unknown; reason: string }
+  /** A write the page needs that makes no request (design §3.3 item 3, E6):
+   *  the module's `applyLocal` runs in one generation-fenced transaction, under
+   *  the erasure fence when the entry declares one. Live only. */
+  | { kind: "local"; reason: string }
   /** Not now: a dependency, or not due. `until` null = re-check after
    *  `WAIT_RECHECK_MS`. */
   | { kind: "wait"; reason: "not_due" | "dependency"; until: Date | null; enqueue?: readonly DemandSignal[] }
@@ -230,6 +234,17 @@ export interface ApplyResult<C = unknown> {
   pageIdentity?: { accountId: string };
 }
 
+/** What a `local` step's write sees (`ResourceModule.applyLocal`). */
+export interface LocalApplyInput {
+  pageId: number;
+  /** The work as the slot picked it. */
+  work: SyncWorkRow;
+  /** The engine clock at the step. */
+  now: Date;
+  /** The page's native Fansly account id (`pages.external_page_id`). */
+  ownRef: string | null;
+}
+
 export interface ShadowResult<C = unknown> {
   work: WorkOutcome<C>;
   /** Demand the live apply would have created: upserted as shadow work. */
@@ -280,6 +295,9 @@ export interface ResourceModule<C = unknown> {
   onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan): Promise<void>;
   /** Live: apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
+  /** Live: the write of a `local` plan, in the commit's fenced transaction
+   *  (after the page lock and the erasure fence, before the work row). */
+  applyLocal?(tx: Database, input: LocalApplyInput): Promise<ApplyResult<C>>;
   /** Shadow: estimate the outcome of the step without an answer. */
   shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
   /** The resource's own journal trim of the served answer (default: as served). */

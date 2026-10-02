@@ -4,7 +4,9 @@ import { createDefaultFanslySendOsProbe } from "../../apps/runtime/src/services/
 import { SyncEngineHost } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import { fixedShadowLatency } from "../../apps/runtime/src/sync/engine/shadow.ts";
+import { FANSLY_WS_SOURCE_TIMING } from "../../apps/runtime/src/sync/fansly/ws/source.ts";
 import { harnessConfig, harnessHostOptions, harnessRng } from "./sync-engine.ts";
+import { wsHostOptions } from "./sync-ws.ts";
 import {
   childShadowRegistry,
   CRASH_READ_KEY,
@@ -28,6 +30,10 @@ import {
 //               transport against FANSLY_BASE_URL through the page proxy,
 //               S from sync_test_setting, jitter seeded by RNG_SEED. The
 //               test kills it.
+//   ws-live     the same live host with the page's socket (PAGE_ID) on the
+//               fake origin WS_ORIGIN, on the production socket timing (its
+//               drains included; only the guard runs every 200 ms); SIGTERM
+//               stops it as the `sync` runtime does (host, pool, exit 0).
 // Prints "ready <pid>" once running.
 
 async function runHost(): Promise<void> {
@@ -100,6 +106,32 @@ async function runHarnessLive(): Promise<void> {
   console.log(`ready ${process.pid}`);
 }
 
+async function runWsLive(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL!;
+  const pool = createPool(connectionString);
+  const db = createDb(pool) as unknown as Database;
+  const pageId = Number(process.env.PAGE_ID);
+  let host: SyncEngineHost | null = null;
+  host = new SyncEngineHost(wsHostOptions({
+    db,
+    pool,
+    connectionString,
+    config: harnessConfig(connectionString, process.env.FANSLY_BASE_URL!),
+    rng: harnessRng(Number(process.env.RNG_SEED ?? "1")),
+    wsOrigin: process.env.WS_ORIGIN!,
+    sourceOf: () => host?.wsSource(pageId) ?? null,
+    timing: { ...FANSLY_WS_SOURCE_TIMING, checkMs: 200 },
+  }));
+  await host.start();
+  const stop = async () => {
+    await host?.stop();
+    await pool.end().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void stop());
+  console.log(`ready ${process.pid}`);
+}
+
 const mode = process.argv[2];
 if (mode === "host") {
   await runHost();
@@ -107,6 +139,8 @@ if (mode === "host") {
   await runLiveCrash();
 } else if (mode === "harness-live") {
   await runHarnessLive();
+} else if (mode === "ws-live") {
+  await runWsLive();
 } else if (mode !== undefined) {
   console.error(`unknown mode ${mode}`);
   process.exit(2);
