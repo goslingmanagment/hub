@@ -21,7 +21,9 @@ import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.t
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
-import { simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
+import { routeThreadAt } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
+import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { isOneTimeWalk, simulateCoalescedReads } from "../apps/runtime/src/sync/report/shadow-window.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
 // their incident wiring (titles, keys, paging) and the report's pure parts.
@@ -283,6 +285,38 @@ describe("the report's and the sampler's pure parts", () => {
     ], coalesceOf).get("payouts.daily")!;
     expect(reads.reads).toBe(2);
     expect(reads.dueLagsMs).toEqual([0, 0]);
+  });
+
+  it("A1 leaves out only the one-time walks: first-pass backlogs and backfills only one-time events start", () => {
+    const goals = FANSLY_RESOURCE_SPECS.filter((spec) => spec.kind === "goal" && spec.class !== "requests");
+    const oneTime = goals.filter((spec) => isOneTimeWalk(spec)).map((spec) => spec.key).sort();
+    expect(oneTime).toEqual([
+      "catalog.vault", "fan-profiles.alias-backfill", "media-stats.walk", "notifications.backfill", "posts.backfill",
+      "stats.backfill", "subscribers.history", "top-spenders.bootstrap", "transactions.backfill",
+    ]);
+    // The recurring walks count in the 40–100/h band.
+    expect(goals.filter((spec) => !isOneTimeWalk(spec)).map((spec) => spec.key)).toEqual(expect.arrayContaining([
+      "fan-earnings.roster", "post-replies.walk", "purchases.targets", "fan-profiles.lookup", "posts.engagement",
+      "followers.reconcile", "payouts.walk",
+    ]));
+  });
+
+  it("offline routing judges a chat as the router knew it at the frame", () => {
+    const frameMs = NOW.getTime();
+    const thread = {
+      groupId: "g1", threadId: 1, bound: true, excluded: false, headConfirmedId: "900",
+      headConfirmedAt: new Date(frameMs - MINUTE), firstSeenAt: new Date(frameMs - 60 * MINUTE),
+    };
+    expect(routeThreadAt(undefined, frameMs)).toEqual({ known: false, bound: false, excluded: false, headConfirmedId: null });
+    expect(routeThreadAt(thread, frameMs)).toEqual({ known: true, bound: true, excluded: false, headConfirmedId: "900" });
+    // A chat legacy listed after the frame was unknown then.
+    expect(routeThreadAt({ ...thread, firstSeenAt: new Date(frameMs + 1) }, frameMs).known).toBe(false);
+    // A head a later capture confirmed (a rebuild after the window) was not confirmed then.
+    expect(routeThreadAt({ ...thread, headConfirmedAt: new Date(frameMs + 1) }, frameMs).headConfirmedId).toBeNull();
+    expect(routeThreadAt({ ...thread, headConfirmedAt: null }, frameMs).headConfirmedId).toBeNull();
+    // As it stands (the live router): the facts of the row.
+    expect(routeThreadAt({ ...thread, headConfirmedAt: new Date(frameMs + 1), firstSeenAt: new Date(frameMs + 1) }, null))
+      .toEqual({ known: true, bound: true, excluded: false, headConfirmedId: "900" });
   });
 
   it("parses the report window", () => {

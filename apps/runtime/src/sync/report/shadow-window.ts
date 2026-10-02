@@ -37,8 +37,12 @@ export const LIVE_PATH_MIN_SAMPLE = { messages: 50, transactions: 5 } as const;
 export const OFFLINE_DECISIONS_LOOKBACK_MS = 24 * HOUR_MS;
 /** A frame's shadow admission is looked for up to this long after the window. */
 const ADMISSION_SEARCH_MS = 15 * 60_000;
-/** One-time backlogs of a first shadow run (design §3.12 A1). */
+/** One-time backlogs of a first shadow run (design §3.12 A1): the media-stats
+ *  first pass of never-visited items and the vault crawl. */
 const ONE_TIME_BACKLOG_KEYS: ReadonlySet<string> = new Set(["media-stats.walk", "catalog.vault"]);
+/** Triggers of one-time work: a walk only these start is a backfill, not
+ *  steady-state demand. */
+const ONE_TIME_TRIGGERS: ReadonlySet<string> = new Set(["owner", "new_page", "legacy_import", "dependency"]);
 /** Why the legacy volume of a stream or sender differs from the engine's (design §3.12 A2). */
 const LEGACY_VOLUME_NOTES: Readonly<Record<string, string>> = {
   "stream:followers": "followers.head reuses pages.follower_count; the full reconcile is daily (the owner's floor)",
@@ -61,6 +65,15 @@ function quantiles(values: readonly number[]): Quantiles {
   const p50 = quantileOf(values, 0.5);
   const p95 = quantileOf(values, 0.95);
   return p50 === null || p95 === null ? null : { p50, p95 };
+}
+
+/**
+ * A walk outside the steady-state band (design §3.12 A1): a first-pass
+ * backlog, or a backfill only one-time events start. Every other walk recurs
+ * (polls, projection queues, applies, the socket) and counts in the band.
+ */
+export function isOneTimeWalk(spec: Pick<ResourceSpec, "key" | "triggers">): boolean {
+  return ONE_TIME_BACKLOG_KEYS.has(spec.key) || spec.triggers.every((trigger) => ONE_TIME_TRIGGERS.has(trigger));
 }
 
 function refKey(ref: LegacyRef): string {
@@ -165,7 +178,7 @@ export interface DemandRow {
   kind: string;
   observed: number;
   /** Polls due in the window plus the reads its socket frames imply; null when
-   *  neither models the key (walks, apply follow-ups). */
+   *  neither models the key (walk steps, apply follow-ups). */
   expected: number | null;
   ratio: number | null;
   verdict: "ok" | "outside" | "not_modelled";
@@ -176,10 +189,12 @@ export interface PageDemand {
   page: string;
   mode: SyncPageRow["mode"];
   attempts: { urgent: number; requests: number; planned: number };
-  /** Urgent + planned attempts of keys that are not walks. */
+  /** Urgent + planned attempts, recurring walks included; the one-time
+   *  backlog walks are left out (listed in `walks`). */
   steadyState: number;
   band: { min: number; max: number };
   inBand: boolean;
+  /** Every walk key of the page; a recurring one is also a `resources` row. */
   walks: Array<{ resource: string; observed: number; oneTimeBacklog: boolean }>;
   resources: DemandRow[];
   outside: DemandRow[];
@@ -197,17 +212,21 @@ export interface LegacyVolumeRow {
 }
 
 export interface LiveDecision {
-  /** Frames the router reads (a fan message REST already confirmed, or one in
-   *  an excluded chat, is read by nothing and counted in `notRead`). */
+  /** Frames the router reads. A fan message no key reads at its frame's time
+   *  (a chat excluded from message sync, a message the chain confirmed by a
+   *  capture before the frame) is counted in `notRead` by reason instead. */
   frames: number;
   notRead: number;
-  /** Frame received → the first shadow admission of its key after it. */
+  notReadReasons: Record<string, number>;
+  /** Frame received → the first shadow admission after it of a key that reads
+   *  it (a fan message: its chat's head, or finding its chat). */
   shadowAdmissionLagMs: Quantiles;
   /** Frame received → the legacy store held it. */
   legacyArrivalLagMs: Quantiles;
   withoutShadowAdmission: number;
   withoutLegacyArrival: number;
   targetP95Ms: number;
+  /** Null without a frame to read; false when a frame got no shadow read. */
   meetsTarget: boolean | null;
 }
 
@@ -230,14 +249,14 @@ export interface ShadowWindowReport {
   verdict: { a1: boolean; a2: boolean; a3: boolean | null; a4: boolean };
 }
 
-/** A socket frame of the window: its page, time, the work key it routes to
- *  (resource, subject) and the id the legacy store keys it by. */
-interface FrameFact { pageId: number; atMs: number; resource: string; subject: string; ref: string }
+/** A socket frame of the window: its page, time, the work keys that read it
+ *  (resources of one subject) and the id the legacy store keys it by. */
+interface FrameFact { pageId: number; atMs: number; resources: readonly string[]; subject: string; ref: string }
 
 interface WindowFrames {
   receipts: number;
   unreadable: number;
-  fanMessages: Array<Omit<FrameFact, "resource"> & { item: WsItem }>;
+  fanMessages: Array<Omit<FrameFact, "resources"> & { item: Extract<WsItem, { kind: "message_created" }> }>;
   transactions: FrameFact[];
   /** Per page, the decoded receipts (routing input). */
   byPage: Map<number, Array<{ atMs: number; items: WsItem[] }>>;
@@ -261,7 +280,7 @@ async function readWindowFrames(
         if (item.kind === "message_created" && !item.isOwn) {
           frames.fanMessages.push({ pageId: receipt.pageId, atMs, subject: item.message.groupId, ref: item.message.id, item });
         } else if (item.kind === "transaction" && item.status === FANSLY_TRANSACTION_STATUS_NEW && item.type !== FANSLY_PAYOUT_TRANSACTION_TYPE) {
-          frames.transactions.push({ pageId: receipt.pageId, atMs, resource: "transactions.head", subject: "", ref: item.id });
+          frames.transactions.push({ pageId: receipt.pageId, atMs, resources: ["transactions.head"], subject: "", ref: item.id });
         }
       }
     }
@@ -270,27 +289,40 @@ async function readWindowFrames(
 }
 
 /** The keys that read a fan message: the chat's head, or finding the chat. */
-const FAN_MESSAGE_READ_KEYS: ReadonlySet<string> = new Set(["dm-messages.head", "dm-conversations.find"]);
+export const FAN_MESSAGE_READ_KEYS: readonly string[] = ["dm-messages.head", "dm-conversations.find"];
 
-/** Each fan-message frame with the key the router sends it to; frames no key
- *  reads (already confirmed, an excluded chat) are counted apart. */
-async function routedFanFrames(
+/**
+ * The fan-message frames a key reads, and those none reads by reason. Which
+ * key reads a frame is left open: the frame matches the first shadow
+ * admission of either read key of its chat, so a chat legacy lists after the
+ * frame cannot turn the shadow's `.find` into a missing `.head`. Only whether
+ * a frame needs a read at all is judged, by the router with the thread facts
+ * as they stood at the frame (`routeThreadAt`): a chat known then and excluded
+ * from message sync, or a message the chain confirmed by a capture before the
+ * frame, needs none; a chain rebuilt after the window cannot drop a frame.
+ */
+async function fanFramesToRead(
   db: Database,
   frames: WindowFrames["fanMessages"],
-): Promise<{ routed: FrameFact[]; notRead: number }> {
-  const routed: FrameFact[] = [];
-  let notRead = 0;
+): Promise<{ toRead: FrameFact[]; notRead: Record<string, number> }> {
+  const toRead: FrameFact[] = [];
+  const notRead: Record<string, number> = {};
   const pageIds = [...new Set(frames.map((frame) => frame.pageId))];
   for (const pageId of pageIds) {
     const ofPage = frames.filter((frame) => frame.pageId === pageId).sort((a, b) => a.atMs - b.atMs);
     const decisions = await routeReceiptsOffline(db, { pageId, receipts: ofPage.map((frame) => ({ atMs: frame.atMs, items: [frame.item] })) });
     ofPage.forEach((frame, index) => {
-      const signal = decisions[index]?.signals.find((entry) => FAN_MESSAGE_READ_KEYS.has(entry.resource) && entry.subject === frame.subject);
-      if (signal === undefined) notRead += 1;
-      else routed.push({ pageId, atMs: frame.atMs, resource: signal.resource, subject: frame.subject, ref: frame.ref });
+      const decision = decisions[index]!;
+      const read = decision.signals.some((entry) => FAN_MESSAGE_READ_KEYS.includes(entry.resource) && entry.subject === frame.subject);
+      if (read) {
+        toRead.push({ pageId, atMs: frame.atMs, resources: FAN_MESSAGE_READ_KEYS, subject: frame.subject, ref: frame.ref });
+      } else {
+        const reason = decision.thread(frame.subject).excluded ? "excluded_chat" : "confirmed_before_frame";
+        notRead[reason] = (notRead[reason] ?? 0) + 1;
+      }
     });
   }
-  return { routed, notRead };
+  return { toRead, notRead };
 }
 
 /** The reads the frames of each page imply, per page and resource. */
@@ -330,7 +362,20 @@ function demandOfPage(
     const workClass = observedRow?.class ?? spec?.class ?? "planned";
     if (workClass === "urgent" || workClass === "requests" || workClass === "planned") attempts[workClass] += observed;
     if (spec?.kind === "goal") {
-      walks.push({ resource: key, observed, oneTimeBacklog: ONE_TIME_BACKLOG_KEYS.has(key) });
+      const oneTimeBacklog = isOneTimeWalk(spec);
+      walks.push({ resource: key, observed, oneTimeBacklog });
+      if (oneTimeBacklog || workClass === "requests") continue;
+      steadyState += observed;
+      rows.push({
+        resource: key,
+        class: workClass,
+        kind: spec.kind,
+        observed,
+        expected: null,
+        ratio: null,
+        verdict: "not_modelled",
+        reason: "a recurring walk: its steps are not modelled per resource; counted in the steady state",
+      });
       continue;
     }
     if (workClass !== "requests") steadyState += observed;
@@ -450,7 +495,7 @@ async function liveDecision(
   db: Database,
   input: {
     frames: FrameFact[];
-    notRead: number;
+    notRead: Record<string, number>;
     pageIds: readonly number[];
     window: { start: Date; end: Date };
     target: number;
@@ -460,16 +505,27 @@ async function liveDecision(
   const admissions = await listSyncAdmissions(db, {
     pageIds: input.pageIds,
     shadow: true,
-    resources: [...new Set(input.frames.map((frame) => frame.resource))],
+    resources: [...new Set(input.frames.flatMap((frame) => frame.resources))],
     from: input.window.start,
     to: new Date(input.window.end.getTime() + ADMISSION_SEARCH_MS),
   });
   const keyOf = (pageId: number, resource: string, subject: string) => `${pageId}\u0000${resource}\u0000${subject}`;
+  // Admission times per key, ascending (the read orders by admission).
   const byKey = new Map<string, number[]>();
   for (const admission of admissions) {
     const key = keyOf(admission.pageId, admission.resource, admission.subject);
-    byKey.set(key, [...(byKey.get(key) ?? []), admission.admittedAt.getTime()]);
+    const times = byKey.get(key);
+    if (times === undefined) byKey.set(key, [admission.admittedAt.getTime()]);
+    else times.push(admission.admittedAt.getTime());
   }
+  const firstAdmission = (frame: FrameFact): number | undefined => {
+    let first: number | undefined;
+    for (const resource of frame.resources) {
+      const at = byKey.get(keyOf(frame.pageId, resource, frame.subject))?.find((time) => time >= frame.atMs);
+      if (at !== undefined && (first === undefined || at < first)) first = at;
+    }
+    return first;
+  };
   const arrivals = new Map<number, Map<string, Date>>();
   for (const pageId of input.pageIds) {
     const refs = input.frames.filter((frame) => frame.pageId === pageId).map((frame) => frame.ref);
@@ -483,7 +539,7 @@ async function liveDecision(
   let withoutShadow = 0;
   let withoutLegacy = 0;
   for (const frame of input.frames) {
-    const admitted = byKey.get(keyOf(frame.pageId, frame.resource, frame.subject))?.find((at) => at >= frame.atMs);
+    const admitted = firstAdmission(frame);
     if (admitted === undefined) withoutShadow += 1;
     else shadowLags.push(admitted - frame.atMs);
     const arrived = arrivals.get(frame.pageId)?.get(frame.ref);
@@ -493,13 +549,17 @@ async function liveDecision(
   const shadowQ = quantiles(shadowLags);
   return {
     frames: input.frames.length,
-    notRead: input.notRead,
+    notRead: Object.values(input.notRead).reduce((total, count) => total + count, 0),
+    notReadReasons: input.notRead,
     shadowAdmissionLagMs: shadowQ,
     legacyArrivalLagMs: quantiles(legacyLags),
     withoutShadowAdmission: withoutShadow,
     withoutLegacyArrival: withoutLegacy,
     targetP95Ms: input.target,
-    meetsTarget: shadowQ === null ? null : shadowQ.p95 <= input.target && withoutShadow === 0,
+    // Every frame to read must have its shadow read, within the target.
+    meetsTarget: input.frames.length === 0
+      ? null
+      : withoutShadow === 0 && shadowQ !== null && shadowQ.p95 <= input.target,
   };
 }
 
@@ -565,9 +625,9 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   const legacy = await legacyVolume(db, { pages: input.pages, window: input.window, observed });
 
   // A3: live-path decisions.
-  const fan = await routedFanFrames(db, frames.fanMessages);
+  const fan = await fanFramesToRead(db, frames.fanMessages);
   const fanMessages = await liveDecision(db, {
-    frames: fan.routed,
+    frames: fan.toRead,
     notRead: fan.notRead,
     pageIds,
     window: input.window,
@@ -576,7 +636,7 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   });
   const transactions = await liveDecision(db, {
     frames: frames.transactions,
-    notRead: 0,
+    notRead: {},
     pageIds,
     window: input.window,
     target: LIVE_PATH_TARGET_P95_MS.transactions,

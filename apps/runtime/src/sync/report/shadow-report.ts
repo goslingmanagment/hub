@@ -180,9 +180,11 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     const unexplained = window.legacy.filter((row) => !row.explained).map((row) => row.ref);
     lines.push(`A2 legacy volume: ${unexplained.length === 0 ? "every stream and sender explained" : `unexplained: ${unexplained.join(", ")}`}`);
     const { fanMessages, transactions, offline } = window.livePath;
-    lines.push(`A3 fan messages: ${fanMessages.frames} frames, shadow p95 ${seconds(fanMessages.shadowAdmissionLagMs?.p95)} `
+    lines.push(`A3 fan messages: ${fanMessages.frames} frames to read (${fanMessages.withoutShadowAdmission} without a shadow read, `
+      + `${fanMessages.notRead} needing none), shadow p95 ${seconds(fanMessages.shadowAdmissionLagMs?.p95)} `
       + `(target ${seconds(fanMessages.targetP95Ms)}), legacy p95 ${seconds(fanMessages.legacyArrivalLagMs?.p95)}`);
-    lines.push(`A3 transactions: ${transactions.frames} frames, shadow p95 ${seconds(transactions.shadowAdmissionLagMs?.p95)} `
+    lines.push(`A3 transactions: ${transactions.frames} frames (${transactions.withoutShadowAdmission} without a shadow read), `
+      + `shadow p95 ${seconds(transactions.shadowAdmissionLagMs?.p95)} `
       + `(target ${seconds(transactions.targetP95Ms)}), legacy p95 ${seconds(transactions.legacyArrivalLagMs?.p95)}`);
     if (offline !== null) {
       lines.push(`A3 offline decisions over ${offline.receipts} receipts of the previous 24 h: `

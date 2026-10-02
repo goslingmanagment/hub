@@ -37,6 +37,8 @@ const FAN = "200000000000000001";
 const GROUP = "300000000000000001";
 const TX = "777000000000000001";
 const MINUTE = 60_000;
+/** Legacy listed the fixture's chats long before any frame of the window. */
+const LISTED_BEFORE = () => new Date(Date.now() - 24 * 3_600_000);
 const logger = createLogger("silent");
 
 function db(): Database {
@@ -50,7 +52,7 @@ function ctx() {
 async function shadowPage(): Promise<WsCapturePage> {
   const page = await seedWsCapturePage({ db: db(), pool: testDb!.pool }, { ownRef: OWN, label: "lilly-1" });
   await setModeDirect(testDb!.pool, page.pageId, "shadow");
-  await seedWsThread({ db: db(), pool: testDb!.pool }, { pageId: page.pageId, groupId: GROUP, fanRef: FAN });
+  await seedWsThread({ db: db(), pool: testDb!.pool }, { pageId: page.pageId, groupId: GROUP, fanRef: FAN, firstSeenAt: LISTED_BEFORE() });
   return page;
 }
 
@@ -103,10 +105,31 @@ describe("the shadow report (design §3.12)", () => {
     const page = await shadowPage();
     const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
     await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
     // A fan message in a chat excluded from message sync: no key reads it.
     const excluded = "300000000000000009";
-    await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: page.pageId, groupId: excluded, fanRef: "200000000000000009", excluded: true });
-    await page.capture(wsCreated(wsMessage({ groupId: excluded, senderId: "200000000000000009" })), new Date(start.getTime() + 30 * MINUTE));
+    await seedWsThread({ db: db(), pool: testDb.pool }, {
+      pageId: page.pageId, groupId: excluded, fanRef: "200000000000000009", excluded: true, firstSeenAt: LISTED_BEFORE(),
+    });
+    await page.capture(wsCreated(wsMessage({ groupId: excluded, senderId: "200000000000000009" })), at(30 * MINUTE));
+    // A message the chain confirmed by a capture before its frame: no key reads it.
+    const confirmed = "300000000000000008";
+    await seedWsThread({ db: db(), pool: testDb.pool }, {
+      pageId: page.pageId, groupId: confirmed, fanRef: "200000000000000008", firstSeenAt: LISTED_BEFORE(),
+      headConfirmedId: "400000000000000002", headConfirmedAt: at(34 * MINUTE),
+    });
+    await page.capture(
+      wsCreated(wsMessage({ id: "400000000000000001", groupId: confirmed, senderId: "200000000000000008" })),
+      at(35 * MINUTE),
+    );
+    // A new fan's first message: legacy lists the chat 2 min after the frame,
+    // so the router did not know it then and the shadow finds the chat 4 s later.
+    const fresh = "300000000000000007";
+    await page.capture(wsCreated(wsMessage({ groupId: fresh, senderId: "200000000000000007" })), at(25 * MINUTE));
+    await seedWsThread({ db: db(), pool: testDb.pool }, {
+      pageId: page.pageId, groupId: fresh, fanRef: "200000000000000007", firstSeenAt: at(27 * MINUTE),
+    });
+    await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: fresh, at: at(25 * MINUTE + 4_000) });
     const report = await buildShadowReport(ctx(), {
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -120,19 +143,22 @@ describe("the shadow report (design §3.12)", () => {
     expect(row("notifications.forward")).toMatchObject({ observed: 2, expected: 2, verdict: "ok" });
     expect(row("dm-messages.head")).toMatchObject({ class: "urgent", observed: 1, expected: 1, verdict: "ok" });
     expect(row("transactions.head")).toMatchObject({ observed: 1, expected: 1, verdict: "ok" });
+    // The new chat's frame implies finding the chat, not reading its head.
+    expect(row("dm-conversations.find")).toMatchObject({ class: "urgent", observed: 1, expected: 1, verdict: "ok" });
     // A 30-minute poll that never ran is listed with its reason.
     expect(row("dm-conversations.head")).toMatchObject({ observed: 0, expected: 2, verdict: "outside" });
     expect(demand.walks).toContainEqual({ resource: "media-stats.walk", observed: 3, oneTimeBacklog: true });
-    expect(demand.attempts).toEqual({ urgent: 2, requests: 0, planned: 5 });
-    expect(demand.steadyState).toBe(4);
+    expect(demand.attempts).toEqual({ urgent: 3, requests: 0, planned: 5 });
+    expect(demand.steadyState).toBe(5);
     expect(demand.inBand).toBe(false);
 
     expect(window.livePath.fanMessages).toMatchObject({
-      frames: 1,
-      notRead: 1,
-      shadowAdmissionLagMs: { p50: 6_000, p95: 6_000 },
+      frames: 2,
+      notRead: 2,
+      notReadReasons: { excluded_chat: 1, confirmed_before_frame: 1 },
+      shadowAdmissionLagMs: { p50: 4_000, p95: 6_000 },
       withoutShadowAdmission: 0,
-      withoutLegacyArrival: 1,
+      withoutLegacyArrival: 2,
       meetsTarget: true,
     });
     expect(window.livePath.transactions).toMatchObject({
@@ -148,7 +174,7 @@ describe("the shadow report (design §3.12)", () => {
     expect(hints).toMatchObject({ basis: "window", legacy: 4, explained: true });
     expect(hints.shadowKeys).toEqual(expect.arrayContaining(["dm-messages.head"]));
 
-    expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 7, violations: 0 }] });
+    expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 8, violations: 0 }] });
     expect(window.verdict).toMatchObject({ a1: false, a3: true, a4: true });
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");

@@ -56,7 +56,17 @@ export async function seedWsCapturePage(
 /** A DM thread of the page; bound threads get a fan row. */
 export async function seedWsThread(
   handles: { db: Database; pool: Pool },
-  input: { pageId: number; groupId: string; fanRef?: string | null; excluded?: boolean; headConfirmedId?: string | null },
+  input: {
+    pageId: number;
+    groupId: string;
+    fanRef?: string | null;
+    excluded?: boolean;
+    headConfirmedId?: string | null;
+    /** Capture time of the page that confirmed the head (default: now when a head is given). */
+    headConfirmedAt?: Date;
+    /** When the row was first written (default: now). */
+    firstSeenAt?: Date;
+  },
 ): Promise<number> {
   let fanId: number | null = null;
   if (input.fanRef !== null && input.fanRef !== undefined) {
@@ -64,10 +74,15 @@ export async function seedWsThread(
     fanId = fan!.id;
   }
   const metadata = input.excluded === true ? { messageSyncExcludedReason: "partner_missing_from_aggregation_accounts" } : {};
+  const headConfirmedId = input.headConfirmedId ?? null;
   const result = await handles.pool.query<{ id: string }>(
-    `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, metadata, head_confirmed_id)
-     values ($1, $2, $3, $4::jsonb, $5) returning id::text as id`,
-    [input.pageId, fanId, input.groupId, JSON.stringify(metadata), input.headConfirmedId ?? null],
+    `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, metadata, head_confirmed_id,
+                                  head_confirmed_at, first_seen_at)
+     values ($1, $2, $3, $4::jsonb, $5, $6, coalesce($7::timestamptz, now())) returning id::text as id`,
+    [
+      input.pageId, fanId, input.groupId, JSON.stringify(metadata), headConfirmedId,
+      headConfirmedId === null ? null : input.headConfirmedAt ?? new Date(), input.firstSeenAt ?? null,
+    ],
   );
   return Number(result.rows[0]!.id);
 }
