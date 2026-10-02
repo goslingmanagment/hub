@@ -946,6 +946,8 @@ export const syncPages = pgTable(
     lastSendAttemptId: bigint("last_send_attempt_id", { mode: "number" }),
     lastCompletedAt: timestamp("last_completed_at", { withTimezone: true }),
     wsRouterCursor: bigint("ws_router_cursor", { mode: "number" }).notNull().default(0),
+    // 0235 (step 3, owner decision №8): DM exclusion reasons lifted on the page.
+    liftedDmExclusions: text("lifted_dm_exclusions").array().notNull().default(sql`'{}'::text[]`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   },
@@ -953,6 +955,10 @@ export const syncPages = pgTable(
     modeCheck: check("sync_pages_mode_check", sql`${table.mode} in ('off', 'shadow', 'handover', 'live')`),
     holdPairCheck: check("sync_pages_hold_pair_check", sql`(${table.holdKind} is null) = (${table.holdUntil} is null)`),
     cyclePosCheck: check("sync_pages_cycle_pos_check", sql`${table.cyclePos} between 0 and 9`),
+    liftedDmExclusionsCheck: check(
+      "sync_pages_lifted_dm_exclusions_check",
+      sql`${table.liftedDmExclusions} <@ array['partner_missing_from_aggregation_accounts', 'partner_unresolvable_from_account_lookup']::text[]`,
+    ),
   }),
 );
 

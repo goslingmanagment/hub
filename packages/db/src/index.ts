@@ -174,6 +174,7 @@ export * from "./repositories/sync/history-requests.ts";
 export * from "./repositories/sync/ws-router.ts";
 export * from "./repositories/sync/ws-gap.ts";
 export * from "./repositories/sync/media-handoff.ts";
+export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";
 export * from "./repositories/sync/legacy-streams.ts";
 export * from "./repositories/sync/legacy-import.ts";

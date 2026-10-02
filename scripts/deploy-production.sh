@@ -566,6 +566,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # it (no page is live before the step-3 switch), so a rollback finds it
   # empty and runs unchanged.
   "0234_sync_media_handoff.sql"
+  # Lifted DM exclusions per page (design S3-06, owner decision №8): one
+  # column on sync_pages, text[] NOT NULL DEFAULT '{}' (catalog-only), and its
+  # check. The previous image never names it (sync_pages is read and written
+  # by named columns), so it runs unchanged after a rollback; a lift the owner
+  # made lapses there (its conversation list re-applies the reason) until a
+  # forward deploy returns.
+  "0235_sync_pages_lifted_dm_exclusions.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

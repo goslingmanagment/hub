@@ -507,8 +507,14 @@ export async function requeueSyncWork(
 
 /** The registry keys `sync work enqueue` takes: every key the owner may
  *  start (`owner` trigger) except those with a lever of their own — the
- *  probe (`sync probe`) and the credential checks (the account routes). */
-const OWNER_ENQUEUE_EXCLUDED_KEYS: ReadonlySet<string> = new Set(["probe.manual", "account.verify", "account.identity"]);
+ *  probes (`sync probe`, `sync excluded probe`) and the credential checks
+ *  (the account routes). */
+const OWNER_ENQUEUE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
+  "probe.manual",
+  "probe.excluded-chat",
+  "account.verify",
+  "account.identity",
+]);
 
 export function ownerEnqueueKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURCE_SPECS): string[] {
   return specs

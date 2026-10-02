@@ -59,6 +59,7 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
 import { registerSyncSwitchCommands } from "./sync/cli/switch.ts";
@@ -3350,6 +3351,9 @@ export function buildProgram() {
   // Fansly Sync Engine step 3 (step-3 design §3.5 item 8): `sync switch`,
   // `sync switch check`, `sync rollback`.
   registerSyncSwitchCommands(sync, { requestLegacyRecovery: queueLegacyRecoverySync });
+  // Owner decision №8 (step-3 design S3-06): `sync excluded probe | report |
+  // lift | unlift`.
+  registerSyncExcludedCommands(sync);
 
   queue
     .command("planner-recover")

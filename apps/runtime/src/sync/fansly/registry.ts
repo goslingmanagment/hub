@@ -129,6 +129,8 @@ const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Prom
   (await import("./resources/stats.ts")).statsModule(variant);
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
+const probeExcludedChatModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/probe.ts")).probeExcludedChatModule;
 const wsConnectModule = async (): Promise<ResourceModule> =>
   (await import("./resources/ws-connect.ts")).wsConnectModule;
 const mediaDownloadModule = async (): Promise<ResourceModule> =>
@@ -637,6 +639,21 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: [],
     legacy: [sender("endpoint_probe"), sender("replay_probe")],
     module: probeModule,
+  },
+  {
+    // Owner decision №8 (step 3, S3-06): one head read of a chat the legacy
+    // engine excluded from message sync, asked for by `sync excluded probe`.
+    // A 403 is the chat's answer, never the session's (G8, E8): it closes the
+    // probe `served: false` and holds nothing; a 401 and a 429 stay page-wide.
+    // Journaled, never canonicalized (no DM state for an excluded chat).
+    key: "probe.excluded-chat", file: "probe", subject: "thread", kind: "trigger", class: "planned",
+    triggers: ["owner"], slo: {},
+    proof: "none", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
+    subjectScopedAuthStatuses: [403],
+    terminalStatuses: [400, 404, 410, 422],
+    operations: ["messages.page"],
+    legacy: [],
+    module: probeExcludedChatModule,
   },
 ];
 

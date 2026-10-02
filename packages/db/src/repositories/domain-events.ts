@@ -1243,6 +1243,17 @@ export async function listObservationsForReplay(
 }
 
 /**
+ * The stamp of an observation that is journaled as evidence and that no
+ * canonicalizer may ever consume: the integer column's maximum. Every family
+ * selects `parse_version < its version` (the sweep, its replay pass, health
+ * floors, parse debt), and `markObservationParsed` is forward-only, so a row
+ * stamped here stays out of every family at every future version. A stamp at
+ * a family's current version would not: the family's next version bump
+ * replays every row below it.
+ */
+export const NEVER_CANONICALIZED_PARSE_VERSION = 2_147_483_647;
+
+/**
  * Stamps an observation as consumed by canonicalizer version N. Forward-only:
  * a concurrent higher-version stamp is never regressed.
  */

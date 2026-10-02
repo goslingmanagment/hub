@@ -999,3 +999,22 @@ export async function getSyncAttemptSummaries(
     httpStatus: row.httpStatus === null ? null : Number(row.httpStatus),
   }]));
 }
+
+/** Every attempt of the given work rows of a page, oldest first (the owner's
+ *  evidence reads, e.g. `sync excluded report`). An attempt the telemetry
+ *  retention pruned is simply absent. */
+export async function listSyncAttemptsOfWorks(
+  db: Database,
+  input: { pageId: number; workIds: readonly number[] },
+): Promise<SyncAttemptRow[]> {
+  const ids = [...new Set(input.workIds)].filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (ids.length === 0) return [];
+  const result = await db.execute<AttemptSqlRow>(sql`
+    select ${attemptColumns}
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.work_id = any(${sql.param(ids.map(String))}::bigint[])
+     order by a.id
+  `);
+  return result.rows.map(normalizeAttemptRow);
+}

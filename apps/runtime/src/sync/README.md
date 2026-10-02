@@ -40,6 +40,7 @@ sync/
   report/                    `sync shadow report`: part A (the live window), part B (the past journal)
   switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
                              `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
+  excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -202,7 +203,8 @@ before the page's safe release: a graceful stop (shutdown, mode change) captures
 
 ## Live-only resources (step 3)
 
-Four keys never run in shadow (`liveOnly`): they need a page the engine owns.
+These four keys never run in shadow (`liveOnly`, as the identity check `account.identity` and the excluded-chat probe
+`probe.excluded-chat`, below): they need a page the engine owns.
 
 - `ws.connect` — the socket's HTTP Upgrade (wire `ws.upgrade`) as an admitted request: the page's socket owner
   (the slot's `FanslyWsSource`, seen by the actor and the transport as a `LivePageSocket`) asks for it at start and
@@ -228,6 +230,31 @@ The Upgrade and a CDN hop journal nothing (`capture` on their wire spec): no obs
 memory, right after the capture (`applyAnswer`); a crash before that, a busy erasure fence or a failed apply
 skips the attempt and reads the hop again as a new admission. A `local` plan (`applyLocal`) is a write without
 a request in one generation-fenced transaction (with the erasure fence when the entry takes it).
+
+## Excluded chats (step 3, owner decision №8)
+
+The legacy engine excluded chats from message sync (`page_dm_threads.metadata.messageSyncExcludedReason`:
+`partner_missing_from_aggregation_accounts`, `partner_unresolvable_from_account_lookup`); the engine reads none of
+them (`threadSkip`) and the socket shows their new messages. On a live page `pnpm cli sync excluded probe --page P
+[--sample 20] [--reason R]` asks for one `probe.excluded-chat` per sampled chat (bound, visible, most recently active
+first; audited `admin.sync_dm_exclusion_probe_request`): one head read of the chat, live only, an ordinary planned
+admission. Its answer is journaled and stamped `NEVER_CANONICALIZED_PARSE_VERSION` (the integer maximum, above every
+family version — a stamp at the DM family's own version would be replayed by its next bump), so no sweep ever
+canonicalizes it and an excluded chat gets no events, messages or archive rows from a probe. A served page closes the
+probe `served: true` (messages, newest/oldest time, ids the socket showed first); a 403 (`subjectScopedAuthStatuses`),
+a declared 400/404/410/422, a `success: false` envelope or a refused body is the chat's answer: `served: false`,
+nothing held, no breaker. A 401 and a 429 stay the page's (plan §9).
+
+`sync excluded report --page P [--reason R] [--record]` prints the newest probe's verdicts (served / not served /
+pending) with the evidence ids; `--record` keeps the summary as `admin.sync_dm_exclusion_probe`. `sync excluded lift
+--page P --reason R --evidence-page L` needs a live page and L's newest recorded probe of R with ≥ 10 probed chats,
+≥ 80 % served and no page-level error (E2): in one transaction the reason joins `sync_pages.lifted_dm_exclusions`
+(0235) and the page's bound threads lose it (audited `admin.sync_dm_exclusion_lift`). The engine's conversation list
+then never assigns a lifted reason to a thread it leaves bound, nor does the account probe re-exclude a lifted
+unresolvable chat, so those chats sync like any other (new heads are read; history only by request). An unbound
+thread keeps its reason. `sync excluded unlift --page P --reason R` takes the reason off the page's list; the next
+list pass assigns it again. The lift is per page: a later page is lifted after its own acceptance, naming the
+first page's recorded probe as evidence.
 
 ## Ownership
 
@@ -450,6 +477,7 @@ every report prints the rule it applied.
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
 | One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
+| Do the excluded chats of a live page load? Lift the exclusion | `pnpm cli sync excluded probe --page <label>`; `… report --page <label> --record`; `… lift --page <label> --reason <reason> --evidence-page <label>` |
 | Quarantined work, after the fix | `pnpm cli sync work list --page <label> --state quarantined`; `pnpm cli sync work requeue --page <label> --quarantined [--resource <key>]` |
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
