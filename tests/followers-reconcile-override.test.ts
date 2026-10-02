@@ -18,7 +18,9 @@ const authMocks = vi.hoisted(() => ({
 
 vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
-  return { ...actual, ...dbMocks };
+  // The page is the legacy engine's (the engine branch:
+  // tests/sync-engine-levers.integration.test.ts).
+  return { ...actual, ...dbMocks, listSyncPages: async () => [] };
 });
 
 vi.mock("../apps/runtime/src/services/auth.ts", () => authMocks);

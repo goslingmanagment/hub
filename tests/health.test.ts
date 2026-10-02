@@ -9,6 +9,9 @@ const healthMocks = vi.hoisted(() => ({
   countConversationSyncFailuresByAccount: vi.fn(
     async (): Promise<Array<{ platformAccountId: number; failingConversationCount: number }>> => [],
   ),
+  // No page is the Fansly Sync Engine's here: every page is judged by its
+  // legacy streams (the engine pages' block: tests/sync-engine-health).
+  listSyncPages: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
 vi.mock("../apps/runtime/src/services/connections.ts", () => ({
@@ -25,6 +28,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   countUnresolvedProjectionDebtByAccount: healthMocks.countUnresolvedProjectionDebtByAccount,
   countConversationSyncFailuresByAccount: healthMocks.countConversationSyncFailuresByAccount,
+  listSyncPages: healthMocks.listSyncPages,
 }));
 
 // getPublicSyncHealth now resolves live effective config; with no db overlay here it

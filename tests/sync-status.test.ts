@@ -23,6 +23,8 @@ vi.mock("@agency_hub_core/db", async () => {
     listPageSyncStates: dbMocks.listPageSyncStates,
     listCheckpointStates: dbMocks.listCheckpointStates,
     listSyncMonitorStreamRows: dbMocks.listSyncMonitorStreamRows,
+    // No page is the Fansly Sync Engine's here (its blocks: tests/sync-engine-health).
+    listSyncPages: async () => [],
   };
 });
 

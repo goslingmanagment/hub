@@ -33,6 +33,7 @@ import {
   setResourceHold,
   settleAttemptWithoutCapture,
   settleWork,
+  SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE,
   tryAcquireDmArchiveWriterFenceLock,
   upsertDemands,
   type Database,
@@ -763,6 +764,9 @@ export async function capture(
       demandRevision: admission.demandRevision,
       subjectQueue: admission.spec.subjectQueue === true,
       request: admission.request,
+      ...(read?.kind === "contract_violation"
+        ? { quarantineDetail: { field: read.violation.field, detail: read.violation.detail } }
+        : {}),
     }, decision, module);
     return { decision, paceGapMs: captured.paceGapMs };
   });
@@ -797,6 +801,9 @@ interface OutcomeTarget {
   subjectQueue: boolean;
   /** The request the attempt sent (a subject-queue walk's subject). */
   request: RequestPlan;
+  /** What a quarantine of the work records as its detail (the contract
+   *  violation's field, the apply's refusal). */
+  quarantineDetail?: Readonly<Record<string, unknown>>;
 }
 
 async function writeOutcomeDecision(
@@ -872,7 +879,13 @@ async function writeOutcomeDecision(
       });
       return;
     case "quarantine":
-      await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: next.reason });
+      await quarantineWork(tx, {
+        workId: work.id,
+        generation: d.generation,
+        errorClass: next.reason,
+        detail: target.quarantineDetail ?? {},
+        attemptId: target.attemptId,
+      });
       return;
     case "close": {
       const settled = await settleWork(tx, {
@@ -966,6 +979,18 @@ export function classifyApplyError(error: unknown): ApplyErrorKind {
     }
   }
   return "other";
+}
+
+/** What a quarantined work records of the apply error that stopped it
+ *  (`sync_work.result.quarantine.detail`): a resource's refusal and its own
+ *  account, a contract violation's field — never a driver message, which may
+ *  embed SQL and parameters. */
+export function applyErrorDetail(error: unknown): Record<string, unknown> {
+  for (const link of errorChain(error)) {
+    if (link instanceof ApplyQuarantine) return { ...link.detail, refusal: link.reason };
+    if (link instanceof FanslyContractViolationError) return { field: link.field, detail: link.detail };
+  }
+  return { error: errorName(error) };
 }
 
 /** When to try a deferred apply again, by the age of its answer. */
@@ -1150,7 +1175,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
     if (kind === "deferred" || kind === "transient") {
       const payloadGone = [...errorChain(error)].some((link) => isCapturePayloadUnavailable(link));
       if (payloadGone && answerAgeMs > PAYLOAD_UNAVAILABLE_QUARANTINE_MS) {
-        quarantine = await markAttemptQuarantined(tx, { attemptId, error: name });
+        quarantine = await markAttemptQuarantined(tx, { attemptId, error: `${SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE}${name}` });
       } else {
         await markDeferred(tx, { attemptId, error: name, retryInMs });
       }
@@ -1201,6 +1226,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         demandRevision: attempt.demandRevision ?? work?.demandRevision ?? 0,
         subjectQueue,
         request: requestOfAttempt(attempt),
+        quarantineDetail: applyErrorDetail(error),
       }, decision, null);
       return { quarantined: true, alerts: decision.alerts };
     }
@@ -1224,7 +1250,13 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
       }
     }
     if (attempt.workId !== null) {
-      await quarantineWork(tx, { workId: attempt.workId, generation: d.generation, errorClass: `apply:${name}` });
+      await quarantineWork(tx, {
+        workId: attempt.workId,
+        generation: d.generation,
+        errorClass: `apply:${name}`,
+        detail: applyErrorDetail(error),
+        attemptId,
+      });
     }
     return { quarantined: true, alerts: [quarantinedAlert] };
   });

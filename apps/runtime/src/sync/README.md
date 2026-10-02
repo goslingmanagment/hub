@@ -13,7 +13,7 @@ as the engine (`LIVE_LOOP_ENABLED = false`, `sync page mode` moves only `off ↔
 ```
 sync/
   main.ts, context.ts        the `sync` runtime role: context, heartbeat, host, signals
-  cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync ownership …`) and its reads
+  cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync work …`, `sync ownership …`) and its reads
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
     pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
@@ -118,6 +118,32 @@ agent plane (`agentSyncStatus`, `agentSyncWhy`, `hub sync-status`, `hub sync-why
 
 "Sync now" (`syncPageRefresh`, `refreshSyncPage`) makes the page's poll rows due now and wakes its actor; it sends
 nothing itself, and an `off` page (no actor) answers 409 `sync_page_off`.
+
+### Engine-owned pages on the legacy surfaces (step 3, S3-02)
+
+A page in `handover`/`live` has frozen legacy streams, so the surfaces that speak in legacy streams speak for the
+engine instead; `fansly/legacy-streams.ts` maps a legacy stream to the registry keys that took it over (generated
+from the registry's `legacy` refs; `@agency_hub_core/db`'s `FANSLY_ENGINE_LEGACY_STREAMS` is its SQL copy, pinned
+equal by `tests/sync-legacy-streams.test.ts`). `off`/`shadow` pages are untouched.
+
+| Surface | On an engine page |
+|---|---|
+| `/api/v1/health/sync` | legacy checks skipped; an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min |
+| Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each legacy stream from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
+| Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
+| Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates as on a legacy page and closes the row done |
+| Dataset `sync_streams` | rows from the live work per legacy stream: `failed` (quarantined / vendor-blocked) > `paused` > `running` > `ok`; success = the newest applied read (a page-level key's at any age, a thread / target / fan key's within 24 h); failure = a standing one (an active row whose last outcome failed); every lookup bounded per key, never by the journal's length |
+
+A quarantine records why in `sync_work.result.quarantine` (`{reason, detail, attemptId, at}`: an `ApplyQuarantine`
+detail or a contract violation's field). `pnpm cli sync work list --page P [--state quarantined] [--resource R]`
+shows it; `pnpm cli sync work requeue --page P --work <id> | --quarantined [--resource R]` takes rows out of
+quarantine — a live row whose last attempt holds a captured answer goes back to `running` with that attempt
+`deferred`, so the actor re-applies it from the journal before any new read (no request); other rows, and a row
+whose captured body can no longer be read (`apply_error` `payload_unavailable:…`), open due now (audited
+`admin.sync_work_requeue`). It touches only the journal the page runs (live on `handover`/`live`, shadow otherwise),
+and `--work` ids are all-or-nothing. `pnpm cli sync work enqueue --page P --resource <key> [--subject S]
+[--params <json>]` files the owner's own demand for a key with the `owner` trigger on a live page; `--subject` only
+for a key that runs per subject (audited `admin.sync_work_enqueue`).
 
 `requests/urgent.ts` is how the API and the CLIs ask the actor for a read instead of calling Fansly: `enqueueAndWait`
 upserts the work of a registry key with the `api` trigger and waits up to 15–30 s for `applied_revision` to reach the
@@ -315,6 +341,8 @@ step-3 switch.
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
 | One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
+| Quarantined work, after the fix | `pnpm cli sync work list --page <label> --state quarantined`; `pnpm cli sync work requeue --page <label> --quarantined [--resource <key>]` |
+| A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
 | The shadow acceptance | `pnpm cli sync shadow report --window <start>/<end> --out <path>` (part B alone: `--part b`, outside 00:00–05:00 UTC) |

@@ -187,6 +187,9 @@ export async function requestAllPagesSync(
   input: {
     scope: SyncTriggerScope;
     reason: SyncRequestSource;
+    /** Pages another engine serves (the Fansly Sync Engine's, step 3): their
+     *  legacy streams are fenced, so nothing is requested for them here. */
+    excludePageIds?: ReadonlySet<number>;
   },
 ) {
   if (input.scope === "posts") {
@@ -199,6 +202,7 @@ export async function requestAllPagesSync(
   }>;
 
   for (const page of pages) {
+    if (input.excludePageIds?.has(page.id) === true) continue;
     const request = await requestPageSync(app, boss, {
       pageLabel: page.label,
       scope: input.scope,

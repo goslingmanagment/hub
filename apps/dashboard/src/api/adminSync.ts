@@ -100,3 +100,14 @@ export function useAdminUpdateCredentials(pageLabel: string) {
     },
   });
 }
+
+/** The Fansly Sync Engine's status of every page (`/api/v1/sync/pages`,
+ *  owner session): mode, owner, holds, socket, queue by why it waits. */
+export function useSyncEnginePages(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["syncEngine", "pages"],
+    queryFn: () => kernel.syncPages(),
+    refetchInterval: 10_000,
+    enabled: options.enabled ?? true,
+  });
+}

@@ -42,6 +42,7 @@ import {
   followersReconcileQueuedSince,
 } from "./sync/followers-reconcile-floor.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
+import { buildEngineDomainBlock, readEngineStatusFacts, type EngineStatusFacts } from "./sync-status-engine.ts";
 import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
@@ -66,7 +67,11 @@ export type SyncDomainBlockState =
   | "delayed"
   | "failed"
   | "paused"
-  | "not_available";
+  | "not_available"
+  /** The page is the Fansly Sync Engine's (`handover`/`live`, design step 3
+   *  §3.2): its legacy streams are frozen, the block describes the engine's
+   *  live work instead (`engineMode`). */
+  | "engine";
 
 export interface SyncDomainProgress {
   label: string;
@@ -122,6 +127,8 @@ type QueueContext = {
 export interface SyncDomainBlockStatus {
   block: SyncDomainBlockKey;
   state: SyncDomainBlockState;
+  /** Set exactly when `state` is `engine`: the page's engine mode. */
+  engineMode?: "handover" | "live";
   succeededAt: string | null;
   progress: SyncDomainProgress | null;
   progressStream: SyncStream | null;
@@ -604,6 +611,26 @@ export function mapDomainBlockToSyncUx(block: SyncDomainBlockStatus): SyncUxSumm
         detail: "This sync domain is not available for this platform.",
         updatedAt,
       });
+    case "engine":
+      if (block.needsAttention) {
+        return summary("attention", {
+          label: reasonCode === "credentials_invalid" ? "Reconnect" : "Needs attention",
+          headline: reasonCode === "credentials_invalid"
+            ? "Reconnect to resume sync"
+            : "The Fansly Sync Engine needs attention",
+          detail: reasonSummary,
+          updatedAt: block.succeededAt,
+          requiresAction: reasonCode === "credentials_invalid",
+        });
+      }
+      return summary(block.engineMode === "handover" ? "catching_up" : "healthy", {
+        label: block.engineMode === "handover" ? "Switching" : "Fansly Sync Engine",
+        headline: block.engineMode === "handover"
+          ? "Switching to the Fansly Sync Engine"
+          : "Managed by the Fansly Sync Engine",
+        detail: reasonSummary,
+        updatedAt: block.succeededAt,
+      });
     case "up_to_date":
     default:
       return summary("healthy", {
@@ -624,6 +651,16 @@ function buildPageSyncUx(blocks: SyncDomainBlockStatus[]) {
       headline: "Not available",
       detail: "No sync domains are available for this page.",
     });
+  }
+
+  // An engine page: its blocks speak for the engine's live work.
+  const engineBlocks = supportedBlocks.filter((block) => block.state === "engine");
+  if (engineBlocks.length > 0) {
+    return mapDomainBlockToSyncUx(
+      engineBlocks.find((block) => block.statusReason?.code === "credentials_invalid")
+        ?? engineBlocks.find((block) => block.needsAttention)
+        ?? engineBlocks[0]!,
+    );
   }
 
   const requiresReconnect = supportedBlocks.find((block) => block.statusReason?.code === "credentials_invalid");
@@ -1629,7 +1666,12 @@ export async function getSyncStatusSnapshot(
     fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
   const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
-  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => fanslyPageIds.includes(page.id))
+  // Pages the Fansly Sync Engine owns report its live work, not their frozen
+  // legacy cursors (design step 3 §3.2 item 2).
+  const engineFacts: Map<number, EngineStatusFacts> = fanslyPageIds.length > 0 && effectiveConfig !== null
+    ? await readEngineStatusFacts(app.db, { pageIds: fanslyPageIds, settingMs: effectiveConfig.fanslyDefaultDelayMs })
+    : new Map();
+  const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => fanslyPageIds.includes(page.id) && !engineFacts.has(page.id))
     .map(async page => [page.id, await getFanslyWsHintDiagnostic(app, page.label, effectiveConfig ?? app.config)] as const)));
   const dmFullSweepSlaByPage = new Map(scopedPages
     .filter((page) => fanslyPageIds.includes(page.id))
@@ -1707,6 +1749,29 @@ export async function getSyncStatusSnapshot(
         app.config,
         page,
       );
+      const engine = engineFacts.get(page.id);
+      if (engine !== undefined) {
+        const engineBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
+          const policy = SYNC_DOMAIN_POLICY[block];
+          const streams = supportedTasks
+            .filter((stream) => policy.primaryStreams.includes(stream) || policy.supportingStreams.includes(stream))
+            .map((stream) => ({ stream, role: policy.primaryStreams.includes(stream) ? "primary" as const : "supporting" as const }));
+          return [block, streams.length === 0
+            ? deriveDomainState(block, page, [], [])
+            : buildEngineDomainBlock(block, streams, engine)] as const;
+        })) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
+        return {
+          pageId: page.id,
+          pageLabel: page.label,
+          platform: page.platform,
+          modelSlug: page.modelSlug,
+          modelName: page.modelName,
+          username: page.username,
+          displayName: page.displayName,
+          blocks: engineBlocks,
+          syncUx: buildPageSyncUx(SYNC_DOMAIN_BLOCKS.map((block) => engineBlocks[block])),
+        } satisfies SyncStatusPage;
+      }
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
         const domainTasks = supportedTasks
           .filter((stream) => SYNC_DOMAIN_POLICY[block].primaryStreams.includes(stream) || SYNC_DOMAIN_POLICY[block].supportingStreams.includes(stream))
