@@ -31,6 +31,7 @@ import {
   setPageOfapiAccountId,
   claimOfapiCollectionJob,
   checkpointOfapiCollectionJob,
+  closeAdmissionRefusedOfapiCollectionRuns,
   reserveOfapiCollectionRequest,
   resumeOfapiCollectionJob,
   saveOfapiReadSnapshot,
@@ -902,4 +903,78 @@ it("uses the runtime visitor handler to preserve exactly one UTC day without a s
   ]);
   await runOfapiCollectionJob(app, approved.id, ofapiCollectionHandlers);
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+// 2026-09-18: a 93% disk refused every scheduled read at capture admission.
+// Each run parked as paused and held its category's schedule until an owner
+// noticed; nothing was collected again for two weeks.
+describe("capture-admission refusals of scheduled runs", () => {
+  const setStorageHealthy = (healthy: boolean) =>
+    db.pool.query(
+      "update ofapi_storage_health_state set healthy=$1,breached=$2,checked_at=clock_timestamp(),updated_at=clock_timestamp()",
+      [healthy, !healthy],
+    );
+  async function scheduledRun(at: Date) {
+    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
+      category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
+      dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false }] }, actor);
+    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], at);
+    return id!;
+  }
+  const later = (at: Date) => new Date(at.getTime() + 16 * 60000);
+
+  it("ends a refused scheduled run failed with no request, and the next interval schedules", async () => {
+    const at = new Date();
+    const id = await scheduledRun(at);
+    await setStorageHealthy(false);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect(await runOfapiCollectionJob(app, id)).toEqual({
+      state: "failed",
+      reason: "scheduled_run_refused:storage_unhealthy",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({ state: "failed", used_calls: 0 });
+    await setStorageHealthy(true);
+    const next = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at));
+    expect(next).toHaveLength(1);
+    expect(next[0]).not.toBe(id);
+  });
+
+  it("keeps a refused one-off run paused for the owner", async () => {
+    const created = await job(["me"]);
+    await setStorageHealthy(false);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect(await runOfapiCollectionJob(app, created.id)).toEqual({
+      state: "paused",
+      reason: "Capture admission: storage_unhealthy",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("closes runs parked by a refusal before the fix, and no other pause", async () => {
+    const at = new Date();
+    const id = await scheduledRun(at);
+    const token = (await claimOfapiCollectionJob(app.db, id))!;
+    await checkpointOfapiCollectionJob(app.db, { id, token, checkpoint: {}, state: "paused",
+      reason: "Capture admission: storage_unhealthy" });
+    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at))).toEqual([]);
+
+    expect(await closeAdmissionRefusedOfapiCollectionRuns(app.db)).toEqual([{
+      id, pageId, category: "profile_notifications", reason: "scheduled_run_refused:storage_unhealthy",
+    }]);
+    expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({
+      state: "failed", reason: "scheduled_run_refused:storage_unhealthy", lease_token: null,
+    });
+    const [nextId] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at));
+    expect(nextId).toBeDefined();
+
+    // A pause held for a captured vendor outcome stays for the owner.
+    const nextToken = (await claimOfapiCollectionJob(app.db, nextId!))!;
+    await checkpointOfapiCollectionJob(app.db, { id: nextId!, token: nextToken, checkpoint: {}, state: "paused",
+      reason: "Vendor HTTP 404; response captured" });
+    expect(await closeAdmissionRefusedOfapiCollectionRuns(app.db)).toEqual([]);
+    expect(await getOfapiCollectionJob(app.db, nextId!)).toMatchObject({ state: "paused" });
+  });
 });
