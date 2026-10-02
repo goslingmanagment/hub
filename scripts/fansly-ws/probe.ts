@@ -9,6 +9,7 @@ import { createProbeTransportDiagnostics } from "../../apps/runtime/src/services
 import { correlationKeyFingerprint, readCorrelationKey } from "./correlation-key.ts";
 import { observeFanslyProbe, MAX_PROBE_DURATION_MS } from "./probe-observer.ts";
 import { readBindingReceipt, verifyBindingBeforeConnect } from "./binding-receipt.ts";
+import { refuseEngineOwnedPage } from "./engine-owned.ts";
 import { PROBE_HANDSHAKE_WINDOW_MS, withFanslyScriptSendGuard } from "./send-guard.ts";
 
 export { readProbeSnapshot } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
@@ -65,6 +66,7 @@ export async function runStoredFanslyProbe(input: {
   let before: Awaited<ReturnType<typeof readProbeSnapshot>> | undefined;
 
   try {
+    await refuseEngineOwnedPage(db, input.pageLabel);
     before = await readProbeSnapshot(db, config, input.pageLabel);
     const context = before;
     const bindingPreflight = binding === undefined ? undefined

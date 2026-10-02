@@ -12,6 +12,7 @@ import {
   getNotificationIncidentByKey,
   incrementAiMediaDescribeRefusals,
   insertAiGenerationContent,
+  isFanslyPageEngineOwned,
   isAiMediaContentRefused,
   isAiMediaRefRefused,
   reserveAiGatewayUsageEvent,
@@ -125,7 +126,18 @@ function nextUtcMidnight(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 }
 
-async function defaultDownload(app: AppContext, input: { url: string; pageId: number }) {
+/** The describer's download when no `deps.download` is given: through the
+ *  page's own egress, the CDN hop under the page's send guard. */
+export async function downloadAiMediaThroughPageEgress(
+  app: AppContext,
+  input: { url: string; pageId: number },
+): Promise<MediaDownloadResult> {
+  // A page the Fansly Sync Engine owns sends nothing through the legacy path
+  // (step-3 design §3.1 item 9): like a closed send guard, nothing was sent
+  // and the row looks again later.
+  if ((await isFanslyPageEngineOwned(app.db, input.pageId)).owned) {
+    return { ok: false, reason: "send_guard", httpStatus: null };
+  }
   const egress = await resolveEgress(app, { kind: "page", pageId: input.pageId });
   try {
     // Plan §2.5: a Fansly CDN hop rides the page's send guard; the download
@@ -429,7 +441,7 @@ async function processRow(
     return { status: "budget_deferred", sent: false, stop: true };
   }
 
-  const download = deps.download ?? ((args) => defaultDownload(app, args));
+  const download = deps.download ?? ((args) => downloadAiMediaThroughPageEgress(app, args));
   const downloaded = await download({ url: resolution.url, pageId: row.pageId });
   if (!downloaded.ok && downloaded.reason === "send_guard") {
     // The page's send guard did not admit the CDN request (the page is closed,

@@ -11,6 +11,7 @@ import {
   createModel,
   ensureFanslyPageSendGuard,
   ensurePageSyncStates,
+  ensureSyncPage,
   getPageSyncState,
   listFanslySendGuards,
   requestAiMediaAcceleratorRead,
@@ -492,6 +493,58 @@ describe("the legacy DM paths on a page the engine owns", () => {
       expect(network.arrivals).toEqual([]);
       expect(await journalCount(f.page.id)).toBe(0);
       expect(f.app.fanslySendGuards!.counters).toMatchObject({ captures: 0, engineOwnedRefusals: 2 });
+    } finally {
+      await network.close();
+    }
+  });
+});
+
+// ── Step 3: the switch's fence in front of the guard ────────────────────────
+
+describe("a page the switch fenced: handover plus the engine's guard row (step-3 design §3.1)", () => {
+  it("the legacy schedulers lease nothing, and every source is still refused at the wire", async (context) => {
+    if (!testDb) return context.skip();
+    const network = await startFakeFanslyNetwork();
+    try {
+      const f = await legacyDmFixture(network);
+      // The switch's phase A: mode first (the predicate), then the guard
+      // flip (done by the fixture).
+      await ensureSyncPage(f.app.db, { pageId: f.page.id });
+      await testDb.pool.query(
+        "update sync_pages set mode = 'handover', mode_changed_by = 'test' where page_id = $1", [f.page.id],
+      );
+      const healthBefore = await f.health();
+      await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["dm_messages"], source: "scheduled" });
+
+      // The predicate fences before the guard: no lease, so no refusal, no
+      // retry and no failure charged to the stream.
+      expect(await executeNextSyncPageChunk(f.app, f.page.id)).toMatchObject({ kind: "idle" });
+      expect(await getPageSyncState(f.app.db, f.page.id, "dm_messages")).toMatchObject({
+        status: "pending", leasedSeq: null, retryKind: null, retryAt: null, consecutiveFailures: 0, blockerKind: null,
+      });
+      // The targeted backfill finds no lease and does not wait for one.
+      const startedAt = Date.now();
+      expect(await runTargetedThreadBackfill(f.app, { threadId: f.threads[HEALTHY]! })).toMatchObject({
+        outcome: "lease_unavailable", requests: 0, requestAttempts: 0,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(f.app.fanslySendGuards!.counters).toMatchObject({ captures: 0, engineOwnedRefusals: 0 });
+
+      // The catch-all: every source of the journal's vocabulary is refused
+      // at the capture, in this process as in any other.
+      for (const source of FANSLY_SEND_SOURCES) {
+        const refused = await f.app.fanslySendGuards!.forPage(f.page.id, source)
+          .acquire({ operation: "probe", requestTimeoutMs: 2_000 })
+          .then(() => null, (error: unknown) => error);
+        expect(refused).toBeInstanceOf(FanslyPageOwnedBySyncEngineError);
+      }
+      expect(f.app.fanslySendGuards!.counters).toMatchObject({
+        captures: 0, engineOwnedRefusals: FANSLY_SEND_SOURCES.length,
+      });
+      expect(network.arrivals).toEqual([]);
+      expect(network.tunnels).toBe(0);
+      expect(await journalCount(f.page.id)).toBe(0);
+      expect(await f.health()).toEqual(healthBefore);
     } finally {
       await network.close();
     }

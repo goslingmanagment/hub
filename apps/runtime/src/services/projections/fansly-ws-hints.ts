@@ -2,8 +2,8 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark, listEventAccounts, listEventsSince, setProjectionWatermark, isFanslyWsHintDrainDue,
-  lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent, requestPageSync,
-  tryAcquireDmArchiveWriterFenceLock, type Database,
+  isFanslyPageEngineOwned, lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent,
+  requestPageSync, tryAcquireDmArchiveWriterFenceLock, type Database,
 } from "@agency_hub_core/db";
 import { FANSLY_WS_HINT_TYPES, resolveFanslyWsHintPolicy } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
@@ -28,7 +28,13 @@ const DRAIN_WAKE_INTERVAL_MS = 5 * 60_000;
 
 /** Existing minutely projector: events -> operational receipts/dirty queue.
  * No HTTP. One bounded ledger page per account/tick, including when disabled.
- * Minimal diagnostic callers without config are explicitly default-off. */
+ * Minimal diagnostic callers without config are explicitly default-off.
+ *
+ * A page the Fansly Sync Engine owns (`handover`/`live`, step-3 design §3.1
+ * item 6) only has its watermark advanced over the batch: no hint receipt, no
+ * `fansly_ws_dm` plane write, no wake of the fenced DM stream. Its socket
+ * receipts route their demand in the engine's post-ack hook (I18), and its
+ * deletions are the engine's `dm-live.deletions`. */
 export async function runFanslyWsHintProjection(
   app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>,
   input?: { accountId?: number | null },
@@ -46,6 +52,10 @@ export async function runFanslyWsHintProjection(
     const watermark = await getProjectionWatermark(app.db, FANSLY_WS_HINT_PROJECTION, accountId);
     const events = await listEventsSince(app.db, { accountId, afterSeq: watermark, limit: 500 });
     totals.eventsSeen += events.length;
+    if ((await isFanslyPageEngineOwned(app.db, accountId)).owned) {
+      if (events.length) await setProjectionWatermark(app.db, FANSLY_WS_HINT_PROJECTION, accountId, events.at(-1)!.accountSeq);
+      continue;
+    }
     for (const event of events) {
       if (event.type !== FANSLY_WS_SIGNAL_EVENT || event.observationId == null) continue;
       const parsed = signalSchema.safeParse(event.data);
