@@ -39,7 +39,8 @@ pnpm cli ofapi-message-material-replay \
 ```
 
 The dates are the receipt window of the reported incident, not the message
-creation window. Preview is a SQL READ ONLY transaction. It reports candidate
+creation window. The CLI opens only a database context; it does not initialize provider clients
+or run their credential preflight. Preview is a SQL READ ONLY transaction. It reports candidate
 captures/items, skipped shapes and a resume cursor; candidate counts precede
 erasure filtering and event deduplication. It prints no message bodies and
 makes no OFAPI calls. Confirm page and window before executing on production.
