@@ -22,7 +22,10 @@ later gateway version and must preserve the same feature and output contracts.
 
 `POST /api/v1/ai/gateway/stream`
 
-- Auth: chatter API key only.
+- Auth: owner cookie session only. A raw prompt on the agency's provider keys is owner content, so
+  no device token of any role or client profile is admitted. Every client streams through
+  `POST /api/v1/ai/features/:feature`, where the hub assembles the prompt itself; the sections
+  below describe the shared gateway internals both routes use.
 - Response: `text/event-stream`.
 - Request schema: `aiGatewayStreamBodySchema` in `packages/contracts/src/routes.ts`.
 - Frame schema: each SSE `data:` payload is one `aiGatewayStreamFrameSchema` JSON object.

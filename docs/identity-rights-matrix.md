@@ -60,6 +60,8 @@ pages that account is granted; the owner is granted every page implicitly.
 | Manual resolve of a held chat-extension send — `/pages/{label}/client-send-custody/{attempt}/resolve` (`session` + page scope) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 | List of held chat-extension sends and of the ones resolved by hand — `/client-send-custody` (`session`; the page is a filter in the query) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 | Chat-extension "new subscribers" list — `/client/pages/{label}/audience-new` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
+| AI persona prompts and raw prompts — `/ai/personas`, `/ai/personas/{key}`, `/ai/gateway/stream`, `/admin/ai/personas*` (`owner-session`) | **yes** (legacy writes answer 409: edit in the console) | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
+| Client AI — `/ai/persona-catalog` (metadata, no prompt text), `/ai/features/{feature}` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach (features behind the owner's switches) |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -405,6 +407,13 @@ someone:
 - **The dashboard and the cabinet are different gates.** A chatter holds a real
   cookie session and still cannot open `/models`; `any-session` is the
   self-serve surface, `session` is the dashboard.
+- **Persona prompts are owner content.** No device token — any role, any client
+  version, a legacy token with no client profile, the owner's own — reads a
+  persona's system prompt, writes or archives a persona, or sends a raw prompt.
+  Before this cutover every full device token could do all of that, with no
+  audit row (the narrow chat-extension token never could). The clients keep
+  exactly what they use: the metadata catalog and the feature lane, where the
+  hub assembles the prompt itself.
 
 ## The event matrix
 
@@ -420,6 +429,9 @@ someone:
 | Deactivated | Every credential 401s and both sign-in lanes refuse **with no oracle** — byte-identical answers for a disabled account and for one that never existed | `rights-matrix.integration` › *row «deactivated»*; the tombstone and the frozen mutations: `user-deactivation.integration` |
 | Deleted and login reused | Old credentials/links and old-ID actions fail; a new account has a new ID and only newly assigned access; old audit/spend attribution survives | `user-identity-reuse.integration` |
 | Stale username route or old card | It cannot resolve to a replacement user, including numeric logins | `user-identity-reuse.integration`; `team-account-lifecycle` |
+| Persona edited | Only the owner by cookie, through `/admin/ai/personas`: every change is compare-and-set on the version (a stale tab gets 409) and commits an `ai_persona.created` / `updated` / `archived` audit row with no prompt text in the same transaction. The legacy `/ai/personas` writes are retired (409 for the owner, 403 for every bearer) | `rights-matrix.integration` › *row «persona edited»*; the lane in depth: `ai-persona-admin.integration` |
+| Persona prompts are owner content | Every device token — fresh or legacy, full or the chat-extension's narrow one, any role, the owner's included — and a chatter's cookie session answer 403 on the full-text list, the legacy writes and the raw prompt gateway; nothing changes and no AI spend is booked; the catalog still answers 200 to every device token without prompt text | `rights-matrix.integration` › *row «persona prompts are owner content»*; both enforcement modes: `auth-policy.integration` |
+| Client AI keeps working | A chatter's device token, a legacy one included, still streams through `/ai/features/{feature}` | `rights-matrix.integration` › *row «client AI keeps working»* |
 | Roles | owner: every page, console by cookie only; team_lead: dashboard but not the console, clients by assignment; chatter: cabinet and clients, never the dashboard; `content_manager`: cannot sign in anywhere | `rights-matrix.integration` › *§7 — roles* (four cases). The declarative policy grid per module: `auth-policy.integration` |
 | Another person signs in on the same PC | The principal and the assigned pages are the new person's; the previous person's local data is hidden but still on the disk | **manual + documented** (D23 of the desktop repo, #145) |
 | No pages of that platform | The extension shows CG-HUB-05; the desktop shows an empty state instead of reconnecting forever | **unit tests in the clients** |

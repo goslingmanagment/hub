@@ -14,12 +14,9 @@ import {
   getAiGenerationContentByRef,
   getFreshestUsableRecaps,
   listAiGenerationContent,
-  archiveAiPersona,
-  AiPersonaVersionConflictError,
   findPageByLabel,
   listAiPersonaStates,
   listAiPersonas,
-  upsertAiPersona,
 } from "@agency_hub_core/db";
 
 import {
@@ -36,6 +33,11 @@ import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts"
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { parseAiStreamCapabilities } from "./prompt-debug-echo.ts";
+import {
+  archiveAiPersonaAsOwner,
+  createAiPersonaAsOwner,
+  updateAiPersonaAsOwner,
+} from "./persona-admin.ts";
 import { aiPersonaDefinitionId } from "./persona-definition.ts";
 
 export {
@@ -53,15 +55,11 @@ interface PersonaRecord {
   revision: number;
 }
 
-const ADMIN_PERSONA_MUTATIONS_ENABLED = false;
-
-function requireAdminPersonaMutationsEnabled(): void {
-  if (!ADMIN_PERSONA_MUTATIONS_ENABLED) {
-    throw new ConflictError(
-      "AI persona administration is read-only until legacy client write access is closed",
-    );
-  }
-}
+// The legacy bearer write lane is closed (owner-session + retired): persona
+// writes go through the versioned, audited admin routes only, so there is
+// exactly one write lane.
+const LEGACY_PERSONA_WRITE_RETIRED_MESSAGE =
+  "Legacy AI persona writes are retired; use /api/v1/admin/ai/personas";
 
 function serializePersona(persona: PersonaRecord) {
   return {
@@ -94,22 +92,26 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return ingestAiUsageBatch(appContext, principal, request.body);
   });
 
+  // Raw prompt lane: owner cookie session only. A raw prompt on the agency's
+  // provider keys is owner content; clients stream through the feature route
+  // below, where the hub assembles the prompt. The declared policy and this
+  // guard must agree (owner-session <-> requireOwner), or log mode would differ.
   server.post("/api/v1/ai/gateway/stream", {
     schema: routeSchemas.aiGatewayStream,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
+    requireOwner(principal);
     const stream = await prepareAiGatewayStream(appContext, principal, request.body);
     await pipeAiGatewaySse(request, reply, stream);
   });
 
-  // Transitional legacy full-text route. Shipped clients still read this
-  // contract while the read-only catalog releases roll out.
+  // Legacy full-text list: owner cookie session only. Prompt text never
+  // reaches a device token of any role; clients read the catalog below.
   server.get("/api/v1/ai/personas", {
     schema: routeSchemas.aiPersonasList,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
+    requireOwner(principal);
     const personas = await listAiPersonas(appContext.db);
     return {
       personas: personas.map(serializePersona),
@@ -174,64 +176,29 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return { full: slot(found.full), short: slot(found.short) };
   });
 
-  // Transitional legacy write lane. Omitted expectedVersion retains the
-  // shipped clients' last-write-wins behavior until preservation coverage is
-  // proven. Numeric tokens remain additive for already-built newer clients.
+  // Retired legacy write lane. Registered so the vendored client SDKs keep
+  // their operation table, but nobody writes through it: a device token gets
+  // 403 from the owner-session policy, the owner gets a 409 naming the admin
+  // routes. It wrote last-write-wins without an audit row.
   server.put("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaUpsert,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    let persona;
-    try {
-      persona = await upsertAiPersona(appContext.db, {
-        key: request.params.key,
-        displayName: request.body.displayName,
-        systemBlock: request.body.systemBlock,
-        ...(request.body.expectedVersion !== undefined
-          ? { expectedVersion: request.body.expectedVersion }
-          : {}),
-      });
-    } catch (error) {
-      if (error instanceof AiPersonaVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
-    return serializePersona(persona);
+    requireOwner(principal);
+    throw new ConflictError(LEGACY_PERSONA_WRITE_RETIRED_MESSAGE);
   });
 
   server.delete("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaArchive,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
-    let archived;
-    try {
-      archived = await archiveAiPersona(
-        appContext.db,
-        request.params.key,
-        request.query.expectedVersion === undefined
-          ? undefined
-          : request.query.expectedVersion === 0
-            ? null
-            : request.query.expectedVersion,
-      );
-    } catch (error) {
-      if (error instanceof AiPersonaVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
-    if (archived === null) {
-      throw new NotFoundError("Persona not found");
-    }
-    return { archived: true, version: archived.revision };
+    requireOwner(principal);
+    throw new ConflictError(LEGACY_PERSONA_WRITE_RETIRED_MESSAGE);
   });
 
-  // Future permanent owner namespace. Full reads are cookie-session + owner
-  // only; mutations stay registered but fail closed until the legacy bearer
-  // write lane is removed. Bearer credentials cannot read prompt text here.
+  // The owner namespace: full reads and the only persona write lane. Cookie
+  // session + owner role only; every mutation is compare-and-set on the
+  // persona revision and commits its audit row in the same transaction.
   server.get("/api/v1/admin/ai/personas", {
     schema: routeSchemas.adminAiPersonasList,
   }, async (request) => {
@@ -246,21 +213,12 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    requireAdminPersonaMutationsEnabled();
-    try {
-      const persona = await upsertAiPersona(appContext.db, {
-        key: request.body.key,
-        displayName: request.body.displayName,
-        systemBlock: request.body.systemBlock,
-        expectedVersion: null,
-      });
-      return serializeAdminPersona(persona);
-    } catch (error) {
-      if (error instanceof AiPersonaVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
+    const persona = await createAiPersonaAsOwner(appContext, principal, {
+      key: request.body.key,
+      displayName: request.body.displayName,
+      systemBlock: request.body.systemBlock,
+    });
+    return serializeAdminPersona(persona);
   });
 
   server.put("/api/v1/admin/ai/personas/:key", {
@@ -268,21 +226,13 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    requireAdminPersonaMutationsEnabled();
-    try {
-      const persona = await upsertAiPersona(appContext.db, {
-        key: request.params.key,
-        displayName: request.body.displayName,
-        systemBlock: request.body.systemBlock,
-        expectedVersion: request.body.expectedVersion,
-      });
-      return serializeAdminPersona(persona);
-    } catch (error) {
-      if (error instanceof AiPersonaVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
+    const persona = await updateAiPersonaAsOwner(appContext, principal, {
+      key: request.params.key,
+      displayName: request.body.displayName,
+      systemBlock: request.body.systemBlock,
+      expectedVersion: request.body.expectedVersion,
+    });
+    return serializeAdminPersona(persona);
   });
 
   server.delete("/api/v1/admin/ai/personas/:key", {
@@ -290,23 +240,10 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    requireAdminPersonaMutationsEnabled();
-    let persona;
-    try {
-      persona = await archiveAiPersona(
-        appContext.db,
-        request.params.key,
-        request.query.expectedVersion,
-      );
-    } catch (error) {
-      if (error instanceof AiPersonaVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
-    if (persona === null) {
-      throw new NotFoundError("Persona not found");
-    }
+    const persona = await archiveAiPersonaAsOwner(appContext, principal, {
+      key: request.params.key,
+      expectedVersion: request.query.expectedVersion,
+    });
     return serializeAdminPersona(persona);
   });
 

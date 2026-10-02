@@ -199,11 +199,11 @@ both enforcement modes. A full device token is not affected.
 | GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — | no |
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — | no |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — | yes |
-| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — | no |
+| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `owner-session` | — | — | no |
 | GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — | yes |
-| GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — | no |
-| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — | no |
-| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — | no |
+| GET | `/api/v1/ai/personas` | `aiPersonasList` | `owner-session` | — | — | no |
+| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `owner-session` | — | — | no |
+| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `owner-session` | — | — | no |
 | GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — | yes |
 | GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — | no |
 | GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — | no |
