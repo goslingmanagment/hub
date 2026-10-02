@@ -9,6 +9,7 @@ import {
   INVALID_KNOWN_CHAT_DELAY_MS,
   INVALID_NO_CHAT_REPAIR_DELAY_MS,
   mergeDemandSignals,
+  OWN_MASS_MESSAGE_CONTAINER_TYPE,
   OwnBroadcastWindow,
   routeWsItems,
   unknownRouteThread,
@@ -176,6 +177,23 @@ describe("routeWsItems (design §6.2)", () => {
     const newer = message();
     expect(routeWsItems(items(created(newer)), context({ threads: { [GROUP]: { ...BOUND, headConfirmedId: msg.id } } })))
       .toMatchObject([{ resource: "dm-messages.head", subject: GROUP }]);
+  });
+
+  it("the page's own mass-message container (type 3) is never looked for; other messages of unknown chats are", () => {
+    // Production frame shape (2026-09-27, lilly-2): the page's own type-3
+    // message in a group holding the page alone, its correlation the group.
+    const container = message({ senderId: OWN, type: OWN_MASS_MESSAGE_CONTAINER_TYPE, correlationId: GROUP });
+    for (const thread of [unknownRouteThread(), { ...BOUND, bound: false }]) {
+      expect(routeWsItems(items(created(container)), context({ threads: { [GROUP]: thread } }))).toEqual([]);
+    }
+    // A chatter's own reply and a fan's message in an unknown chat are still found.
+    const find = [{ resource: "dm-conversations.find", subject: GROUP, demand: { reason: "ws:message_unknown_chat" } }];
+    expect(routeWsItems(items(created(message({ senderId: OWN, type: 1 }))), context())).toEqual(find);
+    expect(routeWsItems(items(created(message({ type: OWN_MASS_MESSAGE_CONTAINER_TYPE }))), context())).toEqual(find);
+    // A group the socket says was created is still found (the backstop).
+    expect(routeWsItems(items(serviceFrame({ type: 8, id: GROUP }, 4)), context())).toEqual([
+      { resource: "dm-conversations.find", subject: GROUP, demand: { reason: "ws:group_created" } },
+    ]);
   });
 
   it("deletions, new chats, money, subscriptions and payouts", () => {
