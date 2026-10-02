@@ -55,10 +55,14 @@ import { routeFanslyWsReceiptDemand } from "./route-receipt.ts";
 // - The connection: never self-scheduled. The source raises `ws.connect`
 //   demand (at start, and after every end on the step-1 ladder); the actor
 //   admits it like any request, and the transport runs `handshake()` inside
-//   the admitted step. The Upgrade rides an engine lease (the step-1
-//   `FanslySendLease` shape, G12/E15) whose send check is the pacer's: it is
-//   the last check before the request headers (I1–I3), and one admission is
-//   one Upgrade. The receiver keeps running after the 101.
+//   the admitted step. Nothing else asks for the page's connection, so a
+//   demand the database refused is written again — the same demand, the
+//   same due time — while the source holds the lock and has no connection
+//   (plan §9: demand outlives a database blip). The Upgrade rides an engine
+//   lease (the step-1 `FanslySendLease` shape, G12/E15) whose send check is
+//   the pacer's: it is the last check before the request headers (I1–I3),
+//   and one admission is one Upgrade. The receiver keeps running after the
+//   101.
 // - Frames: captured on the owning session (observation + pending receipt),
 //   then applied to the overlay and acked by the connection's applier, whose
 //   post-ack hook routes the receipt's demand in the ack transaction (I18);
@@ -68,7 +72,8 @@ import { routeFanslyWsReceiptDemand } from "./route-receipt.ts";
 //   socket down longer than two minutes raises `dm-conversations.ws-down`
 //   once per outage; the auth frame's refusal blocks the credentials
 //   generation (persisted on the connection row, as step 1) and raises
-//   `account.verify`, with no reconnect until the generation changes.
+//   `account.verify` (written again while the block lasts if the database
+//   refused it), with no reconnect until the generation changes.
 // - Stop: `disabled` drains (the receiver captures what the socket already
 //   delivered, ≤ 20 s; the applier ≤ 10 s; the connection row closes with the
 //   instant intake stopped, the next connection's `gap_since`); `ownership_lost`
@@ -245,6 +250,13 @@ export function upgradeOutcome(lease: Pick<EngineUpgradeLease, "sent" | "refusal
 
 type WsOwner = NonNullable<Awaited<ReturnType<typeof acquireFanslyWsOwnership>>>;
 
+/** The `ws.connect` demand the source asked for and has not written yet. */
+interface ConnectWant {
+  reason: "ws_start" | "ws_reconnect" | "ws_generation_changed";
+  dueAt: Date;
+  failures: number;
+}
+
 interface Connection {
   id: string;
   generation: string;
@@ -293,8 +305,14 @@ export class FanslyWsSource {
   #downListed = false;
   #failures = 0;
   #connectNotBefore: Date | null = null;
+  /** Asked for and not written yet (null: nothing outstanding). */
+  #connectWant: ConnectWant | null = null;
+  /** `ws.connect` writes run one at a time. */
+  #connectWrites: Promise<void> = Promise.resolve();
   #lastGeneration: string | null = null;
   #blockedGeneration: string | null = null;
+  /** The refused generation whose `account.verify` was not written. */
+  #verifyUnwritten: string | null = null;
   #owner: WsOwner | null = null;
   #connection: Connection | null = null;
   #started = false;
@@ -361,6 +379,8 @@ export class FanslyWsSource {
     }
     this.#state = "connecting";
     this.#connectNotBefore = null;
+    // This admitted step is the connection an unwritten demand asked for.
+    this.#connectWant = null;
     let context: Awaited<ReturnType<typeof readProbeSnapshot>>;
     let accountRef: string;
     try {
@@ -483,7 +503,8 @@ export class FanslyWsSource {
   }
 
   /** Until the lock session is lost or the source stops; meanwhile re-read a
-   *  blocked credentials generation. */
+   *  blocked credentials generation and write again the demand the database
+   *  refused. */
   async #whileOwned(lost: Promise<void>): Promise<void> {
     let isLost = false;
     void lost.then(() => {
@@ -493,6 +514,22 @@ export class FanslyWsSource {
       await Promise.race([lost, this.#sleep(this.#timing.recheckMs)]);
       if (isLost || this.#life.signal.aborted) return;
       if (this.#state === "blocked_generation") await this.#recheckBlocked();
+      await this.#retryUnwritten();
+    }
+  }
+
+  /** The one-time demands nothing else raises again: the connection while
+   *  the page has no socket, the verify while its generation stays refused.
+   *  (`repair.ws-gap` is retried by the next guard, `.ws-down` by the down
+   *  timer.) */
+  async #retryUnwritten(): Promise<void> {
+    const verify = this.#verifyUnwritten;
+    if (verify !== null) {
+      if (this.#state === "blocked_generation" && this.#blockedGeneration === verify) await this.#writeVerify(verify);
+      else this.#verifyUnwritten = null;
+    }
+    if (this.#connectWant !== null && this.#connection === null && (this.#state === "owning" || this.#state === "down")) {
+      await this.#writeConnect(true);
     }
   }
 
@@ -510,15 +547,27 @@ export class FanslyWsSource {
   #block(generation: string, refused: boolean): void {
     this.#state = "blocked_generation";
     this.#blockedGeneration = generation;
+    // No reconnect until the generation changes.
+    this.#connectWant = null;
     if (!refused) return;
     const { pageId, logger, metrics } = this.#d;
     metrics.increment("sync_ws_auth_refused", { pageId });
     logger.error({ pageId }, "Fansly sync WS: the socket refused the page's credentials; no reconnect until they change");
     // A REST answer decides whether the page's session is bad (a 401/403
     // holds the page, §9); the socket's own refusal is alert 2.
-    void this.#enqueue([{ resource: "account.verify", demand: { reason: "ws_auth_refused" } }]);
+    void this.#writeVerify(generation);
     void this.#d.alerts?.open({ subKey: "live_degraded", pageId, detail: "ws_auth_refused", shadow: false })
       .catch(() => undefined);
+  }
+
+  /** The refused generation's `account.verify`; kept for `#retryUnwritten`
+   *  while it could not be written. */
+  async #writeVerify(generation: string): Promise<void> {
+    if (await this.#enqueue([{ resource: "account.verify", demand: { reason: "ws_auth_refused" } }])) {
+      if (this.#verifyUnwritten === generation) this.#verifyUnwritten = null;
+    } else {
+      this.#verifyUnwritten = generation;
+    }
   }
 
   // ── one connection ────────────────────────────────────────────────────────
@@ -708,22 +757,55 @@ export class FanslyWsSource {
    * made the attempt, it would make that row due again at once (a newer
    * demand keeps a settling row open, I11) and skip the ladder.
    */
-  async #requestConnect(reason: "ws_start" | "ws_reconnect" | "ws_generation_changed"): Promise<void> {
-    const { pageId, clock } = this.#d;
-    const deadline = clock.monoNow() + this.#timing.settleWaitMs;
-    while (!this.#life.signal.aborted && clock.monoNow() < deadline) {
-      const open = await getOpenWorkForKey(this.#d.db, { pageId, shadow: false, resource: "ws.connect", subject: "" })
-        .catch(() => null);
-      if (open?.state !== "running") break;
+  async #requestConnect(reason: ConnectWant["reason"]): Promise<void> {
+    const deadline = this.#d.clock.monoNow() + this.#timing.settleWaitMs;
+    while (!this.#life.signal.aborted && this.#d.clock.monoNow() < deadline) {
+      if (!(await this.#connectRunning())) break;
       await this.#sleep(SETTLE_POLL_MS);
     }
     if (this.#life.signal.aborted) return;
-    const now = clock.wallNow();
+    const now = this.#d.clock.wallNow();
     const dueAt = reason === "ws_reconnect"
       ? new Date(now.getTime() + Math.round(wsReconnectDelayMs(this.#failures, this.#random(), this.#timing.reconnectBaseMs)))
       : now;
     this.#connectNotBefore = reason === "ws_reconnect" ? dueAt : null;
-    await this.#enqueue([{ resource: "ws.connect", dueAt, params: { failures: this.#failures }, demand: { reason } }]);
+    this.#connectWant = { reason, dueAt, failures: this.#failures };
+    await this.#writeConnect(false);
+  }
+
+  /**
+   * Write the wanted `ws.connect` demand, one write at a time; it stays
+   * wanted until a write lands (`#retryUnwritten` writes it again, with its
+   * first due time — the ladder's instant does not move). A retry leaves a
+   * running step alone: that step is the connection (`handshake` drops the
+   * want), or it ends and the next re-check writes the demand.
+   */
+  #writeConnect(retry: boolean): Promise<void> {
+    const write = this.#connectWrites.then(async () => {
+      const want = this.#connectWant;
+      if (want === null || this.#life.signal.aborted) return;
+      if (retry && await this.#connectRunning()) return;
+      const written = await this.#enqueue([{
+        resource: "ws.connect",
+        dueAt: want.dueAt,
+        params: { failures: want.failures },
+        demand: { reason: want.reason },
+      }]);
+      if (!written || this.#connectWant !== want) return;
+      this.#connectWant = null;
+      if (retry) {
+        this.#d.logger.info({ pageId: this.#d.pageId, reason: want.reason }, "Fansly sync WS: the connection demand was written on a retry");
+      }
+    });
+    this.#connectWrites = write.catch(() => undefined);
+    return write;
+  }
+
+  /** A `ws.connect` step of the page is running (unreadable: no). */
+  async #connectRunning(): Promise<boolean> {
+    const open = await getOpenWorkForKey(this.#d.db, { pageId: this.#d.pageId, shadow: false, resource: "ws.connect", subject: "" })
+      .catch(() => null);
+    return open?.state === "running";
   }
 
   // ── down ──────────────────────────────────────────────────────────────────

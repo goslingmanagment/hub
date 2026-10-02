@@ -40,7 +40,9 @@ import { speakFansly, WS_NOOP_FRAME, wsHostOptions } from "./helpers/sync-ws.ts"
 // and reconnects; the auth frame's refusal blocks the credentials generation
 // (account.verify, alert 2, the list head while down), with no reconnect until
 // the credentials change; the first connection after the legacy one starts its
-// gap at the legacy close and raises the repair.
+// gap at the legacy close and raises the repair; a `ws.connect` or
+// `account.verify` demand the database refused is written again (plan §9), so
+// the socket comes back after a database blip.
 
 const S = 300;
 
@@ -156,6 +158,37 @@ async function lockHolder(pageId: number): Promise<number | null> {
 async function scalar(text: string, values: unknown[] = []): Promise<number> {
   const result = await testDb!.pool.query<{ n: number }>(text, values);
   return Number(result.rows[0]?.n ?? 0);
+}
+
+/**
+ * A database blip under the source's demand writes: the live writes of
+ * `resource` whose attempt number (1-based) is in `refused` fail. A sequence
+ * counts the attempts — the refused transaction does not roll it back.
+ */
+async function refuseDemandWrites(resource: string, refused: readonly number[]): Promise<{
+  attempts(): Promise<number>;
+  restore(): Promise<void>;
+}> {
+  const pool = testDb!.pool;
+  await pool.query(`create sequence test_demand_attempts;
+    create function test_refuse_demand() returns trigger language plpgsql as $$
+    begin
+      if new.resource = '${resource}' and not new.shadow then
+        if nextval('test_demand_attempts') = any('{${refused.join(",")}}'::bigint[]) then
+          raise exception 'injected demand write failure';
+        end if;
+      end if;
+      return new;
+    end $$;
+    create trigger test_refuse_demand before insert on sync_work
+      for each row execute function test_refuse_demand()`);
+  return {
+    attempts: () => scalar("select (case when is_called then last_value else 0 end)::int as n from test_demand_attempts"),
+    async restore() {
+      await pool.query(`drop trigger test_refuse_demand on sync_work; drop function test_refuse_demand();
+        drop sequence test_demand_attempts`);
+    },
+  };
 }
 
 function upgrades(r: Rig): FakeArrival[] {
@@ -338,6 +371,67 @@ describe("the page's socket in the sync process", () => {
     expect(host.wsSource(pageId)?.state).toBe("open");
     expect(host.wsSource(pageId)?.downSince).toBeNull();
   }, 90_000);
+
+  it("a ws.connect demand the database refused is written again while the source holds the lock: the socket comes back at start and after an end", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const { pageId } = r.page;
+    // The first socket ends once verified; the second stays.
+    let sockets = 0;
+    r.server.onWebSocket = (peer) => {
+      sockets += 1;
+      const ends = sockets === 1;
+      speakFansly(peer, {
+        onSession: (session) => {
+          if (ends) setTimeout(() => session.close(), 500);
+        },
+      });
+    };
+    // Writes 1–2 (the start's) and 4 (the reconnect's) are refused.
+    const refused = await refuseDemandWrites("ws.connect", [1, 2, 4]);
+    try {
+      const host = await startHost(r, { seed: 23 });
+      await until(async () => (await connections(pageId)).filter((row) => row.verified_at !== null).length === 2
+        && host.wsSource(pageId)?.state === "open", 30_000, "the second connection verified");
+      // Written once landed: no write after the third and the fifth.
+      expect(await refused.attempts()).toBe(5);
+    } finally {
+      await refused.restore();
+    }
+    const rows = await connections(pageId);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.closed_at).not.toBeNull();
+    expect(rows[1]!.closed_at).toBeNull();
+    // Each written demand was one admission and one Upgrade.
+    expect(upgrades(r)).toHaveLength(2);
+    expect(await scalar(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'ws.connect' and sent_at is not null", [pageId],
+    )).toBe(2);
+    const work = await testDb.pool.query<{ reasons: string[]; state: string }>(
+      "select demand->'reasons' as reasons, state from sync_work where page_id = $1 and resource = 'ws.connect' order by id", [pageId],
+    );
+    expect(work.rows).toEqual([{ reasons: ["ws_start"], state: "done" }, { reasons: ["ws_reconnect"], state: "done" }]);
+  }, 60_000);
+
+  it("an account.verify the database refused is written again while the credentials generation stays refused", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const { pageId } = r.page;
+    r.server.onWebSocket = (peer) => speakFansly(peer, { refuseAuth: true });
+    const refused = await refuseDemandWrites("account.verify", [1]);
+    try {
+      const host = await startHost(r, { seed: 29 });
+      await until(async () => host.wsSource(pageId)?.state === "blocked_generation", 30_000, "the source blocked");
+      await until(async () => (await scalar(
+        "select count(*)::int as n from sync_work where page_id = $1 and not shadow and resource = 'account.verify'", [pageId],
+      )) === 1, 10_000, "the verify demand written on a retry");
+      await sleep(1_500);
+      expect(await refused.attempts()).toBe(2);
+    } finally {
+      await refused.restore();
+    }
+    expect(upgrades(r)).toHaveLength(1);
+  }, 60_000);
 
   it("the first connection after the legacy one: its gap starts at the legacy close, and a verified socket raises the repair", async (context) => {
     if (!testDb) return context.skip();

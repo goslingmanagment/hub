@@ -163,7 +163,10 @@ Upgrade rides an engine lease over the pacer's one-shot check (the last check be
 Upgrade). Frames are captured on the owning session, applied and acked by the connection's applier with the post-ack
 hook (what it leaves, the worker timer acks — and routes). A verified connection raises `repair.ws-gap`; a socket down
 for two minutes raises `dm-conversations.ws-down` once; the auth frame's refusal blocks the credentials generation
-(as in step 1), raises `account.verify` and alert 2, with no reconnect until the credentials change. The source stops
+(as in step 1), raises `account.verify` and alert 2, with no reconnect until the credentials change. Demand the
+database refused is written again: `ws.connect` (same due time) every 10 s while the source holds the lock and has no
+connection, `account.verify` while the generation stays refused, `repair.ws-gap` on the next guard, `.ws-down` on the
+next down check. The source stops
 before the page's safe release: a graceful stop (shutdown, mode change) captures what the socket already delivered
 (≤ 20 s) and applies it (≤ 10 s), then closes the connection row at the instant intake stopped — the next connection's
 `gap_since` — and the lock session; a lost ownership does not drain.
