@@ -122,6 +122,13 @@ describe("the legacy processes ask before they act", () => {
     ["apps/runtime/src/services/fansly-ws/worker.ts", "startFanslyWsWorker", "listEngineOwnedFanslyPages(app.db)"],
     ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageEngineOwned(owner.db, stored.page.id)"],
     ["apps/runtime/src/services/fansly-ws/worker.ts", "runPage", "isFanslyPageOwnedBySyncEngineError(error)"],
+    // Per event, in its transaction (no policy, receipt still filed) …
+    [
+      "apps/runtime/src/services/projections/fansly-ws-hints.ts",
+      "runFanslyWsHintProjection",
+      "isFanslyPageEngineOwned(db, accountId)",
+    ],
+    // … and before the DM stream wake.
     [
       "apps/runtime/src/services/projections/fansly-ws-hints.ts",
       "runFanslyWsHintProjection",

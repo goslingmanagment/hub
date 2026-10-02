@@ -168,9 +168,10 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 (`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
 `sync_silent` deadman, the AI fast lane (`page_held`), hydration dispatch and auto-approval, and the deletion
 reconcile's window drift pass. The legacy processes ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS
-supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector only
-advances its watermark, the AI describer neither downloads nor wakes the DM stream, and the deletion reconcile writes
-the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
+supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector files
+its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM stream wake; a deletion keeps its
+`mutation_debt` receipt, so a frame captured before the switch is still marked), the AI describer neither downloads nor
+wakes the DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
 `scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
 command to use instead. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
 reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query, so leaving to `off`

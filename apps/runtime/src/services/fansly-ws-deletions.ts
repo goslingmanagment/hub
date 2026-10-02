@@ -28,10 +28,14 @@
 //
 // On a page the Fansly Sync Engine owns (`handover`/`live`, step-3 design
 // §3.1 item 12) both shapes still write the marks — sticky and idempotent, the
-// same `markFanslyWsHotDeletion` the engine's `dm-live.deletions` uses, so the
-// receipts filed in the hour before the switch are applied — but they never
-// write a thread's stored window there: on those pages the window is the
-// engine's (`syncLegacyThreadSummaryAfterDeletion`, I9).
+// same `markFanslyWsHotDeletion` the engine's `dm-live.deletions` uses. The
+// hint projector keeps filing `mutation_debt` receipts on those pages, so a
+// deletion frame the legacy socket captured before the switch (acked in
+// shadow, where the engine writes nothing) is marked even when its receipt is
+// filed after the switch, and a switch reverted in phase B still gets its
+// handover hour's deletions. They never write a thread's stored window there:
+// on those pages the window is the engine's
+// (`syncLegacyThreadSummaryAfterDeletion`, I9).
 //
 // Neither shape inserts a row or calls Fansly: they read Hub's own receipts.
 // A mark is sticky. A later REST read of the message cannot clear it
