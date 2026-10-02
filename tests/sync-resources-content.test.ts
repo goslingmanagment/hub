@@ -272,7 +272,9 @@ describe("standing rows", () => {
   it("a page keeps one open row per poll and per standing walk", () => {
     const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
     const rows = pollsFor(registry, { registryOverrides: {} }, true);
-    expect(rows.filter((row) => row.kind === "goal").map((row) => row.resource).sort()).toEqual(["post-replies.walk", "posts.engagement"]);
+    expect(rows.filter((row) => row.kind === "goal").map((row) => row.resource).sort()).toEqual([
+      "catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement",
+    ]);
     expect(rows.find((row) => row.resource === "posts.engagement")).toEqual({ resource: "posts.engagement", class: "planned", everyMs: 6 * HOUR, kind: "goal" });
     // A poll row stays exactly what it was.
     expect(rows.find((row) => row.resource === "notifications.forward")).toEqual({ resource: "notifications.forward", class: "planned", everyMs: 30 * 60_000 });

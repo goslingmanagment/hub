@@ -1,0 +1,1120 @@
+import { sql } from "drizzle-orm";
+
+import {
+  countMediaStatsRefreshProgress,
+  getSyncAttempt,
+  listMediaStatsRefreshChunk,
+  markMediaStatsTopMediaDirty,
+  recordMediaStatsBackfillCursor,
+  recordMediaStatsBackfillProgress,
+  recordMediaStatsVisit,
+  seedMediaStatsQueue,
+  type CaptureCoverageStatus,
+  type Database,
+  type MediaStatsRefreshCandidate,
+  type MediaStatsTier,
+  type MediaStatsTiers,
+  type SubjectQueueKeyset,
+  type SyncAttemptRow,
+  type SyncPageRow,
+} from "@agency_hub_core/db";
+import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
+
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import {
+  answeredFloor,
+  BACKFILL_EMPTY_STREAK_LIMIT,
+  BACKFILL_OVERLAP_DAYS,
+  BACKFILL_WINDOWS_PER_VISIT,
+  backfillCursorJson,
+  countMediaStatBuckets,
+  FIRST_VISIT_REQUESTS,
+  isProviderRefusal,
+  MEDIA_STATS_DAILY_PERIOD_MS,
+  mediaBackfillCreationFloorMs,
+  mediaBackfillFirstMonthProbe,
+  mediaStatsWindowIsEmpty,
+  parseFanslyMediaStatsCursorState,
+  parseMediaBackfillCursor,
+  SEED_BATCH_SIZE,
+  servedMediaOfferRef,
+  servedWindowCoversRequest,
+  servedWindowSpansRequest,
+  steadyRefreshPlan,
+  steadyWindows,
+  TOP_MEDIA_MARK_LIMIT,
+  windowAnsweredBy,
+  windowKey,
+  type HoleLeftOpen,
+  type LongTailWindowMode,
+  type MediaBackfillCursor,
+  type WindowFailure,
+} from "../../../services/sync/fansly-media-stats.ts";
+import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../../../services/sync/fansly-stats.ts";
+import { ApplyQuarantine } from "../../engine/commit.ts";
+import {
+  effectiveTiers,
+  type ApplyInput,
+  type ApplyResult,
+  type LegacyImport,
+  type RequestPlan,
+  type ResourceModule,
+  type ShadowResult,
+  type StepPlan,
+} from "../../engine/resource.ts";
+import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
+import {
+  advanceShadowPass,
+  clearQueueSubjectBlocks,
+  currentShadowPass,
+  EMPTY_SHADOW_PASS,
+  parseShadowPass,
+  recordQueueSubjectFailures,
+  shadowPassWaitUntil,
+  standingRecheckAt,
+  type ShadowPass,
+} from "../lib/subject-queue.ts";
+import { fanslyResourceSpec } from "../registry.ts";
+
+// `media-stats.walk` (plan §5, design §5.18, owner decision №6 "экономно"):
+// per-media traffic, `GET /it/moie/statsnew`, journaled as
+// `media_offer_stats` and turned into events by inline canonicalization
+// (`pull/stats`). A standing walk over the `media_stats` queue the media-plane
+// and engagement projectors seed and dirty (design §4.3): dirty (a purchase,
+// the daily top-50 mark) → by tier → within a tier the window edge, never
+// visited newest first, then the oldest visit. The tiers are the owner's
+// (≤ 30 d daily, 31–90 d weekly, older monthly, D19), passed to the legacy
+// chunk query as its optional `tiers` input.
+//
+// One VISIT of one item is the legacy lane's visit, every rule kept — the
+// first-sight backfill in 31-day windows newest first down to the item's
+// creation (two all-zero windows buy one first-month probe), the tier's steady
+// refresh with the hole below it, the repeat guard, halve-once-then-stop on a
+// window the route does not honour, and the 90-day long-tail discovery with
+// its fallback to three 31-day windows — but one WINDOW per step. The legacy
+// day cap, chunk budget and continuations are gone: the pacer is the only
+// pace, so a visit is never cut short by a budget.
+//
+// How a visit spans steps: a visit is a pure procedure over the item as it
+// stood when the visit began (`snapshot`) and the answers of the windows it
+// has asked for so far (`outcomes`). Each step replays it — deterministically,
+// no clock, no randomness — until it needs a window it has no answer for: that
+// window is the step's one request, and the visit travels with the request
+// (`RequestPlan.step`), so the apply folds the answer into exactly the visit
+// the plan decided. A visit that ends writes what the legacy visit wrote: the
+// item's visit and backfill cursor (`recordMediaStatsVisit`), or only the
+// cursor a walk moved without a look. A failed window ends the visit: the
+// item's queue-row breaker opens (the engine's subject ladder) and the
+// backfill windows it had journaled stay in its cursor; a refused 90-day
+// window first tries the split plan, exactly as legacy.
+//
+// A visit replays only under the rules it began with. One in flight across a
+// deploy that changed a visit rule (`steadyWindows`, the backfill constants
+// shared with the legacy lane) no longer replays: it is ABANDONED, never
+// fatal — the plan drops it and starts the next due item afresh, an apply
+// whose step it was ends it without a look (the answer stays journaled and
+// canonicalized) and opens the item's queue-row breaker, so a visit that never
+// replays costs that item its backoff ladder, never the page's walk.
+
+const KEY = "media-stats.walk";
+const PLANE = "media_stats";
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+/** The walk looks at its queue again this long after it found nothing due
+ *  (the legacy stream's cadence). */
+export const MEDIA_STATS_RECHECK_MS = 6 * HOUR_MS;
+/** The page's coverage row is rewritten at most this often (an aggregate over
+ *  the whole queue, not a per-look record). */
+const COVERAGE_EVERY_MS = HOUR_MS;
+/** Error classes of a failure that is about the item (its breaker opened). */
+const SUBJECT_ERRORS: ReadonlySet<string> = new Set(["subject_failure", "envelope_unsuccessful", "subject_terminal"]);
+
+function recordOf(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function int(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+}
+
+// ── the tiers (owner decision №6, from the registry) ─────────────────────────
+
+/** The tiers of `media-stats.walk` on this page as the chunk query takes
+ *  them: the registry's (owner decision №6), or the page's override (`sync
+ *  page override --resource media-stats.walk --tiers … --owner-approved`). */
+export function mediaStatsOwnerTiers(page: Pick<SyncPageRow, "registryOverrides">): MediaStatsTiers {
+  const tiers = effectiveTiers(fanslyResourceSpec(KEY)!, page) ?? [];
+  const [fresh, mid, old] = tiers;
+  if (fresh?.maxAgeDays == null || mid?.maxAgeDays == null || old === undefined) {
+    throw new Error(`${KEY} needs three tiers (fresh, mid, older)`);
+  }
+  return {
+    freshDays: fresh.maxAgeDays,
+    midDays: mid.maxAgeDays,
+    freshEveryMs: fresh.everyMs,
+    midEveryMs: mid.everyMs,
+    oldEveryMs: old.everyMs,
+  };
+}
+
+/** How long after a visit an item of this tier is due again. */
+export function tierEveryMs(tiers: MediaStatsTiers, tier: MediaStatsTier): number {
+  return tier === "fresh" ? tiers.freshEveryMs : tier === "mid" ? tiers.midEveryMs : tiers.oldEveryMs;
+}
+
+export function pickDueMedia(
+  db: Database,
+  input: { pageId: number; now: Date; limit: number; after: SubjectQueueKeyset | null; tiers: MediaStatsTiers },
+): Promise<MediaStatsRefreshCandidate[]> {
+  return listMediaStatsRefreshChunk(db, {
+    pageId: input.pageId,
+    limit: input.limit,
+    now: input.now,
+    // Not read: the owner's tiers carry the long-tail interval.
+    longTailCycleDays: 30,
+    tiers: input.tiers,
+    ...(input.after === null ? {} : { after: input.after }),
+  });
+}
+
+// ── one visit, replayed ──────────────────────────────────────────────────────
+
+/** What the route has shown about its 90-day window (page-scoped, durable). */
+export interface MediaStatsPageState {
+  longTailWindowMode: LongTailWindowMode;
+  longTailWindowAnnounced: boolean;
+  /** The UTC day a 31-day probe after a refused 90-day window last failed. */
+  longTailProbeFailedDay: string | null;
+}
+
+/** The item as the visit began. */
+export interface MediaVisitSnapshot {
+  subjectRef: string;
+  tier: MediaStatsTier;
+  dirty: boolean;
+  createdAtPlatformMs: number | null;
+  firstSeenAtMs: number | null;
+  lastVisitedAtMs: number | null;
+  /** `subject_refresh_state.backfill_cursor` as the visit began. */
+  backfillCursor: Record<string, unknown>;
+  /** The visit's clock: every window and the item's age are measured from it. */
+  nowMs: number;
+  page: MediaStatsPageState;
+}
+
+export type MediaWindowOutcome =
+  | {
+    key: string;
+    ok: { servedAfterMs: number | null; servedBeforeMs: number | null; empty: boolean; buckets: number; observationId: number | null };
+  }
+  | { key: string; failed: WindowFailure };
+
+export interface MediaVisit {
+  snapshot: MediaVisitSnapshot;
+  outcomes: MediaWindowOutcome[];
+}
+
+export interface MediaWindowRequest {
+  key: string;
+  periodMs: number;
+  afterMs: number;
+  beforeMs: number;
+  mode: "backfill" | "steady";
+  /** The long tail's trailing 90-day window on a route not known to split. */
+  ninetyProbe: boolean;
+}
+
+export type MediaVisitRun =
+  /** The visit needs this window next. */
+  | { kind: "need"; window: MediaWindowRequest; page: MediaStatsPageState; counters: Record<string, number> }
+  /** A window failed: the visit ends; `progress` is the backfill cursor to
+   *  keep (null when it did not move). */
+  | { kind: "failed"; progress: Record<string, unknown> | null; page: MediaStatsPageState; counters: Record<string, number> }
+  /** The visit is over: `visited` is the look to record (null: nothing
+   *  durable to call a visit — `progress` then is a moved cursor, or null). */
+  | {
+    kind: "finished";
+    visited: { knownCount: number; backfillCursor: Record<string, unknown>; clearDirty: boolean } | null;
+    progress: Record<string, unknown> | null;
+    page: MediaStatsPageState;
+    counters: Record<string, number>;
+  };
+
+/** The replay asked for a different window than the one the step answered:
+ *  the visit began under other visit rules (a deploy while it was in flight). */
+export class MediaVisitDivergedError extends Error {
+  constructor(readonly expected: string, readonly recorded: string) {
+    super(`Media-stats visit replay diverged: asked ${expected}, the step answered ${recorded}`);
+    this.name = "MediaVisitDivergedError";
+  }
+}
+
+class NeedWindow {
+  constructor(readonly window: MediaWindowRequest) {}
+}
+
+type Window = { periodMs: number; afterMs: number; beforeMs: number };
+type Span = { afterMs: number; beforeMs: number };
+type Served = { afterMs: number | null; beforeMs: number | null };
+type Answer = { served: Served; honoured: boolean; empty: boolean; buckets: number; observationId: number | null };
+type SteadyResult = { status: "ok" | "failed"; buckets: number; complete: boolean; holeClosed: boolean };
+
+/**
+ * One visit (the legacy `visitCandidate` with its budgets removed) over the
+ * answers recorded so far. Pure: the same visit always asks for the same
+ * windows in the same order.
+ */
+export function runMediaVisit(visit: MediaVisit): MediaVisitRun {
+  const s = visit.snapshot;
+  const now = new Date(s.nowMs);
+  const today = fanslyUtcDayKey(now);
+  const page: MediaStatsPageState = { ...s.page };
+  const counters: Record<string, number> = {};
+  const count = (name: string, by = 1) => {
+    counters[name] = (counters[name] ?? 0) + by;
+  };
+  const candidate = {
+    createdAtPlatform: s.createdAtPlatformMs === null ? null : new Date(s.createdAtPlatformMs),
+    firstSeenAt: s.firstSeenAtMs === null ? null : new Date(s.firstSeenAtMs),
+  };
+  const cursor: MediaBackfillCursor = parseMediaBackfillCursor(s.backfillCursor, now);
+  const cursorAtEntry = JSON.stringify(backfillCursorJson(cursor));
+  const moved = () => {
+    const json = backfillCursorJson(cursor);
+    return JSON.stringify(json) === cursorAtEntry ? null : json;
+  };
+  const issued = new Set<string>();
+  const answered: Span[] = [];
+  let holeFrom: Date | null = null;
+  let holeLeftOpen: HoleLeftOpen | null = null;
+  let lastFailure: WindowFailure | null = null;
+  let next = 0;
+
+  const requestWindow = (window: Window & { mode: "backfill" | "steady"; ninetyProbe: boolean }): Answer | "repeat" | "failed" => {
+    const key = windowKey(window);
+    if (issued.has(key)) {
+      count("window_repeat");
+      return "repeat";
+    }
+    issued.add(key);
+    const outcome = visit.outcomes[next];
+    if (outcome === undefined) throw new NeedWindow({ key, ...window });
+    if (outcome.key !== key) throw new MediaVisitDivergedError(key, outcome.key);
+    next += 1;
+    if ("failed" in outcome) {
+      lastFailure = outcome.failed;
+      return "failed";
+    }
+    const served = { afterMs: outcome.ok.servedAfterMs, beforeMs: outcome.ok.servedBeforeMs };
+    answered.push({ afterMs: served.afterMs ?? window.afterMs, beforeMs: served.beforeMs ?? window.beforeMs });
+    return {
+      served,
+      honoured: windowWasHonoured({ afterMs: window.afterMs, beforeMs: window.beforeMs }, served),
+      empty: outcome.ok.empty,
+      buckets: outcome.ok.buckets,
+      observationId: outcome.ok.observationId,
+    };
+  };
+  const windowHeld = (window: Window) => issued.has(windowKey(window)) || windowAnsweredBy(window, answered);
+
+  /** Halve once, then stop the item's backfill (legacy `handleUnhonouredWindow`). */
+  const unhonoured = (): "narrowed" | "stopped" => {
+    const narrower = narrowedSpanDays(cursor.guard.spanDays);
+    if (!cursor.guard.narrowed && narrower < cursor.guard.spanDays) {
+      cursor.guard.spanDays = narrower;
+      cursor.guard.narrowed = true;
+      return "narrowed";
+    }
+    cursor.done = true;
+    cursor.stopReason = "window_not_honoured";
+    count("window_not_honoured");
+    return "stopped";
+  };
+
+  const runBackfill = (): { status: "ok" | "failed"; windows: number; buckets: number } => {
+    const creationFloorMs = mediaBackfillCreationFloorMs(candidate);
+    let windows = 0;
+    let journaledWindows = 0;
+    let buckets = 0;
+    while (windows < BACKFILL_WINDOWS_PER_VISIT && !cursor.done) {
+      if (creationFloorMs !== null && cursor.nextBeforeMs < creationFloorMs) {
+        cursor.done = true;
+        cursor.stopReason = "created_at_floor";
+        cursor.floorBasis = "created_at";
+        break;
+      }
+      if (cursor.probeHitBeforeMs !== null && cursor.nextBeforeMs <= cursor.probeHitBeforeMs) {
+        cursor.done = true;
+        cursor.stopReason = "created_at_floor";
+        cursor.floorBasis = "created_at";
+        cursor.probeHitBeforeMs = null;
+        break;
+      }
+      const requested = {
+        beforeMs: cursor.nextBeforeMs,
+        afterMs: cursor.nextBeforeMs - cursor.guard.spanDays * DAY_MS,
+      };
+      if (cursor.guard.lastBeforeMs === requested.beforeMs && cursor.guard.lastAfterMs === requested.afterMs) {
+        unhonoured();
+        break;
+      }
+      const outcome = requestWindow({ periodMs: MEDIA_STATS_DAILY_PERIOD_MS, ...requested, mode: "backfill", ninetyProbe: false });
+      windows += 1;
+      if (outcome === "failed") return { status: "failed", windows: journaledWindows, buckets };
+      cursor.guard.lastBeforeMs = requested.beforeMs;
+      cursor.guard.lastAfterMs = requested.afterMs;
+      if (outcome === "repeat") {
+        unhonoured();
+        break;
+      }
+      journaledWindows += 1;
+      count("backfill_windows");
+      buckets += outcome.buckets;
+      cursor.guard.lastObservationId = outcome.observationId ?? cursor.guard.lastObservationId;
+      if (!outcome.honoured) {
+        if (unhonoured() === "stopped") break;
+        continue;
+      }
+      if (outcome.empty) {
+        cursor.emptyStreak += 1;
+        if (cursor.probeResumeBeforeMs !== null) {
+          cursor.done = true;
+          cursor.stopReason = "empty_window_probe";
+          cursor.floorBasis = "empty_window_probe";
+          cursor.probeResumeBeforeMs = null;
+          break;
+        }
+        if (cursor.emptyStreak >= BACKFILL_EMPTY_STREAK_LIMIT && cursor.probeHitBeforeMs === null) {
+          const probe = cursor.probeSpent ? null : mediaBackfillFirstMonthProbe(cursor, candidate);
+          if (probe !== null) {
+            cursor.probeSpent = true;
+            cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+            cursor.nextBeforeMs = probe.probeBeforeMs;
+            continue;
+          }
+          cursor.done = true;
+          cursor.stopReason = "empty_window_streak";
+          cursor.floorBasis = "empty_window";
+          break;
+        }
+        cursor.nextBeforeMs -= cursor.guard.spanDays * DAY_MS;
+        continue;
+      }
+      cursor.emptyStreak = 0;
+      if (outcome.served.afterMs !== null) {
+        const servedFloor = new Date(outcome.served.afterMs).toISOString();
+        cursor.floorAt = cursor.floorAt === null || servedFloor < cursor.floorAt ? servedFloor : cursor.floorAt;
+      }
+      if (cursor.probeResumeBeforeMs !== null) {
+        cursor.probeHitBeforeMs = Math.min(requested.beforeMs, outcome.served.beforeMs ?? requested.beforeMs);
+        cursor.nextBeforeMs = cursor.probeResumeBeforeMs;
+        cursor.probeResumeBeforeMs = null;
+        continue;
+      }
+      cursor.nextBeforeMs = outcome.served.afterMs !== null
+        ? outcome.served.afterMs + BACKFILL_OVERLAP_DAYS * DAY_MS
+        : cursor.nextBeforeMs - cursor.guard.spanDays * DAY_MS;
+    }
+    return { status: "ok", windows: journaledWindows, buckets };
+  };
+
+  const fallBackFromNinetyDays = (): SteadyResult => {
+    const failed: SteadyResult = { status: "failed", buckets: 0, complete: false, holeClosed: false };
+    const refusal = lastFailure;
+    if (refusal === null || !isProviderRefusal(refusal)) return failed;
+    const [probeWindow] = steadyWindows(s.tier, now, "split_31");
+    if (probeWindow === undefined) return failed;
+    const answeredThisVisit = issued.has(windowKey(probeWindow));
+    if (!answeredThisVisit && page.longTailProbeFailedDay === today) return failed;
+    let probeBuckets = 0;
+    if (!answeredThisVisit) {
+      const probe = requestWindow({ ...probeWindow, mode: "steady", ninetyProbe: false });
+      if (probe === "failed") {
+        page.longTailProbeFailedDay = today;
+        return failed;
+      }
+      if (probe === "repeat") return failed;
+      probeBuckets = probe.buckets;
+    }
+    // Always announced: a page that had proven 90 days and lost them is a
+    // new fact about the route, and it triples what a long-tail visit costs.
+    page.longTailWindowMode = "split_31";
+    page.longTailWindowAnnounced = true;
+    count("long_tail_window_split");
+    const split = runSteady("split_31");
+    return { ...split, buckets: probeBuckets + split.buckets };
+  };
+
+  const runSteady = (planMode: LongTailWindowMode): SteadyResult => {
+    const plan = steadyRefreshPlan(s.tier, now, planMode, holeFrom);
+    const windows = plan.windows;
+    const trailing = windows[0];
+    const spanCount = windows.length - plan.holeWindows;
+    const inHole = (window: Window) => windows.indexOf(window as (typeof windows)[number]) >= spanCount;
+    let buckets = 0;
+    const toRead = windows.filter((window) => !windowHeld(window));
+    let spanMissing = toRead.filter((window) => !inHole(window)).length;
+    let holeMissing = toRead.length - spanMissing;
+    const result = (status: SteadyResult["status"]): SteadyResult => ({
+      status,
+      buckets,
+      complete: status !== "failed" && spanMissing === 0,
+      holeClosed: status !== "failed" && holeMissing === 0,
+    });
+    const leaveHoleOpen = (reason: HoleLeftOpen["reason"], window: Window, served: HoleLeftOpen["served"] = null) => {
+      if (inHole(window) && holeLeftOpen === null) {
+        holeLeftOpen = { reason, requested: { afterMs: window.afterMs, beforeMs: window.beforeMs }, served };
+      }
+    };
+    for (const window of toRead) {
+      const hole = inHole(window);
+      const ninetyProbe = s.tier === "long_tail" && window === trailing && planMode !== "split_31";
+      const outcome = requestWindow({ ...window, mode: "steady", ninetyProbe });
+      if (outcome === "failed") return ninetyProbe ? fallBackFromNinetyDays() : result("failed");
+      if (outcome === "repeat") {
+        leaveHoleOpen("repeat_request", window);
+        break;
+      }
+      buckets += outcome.buckets;
+      if (hole) {
+        if (!outcome.honoured || !servedWindowSpansRequest(window, outcome.served)) {
+          leaveHoleOpen("window_not_honoured", window, outcome.served);
+          break;
+        }
+        holeMissing -= 1;
+        count("hole_windows");
+        continue;
+      }
+      spanMissing -= 1;
+      if (ninetyProbe) {
+        const covered = outcome.honoured && servedWindowCoversRequest(window, outcome.served);
+        if (!covered && page.longTailWindowMode !== "split_31") {
+          page.longTailWindowMode = "split_31";
+          if (!page.longTailWindowAnnounced) {
+            page.longTailWindowAnnounced = true;
+            count("long_tail_window_split");
+          }
+          const rerun = runSteady(page.longTailWindowMode);
+          return { ...rerun, buckets: buckets + rerun.buckets };
+        }
+        if (covered && page.longTailWindowMode === "unproven") {
+          page.longTailWindowMode = "ninety";
+          if (!page.longTailWindowAnnounced) {
+            page.longTailWindowAnnounced = true;
+            count("long_tail_window_proven");
+          }
+        }
+      }
+    }
+    return result("ok");
+  };
+
+  try {
+    // Legacy repair: a walk that ended on two empty windows before the probe
+    // existed reopens with the probe armed, once.
+    if (cursor.done && cursor.floorBasis === "empty_window" && !cursor.probeSpent) {
+      const probe = mediaBackfillFirstMonthProbe(cursor, candidate);
+      if (probe !== null) {
+        cursor.done = false;
+        cursor.stopReason = null;
+        cursor.floorBasis = null;
+        cursor.probeSpent = true;
+        cursor.probeResumeBeforeMs = probe.resumeBeforeMs;
+        cursor.nextBeforeMs = probe.probeBeforeMs;
+      }
+    }
+    const walkInPast = !cursor.done && cursor.nextBeforeMs < s.nowMs - DAY_MS;
+    const walkFromToday = !cursor.done && !walkInPast;
+    const refreshedThroughMs = cursor.refreshedThroughMs ?? s.lastVisitedAtMs ?? null;
+    holeFrom = walkFromToday || refreshedThroughMs === null ? null : new Date(refreshedThroughMs);
+    const closesHole = steadyRefreshPlan(s.tier, now, page.longTailWindowMode, holeFrom).holeWindows > 0;
+    // A walk anchored in the past answers neither a dirty mark nor a hole:
+    // the refresh goes first, whole, and the walk resumes below it.
+    const refreshFirst = walkInPast && (s.dirty || closesHole);
+    let buckets = 0;
+    let journaledWindows = 0;
+    let steadyComplete = false;
+    let holeClosed = true;
+    const failedRun = (): MediaVisitRun => ({ kind: "failed", progress: moved(), page, counters });
+
+    if (refreshFirst) {
+      const steady = runSteady(page.longTailWindowMode);
+      if (steady.status === "failed") return failedRun();
+      buckets += steady.buckets;
+      steadyComplete = steady.complete;
+      holeClosed = steady.holeClosed;
+      if (cursor.probeResumeBeforeMs === null) {
+        const resumeBeforeMs = answeredFloor(cursor.nextBeforeMs, answered) + BACKFILL_OVERLAP_DAYS * DAY_MS;
+        if (resumeBeforeMs < cursor.nextBeforeMs) {
+          cursor.nextBeforeMs = resumeBeforeMs;
+          cursor.emptyStreak = 0;
+        }
+      }
+    }
+    if (!cursor.done) {
+      const walk = runBackfill();
+      if (walk.status === "failed") return failedRun();
+      buckets += walk.buckets;
+      journaledWindows += walk.windows;
+    }
+    if (!refreshFirst) {
+      const steady = runSteady(page.longTailWindowMode);
+      if (steady.status === "failed") return failedRun();
+      buckets += steady.buckets;
+      steadyComplete = steady.complete;
+      holeClosed = steady.holeClosed;
+    }
+
+    if (journaledWindows === 0 && !steadyComplete) {
+      // Nothing durable to call a visit; a cursor moved without egress stays.
+      return { kind: "finished", visited: null, progress: moved(), page, counters };
+    }
+    const refreshedWhole = steadyComplete && holeClosed;
+    if (steadyComplete && !holeClosed) count(`refresh_hole_open:${(holeLeftOpen as HoleLeftOpen | null)?.reason ?? "unknown"}`);
+    const unreadHole = refreshedWhole ? steadyRefreshPlan(s.tier, now, page.longTailWindowMode, holeFrom).unreadHole : null;
+    if (unreadHole !== null) count("refresh_hole_unread");
+    cursor.refreshedThroughMs = refreshedWhole || walkFromToday ? s.nowMs : holeFrom?.getTime() ?? null;
+    return {
+      kind: "finished",
+      visited: { knownCount: buckets, backfillCursor: backfillCursorJson(cursor), clearDirty: steadyComplete },
+      progress: null,
+      page,
+      counters,
+    };
+  } catch (error) {
+    if (error instanceof NeedWindow) return { kind: "need", window: error.window, page, counters };
+    throw error;
+  }
+}
+
+/** `runMediaVisit`, or null when the visit no longer replays under today's
+ *  rules (it is abandoned, never fatal). */
+export function replayMediaVisit(visit: MediaVisit): MediaVisitRun | null {
+  try {
+    return runMediaVisit(visit);
+  } catch (error) {
+    if (error instanceof MediaVisitDivergedError) return null;
+    throw error;
+  }
+}
+
+/** A visit exactly as the journal and the cursor will hold it (JSON), so the
+ *  plan that asks for a window and the apply that replays the stored visit
+ *  read the same values. */
+function asStored(visit: MediaVisit): MediaVisit {
+  return JSON.parse(JSON.stringify(visit)) as MediaVisit;
+}
+
+/** The visit of a queue candidate, as it begins now. */
+export function startMediaVisit(candidate: MediaStatsRefreshCandidate, page: MediaStatsPageState, now: Date): MediaVisit {
+  // Read into a local: the platform-branch ratchet greps for a literal
+  // comparison on a name that ends in `platform`.
+  const publishedAt = candidate.createdAtPlatform;
+  return asStored({
+    snapshot: {
+      subjectRef: candidate.subjectRef,
+      tier: candidate.tier,
+      dirty: candidate.dirtyReason !== null,
+      createdAtPlatformMs: publishedAt === null ? null : publishedAt.getTime(),
+      firstSeenAtMs: candidate.firstSeenAt === null ? null : candidate.firstSeenAt.getTime(),
+      lastVisitedAtMs: candidate.lastVisitedAt === null ? null : candidate.lastVisitedAt.getTime(),
+      backfillCursor: candidate.backfillCursor,
+      nowMs: now.getTime(),
+      page: { ...page },
+    },
+    outcomes: [],
+  });
+}
+
+/** The window outcome of one served answer (legacy `requestWindow`'s
+ *  judgement after journaling): an unreadable body or one about another item
+ *  is a failure of this item. */
+export function mediaWindowOutcome(
+  window: Pick<MediaWindowRequest, "key">,
+  input: { subjectRef: string; response: unknown; observationId: number | null },
+): { outcome: MediaWindowOutcome; refusal: "invalid_response" | "subject_mismatch" | null } {
+  if (classifyStatsWindow(input.response) === "invalid") {
+    return { outcome: { key: window.key, failed: { httpStatus: null, retryAfter: false } }, refusal: "invalid_response" };
+  }
+  const servedRef = servedMediaOfferRef(input.response);
+  if (servedRef !== null && servedRef !== input.subjectRef) {
+    return { outcome: { key: window.key, failed: { httpStatus: null, retryAfter: false } }, refusal: "subject_mismatch" };
+  }
+  const served = servedWindow(input.response);
+  return {
+    outcome: {
+      key: window.key,
+      ok: {
+        servedAfterMs: served.afterMs,
+        servedBeforeMs: served.beforeMs,
+        empty: mediaStatsWindowIsEmpty(input.response),
+        buckets: countMediaStatBuckets(input.response),
+        observationId: input.observationId,
+      },
+    },
+    refusal: null,
+  };
+}
+
+// ── the walk's cursor ────────────────────────────────────────────────────────
+
+interface ShadowVisit {
+  subjectRef: string;
+  keyset: SubjectQueueKeyset;
+  tier: MediaStatsTier;
+  /** Windows the visit is estimated to take. */
+  steps: number;
+  done: number;
+}
+
+export interface MediaStatsWalkCursor extends MediaStatsPageState {
+  /** The UTC day the top-50 media were last marked dirty (zero calls). */
+  topMarkedDay: string | null;
+  /** The visit in progress (its next window is due now). */
+  visit: MediaVisit | null;
+  coverageWrittenAt: string | null;
+  last: Record<string, unknown> | null;
+  shadow: ShadowPass;
+  shadowVisit: ShadowVisit | null;
+}
+
+function parseLongTailMode(value: unknown): LongTailWindowMode {
+  return value === "ninety" || value === "split_31" ? value : "unproven";
+}
+
+function parseVisit(value: unknown): MediaVisit | null {
+  const record = recordOf(value);
+  const snapshot = recordOf(record.snapshot);
+  if (text(snapshot.subjectRef) === null || int(snapshot.nowMs) === null || !Array.isArray(record.outcomes)) return null;
+  return value as MediaVisit;
+}
+
+function parseShadowVisit(value: unknown): ShadowVisit | null {
+  const record = recordOf(value);
+  const subjectRef = text(record.subjectRef);
+  const keyset = text(record.keyset);
+  const steps = int(record.steps);
+  const done = int(record.done);
+  if (subjectRef === null || keyset === null || steps === null || done === null) return null;
+  const tier = record.tier === "mid" || record.tier === "long_tail" ? record.tier : "fresh";
+  return { subjectRef, keyset, tier, steps, done };
+}
+
+export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
+  const record = recordOf(value);
+  return {
+    longTailWindowMode: parseLongTailMode(record.longTailWindowMode),
+    longTailWindowAnnounced: record.longTailWindowAnnounced === true,
+    longTailProbeFailedDay: text(record.longTailProbeFailedDay),
+    topMarkedDay: text(record.topMarkedDay),
+    visit: parseVisit(record.visit),
+    coverageWrittenAt: text(record.coverageWrittenAt),
+    last: typeof record.last === "object" && record.last !== null ? record.last as Record<string, unknown> : null,
+    shadow: parseShadowPass(record.shadow),
+    shadowVisit: parseShadowVisit(record.shadowVisit),
+  };
+}
+
+function pageStateOf(cursor: MediaStatsPageState): MediaStatsPageState {
+  return {
+    longTailWindowMode: cursor.longTailWindowMode,
+    longTailWindowAnnounced: cursor.longTailWindowAnnounced,
+    longTailProbeFailedDay: cursor.longTailProbeFailedDay,
+  };
+}
+
+/** The step a request carries: the visit as the plan made it, and the item
+ *  whose stored visit the plan abandoned to make it (counted by the apply). */
+interface MediaStatsStep {
+  visit?: MediaVisit;
+  shadowVisit?: ShadowVisit;
+  abandoned?: string;
+}
+
+function stepOf(request: Pick<RequestPlan, "step">): MediaStatsStep {
+  const record = recordOf(request.step);
+  const visit = parseVisit(record.visit);
+  const shadowVisit = parseShadowVisit(record.shadowVisit);
+  const abandoned = text(record.abandoned);
+  return {
+    ...(visit === null ? {} : { visit }),
+    ...(shadowVisit === null ? {} : { shadowVisit }),
+    ...(abandoned === null ? {} : { abandoned }),
+  };
+}
+
+function windowRequest(subjectRef: string, window: Window, step: MediaStatsStep): RequestPlan<"media.offer_stats"> {
+  return {
+    spec: "media.offer_stats",
+    params: { mediaOfferId: subjectRef, beforeMs: window.beforeMs, afterMs: window.afterMs, periodMs: window.periodMs },
+    step,
+  };
+}
+
+function sameWindow(request: RequestPlan, subjectRef: string, window: Window): boolean {
+  const params = recordOf(request.params);
+  return params.mediaOfferId === subjectRef && params.beforeMs === window.beforeMs
+    && params.afterMs === window.afterMs && params.periodMs === window.periodMs;
+}
+
+/** The window an attempt asked for and how it failed, folded into the visit
+ *  it served (the plan's view of a failed step: the real status). Null when
+ *  the visit asks for nothing more, or no longer replays. */
+function failedVisitOf(attempt: SyncAttemptRow): MediaVisit | null {
+  const visit = stepOf({ step: recordOf(attempt.request).step }).visit;
+  if (visit === undefined) return null;
+  const run = replayMediaVisit(visit);
+  if (run === null || run.kind !== "need") return null;
+  return asStored({
+    ...visit,
+    outcomes: [...visit.outcomes, {
+      key: run.window.key,
+      failed: { httpStatus: attempt.httpStatus, retryAfter: attempt.retryAfterMs !== null },
+    }],
+  });
+}
+
+/** Estimated windows of one visit (shadow): a first visit's walk holds its
+ *  refresh; an open walk in the past adds its windows to the refresh. */
+export function estimateVisitWindows(candidate: MediaStatsRefreshCandidate, mode: LongTailWindowMode, now: Date): number {
+  const cursor = parseMediaBackfillCursor(candidate.backfillCursor, now);
+  const walkFromToday = !cursor.done && cursor.nextBeforeMs >= now.getTime() - DAY_MS;
+  const refreshed = cursor.refreshedThroughMs ?? candidate.lastVisitedAt?.getTime() ?? null;
+  const holeFrom = walkFromToday || refreshed === null ? null : new Date(refreshed);
+  const refresh = steadyRefreshPlan(candidate.tier, now, mode, holeFrom).windows.length;
+  if (cursor.done) return refresh;
+  const tierKey = candidate.tier === "long_tail" ? "longTail" : candidate.tier;
+  if (walkFromToday) return Math.max(refresh, FIRST_VISIT_REQUESTS[tierKey]);
+  const floorMs = mediaBackfillCreationFloorMs(candidate);
+  const spanMs = cursor.guard.spanDays * DAY_MS;
+  const toFloor = floorMs === null ? BACKFILL_WINDOWS_PER_VISIT : Math.ceil(Math.max(0, cursor.nextBeforeMs - floorMs) / spanMs);
+  return refresh + Math.min(BACKFILL_WINDOWS_PER_VISIT, toFloor);
+}
+
+/** The page's coverage row (one per page, never one per item): an aggregate
+ *  over the queue, the per-look evidence being the journal. */
+async function writeQueueCoverage(tx: Database, input: { pageId: number; now: Date; mode: LongTailWindowMode }) {
+  const progress = await countMediaStatsRefreshProgress(tx, { pageId: input.pageId, now: input.now, longTailCycleDays: 30 });
+  const everyItemVisited = progress.queueSize > 0 && progress.neverVisited === 0 && progress.backfillComplete >= progress.queueSize;
+  const status: CaptureCoverageStatus = progress.queueSize === 0
+    ? "not_started"
+    : everyItemVisited ? "window_captured" : "in_progress";
+  await writeFanslyLaneCoverage({
+    db: tx,
+    pageId: input.pageId,
+    plane: CAPTURE_COVERAGE_PLANES.mediaStats,
+    scopeRef: String(input.pageId),
+    status,
+    acquisitionMode: "retroactive",
+    proof: "none",
+    newestCapturedAt: input.now,
+    expectedCount: progress.queueSize,
+    observedUniqueCount: progress.queueSize - progress.neverVisited,
+    reasonCode: null,
+    cursor: {
+      dirty: progress.dirty,
+      neverVisited: progress.neverVisited,
+      backfillComplete: progress.backfillComplete,
+      backfillStopped: progress.backfillStopped,
+      longTailWindowMode: input.mode,
+    },
+  });
+}
+
+async function legacyMediaStatsCursor(db: Database, pageId: number) {
+  const result = await db.execute<{ state: unknown }>(sql`
+    select state from page_sync_cursors where page_id = ${pageId} and stream = 'media_stats'
+  `);
+  return parseFanslyMediaStatsCursorState(result.rows[0]?.state ?? null);
+}
+
+// ── the module ───────────────────────────────────────────────────────────────
+
+async function planShadow(
+  cursor: MediaStatsWalkCursor,
+  ctx: { db: Database; pageId: number; now: Date; tiers: MediaStatsTiers },
+): Promise<StepPlan> {
+  const visit = cursor.shadowVisit;
+  if (visit !== null && visit.done < visit.steps) {
+    const [window] = steadyWindows(visit.tier, ctx.now, cursor.longTailWindowMode);
+    return { kind: "request", request: windowRequest(visit.subjectRef, window!, { shadowVisit: visit }) };
+  }
+  const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
+  const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, tiers: ctx.tiers });
+  if (candidate === undefined) {
+    return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, MEDIA_STATS_RECHECK_MS) };
+  }
+  // Shadow never learns the route: the legacy lane's discovery stands in.
+  const mode = cursor.longTailWindowMode !== "unproven"
+    ? cursor.longTailWindowMode
+    : (await legacyMediaStatsCursor(ctx.db, ctx.pageId))?.longTailWindowMode ?? "unproven";
+  const shadowVisit: ShadowVisit = {
+    subjectRef: candidate.subjectRef,
+    keyset: candidate.keyset,
+    tier: candidate.tier,
+    steps: Math.max(1, estimateVisitWindows(candidate, mode, ctx.now)),
+    done: 0,
+  };
+  const [window] = steadyWindows(candidate.tier, ctx.now, mode);
+  return { kind: "request", request: windowRequest(candidate.subjectRef, window!, { shadowVisit }) };
+}
+
+export const mediaStatsWalkModule: ResourceModule = {
+  async plan(work, ctx): Promise<StepPlan> {
+    const cursor = parseMediaStatsWalkCursor(work.cursor);
+    const tiers = mediaStatsOwnerTiers(ctx.page);
+    if (ctx.shadow) return planShadow(cursor, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, tiers });
+    let page = pageStateOf(cursor);
+    let visit = cursor.visit;
+    let abandoned: string | null = null;
+    // The previous step's request failed (an applied attempt is already
+    // folded into the cursor's visit, whatever failed after it): a failure
+    // about the item ended its visit (its breaker is open, its progress kept
+    // at the capture) unless a refused 90-day window falls back to the split
+    // plan; any other failure (the page's: pace, network, credentials) asks
+    // the same window again.
+    if (work.lastErrorClass !== null && work.lastAttemptId !== null) {
+      const attempt = await getSyncAttempt(ctx.db, work.lastAttemptId);
+      const asked = attempt === null || attempt.applyState === "applied"
+        ? undefined
+        : stepOf({ step: recordOf(attempt.request).step }).visit;
+      if (attempt !== null && asked !== undefined) {
+        if (replayMediaVisit(asked) === null) {
+          abandoned = asked.snapshot.subjectRef;
+          visit = null;
+        } else if (attempt.errorClass !== null && SUBJECT_ERRORS.has(attempt.errorClass)) {
+          const failed = failedVisitOf(attempt);
+          const run = failed === null ? null : replayMediaVisit(failed);
+          if (failed !== null && run !== null && run.kind === "need") {
+            return { kind: "request", request: windowRequest(failed.snapshot.subjectRef, run.window, { visit: failed }) };
+          }
+          if (run !== null) page = run.page;
+          visit = null;
+        } else {
+          visit = asked;
+        }
+      }
+    }
+    if (visit !== null) {
+      const run = replayMediaVisit(visit);
+      if (run === null) abandoned = visit.snapshot.subjectRef;
+      else if (run.kind === "need") return { kind: "request", request: windowRequest(visit.snapshot.subjectRef, run.window, { visit }) };
+    }
+    const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: null, tiers });
+    if (candidate === undefined) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, MEDIA_STATS_RECHECK_MS) };
+    const fresh = startMediaVisit(candidate, page, ctx.now);
+    const run = runMediaVisit(fresh);
+    // Every visit reads at least the tier's refresh: a visit asking for
+    // nothing would be picked again at once.
+    if (run.kind !== "need") return { kind: "quarantine", reason: "media_visit_without_window" };
+    return {
+      kind: "request",
+      request: windowRequest(candidate.subjectRef, run.window, { visit: fresh, ...(abandoned === null ? {} : { abandoned }) }),
+    };
+  },
+
+  async apply(tx, input: ApplyInput): Promise<ApplyResult> {
+    const now = input.now;
+    const cursor = parseMediaStatsWalkCursor(input.work.cursor);
+    const step = stepOf(input.request);
+    const asked = step.visit;
+    if (asked === undefined) throw new ApplyQuarantine("media_stats_step_missing");
+    const subjectRef = asked.snapshot.subjectRef;
+    const counters: Record<string, number> = {};
+    // The plan dropped a stored visit that no longer replays to make this one.
+    if (step.abandoned !== undefined) counters.media_visit_abandoned = 1;
+    const pending = replayMediaVisit(asked);
+    const replays = pending !== null && pending.kind === "need" && sameWindow(input.request, subjectRef, pending.window);
+    let visit: MediaVisit = asked;
+    let run: MediaVisitRun | null = null;
+    let next: MediaStatsWalkCursor = { ...cursor, visit: null, shadow: EMPTY_SHADOW_PASS, shadowVisit: null };
+    if (replays) {
+      const folded = mediaWindowOutcome(pending.window, { subjectRef, response: input.response, observationId: input.observation.id });
+      if (folded.refusal !== null) counters[folded.refusal] = 1;
+      visit = asStored({ ...asked, outcomes: [...asked.outcomes, folded.outcome] });
+      run = runMediaVisit(visit);
+      for (const [name, by] of Object.entries(run.counters)) counters[name] = (counters[name] ?? 0) + by;
+      next = { ...next, ...run.page };
+    }
+    // The free signal (zero calls): today's top-50 jump the queue, once a UTC
+    // day, when the walk next applies anything.
+    const today = fanslyUtcDayKey(now);
+    if (cursor.topMarkedDay !== today) {
+      const marked = await markMediaStatsTopMediaDirty(tx, {
+        pageId: input.pageId,
+        limit: TOP_MEDIA_MARK_LIMIT,
+        dueAt: now,
+        visitedSince: new Date(now.getTime() - DAY_MS),
+      });
+      counters.top_media_marked = marked.marked;
+      next = { ...next, topMarkedDay: today };
+    }
+
+    if (run !== null && run.kind === "need") {
+      return {
+        work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...next, visit } },
+        followups: [],
+        counters,
+      };
+    }
+    let receipt: Record<string, unknown>;
+    if (run === null) {
+      // The visit this step served does not replay to the window it asked
+      // for: it began under other visit rules (a deploy between its plan and
+      // this apply, a re-apply from the journal after the restart). It ends
+      // without a look — the answer stays journaled and canonicalized — and
+      // its item's breaker opens, so a visit that never replays costs that
+      // item its ladder, never the walk: the next plan starts the next due
+      // item afresh under today's rules.
+      await recordQueueSubjectFailures(tx, { pageId: input.pageId, plane: PLANE, subjectRefs: [subjectRef], now });
+      receipt = {
+        subjectRef,
+        outcome: "abandoned",
+        reason: pending === null ? "visit_diverged" : "window_changed",
+        windows: asked.outcomes.length,
+        at: now.toISOString(),
+      };
+      counters.media_visit_abandoned = (counters.media_visit_abandoned ?? 0) + 1;
+    } else if (run.kind === "failed") {
+      // A 2xx that is no answer about this item: its breaker, and the windows
+      // its walk had accepted stay in its cursor.
+      await recordQueueSubjectFailures(tx, { pageId: input.pageId, plane: PLANE, subjectRefs: [subjectRef], now });
+      if (run.progress !== null) {
+        await recordMediaStatsBackfillCursor(tx, { pageId: input.pageId, subjectRef, backfillCursor: run.progress });
+      }
+      receipt = { subjectRef, outcome: "failed", windows: visit.outcomes.length, at: now.toISOString() };
+      counters.media_visits_failed = 1;
+    } else if (run.visited !== null) {
+      await recordMediaStatsVisit(tx, {
+        pageId: input.pageId,
+        subjectRef,
+        tier: asked.snapshot.tier,
+        knownCount: run.visited.knownCount,
+        visitedAt: now,
+        nextDueAt: new Date(now.getTime() + tierEveryMs(mediaStatsOwnerTiers(input.page), asked.snapshot.tier)),
+        backfillCursor: run.visited.backfillCursor,
+        clearDirty: run.visited.clearDirty,
+      });
+      await clearQueueSubjectBlocks(tx, { pageId: input.pageId, plane: PLANE, subjectRefs: [subjectRef] });
+      receipt = {
+        subjectRef,
+        outcome: "visited",
+        tier: asked.snapshot.tier,
+        windows: visit.outcomes.length,
+        buckets: run.visited.knownCount,
+        at: now.toISOString(),
+      };
+      counters.media_visited = 1;
+    } else {
+      if (run.progress !== null) {
+        await recordMediaStatsBackfillProgress(tx, { pageId: input.pageId, subjectRef, backfillCursor: run.progress });
+      }
+      receipt = { subjectRef, outcome: "no_look", windows: visit.outcomes.length, at: now.toISOString() };
+    }
+    next = { ...next, last: receipt };
+    const coverageDue = cursor.coverageWrittenAt === null || now.getTime() - Date.parse(cursor.coverageWrittenAt) >= COVERAGE_EVERY_MS;
+    if (coverageDue) {
+      await writeQueueCoverage(tx, { pageId: input.pageId, now, mode: next.longTailWindowMode });
+      next = { ...next, coverageWrittenAt: now.toISOString() };
+    }
+    // The walk row stays: the next plan takes the next due item, or rests.
+    return { work: { satisfiesRevision: true, nextDueAt: now, cursor: next, result: receipt }, followups: [], counters };
+  },
+
+  async onSubjectOutcome(tx, work, outcome, step): Promise<void> {
+    if (outcome.kind === "ok") return;
+    const visit = stepOf(step.request).visit;
+    if (visit === undefined) return;
+    const subjectRef = visit.snapshot.subjectRef;
+    await recordQueueSubjectFailures(tx, { pageId: work.pageId, plane: PLANE, subjectRefs: [subjectRef], now: new Date() });
+    // Keep what the walk accepted before the failed window (its status is
+    // read by the next plan, which may still fall back from a refused 90-day
+    // window; the visit then writes its cursor anyway). A visit that no
+    // longer replays keeps nothing: the plan abandons it.
+    const pending = replayMediaVisit(visit);
+    if (pending === null || pending.kind !== "need") return;
+    const run = replayMediaVisit({
+      ...visit,
+      outcomes: [...visit.outcomes, { key: pending.window.key, failed: { httpStatus: null, retryAfter: false } }],
+    });
+    if (run !== null && run.kind === "failed" && run.progress !== null) {
+      await recordMediaStatsBackfillCursor(tx, { pageId: work.pageId, subjectRef, backfillCursor: run.progress });
+    }
+  },
+
+  async shadow(work, request, ctx): Promise<ShadowResult> {
+    const cursor = parseMediaStatsWalkCursor(work.cursor);
+    const visit = stepOf(request).shadowVisit;
+    if (visit === undefined) {
+      return { work: { satisfiesRevision: true, nextDueAt: ctx.now, cursor: { ...cursor, shadowVisit: null } }, followups: [] };
+    }
+    const counters: Record<string, number> = {};
+    const today = fanslyUtcDayKey(ctx.now);
+    let next: MediaStatsWalkCursor = { ...cursor };
+    if (cursor.topMarkedDay !== today) {
+      counters.top_media_mark_estimated = 1;
+      next = { ...next, topMarkedDay: today };
+    }
+    const done = visit.done + 1;
+    if (done < visit.steps) {
+      return {
+        work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...next, shadowVisit: { ...visit, done } } },
+        followups: [],
+        counters,
+      };
+    }
+    const advanced = advanceShadowPass({
+      pass: cursor.shadow,
+      now: ctx.now,
+      recheckMs: MEDIA_STATS_RECHECK_MS,
+      taken: [{ keyset: visit.keyset }],
+      limit: 1,
+    });
+    counters.media_visits_estimated = 1;
+    return {
+      work: { satisfiesRevision: true, nextDueAt: advanced.nextDueAt, cursor: { ...next, shadow: advanced.pass, shadowVisit: null } },
+      followups: [],
+      counters,
+    };
+  },
+
+  replay: replayByCanonicalDrafts,
+
+  async importLegacy(tx, page): Promise<LegacyImport> {
+    const legacy = await legacyMediaStatsCursor(tx, page.pageId);
+    // The first-enable seeding (zero platform calls) is finished here when
+    // legacy left it unfinished; media projected later is queued by the
+    // media-plane projector itself.
+    let seedCursor = legacy?.seedCursor ?? null;
+    let seeded = 0;
+    if (legacy?.seedComplete !== true) {
+      for (;;) {
+        const batch = await seedMediaStatsQueue(tx, { pageId: page.pageId, afterSubjectRef: seedCursor, limit: SEED_BATCH_SIZE, dueAt: new Date() });
+        seedCursor = batch.cursor;
+        seeded += batch.inserted;
+        if (batch.scanned < SEED_BATCH_SIZE) break;
+      }
+    }
+    const cursor: MediaStatsWalkCursor = {
+      longTailWindowMode: legacy?.longTailWindowMode ?? "unproven",
+      longTailWindowAnnounced: legacy?.longTailWindowAnnounced ?? false,
+      longTailProbeFailedDay: legacy?.longTailProbeFailedDay ?? null,
+      topMarkedDay: legacy?.topMarkedDay ?? null,
+      visit: null,
+      coverageWrittenAt: null,
+      last: null,
+      shadow: EMPTY_SHADOW_PASS,
+      shadowVisit: null,
+    };
+    // Each item's backfill cursor and visits stay where they are: the queue
+    // rows are the same rows.
+    return {
+      cursors: [{ resource: KEY, subject: "", cursor }],
+      notes: { walk: legacy === null ? "none" : "page_sync_cursors.media_stats", seeded },
+    };
+  },
+};

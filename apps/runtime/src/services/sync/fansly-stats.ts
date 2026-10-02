@@ -131,8 +131,8 @@ const HOURLY_PERIOD_MS = 3_600_000;
 /** The steady-state trailing windows. Fansly restates recent buckets, so the
  *  30-day daily window is re-compared every day; unchanged buckets dedup to
  *  zero events, which is exactly the granularity D-1 was chosen for. */
-const DAILY_TRAILING_DAYS = 30;
-const HOURLY_TRAILING_HOURS = 25;
+export const DAILY_TRAILING_DAYS = 30;
+export const HOURLY_TRAILING_HOURS = 25;
 /** The route serves hourly buckets only inside this window, so two hourly
  *  captures further apart than it leave hours that no window will reach again. */
 const HOURLY_WINDOW_MS = HOURLY_TRAILING_HOURS * HOUR_MS;
@@ -142,13 +142,13 @@ const HOURLY_WINDOW_MS = HOURLY_TRAILING_HOURS * HOUR_MS;
  *  whose request hours are Δ apart meet while Δ ≤ 25 h − (older lag − newer
  *  lag): a day apart, a lag going 2 h -> 0 h leaves one bucket in neither; at
  *  23 h they meet even then. */
-const HOURLY_CAPTURE_SPACING_MS = 23 * HOUR_MS;
+export const HOURLY_CAPTURE_SPACING_MS = 23 * HOUR_MS;
 /** The furthest a scheduled dispatch of this lane can be from the one before. */
 const STATS_CADENCE_MS = SYNC_STREAM_POLICY.stats_snapshot.cadenceSeconds * 1000;
-const EARNINGS_TRAILING_DAYS = 30;
+export const EARNINGS_TRAILING_DAYS = 30;
 const EARNINGS_PAGE_LIMIT = FANSLY_EARNINGS_ROW_LIMIT;
-const DISCOVERY_PAGE_LIMIT = 10;
-const DISCOVERY_PAGES_PER_SWEEP = 2;
+export const DISCOVERY_PAGE_LIMIT = 10;
+export const DISCOVERY_PAGES_PER_SWEEP = 2;
 
 /**
  * THE TRAILING WINDOW'S SPAN, in days — and the ONE window this route's date
@@ -180,12 +180,12 @@ const BACKFILL_HOURLY_STEP_DAYS = 4;
  * (bundle `main.pretty.js` :280600). We send the same thing: a request the
  * client never makes is a request nothing has ever seen answered.
  */
-const MONTH_FORM_TRAILING_DAYS = 30;
+export const MONTH_FORM_TRAILING_DAYS = 30;
 /** Two consecutive empty MONTHS, then ONE probe this many months further back —
  *  [E10] in the unit this walk actually steps in. Only where the account's
  *  creation date is unknown: a known one is the floor, and nothing is probed. */
-const BACKFILL_PROBE_JUMP_MONTHS = 12;
-const BACKFILL_PROBE_JUMP_DAYS = 365;
+export const BACKFILL_PROBE_JUMP_MONTHS = 12;
+export const BACKFILL_PROBE_JUMP_DAYS = 365;
 /**
  * The oldest account creation date the walks BELIEVE.
  *
@@ -209,12 +209,12 @@ const BACKFILL_EARNINGS_WINDOW_DAYS = 31;
  *  a stopped lane and a `capture_coverage` row do not say more honestly. */
 const BACKFILL_NARROW_FLOOR_DAYS = 7;
 /** Two consecutive empty windows (or months), then ONE probe further back. */
-const BACKFILL_EMPTY_STREAK_LIMIT = 2;
+export const BACKFILL_EMPTY_STREAK_LIMIT = 2;
 /** Pages of mass-DM history each first-enable walk (live, deleted) takes per
  *  daily sweep. */
 const BROADCAST_BACKFILL_PAGES_PER_SWEEP = 3;
 /** `recapstats` — the step that completes the sweep and stamps `lastSweepDay`. */
-const LAST_SWEEP_STEP = 10;
+export const LAST_SWEEP_STEP = 10;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -246,7 +246,7 @@ export interface BackfillWindowGuard {
   lastObservationId: number | null;
 }
 
-interface DailyBackfillState {
+export interface DailyBackfillState {
   /** Exclusive upper bound of the TRAILING window, in epoch ms. Read once, for
    *  the one window whose date bounds this route honours. */
   nextBeforeMs: number;
@@ -294,7 +294,7 @@ interface HourlyBackfillState {
   guard: BackfillWindowGuard;
 }
 
-interface EarningsBackfillState {
+export interface EarningsBackfillState {
   nextBeforeMs: number;
   walk: EarningsWindowWalk | null;
   emptyStreak: number;
@@ -423,7 +423,7 @@ export function narrowedSpanDays(spanDays: number): number {
   return Math.min(spanDays, Math.max(BACKFILL_NARROW_FLOOR_DAYS, Math.floor(spanDays / 2)));
 }
 
-function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
+export function parseDailyBackfill(value: unknown, now: Date): DailyBackfillState {
   const record = asRecord(value);
   return {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
@@ -453,7 +453,7 @@ function parseHourlyBackfill(value: unknown, now: Date): HourlyBackfillState {
   };
 }
 
-function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState {
+export function parseEarningsBackfill(value: unknown, now: Date): EarningsBackfillState {
   const record = asRecord(value);
   return {
     nextBeforeMs: asInt(record?.nextBeforeMs, now.getTime()),
@@ -530,7 +530,7 @@ export function parseFanslyStatsCursorState(
   };
 }
 
-function emptyDailyBackfill(now: Date): DailyBackfillState {
+export function emptyDailyBackfill(now: Date): DailyBackfillState {
   return {
     nextBeforeMs: now.getTime(),
     trailingCaptured: false,
@@ -547,7 +547,7 @@ function emptyDailyBackfill(now: Date): DailyBackfillState {
 }
 
 /** An earnings walk that has asked for nothing yet, starting below `nextBeforeMs`. */
-function emptyEarningsBackfill(nextBeforeMs: number, done: boolean): EarningsBackfillState {
+export function emptyEarningsBackfill(nextBeforeMs: number, done: boolean): EarningsBackfillState {
   return {
     nextBeforeMs,
     walk: null,

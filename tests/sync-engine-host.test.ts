@@ -346,6 +346,27 @@ describe("owner levers that need no database", () => {
       pageLabel: "lora-1", resource: "dm-messages.head", override: { everyMs: 60_000 }, ownerApproved: true,
     })).rejects.toBeInstanceOf(SyncOwnerLeverError);
   });
+
+  it("a cadence or tiers override is refused where the entry has none a page can change (it would be ignored)", async () => {
+    const tiered = createEngineRegistry([
+      spec("media-stats.walk", {
+        kind: "goal", class: "planned", ownerProtected: true, pageOverride: "tiers",
+        tiers: [{ maxAgeDays: 30, everyMs: 86_400_000 }, { maxAgeDays: null, everyMs: 604_800_000 }],
+      }),
+      spec("posts.engagement", { kind: "goal", class: "planned", tiers: [{ maxAgeDays: null, everyMs: 86_400_000 }] }),
+      spec("subscribers.poll", { kind: "poll", class: "planned", period: { everyMs: 3_600_000 } }),
+    ]);
+    const tiers = [{ maxAgeDays: 14, everyMs: 43_200_000 }, { maxAgeDays: null, everyMs: 86_400_000 }];
+    const refused = (resource: string, override: Parameters<typeof changeSyncRegistryOverride>[2]["override"]) =>
+      expect(changeSyncRegistryOverride(unused, tiered, { pageLabel: "lora-1", resource, override, ownerApproved: true }))
+        .rejects.toBeInstanceOf(SyncOwnerLeverError);
+    await refused("media-stats.walk", { tiers: tiers.slice(1) });
+    await refused("media-stats.walk", { tiers: [{ maxAgeDays: 14, everyMs: 1 }, { maxAgeDays: 7, everyMs: 1 }] });
+    await refused("media-stats.walk", { everyMs: 86_400_000 });
+    await refused("posts.engagement", { tiers: [{ maxAgeDays: null, everyMs: 1 }] });
+    await refused("subscribers.poll", { everyMs: 60_000, fullEveryMs: 86_400_000 });
+    await refused("subscribers.poll", { tiers });
+  });
 });
 
 describe("the sync process's owner identity", () => {

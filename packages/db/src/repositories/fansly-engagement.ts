@@ -1440,6 +1440,34 @@ export interface MediaStatsRefreshCandidate {
    *  journal: outside the dirty rows the TIER orders the chunk, not this, and
    *  within a tier a band-2 item at the edge of its window goes before band 1. */
   priorityBand: number;
+  /** This item's position in the chunk order (pass it back as `after`). */
+  keyset: SubjectQueueKeyset;
+}
+
+/**
+ * The age tiers of the media-stats queue: an item published within
+ * `freshDays` is due `freshEveryMs` after its last visit, within `midDays`
+ * `midEveryMs`, older `oldEveryMs`. The default is the legacy lane's code
+ * values (30 d daily, 180 d weekly, the long-tail cycle); the Fansly Sync
+ * Engine passes the owner's decision №6 (30 d daily, 90 d weekly, monthly).
+ */
+export interface MediaStatsTiers {
+  freshDays: number;
+  midDays: number;
+  freshEveryMs: number;
+  midEveryMs: number;
+  oldEveryMs: number;
+}
+
+/** The legacy lane's tiers at a long-tail cycle (`fanslyMediaStatsLongTailCycleDays`). */
+export function legacyMediaStatsTiers(longTailCycleDays: number): MediaStatsTiers {
+  return {
+    freshDays: MEDIA_STATS_FRESH_DAYS,
+    midDays: MEDIA_STATS_MID_DAYS,
+    freshEveryMs: MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS,
+    midEveryMs: MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS,
+    oldEveryMs: Math.max(1, longTailCycleDays) * DAY_MS,
+  };
 }
 
 /**
@@ -1494,6 +1522,13 @@ export interface MediaStatsRefreshCandidate {
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
  * twice in this tree.
+ *
+ * Two optional inputs, for the Fansly Sync Engine (design §4.3, §5.18), both
+ * absent on the legacy lane's call, which then selects exactly what it always
+ * did: `tiers` replaces the age tiers and their intervals (`longTailCycleDays`
+ * is then not read), and `after` returns only the items that sort after that
+ * keyset, in the same order — the shadow walk's pass over the due items
+ * without writing the queue.
  */
 export async function listMediaStatsRefreshChunk(
   db: Database,
@@ -1502,9 +1537,17 @@ export async function listMediaStatsRefreshChunk(
     limit: number;
     now: Date;
     longTailCycleDays: number;
+    tiers?: MediaStatsTiers;
+    after?: SubjectQueueKeyset | null;
   },
 ): Promise<MediaStatsRefreshCandidate[]> {
-  const longTailDays = Math.max(1, input.longTailCycleDays);
+  const tiers = input.tiers ?? legacyMediaStatsTiers(input.longTailCycleDays);
+  if (
+    !(tiers.freshDays > 0 && tiers.midDays >= tiers.freshDays)
+    || ![tiers.freshEveryMs, tiers.midEveryMs, tiers.oldEveryMs].every((ms) => Number.isFinite(ms) && ms > 0)
+  ) {
+    throw new RangeError("Media-stats tiers need 0 < freshDays <= midDays and positive intervals");
+  }
   // The age basis, stated once: the platform's date when it served one, and
   // otherwise when we FIRST SAW the item. `first_observed_at` is replayed from
   // the event ledger, so it survives a `creator_media` rebuild — using the
@@ -1513,22 +1556,18 @@ export async function listMediaStatsRefreshChunk(
   const tier = sql`
     case
       when ${publicationAt} is null then 'fresh'
-      when ${publicationAt} >= ${new Date(input.now.getTime() - MEDIA_STATS_FRESH_DAYS * DAY_MS)}
+      when ${publicationAt} >= ${new Date(input.now.getTime() - tiers.freshDays * DAY_MS)}
         then 'fresh'
-      when ${publicationAt} >= ${new Date(input.now.getTime() - MEDIA_STATS_MID_DAYS * DAY_MS)}
+      when ${publicationAt} >= ${new Date(input.now.getTime() - tiers.midDays * DAY_MS)}
         then 'mid'
       else 'long_tail'
     end
   `;
   const dueCutoff = sql`
     case ${tier}
-      when 'fresh' then ${
-    new Date(input.now.getTime() - MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS)
-  }::timestamptz
-      when 'mid' then ${
-    new Date(input.now.getTime() - MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS)
-  }::timestamptz
-      else ${new Date(input.now.getTime() - longTailDays * DAY_MS)}::timestamptz
+      when 'fresh' then ${new Date(input.now.getTime() - tiers.freshEveryMs)}::timestamptz
+      when 'mid' then ${new Date(input.now.getTime() - tiers.midEveryMs)}::timestamptz
+      else ${new Date(input.now.getTime() - tiers.oldEveryMs)}::timestamptz
     end
   `;
   const band = sql`
@@ -1539,6 +1578,32 @@ export async function listMediaStatsRefreshChunk(
     end
   `;
   const windowEdge = mediaStatsWindowEdge(tier, input.now);
+  // The ordering keys as ascending values (a NULL where ORDER BY puts it).
+  const dirtyRank = sql`case when s.dirty_reason is not null then 0 else 1 end`;
+  const tierRank = sql`case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end`;
+  const edgeRank = sql`
+    case
+      when s.last_visited_at < ${windowEdge} then 0
+      when s.last_visited_at is null then 1
+      else 2
+    end
+  `;
+  const visitedKey = sql`coalesce(extract(epoch from s.last_visited_at), '-Infinity'::numeric)`;
+  const publishedKey = sql`coalesce(-extract(epoch from ${publicationAt}), 'Infinity'::numeric)`;
+  let afterPredicate = sql``;
+  if (input.after !== undefined && input.after !== null) {
+    const [afterDirty, afterTier, afterEdge, afterVisited, afterPublished, afterRef] = decodeSubjectQueueKeyset(
+      input.after,
+      ["int", "int", "int", "numeric", "numeric", "text"],
+    );
+    afterPredicate = sql`and ${keysetAfter([
+      { expr: dirtyRank, value: sql`${afterDirty}::int` },
+      { expr: tierRank, value: sql`${afterTier}::int` },
+      { expr: edgeRank, value: sql`${afterEdge}::int` },
+      { expr: visitedKey, value: sql`${afterVisited}::numeric` },
+      { expr: publishedKey, value: sql`${afterPublished}::numeric` },
+    ], sql`s.subject_ref`, sql`${afterRef}::text`)}`;
+  }
   const result = await db.execute<{
     subject_ref: string;
     created_at_platform: Date | string | null;
@@ -1551,6 +1616,11 @@ export async function listMediaStatsRefreshChunk(
     backfill_cursor: Record<string, unknown> | null;
     tier: string;
     priority_band: number | string;
+    dirty_rank: number | string;
+    tier_rank: number | string;
+    edge_rank: number | string;
+    visited_key: string;
+    published_key: string;
   }>(sql`
     select s.subject_ref,
            m.created_at_platform,
@@ -1562,7 +1632,12 @@ export async function listMediaStatsRefreshChunk(
            s.known_count,
            s.backfill_cursor,
            ${tier} as tier,
-           ${band} as priority_band
+           ${band} as priority_band,
+           ${dirtyRank} as dirty_rank,
+           ${tierRank} as tier_rank,
+           ${edgeRank} as edge_rank,
+           ${visitedKey}::text as visited_key,
+           ${publishedKey}::text as published_key
       from subject_refresh_state s
       join creator_media m
         on m.page_id = s.page_id
@@ -1579,6 +1654,7 @@ export async function listMediaStatsRefreshChunk(
          or s.last_visited_at is null
          or s.last_visited_at < ${dueCutoff}
        )
+       ${afterPredicate}
      order by case when s.dirty_reason is not null then 0 else 1 end asc,
               case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
               case
@@ -1609,6 +1685,14 @@ export async function listMediaStatsRefreshChunk(
     knownCount: row.known_count === null ? null : Number(row.known_count),
     backfillCursor: row.backfill_cursor ?? {},
     priorityBand: Number(row.priority_band),
+    keyset: encodeSubjectQueueKeyset([
+      Number(row.dirty_rank),
+      Number(row.tier_rank),
+      Number(row.edge_rank),
+      row.visited_key,
+      row.published_key,
+      row.subject_ref,
+    ]),
     } satisfies MediaStatsRefreshCandidate;
   });
 }

@@ -939,18 +939,54 @@ export async function setPagePause(
   return getSyncPage(db, input.pageId);
 }
 
-/** `registry_overrides[key]` for a page (§4.2): `{everyMs}` or `{enabled:false}`;
- *  null removes the override. Owner-protected keys are the CLI's check. */
+/** One age tier of a tiered walk's override: items up to `maxAgeDays` old
+ *  (null: every older item) are due again `everyMs` after a visit. */
+export interface SyncRegistryTierOverride {
+  maxAgeDays: number | null;
+  everyMs: number;
+}
+
+/**
+ * `sync_pages.registry_overrides[key]` (design §4.2): a poll's period, or the
+ * periods of a goal re-evaluated on a cadence (`everyMs` its incremental
+ * re-check, `fullEveryMs` its full sweep; at least one), a tiered walk's age
+ * tiers, or the key switched off for the page. Which key takes which shape is
+ * the owner CLI's check against the registry.
+ */
+export type SyncRegistryOverride =
+  | { everyMs: number; fullEveryMs?: number }
+  | { fullEveryMs: number }
+  | { tiers: readonly SyncRegistryTierOverride[] }
+  | { enabled: false };
+
+function assertPositiveMs(name: string, value: unknown): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, received ${String(value)}`);
+  }
+}
+
+function assertRegistryOverride(override: SyncRegistryOverride): void {
+  if ("enabled" in override) return;
+  if ("tiers" in override) {
+    if (!Array.isArray(override.tiers) || override.tiers.length === 0) throw new Error("tiers must be a non-empty list");
+    for (const tier of override.tiers) {
+      assertPositiveMs("tiers[].everyMs", tier.everyMs);
+      if (tier.maxAgeDays !== null) assertPositiveMs("tiers[].maxAgeDays", tier.maxAgeDays);
+    }
+    return;
+  }
+  if ("everyMs" in override) assertPositiveMs("everyMs", override.everyMs);
+  if (override.fullEveryMs !== undefined) assertPositiveMs("fullEveryMs", override.fullEveryMs);
+}
+
+/** `registry_overrides[key]` for a page (§4.2); null removes the override.
+ *  Owner-protected keys and the shape a key takes are the CLI's check. */
 export async function setRegistryOverride(
   db: Database,
-  input: { pageId: number; key: string; override: { everyMs: number } | { enabled: false } | null },
+  input: { pageId: number; key: string; override: SyncRegistryOverride | null },
 ): Promise<boolean> {
   if (!SYNC_RESOURCE_KEY_PATTERN.test(input.key)) throw new Error(`Not a resource key: ${input.key}`);
-  if (input.override !== null && "everyMs" in input.override) {
-    if (!Number.isSafeInteger(input.override.everyMs) || input.override.everyMs <= 0) {
-      throw new Error(`everyMs must be a positive integer, received ${input.override.everyMs}`);
-    }
-  }
+  if (input.override !== null) assertRegistryOverride(input.override);
   const value = input.override === null
     ? sql`registry_overrides - ${input.key}::text`
     : sql`jsonb_set(registry_overrides, array[${input.key}::text], ${jsonParam(input.override)})`;
