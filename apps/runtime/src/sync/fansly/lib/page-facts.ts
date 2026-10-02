@@ -3,10 +3,24 @@ import { sql } from "drizzle-orm";
 import type { Database } from "@agency_hub_core/db";
 
 import { resolveFanslyPlatformAccountId } from "../../../services/fansly.ts";
+import type { DemandSignal, StepPlan } from "../../engine/resource.ts";
 
 // What the audience resources read about their page before a step (design
 // §5.11, §5.12): the native account id the follower routes name, and the two
 // `/account/me` counters with the instant they were read. Read-only.
+
+/** In shadow nothing writes a page's native id: a step that needs it
+ *  re-checks this often. */
+export const PAGE_IDENTITY_RECHECK_MS = 60 * 60 * 1000;
+
+/** The plan of a step that needs the page's native Fansly id before it has
+ *  one: live, `account.poll` writes it (made due here); in shadow nothing
+ *  will, so the step only re-checks hourly. */
+export function waitForPageIdentity(key: string, shadow: boolean, now: Date): StepPlan {
+  if (shadow) return { kind: "wait", reason: "dependency", until: new Date(now.getTime() + PAGE_IDENTITY_RECHECK_MS) };
+  const enqueue: DemandSignal[] = [{ resource: "account.poll", demand: { reason: `dependency:${key}` } }];
+  return { kind: "wait", reason: "dependency", until: null, enqueue };
+}
 
 /** The `/account/me` counters are fresh for a walk that starts at most this
  *  long after they were read: the subscribers stated-empty rule's window

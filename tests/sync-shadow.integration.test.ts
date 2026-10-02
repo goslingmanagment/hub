@@ -179,8 +179,8 @@ describe("a page in shadow", () => {
       },
     });
     await expect(first.actor.run({ stop: first.stop.signal, abort: first.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
-    const orphan = await testDb.pool.query<{ id: string; outcome: string; completed_at: Date | null }>(
-      "select id::text, outcome, completed_at from sync_attempts",
+    const orphan = await testDb.pool.query<{ id: string; work_id: string; outcome: string; completed_at: Date | null }>(
+      "select id::text, work_id::text, outcome, completed_at from sync_attempts",
     );
     expect(orphan.rows).toMatchObject([{ outcome: "admitted", completed_at: null }]);
 
@@ -204,9 +204,12 @@ describe("a page in shadow", () => {
     // Nothing was sent for it: closed as shadow, no send instant, prunable.
     expect(recovered.rows[0]).toMatchObject({ outcome: "shadow", send_mark: "shadow", apply_state: "skipped", sent_at: null });
     expect(recovered.rows[0]!.completed_at).not.toBeNull();
-    const work = await testDb.pool.query<{ state: string; close_reason: string | null }>(
-      "select state, close_reason from sync_work where resource = 'shadowtest.read' and subject = 'post-1'",
+    // The orphan's own row. The poll may already have run before the stop
+    // and asked for post-1 again: that is a new row, not this one.
+    const work = await testDb.pool.query<{ resource: string; subject: string; state: string; close_reason: string | null }>(
+      "select resource, subject, state, close_reason from sync_work where id = $1",
+      [orphan.rows[0]!.work_id],
     );
-    expect(work.rows).toEqual([{ state: "done", close_reason: null }]);
+    expect(work.rows).toEqual([{ resource: "shadowtest.read", subject: "post-1", state: "done", close_reason: null }]);
   }, 60_000);
 });

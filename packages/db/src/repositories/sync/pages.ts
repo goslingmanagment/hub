@@ -96,11 +96,17 @@ export interface SyncPageOwnerRecord {
   stopConfirmedBy: string | null;
 }
 
-/** `resource_holds[<file>]`: the §9 resource breaker of one resource file. */
+/** `resource_holds[<file>]`: the §9 resource breaker of one resource file
+ *  (no `kind`), or the conversation list's own 429 hold (`kind:
+ *  'rate_limit_list'`, owner decision 2026-10-02) in the `dm-conversations`
+ *  entry. */
 export interface SyncResourceHold {
   until: string;
   step: number;
   since: string;
+  kind?: "rate_limit_list";
+  /** The newest list 429 (the list ladder's reset clock). */
+  lastRateLimitAt?: string;
 }
 
 type PageSqlRow = {
@@ -863,21 +869,33 @@ export async function setNetworkFailureStreak(
 
 /**
  * The §9 resource breaker of one resource file: `resource_holds[file] =
- * {until, step, since}`; `hold: null` lifts it.
+ * {until, step, since}`, or — with `kind: 'rate_limit_list'` — the list's own
+ * 429 hold, which also keeps the instant of its newest 429; `hold: null` lifts
+ * it. `since` carries over while the entry keeps its kind.
  */
 export async function setResourceHold(
   db: Database,
-  input: { pageId: number; generation?: bigint; file: string; hold: { until: Date; step: number } | null },
+  input: {
+    pageId: number;
+    generation?: bigint;
+    file: string;
+    hold: { until: Date; step: number; kind?: "rate_limit_list"; lastRateLimitAt?: Date } | null;
+  },
 ): Promise<void> {
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.file)) {
     throw new Error(`Not a resource file: ${input.file}`);
   }
+  const kind = input.hold?.kind ?? null;
   const value = input.hold === null
     ? sql`resource_holds - ${input.file}::text`
-    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_build_object(
+    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_strip_nulls(jsonb_build_object(
         'until', to_jsonb(${input.hold.until}::timestamptz),
         'step', ${input.hold.step}::int,
-        'since', coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))))`;
+        'since', case when (resource_holds -> ${input.file}::text ->> 'kind') is not distinct from ${kind}::text
+                      then coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))
+                      else to_jsonb(clock_timestamp()) end,
+        'kind', ${kind}::text,
+        'lastRateLimitAt', to_jsonb(${input.hold.lastRateLimitAt ?? null}::timestamptz))))`;
   const result = await db.execute(sql`
     update sync_pages
        set resource_holds = ${value},

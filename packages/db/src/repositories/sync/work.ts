@@ -462,10 +462,18 @@ export interface SyncWorkPickFilter {
   excludeFiles?: readonly string[];
 }
 
-function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWorkClass): SQL {
+/** The paused, switched-off and held keys a pick leaves out — and so does
+ *  the actor's idle wait (`nextOpenWorkDueAt`), or a held row would look due
+ *  forever and the actor would lap without sleeping. */
+function exclusionPredicate(filter: Pick<SyncWorkPickFilter, "excludeResources" | "excludeFiles">): SQL {
   for (const file of filter.excludeFiles ?? []) {
     if (!SYNC_RESOURCE_FILE_PATTERN.test(file)) throw new Error(`Not a resource file: ${file}`);
   }
+  return sql`not (w.resource = any(${textArrayParam(filter.excludeResources ?? [])}))
+    and not (split_part(w.resource, '.', 1) = any(${textArrayParam(filter.excludeFiles ?? [])}))`;
+}
+
+function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWorkClass): SQL {
   const now = nowParam(filter.now);
   return sql`w.page_id = ${filter.pageId}
     and w.shadow = ${filter.shadow}
@@ -473,8 +481,7 @@ function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWork
     and w.state = 'open'
     and w.due_at <= ${now}
     and (w.breaker_until is null or w.breaker_until <= ${now})
-    and not (w.resource = any(${textArrayParam(filter.excludeResources ?? [])}))
-    and not (split_part(w.resource, '.', 1) = any(${textArrayParam(filter.excludeFiles ?? [])}))`;
+    and ${exclusionPredicate(filter)}`;
 }
 
 /**
@@ -731,11 +738,12 @@ export async function getSyncWork(db: Database, workId: number): Promise<SyncWor
   return row ? normalizeWorkRow(row) : null;
 }
 
-/** The earliest due time of the page's open work in this journal (the actor
- *  sleeps until then, at most a second). Null: no open work. */
+/** The earliest due time of the page's open work in this journal that a
+ *  pick with the same exclusions could take (the actor sleeps until then, at
+ *  most a second). Null: no such open work. */
 export async function nextOpenWorkDueAt(
   db: Database,
-  input: { pageId: number; shadow: boolean },
+  input: Pick<SyncWorkPickFilter, "pageId" | "shadow" | "excludeResources" | "excludeFiles">,
 ): Promise<Date | null> {
   const result = await db.execute<{ dueAt: Date | string | null }>(sql`
     select min(greatest(w.due_at, coalesce(w.breaker_until, w.due_at))) as "dueAt"
@@ -743,8 +751,29 @@ export async function nextOpenWorkDueAt(
      where w.page_id = ${input.pageId}
        and w.shadow = ${input.shadow}::boolean
        and w.state = 'open'
+       and ${exclusionPredicate(input)}
   `);
   return toDate(result.rows[0]?.dueAt);
+}
+
+/** Which of these subjects have an open (or running) row of `resource` in
+ *  this journal — plain read, no lock. */
+export async function listOpenWorkSubjects(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+): Promise<Set<string>> {
+  const subjects = [...new Set(input.subjects)];
+  if (subjects.length === 0) return new Set();
+  const result = await db.execute<{ subject: string }>(sql`
+    select w.subject
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.state in ('open', 'running')
+       and w.subject = any(${textArrayParam(subjects)})
+  `);
+  return new Set(result.rows.map((row) => row.subject));
 }
 
 /** Lock several work rows in id order (the lock order of §3.7). */

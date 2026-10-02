@@ -92,6 +92,8 @@ const subscribersModule = (variant: "poll" | "history") => async (): Promise<Res
   (await import("./resources/subscribers.ts")).subscribersModule(variant);
 const followersModule = (variant: "head" | "reconcile") => async (): Promise<ResourceModule> =>
   (await import("./resources/followers.ts")).followersModule(variant);
+const dmConversationsModule = (variant: "head" | "full" | "find" | "detail" | "ws-down") => async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-conversations.ts")).dmConversationsModule(variant);
 const transactionsModule = (variant: "head" | "insurance" | "rescan" | "backfill") => async (): Promise<ResourceModule> =>
   (await import("./resources/transactions.ts")).transactionsModule(variant);
 const topSpendersModule = (variant: "window" | "bootstrap") => async (): Promise<ResourceModule> =>
@@ -185,6 +187,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"], replayKinds: ["dm_conversations"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("head"),
   },
   {
     key: "dm-conversations.full", file: "dm-conversations", subject: "page", kind: "poll", class: "planned",
@@ -192,6 +195,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("full"),
   },
   {
     key: "dm-conversations.find", file: "dm-conversations", subject: "thread", kind: "trigger", class: "urgent",
@@ -200,6 +204,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups", "group.detail"], replayKinds: ["group_detail"],
     legacy: [stream("dm_conversations"), sender("ws_hint")],
+    module: dmConversationsModule("find"),
   },
   {
     key: "dm-conversations.detail", file: "dm-conversations", subject: "thread", kind: "trigger", class: "planned",
@@ -207,6 +212,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["group.detail"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("detail"),
   },
   {
     // Polls the list head every 30 s only while the socket is down (> 2 min):
@@ -217,12 +223,16 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "single", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("ws-down"),
   },
 
   // ── dm-messages (S2-08b) ──────────────────────────────────────────────────
   {
     key: "dm-messages.head", file: "dm-messages", subject: "thread", kind: "trigger", class: "urgent",
-    triggers: ["ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down", "ws_gap"],
+    triggers: [
+      "ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down",
+      "apply:dm-conversations.find", "ws_gap",
+    ],
     coalesce: { quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND } },
     slo: { resultMs: 30 * SECOND },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
@@ -231,7 +241,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     key: "dm-messages.catchup", file: "dm-messages", subject: "thread", kind: "trigger", class: "planned",
-    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "legacy_import"],
+    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail", "legacy_import"],
     coalesce: { quietMs: MINUTE, maxMs: 10 * MINUTE, extendOnSignal: true }, slo: { staleAfterMs: 6 * HOUR },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
