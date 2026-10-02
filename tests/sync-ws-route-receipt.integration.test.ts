@@ -168,6 +168,36 @@ describe("the post-ack routing hook (I18)", () => {
     expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ target: { kind: "media", id: "970000000000000001" } });
   });
 
+  it("PPV orders: one walk row per target across receipts; a subject-less quarantined row of an older build takes none", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await livePage("live");
+    // What the router wrote before it named the target (its ids in the params,
+    // no subject), quarantined as `purchase_target_unknown`: it holds the key
+    // (page, live, purchases.targets, '') and must absorb no new order.
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, waiting_reason, params, last_error_class)
+       values ($1, false, 'purchases.targets', '', 'goal', 'planned', 'quarantined', 'quarantined', $2::jsonb, 'quarantine:purchase_target_unknown')`,
+      [page.pageId, JSON.stringify({ ids: ["media:970000000000000009"] })],
+    );
+    // Two orders of one media (two receipts, two ack transactions), then an
+    // order naming another media and a bundle.
+    const frames = [
+      serviceFrame({ type: 7, order: { orderId: "960000000000000001", accountMediaId: "970000000000000001" } }, 2),
+      serviceFrame({ type: 7, order: { orderId: "960000000000000002", accountMediaId: "970000000000000001" } }, 2),
+      serviceFrame({ type: 7, order: { orderId: "960000000000000003", accountMediaId: "970000000000000002", accountMediaBundleId: "990000000000000001" } }, 2),
+    ];
+    for (const frame of frames) expect(await applyFanslyWsLive(app(), await page.capture(frame))).not.toBeNull();
+    const targets = (await work(page.pageId))
+      .filter((row) => row.resource === "purchases.targets")
+      .map((row) => ({ subject: row.subject, state: row.state, revision: Number(row.demand_revision), params: row.params }));
+    expect(targets).toEqual([
+      { subject: "", state: "quarantined", revision: 1, params: { ids: ["media:970000000000000009"] } },
+      { subject: "bundle:990000000000000001", state: "open", revision: 1, params: { target: { kind: "bundle", id: "990000000000000001" } } },
+      { subject: "media:970000000000000001", state: "open", revision: 2, params: { target: { kind: "media", id: "970000000000000001" } } },
+      { subject: "media:970000000000000002", state: "open", revision: 1, params: { target: { kind: "media", id: "970000000000000002" } } },
+    ]);
+  });
+
   it("a handover page is routed too; its work waits for the actor", async (context) => {
     if (!testDb) return context.skip();
     const page = await livePage("handover");

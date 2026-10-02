@@ -647,6 +647,32 @@ describe("media-stats.walk", () => {
     expect(again.hits).toEqual([]);
   });
 
+  it("the daily top-50 mark is a local step: nothing admitted or sent, an item read within the day left to its tier", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // A 60-day item read two hours ago: not due by its weekly tier, and the
+    // mark leaves an item visited within the day alone.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2 / 24, backfillCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
+                                    content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
+      [pageId, ITEM_MID, "e".repeat(64)],
+    );
+    const before = await mediaRow(pageId, ITEM_MID);
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    await setCursor(pageId, "media-stats.walk", { topMarkedDay: new Date(Date.now() - DAY_MS).toISOString().slice(0, 10) });
+    const today = new Date().toISOString().slice(0, 10);
+    const { hits } = await drive(pageId, "live", registry, mediaAnswer(), async () => {
+      const row = await workRow(pageId, "media-stats.walk");
+      return row?.cursor.topMarkedDay === today && row.waiting_reason === "not_due";
+    });
+    expect(hits).toEqual([]);
+    expect(await attempts(pageId, "media-stats.walk", "true")).toBe(0);
+    expect(await mediaRow(pageId, ITEM_MID)).toEqual(before);
+  });
+
   it("a failing item breaks only its queue row and the walk moves on", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage("live");
