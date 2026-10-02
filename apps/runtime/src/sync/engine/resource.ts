@@ -1,11 +1,12 @@
-import type {
-  Database,
-  SyncAttemptRow,
-  SyncPageRow,
-  SyncWaitingReason,
-  SyncWorkKind,
-  SyncWorkRow,
-  UpsertDemandInput,
+import {
+  SYNC_WORK_PARAM_IDS_CAP,
+  type Database,
+  type SyncAttemptRow,
+  type SyncPageRow,
+  type SyncWaitingReason,
+  type SyncWorkKind,
+  type SyncWorkRow,
+  type UpsertDemandInput,
 } from "@agency_hub_core/db";
 import type { FanslyWireId, FanslyWireParams } from "@agency_hub_core/fansly";
 
@@ -77,7 +78,9 @@ export interface EngineResourceSpec {
   subjectQueue?: boolean;
   /** Owner decision №6: a frequency change needs the owner (`--owner-approved`). */
   ownerProtected?: true;
-  module: () => Promise<ResourceModule>;
+  /** The entry's code. Absent while it has not landed: the key's work waits
+   *  on `dependency` and counts `not_implemented` (design §12, S2-07a). */
+  module?: () => Promise<ResourceModule>;
 }
 
 /** One physical request a plan asks for. */
@@ -99,6 +102,10 @@ export interface DemandSignal {
   demand?: { messageIds?: readonly string[]; txIds?: readonly string[]; reason: string };
   /** Non-secret parameters, written when the row is created. */
   params?: unknown;
+  /** Subject ids the work serves in batches (fan ids of `fan-profiles.lookup`):
+   *  merged into the open row's `params.ids`, first come first kept, at most
+   *  `SYNC_WORK_PARAM_IDS_CAP`. */
+  ids?: readonly string[];
   /** Result due in this many ms (urgent ordering); default: the SLO. */
   deadlineMs?: number;
 }
@@ -146,6 +153,8 @@ export interface ShadowContext {
 
 export interface ApplyInput {
   pageId: number;
+  /** The engine clock at the apply (stamps, presence buckets). */
+  now: Date;
   /** The page's native Fansly account id (`pages.external_page_id`). */
   ownRef: string | null;
   work: SyncWorkRow;
@@ -166,6 +175,13 @@ export interface ApplyResult<C = unknown> {
   followups: readonly DemandSignal[];
   /** A thread's chain moved: history requests re-check satisfaction (S2-11a). */
   threadChainChanged?: { threadId: number };
+  /** Outcomes worth counting that are not work (a refused empty snapshot, a
+   *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
+  counters?: Readonly<Record<string, number>>;
+  /** The account the page's credentials answered for (`/account/me`):
+   *  `sync_pages.identity_account_id`, written by the engine right after the
+   *  apply commits (the page row is the actor's, never a resource's). */
+  pageIdentity?: { accountId: string };
 }
 
 export interface ShadowResult<C = unknown> {
@@ -174,6 +190,37 @@ export interface ShadowResult<C = unknown> {
   followups: readonly DemandSignal[];
   /** Effects that are not work (subject-queue writes, …), counted only. */
   counters?: Readonly<Record<string, number>>;
+}
+
+/** One journaled observation offered to a resource's replay (the shadow
+ *  report, design §3.12 B5): the body as the journal holds it. */
+export interface ReplayObservation {
+  id: number;
+  receivedAt: Date;
+  kind: string;
+  pageId: number;
+  payload: unknown;
+}
+
+export interface ReplayContext {
+  /** Read-only: a replay never writes. */
+  db: Database;
+  pageId: number;
+}
+
+/** What a replay concluded about one observation: the new wire contract and
+ *  the resource's intended effects against what legacy stored. */
+export type ReplayVerdict =
+  | { kind: "match"; detail?: Readonly<Record<string, unknown>> }
+  | { kind: "mismatch"; reason: string; detail?: Readonly<Record<string, unknown>> }
+  | { kind: "not_replayable"; reason: string };
+
+/** What the step-3 switch carries over from the legacy engine for one key
+ *  (design §11.1 C): the cursor its live work row starts from. */
+export interface LegacyImport {
+  cursors: ReadonlyArray<{ resource: ResourceKey; subject: string; cursor: unknown }>;
+  /** Where each imported value came from (the switch report). */
+  notes: Readonly<Record<string, unknown>>;
 }
 
 export interface ResourceModule<C = unknown> {
@@ -187,6 +234,12 @@ export interface ResourceModule<C = unknown> {
   shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
+  /** Read-only: one legacy observation of a kind this resource owns through
+   *  the new contract and the resource's intended effects (design §3.12 B5). */
+  replay?(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict>;
+  /** One-time, at the step-3 switch of the page: the legacy state this key's
+   *  live work starts from. */
+  importLegacy?(tx: Database, page: { pageId: number }): Promise<LegacyImport>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue row). */
   onSubjectOutcome?(
     tx: Database,
@@ -260,7 +313,7 @@ export function createEngineRegistry(
       let loaded = modules.get(key);
       if (loaded === undefined) {
         const spec = byKey.get(key);
-        loaded = spec === undefined ? Promise.resolve(notImplementedModule(key, metrics)) : spec.module();
+        loaded = spec?.module === undefined ? Promise.resolve(notImplementedModule(key, metrics)) : spec.module();
         // A failed load is not cached: the next step tries again.
         loaded.catch(() => modules.delete(key));
         modules.set(key, loaded);
@@ -373,5 +426,8 @@ export function demandToUpsert(
     };
   }
   if (signal.params !== undefined) upsert.params = signal.params;
+  if (signal.ids !== undefined && signal.ids.length > 0) {
+    upsert.mergeParamIds = { key: "ids", ids: signal.ids, cap: SYNC_WORK_PARAM_IDS_CAP };
+  }
   return upsert;
 }
