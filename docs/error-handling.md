@@ -161,6 +161,9 @@ status, code, and intentional message.
 | Sync | `history_requests_unavailable_on_page` | 409 | A history request on a page not switched to the Fansly Sync Engine, or before its `requests_enabled_at` (every page in step 2). The page is in the caller's scope; the remedy is the hydration route, and `hub history-request` prints that fallback beside the refusal. Never retried automatically. |
 | Sync | `invalid_history_request` | 400 | A history request the service refuses after the contract accepted it (a fan reference that cannot be stored, a malformed depth from a direct caller). |
 | Sync | `history_request_not_found` | 404 | Owner routes and the owner CLI: no request with that ref. The agent plane answers its one static `not_found` instead, for a missing ref and for a request on a page outside the key's grant alike. |
+| Sync | `sync_page_not_found` | 404 | Owner routes of the Fansly Sync Engine (`/api/v1/sync/pages/:pageLabel/…`): no engine page with that label. The agent plane answers its one static `not_found` instead. |
+| Sync | `sync_work_not_found` | 404 | Owner route `GET /api/v1/sync/pages/:pageLabel/work/:workId`: no work row with that id on that page. |
+| Sync | `sync_page_off` | 409 | "Sync now" (`POST /api/v1/sync/pages/:pageLabel/refresh`) on a page whose engine mode is `off`: no actor runs it, so there is nothing to make due. Move the page to `shadow` first. |
 | Voice | `artifact_expired` | 410 | Stored voice audio passed its retrieval lifetime. |
 | Voice | `voice_retrieval_disabled` | 403 | Voice artifact retrieval is disabled. |
 | Voice | `voice_artifact_corrupt` | 500 | Stored audio bytes fail their SHA-256 integrity check. |

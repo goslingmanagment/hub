@@ -64,6 +64,13 @@ export const SYNC_WORK_PARAM_IDS_CAP = 1_000;
 /** LISTEN/NOTIFY channel that wakes a page's actor; the payload is the page id. */
 export const SYNC_WORK_NOTIFY_CHANNEL = "fansly_sync_work";
 
+/** LISTEN/NOTIFY channel a settled LIVE work row announces itself on
+ *  (`settleWork`), payload `<workId>:<appliedRevision>`: the wake of the
+ *  "enqueue work and wait" wrapper (design §7.3). Shadow rows stay silent —
+ *  the wrapper answers `not_live` on every page that is not live, so a shadow
+ *  row never has a waiter. */
+export const SYNC_WORK_DONE_NOTIFY_CHANNEL = "fansly_sync_work_done";
+
 /** Candidates a class pick reads at once (design §3.4). */
 export const SYNC_WORK_PICK_LIMIT = 20;
 
@@ -284,6 +291,11 @@ export interface UpsertDemandInput {
   mergeParamIds?: { key: string; ids: readonly string[]; cap: number };
   /** Ciphertext (page credentials box); written when the row is created only. */
   secretParams?: string | null;
+  /** Never merge into an open row of the key: create a new row, or leave the
+   *  open one untouched (no revision bump, no due change) and report it with
+   *  `created: false`. A work whose secret parameters are the point (a
+   *  candidate identity check) must not ride on another candidate's row. */
+  createOnly?: boolean;
 }
 
 export interface UpsertDemandResult {
@@ -356,7 +368,7 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
          limit 1
       ) prev on true
     on conflict (page_id, shadow, resource, subject) where state in ('open', 'running', 'quarantined')
-    do update set
+    ${input.createOnly === true ? sql`do nothing` : sql`do update set
       demand_revision = sync_work.demand_revision + 1,
       demand = sync_work_merge_demand(sync_work.demand, excluded.demand),
       params = ${mergedIds(sql`sync_work.params`)},
@@ -367,11 +379,22 @@ export async function upsertDemand(db: Database, input: UpsertDemandInput): Prom
       end,
       deadline_at = least(sync_work.deadline_at, excluded.deadline_at),
       coalesce_until = least(sync_work.coalesce_until, excluded.coalesce_until),
-      updated_at = clock_timestamp()
+      updated_at = clock_timestamp()`}
     returning id::text as id, demand_revision::text as "demandRevision", (xmax = 0) as created
   `);
   const row = result.rows[0];
-  if (!row) throw new Error("sync_work upsert returned no row");
+  if (!row) {
+    if (input.createOnly !== true) throw new Error("sync_work upsert returned no row");
+    // The open row of the key stays as it is: no demand merged, nothing to wake.
+    const open = await getOpenWorkForKey(db, {
+      pageId: input.pageId,
+      shadow: input.shadow,
+      resource: input.resource,
+      subject,
+    });
+    if (open === null) throw new Error(`sync_work ${input.resource} conflicted with an open row that is gone; retry`);
+    return { id: open.id, demandRevision: open.demandRevision, created: false };
+  }
   await notifyWork(db, input.pageId);
   return { id: Number(row.id), demandRevision: Number(row.demandRevision), created: row.created === true };
 }
@@ -447,6 +470,40 @@ export async function ensurePollRows(
   const created = result.rowCount ?? 0;
   if (created > 0) await notifyWork(db, input.pageId);
   return created;
+}
+
+/**
+ * "Sync now" (design §7.3): every open poll row of a page in one journal —
+ * or only those of the given resource files — becomes due now. A running row,
+ * a row already due and the standing walks are left alone; a poll's next due
+ * time after its read is the registry's period again. Wakes the page's actor
+ * when anything moved. Returns how many rows were bumped.
+ */
+export async function bumpPagePolls(
+  db: Database,
+  input: { pageId: number; shadow: boolean; files?: readonly string[] },
+): Promise<number> {
+  const files = input.files ?? null;
+  for (const file of files ?? []) {
+    if (!SYNC_RESOURCE_FILE_PATTERN.test(file)) throw new Error(`Not a sync resource file: ${file}`);
+  }
+  const fileFilter = files === null
+    ? sql``
+    : sql`and split_part(w.resource, '.', 1) = any(${textArrayParam(files)})`;
+  const result = await db.execute(sql`
+    update sync_work w
+       set due_at = clock_timestamp(),
+           updated_at = clock_timestamp()
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}
+       and w.kind = 'poll'
+       and w.state = 'open'
+       and w.due_at > clock_timestamp()
+       ${fileFilter}
+  `);
+  const bumped = result.rowCount ?? 0;
+  if (bumped > 0) await notifyWork(db, input.pageId);
+  return bumped;
 }
 
 // ── picks (design §3.4) ───────────────────────────────────────────────────────
@@ -701,8 +758,9 @@ export interface SettleWorkResult {
  * Settle a work row after a step (apply, no-HTTP plan, failed attempt). The
  * row closes only when the step asked to AND no demand newer than
  * `servedRevision` arrived during the step; otherwise it stays open and runs
- * again (I11). A closing row drops its `secret_params`. Null: the row is not
- * open or running any more (erased, superseded).
+ * again (I11). A closing row drops its `secret_params`. A live row announces
+ * the settle on `fansly_sync_work_done` (delivered at commit). Null: the row
+ * is not open or running any more (erased, superseded).
  */
 export async function settleWork(db: Database, input: SettleWorkInput): Promise<SettleWorkResult | null> {
   const close = input.close ?? null;
@@ -712,7 +770,7 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   // statement waits for the row lock is seen (the re-checked row version).
   const closing = sql`(${close}::text is not null and w.demand_revision <= ${input.servedRevision}::bigint)`;
   const newerDemand = sql`(w.demand_revision > ${input.servedRevision}::bigint)`;
-  const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string }>(sql`
+  const result = await db.execute<{ state: SyncWorkState; demandRevision: string; appliedRevision: string; shadow: boolean }>(sql`
     update sync_work w
        set applied_revision = greatest(w.applied_revision,
              least(w.demand_revision, coalesce(${applied}::bigint, w.applied_revision))),
@@ -741,10 +799,13 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
            updated_at = clock_timestamp()
      where w.id = ${input.workId}
        and w.state in ('open', 'running')
-    returning w.state, w.demand_revision::text as "demandRevision", w.applied_revision::text as "appliedRevision"
+    returning w.state, w.demand_revision::text as "demandRevision", w.applied_revision::text as "appliedRevision", w.shadow
   `);
   const row = result.rows[0];
   if (!row) return null;
+  if (!row.shadow) {
+    await db.execute(sql`select pg_notify(${SYNC_WORK_DONE_NOTIFY_CHANNEL}, ${`${input.workId}:${row.appliedRevision}`})`);
+  }
   return {
     state: row.state,
     demandRevision: Number(row.demandRevision),

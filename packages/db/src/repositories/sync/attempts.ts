@@ -827,3 +827,43 @@ export async function getSyncAttempt(db: Database, attemptId: number): Promise<S
   const row = result.rows[0];
   return row ? normalizeAttemptRow(row) : null;
 }
+
+/** What a status read shows of a work row's last attempt (design §7.4). */
+export interface SyncAttemptSummary {
+  id: number;
+  admittedAt: Date;
+  sentAt: Date | null;
+  outcome: SyncAttemptOutcome;
+  httpStatus: number | null;
+}
+
+/**
+ * The attempts of the given ids (`sync_work.last_attempt_id`), for the status
+ * and "why" reads. An id whose attempt the retention pruned is simply absent.
+ */
+export async function getSyncAttemptSummaries(
+  db: Database,
+  attemptIds: readonly number[],
+): Promise<Map<number, SyncAttemptSummary>> {
+  const ids = [...new Set(attemptIds)].filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (ids.length === 0) return new Map();
+  const result = await db.execute<{
+    id: string;
+    admittedAt: Date | string;
+    sentAt: Date | string | null;
+    outcome: SyncAttemptOutcome;
+    httpStatus: number | null;
+  }>(sql`
+    select a.id::text as id, a.admitted_at as "admittedAt", a.sent_at as "sentAt", a.outcome,
+           a.http_status as "httpStatus"
+      from sync_attempts a
+     where a.id = any(${sql.param(ids.map(String))}::bigint[])
+  `);
+  return new Map(result.rows.map((row) => [Number(row.id), {
+    id: Number(row.id),
+    admittedAt: toRequiredDate(row.admittedAt),
+    sentAt: toDate(row.sentAt),
+    outcome: row.outcome,
+    httpStatus: row.httpStatus === null ? null : Number(row.httpStatus),
+  }]));
+}

@@ -11,6 +11,7 @@ import {
   agentObservationSourceEnum,
   agentResolveHintEnum,
   agentSenderRoleEnum,
+  agentSyncResourceKeyEnum,
   agentThreadsOrderByEnum,
   agentTimelineLaneEnum,
   platformEnum,
@@ -1084,6 +1085,36 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         limit: readNumber(values, "limit"),
         cursor: readString(values, "cursor"),
       }),
+    }),
+  },
+  {
+    name: "sync-status",
+    operation: "agentSyncStatus",
+    summary:
+      "The Fansly Sync Engine's status of your pages: pause record, sends by class, queue by why it waits,"
+      + " holds, request progress. Off and shadow pages show simulated (shadow) work.",
+    options: {
+      "page-label": { kind: "string", describe: "Narrow to one page" },
+    },
+    run: (client, values) => client.agentSyncStatus({
+      query: defined({ pageLabel: readString(values, "page-label") }),
+    }),
+  },
+  {
+    name: "sync-why",
+    operation: "agentSyncWhy",
+    summary: "Why a page's engine work of one resource (and subject) is waiting.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      resource: { kind: "string", describe: "A registry key, e.g. dm-messages.head (required)" },
+      subject: { kind: "string", describe: "A chat, fan, media … id; omitted: every open row of the key" },
+    },
+    run: (client, values) => client.agentSyncWhy({
+      params: { pageLabel: requireString(values, "page-label") },
+      query: {
+        resource: requireEnum(values, "resource", agentSyncResourceKeyEnum.options),
+        ...defined({ subject: readString(values, "subject") }),
+      },
     }),
   },
 ];

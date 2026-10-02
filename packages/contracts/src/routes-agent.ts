@@ -2357,6 +2357,234 @@ export const agentHistoryRequestListResponseSchema = z.object({
   addAgentIssues(agentEvidenceIssues(value, value.items.length), ctx));
 
 // ---------------------------------------------------------------------------
+// Sync status and "why waiting" — the Fansly Sync Engine's page status and its
+// work rows (plan §10, design §3.9, §7.4). The agent plane reads them through
+// `agentSyncStatus` / `agentSyncWhy`; the owner routes in `routes-sync.ts`
+// serve the same shapes.
+//
+// A page that is `off` or `shadow` reports its SHADOW journal (`shadow: true`
+// on each work row): simulated work, nothing was sent. In step 2 every page is
+// one of the two.
+//
+// The vocabularies mirror closed lists of the server
+// (`packages/db/src/repositories/sync/*.ts`, `apps/runtime/src/sync/engine/
+// status.ts`, `apps/runtime/src/sync/fansly/registry.ts`); this module cannot
+// import them, so `tests/sync-status-contracts.test.ts` pins each one equal.
+// ---------------------------------------------------------------------------
+
+export const agentSyncPageModeEnum = z.enum(["off", "shadow", "handover", "live"]);
+export const agentSyncWorkClassEnum = z.enum(["urgent", "requests", "planned"]);
+export const agentSyncWorkKindEnum = z.enum(["poll", "trigger", "goal", "repair"]);
+export const agentSyncWorkStateEnum = z.enum(["open", "running", "quarantined", "done", "cancelled", "superseded"]);
+export const agentSyncPageHoldKindEnum = z.enum(["rate_limit", "auth", "identity_mismatch", "network"]);
+export const agentSyncAttemptOutcomeEnum = z.enum([
+  "admitted",
+  "sent",
+  "response",
+  "transport_error",
+  "timeout",
+  "aborted_before_send",
+  "unknown",
+  "shadow",
+]);
+
+/** Every registry key of the engine (`<file>.<variant>`), the vocabulary a
+ *  "why" read names its resource in. */
+export const agentSyncResourceKeyEnum = z.enum([
+  "account.poll",
+  "account.verify",
+  "account.identity",
+  "ws.connect",
+  "dm-live.deletions",
+  "dm-conversations.head",
+  "dm-conversations.full",
+  "dm-conversations.find",
+  "dm-conversations.detail",
+  "dm-conversations.ws-down",
+  "dm-messages.head",
+  "dm-messages.catchup",
+  "dm-messages.history",
+  "transactions.head",
+  "transactions.insurance",
+  "transactions.rescan",
+  "transactions.backfill",
+  "top-spenders.window",
+  "top-spenders.bootstrap",
+  "fan-earnings.roster",
+  "purchases.targets",
+  "payouts.daily",
+  "payouts.walk",
+  "subscribers.poll",
+  "subscribers.history",
+  "followers.head",
+  "followers.reconcile",
+  "fan-profiles.lookup",
+  "fan-profiles.probe",
+  "fan-profiles.alias-backfill",
+  "notifications.forward",
+  "notifications.backfill",
+  "posts.refresh",
+  "posts.backfill",
+  "posts.engagement",
+  "post-replies.walk",
+  "post-replies.authors",
+  "catalog.fixed",
+  "catalog.vault",
+  "catalog.hydrate",
+  "media-stats.walk",
+  "stats.daily",
+  "stats.hourly",
+  "stats.backfill",
+  "media-download.fetch",
+  "repair.ws-gap",
+  "probe.manual",
+]);
+
+const agentSyncCountSchema = z.number().int().nonnegative();
+
+const agentSyncClassQueueSchema = z.object({
+  /** Waits only for its slot (`pacer`) or for other work (`class_share`). */
+  runnable: agentSyncCountSchema,
+  waitingByReason: z.partialRecord(agentSyncWaitingReasonEnum, agentSyncCountSchema),
+}).strict();
+
+/** One page as the engine sees it (design §3.9): who owns it, the pause rule's
+ *  record, sends by class, the queue by "why waiting", holds and breakers. */
+export const agentSyncPageStatusSchema = z.object({
+  pageLabel: z.string().nullable(),
+  mode: agentSyncPageModeEnum,
+  owner: z.object({
+    /** A bigint as decimal text. */
+    generation: z.string().regex(/^\d+$/),
+    host: z.string().nullable(),
+    acquiredAt: agentIsoTimestamp.nullable(),
+    heartbeatAt: agentIsoTimestamp.nullable(),
+    /** A fresh heartbeat of an unreleased owner in a mode an actor runs in. */
+    running: z.boolean(),
+  }).strict(),
+  pause: z.object({
+    /** The owner's pause setting S, as the engine reads it. */
+    settingMs: z.number().int().positive(),
+    lastSendAt: agentIsoTimestamp.nullable(),
+    minGapLastHourMs: z.number().nonnegative().nullable(),
+    /** Sends closer than their S over the last day (the owner's rule says 0). */
+    violationsLastDay: agentSyncCountSchema,
+  }).strict(),
+  sendsLastHour: z.object({
+    urgent: agentSyncCountSchema,
+    requests: agentSyncCountSchema,
+    planned: agentSyncCountSchema,
+    byResource: z.record(z.string(), agentSyncCountSchema),
+  }).strict(),
+  queue: z.object({
+    urgent: agentSyncClassQueueSchema,
+    requests: agentSyncClassQueueSchema,
+    planned: agentSyncClassQueueSchema,
+  }).strict(),
+  holds: z.object({
+    page: z.object({
+      kind: agentSyncPageHoldKindEnum,
+      /** "infinity": an auth or identity hold only new credentials lift. */
+      until: z.union([agentIsoTimestamp, z.literal("infinity")]),
+      since: agentIsoTimestamp.nullable(),
+    }).strict().nullable(),
+    resources: z.array(z.object({
+      file: z.string(),
+      until: agentIsoTimestamp,
+      step: agentSyncCountSchema,
+      /** The file's breaker, or the conversation list's own 429 hold. */
+      kind: z.enum(["breaker", "rate_limit_list"]),
+    }).strict()),
+  }).strict(),
+  breakers: z.object({ open: agentSyncCountSchema, blockedByVendor: agentSyncCountSchema }).strict(),
+  quarantined: agentSyncCountSchema,
+  /** Open history requests with their progress (live pages only). */
+  requests: z.array(z.object({
+    ref: z.string().uuid(),
+    itemsReady: agentSyncCountSchema,
+    itemsTotal: agentSyncCountSchema,
+    readsDone: agentSyncCountSchema,
+    readsRemainingMin: agentSyncCountSchema,
+    etaEstimateSeconds: z.number().nonnegative().nullable(),
+  }).strict()),
+  ws: z.object({
+    connected: z.boolean(),
+    since: agentIsoTimestamp.nullable(),
+    gapSince: agentIsoTimestamp.nullable(),
+    decodeDebt: agentSyncCountSchema,
+  }).strict().nullable(),
+  /** A page in `off`/`shadow`: what its shadow journal did over the hour. */
+  shadow: z.object({
+    attemptsLastHour: agentSyncCountSchema,
+    demandVsEstimate: z.number().nonnegative().nullable(),
+  }).strict().nullable(),
+}).strict();
+
+/** One work row and why it waits ("почему ждёт", plan §10). */
+export const agentSyncWorkSchema = z.object({
+  id: z.number().int().positive(),
+  /** A registry key; a row of a key a later build retired keeps its name. */
+  resource: z.string().min(1),
+  /** '' for page-level work; a chat, fan, media … id otherwise. */
+  subject: z.string(),
+  /** The shadow journal: simulated work, nothing was sent. */
+  shadow: z.boolean(),
+  kind: agentSyncWorkKindEnum,
+  class: agentSyncWorkClassEnum,
+  state: agentSyncWorkStateEnum,
+  /** Null for closed work: it waits for nothing. */
+  waitingReason: agentSyncWaitingReasonEnum.nullable(),
+  waitingUntil: agentIsoTimestamp.nullable(),
+  dueAt: agentIsoTimestamp,
+  demandRevision: agentSyncCountSchema,
+  appliedRevision: agentSyncCountSchema,
+  failureCount: agentSyncCountSchema,
+  breakerUntil: agentIsoTimestamp.nullable(),
+  blockedByVendorAt: agentIsoTimestamp.nullable(),
+  lastAttempt: z.object({
+    admittedAt: agentIsoTimestamp,
+    sentAt: agentIsoTimestamp.nullable(),
+    outcome: agentSyncAttemptOutcomeEnum,
+    httpStatus: z.number().int().nullable(),
+  }).strict().nullable(),
+  closedAt: agentIsoTimestamp.nullable(),
+  closeReason: z.string().nullable(),
+}).strict();
+
+/** At most this many work rows in one "why" answer. */
+export const AGENT_SYNC_WHY_MAX_ROWS = 200;
+
+export const agentSyncStatusQuerySchema = z.object({
+  pageLabel: z.string().min(1).optional(),
+}).strict();
+
+export const agentSyncStatusResponseSchema = z.object({
+  pages: z.array(agentSyncPageStatusSchema).max(200),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentEvidenceIssues(value, value.pages.length), ctx));
+
+export const agentSyncWhyParamsSchema = z.object({
+  ...pageParamsSchema.shape,
+}).strict();
+
+export const agentSyncWhyQuerySchema = z.object({
+  resource: agentSyncResourceKeyEnum,
+  /** Omitted: every open row of the key; '' is the page-level row. */
+  subject: z.string().max(200).optional(),
+}).strict();
+
+export const agentSyncWhyResponseSchema = z.object({
+  work: z.array(agentSyncWorkSchema).max(AGENT_SYNC_WHY_MAX_ROWS),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentEvidenceIssues(value, value.work.length), ctx));
+
+// ---------------------------------------------------------------------------
 // The route registry. `routes.ts` spreads this into `routeSchemas`.
 // ---------------------------------------------------------------------------
 
@@ -2695,6 +2923,42 @@ export const agentRouteSchemas = {
       503: errorResponseSchema,
     },
   },
+  agentSyncStatus: {
+    // Not page-scoped (the label is an optional filter): a label outside the
+    // grant narrows the answer to nothing, like the history list.
+    auth: { kind: "agentKey" },
+    tags: ["agent"],
+    summary:
+      "The Fansly Sync Engine's status of this key's pages: owner, pause record, sends by class, queue by"
+      + " why it waits, holds, breakers, request progress. Off and shadow pages report their shadow journal",
+    querystring: agentSyncStatusQuerySchema,
+    response: {
+      200: agentSyncStatusResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  agentSyncWhy: {
+    auth: { kind: "agentKey", scope: "page" },
+    tags: ["agent"],
+    summary:
+      "Why a page's work of one registry key (and subject) waits: the open rows, or the newest closed one of"
+      + " a named subject. Chat and fan subjects need read:messages as well",
+    params: agentSyncWhyParamsSchema,
+    querystring: agentSyncWhyQuerySchema,
+    response: {
+      200: agentSyncWhyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type AgentDelivery = z.infer<typeof agentDeliverySchema>;
@@ -2771,3 +3035,11 @@ export type AgentHistoryRequestCancelBody = z.infer<typeof agentHistoryRequestCa
 export type AgentHistoryRequestCancelResponse = z.infer<typeof agentHistoryRequestCancelResponseSchema>;
 export type AgentHistoryRequestListQuery = z.infer<typeof agentHistoryRequestListQuerySchema>;
 export type AgentHistoryRequestListResponse = z.infer<typeof agentHistoryRequestListResponseSchema>;
+export type AgentSyncPageMode = z.infer<typeof agentSyncPageModeEnum>;
+export type AgentSyncResourceKey = z.infer<typeof agentSyncResourceKeyEnum>;
+export type AgentSyncPageStatus = z.infer<typeof agentSyncPageStatusSchema>;
+export type AgentSyncWork = z.infer<typeof agentSyncWorkSchema>;
+export type AgentSyncStatusQuery = z.infer<typeof agentSyncStatusQuerySchema>;
+export type AgentSyncStatusResponse = z.infer<typeof agentSyncStatusResponseSchema>;
+export type AgentSyncWhyQuery = z.infer<typeof agentSyncWhyQuerySchema>;
+export type AgentSyncWhyResponse = z.infer<typeof agentSyncWhyResponseSchema>;

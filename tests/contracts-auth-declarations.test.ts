@@ -61,6 +61,8 @@ describe("route auth declarations", () => {
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
+      // The Sync Engine's "why waiting" of one page's work.
+      "agentSyncWhy",
       "agentThreadMessages",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +
       // `scope: "page"`, which is also what gates the two `/money/*` routes:
