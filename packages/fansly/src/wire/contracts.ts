@@ -349,11 +349,60 @@ function isOkStatus(status: number) {
   return status >= 200 && status <= 299;
 }
 
+/** One answer as the wire layer read it off the socket. */
+export interface FanslyWireAnswer {
+  status: number;
+  headers: Readonly<Record<string, string>>;
+  bodyText: string;
+  /** `capture: 'bytes'` routes: the body itself and whether it passed the cap. */
+  bodyBuffer?: Buffer;
+  bodyOverflow?: boolean;
+}
+
+/** A status that is about the page or the wire, never a route's own answer:
+ *  the session (401/403), the request's own deadline (408), the provider's
+ *  pace (429). */
+const PAGE_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
+
+/**
+ * How the answer of a route that journals nothing (`capture`) reads: by its
+ * status, never through the API envelope (an Upgrade has no body, a CDN file
+ * is not JSON). A page-level status — and a 5xx naming its own deadline, the
+ * provider's pace — is an `http_error` the engine classifies as for any
+ * route. Otherwise the Upgrade's answer is its 101 (anything else failed the
+ * handshake), and every status of a CDN hop is that hop's own answer: the
+ * resource reads the bytes of a 2xx, the next hop of a 3xx, and records any
+ * other status as the download's failure.
+ */
+function readUnjournaledAnswer<P, R>(spec: FanslyWireSpec<P, R>, params: P, answer: FanslyWireAnswer): FanslyWireRead<R> {
+  const { status } = answer;
+  const retryAfter = answer.headers["retry-after"] ?? null;
+  const httpError = (): FanslyWireRead<R> => ({ kind: "http_error", status, envelope: null, retryAfter, finalServerError: false });
+  const contract = (response: unknown): FanslyWireRead<R> => {
+    const parsed = spec.parse(response, params);
+    return parsed.ok
+      ? { kind: "accepted", status, response, value: parsed.value }
+      : { kind: "contract_violation", status, response, violation: parsed.violation };
+  };
+  if (PAGE_LEVEL_STATUSES.has(status) || (status >= 500 && retryAfter !== null)) return httpError();
+  if (spec.capture === "none") return status === 101 ? contract({ status }) : httpError();
+  const ok = isOkStatus(status);
+  const tooLarge = answer.bodyOverflow === true;
+  return contract({
+    status,
+    contentType: answer.headers["content-type"] ?? null,
+    location: status >= 300 && status <= 399 ? answer.headers.location ?? null : null,
+    body: ok && !tooLarge ? answer.bodyBuffer ?? Buffer.from(answer.bodyText, "utf8") : null,
+    tooLarge,
+  });
+}
+
 export function readFanslyWireResponse<P, R>(
   spec: FanslyWireSpec<P, R>,
   params: P,
-  answer: { status: number; headers: Readonly<Record<string, string>>; bodyText: string },
+  answer: FanslyWireAnswer,
 ): FanslyWireRead<R> {
+  if (spec.capture !== undefined) return readUnjournaledAnswer(spec, params, answer);
   const { status, bodyText } = answer;
   const envelope = parseFanslyEnvelope(bodyText);
   const retryAfter = answer.headers["retry-after"] ?? null;

@@ -560,6 +560,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # incidents list refuses to serialize it until the row is resolved or a
   # forward deploy returns.
   "0233_fansly_sync_engine_incident_kind.sql"
+  # Fansly Sync Engine media handoff (design S3-04, owner decision №17): one
+  # new table (sync_media_handoff), two indexes and comments, no grant. The
+  # previous image never names it, and only the actor of a live page writes
+  # it (no page is live before the step-3 switch), so a rollback finds it
+  # empty and runs unchanged.
+  "0234_sync_media_handoff.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

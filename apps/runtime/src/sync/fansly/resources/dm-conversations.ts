@@ -280,7 +280,7 @@ function mergeCounters(...all: ReadonlyArray<Record<string, number>>): Record<st
 
 // ── the list page apply ─────────────────────────────────────────────────────
 
-interface ListPageOutcome {
+export interface ListPageOutcome {
   items: ResolvedListItem[];
   followups: DemandSignal[];
   counters: Record<string, number>;
@@ -293,7 +293,7 @@ interface ListPageOutcome {
  * transaction (the erasure fence is held, `fence: dm_archive`): the partner
  * fans, then each chat through the list's writer, then the follow-ups.
  */
-async function applyListPage(
+export async function applyListPage(
   tx: Database,
   input: {
     pageId: number;
@@ -1032,12 +1032,19 @@ const detailModule: ResourceModule = {
 
 // ── ws-down (live only, step 3) ─────────────────────────────────────────────
 
-/** The page's socket is connected and verified (no `.ws-down` reads needed). */
-async function socketUp(db: Database, pageId: number): Promise<boolean> {
+/** A socket whose receiver last proved itself longer ago than this is not
+ *  up: the receiver's guard runs every 5 s, so a row it stopped touching is a
+ *  process that died with the row open (design G10, E13). */
+export const DM_LIST_SOCKET_GUARD_FRESH_MS = 30_000;
+
+/** The page's socket is connected, verified and alive (no `.ws-down` reads
+ *  needed). A row left open by a killed process is not: its guard went stale. */
+export async function socketUp(db: Database, pageId: number): Promise<boolean> {
   const result = await db.execute<{ up: boolean }>(sql`
     select exists (
       select 1 from fansly_ws_connections c
        where c.page_id = ${pageId} and c.closed_at is null and c.verified_at is not null
+         and c.last_guard_at > clock_timestamp() - ${DM_LIST_SOCKET_GUARD_FRESH_MS}::double precision * interval '1 millisecond'
     ) as up
   `);
   return result.rows[0]?.up === true;

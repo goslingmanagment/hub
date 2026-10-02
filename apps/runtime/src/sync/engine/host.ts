@@ -21,6 +21,7 @@ import {
   type FanslySendOsProbe,
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { createPageTransport } from "../fansly/transport.ts";
+import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
 import { SyncActor, type ActorExit, type ShadowFeed } from "./actor.ts";
 import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
@@ -42,6 +43,8 @@ import {
   systemClock,
   type AlertSink,
   type Clock,
+  type LivePageSocket,
+  type LivePageSocketRef,
   type Metrics,
   type PauseSource,
   type SettingsSource,
@@ -130,8 +133,14 @@ export interface SyncHostOptions {
   liveLoopEnabled?: boolean;
   /** TESTS ONLY: a pacer with a test setting floor. Never passed by `main.ts`. */
   pacerFactory?: (deps: PacerDeps) => Pacer;
-  /** TESTS ONLY: a stand-in for the live page transport. */
-  liveTransportFactory?: (page: SyncPageRow) => Promise<PageTransport>;
+  /** TESTS ONLY: a stand-in for the live page transport (`socket` is the
+   *  page's socket owner the production transport sends `ws.upgrade` through). */
+  liveTransportFactory?: (page: SyncPageRow, options: { socket: LivePageSocketRef }) => Promise<PageTransport>;
+  /** The live page's WebSocket owner (design S3-03: the `FanslyWsSource` of
+   *  the slot): `ws.connect` plans by its state and the live transport sends
+   *  the Upgrade through its handshake. Absent, or null for a page: no socket
+   *  owner in this process — `ws.connect` waits on `dependency`. */
+  liveSocket?: (page: SyncPageRow) => LivePageSocket | null;
   /** TESTS ONLY: crash points. */
   faults?: SyncFaultHook;
 }
@@ -411,6 +420,9 @@ export class SyncEngineHost {
     let transport: PageTransport | null = null;
     let pacer: Pacer;
     let ownRef: string | null;
+    // The live page's socket owner, read at every plan and every Upgrade.
+    const socket: LivePageSocket | null = mode === "live" ? this.#o.liveSocket?.(page) ?? null : null;
+    const socketRef: LivePageSocketRef = () => socket;
     try {
       const settingMs = await this.#pause.readSettingMs();
       // I5: computed by the database clock, from every send of every owner.
@@ -428,7 +440,7 @@ export class SyncEngineHost {
           clock: this.#clock,
           latency: this.#o.shadowLatency?.(pageId) ?? createLegacyShadowLatency({ db, pageId, clock: this.#clock, rng: this.#rng }),
         })
-        : await this.#liveTransport(page);
+        : await this.#liveTransport(page, socketRef);
     } catch (error) {
       // Nothing was sent under the new generation: release it at once.
       await transport?.close().catch(() => undefined);
@@ -462,6 +474,7 @@ export class SyncEngineHost {
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
+      ...(mode === "live" ? { socket: socketRef, secrets: createSyncWorkSecretBox(this.#o.config) } : {}),
     });
     const stop = new AbortController();
     const abort = new AbortController();
@@ -486,10 +499,14 @@ export class SyncEngineHost {
       .then((exit) => this.#onActorExit(slot, exit, session));
   }
 
-  async #liveTransport(page: SyncPageRow): Promise<PageTransport> {
-    if (this.#o.liveTransportFactory !== undefined) return this.#o.liveTransportFactory(page);
+  async #liveTransport(page: SyncPageRow, socket: LivePageSocketRef): Promise<PageTransport> {
+    if (this.#o.liveTransportFactory !== undefined) return this.#o.liveTransportFactory(page, { socket });
     if (page.pageLabel === null) throw new Error(`Fansly sync page ${page.pageId} has no label`);
-    return createPageTransport({ db: this.#o.db, config: this.#o.config }, { pageId: page.pageId, pageLabel: page.pageLabel });
+    return createPageTransport(
+      { db: this.#o.db, config: this.#o.config },
+      { pageId: page.pageId, pageLabel: page.pageLabel },
+      { socket },
+    );
   }
 
   #judge(previous: SyncPageOwnerRecord): string | null {

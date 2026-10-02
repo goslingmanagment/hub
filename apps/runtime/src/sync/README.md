@@ -148,6 +148,35 @@ on the production journal), and as a fallback more than 20 own messages in disti
 broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; the hot-table and
 archive marks of a live page land with the socket's live ownership (step 3).
 
+## Live-only resources (step 3)
+
+Four keys never run in shadow (`liveOnly`): they need a page the engine owns.
+
+- `ws.connect` — the socket's HTTP Upgrade (wire `ws.upgrade`) as an admitted request: the page's socket owner
+  (S3-03's `FanslyWsSource`, wired through the host's `liveSocket` and `LivePageSocket`) asks for it at start and
+  after every close, the actor admits it through the pacer, the transport sends it through the owner's handshake
+  with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 holds it `rate_limit`; any
+  other failure closes the work `failed_handshake` for the owner's reconnect ladder — no page network streak.
+- `repair.ws-gap` — after a socket gap: the conversation list from offset 0 down to the earliest gap of the
+  unreconciled verified connections (60 s earlier; with none, the work's first demand), pages ≥ 5 s apart,
+  every moved chat read at once, the money head and the subscribers poll bumped; when what it asked for has
+  served its demand (≤ 10 min), a `local` step stamps the connections (`state_reconciled_at`,
+  `transient_unknown`). Demand during a pass starts a new pass on the same row.
+- `dm-conversations.ws-down` — the list head every 30 s while no verified socket proves itself (a guard younger
+  than 30 s: a row a killed process left open is not a socket).
+- `media-download.fetch` — the AI describer's CDN download of a chat file (wire `cdn.media`): the signed URL is
+  the work's secret (`sync_work.secret_params`, sealed with the page-credentials box, read only by the live
+  transport, dropped at close), one admission per hop, Fansly media CDN hosts only, ≤ 5 MiB; a 401/403 is the
+  signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the page. The bytes cross to
+  the worker through the transient handoff table `sync_media_handoff` (owner decision №17): not a captured fact,
+  consumed by the describer's read, swept after 24 h.
+
+The Upgrade and a CDN hop journal nothing (`capture` on their wire spec): no observation, no request line in
+`sync_attempts.request` (a hop keeps its number and the sha256 of its path). Their answer is applied once, from
+memory, right after the capture (`applyAnswer`); a crash before that, a busy erasure fence or a failed apply
+skips the attempt and reads the hop again as a new admission. A `local` plan (`applyLocal`) is a write without
+a request in one generation-fenced transaction (with the erasure fence when the entry takes it).
+
 ## Ownership
 
 A page has one owner generation at a time (`sync_pages.owner_generation`, fenced in every write) and its owner holds
@@ -238,6 +267,7 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
 | 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
 | any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
 | 401 / 403 | `auth` | page hold until new credentials, alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
@@ -293,6 +323,7 @@ step-3 switch.
 | Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
 | The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
+| Where the describer's downloads of a live page stand | `sync_work` of `media-download.fetch` (subject `desc:<id>`), `sync_media_handoff` (bytes awaiting the worker) |
 | A new kind of data | the same + schema, repository, migration |
 | A new depth or rule of a history request | `requests/history-rules.ts` (satisfaction, anchors) + `requests/history.ts` + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |

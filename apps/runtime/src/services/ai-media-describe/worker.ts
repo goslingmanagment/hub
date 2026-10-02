@@ -7,6 +7,7 @@ import {
   findDescribedAiMediaByContent,
   findPageByLabel,
   finishAiMediaDescription,
+  getSyncPage,
   getAiMediaDescribeDay,
   getFirstAiMediaDescriptionLink,
   getNotificationIncidentByKey,
@@ -47,6 +48,7 @@ import {
   type MediaDescribeClientFactory,
   type MediaDescribeOutcome,
 } from "./describer.ts";
+import { downloadThroughSyncEngine } from "./engine-download.ts";
 import { prepareMediaImage } from "./image.ts";
 import {
   isAfterAiMediaDescribeBoundary,
@@ -102,7 +104,7 @@ export interface AiMediaDescribeDeps {
   sources: ReadonlyMap<AiMediaPlatform, AiMediaSource>;
   /** Null when no Anthropic key is configured (the sweep then idles). */
   clientFactory: MediaDescribeClientFactory | null;
-  download?: (input: { url: string; pageId: number }) => Promise<MediaDownloadResult>;
+  download?: (input: { url: string; pageId: number; descriptionId: number }) => Promise<MediaDownloadResult>;
   /** The clock; read at every step (claim, reservation, settle). */
   now?: () => Date;
   sleep?: (ms: number) => Promise<void>;
@@ -125,7 +127,18 @@ function nextUtcMidnight(now: Date) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 }
 
-async function defaultDownload(app: AppContext, input: { url: string; pageId: number }) {
+/** The describer's download of one file: through the page's actor on a page
+ *  the Fansly Sync Engine owns, else through the page's egress and send guard. */
+export async function downloadAiMediaForDescribe(
+  app: AppContext,
+  input: { url: string; pageId: number; descriptionId: number },
+): Promise<MediaDownloadResult> {
+  // A page the Fansly Sync Engine owns has one sender, its actor: the CDN
+  // hops are its requests (`media-download.fetch`, design S3-04 item 7). While
+  // the page is switching (`handover`) nobody may send: look again later.
+  const mode = (await getSyncPage(app.db, input.pageId))?.mode ?? null;
+  if (mode === "live") return downloadThroughSyncEngine(app, input);
+  if (mode === "handover") return { ok: false as const, reason: "send_guard" as const, httpStatus: null };
   const egress = await resolveEgress(app, { kind: "page", pageId: input.pageId });
   try {
     // Plan §2.5: a Fansly CDN hop rides the page's send guard; the download
@@ -429,8 +442,8 @@ async function processRow(
     return { status: "budget_deferred", sent: false, stop: true };
   }
 
-  const download = deps.download ?? ((args) => defaultDownload(app, args));
-  const downloaded = await download({ url: resolution.url, pageId: row.pageId });
+  const download = deps.download ?? ((args) => downloadAiMediaForDescribe(app, args));
+  const downloaded = await download({ url: resolution.url, pageId: row.pageId, descriptionId: row.id });
   if (!downloaded.ok && downloaded.reason === "send_guard") {
     // The page's send guard did not admit the CDN request (the page is closed,
     // or this worker is stopping): nothing was sent and nothing is wrong with

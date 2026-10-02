@@ -170,7 +170,8 @@ describe("Fansly wire specs against the adapter", () => {
     const { FanslyAdapter, fetchMock } = await loadAdapters();
     const wire: Wire = await import("@agency_hub_core/fansly");
     const cases = parityCases(wire);
-    expect(new Set(cases.map((entry) => entry.id))).toEqual(new Set(wire.FANSLY_WIRE_IDS));
+    // Every API route; the socket's Upgrade and a CDN hop have no adapter twin.
+    expect(new Set(cases.map((entry) => entry.id))).toEqual(new Set(wire.FANSLY_WIRE_IDS.filter((id) => wire.isFanslyApiWireId(id))));
 
     fetchMock.mockImplementation(async () => toJsonResponse({ success: true, response: [] }));
     const adapter = new FanslyAdapter({ baseUrl: BASE_URL });

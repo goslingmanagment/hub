@@ -97,6 +97,34 @@ describe("sync errors: classification of one outcome", () => {
     expect(classify(answer(403, ""), [403]).errorClass).toBe("auth");
   });
 
+  it("a 401/403 a resource declares about its subject closes the subject and holds nothing (G16)", () => {
+    const cdn = fanslyWireSpec("cdn.media");
+    const scoped = { now: NOW, subjectScopedAuthStatuses: [401, 403] as const };
+    for (const status of [401, 403]) {
+      expect(classifyWireOutcome(answer(status, ""), cdn, { hop: 0 }, scoped).errorClass, String(status)).toBe("subject_terminal");
+      // Without the declaration the same answer is the page's session.
+      expect(classifyWireOutcome(answer(status, ""), cdn, { hop: 0 }, { now: NOW }).errorClass, String(status)).toBe("auth");
+    }
+    // Only the listed statuses: a 401 stays the page's when only 403 is listed.
+    expect(classifyWireOutcome(answer(401, ""), accountMe, {}, { now: NOW, subjectScopedAuthStatuses: [403] }).errorClass).toBe("auth");
+    expect(classifyWireOutcome(answer(403, ""), accountMe, {}, { now: NOW, subjectScopedAuthStatuses: [403] }).errorClass).toBe("subject_terminal");
+    // A 429 is the provider's pace whatever the resource says (plan §9).
+    expect(classifyWireOutcome(answer(429, ""), cdn, { hop: 0 }, scoped).errorClass).toBe("rate_limit");
+  });
+
+  it("reads a CDN hop and an Upgrade by status: every non-page-level answer is theirs to apply", () => {
+    const cdn = fanslyWireSpec("cdn.media");
+    const upgrade = fanslyWireSpec("ws.upgrade");
+    for (const status of [200, 302, 404, 500]) {
+      expect(classifyWireOutcome(answer(status, ""), cdn, { hop: 0 }, { now: NOW }).errorClass, String(status)).toBe("ok");
+    }
+    expect(classifyWireOutcome(answer(503, "", { "retry-after": "60" }), cdn, { hop: 0 }, { now: NOW }).errorClass).toBe("rate_limit");
+    expect(classifyWireOutcome(answer(101, ""), upgrade, {}, { now: NOW }).errorClass).toBe("ok");
+    expect(classifyWireOutcome(answer(401, ""), upgrade, {}, { now: NOW }).errorClass).toBe("auth");
+    expect(classifyWireOutcome(answer(429, ""), upgrade, {}, { now: NOW }).errorClass).toBe("rate_limit");
+    expect(classifyWireOutcome(answer(400, ""), upgrade, {}, { now: NOW }).errorClass).toBe("subject_failure");
+  });
+
   it("a 5xx naming its own deadline is the provider's pace (page-wide), not the subject's failure", () => {
     const classified = classify(answer(503, "", { "retry-after": "30" }));
     expect(classified).toMatchObject({ errorClass: "rate_limit", retryAfterMs: 30_000 });

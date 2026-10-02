@@ -172,6 +172,8 @@ export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/sync/history-requests.ts";
 // The WebSocket demand router's reads (design §6).
 export * from "./repositories/sync/ws-router.ts";
+export * from "./repositories/sync/ws-gap.ts";
+export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/observability.ts";
 export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/projection-debt.ts";

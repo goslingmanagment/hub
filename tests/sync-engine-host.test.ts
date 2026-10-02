@@ -82,8 +82,8 @@ describe("the registry rules", () => {
     expect(metrics.get("sync_not_implemented")).toBe(1);
   });
 
-  it("the Fansly table's entries without code wait on their dependency (sync-registry-coverage pins the rest)", () => {
-    expect(FANSLY_RESOURCE_SPECS.some((entry) => entry.module === undefined)).toBe(true);
+  it("every entry of the Fansly table has its code since S3-04 (sync-registry-coverage pins the rest)", () => {
+    expect(FANSLY_RESOURCE_SPECS.filter((entry) => entry.module === undefined).map((entry) => entry.key)).toEqual([]);
     expect(FANSLY_RESOURCE_SPECS.find((entry) => entry.key === "subscribers.poll")?.module).toBeTypeOf("function");
   });
 

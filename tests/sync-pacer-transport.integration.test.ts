@@ -12,6 +12,7 @@ import { submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   CountingConnectProxy,
+  demandHarnessDownload,
   earlyWakingClock,
   ensureHarnessSettingTable,
   FakeChats,
@@ -45,9 +46,10 @@ import {
 // restarts (graceful, and kill -9 of a real process mid-request) and a
 // dispatch that misses its send window.
 //
-// The identity, CDN and Upgrade kinds are test-only resources of the harness
-// (their production resources arrive with S3-03/S3-04/S3-05); they use the
-// same page egress and the same send-check composition.
+// The CDN download and the Upgrade are the production resources
+// (`media-download.fetch`, `ws.connect`, S3-04) through the production page
+// transport; the identity check is still a test-only key (`account.identity`
+// sends with S3-05), on the same page egress and send-check composition.
 
 const S = 300;
 
@@ -128,7 +130,7 @@ async function demand(pageId: number, resource: string, subject: string, params?
     resource,
     subject,
     kind: "trigger",
-    class: resource === HARNESS_KEY.cdn ? "planned" : "urgent",
+    class: "urgent",
     ...(params === undefined ? {} : { params }),
   });
 }
@@ -186,8 +188,9 @@ describe("every physical request of a page, counted at the origin", () => {
       await demand(pageId, key, "a");
       await demand(pageId, key, "b");
     }
-    await demand(pageId, HARNESS_KEY.cdn, "img-1", { path: "/cdn/img-1" });
-    await demand(pageId, HARNESS_KEY.cdn, "img-2", { path: "/cdn/img-2" });
+    for (const name of ["img-1", "img-2"]) {
+      await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId, config: r.config, url: `${r.server.origin}/cdn/${name}` });
+    }
     // A history request for one chat of 90 messages the hub holds none of:
     // the head, three pages below it and the empty page (⌈90/25⌉ + 1).
     const chat = r.chats.add({ count: 90, ageMs: 86_400_000 });
@@ -241,6 +244,10 @@ describe("every physical request of a page, counted at the origin", () => {
       ["/cdn/final/img-1", 200], ["/cdn/final/img-2", 200], ["/cdn/img-1", 302], ["/cdn/img-2", 302],
     ]);
     expect(byResource(HARNESS_KEY.cdn)).toHaveLength(4);
+    // Both files reached the describer's handoff buffer, and no URL the journal.
+    expect(await scalar("select count(*)::int as n from sync_media_handoff where page_id = $1", [pageId])).toBe(2);
+    expect(await scalar(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and request::text like '%/cdn/%'", [pageId])).toBe(0);
     expect(at("/api/v1/account/me")).toHaveLength(2);
     expect(at("/api/v1/trackinglinks")).toHaveLength(6);
     // The history reads went through the requests class, one arrival each.

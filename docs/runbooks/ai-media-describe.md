@@ -30,8 +30,18 @@ described; caps $1 and 150 images per UTC day for the agency.
 3. The file is downloaded into memory through the page's egress
    (`services/egress/media-download.ts`: https only, `cdn*.fansly.com`,
    `cdn*.onlyfans.com`, `cdn.fansapi.com`; redirects only onto the same hosts;
-   ≤5 MB, 10 s; no platform auth). The sha256 of the bytes is checked against
-   refused content, and an already-described copy is reused without a call.
+   ≤5 MB, 10 s; no platform auth). On a Fansly page the Sync Engine owns
+   (`sync_pages.mode = 'live'`) the worker never sends: it asks the page's
+   actor (`media-download.fetch`, the signed URL sealed in the work's secret
+   parameters, one paced request per hop, `cdn*.fansly.com` only) and waits up
+   to 30 s; the actor leaves the bytes in the transient handoff table
+   `sync_media_handoff` (0234, owner decision №17), which the worker reads and
+   deletes in one statement (a row nobody consumed is deleted after 24 h). A
+   wait that runs out is a `download_timeout` retry, and that retry takes the
+   download's bytes if it closed within the hour, with no new request. While a
+   page switches (`handover`) nothing is downloaded (`download_send_guard`).
+   The sha256 of the bytes is checked against refused content, and an
+   already-described copy is reused without a call.
 4. `sharp` downscales it in memory (≤1024 px long edge, never enlarged, first
    frame of a GIF, metadata stripped, re-encoded JPEG). Images under 200 px are
    `unavailable`.
@@ -217,7 +227,9 @@ inside fan and page erasure. Fan erasure deletes the fan's links and the
 descriptions of media the fan sent; a PPV teaser's description (creator
 content, nothing about the fan) stays with its other links. No TTL. The
 describer and its logs never store a URL, a signature, bytes or a description
-in a log line.
+in a log line. The only bytes ever written to a row are the engine's handoff
+(`sync_media_handoff`): consumed by the describer's read, swept after 24 h,
+inside page and fan erasure, never granted to `read_only`, never in the lake.
 
 ## Read-only checks
 

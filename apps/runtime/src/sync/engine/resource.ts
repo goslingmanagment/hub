@@ -10,7 +10,8 @@ import {
 } from "@agency_hub_core/db";
 import type { FanslyWireId, FanslyWireParams } from "@agency_hub_core/fansly";
 
-import { noopMetrics, type Metrics, type SettingsSource } from "./ports.ts";
+import type { OutcomeDecision } from "./errors.ts";
+import { noopMetrics, type LivePageSocket, type Metrics, type SecretBox, type SettingsSource } from "./ports.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The resource contract of the Fansly Sync Engine (design §4.1): what a
@@ -81,6 +82,12 @@ export interface EngineResourceSpec {
   /** HTTP statuses that are this resource's final answer for a subject
    *  (closed with a receipt, no breaker): purchases 404/410/422, … */
   terminalStatuses?: readonly number[];
+  /** 401/403 answers that are about the subject, not the page's session
+   *  (design G16, E8): closed with a receipt (`subject_terminal`) instead of
+   *  holding the whole page `auth`. A CDN hop carries no session (its 401/403
+   *  is the signed URL's); an excluded chat may be forbidden while the session
+   *  is fine. Pinned per key by tests/sync-registry-coverage.test.ts. */
+  subjectScopedAuthStatuses?: readonly (401 | 403)[];
   /** A walk over a `subject_refresh_state` plane: a subject failure breaks
    *  the queue subject, the walk row goes on (design §4.3). */
   subjectQueue?: boolean;
@@ -167,7 +174,11 @@ export type StepPlan<C = unknown> =
   /** Not now: a dependency, or not due. `until` null = re-check after
    *  `WAIT_RECHECK_MS`. */
   | { kind: "wait"; reason: "not_due" | "dependency"; until: Date | null; enqueue?: readonly DemandSignal[] }
-  | { kind: "quarantine"; reason: string };
+  | { kind: "quarantine"; reason: string }
+  /** A write without a request (design §3.3 item 3, E6): the module's
+   *  `applyLocal` in one generation-fenced transaction (with the erasure fence
+   *  when the entry takes it). Nothing is admitted or sent. */
+  | { kind: "local"; reason: string };
 
 export interface PlanContext {
   db: Database;
@@ -178,6 +189,9 @@ export interface PlanContext {
   registry: EngineRegistry;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
+  /** The page's socket owner (live pages of a process that runs one; absent
+   *  or null otherwise): what `ws.connect` plans by. */
+  socket?: LivePageSocket | null;
 }
 
 export interface ShadowContext {
@@ -209,6 +223,49 @@ export interface ApplyInput {
   page: SyncPageRow;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
+}
+
+/**
+ * The answer of a route that journals nothing (`capture: 'none' | 'bytes'` —
+ * the WebSocket Upgrade, a CDN hop), applied once, from memory, right after
+ * its capture (`ResourceModule.applyAnswer`). There is no observation to
+ * re-apply from: when this apply cannot run (a crash, a busy erasure fence, an
+ * error) the attempt is skipped and the work is read again.
+ */
+export interface AnswerApplyInput {
+  pageId: number;
+  now: Date;
+  ownRef: string | null;
+  work: SyncWorkRow;
+  attempt: SyncAttemptRow;
+  request: RequestPlan;
+  /** The value the route's contract accepted (the answer itself). */
+  parsed: unknown;
+  /** The erasure fence is held (resources with `fence: 'dm_archive'`). */
+  fenced: boolean;
+  page: SyncPageRow;
+  /** The live owner generation (writes a module makes outside the work row,
+   *  e.g. the work's next secret parameters, are fenced by it). */
+  generation: bigint;
+  /** The box of the work's secret parameters (null: none in this process). */
+  secrets: SecretBox | null;
+}
+
+/** What the outcome hook knows of the step besides the decision. */
+export interface OutcomeStep {
+  request: RequestPlan;
+  /** The answer's status, when one came back. */
+  httpStatus: number | null;
+  /** How the send ended (a response, or the wire failing). */
+  outcome: "response" | "transport_error" | "timeout";
+}
+
+/** A local step (`StepPlan` `local`): a write without a request. */
+export interface LocalApplyInput {
+  pageId: number;
+  work: SyncWorkRow;
+  now: Date;
+  ownRef: string | null;
 }
 
 export interface ApplyResult<C = unknown> {
@@ -280,6 +337,17 @@ export interface ResourceModule<C = unknown> {
   onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan): Promise<void>;
   /** Live: apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
+  /** Live, a route that journals nothing (`capture`): apply its in-memory
+   *  answer (tx 3). Required for such routes; `apply` is never called for them. */
+  applyAnswer?(tx: Database, input: AnswerApplyInput): Promise<ApplyResult<C>>;
+  /** Live, a `local` plan: the write without a request (tx of `commit.applyLocal`). */
+  applyLocal?(tx: Database, input: LocalApplyInput): Promise<ApplyResult<C>>;
+  /** The module's word on an outcome's consequences (`errors.onOutcome`), in
+   *  the capture transaction: a failed WebSocket handshake goes to the
+   *  socket's reconnect ladder instead of the page's network streak; a CDN
+   *  hop's final answer closes its download with the describer's failure.
+   *  Pure. */
+  outcome?(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision;
   /** Shadow: estimate the outcome of the step without an answer. */
   shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
   /** The resource's own journal trim of the served answer (default: as served). */

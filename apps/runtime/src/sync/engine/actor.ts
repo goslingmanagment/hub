@@ -18,6 +18,7 @@ import {
 import {
   admit,
   apply,
+  applyLocal,
   capture,
   commitNoHttp,
   deferAfterPlanError,
@@ -43,7 +44,7 @@ import {
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
-import type { OwnershipSession, TransportOutcome, Wake } from "./ports.ts";
+import { UnsendableRequestError, type LivePageSocketRef, type OwnershipSession, type TransportOutcome, type Wake } from "./ports.ts";
 import {
   pollsFor,
   resourceDisabled,
@@ -96,6 +97,9 @@ export interface ActorDeps extends CommitDeps {
   ownership: OwnershipSession;
   wake: Wake;
   shadowFeed?: ShadowFeed;
+  /** The live page's socket owner (`ws.connect` plans by its state); absent
+   *  in shadow and where no socket owner runs. */
+  socket?: LivePageSocketRef;
 }
 
 export type ActorExit =
@@ -229,9 +233,20 @@ export class SyncActor {
         page,
         registry: d.registry,
         ...(d.settings === undefined ? {} : { settings: d.settings }),
+        ...(shadow || d.socket === undefined ? {} : { socket: d.socket() }),
       });
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
+      return null;
+    }
+    if (plan.kind === "local") {
+      // A write without a request (design §3.3 item 3): nothing is admitted,
+      // so the slot stays open for the next work.
+      if (shadow) {
+        await commitNoHttp(d, picked.work, { kind: "done", reason: `shadow:${plan.reason}` });
+      } else {
+        await applyLocal(d, picked.work, module);
+      }
       return null;
     }
     if (plan.kind !== "request") {
@@ -247,12 +262,22 @@ export class SyncActor {
       return null;
     }
 
-    const request = await d.transport.prepare(plan.request);
+    let request: Awaited<ReturnType<PageTransport["prepare"]>>;
+    try {
+      request = await d.transport.prepare(plan.request, { work: picked.work });
+    } catch (error) {
+      if (!(error instanceof UnsendableRequestError)) throw error;
+      // Nothing can ever send it (no secret, a host the engine never calls):
+      // the work closes with that answer, nothing is admitted.
+      d.metrics.increment("sync_unsendable", { resource: picked.work.resource, reason: error.reason });
+      await commitNoHttp(d, picked.work, { kind: "done", reason: error.reason, result: error.result });
+      return null;
+    }
     // The send window starts BEFORE the admission commit (SK16).
     const issuedMono = d.clock.monoNow();
     let admission: AdmissionRecord | null;
     try {
-      admission = await admit(d, picked, plan.request, grant, module);
+      admission = await admit(d, picked, plan.request, grant, module, request);
     } catch (error) {
       if (error instanceof LiveGateClosedError) {
         d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });

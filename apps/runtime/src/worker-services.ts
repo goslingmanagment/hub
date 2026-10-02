@@ -10,6 +10,7 @@ import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
   deleteExpiredSyncEngineTelemetry,
+  deleteExpiredSyncMediaHandoff,
   deleteExpiredSyncObservability,
   getLatestScheduledReportDateOnOrBefore,
   getTelegramSettings,
@@ -410,6 +411,10 @@ export async function startWorkerServices(
       app.db,
       observabilityCutoff,
     ));
+    // Fansly Sync Engine media handoff (0234, owner decision №17): chat-media
+    // bytes the describer never consumed are transient custody, deleted once
+    // their 24 h passed — not a captured fact.
+    const mediaHandoff = await timed("syncMediaHandoff", () => deleteExpiredSyncMediaHandoff(app.db));
     // Voice-notes retention rides the nightly cleanup: purge audio bytes older
     // than 7 days and release the reservations of long-stale indeterminate rows.
     const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
@@ -431,6 +436,7 @@ export async function startWorkerServices(
         budgetExhausted: engineTelemetry.budgetExhausted,
         steps: engineTelemetry.steps,
       },
+      syncMediaHandoff: { deletedExpired: mediaHandoff },
       voiceRetention,
     };
     if (observability.budgetExhausted || engineTelemetry.budgetExhausted) {

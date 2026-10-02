@@ -33,6 +33,7 @@ import {
   setResourceHold,
   settleAttemptWithoutCapture,
   settleWork,
+  skipAttemptApply,
   tryAcquireDmArchiveWriterFenceLock,
   upsertDemands,
   type Database,
@@ -45,10 +46,12 @@ import {
 } from "@agency_hub_core/db";
 import {
   buildFanslyWireTarget,
+  FANSLY_WIRE_IDS,
   fanslyWireSpec,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRead,
+  type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
@@ -69,11 +72,12 @@ import {
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
-import type { AlertSink, Clock, Metrics, Rng, SettingsSource } from "./ports.ts";
+import type { AlertSink, Clock, Metrics, Rng, SecretBox, SettingsSource } from "./ports.ts";
 import {
   demandToUpsert,
   nextPollDueAt,
   WAIT_RECHECK_MS,
+  type ApplyResult,
   type DemandSignal,
   type EngineRegistry,
   type EngineResourceSpec,
@@ -236,6 +240,9 @@ export interface CommitDeps {
   onWorkClosed?: WorkClosedHook;
   /** The live settings resources read (absent: the registry defaults). */
   settings?: SettingsSource;
+  /** The box of the works' secret parameters (live: the host's; absent in
+   *  shadow, where no secret is ever read or written). */
+  secrets?: SecretBox;
   faults?: SyncFaultHook;
 }
 
@@ -290,16 +297,47 @@ async function fault(d: CommitDeps, point: SyncFaultPoint): Promise<void> {
   if (d.faults !== undefined) await d.faults(point);
 }
 
-/** `sync_attempts.request`: the wire id, its parameters (the coverage
- *  evidence, design §2.9 D1), the request line and — when the resource keeps
- *  one — its account of the step (`RequestPlan.step`). Never a header. */
-export function requestJsonOf(request: RequestPlan): {
+/** The wire routes whose answer is never journaled (`capture`: the
+ *  WebSocket Upgrade, a CDN hop): applied from memory or not at all. */
+export const ANSWER_IN_MEMORY_OPERATIONS: readonly FanslyWireId[] =
+  FANSLY_WIRE_IDS.filter((id) => fanslyWireSpec(id).capture !== undefined);
+
+export function isAnswerInMemory(operation: string): boolean {
+  return (ANSWER_IN_MEMORY_OPERATIONS as readonly string[]).includes(operation);
+}
+
+/** `sync_attempts.request` of an API route: the wire id, its parameters (the
+ *  coverage evidence, design §2.9 D1), the request line and — when the
+ *  resource keeps one — its account of the step (`RequestPlan.step`). Never a
+ *  header. A route of another host keeps no request line (design J7): the
+ *  Upgrade has nothing to name, and a CDN hop names only its hop and the
+ *  sha256 of its URL path — the signed URL itself stays in the work's
+ *  ciphertext. */
+export function requestJsonOf(request: RequestPlan, sent?: Pick<FanslyWireRequest, "url"> | null): {
   spec: FanslyWireId;
   params: unknown;
-  path: string;
-  query: Record<string, string>;
+  path?: string;
+  query?: Record<string, string>;
+  host?: "cdn" | "ws";
+  hop?: number;
+  pathSha256?: string | null;
   step?: unknown;
 } {
+  const host = fanslyWireSpec(request.spec).host;
+  const step = request.step === undefined ? {} : { step: request.step };
+  if (host === "ws") return { spec: request.spec, host, params: {}, ...step };
+  if (host === "cdn") {
+    const hop = Number((request.params as { hop?: unknown }).hop ?? 0);
+    let pathSha256: string | null = null;
+    if (sent !== undefined && sent !== null) {
+      try {
+        pathSha256 = createHash("sha256").update(new URL(sent.url).pathname).digest("hex");
+      } catch {
+        pathSha256 = null;
+      }
+    }
+    return { spec: request.spec, host, params: { hop }, hop, pathSha256, ...step };
+  }
   const target = buildFanslyWireTarget(request.spec, request.params as never);
   const query: Record<string, string> = {};
   for (const [key, value] of new URLSearchParams(target.search)) query[key] = value;
@@ -409,6 +447,8 @@ export async function admit(
   request: RequestPlan,
   grant: SlotGrant,
   module: ResourceModule,
+  /** The request the transport built for the plan (a CDN hop's path digest). */
+  prepared: Pick<FanslyWireRequest, "url"> | null = null,
 ): Promise<AdmissionRecord | null> {
   const spec = d.registry.spec(picked.work.resource);
   if (spec === null) throw new Error(`No registry entry for ${picked.work.resource}`);
@@ -436,7 +476,7 @@ export async function admit(
       jitterU: grant.jitterU,
       pauseMs: grant.pauseMs,
       operation: request.spec,
-      request: requestJsonOf(request),
+      request: requestJsonOf(request, prepared),
       evidence: spec.evidence,
     });
     // A requests-class read is the turn of one request and one fan: the round
@@ -547,7 +587,7 @@ export async function settleShadow(
 export async function commitNoHttp(
   d: CommitDeps,
   work: SyncWorkRow,
-  plan: Exclude<StepPlan, { kind: "request" }>,
+  plan: Exclude<StepPlan, { kind: "request" } | { kind: "local" }>,
 ): Promise<void> {
   const now = d.clock.wallNow();
   const spec = d.registry.spec(work.resource);
@@ -589,6 +629,62 @@ export async function commitNoHttp(
   });
   if (plan.kind === "quarantine") {
     await openAlerts(d, [{ subKey: "live_degraded", detail: "quarantined" }], { resource: work.resource });
+  }
+}
+
+/** A local step whose erasure fence was busy is tried again this soon. */
+export const LOCAL_FENCE_RETRY_MS = 1_000;
+
+/**
+ * A `local` plan (design §3.3 item 3, E6): the module's write without a
+ * request, in ONE generation-fenced transaction — `lockOwnedPage` → the
+ * erasure fence when the entry takes it (busy: the work is due again in a
+ * second, waiting on `dependency`) → `module.applyLocal` → the work row →
+ * its follow-ups (the lock order of §3.7). Nothing is admitted or sent, so
+ * the pacer's slot stays open. A module error never stops the page: the work
+ * waits a minute, as after a failed plan.
+ */
+export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<"applied" | "fence_busy" | "failed"> {
+  if (module.applyLocal === undefined) {
+    await deferAfterPlanError(d, work, new Error(`${work.resource} planned a local step it has no applyLocal for`));
+    return "failed";
+  }
+  const spec = d.registry.spec(work.resource);
+  try {
+    const done = await inTx(d.db, async (tx) => {
+      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+      const now = d.clock.wallNow();
+      if (spec?.fence === "dm_archive" && !(await tryAcquireDmArchiveWriterFenceLock(tx, d.pageId))) {
+        const until = new Date(now.getTime() + LOCAL_FENCE_RETRY_MS);
+        await settleWork(tx, {
+          workId: work.id,
+          generation: d.generation,
+          servedRevision: work.demandRevision,
+          satisfiesRevision: false,
+          nextDueAt: until,
+          waitingReason: "dependency",
+          waitingUntil: until,
+        });
+        return null;
+      }
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+      const result = await module.applyLocal!(tx, { pageId: d.pageId, work, now, ownRef: d.ownRef });
+      const settled = await settleWork(tx, settleInputOf(d, work, spec, result.work, work.demandRevision, page, now));
+      const upserts = upsertsOf(d, result.followups, page, now);
+      if (upserts.length > 0) await upsertDemands(tx, upserts);
+      await afterSettle(tx, d, work, settled, result.work.closeReason ?? null);
+      return { counters: result.counters ?? {} };
+    });
+    if (done === null) return "fence_busy";
+    for (const [name, by] of Object.entries(done.counters)) {
+      d.metrics.increment("sync_apply_effect", { resource: work.resource, effect: name }, by);
+    }
+    return "applied";
+  } catch (error) {
+    if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
+    await deferAfterPlanError(d, work, error);
+    return "failed";
   }
 }
 
@@ -668,18 +764,25 @@ export async function capture(
   const classified = classifyWireOutcome(outcome, wireSpec, admission.request.params as never, {
     now,
     ...(admission.spec.terminalStatuses === undefined ? {} : { terminalStatuses: admission.spec.terminalStatuses }),
+    ...(admission.spec.subjectScopedAuthStatuses === undefined
+      ? {}
+      : { subjectScopedAuthStatuses: admission.spec.subjectScopedAuthStatuses }),
   });
   const read: FanslyWireRead<unknown> | null = classified.read;
   const sent = armed.sentMono !== null;
   const durationMs = armed.sentMono === null ? null : d.clock.monoNow() - armed.sentMono;
+  // A route that journals nothing (`capture`: the Upgrade, a CDN hop) writes
+  // no observation, whatever it answered: its answer lives in memory until
+  // the apply right after (design S3-04 item 3; owner decision №17).
+  const journaled = wireSpec.kind === null || wireSpec.capture !== undefined ? null : wireSpec.kind;
   let observationPayload: { kind: string; payload: unknown } | null = null;
-  if (outcome.kind === "response" && read !== null) {
+  if (outcome.kind === "response" && read !== null && journaled !== null) {
     observationPayload = read.kind === "accepted" || read.kind === "contract_violation"
       ? {
-        kind: wireSpec.kind,
+        kind: journaled,
         payload: (d.capture ?? defaultCaptureCodec).prepare({
           spec: admission.request.spec,
-          kind: wireSpec.kind,
+          kind: journaled,
           response: read.response,
           contractAccepted: read.kind === "accepted",
           request: admission.request,
@@ -687,7 +790,7 @@ export async function capture(
           module,
         }),
       }
-      : { kind: `${wireSpec.kind}:failed`, payload: failedBody(outcome) };
+      : { kind: `${journaled}:failed`, payload: failedBody(outcome) };
   }
 
   const committed = await inTx(d.db, async (tx) => {
@@ -729,7 +832,7 @@ export async function capture(
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
     const file = resourceFileOf(admission.work.resource);
-    const decision = onOutcome({
+    const decided = onOutcome({
       errorClass: classified.errorClass,
       now,
       resource: admission.work.resource,
@@ -757,6 +860,11 @@ export async function capture(
         })
         : 0,
     });
+    // The resource's own word on what this outcome means for it (a failed
+    // WebSocket handshake belongs to the socket's reconnect ladder).
+    const decision = module.outcome === undefined
+      ? decided
+      : module.outcome(decided, { request: admission.request, httpStatus: classified.httpStatus, outcome: outcome.kind });
     await writeOutcomeDecision(tx, d, {
       attemptId: admission.attemptId,
       work: admission.work,
@@ -875,6 +983,9 @@ async function writeOutcomeDecision(
       await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: next.reason });
       return;
     case "close": {
+      // A close may carry the resource's own result (a CDN 403 is the
+      // describer's `http_status` failure).
+      const terminal = next.result === undefined ? {} : { result: next.result };
       const settled = await settleWork(tx, {
         workId: work.id,
         generation: d.generation,
@@ -883,6 +994,7 @@ async function writeOutcomeDecision(
         close: "done",
         closeReason: next.closeReason,
         lastErrorClass: decision.attemptErrorClass,
+        ...terminal,
         ...(breaker === undefined ? {} : { breaker }),
       });
       await afterSettle(tx, d, work, settled, next.closeReason);
@@ -1022,6 +1134,10 @@ export async function apply(
       const spec = d.registry.spec(attempt.resource);
       if (spec === null) throw new ApplyDeferred("no_registry_entry");
       const module = await d.registry.module(attempt.resource);
+      // A route that journals nothing is applied from memory or not at all
+      // (`recordApplyError` skips it and the work is read again).
+      const answerInMemory = isAnswerInMemory(attempt.operation);
+      if (answerInMemory && inMemory === null) throw new ApplyDeferred("answer_not_in_memory");
       let fenced = false;
       if (spec.fence === "dm_archive") {
         if (!(await tryAcquireDmArchiveWriterFenceLock(tx, d.pageId))) throw new ApplyDeferred("erasure_busy");
@@ -1031,6 +1147,27 @@ export async function apply(
       const work = await getSyncWork(tx, attempt.workId);
       if (work === null) throw new ApplyDeferred("work_missing");
       const request = requestOfAttempt(attempt);
+      let result: ApplyResult;
+      if (answerInMemory) {
+        if (module.applyAnswer === undefined) throw new ApplyQuarantine("no_answer_apply", { resource: attempt.resource });
+        await fault(d, "in_apply");
+        const page = await getSyncPage(tx, d.pageId);
+        if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+        result = await module.applyAnswer(tx, {
+          pageId: d.pageId,
+          now: d.clock.wallNow(),
+          ownRef: d.ownRef,
+          work,
+          attempt,
+          request,
+          parsed: inMemory!.parsed,
+          fenced,
+          page,
+          generation: d.generation,
+          secrets: d.secrets ?? null,
+        });
+        return settleApplied(tx, d, { attempt, work, spec, page, result });
+      }
       let response: unknown;
       let parsed: unknown;
       if (inMemory !== null) {
@@ -1042,7 +1179,7 @@ export async function apply(
         const wire = fanslyWireSpec(request.spec);
         response = (d.capture ?? defaultCaptureCodec).served({
           spec: request.spec,
-          kind: wire.kind,
+          kind: wire.kind ?? request.spec,
           payload: await readJournalBody(tx, d, attempt),
           request,
         });
@@ -1055,7 +1192,7 @@ export async function apply(
       // the same row (the page row is the actor's; no resource writes it).
       const page = await getSyncPage(tx, d.pageId);
       if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-      const result = await module.apply(tx, {
+      result = await module.apply(tx, {
         pageId: d.pageId,
         now: d.clock.wallNow(),
         ownRef: d.ownRef,
@@ -1077,34 +1214,7 @@ export async function apply(
           receivedAt: attempt.observationReceivedAt!,
         });
       }
-      // sync_work after every event append (lock order): the work row, then
-      // the follow-ups in (resource, subject) order.
-      const now = d.clock.wallNow();
-      const settle = settleInputOf(d, work, spec, result.work, attempt.demandRevision ?? work.demandRevision, page, now);
-      const breakerSet = work.failureCount !== 0 || work.breakerUntil !== null || work.blockedByVendorAt !== null;
-      const settled = await settleWork(tx, {
-        ...settle,
-        lastErrorClass: null,
-        ...(breakerSet && spec.subjectQueue !== true
-          ? { breaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null } }
-          : {}),
-      });
-      const upserts = upsertsOf(d, result.followups, page, now);
-      if (upserts.length > 0) await upsertDemands(tx, upserts);
-      // history_* last (lock order): the chain hook first (anchors, satisfied
-      // fans, the work closed when none is left), then the fans of a work
-      // that closed for another reason.
-      if (result.threadChainChanged !== undefined && d.onThreadChainChanged !== undefined) {
-        await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
-      }
-      await afterSettle(tx, d, work, settled, result.work.closeReason ?? null);
-      await markApplied(tx, { attemptId });
-      return {
-        outcome: "applied" as const,
-        counters: result.counters ?? null,
-        pageIdentity: result.pageIdentity ?? null,
-        resource: attempt.resource,
-      };
+      return settleApplied(tx, d, { attempt, work, spec, page, result });
     });
     if (applied === "nothing") return "nothing";
     for (const [name, by] of Object.entries(applied.counters ?? {})) {
@@ -1116,6 +1226,45 @@ export async function apply(
     if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
     return recordApplyError(d, attemptId, error);
   }
+}
+
+/** The end of tx 3 every apply shares: the work row, then the follow-ups in
+ *  (resource, subject) order, the history hooks (`history_*` last in the lock
+ *  order), the attempt `applied`. */
+async function settleApplied(
+  tx: Database,
+  d: CommitDeps,
+  input: { attempt: SyncAttemptRow; work: SyncWorkRow; spec: EngineResourceSpec; page: SyncPageRow; result: ApplyResult },
+) {
+  const { attempt, work, spec, page, result } = input;
+  // sync_work after every event append (lock order): the work row, then the
+  // follow-ups in (resource, subject) order.
+  const now = d.clock.wallNow();
+  const settle = settleInputOf(d, work, spec, result.work, attempt.demandRevision ?? work.demandRevision, page, now);
+  const breakerSet = work.failureCount !== 0 || work.breakerUntil !== null || work.blockedByVendorAt !== null;
+  const settled = await settleWork(tx, {
+    ...settle,
+    lastErrorClass: null,
+    ...(breakerSet && spec.subjectQueue !== true
+      ? { breaker: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null } }
+      : {}),
+  });
+  const upserts = upsertsOf(d, result.followups, page, now);
+  if (upserts.length > 0) await upsertDemands(tx, upserts);
+  // history_* last (lock order): the chain hook first (anchors, satisfied
+  // fans, the work closed when none is left), then the fans of a work that
+  // closed for another reason.
+  if (result.threadChainChanged !== undefined && d.onThreadChainChanged !== undefined) {
+    await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
+  }
+  await afterSettle(tx, d, work, settled, result.work.closeReason ?? null);
+  await markApplied(tx, { attemptId: attempt.id });
+  return {
+    outcome: "applied" as const,
+    counters: result.counters ?? null,
+    pageIdentity: result.pageIdentity ?? null,
+    resource: attempt.resource,
+  };
 }
 
 /** The page's identity after an applied `/account/me` (status only: the
@@ -1146,6 +1295,25 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
     const now = d.clock.wallNow();
     const answerAgeMs = Math.max(0, now.getTime() - (attempt.completedAt ?? attempt.admittedAt).getTime());
     const retryInMs = deferredRetryInMs(answerAgeMs);
+    const answerInMemory = isAnswerInMemory(attempt.operation);
+    if (answerInMemory && (kind === "deferred" || kind === "transient")) {
+      // An answer that lived in memory only has nothing to be re-applied
+      // from: the attempt is skipped and its work is read again, as a new
+      // admission, once the retry delay passed.
+      await skipAttemptApply(tx, { attemptId, error: name });
+      if (attempt.workId !== null) {
+        await settleWork(tx, {
+          workId: attempt.workId,
+          generation: d.generation,
+          servedRevision: attempt.demandRevision ?? 0,
+          satisfiesRevision: false,
+          nextDueAt: new Date(now.getTime() + retryInMs),
+          waitingReason: null,
+          lastErrorClass: `apply:${name}`,
+        });
+      }
+      return { quarantined: false, alerts: [] };
+    }
     let quarantine = false;
     if (kind === "deferred" || kind === "transient") {
       const payloadGone = [...errorChain(error)].some((link) => isCapturePayloadUnavailable(link));
@@ -1159,7 +1327,9 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         attemptId,
         error: name,
         retryInMs,
-        deterministic: kind === "deterministic",
+        // An unexpected error of an in-memory answer cannot be retried from
+        // the journal: it is quarantined at once, as a deterministic one.
+        deterministic: kind === "deterministic" || answerInMemory,
       });
       quarantine = recorded?.quarantined === true;
     }
@@ -1268,7 +1438,7 @@ export async function drainDueApplies(d: CommitDeps, max: number): Promise<numbe
 export async function recoverUnfinished(d: CommitDeps): Promise<RecoverUnfinishedAttemptsResult> {
   return inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    return recoverUnfinishedAttempts(tx, { pageId: d.pageId });
+    return recoverUnfinishedAttempts(tx, { pageId: d.pageId, answerInMemoryOperations: ANSWER_IN_MEMORY_OPERATIONS });
   });
 }
 

@@ -4423,6 +4423,33 @@ export const aiMediaDescriptions = pgTable(
   }),
 );
 
+/**
+ * Fansly Sync Engine (0234, owner decision №17): the transient handoff of chat
+ * media bytes from the `sync` process (`media-download.fetch`) to the AI
+ * describer in the worker. Consumed (deleted) by the describer's read, or
+ * swept after `expires_at`. Not a captured fact; never granted to read_only.
+ */
+export const syncMediaHandoff = pgTable(
+  "sync_media_handoff",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "cascade" }),
+    descriptionId: bigint("description_id", { mode: "number" })
+      .notNull()
+      .references(() => aiMediaDescriptions.id, { onDelete: "cascade" }),
+    workId: bigint("work_id", { mode: "number" }).notNull(),
+    contentType: text("content_type"),
+    byteCount: integer("byte_count").notNull(),
+    bytes: bytea("bytes").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    descriptionIdx: index("sync_media_handoff_description").on(table.descriptionId),
+    expiresIdx: index("sync_media_handoff_expires").on(table.expiresAt),
+  }),
+);
+
 export const aiMediaDescriptionLinks = pgTable(
   "ai_media_description_links",
   {

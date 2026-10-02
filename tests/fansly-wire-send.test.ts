@@ -8,9 +8,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFanslyWireRequest,
   createOneShotSendCheck,
+  FANSLY_CDN_ACCEPT,
   FANSLY_WIRE_MAX_BODY_BYTES,
   FanslyAdapter,
   FanslySendRefusedError,
+  sendFanslyCdnRequest,
   sendFanslyWireRequest,
   type FanslySendCheck,
 } from "@agency_hub_core/fansly";
@@ -380,6 +382,77 @@ describe("the body", () => {
     expect(outcome).toMatchObject({ kind: "transport_error", sent: true });
     if (outcome.kind !== "transport_error") throw new Error("unreachable");
     expect(outcome.message).toContain(`exceeds ${FANSLY_WIRE_MAX_BODY_BYTES} bytes`);
+  });
+});
+
+describe("a CDN hop (step 3, media-download.fetch)", () => {
+  const image = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+  const headersSeen: Array<Record<string, string | string[] | undefined>> = [];
+
+  async function cdn(respond: Parameters<typeof startFakeFanslyNetwork>[0] extends infer O ? O extends { respond?: infer R } ? R : never : never) {
+    headersSeen.length = 0;
+    return open({
+      respond: (request, response) => {
+        headersSeen.push(request.headers);
+        respond!(request, response);
+      },
+    });
+  }
+
+  it("is one physical request with the browser's image accept and no session, its bytes in hand", async () => {
+    const { network, dispatcher } = await cdn((_request, response) => {
+      response.writeHead(200, { "content-type": "image/jpeg", "content-length": String(image.length) });
+      response.end(image);
+    });
+    const { calls, hooks } = recordingCheck();
+    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg?sig=secret`, timeoutMs: 2_000, maxBytes: 1024 }, hooks, live());
+    expect(outcome).toMatchObject({ kind: "response", status: 200, bodyText: "", bodyBytes: image.length, sendMark: "request_start" });
+    expect(outcome.kind === "response" ? outcome.bodyBuffer : null).toEqual(image);
+    expect(calls).toHaveLength(1);
+    expect(network.arrivals).toHaveLength(1);
+    expect(headersSeen[0]?.accept).toBe(FANSLY_CDN_ACCEPT);
+    for (const sessionHeader of ["authorization", "fansly-client-id", "fansly-client-check", "fansly-session-id", "cookie"]) {
+      expect(headersSeen[0]?.[sessionHeader], sessionHeader).toBeUndefined();
+    }
+  });
+
+  it("answers a redirect itself: the next hop is the next admission", async () => {
+    const { network, dispatcher } = await cdn((_request, response) => {
+      response.writeHead(302, { location: "/final.jpg?sig=next" });
+      response.end("moved");
+    });
+    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live());
+    expect(outcome).toMatchObject({ kind: "response", status: 302, headers: { location: "/final.jpg?sig=next" } });
+    expect(outcome.kind === "response" ? outcome.bodyBuffer : "x").toBeUndefined();
+    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/file.jpg"]);
+  });
+
+  it("caps the body: a declared length over the cap is not read, a streamed one stops at the cap — an answer, not a failure", async () => {
+    const declared = await cdn((_request, response) => {
+      response.writeHead(200, { "content-type": "image/jpeg", "content-length": "4096" });
+      response.end(Buffer.alloc(4096));
+    });
+    expect(await sendFanslyCdnRequest(declared.dispatcher, { url: `${declared.network.baseUrl}/big.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live()))
+      .toMatchObject({ kind: "response", status: 200, bodyOverflow: true });
+    await dispatcher?.close();
+    await network?.close();
+
+    const streamed = await cdn((_request, response) => {
+      response.writeHead(200, { "content-type": "image/jpeg" });
+      response.write(Buffer.alloc(800));
+      response.end(Buffer.alloc(800));
+    });
+    const outcome = await sendFanslyCdnRequest(streamed.dispatcher, { url: `${streamed.network.baseUrl}/big.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live());
+    expect(outcome).toMatchObject({ kind: "response", status: 200, bodyOverflow: true });
+    expect(outcome.kind === "response" ? outcome.bodyBuffer : "x").toBeUndefined();
+  });
+
+  it("writes nothing for a refused admission", async () => {
+    const { network, dispatcher } = await cdn((_request, response) => response.end("x"));
+    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg`, timeoutMs: 2_000, maxBytes: 1024 },
+      recordingCheck(() => new FanslySendRefusedError("pace")).hooks, live());
+    expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "pace" });
+    expect(network.arrivals).toHaveLength(0);
   });
 });
 

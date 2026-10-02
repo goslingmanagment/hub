@@ -18,7 +18,7 @@ import {
 // "How fresh a resource is" is one line here (a period, a coalescing window);
 // a change to an owner-protected frequency (decision №6) needs the owner.
 // An entry whose code has not landed yet has no `module`: its work waits on
-// `dependency` and counts `sync_not_implemented` (S2-08a … S3-04 fill them).
+// `dependency` and counts `sync_not_implemented` (S2-08a … S3-04 filled them).
 
 /** The resource file a key belongs to (`<file>.<variant>`). */
 export type ResourceFile =
@@ -129,6 +129,12 @@ const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Prom
   (await import("./resources/stats.ts")).statsModule(variant);
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
+const wsConnectModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/ws-connect.ts")).wsConnectModule;
+const mediaDownloadModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/media-download.ts")).mediaDownloadModule;
+const repairModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/repair.ts")).repairWsGapModule;
 
 const STATS_DAILY_OPERATIONS: readonly FanslyWireId[] = [
   "account.stats", "earnings.stats_window", "earnings.monthly", "trackinglinks", "discovery.suggestions",
@@ -167,11 +173,16 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── ws (step 3) ───────────────────────────────────────────────────────────
   {
+    // The socket's Upgrade (S3-04): asked for by the page's socket owner at
+    // start and after every close (its reconnect ladder), one admission per
+    // Upgrade. A failed handshake goes back to that ladder, never to the
+    // page's network streak.
     key: "ws.connect", file: "ws", subject: "page", kind: "trigger", class: "urgent",
     triggers: ["ws_lifecycle"], slo: {},
     proof: "none", walk: "single", http: true, liveOnly: true, evidence: false, fence: "none",
-    operations: [],
+    operations: ["ws.upgrade"],
     legacy: [sender("ws_connect")],
+    module: wsConnectModule,
   },
 
   // ── dm-live (no HTTP; S2-10 routes it, S3-03 writes it) ───────────────────
@@ -267,7 +278,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   // ── transactions (S2-07b) ─────────────────────────────────────────────────
   {
     key: "transactions.head", file: "transactions", subject: "page", kind: "trigger", class: "urgent",
-    triggers: ["ws:transaction", "ws:order", "ws:wallet", "ws:subscription"],
+    triggers: ["ws:transaction", "ws:order", "ws:wallet", "ws:subscription", "ws_gap"],
     coalesce: { quietMs: 2 * SECOND, maxMs: 2 * SECOND, extendOnSignal: false }, slo: { resultMs: 15 * SECOND },
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"], replayKinds: ["earnings_transactions"],
@@ -589,11 +600,16 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── live only (step 3) ────────────────────────────────────────────────────
   {
+    // The AI describer's CDN download (S3-04, owner decision №17): one hop
+    // per step, the URL in the work's secret; a 401/403 is the signed URL's,
+    // never the page session's (G16, E8).
     key: "media-download.fetch", file: "media-download", subject: "media", kind: "trigger", class: "planned",
     triggers: ["api"], slo: {},
     proof: "snapshot", walk: "single", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
-    operations: [],
+    subjectScopedAuthStatuses: [401, 403],
+    operations: ["cdn.media"],
     legacy: [sender("media_download")],
+    module: mediaDownloadModule,
   },
   {
     // Also a frame no chat can be named for (plan §7 p.10 (b), the router).
@@ -602,6 +618,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "none", walk: "composite", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [],
+    module: repairModule,
   },
 
   // ── probe (S2-09b) ────────────────────────────────────────────────────────

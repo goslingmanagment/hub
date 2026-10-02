@@ -62,9 +62,11 @@ export type FanslyObservationKind =
   | "vault_albums"
   | "vault_media";
 
-/** Where a spec is sent. The CDN host (media download, step 3) joins with its
- *  spec; until then every spec is an API route. */
-export type FanslyWireHost = "api";
+/** Where a spec is sent: the API (`fanslyBaseUrl`), a media CDN host (the
+ *  signed URL of a chat file, step 3) or the WebSocket host (the Upgrade that
+ *  opens the page's socket, step 3). Only an API route has a path of its own
+ *  and journals its answer. */
+export type FanslyWireHost = "api" | "cdn" | "ws";
 
 /** A route that takes no parameters. */
 export type FanslyWireNoParams = Record<string, never>;
@@ -126,6 +128,11 @@ export interface FanslyWireParamsById {
   "broadcast.scheduled": FanslyWireNoParams;
   "polls": FanslyWireNoParams;
   "recapstats": FanslyWireNoParams;
+  /** The socket's HTTP Upgrade: the page's socket owner sends it. */
+  "ws.upgrade": FanslyWireNoParams;
+  /** One hop of a CDN download (0 = the signed URL, 1–2 = redirects). The URL
+   *  itself is never a parameter: it is the work's secret (design J7). */
+  "cdn.media": { hop: number };
 }
 
 export type FanslyWireId = keyof FanslyWireParamsById;
@@ -156,6 +163,31 @@ export interface FanslySubscribersPageContract {
 export interface FanslyTransactionsPageContract {
   total: number;
   data: FanslyEarningsTransaction[];
+}
+
+/** The WebSocket Upgrade's answer (`ws.upgrade`): 101 opened the socket. */
+export interface FanslyWsUpgradeAnswer {
+  status: number;
+}
+
+/**
+ * One CDN hop's answer (`cdn.media`), read by its status — the bytes of a
+ * 2xx, the next hop of a 3xx, or the status alone. It lives in memory only and
+ * is never journaled: `location` can be a signed URL and `body` is chat media
+ * (design J7; owner decision №17 — the bytes cross to the describer through
+ * the transient handoff buffer, they are not a captured fact).
+ */
+export interface FanslyCdnAnswer {
+  status: number;
+  contentType: string | null;
+  /** A 3xx's `Location` as served (relative or absolute); null otherwise. */
+  location: string | null;
+  /** The body of a 2xx as received; null for any other status, and when it
+   *  passed the byte cap (`tooLarge`). */
+  body: Buffer | null;
+  /** The body passed the byte cap (declared or while streaming): not read to
+   *  the end. */
+  tooLarge: boolean;
 }
 
 /** The answer of a route the spec opts into reading as "nothing here" (a 204,
@@ -207,6 +239,8 @@ export interface FanslyWireResultById {
   "broadcast.scheduled": unknown;
   "polls": unknown;
   "recapstats": unknown;
+  "ws.upgrade": FanslyWsUpgradeAnswer;
+  "cdn.media": FanslyCdnAnswer;
 }
 export type FanslyWireResult<I extends FanslyWireId> = FanslyWireResultById[I];
 
@@ -222,8 +256,17 @@ export type FanslyContractResult<R> =
 
 export interface FanslyWireSpec<P, R> {
   readonly id: FanslyWireId;
-  readonly kind: FanslyObservationKind;
+  /** The observation kind the answer is journaled under; null for a route
+   *  whose answer is never journaled (`capture`). */
+  readonly kind: FanslyObservationKind | null;
   readonly host: FanslyWireHost;
+  /**
+   * A route whose answer is NOT journaled as an observation, read by its
+   * status instead of the API envelope: `none` — nothing worth keeping (the
+   * WebSocket Upgrade: the connection row is the record); `bytes` — a body the
+   * resource hands on in memory (a CDN file). Absent for every API route.
+   */
+  readonly capture?: "none" | "bytes";
   /** The route with its path parameters named, as the legacy journal wrote it. */
   readonly endpointTemplate: string;
   /** The adapter operation that sends this route today (`sync_http_attempts.operation`),
@@ -282,6 +325,12 @@ export type FanslyWireOutcome =
     /** Bytes of the body as received, before content decoding. */
     bodyBytes: number;
     sendMark: "request_start" | "completion_fallback";
+    /** The decoded body itself: `capture: 'bytes'` routes only (a CDN file),
+     *  whose body is not text. */
+    bodyBuffer?: Buffer;
+    /** `capture: 'bytes'` only: the body passed the call's byte cap (declared
+     *  or while streaming) and was not read to the end. */
+    bodyOverflow?: boolean;
   }
   | { kind: "transport_error" | "timeout"; sent: boolean; message: string }
   | { kind: "aborted_before_send"; refusal: FanslySendRefusalReason };

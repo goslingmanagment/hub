@@ -5,10 +5,13 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  consumeSyncMediaHandoff,
   createFanslyPage,
   createModel,
   deleteExpiredSyncEngineTelemetry,
+  deleteExpiredSyncMediaHandoff,
   ensureSyncPage,
+  storeSyncMediaHandoff,
   type Database,
 } from "@agency_hub_core/db";
 
@@ -121,6 +124,41 @@ async function insertHistoryItem(requestId: number, pageId: number, ordinal: num
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function insertDescription(pageId: number, ref: string, fan: string | null): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `insert into ai_media_descriptions (page_id, platform, media_ref, variant, media_kind, sender_role, fan_platform_user_id, status)
+     values ($1, 'fansly', $2, 'full', 'photo', $3, $4, 'pending') returning id::text`,
+    [pageId, ref, fan === null ? "model" : "fan", fan],
+  );
+  return Number(rows[0]!.id);
+}
+
+describe("the media handoff buffer (0234, owner decision №17)", () => {
+  it("stores bytes for a description that exists, hands them over once, and expires what nobody consumed", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("handoff");
+    const description = await insertDescription(pageId, "m-1", null);
+    const bytes = Buffer.from([0xff, 0xd8, 0x00, 0x01]);
+    const stored = await storeSyncMediaHandoff(db(), { pageId, descriptionId: description, workId: 7, contentType: "image/jpeg", bytes });
+    expect(stored).toMatchObject({ byteCount: 4 });
+    expect(stored!.expiresAt.getTime() - Date.now()).toBeGreaterThan(DAY_MS - 60_000);
+    // Nothing for a description that is gone (or another page's).
+    expect(await storeSyncMediaHandoff(db(), { pageId, descriptionId: description + 999, workId: 7, contentType: null, bytes })).toBeNull();
+    // Another description's read finds nothing; the right one consumes it once.
+    expect(await consumeSyncMediaHandoff(db(), { pageId, descriptionId: description + 1, handoffId: stored!.id })).toBeNull();
+    expect(await consumeSyncMediaHandoff(db(), { pageId, descriptionId: description, handoffId: stored!.id }))
+      .toMatchObject({ bytes, contentType: "image/jpeg" });
+    expect(await consumeSyncMediaHandoff(db(), { pageId, descriptionId: description, handoffId: stored!.id })).toBeNull();
+
+    const fresh = await storeSyncMediaHandoff(db(), { pageId, descriptionId: description, workId: 8, contentType: null, bytes });
+    const stale = await storeSyncMediaHandoff(db(), { pageId, descriptionId: description, workId: 9, contentType: null, bytes });
+    await query("update sync_media_handoff set created_at = created_at - interval '2 days', expires_at = expires_at - interval '2 days' where id = $1", [stale!.id]);
+    expect(await consumeSyncMediaHandoff(db(), { pageId, descriptionId: description, handoffId: stale!.id })).toBeNull();
+    expect(await deleteExpiredSyncMediaHandoff(db())).toBe(1);
+    expect((await query<{ id: string }>("select id::text from sync_media_handoff")).map((row) => Number(row.id))).toEqual([fresh!.id]);
+  });
+});
 
 describe("the 0228 migration", () => {
   it("seeds every existing Fansly page in mode off, grants the read role, and merges demand in SQL", async (context) => {
@@ -406,6 +444,28 @@ describe("erasure of the engine's state (design §2.9)", () => {
     expect(await query("select id from page_dm_threads")).toEqual([]);
   });
 
+  it("a fan erasure removes the chat files of the fan's descriptions still waiting in the media handoff, and no other's", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("erase-fan-media");
+    const bytes = Buffer.from("jpeg");
+    const fans = await insertDescription(pageId, "m-fan", FAN);
+    const others = await insertDescription(pageId, "m-other", OTHER_FAN);
+    const creators = await insertDescription(pageId, "m-model", null);
+    for (const description of [fans, others, creators]) {
+      await storeSyncMediaHandoff(db(), { pageId, descriptionId: description, workId: 1, contentType: null, bytes });
+    }
+    await withEraser(async (app, operatorId) => {
+      const scope = { scopeType: "fan" as const, platform: "fansly" as const, fanRef: FAN };
+      const plan = await planErasure(app, scope);
+      const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
+      expect(targets.get("hot:sync_media_handoff:delete")).toBe(1);
+      const result = await executeErasure(app, scope, { initiatedBy: operatorId });
+      expect(result.executedCounts["hot:sync_media_handoff:delete"]).toBe(1);
+    });
+    const left = await query<{ description_id: string }>("select description_id::text from sync_media_handoff order by description_id");
+    expect(left.map((row) => Number(row.description_id))).toEqual([others, creators]);
+  });
+
   it("a page erasure removes the page's engine row, work and attempts, and only that page's", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("erase-page");
@@ -413,6 +473,8 @@ describe("erasure of the engine's state (design §2.9)", () => {
     for (const page of [pageId, other]) {
       await insertWork(page, { subject: "g" });
       await insertAttempt(page, { evidence: true });
+      const description = await insertDescription(page, `m-${page}`, null);
+      await storeSyncMediaHandoff(db(), { pageId: page, descriptionId: description, workId: 1, contentType: null, bytes: Buffer.from("x") });
       const request = await insertHistoryRequest(page, 1);
       await insertHistoryItem(request, page, 0, { input_kind: "conversation_ref", input_ref: "g", conversation_ref: "g" });
     }
@@ -425,7 +487,7 @@ describe("erasure of the engine's state (design §2.9)", () => {
       expect(targets.get("hot:sync_attempts:delete")).toBe(1);
       await executeErasure(app, scope, { initiatedBy: operatorId });
     });
-    for (const table of ["sync_pages", "sync_work", "sync_attempts", "history_requests", "history_request_items"]) {
+    for (const table of ["sync_pages", "sync_work", "sync_attempts", "history_requests", "history_request_items", "sync_media_handoff"]) {
       expect(await query(`select page_id::int from ${table}`), table).toEqual([{ page_id: other }]);
     }
   });

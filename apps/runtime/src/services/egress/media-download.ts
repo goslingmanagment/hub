@@ -1,13 +1,15 @@
-import type { FanslySendGuard, FanslySendLease } from "@agency_hub_core/fansly";
+import { FANSLY_CDN_ACCEPT, type FanslySendGuard, type FanslySendLease } from "@agency_hub_core/fansly";
 import type { Dispatcher } from "undici";
 
 import { fetchWithEgress } from "./fetch.ts";
 import { fanslySendFailureOutcome, isFanslyHost } from "./fansly-send-lease.ts";
 
-// AI media describer downloads (docs/runbooks/ai-media-describe.md). The only
-// hub code that fetches chat media bytes. The bytes stay in this process's
-// memory and go straight to the describer; nothing here writes a file, a row
-// or a log line containing the URL.
+// AI media describer downloads (docs/runbooks/ai-media-describe.md). The hub
+// code that fetches chat media bytes — except on a Fansly page the Sync Engine
+// owns, whose actor downloads them as its own requests (`media-download.fetch`,
+// the same host policy below: `isFanslyCdnUrl`). The bytes stay in this
+// process's memory and go straight to the describer; nothing here writes a
+// file, a row or a log line containing the URL.
 //
 // Rules: https only; a fixed host allowlist (the platforms' media CDNs and the
 // OFAPI cache CDN); redirects followed by hand and only onto the same
@@ -36,6 +38,13 @@ export function isAllowedMediaHost(url: URL) {
     && url.password === ""
     && (url.port === "" || url.port === "443")
     && ALLOWED_HOST_PATTERNS.some((pattern) => pattern.test(url.hostname.toLowerCase()));
+}
+
+/** A URL the Fansly Sync Engine's CDN download may request: an allowed media
+ *  host (https, no credentials, port 443) that is Fansly's — the engine's
+ *  download is a request of a Fansly page (`media-download.fetch`). */
+export function isFanslyCdnUrl(url: URL): boolean {
+  return isAllowedMediaHost(url) && isFanslyHost(url.hostname);
 }
 
 export type MediaDownloadFailure =
@@ -158,7 +167,7 @@ async function downloadHop(
       signal: AbortSignal.timeout(limits.timeoutMs),
       // No credentials of any kind: CDN URLs are self-signed.
       credentials: "omit",
-      headers: { accept: "image/avif,image/webp,image/jpeg,image/png,image/gif;q=0.9,*/*;q=0.1" },
+      headers: { accept: FANSLY_CDN_ACCEPT },
     };
     const dispatcher = input.dispatcher && lease ? lease.bind(input.dispatcher) : input.dispatcher;
     const response = dispatcher

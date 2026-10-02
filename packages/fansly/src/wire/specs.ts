@@ -13,8 +13,10 @@ import {
   parseFanslyTransactionsPage,
 } from "./contracts.ts";
 import type {
+  FanslyCdnAnswer,
   FanslyContractResult,
   FanslyTransactionsPageContract,
+  FanslyWsUpgradeAnswer,
   FanslyWireId,
   FanslyWireParams,
   FanslyWireRequest,
@@ -198,6 +200,23 @@ function earningsAccounts(response: unknown): FanslyContractResult<FanslyEarning
   return index === -1
     ? accepted(response as FanslyEarningsAccount[])
     : refused(`[${index}]`, "earnings account row is not an object");
+}
+
+function wsUpgradeAnswer(response: unknown): FanslyContractResult<FanslyWsUpgradeAnswer> {
+  return isRecord(response) && response.status === 101
+    ? accepted({ status: 101 })
+    : refused("status", "an Upgrade is answered by 101");
+}
+
+function cdnAnswer(response: unknown): FanslyContractResult<FanslyCdnAnswer> {
+  if (!isRecord(response) || typeof response.status !== "number") return refused("status", "a CDN answer carries its status");
+  if (response.body !== null && !Buffer.isBuffer(response.body)) return refused("body", "a CDN body is bytes");
+  return accepted(response as unknown as FanslyCdnAnswer);
+}
+
+/** A route without a path of its own: its URL is not the API's. */
+function noApiPath(id: FanslyWireId, why: string): never {
+  throw new RangeError(`Fansly wire route ${id} is not an API route: ${why}`);
 }
 
 type SpecTable = { readonly [I in FanslyWireId]: FanslyWireSpecFor<I> };
@@ -687,6 +706,32 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     query: noQuery,
     parse: journalFirst,
   },
+  // Step 3, live only. Neither journals its answer (`capture`): the Upgrade's
+  // record is the connection row, and a CDN file's bytes are handed to the AI
+  // describer in memory and through the transient handoff buffer.
+  "ws.upgrade": {
+    id: "ws.upgrade",
+    kind: null,
+    host: "ws",
+    capture: "none",
+    // The socket URL itself is the socket owner's (`openFanslyReceiverSocket`).
+    endpointTemplate: "/?v=3",
+    legacyOperation: "ws_connect",
+    path: () => noApiPath("ws.upgrade", "the page's socket owner sends the Upgrade"),
+    query: () => noApiPath("ws.upgrade", "the page's socket owner sends the Upgrade"),
+    parse: wsUpgradeAnswer,
+  },
+  "cdn.media": {
+    id: "cdn.media",
+    kind: null,
+    host: "cdn",
+    capture: "bytes",
+    endpointTemplate: "<signed CDN URL>",
+    legacyOperation: "media_download",
+    path: () => noApiPath("cdn.media", "its URL is the work's secret"),
+    query: () => noApiPath("cdn.media", "its URL is the work's secret"),
+    parse: cdnAnswer,
+  },
 };
 
 export const FANSLY_WIRE_IDS = Object.keys(FANSLY_WIRE_SPECS) as FanslyWireId[];
@@ -699,6 +744,11 @@ export function fanslyWireSpec<I extends FanslyWireId>(id: I): FanslyWireSpecFor
   return FANSLY_WIRE_SPECS[id];
 }
 
+/** Whether `id` is an API route (a path under `fanslyBaseUrl`, journaled). */
+export function isFanslyApiWireId(id: FanslyWireId): boolean {
+  return fanslyWireSpec(id).host === "api";
+}
+
 /** The pathname and query of one request, exactly as the adapter writes them:
  *  `ngsw-bypass=true` first, then the spec's keys in order. Throws on a
  *  parameter no request may carry, before anything is admitted or sent. */
@@ -707,6 +757,7 @@ export function buildFanslyWireTarget<I extends FanslyWireId>(
   params: FanslyWireParams<I>,
 ): { pathname: string; search: string } {
   const spec = fanslyWireSpec(id);
+  if (spec.host !== "api") noApiPath(id, `it is sent to the ${spec.host} host`);
   const query = new URLSearchParams({ "ngsw-bypass": "true" });
   for (const [key, value] of Object.entries(spec.query(params))) {
     query.set(key, value);

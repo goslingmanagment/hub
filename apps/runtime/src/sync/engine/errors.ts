@@ -129,6 +129,7 @@ export interface ClassifiedOutcome<R> {
  * | transport error, timeout, 408                       | `network` |
  * | 429 on the conversation list (`messaging.groups`)   | `rate_limit_list` (the list's quota, the list only) |
  * | 429; a 5xx naming its own deadline (`Retry-After`)  | `rate_limit` (the provider's pace, page-wide) |
+ * | 401 / 403 the resource declares about its subject   | `subject_terminal` (design G16: a CDN hop's signed URL, an excluded chat) |
  * | 401 / 403                                           | `auth` |
  * | a status the resource declares terminal             | `subject_terminal` |
  * | any other non-2xx (3xx included: an answer, never a hop) | `subject_failure` |
@@ -143,7 +144,13 @@ export function classifyWireOutcome<P, R>(
   outcome: FanslyWireOutcome,
   spec: FanslyWireSpec<P, R>,
   params: P,
-  options: { now: Date; terminalStatuses?: readonly number[] },
+  options: {
+    now: Date;
+    terminalStatuses?: readonly number[];
+    /** 401/403 this resource's answer is about its subject, never the page's
+     *  session (`EngineResourceSpec.subjectScopedAuthStatuses`). */
+    subjectScopedAuthStatuses?: readonly number[];
+  },
 ): ClassifiedOutcome<R> {
   switch (outcome.kind) {
     case "aborted_before_send":
@@ -166,7 +173,11 @@ export function classifyWireOutcome<P, R>(
     read,
   });
   if (status === 429) return classified(spec.id === LIST_RATE_LIMIT_ROUTE ? "rate_limit_list" : "rate_limit");
-  if (status === 401 || status === 403) return classified("auth");
+  if (status === 401 || status === 403) {
+    // Before the page-wide `auth`: a status the resource declares about its
+    // subject closes that subject with a receipt and holds nothing (G16).
+    return classified((options.subjectScopedAuthStatuses ?? []).includes(status) ? "subject_terminal" : "auth");
+  }
   if (status === 408) return classified("network");
   switch (read.kind) {
     case "accepted":
@@ -265,7 +276,9 @@ export type WorkDecision =
   /** Back to `open`. `dueAt` null = keep the row's due time. */
   | { action: "reopen"; dueAt: Date | null; waitingReason: WaitingReasonForError | null; waitingUntil: Date | null }
   | { action: "quarantine"; reason: string }
-  | { action: "close"; closeReason: string };
+  /** Close the work; `result` is what its waiter reads (a resource's own
+   *  account of the subject's final answer, set by its outcome hook). */
+  | { action: "close"; closeReason: string; result?: unknown };
 
 export type WaitingReasonForError = "page_hold" | "subject_breaker" | "blocked_by_vendor" | "resource_hold";
 

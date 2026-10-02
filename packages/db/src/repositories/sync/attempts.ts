@@ -6,6 +6,7 @@ import type { SyncEngineWorkClass } from "./work.ts";
 import {
   generationParam,
   jsonParam,
+  textArrayParam,
   timestampParam,
   toDate,
   toNumber,
@@ -446,6 +447,25 @@ export async function markApplied(db: Database, input: { attemptId: number }): P
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * An answer that lived in memory only (a route that journals nothing: the
+ * WebSocket Upgrade, a CDN hop) and can no longer be applied — a crash between
+ * its capture and its apply, a busy erasure fence, a failed apply: there is
+ * nothing to re-apply from, so the attempt is `skipped` and its work is read
+ * again as a new attempt (the caller reopens the work).
+ */
+export async function skipAttemptApply(db: Database, input: { attemptId: number; error: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_attempts
+       set apply_state = 'skipped',
+           apply_error = ${input.error},
+           apply_retry_at = null
+     where id = ${input.attemptId}
+       and apply_state in ('captured', 'deferred')
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** A typed deferral or a transient error (§3.7.3): retried after `retryInMs`,
  *  not counted against the attempt. */
 export async function markDeferred(
@@ -524,6 +544,8 @@ export async function listUnfinishedAttempts(
 export interface RecoverUnfinishedAttemptsResult {
   /** Live attempts admitted or sent by a previous run: outcome `unknown`. */
   unknown: number;
+  /** Captured answers that lived in memory only: `skipped`, their work open again. */
+  memorySkipped: number;
   /** Shadow attempts left admitted: closed as `shadow` (nothing was sent). */
   shadowClosed: number;
   /** Running work rows whose attempt ended without anything to apply: open again. */
@@ -543,13 +565,26 @@ export interface RecoverUnfinishedAttemptsResult {
  */
 export async function recoverUnfinishedAttempts(
   db: Database,
-  input: { pageId: number },
+  input: {
+    pageId: number;
+    /** Operations (wire ids) whose answer is never journaled (`ws.upgrade`,
+     *  `cdn.media`): a captured one has nothing to re-apply from, so it is
+     *  `skipped` and its work runs again as a new attempt. */
+    answerInMemoryOperations?: readonly string[];
+  },
 ): Promise<RecoverUnfinishedAttemptsResult> {
-  const result = await db.execute<{ unknown: number; shadowClosed: number; appliesDue: number }>(sql`
+  const inMemory = textArrayParam(input.answerInMemoryOperations ?? []);
+  const result = await db.execute<{ unknown: number; memorySkipped: number; shadowClosed: number; appliesDue: number }>(sql`
     with live_unknown as (
       update sync_attempts
          set outcome = 'unknown', completed_at = clock_timestamp()
        where page_id = ${input.pageId} and not shadow and outcome in ('admitted', 'sent')
+      returning id
+    ), memory_skipped as (
+      update sync_attempts
+         set apply_state = 'skipped', apply_error = 'answer_lost_at_restart', apply_retry_at = null
+       where page_id = ${input.pageId} and not shadow and apply_state in ('captured', 'deferred')
+         and operation = any(${inMemory})
       returning id
     ), shadow_closed as (
       update sync_attempts
@@ -560,9 +595,11 @@ export async function recoverUnfinishedAttempts(
       update sync_attempts
          set apply_retry_at = clock_timestamp()
        where page_id = ${input.pageId} and not shadow and apply_state in ('captured', 'deferred')
+         and not (operation = any(${inMemory}))
       returning id
     )
     select (select count(*) from live_unknown)::int as unknown,
+           (select count(*) from memory_skipped)::int as "memorySkipped",
            (select count(*) from shadow_closed)::int as "shadowClosed",
            (select count(*) from applies_due)::int as "appliesDue"
   `);
@@ -584,6 +621,7 @@ export async function recoverUnfinishedAttempts(
   const row = result.rows[0];
   return {
     unknown: Number(row?.unknown ?? 0),
+    memorySkipped: Number(row?.memorySkipped ?? 0),
     shadowClosed: Number(row?.shadowClosed ?? 0),
     workReopened: reopened.rowCount ?? 0,
     appliesDue: Number(row?.appliesDue ?? 0),

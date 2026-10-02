@@ -1376,6 +1376,20 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       delete from ai_media_accelerator_reads where ${acceleratorPred}`),
   });
   const mediaDescriptionPred = sql`page_id in ${scope.pageIds} and fan_platform_user_id = ${ref}`;
+  // The engine's transient handoff of the fan's chat files (0234): the bytes
+  // of the descriptions deleted below (their FK would cascade; explicit, so
+  // the plan counts them).
+  const mediaHandoffPred = sql`page_id in ${scope.pageIds} and description_id in (
+    select d.id from ai_media_descriptions d where d.page_id in ${scope.pageIds} and d.fan_platform_user_id = ${ref})`;
+  targets.push({
+    plane: "hot",
+    target: "sync_media_handoff",
+    action: "delete",
+    rows: await countOf(app, sql`
+      select count(*)::text as n from sync_media_handoff where ${mediaHandoffPred}`),
+    run: (tx) => execCount(tx, sql`
+      delete from sync_media_handoff where ${mediaHandoffPred}`),
+  });
   targets.push({
     plane: "hot",
     target: "ai_media_descriptions",
@@ -1660,6 +1674,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["revenue_mix_daily", "page_id"],
     ["revenue_month_totals", "page_id"],
     ["sync_runs", "page_id"],
+    // Fansly Sync Engine media handoff (0234, owner decision №17): transient
+    // chat-media bytes for the describer; before the descriptions they
+    // reference (the FKs cascade on both, which erasure keeps or deletes).
+    ["sync_media_handoff", "page_id"],
     // AI media describer (0212): links before the descriptions they reference.
     ["ai_media_description_links", "page_id"],
     ["ai_media_descriptions", "page_id"],
