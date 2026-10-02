@@ -254,6 +254,19 @@ describe("(b) the sync_silent deadman", () => {
       latestStartedAt: run!.startedAt, hasDueStream: true,
     });
   });
+
+  it("still watches a shadow page's due streams and runs (J8)", async () => {
+    const model = await createModel(db().db, { slug: "silent-shadow", name: "Silent" });
+    const page = await createFanslyPage(db().db, { modelId: model!.id, label: "silent-shadow" });
+    await setMode(page!.id, "shadow");
+    const now = new Date();
+    await pendingStream(page!.id, "light", new Date(now.getTime() - 3_600_000));
+    const run = await startSyncRun(db().db, {
+      platformAccountId: page!.id, stream: "light", trigger: "scheduled", startedAt: new Date(now.getTime() - 60_000),
+    });
+    expect(await getFanslySyncLiveness(db().db, { since: new Date(now.getTime() - 3_600_000), dueBefore: now }))
+      .toEqual({ latestStartedAt: run!.startedAt, hasDueStream: true });
+  });
 });
 
 describe("(c) the AI fast lane's page gate", () => {
@@ -489,6 +502,32 @@ describe("(e) the legacy WS supervisor", () => {
       // Leaving to `off` restores it with no other action.
       await setMode(f.page.id, "off");
       await vi.waitFor(() => expect(f.open).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+    } finally {
+      await worker.stop();
+      f.open.mockRestore();
+    }
+  });
+
+  it("keeps a shadow page's socket across polls, as before (J8)", async () => {
+    const f = await wsFixture("fence-ws-shadow");
+    await setMode(f.page.id, "shadow");
+    const worker = startFanslyWsWorker(f.app, { timing: scaled });
+    try {
+      await vi.waitFor(async () => expect(await f.observations()).toBe(1), { timeout: 10_000 });
+      await vi.waitFor(async () => expect((await db().pool.query(
+        "select count(*)::int as n from fansly_ws_connections where verified_at is not null",
+      )).rows[0].n).toBe(1), { timeout: 5_000 });
+      // Several polls later the supervisor still holds the page: one socket,
+      // never stopped, the lock held, the row open, frames still captured.
+      await sleep(2 * scaled.configPollMs + 200);
+      f.deliver(frame("456"));
+      await vi.waitFor(async () => expect(await f.observations()).toBe(2), { timeout: 5_000 });
+      expect(f.open).toHaveBeenCalledOnce();
+      expect(f.stops[0]).not.toHaveBeenCalled();
+      expect(await wsLockHolders(f.page.id)).toBe(1);
+      expect((await db().pool.query(
+        "select closed_at is null as open from fansly_ws_connections where page_id = $1", [f.page.id],
+      )).rows).toEqual([{ open: true }]);
     } finally {
       await worker.stop();
       f.open.mockRestore();
@@ -904,6 +943,58 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     await expect(downloadAiMediaThroughPageEgress(f.app, { url: "https://cdn3.fansly.com/a.jpg", pageId: f.page.id }))
       .rejects.toThrow();
   });
+
+  it("a shadow page passes every lever and reaches its send as before (J8)", async () => {
+    // The adapter answers with a sentinel: reaching it is the "as before".
+    const sent = () => { throw new Error("adapter reached"); };
+    const adapter = { getAccountMe: vi.fn(sent), verifySession: vi.fn(sent), getAccountsByIdsPage: vi.fn(sent) };
+    const app = createTestAppContext(db(), { adapter: adapter as unknown as AppContext["adapter"] });
+    const page = await seedPage(app, "fence-shadow-lever");
+    await setMode(page.id, "shadow");
+
+    // The CDN download goes on to resolve the page's egress: this page has no
+    // proxy yet, so it fails closed there, exactly as an `off` page does.
+    await expect(downloadAiMediaThroughPageEgress(app, { url: "https://cdn3.fansly.com/a.jpg", pageId: page.id }))
+      .rejects.toThrow(/has no assigned proxy/);
+
+    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
+    await createUserAccount(app, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
+    const server = await buildApiServer(app);
+    await server.ready();
+    try {
+      const login = await server.inject({
+        method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: "owner-secret" },
+      });
+      const header = login.headers["set-cookie"];
+      const cookie = (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
+      const credentials = await server.inject({
+        method: "PATCH", url: `/api/v1/admin/pages/${page.label}/credentials`, headers: { cookie },
+        payload: { platform: "fansly", session: { authorization: "fresh-token" } },
+      });
+      expect(credentials.statusCode).not.toBe(409);
+      expect(adapter.verifySession).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+
+    await expect(setPageProxy(app, page.label, { url: "http://proxy.example.test:8080" }))
+      .rejects.toThrow("adapter reached");
+    expect(adapter.verifySession).toHaveBeenCalledTimes(2);
+    const endpoint = await runFanslyEndpointProbe(app, { pageLabels: [page.label], dryRun: true });
+    expect(endpoint.length).toBeGreaterThan(0);
+    expect(new Set(endpoint.map((row) => row.verdict))).toEqual(new Set(["skipped"]));
+    const replay = await runFanslyReplayProbe(app, { pageLabels: [page.label], dryRun: true });
+    expect(replay.length).toBeGreaterThan(0);
+    expect(new Set(replay.map((row) => row.verdict))).toEqual(new Set(["skipped"]));
+
+    const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: "4243" }]);
+    await upsertFanPages(app.db, [{ fanId: fan!.id, platformAccountId: page.id, isFollower: true }]);
+    await expect(backfillFanslyPageAliases(app, {})).rejects.toThrow("adapter reached");
+    await expect(backfillFanslyPageAliases(app, { pageLabels: [page.label] })).rejects.toThrow("adapter reached");
+    expect(adapter.getAccountsByIdsPage).toHaveBeenCalledTimes(2);
+
+    await expect(refuseEngineOwnedPage(app.db, page.label)).resolves.toBeUndefined();
+  });
 });
 
 describe("(g) the runtime CLI", () => {
@@ -938,5 +1029,33 @@ describe("(g) the runtime CLI", () => {
     expect(getAccountMe).not.toHaveBeenCalled();
     // Refused before the queue was even opened.
     expect((await db().pool.query("select to_regclass('pgboss.job') is null as absent")).rows[0].absent).toBe(true);
+  });
+
+  it("`page verify` and `dm backfill-thread` serve a shadow page as before (J8)", async () => {
+    const getAccountMe = vi.fn(async () => { throw new Error("adapter reached"); });
+    const app = createTestAppContext(db(), {
+      adapter: { getAccountMe } as unknown as AppContext["adapter"], databaseUrl: db().connectionString,
+    });
+    const page = await seedPage(app, "fence-cli-shadow");
+    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
+    await setMode(page.id, "shadow");
+    const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const verify = await loadCliProgram(app);
+      await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
+        .rejects.toThrow("adapter reached");
+      expect(getAccountMe).toHaveBeenCalledOnce();
+      const backfill = await loadCliProgram(app);
+      await backfill.parseAsync(["dm", "backfill-thread", "--thread", String(thread.id)], { from: "user" });
+    } finally {
+      log.mockRestore();
+      vi.doUnmock("../apps/runtime/src/bootstrap.ts");
+      vi.resetModules();
+    }
+    // The job was queued for the worker, as before the fences.
+    expect((await db().pool.query(
+      "select count(*)::int as n from pgboss.job where data->>'threadId' = $1", [String(thread.id)],
+    )).rows[0].n).toBe(1);
   });
 });
