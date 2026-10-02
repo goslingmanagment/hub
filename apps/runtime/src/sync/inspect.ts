@@ -18,6 +18,7 @@ import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
 import type { EngineRegistry } from "./engine/resource.ts";
+import { pageRequestProgress } from "./requests/history.ts";
 import {
   buildPageStatus,
   estimateSlotOpensAt,
@@ -108,6 +109,8 @@ export async function readSyncPageStatus(
   const hourSends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - HOUR_MS), shadow });
   const daySends = await listSendsForPaceAudit(db, { pageId: page.pageId, since: new Date(now.getTime() - DAY_MS), shadow });
   const gaps = hourSends.map((send) => send.gapMs).filter((gap): gap is number => gap !== null);
+  // History requests exist only on live pages (the intake refuses others).
+  const requests = shadow ? [] : await pageRequestProgress({ db, rawConfig }, page.pageId);
   const status = buildPageStatus({
     pageLabel: page.pageLabel,
     page: { ...statusPage(page), holdSince: page.holdSince, lastSendAt: page.lastSendAt },
@@ -122,6 +125,7 @@ export async function readSyncPageStatus(
       minGapLastHourMs: gaps.length === 0 ? null : Math.min(...gaps),
       violationsLastDay: daySends.filter((send) => send.gapMs !== null && send.gapMs < send.settingMs).length,
     },
+    requests,
   });
   return shadow
     ? { ...status, shadow: { attemptsLastHour: lastHour.urgent + lastHour.requests + lastHour.planned, demandVsEstimate: null } }

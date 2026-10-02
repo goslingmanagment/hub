@@ -153,7 +153,12 @@ describe("what a pick leaves out", () => {
     expect(exclusions).toEqual({
       excludeResources: ["dm-messages.catchup", "media-download.fetch", "media-stats.walk"],
       excludeFiles: [],
+      excludeClasses: [],
     });
+  });
+
+  it("the owner's requests pause: the whole requests class (the idle wait must not count it as due)", () => {
+    expect(pickExclusions(page({ pausedRequests: true }), registry, false, NOW).excludeClasses).toEqual(["requests"]);
   });
 
   it("a held file, but never the key a hold does not stop (dm-messages.head)", () => {
@@ -164,7 +169,7 @@ describe("what a pick leaves out", () => {
         "posts": { until: new Date(NOW.getTime() - 1).toISOString(), step: 1, since: NOW.toISOString() },
       },
     }), registry, false, NOW);
-    expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"] });
+    expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 });
 

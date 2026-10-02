@@ -98,6 +98,28 @@ async function insertAttempt(pageId: number, fields: Record<string, unknown>): P
   return Number(rows[0]!.id);
 }
 
+async function insertHistoryRequest(pageId: number, items: number): Promise<number> {
+  const rows = await query<{ id: string }>(
+    `insert into history_requests (request_ref, page_id, requester_kind, idempotency_key, request_fingerprint, depth_kind,
+            reason_sha256, reason_length, items_total, estimate_at_submit)
+     values (gen_random_uuid(), $1, 'owner_cli', gen_random_uuid(), repeat('a', 64), 'all', repeat('b', 64), 4, $2, '{}')
+     returning id::text`,
+    [pageId, items],
+  );
+  return Number(rows[0]!.id);
+}
+
+async function insertHistoryItem(requestId: number, pageId: number, ordinal: number, fields: Record<string, unknown>): Promise<number> {
+  const row = { request_id: requestId, page_id: pageId, ordinal, state: "queued", ...fields };
+  const columns = Object.keys(row);
+  const values = Object.values(row).map(sqlValue);
+  const rows = await query<{ id: string }>(
+    `insert into history_request_items (${columns.join(", ")}) values (${columns.map((_, index) => `$${index + 1}`).join(", ")}) returning id::text`,
+    values,
+  );
+  return Number(rows[0]!.id);
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("the 0228 migration", () => {
@@ -280,6 +302,40 @@ describe("erasure of the engine's state (design §2.9)", () => {
     expect(await query("select page_id::int from sync_pages")).toEqual([{ page_id: pageId }]);
   });
 
+  it("a fan erasure removes the fan's history request items — by fan id, by chat, by chat link — and no other fan's", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("erase-history");
+    const request = await insertHistoryRequest(pageId, 6);
+    const erased = [
+      await insertHistoryItem(request, pageId, 0, { input_kind: "fan_platform_user_id", input_ref: FAN, fan_platform_user_id: FAN }),
+      await insertHistoryItem(request, pageId, 1, { input_kind: "conversation_ref", input_ref: "group-fan", conversation_ref: "group-fan" }),
+      await insertHistoryItem(request, pageId, 2, {
+        input_kind: "chat_url", input_ref: `https://fansly.com/messages/${FAN}`, state: "refused", refusal: "not_found",
+      }),
+    ];
+    const kept = [
+      await insertHistoryItem(request, pageId, 3, { input_kind: "fan_platform_user_id", input_ref: OTHER_FAN, fan_platform_user_id: OTHER_FAN }),
+      await insertHistoryItem(request, pageId, 4, { input_kind: "conversation_ref", input_ref: "group-other", conversation_ref: "group-other" }),
+    ];
+    await query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
+       values ($1, 'group-fan', $2), ($1, 'group-other', $3)`,
+      [pageId, FAN, OTHER_FAN],
+    );
+    await withEraser(async (app, operatorId) => {
+      const scope = { scopeType: "fan" as const, platform: "fansly" as const, fanRef: FAN };
+      const plan = await planErasure(app, scope);
+      const targets = new Map(plan.targets.map((target) => [`${target.plane}:${target.target}:${target.action}`, target.rows]));
+      expect(targets.get("hot:history_request_items:delete")).toBe(erased.length);
+      const result = await executeErasure(app, scope, { initiatedBy: operatorId });
+      expect(result.executedCounts["hot:history_request_items:delete"]).toBe(erased.length);
+    });
+    expect((await query<{ id: string }>("select id::text from history_request_items order by id")).map((row) => Number(row.id)))
+      .toEqual(kept);
+    // The request keeps only digests and counts: it stays.
+    expect(await query("select id::int from history_requests")).toEqual([{ id: request }]);
+  });
+
   it("a page erasure removes the page's engine row, work and attempts, and only that page's", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("erase-page");
@@ -287,6 +343,8 @@ describe("erasure of the engine's state (design §2.9)", () => {
     for (const page of [pageId, other]) {
       await insertWork(page, { subject: "g" });
       await insertAttempt(page, { evidence: true });
+      const request = await insertHistoryRequest(page, 1);
+      await insertHistoryItem(request, page, 0, { input_kind: "conversation_ref", input_ref: "g", conversation_ref: "g" });
     }
     await withEraser(async (app, operatorId) => {
       const scope = { scopeType: "page" as const, pageLabel: "erase-page" };
@@ -297,7 +355,7 @@ describe("erasure of the engine's state (design §2.9)", () => {
       expect(targets.get("hot:sync_attempts:delete")).toBe(1);
       await executeErasure(app, scope, { initiatedBy: operatorId });
     });
-    for (const table of ["sync_pages", "sync_work", "sync_attempts"]) {
+    for (const table of ["sync_pages", "sync_work", "sync_attempts", "history_requests", "history_request_items"]) {
       expect(await query(`select page_id::int from ${table}`), table).toEqual([{ page_id: other }]);
     }
   });

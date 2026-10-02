@@ -6,6 +6,7 @@ import {
   getOpenWorkForKey,
   isDmArchiveScopeFenced,
   listDomainEventsByDedupKeys,
+  listOpenHistoryItems,
   listPageDmThreadListStates,
   listStoredDmMessagesForReplay,
   listUnrecordedMediaOrders,
@@ -66,6 +67,7 @@ import {
 } from "../lib/chain.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
 import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";
 
 // `dm-messages.head`, `.catchup`, `.history` (plan §6.2, §7 p.4, §4; design
@@ -82,11 +84,13 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // - catchup (planned; a list head newer than what the reads reached): the
 //   same reads; closed without a request once the chain's head reached its
 //   target, and by any `.head` walk that reaches it.
-// - history (requests class; only from a history request, I12): `before =
-//   contiguous_oldest_id` down to the EMPTY page that proves the start
-//   (owner decision №3); a thread without a chain reads its head first.
-//   Whether the attached request items are satisfied is the history hook's
-//   (S2-11a, `onThreadChainChanged`).
+// - history (requests class; only while a history request's fan is attached
+//   to it, I12): the head first while an attached fan has no anchor and the
+//   walk has not read the head since that fan was filed (§7.1.4), then
+//   `before = contiguous_oldest_id` down to the EMPTY page that proves the
+//   start (owner decision №3). Every read runs the history hook
+//   (`onThreadChainChanged`: anchors, satisfaction, closing the work when no
+//   fan is left).
 //
 // The apply (one transaction, the commit holds the erasure fence): the page
 // contract → the chain fold (pure, before any write; an anomaly the design
@@ -200,6 +204,9 @@ export interface DmMessagesCursor {
   shadow: ShadowWalkProgress | null;
   /** The receipt of the last finished walk. */
   last: Record<string, unknown> | null;
+  /** `.history`: capture time of the walk's latest head read (a fan filed
+   *  earlier is anchored by it; a newer one needs another, §7.1.4). */
+  historyHeadAt: Date | null;
 }
 
 function parseSegment(value: unknown): Segment | null {
@@ -233,6 +240,7 @@ export function parseDmMessagesCursor(value: unknown): DmMessagesCursor {
   const shadow = recordOf(record.shadow);
   const steps = count(shadow.steps);
   const done = count(shadow.done);
+  const historyHeadAt = typeof record.historyHeadAt === "string" ? new Date(record.historyHeadAt) : null;
   return {
     segment: parseSegment(record.segment),
     walkPages: count(record.walkPages) ?? 0,
@@ -241,6 +249,7 @@ export function parseDmMessagesCursor(value: unknown): DmMessagesCursor {
     last: typeof record.last === "object" && record.last !== null && !Array.isArray(record.last)
       ? record.last as Record<string, unknown>
       : null,
+    historyHeadAt: historyHeadAt === null || Number.isNaN(historyHeadAt.getTime()) ? null : historyHeadAt,
   };
 }
 
@@ -251,6 +260,7 @@ function cursorJson(cursor: DmMessagesCursor): Record<string, unknown> {
     misses: cursor.misses,
     shadow: cursor.shadow,
     last: cursor.last,
+    historyHeadAt: cursor.historyHeadAt === null ? null : cursor.historyHeadAt.toISOString(),
   };
 }
 
@@ -303,7 +313,8 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   const thread = await readThread(ctx.db, ctx.pageId, groupId);
   const skip = threadSkip(thread);
   if (skip !== null || thread === null) return { kind: "done", reason: skip ?? "thread_missing" };
-  const segment = liveSegment(parseDmMessagesCursor(work.cursor).segment, thread.chain);
+  const cursor = parseDmMessagesCursor(work.cursor);
+  const segment = liveSegment(cursor.segment, thread.chain);
   switch (variant) {
     case "head":
       if (segment === null && demandWithinChain(work.demand, thread.chain)) return { kind: "done", reason: "already_confirmed" };
@@ -314,8 +325,15 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
       return { kind: "request", request: messagesRequest(groupId, segment?.oldestId ?? null) };
     case "history": {
       if (thread.chain.state === "complete") return { kind: "done", reason: "history_complete" };
-      const before = segment?.oldestId ?? (thread.chain.state === "partial" ? thread.chain.oldestId : null);
-      return { kind: "request", request: messagesRequest(groupId, before) };
+      // No history walk without a request (I12): the fans attached to this
+      // chat's work are what it reads for.
+      const fans = await listOpenHistoryItems(ctx.db, { workId: work.id });
+      if (fans.length === 0) return { kind: "done", reason: "no_open_items" };
+      if (segment !== null) return { kind: "request", request: messagesRequest(groupId, segment.oldestId) };
+      if (thread.chain.state !== "partial" || needsHistoryHeadRead(fans, cursor.historyHeadAt)) {
+        return { kind: "request", request: messagesRequest(groupId, null) };
+      }
+      return { kind: "request", request: messagesRequest(groupId, thread.chain.oldestId) };
     }
   }
 }
@@ -726,6 +744,7 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
     walkPages: done ? 0 : cursor.walkPages + 1,
     misses: resolution.misses,
     shadow: null,
+    historyHeadAt: variant === "history" && before === null ? input.observation.receivedAt : cursor.historyHeadAt,
     last: done
       ? {
         completedAt: input.now.toISOString(),
@@ -741,7 +760,10 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
     followups,
     counters,
     canonicalized: true,
-    ...(chainMoved ? { threadChainChanged: { threadId: thread.state.id } } : {}),
+    // Every history read runs the request hook (anchors after a head read
+    // that moved nothing, satisfaction, the work's close); other reads only
+    // when the chain moved.
+    ...(chainMoved || variant === "history" ? { threadChainChanged: { threadId: thread.state.id } } : {}),
   };
 }
 

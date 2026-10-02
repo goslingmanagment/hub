@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   FANSLY_SEND_GUARD_OWNER_ENGINES,
+  HISTORY_DEPTH_KINDS,
+  HISTORY_INPUT_KINDS,
+  HISTORY_ITEM_REFUSALS,
+  HISTORY_ITEM_SATISFIED_BY,
+  HISTORY_ITEM_STATES,
+  HISTORY_REQUEST_STATES,
+  HISTORY_REQUESTER_KINDS,
+  historyRequestItems,
+  historyRequests,
   pageDmThreads,
   THREAD_CHAIN_SOURCES,
   THREAD_HISTORY_PROOFS,
@@ -21,8 +30,8 @@ import {
 } from "@agency_hub_core/db";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
-// each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration; later
-// step-2 PRs (0232–0233) add theirs here.
+// each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration; the last
+// step-2 PR (0233) adds its own here.
 
 function stripComments(text: string): string {
   return text
@@ -286,6 +295,83 @@ describe("0231_dm_thread_history_chain.sql", () => {
     const names = Object.values(pageDmThreads as unknown as Record<string, { name?: unknown }>)
       .map((column) => column.name);
     for (const column of threadColumns) expect(names).toContain(column);
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0232_history_requests.sql", () => {
+  const migration = "0232_history_requests.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("is purely additive: two new tables, their indexes, comments and grants", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(/^(create table if not exists|create (unique )?index if not exists|comment on|do \$\$)/);
+      // A foreign key's own `on delete …` is not a deletion.
+      expect(statement.replace(/on delete (restrict|cascade|set null)/g, "")).not.toMatch(/\b(drop|rename|truncate|delete|update|alter)\b/i);
+    }
+    expect(statements.filter((statement) => statement.startsWith("create table if not exists")).map((statement) => statement.split(" ")[5]))
+      .toEqual(["history_requests", "history_request_items"]);
+    // Page-owned (erasure keeps pages); the fans of a request go with it.
+    expect(sql.match(/references pages\(id\) on delete restrict/g)).toHaveLength(2);
+    expect(sql).toContain("request_id bigint not null references history_requests(id) on delete cascade");
+    expect(sql).toContain("thread_id bigint references page_dm_threads(id) on delete set null");
+    // [A4] resolved: the owner user is a `users` row, as agent_hydration_requests.decided_by_user_id.
+    expect(sql).toContain("requester_user_id bigint references users(id) on delete restrict");
+    expect(sql).toContain("requester_agent_key_id bigint references agent_keys(id) on delete restrict");
+  });
+
+  it("keeps the vocabularies of the checks equal to the repository's constants", () => {
+    expect(checkList(sql, "history_requests_requester_kind_check")).toEqual([...HISTORY_REQUESTER_KINDS]);
+    expect(checkList(sql, "history_requests_depth_kind_check")).toEqual([...HISTORY_DEPTH_KINDS]);
+    expect(checkList(sql, "history_requests_state_check")).toEqual([...HISTORY_REQUEST_STATES]);
+    expect(checkList(sql, "history_request_items_input_kind_check")).toEqual([...HISTORY_INPUT_KINDS]);
+    expect(checkList(sql, "history_request_items_state_check")).toEqual([...HISTORY_ITEM_STATES]);
+    expect(checkList(sql, "history_request_items_refusal_check")).toEqual([...HISTORY_ITEM_REFUSALS]);
+    expect(checkList(sql, "history_request_items_satisfied_by_check")).toEqual([...HISTORY_ITEM_SATISFIED_BY]);
+  });
+
+  it("keeps one request per requester and idempotency key, and the requests class's round-robin indexes", () => {
+    expect(statements).toContain(
+      "create unique index if not exists history_requests_idempotency on history_requests "
+        + "(requester_kind, coalesce(requester_agent_key_id, 0), coalesce(requester_user_id, 0), idempotency_key)",
+    );
+    expect(statements).toContain(
+      "create index if not exists history_requests_page_open on history_requests (page_id, last_served_at nulls first, id) "
+        + "where state = 'open'",
+    );
+    expect(statements).toContain(
+      "create index if not exists history_request_items_rr on history_request_items "
+        + "(request_id, last_served_at nulls first, ordinal) where state in ('queued', 'loading', 'blocked')",
+    );
+  });
+
+  it("comments every column of both tables", () => {
+    for (const table of ["history_requests", "history_request_items"]) {
+      const body = sql.slice(sql.indexOf(`create table if not exists ${table} (`), sql.indexOf(");", sql.indexOf(`create table if not exists ${table} (`)));
+      const columns = [...body.matchAll(/^\s{2}([a-z_0-9]+) (?:bigserial|bigint|uuid|text|integer|timestamptz|jsonb)\b/gm)].map((match) => match[1]!);
+      expect(columns.length, table).toBeGreaterThan(10);
+      for (const column of columns.filter((name) => name !== "id")) {
+        expect(statements.some((statement) => statement.startsWith(`comment on column ${table}.${column} is '`)), `${table}.${column}`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it("grants the read role both tables", () => {
+    expect(text).toContain("grant select on history_requests to read_only");
+    expect(text).toContain("grant select on history_request_items to read_only");
+  });
+
+  it("names no table the runtime schema guard forbids, and is mirrored in drizzle", () => {
+    expect(sql).not.toMatch(/create table if not exists sync_requests\b/);
+    const names = (table: unknown) => Object.values(table as Record<string, { name?: unknown }>).map((column) => column.name);
+    expect(names(historyRequests)).toEqual(expect.arrayContaining(["request_ref", "estimate_at_submit", "items_terminal"]));
+    expect(names(historyRequestItems)).toEqual(expect.arrayContaining(["anchor_upward_count", "fan_platform_user_id", "final"]));
   });
 
   it("allows application rollback after the additive migration", () => {

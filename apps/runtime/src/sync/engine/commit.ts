@@ -17,6 +17,7 @@ import {
   lockOwnedPage,
   markApplied,
   markAttemptQuarantined,
+  markHistoryTurnServed,
   markAttemptSent,
   markDeferred,
   markWorkRunning,
@@ -36,6 +37,7 @@ import {
   upsertDemands,
   type Database,
   type RecoverUnfinishedAttemptsResult,
+  type SettleWorkResult,
   type SyncAttemptRow,
   type SyncPageRow,
   type SyncWorkRow,
@@ -207,6 +209,14 @@ export type ObservationCanonicalizer = (
 /** The history-request hook of tx 3 (`history_*` last in the lock order). */
 export type ThreadChainChangedHook = (tx: Database, input: { pageId: number; threadId: number }) => Promise<void>;
 
+/** Runs in the transaction that closed a work row (done or cancelled), after
+ *  every sync_work write of it: the history requests settle the fans that
+ *  rode on it (`history_*` last in the lock order). */
+export type WorkClosedHook = (
+  tx: Database,
+  input: { pageId: number; workId: number; resource: string; subject: string; closeReason: string | null },
+) => Promise<void>;
+
 export interface CommitDeps {
   db: Database;
   pageId: number;
@@ -223,9 +233,16 @@ export interface CommitDeps {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  onWorkClosed?: WorkClosedHook;
   /** The live settings resources read (absent: the registry defaults). */
   settings?: SettingsSource;
   faults?: SyncFaultHook;
+}
+
+/** The history request and fan whose turn a requests-class read is. */
+export interface RequestTurn {
+  requestId: number;
+  itemId: number;
 }
 
 /** The work a slot picked. */
@@ -234,6 +251,8 @@ export interface PickedWork {
   workClass: WorkClass;
   slot: number;
   nextCyclePos: number;
+  /** Requests class: whose turn it is (the admission stamps it, §3.7.1). */
+  requestTurn?: RequestTurn | null;
 }
 
 export interface AdmissionRecord {
@@ -345,6 +364,19 @@ function settleInputOf(
   };
 }
 
+/** Run the work-closed hook when a settle closed the row. */
+async function afterSettle(
+  tx: Database,
+  d: CommitDeps,
+  work: Pick<SyncWorkRow, "id" | "resource" | "subject">,
+  settled: SettleWorkResult | null,
+  closeReason: string | null,
+): Promise<void> {
+  if (settled === null || d.onWorkClosed === undefined) return;
+  if (settled.state !== "done" && settled.state !== "cancelled") return;
+  await d.onWorkClosed(tx, { pageId: d.pageId, workId: work.id, resource: work.resource, subject: work.subject, closeReason });
+}
+
 // ── tx 1: admission ─────────────────────────────────────────────────────────
 
 /**
@@ -389,6 +421,11 @@ export async function admit(
       request: requestJsonOf(request),
       evidence: spec.evidence,
     });
+    // A requests-class read is the turn of one request and one fan: the round
+    // robin's stamps and the fan's read count (history_* after sync_work).
+    if (d.mode === "live" && picked.requestTurn !== undefined && picked.requestTurn !== null) {
+      await markHistoryTurnServed(tx, picked.requestTurn);
+    }
     // Claims are live-only: a shadow step never touches another table.
     if (d.mode === "live" && module.onAdmit !== undefined) await module.onAdmit(tx, picked.work, request);
     return {
@@ -500,8 +537,8 @@ export async function commitNoHttp(
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     switch (plan.kind) {
-      case "done":
-        await settleWork(tx, settleInputOf(d, work, spec, {
+      case "done": {
+        const settled = await settleWork(tx, settleInputOf(d, work, spec, {
           close: "done",
           closeReason: plan.reason,
           satisfiesRevision: true,
@@ -509,7 +546,9 @@ export async function commitNoHttp(
           ...(plan.proof === undefined ? {} : { proof: plan.proof }),
           ...(plan.result === undefined ? {} : { result: plan.result }),
         }, work.demandRevision, page, now));
+        await afterSettle(tx, d, work, settled, plan.reason);
         return;
+      }
       case "wait": {
         const until = plan.until ?? new Date(now.getTime() + WAIT_RECHECK_MS);
         await settleWork(tx, {
@@ -817,8 +856,8 @@ async function writeOutcomeDecision(
     case "quarantine":
       await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: next.reason });
       return;
-    case "close":
-      await settleWork(tx, {
+    case "close": {
+      const settled = await settleWork(tx, {
         workId: work.id,
         generation: d.generation,
         servedRevision: target.demandRevision,
@@ -828,7 +867,9 @@ async function writeOutcomeDecision(
         lastErrorClass: decision.attemptErrorClass,
         ...(breaker === undefined ? {} : { breaker }),
       });
+      await afterSettle(tx, d, work, settled, next.closeReason);
       return;
+    }
   }
 }
 
@@ -1019,7 +1060,7 @@ export async function apply(
       const page = await getSyncPage(tx, d.pageId);
       const settle = settleInputOf(d, work, spec, result.work, attempt.demandRevision ?? work.demandRevision, page, now);
       const breakerSet = work.failureCount !== 0 || work.breakerUntil !== null || work.blockedByVendorAt !== null;
-      await settleWork(tx, {
+      const settled = await settleWork(tx, {
         ...settle,
         lastErrorClass: null,
         ...(breakerSet && spec.subjectQueue !== true
@@ -1028,9 +1069,13 @@ export async function apply(
       });
       const upserts = upsertsOf(d, result.followups, page, now);
       if (upserts.length > 0) await upsertDemands(tx, upserts);
+      // history_* last (lock order): the chain hook first (anchors, satisfied
+      // fans, the work closed when none is left), then the fans of a work
+      // that closed for another reason.
       if (result.threadChainChanged !== undefined && d.onThreadChainChanged !== undefined) {
         await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
       }
+      await afterSettle(tx, d, work, settled, result.work.closeReason ?? null);
       await markApplied(tx, { attemptId });
       return {
         outcome: "applied" as const,

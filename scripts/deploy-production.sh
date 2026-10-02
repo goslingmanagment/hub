@@ -547,6 +547,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # The previous image never names any of them and writes threads by named
   # columns, so it runs unchanged after a rollback.
   "0231_dm_thread_history_chain.sql"
+  # Fansly Sync Engine history requests (design §2.5): two new tables
+  # (history_requests, history_request_items), their indexes, comments and
+  # grants. The previous image never names either table, so after a rollback
+  # it runs unchanged; requests are accepted only on live pages, so in step 2
+  # both stay empty.
+  "0232_history_requests.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

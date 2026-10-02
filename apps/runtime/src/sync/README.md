@@ -66,6 +66,26 @@ it) → **apply** (erasure fence, parse through the wire contract, domain writes
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
 
+## History requests
+
+An agent or the owner asks for the history of up to 1 000 fans' chats on one page, to a depth (`all`: proven to the
+first message by an empty page, owner decision №3; `latest N`; the legacy wrapper's boundary). The intake
+(`requests/history.ts`, database only) resolves every fan to a visible chat or refuses it (`not_found`, `excluded`,
+`page_erased`, `duplicate`) without failing the request; a fan already satisfied is `ready` without a read. The fans of
+one chat ride on the chat's ONE `dm-messages.history` work row (class `requests`), so a read serves every request on
+the chat and is counted once, on the fan whose turn it was. The requests class serves round robin between a page's
+open requests, then between a request's fans. The first read of a fan without an anchor is the chat's head (its
+"latest N" counts from there; messages that arrive later come live); then `before = contiguous_oldest_id` down. Every
+history read runs the request hook (`onHistoryThreadChainChanged`): anchors, satisfied fans `ready`, the request
+`done`, the chat's work closed when no fan rides on it. A history work that closes for a reason of its own (the chat
+was deleted or excluded since) ends its fans through `onHistoryWorkClosed`. No history read happens without an open
+fan (I12): the plan closes such a work, and the actor's idle wait does not count it. Requests are accepted only on a
+`live` page whose `requests_enabled_at` has passed — every other page answers 409
+`history_requests_unavailable_on_page`, so in step 2 the class is empty. Intake, cancel, the admission and the apply
+take `sync_work` rows before `history_requests` before `history_request_items`
+(`tests/sync-history-lock-order.integration.test.ts`). The ETA (`requests/eta.ts`) reads thread columns only and
+always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
+
 ## WebSocket demand
 
 The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is
@@ -201,6 +221,6 @@ holds the resource file (30 min → 2 h → 6 h).
 | The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
 | A new kind of data | the same + schema, repository, migration |
-| A new depth or rule of a history request | `requests/history.ts` (+ the satisfaction rule in `engine/commit.ts`) + the contract |
+| A new depth or rule of a history request | `requests/history-rules.ts` (satisfaction, anchors) + `requests/history.ts` + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |

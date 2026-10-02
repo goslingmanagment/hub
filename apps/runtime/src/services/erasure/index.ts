@@ -924,6 +924,14 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
     target: "ai_media_descriptions",
     reach: "predicate",
   },
+  // Fansly Sync Engine history requests (0232): a fan of a request, as given
+  // or as the chat's partner. historyItemPred: `fan_platform_user_id = ref or
+  // conversation_ref in the fan's chats or the input names the fan`.
+  {
+    column: "history_request_items.fan_platform_user_id",
+    target: "history_request_items",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -989,6 +997,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "sync_attempts", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from sync_attempts where ${syncAttemptPred}`),
     run: tx => execCount(tx, sql`delete from sync_attempts where ${syncAttemptPred}`),
+  });
+  // History requests (0232): the fan's items — given by fan id, or by a chat
+  // (conversation ref, chat URL) of the fan. The request row keeps only
+  // digests and counts.
+  const historyItemPred = sql`page_id in ${scope.pageIds} and (fan_platform_user_id = ${ref}
+    or conversation_ref in ${wsGroupRefs} or input_ref in ${wsGroupRefs} or ${fanRefTextMatchSql(ref, sql.raw("input_ref"))})`;
+  targets.push({
+    plane: "hot", target: "history_request_items", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from history_request_items where ${historyItemPred}`),
+    run: tx => execCount(tx, sql`delete from history_request_items where ${historyItemPred}`),
   });
 
   targets.push({
@@ -1607,6 +1625,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // journal; both cascade on pages, which erasure keeps.
     ["fansly_send_log", "page_id"],
     ["fansly_page_send_guards", "page_id"],
+    // Fansly Sync Engine history requests (0232): the fans of a request before
+    // the request (the items also cascade on it). RESTRICT FKs on pages.
+    ["history_request_items", "page_id"],
+    ["history_requests", "page_id"],
     // Fansly Sync Engine (0228): the page's attempt journal, its work queue and
     // its engine row (mode, ownership, holds). RESTRICT FKs; erasure keeps pages.
     ["sync_attempts", "page_id"],
