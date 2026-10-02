@@ -6,6 +6,7 @@ import {
   checkOfapiCollectionLease,
   checkpointOfapiCollectionJob,
   claimOfapiCollectionJob,
+  closeAdmissionRefusedOfapiCollectionRuns,
   enqueueDueOfapiCollectionSchedules,
   findPageById,
   getEffectiveOfapiCollectionPolicy,
@@ -27,6 +28,7 @@ import {
   captureOfapiCollectionRead,
   matchesOfapiCollectionJobCategory,
   completeOfapiCollectionRead,
+  OfapiCollectionAdmissionError,
   type OfapiCollectionReadStep,
 } from "./ofapi-collection-read-transport.ts";
 import {
@@ -351,10 +353,20 @@ export async function runOfapiCollectionJob(
     const scheduledHttpFailure = job.purpose === "background"
       && error instanceof OfapiCollectionCapturedHttpError
       && (error.status === 429 || (error.status >= 500 && error.status <= 599));
+    // A capture-admission refusal (disk gate, credit floor, caps) comes before
+    // any vendor request, so nothing is paid or uncertain. A scheduled run
+    // ends failed like an exhausted allowance and the next interval starts a
+    // fresh window. Parked as paused, it held its category for good: from
+    // 2026-09-18 a 93% disk stopped balances, visitors and both link
+    // categories on both OF pages.
+    const scheduledRefusal = job.purpose === "background"
+      && admissionError instanceof OfapiCollectionAdmissionError
+      ? admissionError.reason : null;
     // A bounded scheduled run may end with a partial cursor. Retain that
     // evidence as failed, not completed or operator-paused, so the next
     // configured interval can start a new bounded window without backlog.
     const reason = scheduledLimit ? `scheduled_run_exhausted:${scheduledLimit}` :
+      scheduledRefusal ? `scheduled_run_refused:${scheduledRefusal}` :
       error instanceof Error
         ? error.message.startsWith("Failed query")
           ? "Local collection persistence failed"
@@ -371,7 +383,7 @@ export async function runOfapiCollectionJob(
       id: jobId,
       token,
       checkpoint,
-      state: scheduledLimit || scheduledHttpFailure ? "failed" : localRecovery ? "queued" : "paused",
+      state: scheduledLimit || scheduledRefusal || scheduledHttpFailure ? "failed" : localRecovery ? "queued" : "paused",
       bytesAdded: capturedFailureBytes,
       reason,
     }).catch((err) =>
@@ -401,6 +413,12 @@ export async function sweepOfapiCollections(
   boss: Pick<PgBoss, "send">,
   handlers: OfapiCollectionHandlers = {},
 ) {
+  const closed = await closeAdmissionRefusedOfapiCollectionRuns(app.db);
+  if (closed.length > 0)
+    app.logger.warn(
+      { runs: closed },
+      "Closed scheduled collection runs parked by a capture-admission refusal",
+    );
   await enqueueDueOfapiCollectionSchedules(app.db, [
     ...new Set([
       ...READ_CATEGORIES,

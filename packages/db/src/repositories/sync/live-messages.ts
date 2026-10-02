@@ -19,6 +19,14 @@
 // event is NOT a `message_archive` projection input (MESSAGE_EVENT_TYPES does
 // not list it), so the archive stays REST-confirmed only. A deletion is a
 // sticky mark on the overlay row in the same transaction; nothing clears it.
+//
+// The Sync Engine routes a receipt's demand through the optional post-ack
+// hook (`afterAck`, design §6.3, I18): it runs in the apply's outer
+// transaction right after the ack, on every path that acks, so the demand
+// commits exactly when the ack does and is routed exactly once, whichever
+// driver wins the receipt. A path that does not ack (`not_pending`,
+// `erasure_busy`) never runs it. A hook that throws rolls the whole apply
+// back: the receipt stays pending for the next driver.
 
 import { sql, type SQL } from "drizzle-orm";
 import {
@@ -84,6 +92,22 @@ export type FanslyWsLivePayloadResolver = (
   source: FanslyWsLivePayloadSource,
 ) => Promise<unknown>;
 
+/** What the post-ack hook learns about the receipt it was called for. */
+export interface FanslyWsLiveAckedReceipt {
+  pageId: number;
+  observationId: number;
+  receivedAt: Date;
+  /** The page's own Fansly account id the frame was captured under. */
+  ownRef: string | null;
+  /** The raw frame; null when the raw was unreachable (nothing to route). */
+  frame: string | null;
+  liveState: FanslyWsLiveState;
+}
+
+/** Runs in the apply's outer transaction right after the ack (see the module
+ * header). It must not commit, roll back or touch the receipt. */
+export type FanslyWsLiveAfterAck = (tx: Database, receipt: FanslyWsLiveAckedReceipt) => Promise<void>;
+
 /** Lock waits (the account's event counter, an overlay row) end the attempt
  * instead of holding a pool connection; the receipt stays pending. */
 const APPLY_STATEMENT_TIMEOUT = "5s";
@@ -124,7 +148,11 @@ function deterministicDataError(error: unknown): string | null {
  */
 export async function applyFanslyWsLiveReceipt(
   db: Database,
-  input: { observationId: number; resolvePayload?: FanslyWsLivePayloadResolver },
+  input: {
+    observationId: number;
+    resolvePayload?: FanslyWsLivePayloadResolver;
+    afterAck?: FanslyWsLiveAfterAck;
+  },
 ): Promise<FanslyWsLiveApplyResult> {
   return db.transaction(async (tx): Promise<FanslyWsLiveApplyResult> => {
     const database = tx as unknown as Database;
@@ -150,6 +178,12 @@ export async function applyFanslyWsLiveReceipt(
     if (!row) return { status: "not_pending" };
     const pageId = Number(row.page_id);
     const receivedAt = new Date(row.received_at);
+    const acked = async (frame: string | null, liveState: FanslyWsLiveState) => {
+      if (input.afterAck === undefined) return;
+      await input.afterAck(database, {
+        pageId, observationId: input.observationId, receivedAt, ownRef: row.native_account_ref, frame, liveState,
+      });
+    };
     // Same shared fence every DM archive writer takes: an erasure in flight
     // defers this apply (receipt stays pending) instead of racing its delete.
     if (!await tryAcquireDmArchiveWriterFenceLock(database, pageId)) return { status: "erasure_busy" };
@@ -166,6 +200,7 @@ export async function applyFanslyWsLiveReceipt(
     if (frame === null) {
       // Tiered, erased or otherwise unreachable raw: nothing to apply ever.
       await ackReceipt(database, input.observationId, "debt", null);
+      await acked(null, "debt");
       return { status: "debt", ...emptyCounts() };
     }
 
@@ -188,12 +223,13 @@ export async function applyFanslyWsLiveReceipt(
       : a.kind === b.kind ? 0 : a.kind === "delete" ? -1 : 1);
     const nodes = decodeFanslyWsCapture(frame);
 
+    let result: FanslyWsLiveApplyResult;
     try {
       // The frame's writes and its ack run in a savepoint (`tx` is already a
       // transaction), so a refusal that every retry would hit rolls back only
       // them: the receipt, still locked, is then acked as debt below instead
       // of staying pending forever and holding the replay's head.
-      return await tx.transaction((savepoint) => applyOperations(savepoint as unknown as Database, {
+      result = await tx.transaction((savepoint) => applyOperations(savepoint as unknown as Database, {
         observationId: input.observationId, pageId, receivedAt, ownRef: row.native_account_ref,
         decoderVersion: live.decoderVersion, operations, invalid, nodes,
       }));
@@ -202,8 +238,15 @@ export async function applyFanslyWsLiveReceipt(
       if (dataError === null) throw error;
       // No overlay row and no event of this frame survive; the ack does.
       await ackReceipt(database, input.observationId, "debt", nodes);
+      await acked(frame, "debt");
       return { status: "debt", ...emptyCounts(), invalid: invalid + operations.length, dataError };
     }
+    // The savepoint acked the receipt; the hook runs after it, outside the
+    // savepoint, so the demand commits with the ack.
+    if (result.status === "applied" || result.status === "skipped" || result.status === "debt") {
+      await acked(frame, result.status);
+    }
+    return result;
   });
 }
 

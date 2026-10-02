@@ -104,6 +104,8 @@ const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => as
   }
 };
 
+const dmLiveDeletionsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-live.ts")).dmLiveDeletionsModule;
 const notificationsModule = (variant: "forward" | "backfill") => async (): Promise<ResourceModule> =>
   (await import("./resources/notifications.ts")).notificationsModule(variant);
 const postsModule = (variant: "refresh" | "backfill" | "engagement") => async (): Promise<ResourceModule> =>
@@ -155,7 +157,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [sender("ws_connect")],
   },
 
-  // ── dm-live (no HTTP) ─────────────────────────────────────────────────────
+  // ── dm-live (no HTTP; S2-10 routes it, S3-03 writes it) ───────────────────
   {
     key: "dm-live.deletions", file: "dm-live", subject: "thread", kind: "trigger", class: "urgent",
     triggers: ["ws:message_deleted"],
@@ -163,6 +165,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "none", walk: "none", http: false, evidence: false, fence: "dm_archive",
     operations: [],
     legacy: [],
+    module: dmLiveDeletionsModule,
   },
 
   // ── dm-conversations (S2-08a) ─────────────────────────────────────────────
@@ -532,8 +535,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [sender("media_download")],
   },
   {
+    // Also a frame no chat can be named for (plan §7 p.10 (b), the router).
     key: "repair.ws-gap", file: "repair", subject: "page", kind: "repair", class: "urgent",
-    triggers: ["ws_gap"], slo: { resultMs: MINUTE },
+    triggers: ["ws_gap", "ws:invalid"], slo: { resultMs: MINUTE },
     proof: "none", walk: "composite", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [],

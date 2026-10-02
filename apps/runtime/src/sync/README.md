@@ -25,13 +25,13 @@ sync/
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step and the no-HTTP outcomes
-    shadow.ts                the shadow transport and the shadow demand feed
+    shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts, metrics.ts    plan §10
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     resources/               one file per resource family
-    ws/                      decode, router, the post-ack routing hook
+    ws/                      decode, router, the post-ack routing hook (live) and the shadow WS feed
     lib/                     chain rules, walk helpers
   requests/                  history requests, ETA, enqueue-and-wait
 ```
@@ -51,6 +51,27 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+## WebSocket demand
+
+The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is
+switched; it captures each frame (observation + pending receipt) and the step-1 drivers apply the overlay and ack the
+receipt. The engine turns receipts into work in two ways, with one decoder (`fansly/ws/decode.ts`: the step-1 message
+decoder plus new chats, money, subscriptions and payouts) and one routing table (`fansly/ws/router.ts`):
+
+- **Live pages (`handover`/`live`, step 3)**: every driver passes the post-ack hook `routeFanslyWsReceiptDemand`
+  (`fansly/ws/route-receipt.ts`), which upserts the receipt's demand in the transaction that acks it — once per
+  receipt, whichever driver wins it (I18). On `off`/`shadow` pages the hook only reads the page's mode.
+- **Shadow pages**: the actor reads the receipts past `sync_pages.ws_router_cursor` once per lap and routes them into
+  shadow work; it never acks a receipt and never writes the overlay. A router that never ran starts 15 minutes back;
+  receipts older than that are passed over (history, not live demand). The receipts have no `page_id` index, so a
+  lap that finds nothing of the page moves its cursor up to that 15-minute watermark (at most once a minute): a
+  silent page's read covers the horizon, not everything captured since its last receipt.
+
+Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
+on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
+broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; the hot-table and
+archive marks of a live page land with the socket's live ownership (step 3).
 
 ## Ownership
 
