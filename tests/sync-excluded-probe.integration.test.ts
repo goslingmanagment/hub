@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, insertAuditEvent, upsertFans, type Database } from "@agency_hub_core/db";
+import { getSyncPage, insertAuditEvent, NEVER_CANONICALIZED_PARSE_VERSION, upsertFans, type Database } from "@agency_hub_core/db";
 import type { FanslyMessagingGroupsPage, FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
@@ -8,6 +8,7 @@ import {
   FANSLY_WS_LIVE_FIELD,
 } from "@agency_hub_core/shared";
 
+import { familyForObservation } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { createEngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
@@ -21,7 +22,7 @@ import {
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { applyListPage } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import { fanProfilesProbeModule } from "../apps/runtime/src/sync/fansly/resources/fan-profiles.ts";
-import { EXCLUDED_CHAT_PROBE_KEY, excludedChatProbeParseVersion } from "../apps/runtime/src/sync/fansly/resources/probe.ts";
+import { EXCLUDED_CHAT_PROBE_KEY } from "../apps/runtime/src/sync/fansly/resources/probe.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   makeTestActor,
@@ -37,8 +38,9 @@ import {
 // engine excluded from message sync, through the real actor and commits
 // against a real database (a scripted transport plays Fansly's `/message`),
 // and the explicit lift. Pinned: a served chat closes `served: true` with what
-// the page showed, its observation is stamped parsed and a driver pass turns
-// it into nothing (no events, no messages, no archive rows); a 403 closes the
+// the page showed, its observation is stamped never-canonicalized and a
+// driver pass turns it into nothing (no events, no messages, no archive rows),
+// nor does a version bump of the DM family that replays DM history; a 403 closes the
 // probe `served: false` without holding the page, and the next probe goes
 // out; a 401 holds the page; the report and its record; the lift — live
 // only, on a recorded verdict of ≥ 10 chats, ≥ 80 % served, no page-level
@@ -74,6 +76,7 @@ const MISSING = FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGR
 const UNRESOLVABLE = FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
 const BASE_MS = Date.now() - 6 * HOUR;
 const ACTOR = "test";
+const QUIET = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
 const snowflake = (ms: number, seq = 0) => ((BigInt(ms - EPOCH_MS) << 22n) | BigInt(seq)).toString();
 const groupOf = (n: number) => `7100000000000${String(n).padStart(5, "0")}`;
@@ -259,22 +262,46 @@ describe("probe.excluded-chat", () => {
       "select kind, parse_version from observations where id = $1",
       [observationId],
     );
-    expect(stamped.rows[0]).toEqual({ kind: "dm_messages", parse_version: excludedChatProbeParseVersion() });
+    expect(stamped.rows[0]).toEqual({ kind: "dm_messages", parse_version: NEVER_CANONICALIZED_PARSE_VERSION });
 
     // The minutely sweep finds nothing to do with it: no events, no rows.
-    const logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
-    await runCanonicalization({ db: db(), logger } as never, { accountId: pageId, kinds: ["dm_messages"] });
+    await runCanonicalization({ db: db(), logger: QUIET } as never, { accountId: pageId, kinds: ["dm_messages"] });
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId])).toBe(0);
     expect(await scalar("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId])).toBe(0);
     expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(0);
     // The chat stays excluded until the owner lifts it; the page holds nothing.
     expect(await reasonOf(threadId)).toBe(MISSING);
     expect((await hold(pageId)).hold_kind).toBeNull();
-    // The stamp is what keeps it out: below it, the same observation is a DM page.
-    await runCanonicalization({ db: db(), logger } as never, {
-      observationId,
-      belowParseVersion: excludedChatProbeParseVersion() + 1,
+  });
+
+  it("a version bump of the DM family re-parses DM history, never a probe", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("probe-bump");
+    const threadId = await seedThread(pageId, 1, { reason: MISSING });
+    await probe("probe-bump");
+    await runLive(pageId, served, async () => (await closedProbes(pageId)) === 1);
+    const observationId = Number((await probeWork(pageId, 1))!.result.observationId);
+    const dmFamily = familyForObservation({ source: "pull", kind: "dm_messages", platform: "fansly" })!;
+    // The family's next version: the minutely sweep replays every Fansly
+    // `dm_messages` observation below it, whoever journaled it (a page-scoped
+    // sweep, not one observation).
+    const bump = () => runCanonicalization({ db: db(), logger: QUIET } as never, {
+      accountId: pageId,
+      kinds: ["dm_messages"],
+      belowParseVersion: dmFamily.version + 1,
     });
+    await bump();
+    expect(await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(0);
+    expect(await scalar("select parse_version as n from observations where id = $1", [observationId])).toBe(NEVER_CANONICALIZED_PARSE_VERSION);
+    expect(await reasonOf(threadId)).toBe(MISSING);
+
+    // Control: the stamp is what keeps it out. At the family's own version (a
+    // stamp the next bump replays) the same sweep turns the probe into DM
+    // events, so the sweep above would have caught a leak.
+    await testDb.pool.query("update observations set parse_version = $2 where id = $1", [observationId, dmFamily.version]);
+    await bump();
     expect(await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId])).toBeGreaterThan(0);
   });
 

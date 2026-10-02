@@ -1,4 +1,4 @@
-import { countDmLiveMessagesOfChat, markObservationParsed } from "@agency_hub_core/db";
+import { countDmLiveMessagesOfChat, markObservationParsed, NEVER_CANONICALIZED_PARSE_VERSION } from "@agency_hub_core/db";
 import {
   buildFanslyWireTarget,
   fanslyWireSpec,
@@ -8,7 +8,6 @@ import {
   type FanslyWireId,
 } from "@agency_hub_core/fansly";
 
-import { familyForObservation } from "../../../services/canonicalize/index.ts";
 import { normalizeFanslyTimestamp } from "../../../services/sync/shared.ts";
 import type { OutcomeDecision } from "../../engine/errors.ts";
 import type {
@@ -94,10 +93,13 @@ export const probeManualModule: ResourceModule = {
 // the planned class's ordinary admissions (I1); the subject is the chat.
 //
 // - 2xx: the answer is journaled (capture before parse) and the apply only
-//   stamps its observation parsed at the DM family's version, so neither the
-//   inline canonicalization nor the minutely sweep ever turns a probe into
-//   events or archive rows — an excluded chat gets no partial DM state. The
-//   work closes with what the page showed (`served: true`).
+//   stamps its observation `NEVER_CANONICALIZED_PARSE_VERSION`, so neither
+//   the inline canonicalization nor the minutely sweep — at this or any later
+//   version of the DM family — ever turns a probe into events or archive rows:
+//   an excluded chat gets no partial DM state. (A stamp at the family's own
+//   version would not hold: its next version bump replays every DM
+//   observation below the new version.) The work closes with what the page
+//   showed (`served: true`).
 // - 403 (`subjectScopedAuthStatuses`: the chat may be forbidden while the
 //   session is fine) and the client statuses the entry declares terminal, a
 //   `success: false` envelope or a body the contract refuses: the chat's own
@@ -132,14 +134,6 @@ export type ExcludedChatProbeResult =
     httpStatus: number | null;
     errorClass: "subject_terminal" | "envelope_unsuccessful" | "contract";
   };
-
-const DM_FAMILY = familyForObservation({ source: "pull", kind: "dm_messages", platform: "fansly" });
-
-/** The DM family's parse version: a probe's observation is stamped at it. */
-export function excludedChatProbeParseVersion(): number {
-  if (DM_FAMILY === null) throw new Error("no canonicalizer family claims Fansly dm_messages");
-  return DM_FAMILY.version;
-}
 
 function headRead(groupId: string): RequestPlan<"messages.page"> {
   return { spec: "messages.page", params: { groupId, before: null } };
@@ -183,11 +177,13 @@ export const probeExcludedChatModule: ResourceModule = {
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
     const page = input.parsed as FanslyMessagesPage;
     // Journaled, never canonicalized: no events, no archive rows, no partial
-    // DM state for an excluded chat (the minutely sweep skips a stamped row).
+    // DM state for an excluded chat. The stamp is above every family version,
+    // present and future, so neither the sweep nor a version bump's replay
+    // ever selects the row.
     await markObservationParsed(tx, {
       observationId: input.observation.id,
       receivedAt: input.observation.receivedAt,
-      parseVersion: excludedChatProbeParseVersion(),
+      parseVersion: NEVER_CANONICALIZED_PARSE_VERSION,
     });
     const times = page.messages.map((message) => createdAtIso(message.createdAt as unknown)).filter((at): at is string => at !== null).sort();
     const ids = page.messages.flatMap((message) => (typeof message.id === "string" && message.id.length > 0 ? [message.id] : []));

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { SyncAttemptRow, SyncWorkRow } from "@agency_hub_core/db";
+import { NEVER_CANONICALIZED_PARSE_VERSION, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
 import { fanslyWireSpec, type FanslyWireOutcome } from "@agency_hub_core/fansly";
 import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
 } from "@agency_hub_core/shared";
 
+import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { classifyWireOutcome, onOutcome, type OutcomeDecision, type PageErrorState } from "../apps/runtime/src/sync/engine/errors.ts";
 import type { PlanContext } from "../apps/runtime/src/sync/engine/resource.ts";
 import { buildSyncExcludedCommandGroup, type SyncExcludedCliDeps } from "../apps/runtime/src/sync/cli/excluded.ts";
@@ -105,6 +106,15 @@ describe("probe.excluded-chat", () => {
     });
     await expect(probeExcludedChatModule.plan(work, { ...live, shadow: true } as PlanContext)).resolves.toEqual({ kind: "done", reason: "shadow" });
     await expect(probeExcludedChatModule.plan({ subject: "" } as SyncWorkRow, live)).resolves.toEqual({ kind: "quarantine", reason: "probe_without_chat" });
+  });
+
+  it("stamps a served answer above every canonicalizer family's version, so no sweep or bump replays it", () => {
+    // `parse_version` is an integer column: the stamp is its maximum.
+    expect(NEVER_CANONICALIZED_PARSE_VERSION).toBe(2 ** 31 - 1);
+    for (const family of CANONICALIZER_FAMILIES) {
+      expect(family.version, `${family.source}/${family.lane}`).toBeLessThan(NEVER_CANONICALIZED_PARSE_VERSION);
+      expect(family.minimumParseVersion ?? 0, `${family.source}/${family.lane}`).toBeLessThan(NEVER_CANONICALIZED_PARSE_VERSION);
+    }
   });
 
   it("a 403 is the chat's answer: closed `served: false`, no page hold, no breaker, no alert", () => {
