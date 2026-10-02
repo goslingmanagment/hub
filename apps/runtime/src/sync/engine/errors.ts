@@ -15,7 +15,8 @@ import type { SyncAlertSubKey } from "./ports.ts";
 //
 // The commit transactions write the decisions; nothing here touches the
 // database. The pause setting S is never changed by the engine: a 429 holds
-// the page and alerts the owner, who decides.
+// the page and alerts the owner, who decides — except a 429 on the
+// conversation list, which holds only the list (owner decision 2026-10-02).
 //
 // Changing the reaction to 429 / 5xx is this file plus tests/sync-errors.test.ts
 // (plan §12).
@@ -46,6 +47,36 @@ export const NETWORK_PAUSE_LADDER_MS = [10_000, 30_000, 60_000, 120_000, 300_000
 /** A network hold that has lasted longer than this pages the owner. */
 export const NETWORK_ALERT_AFTER_MS = 600_000;
 
+/**
+ * Owner decision 2026-10-02 «редко + мягкий 429»: the conversation list has a
+ * stricter vendor quota than the page pause (continuous walks every ≈ 2 s got
+ * 429 on 2026-06-03 lilly-2 and 2026-10-01 lora-1; 5 s never did). A 429 on
+ * this route holds only the list — `resource_holds['dm-conversations']` with
+ * kind `rate_limit_list` — never the page: live messages, money, group detail
+ * and every other resource keep running.
+ */
+export const LIST_RATE_LIMIT_ROUTE = "messaging.groups";
+/** The `resource_holds` entry the list hold lives in. */
+export const LIST_RATE_LIMIT_FILE = "dm-conversations";
+/** A list 429 without `Retry-After`: 5 s → 10 s → 20 s → 40 s → 80 s → 160 s
+ *  → 300 s by consecutive list 429s (an FBuddy-style cooldown). */
+export const LIST_RATE_LIMIT_LADDER_MS = [5, 10, 20, 40, 80, 160, 300].map((seconds) => seconds * 1_000);
+/** The list ladder starts over after this long without a list 429. */
+export const LIST_RATE_LIMIT_LADDER_RESET_MS = 10 * 60_000;
+/**
+ * The keys a list hold stops: the ones that can only read the list (their
+ * every wire operation is `messaging.groups`; pinned against the registry by
+ * tests/sync-registry-coverage.test.ts). `dm-conversations.find` is not one —
+ * while the list is held it goes straight to `group.detail` — nor is
+ * `dm-conversations.detail`, which never reads the list.
+ */
+export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
+  "dm-conversations.head",
+  "dm-conversations.full",
+  "dm-conversations.ws-down",
+  "repair.ws-gap",
+]);
+
 /** Statuses that are never a subject's terminal answer, whatever a resource
  *  declares: they are about the page or the wire. */
 const NEVER_TERMINAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
@@ -53,6 +84,7 @@ const NEVER_TERMINAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429
 export type ErrorClass =
   | "ok"
   | "rate_limit"
+  | "rate_limit_list"
   | "auth"
   | "identity_mismatch"
   | "subject_failure"
@@ -95,6 +127,7 @@ export interface ClassifiedOutcome<R> {
  * |---|---|
  * | the dispatch was refused / cancelled before sending | `not_sent` |
  * | transport error, timeout, 408                       | `network` |
+ * | 429 on the conversation list (`messaging.groups`)   | `rate_limit_list` (the list's quota, the list only) |
  * | 429; a 5xx naming its own deadline (`Retry-After`)  | `rate_limit` (the provider's pace, page-wide) |
  * | 401 / 403                                           | `auth` |
  * | a status the resource declares terminal             | `subject_terminal` |
@@ -132,7 +165,7 @@ export function classifyWireOutcome<P, R>(
     retryAfterMs,
     read,
   });
-  if (status === 429) return classified("rate_limit");
+  if (status === 429) return classified(spec.id === LIST_RATE_LIMIT_ROUTE ? "rate_limit_list" : "rate_limit");
   if (status === 401 || status === 403) return classified("auth");
   if (status === 408) return classified("network");
   switch (read.kind) {
@@ -156,12 +189,19 @@ export function classifyWireOutcome<P, R>(
 
 // ── decisions ───────────────────────────────────────────────────────────────
 
-/** `sync_pages.resource_holds[<file>]`. */
+/** `sync_pages.resource_holds[<file>]`: the §9 resource breaker of the file
+ *  (no `kind`), or the list's own 429 hold (`kind: 'rate_limit_list'`, which
+ *  stops only `LIST_RATE_LIMIT_HELD_KEYS`). */
 export interface ResourceHoldEntry {
   until: string;
   step: number;
   since: string;
+  kind?: "rate_limit_list";
+  /** The newest list 429 (the ladder's reset clock); list holds only. */
+  lastRateLimitAt?: string;
 }
+
+export type ResourceHoldKind = "breaker" | "rate_limit_list";
 
 /** The page fields `onOutcome` reads; names follow the `sync_pages` row. */
 export interface PageErrorState {
@@ -236,7 +276,15 @@ export interface SubjectBreakerDecision extends SubjectBreakerState {
 
 export type ResourceHoldDecision =
   | { action: "keep" }
-  | { action: "set"; file: string; until: Date; step: number }
+  | {
+    action: "set";
+    file: string;
+    until: Date;
+    step: number;
+    /** Absent for the resource breaker. */
+    kind?: "rate_limit_list";
+    lastRateLimitAt?: Date;
+  }
   | { action: "clear"; file: string };
 
 export interface AlertDecision {
@@ -269,20 +317,53 @@ export function isResourceHoldExempt(resource: string): boolean {
   return RESOURCE_HOLD_EXEMPT_KEYS.has(resource);
 }
 
-/** The resource hold that stops `resource` now, or null. Exempt keys are
- *  never stopped by their file's hold. */
+function inForce(entry: ResourceHoldEntry | undefined, now: Date): Date | null {
+  if (entry === undefined) return null;
+  const until = new Date(entry.until);
+  return Number.isNaN(until.getTime()) || until.getTime() <= now.getTime() ? null : until;
+}
+
+/** The list's own 429 hold in force now, or null. */
+export function listRateLimitHold(
+  holds: Readonly<Record<string, ResourceHoldEntry>>,
+  now: Date,
+): { until: Date; step: number } | null {
+  const entry = holds[LIST_RATE_LIMIT_FILE];
+  if (entry?.kind !== "rate_limit_list") return null;
+  const until = inForce(entry, now);
+  return until === null ? null : { until, step: entry.step };
+}
+
+/** The list ladder position to use now: the entry's, or 0 after
+ *  `LIST_RATE_LIMIT_LADDER_RESET_MS` without a list 429 (or with no list
+ *  entry at all). */
+export function listRateLimitStep(entry: ResourceHoldEntry | undefined, now: Date): number {
+  if (entry?.kind !== "rate_limit_list" || entry.lastRateLimitAt === undefined) return 0;
+  const last = new Date(entry.lastRateLimitAt);
+  if (Number.isNaN(last.getTime()) || now.getTime() - last.getTime() >= LIST_RATE_LIMIT_LADDER_RESET_MS) return 0;
+  return Math.max(0, Math.trunc(entry.step));
+}
+
+/** The resource hold that stops `resource` now, or null: its file's breaker
+ *  (exempt keys are never stopped by it), or the list's 429 hold for the keys
+ *  that can only read the list. */
 export function activeResourceHold(
   holds: Readonly<Record<string, ResourceHoldEntry>>,
   resource: string,
   now: Date,
-): { file: string; until: Date; step: number } | null {
+): { file: string; until: Date; step: number; kind: ResourceHoldKind } | null {
   if (isResourceHoldExempt(resource)) return null;
   const file = resourceFileOf(resource);
   const entry = holds[file];
-  if (!entry) return null;
-  const until = new Date(entry.until);
-  if (Number.isNaN(until.getTime()) || until.getTime() <= now.getTime()) return null;
-  return { file, until, step: entry.step };
+  if (entry !== undefined && entry.kind !== "rate_limit_list") {
+    const until = inForce(entry, now);
+    if (until !== null) return { file, until, step: entry.step, kind: "breaker" };
+  }
+  if (LIST_RATE_LIMIT_HELD_KEYS.has(resource)) {
+    const list = listRateLimitHold(holds, now);
+    if (list !== null) return { file: LIST_RATE_LIMIT_FILE, until: list.until, step: list.step, kind: "rate_limit_list" };
+  }
+  return null;
 }
 
 /**
@@ -349,7 +430,9 @@ const KEEP_RESOURCE: ResourceHoldDecision = { action: "keep" };
  * (plan §9): the resource breaker, and a wrong transactions writer found by an
  * apply (design §3.7.3, §5.6). A hold still in force is kept; an expired entry
  * still on the row means the trouble came back before any success cleared it,
- * so the ladder climbs. Exempt keys never take a hold.
+ * so the ladder climbs. Exempt keys never take a hold. A list 429 hold in the
+ * same entry is replaced: the breaker stops the whole file, the list included,
+ * for longer than the list ladder's top.
  */
 export function escalateResourceHold(
   holds: Readonly<Record<string, ResourceHoldEntry>>,
@@ -358,8 +441,9 @@ export function escalateResourceHold(
 ): ResourceHoldDecision {
   if (isResourceHoldExempt(resource)) return KEEP_RESOURCE;
   const file = resourceFileOf(resource);
-  const current = holds[file];
-  if (current !== undefined && new Date(current.until).getTime() > now.getTime()) return KEEP_RESOURCE;
+  const entry = holds[file];
+  const current = entry?.kind === "rate_limit_list" ? undefined : entry;
+  if (inForce(current, now) !== null) return KEEP_RESOURCE;
   const step = current === undefined ? 0 : Math.max(0, current.step);
   return { action: "set", file, until: later(now, ladder(RESOURCE_HOLD_LADDER_MS, step)), step: step + 1 };
 }
@@ -398,7 +482,10 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       const staleHold = page.holdKind !== null && !holdInForce;
       const file = resourceFileOf(input.resource);
       const entry = page.resourceHolds[file];
-      const resourceExpired = entry !== undefined && !(new Date(entry.until).getTime() > now.getTime());
+      // An expired list hold stays on the row until its ladder resets: the
+      // next list 429 within the reset window climbs from where it was.
+      const resourceExpired = entry !== undefined && inForce(entry, now) === null &&
+        (entry.kind !== "rate_limit_list" || listRateLimitStep(entry, now) === 0);
       const breakerSet = input.subjectState.failureCount !== 0 ||
         input.subjectState.breakerUntil !== null ||
         input.subjectState.blockedByVendorAt !== null;
@@ -469,6 +556,47 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
         },
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: until },
         alerts: [{ subKey: "page_stopped", detail: "rate_limit" }],
+      };
+    }
+
+    case "rate_limit_list": {
+      // The list's quota, not the page's: only the list waits. A breaker hold
+      // of the file in force already stops more, for longer: it stays.
+      const held = LIST_RATE_LIMIT_HELD_KEYS.has(input.resource);
+      const current = page.resourceHolds[LIST_RATE_LIMIT_FILE];
+      const breakerUntil = current?.kind === "rate_limit_list" ? null : inForce(current, now);
+      if (breakerUntil !== null) {
+        return {
+          ...base,
+          networkFailureStreak: streakReset,
+          work: held
+            ? { action: "reopen", dueAt: null, waitingReason: "resource_hold", waitingUntil: breakerUntil }
+            : reopenNow,
+        };
+      }
+      const step = listRateLimitStep(current, now);
+      const holdMs = input.retryAfterMs ?? ladder(LIST_RATE_LIMIT_LADDER_MS, step);
+      const listInForce = listRateLimitHold(page.resourceHolds, now);
+      let until = later(now, Math.max(0, holdMs));
+      if (listInForce !== null && listInForce.until.getTime() > until.getTime()) until = listInForce.until;
+      // Alert 1 only when the hold reaches the ladder's top (sustained), never
+      // on a single list 429.
+      const sustained = step >= LIST_RATE_LIMIT_LADDER_MS.length - 1;
+      return {
+        ...base,
+        networkFailureStreak: streakReset,
+        resourceHold: {
+          action: "set",
+          file: LIST_RATE_LIMIT_FILE,
+          until,
+          step: step + 1,
+          kind: "rate_limit_list",
+          lastRateLimitAt: now,
+        },
+        // A key that can only read the list waits for the hold (no immediate
+        // retry); `.find` goes on to `group.detail` at once.
+        work: held ? { action: "reopen", dueAt: null, waitingReason: "resource_hold", waitingUntil: until } : reopenNow,
+        alerts: sustained ? [{ subKey: "page_stopped", detail: "rate_limit_list" }] : [],
       };
     }
 

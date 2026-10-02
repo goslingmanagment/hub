@@ -692,6 +692,9 @@ export async function capture(
   });
 
   if (committed.decision === null) return { applyNow: false, inMemory: null };
+  if (committed.decision.errorClass === "rate_limit_list") {
+    d.metrics.increment("sync_list_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
+  }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4): this send against the page's previous
   // recorded send of ANY owner; closer than the setting opens alert 1.
@@ -737,7 +740,16 @@ async function writeOutcomeDecision(
   }
   const resourceHold = decision.resourceHold;
   if (resourceHold.action === "set") {
-    await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: { until: resourceHold.until, step: resourceHold.step } });
+    await setResourceHold(tx, {
+      ...fenced,
+      file: resourceHold.file,
+      hold: {
+        until: resourceHold.until,
+        step: resourceHold.step,
+        ...(resourceHold.kind === undefined ? {} : { kind: resourceHold.kind }),
+        ...(resourceHold.lastRateLimitAt === undefined ? {} : { lastRateLimitAt: resourceHold.lastRateLimitAt }),
+      },
+    });
   } else if (resourceHold.action === "clear") {
     await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: null });
   }

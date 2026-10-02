@@ -32,7 +32,14 @@ import {
   type PickedWork,
   type SyncFaultPoint,
 } from "./commit.ts";
-import { activePageHold, activeResourceHold, isResourceHoldExempt, resourceFileOf, type ResourceHoldEntry } from "./errors.ts";
+import {
+  activePageHold,
+  activeResourceHold,
+  isResourceHoldExempt,
+  LIST_RATE_LIMIT_HELD_KEYS,
+  resourceFileOf,
+  type ResourceHoldEntry,
+} from "./errors.ts";
 import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import type { OwnershipSession, TransportOutcome, Wake } from "./ports.ts";
 import {
@@ -412,6 +419,8 @@ export class SyncActor {
  * keys, keys switched off for the page, live-only keys in shadow, and the
  * files under a live resource hold — except a key a hold never stops
  * (`dm-messages.head`): its file's other known keys are listed one by one.
+ * The conversation list's own 429 hold stops only the keys that can only
+ * read the list (`LIST_RATE_LIMIT_HELD_KEYS`), whatever their file.
  */
 export function pickExclusions(
   page: Pick<SyncPageRow, "pausedResources" | "registryOverrides" | "resourceHolds">,
@@ -430,6 +439,12 @@ export function pickExclusions(
   const holds = page.resourceHolds as Record<string, ResourceHoldEntry>;
   for (const [file, entry] of Object.entries(holds)) {
     if (!(new Date(entry.until).getTime() > now.getTime())) continue;
+    if (entry.kind === "rate_limit_list") {
+      for (const spec of registry.specs) {
+        if (LIST_RATE_LIMIT_HELD_KEYS.has(spec.key)) resources.add(spec.key);
+      }
+      continue;
+    }
     const fileKeys = registry.specs.filter((spec) => resourceFileOf(spec.key) === file);
     if (fileKeys.some((spec) => isResourceHoldExempt(spec.key))) {
       for (const spec of fileKeys) {

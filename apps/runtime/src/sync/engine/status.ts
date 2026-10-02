@@ -149,7 +149,7 @@ export function explainWork(
     return {
       reason: "resource_hold",
       until: resourceHold.until,
-      detail: { file: resourceHold.file, step: resourceHold.step },
+      detail: { file: resourceHold.file, step: resourceHold.step, kind: resourceHold.kind },
     };
   }
   if (work.waitingReason === "dependency" && after(work.dueAt)) {
@@ -246,7 +246,8 @@ export interface PageStatus {
     /** `until` is an ISO instant, or "infinity" for an auth / identity hold
      *  that only new credentials lift. */
     page: { kind: PageHoldKind; until: string; since: string | null } | null;
-    resources: Array<{ file: string; until: string; step: number }>;
+    /** `kind`: the file's breaker, or the conversation list's own 429 hold. */
+    resources: Array<{ file: string; until: string; step: number; kind: "breaker" | "rate_limit_list" }>;
   };
   breakers: { open: number; blockedByVendor: number };
   quarantined: number;
@@ -282,7 +283,12 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
   const hold = activePageHold(page, now);
   const resources = Object.entries(page.resourceHolds)
     .filter(([, entry]) => new Date(entry.until).getTime() > at)
-    .map(([file, entry]) => ({ file, until: new Date(entry.until).toISOString(), step: entry.step }))
+    .map(([file, entry]) => ({
+      file,
+      until: new Date(entry.until).toISOString(),
+      step: entry.step,
+      kind: entry.kind === "rate_limit_list" ? "rate_limit_list" as const : "breaker" as const,
+    }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   let breakersOpen = 0;
   let blockedByVendor = 0;
