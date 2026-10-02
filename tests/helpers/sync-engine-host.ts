@@ -16,7 +16,7 @@ import { loadConfig, type AppConfig } from "@agency_hub_core/shared";
 import type { Pool } from "pg";
 
 import { SyncActor, type ActorDeps } from "../../apps/runtime/src/sync/engine/actor.ts";
-import type { SyncFaultHook, SyncLogger } from "../../apps/runtime/src/sync/engine/commit.ts";
+import type { CaptureCodec, SyncFaultHook, SyncLogger } from "../../apps/runtime/src/sync/engine/commit.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import {
   systemClock,
@@ -24,6 +24,7 @@ import {
   type Metrics,
   type OwnershipSession,
   type SendHooks,
+  type SettingsSource,
   type SyncAlertInput,
   type SyncAlertKey,
   type SyncMetricLabels,
@@ -259,6 +260,12 @@ export interface TestActorOptions {
   confirmPrevious?: boolean;
   owner?: FanslySendHolderIdentity;
   floorDelayMs?: number;
+  /** The page's native account id the commits see (default a placeholder). */
+  ownRef?: string | null;
+  /** The journal codec (default: the response verbatim). */
+  capture?: CaptureCodec;
+  /** The live settings resources read (default: the registry defaults). */
+  settings?: SettingsSource;
 }
 
 /** Acquire the page and build an actor on it with a small test setting. */
@@ -288,7 +295,7 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
   const deps: ActorDeps = {
     db: options.db,
     pageId: options.pageId,
-    ownRef: "fansly-own-ref",
+    ownRef: options.ownRef === undefined ? "fansly-own-ref" : options.ownRef,
     generation: acquired.generation,
     mode: options.mode,
     registry: options.registry,
@@ -302,6 +309,8 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     ownership,
     wake: options.wake ?? immediateWake,
     ...(options.faults === undefined ? {} : { faults: options.faults }),
+    ...(options.capture === undefined ? {} : { capture: options.capture }),
+    ...(options.settings === undefined ? {} : { settings: options.settings }),
   };
   return {
     actor: new SyncActor(deps),

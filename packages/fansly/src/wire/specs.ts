@@ -1,7 +1,7 @@
 import type { FanslySessionBundle } from "@agency_hub_core/shared";
 
 import { buildFanslyRequestHeaders } from "../request-headers.ts";
-import type { FanslyEarningsAccount, FanslyPostsPage, FanslyPostTip } from "../types.ts";
+import type { FanslyEarningsAccount, FanslyPostsPage } from "../types.ts";
 import {
   parseFanslyAccountMe,
   parseFanslyAccountsByIds,
@@ -198,12 +198,6 @@ function earningsAccounts(response: unknown): FanslyContractResult<FanslyEarning
   return index === -1
     ? accepted(response as FanslyEarningsAccount[])
     : refused(`[${index}]`, "earnings account row is not an object");
-}
-
-function postTips(response: unknown): FanslyContractResult<FanslyPostTip[]> {
-  return Array.isArray(response)
-    ? accepted(response as FanslyPostTip[])
-    : refused("response", "post tips is not an array");
 }
 
 type SpecTable = { readonly [I in FanslyWireId]: FanslyWireSpecFor<I> };
@@ -430,7 +424,10 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     legacyOperation: "post_tips",
     path: () => "/tips",
     query: (p) => ({ targetIds: idList("targetIds", p.targetIds) }),
-    parse: (response) => postTips(response),
+    // An optional companion read: a body that drifted away from an array is
+    // journaled and counted by the posts walk, which moves on (the legacy lane
+    // never let it wedge the timeline), so the wire refuses nothing here.
+    parse: journalFirst,
   },
   "posts.by_ids": {
     id: "posts.by_ids",

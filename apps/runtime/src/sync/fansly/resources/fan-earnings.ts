@@ -380,6 +380,9 @@ export const fanEarningsRosterModule: ResourceModule = {
   },
 
   async onSubjectOutcome(tx, work, outcome, step) {
+    // A breaker reset (an answer after failures) is an `ok`: the apply
+    // settles the receipt, never a failed visit.
+    if (outcome.kind === "ok") return;
     const subject = fanEarningsSubjectOfRequest(step.request);
     if (subject === null) return;
     const now = new Date();
