@@ -66,11 +66,17 @@ function run(argv: string[], options: { response?: unknown; calls?: Array<{ meth
 describe("hub CLI: the command surface", () => {
   it("offers exactly one command per agentKey operation, and none for the owner-session ones", () => {
     // 9b (observation payloads) and #13 (hydration decisions) are owner-session.
-    // A command for them could only ever produce a confident 401.
-    expect(HUB_COMMANDS.map((command) => command.operation).sort()).toEqual([
+    // A command for them could only ever produce a confident 401. Hydration
+    // filing has no command either; the history requests do.
+    const single = HUB_COMMANDS.filter((command) => command.composite !== true);
+    expect(single.map((command) => command.operation).sort()).toEqual([
       "agentCapabilities",
       "agentCoverage",
       "agentDatasetQuery",
+      "agentHistoryRequestCancel",
+      "agentHistoryRequestCreate",
+      "agentHistoryRequestGet",
+      "agentHistoryRequestList",
       "agentObservations",
       "agentPerson",
       "agentPersonTimeline",
@@ -82,6 +88,19 @@ describe("hub CLI: the command surface", () => {
     expect(HUB_COMMANDS.map((command) => command.operation)).not.toContain(
       "agentObservationPayload",
     );
+  });
+
+  it("marks every composite and builds it on an operation a single command already has", () => {
+    // A composite is several calls of ONE documented operation, never a second API.
+    const composites = HUB_COMMANDS.filter((command) => command.composite === true);
+    expect(composites.map((command) => command.name)).toEqual(["history-request-batch"]);
+    const singleOperations = new Set(
+      HUB_COMMANDS.filter((command) => command.composite !== true).map((command) => command.operation),
+    );
+    for (const command of composites) {
+      expect(singleOperations.has(command.operation), command.name).toBe(true);
+      expect(command.summary, command.name).toMatch(/^COMPOSITE/);
+    }
   });
 
   it("names every command uniquely and describes every flag", () => {

@@ -58,6 +58,8 @@ describe("route auth declarations", () => {
       // uuid, so the middleware cannot resolve a scope and the handler checks
       // the grant itself.
       "agentDatasetQuery",
+      // The Sync Engine's history-request create (same shape as hydration's).
+      "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       "agentThreadMessages",
       // WP-S1 (endpoints-cover serving). All eight are `owner-session` +

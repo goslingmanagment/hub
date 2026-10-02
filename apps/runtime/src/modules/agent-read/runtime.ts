@@ -11,6 +11,8 @@ import {
   type AgentFieldStateName,
   type AgentPredicate,
   type AgentScopeNarrowing,
+  type AgentThreadCaptureFloor,
+  type AgentThreadCoverage,
 } from "@agency_hub_core/contracts";
 import {
   AgentStatementTimeoutError,
@@ -22,6 +24,7 @@ import {
   reserveAgentKeyRows,
   withAgentStatementTimeout,
   type AgentGrantPage,
+  type AgentThreadCoverageRow,
   type Database,
 } from "@agency_hub_core/db";
 import type { AppConfig, Platform } from "@agency_hub_core/shared";
@@ -745,6 +748,32 @@ export const AGENT_SEARCH_BACKEND_IN_USE = "fts" as const;
 
 export function iso(value: Date): string {
   return value.toISOString();
+}
+
+/** A chat's proven coverage on the wire (`hub threads` items flat, the
+ *  transcript's `threadCoverage`). */
+export function threadCoverage(row: AgentThreadCoverageRow): AgentThreadCoverage {
+  return {
+    historyState: row.historyState,
+    historyProof: row.historyProof,
+    contiguousOldestAt: isoOrNull(row.contiguousOldestAt),
+    contiguousCount: row.contiguousCount,
+    headConfirmedAt: isoOrNull(row.headConfirmedAt),
+  };
+}
+
+/**
+ * A thread's own capture floor (design §7.7): the oldest message of its PROVEN
+ * contiguous chain once it has one (`partial` or `complete`), `unknown`
+ * otherwise. Stored-but-unproven messages (`unverified`) set no floor: legacy
+ * windows have holes, and a floor drawn from one would claim coverage nobody
+ * proved.
+ */
+export function threadCaptureFloor(row: AgentThreadCoverageRow): AgentThreadCaptureFloor {
+  const proven = row.historyState === "partial" || row.historyState === "complete";
+  return proven && row.contiguousOldestAt !== null
+    ? { at: row.contiguousOldestAt.toISOString(), kind: "proven_chain" }
+    : { at: null, kind: "unknown" };
 }
 
 /** The audit row for an operation that served verbatim material or a payload. */

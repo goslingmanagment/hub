@@ -112,6 +112,8 @@ for (const file of [
   // Owner administration of the plane's keys (slice B). routes.ts spreads these
   // into routeSchemas too, so the same rule applies: no file, no compile.
   "routes-agent-keys.ts",
+  // The Fansly Sync Engine's owner routes; routes.ts spreads them in too.
+  "routes-sync.ts",
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",

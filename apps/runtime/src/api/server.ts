@@ -69,6 +69,7 @@ import { registerIdentityRoutes } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
+import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
@@ -608,6 +609,9 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Agent Read Plane (operations 1-10) --- (module: apps/runtime/src/modules/agent-read)
   registerAgentReadRoutes(server, moduleContext);
+
+  // --- Fansly Sync Engine owner routes (history requests) --- (module: apps/runtime/src/modules/sync-engine)
+  registerSyncEngineRoutes(server, moduleContext);
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
