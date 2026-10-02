@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   acquireSyncPageOwnership,
@@ -14,7 +14,9 @@ import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.t
 import {
   createFanslyShadowWsFeed,
   routeShadowReceipts,
+  SHADOW_WS_FLOOR_EVERY_MS,
   SHADOW_WS_ROUTE_HORIZON_MS,
+  type ShadowWsFeedState,
 } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { OwnBroadcastWindow } from "../apps/runtime/src/sync/fansly/ws/router.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -99,6 +101,61 @@ async function work(pageId: number) {
 
 const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
 
+interface PlanNode {
+  "Relation Name"?: string;
+  "Actual Rows"?: number;
+  "Actual Loops"?: number;
+  "Rows Removed by Filter"?: number;
+  Plans?: PlanNode[];
+}
+
+function receiptRowsVisited(node: PlanNode): number {
+  const own = node["Relation Name"] === "fansly_ws_decode_receipts"
+    ? ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 0)
+    : 0;
+  return own + (node.Plans ?? []).reduce((total, child) => total + receiptRowsVisited(child), 0);
+}
+
+/** Run one lap; for each read of the receipts it sent, the receipt rows that
+ *  read visits (EXPLAIN ANALYZE of the statement as sent, same parameters). */
+async function receiptRowsPerRead(lap: () => Promise<unknown>): Promise<number[]> {
+  const spy = vi.spyOn(testDb!.pool, "query");
+  let calls: unknown[][];
+  try {
+    await lap();
+    calls = spy.mock.calls.map((call) => [...call] as unknown[]);
+  } finally {
+    spy.mockRestore();
+  }
+  const visited: number[] = [];
+  for (const [config, parameters] of calls) {
+    const statement = typeof config === "string" ? { text: config } : config as { text?: unknown; values?: unknown[] };
+    if (typeof statement.text !== "string" || !/^\s*select\b[\s\S]*\bfrom fansly_ws_decode_receipts\b/i.test(statement.text)) continue;
+    const plan = await testDb!.pool.query<{ "QUERY PLAN": Array<{ Plan: PlanNode }> }>(
+      `explain (analyze, format json) ${statement.text}`,
+      (parameters as unknown[] | undefined) ?? statement.values ?? [],
+    );
+    visited.push(receiptRowsVisited(plan.rows[0]!["QUERY PLAN"][0]!.Plan));
+  }
+  return visited;
+}
+
+/** Receipts of another page, as many as a busy day leaves (no observation
+ *  rows: only the other page's router would read their bodies). */
+async function otherPageReceipts(pageId: number, input: { count: number; receivedAt: string }): Promise<number> {
+  const result = await query<{ last: string }>(
+    `with inserted as (
+       insert into fansly_ws_decode_receipts (observation_id, page_id, received_at, state, live_state)
+       select nextval(pg_get_serial_sequence('observations', 'id')), $1, ${input.receivedAt} + g * interval '100 milliseconds',
+              'retained', 'applied'
+         from generate_series(1, $2::int) g
+       returning observation_id)
+     select max(observation_id)::text as last from inserted`,
+    [pageId, input.count],
+  );
+  return Number(result[0]!.last);
+}
+
 describe("the shadow WS feed (design §6.4)", () => {
   it("starts at the routing horizon, routes into shadow work, never acks a receipt or writes the overlay", async (context) => {
     if (!testDb) return context.skip();
@@ -151,6 +208,47 @@ describe("the shadow WS feed (design §6.4)", () => {
     expect(routed).toMatchObject({ stale: 5, routed: 1, cursor: fresh });
     expect((await work(page.pageId)).map((row) => [...row.txIds].sort())).toEqual([["700000000000000001", "700000000000000099"]]);
     expect(metrics.get("sync_shadow_ws_receipts")).toBeGreaterThanOrEqual(6);
+  });
+
+  it("a silent page's read stays within the horizon: the cursor floors at the watermark, whatever other pages captured", async (context) => {
+    if (!testDb) return context.skip();
+    // Nothing indexes the receipts by page: a read walks every page's
+    // receipts past the cursor, so the cursor must never lag the horizon.
+    const busy = await seedWsCapturePage(handles(), { ownRef: "100000000000000002" });
+    const page = await shadowPage();
+    const old = await page.capture(wsTransaction("700000000000000001", 1), minutesAgo(26 * 60));
+    const watermark = await otherPageReceipts(busy.pageId, { count: 5_000, receivedAt: "now() - interval '1 day'" });
+    await otherPageReceipts(busy.pageId, { count: 3, receivedAt: "now()" });
+    await testDb.pool.query("analyze fansly_ws_decode_receipts");
+
+    // A page that never had a receipt: its first lap starts at the watermark.
+    const quiet = await seedWsCapturePage(handles(), { ownRef: "100000000000000003" });
+    await setModeDirect(testDb.pool, quiet.pageId, "shadow");
+    const fresh = await shadowActor(quiet);
+    const first = await receiptRowsPerRead(() => routeShadowReceipts(fresh.deps, { window: new OwnBroadcastWindow() }));
+    expect(first).toHaveLength(2);
+    for (const rows of first) expect(rows).toBeLessThan(20);
+    expect((await getSyncPage(db(), quiet.pageId))!.wsRouterCursor).toBe(watermark);
+
+    // A page whose cursor lags a day: the lap that finds nothing floors it,
+    // and the next laps read only the horizon (the floor re-reads at most
+    // once a minute).
+    await testDb.pool.query("update sync_pages set ws_router_cursor = $2 where page_id = $1", [page.pageId, old]);
+    const { deps } = await shadowActor(page);
+    const state: ShadowWsFeedState = { window: new OwnBroadcastWindow() };
+    expect(await routeShadowReceipts(deps, state)).toMatchObject({ routed: 0, stale: 0, cursor: watermark });
+    const next = await receiptRowsPerRead(() => routeShadowReceipts(deps, state));
+    expect(next).toHaveLength(1);
+    expect(next[0]).toBeLessThan(20);
+    state.floorCheckedMono = deps.clock.monoNow() - SHADOW_WS_FLOOR_EVERY_MS;
+    const later = await receiptRowsPerRead(() => routeShadowReceipts(deps, state));
+    expect(later).toHaveLength(2);
+    for (const rows of later) expect(rows).toBeLessThan(20);
+
+    // The floor never passes over the page's own fresh receipt.
+    const live = await page.capture(wsTransaction("700000000000000002", 1));
+    expect(await routeShadowReceipts(deps, state)).toMatchObject({ routed: 1, stale: 0, cursor: live });
+    expect((await work(page.pageId)).map((row) => row.txIds)).toEqual([["700000000000000002"]]);
   });
 
   it("own messages: chatter replies are confirmed until the rate fallback sees a broadcast; a marked broadcast never is", async (context) => {

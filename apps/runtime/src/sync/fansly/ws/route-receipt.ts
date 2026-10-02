@@ -8,7 +8,7 @@ import {
   lockOwnedPage,
   readWsRoutePage,
   upsertDemands,
-  wsRouterStartCursor,
+  wsRouterHorizonWatermark,
   type Database,
   type FanslyWsLiveAckedReceipt,
   type FanslyWsLivePayloadResolver,
@@ -54,9 +54,13 @@ import {
 // cursor (`sync_pages.ws_router_cursor`) once per lap, routes them the same
 // way into SHADOW work and advances the cursor in the same transaction. It
 // never acks a receipt and never writes the overlay (I14). A shadow router
-// that never ran starts at the page's newest receipt (nothing captured before
-// the engine ran becomes demand), and receipts older than the routing horizon
-// are passed over: a backlog after downtime is history, not live demand.
+// that never ran starts at the horizon watermark (nothing captured before the
+// engine ran becomes demand), and receipts older than the routing horizon are
+// passed over: a backlog after downtime is history, not live demand. The
+// receipts have no `page_id` index: a page's read walks every page's receipts
+// past its cursor, so a lap that finds nothing of the page moves the cursor up
+// to the watermark (at most once a minute) and a silent page's read stays
+// within the horizon however long it is silent.
 
 /** Receipts one shadow lap reads at most (design §3.12). */
 export const SHADOW_WS_ROUTE_BATCH = 500;
@@ -64,6 +68,9 @@ export const SHADOW_WS_ROUTE_BATCH = 500;
 export const SHADOW_WS_STALE_BATCHES_PER_LAP = 20;
 /** Receipts received longer ago than this are not routed in shadow. */
 export const SHADOW_WS_ROUTE_HORIZON_MS = 15 * 60_000;
+/** A page with nothing past its cursor re-reads the horizon watermark at most
+ *  this often (a cursor write per silent page per minute, not per lap). */
+export const SHADOW_WS_FLOOR_EVERY_MS = 60_000;
 
 /** A class name only: driver errors embed SQL and bound parameters. */
 function errorClass(error: unknown): string {
@@ -209,9 +216,15 @@ export interface ShadowWsRouteResult {
   signals: number;
 }
 
-interface PageWindow {
-  generation: bigint;
+/** The in-memory state a page's shadow feed keeps between laps. */
+export interface ShadowWsFeedState {
   window: OwnBroadcastWindow;
+  /** Monotonic time the horizon watermark was last read (`clock.monoNow`). */
+  floorCheckedMono?: number;
+}
+
+interface PageWindow extends ShadowWsFeedState {
+  generation: bigint;
 }
 
 /** The frame of a captured receipt, or null when it is not a socket frame. */
@@ -228,7 +241,7 @@ function frameOf(payload: unknown): string | null {
  */
 export async function routeShadowReceipts(
   d: CommitDeps,
-  state: { window: OwnBroadcastWindow },
+  state: ShadowWsFeedState,
   options: ShadowWsFeedOptions = {},
 ): Promise<ShadowWsRouteResult> {
   const batch = options.batch ?? SHADOW_WS_ROUTE_BATCH;
@@ -236,33 +249,34 @@ export async function routeShadowReceipts(
   const result: ShadowWsRouteResult = { routed: 0, stale: 0, unreadable: 0, cursor: 0, signals: 0 };
   const page = await getSyncPage(d.db, d.pageId);
   if (page === null || page.mode !== "shadow") return result;
+  // `result.cursor` stays the stored cursor until the lap's write moves it.
   let cursor = page.wsRouterCursor;
   result.cursor = cursor;
+  const floorAtWatermark = async () => {
+    state.floorCheckedMono = d.clock.monoNow();
+    cursor = Math.max(cursor, await wsRouterHorizonWatermark(d.db, { horizonMs }));
+  };
 
-  if (cursor === 0) {
-    // Never ran: skip the page's history up to the routing horizon.
-    const start = await wsRouterStartCursor(d.db, { pageId: d.pageId, horizonMs });
-    if (start > 0) {
-      await d.db.transaction(async (raw) => {
-        const tx = raw as unknown as Database;
-        await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-        await advanceWsRouterCursor(tx, { pageId: d.pageId, generation: d.generation, cursor: start });
-      });
-      cursor = start;
-      result.cursor = start;
-    }
-  }
+  // Never ran: skip the history up to the routing horizon.
+  if (cursor === 0) await floorAtWatermark();
 
   // Read past the stale backlog (bodies are not read for stale rows).
   let receipts: WsRouterReceipt[] = [];
+  let reachedEnd = false;
   for (let pass = 0; pass < SHADOW_WS_STALE_BATCHES_PER_LAP; pass += 1) {
     const read = await listWsRouterReceipts(d.db, { pageId: d.pageId, after: cursor, limit: batch, horizonMs });
-    if (read.length === 0) break;
+    if (read.length === 0) {
+      reachedEnd = true;
+      break;
+    }
     const firstFresh = read.findIndex((receipt) => !receipt.stale);
     if (firstFresh === -1) {
       result.stale += read.length;
       cursor = read.at(-1)!.observationId;
-      if (read.length < batch) break;
+      if (read.length < batch) {
+        reachedEnd = true;
+        break;
+      }
       continue;
     }
     result.stale += firstFresh;
@@ -303,6 +317,13 @@ export async function routeShadowReceipts(
     routed.push({ items: decoded.items, fallback: own.length > 0 && state.window.activeAt(atMs) });
     for (const item of decoded.items) d.metrics.increment("sync_shadow_ws_items", { pageId: d.pageId, kind: item.kind });
     result.routed += 1;
+  }
+  // Nothing of this page past the cursor: the next read starts at the
+  // horizon watermark instead of walking every page's receipts since the
+  // page's last one.
+  if (receipts.length === 0 && reachedEnd
+    && (state.floorCheckedMono === undefined || d.clock.monoNow() - state.floorCheckedMono >= SHADOW_WS_FLOOR_EVERY_MS)) {
+    await floorAtWatermark();
   }
   const lastId = receipts.at(-1)?.observationId ?? cursor;
   if (lastId === result.cursor) return result;

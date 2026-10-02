@@ -178,20 +178,28 @@ export async function listWsRouterReceipts(
 }
 
 /**
- * Where a shadow router that never ran starts: the page's newest receipt
- * received more than `horizonMs` ago (0 without one). Everything captured
- * before that is history, never demand; the receipts of the horizon are
- * routed. One scan of the page's receipts, once per page.
+ * The shadow router's floor: the newest receipt of ANY page received more
+ * than `horizonMs` ago (0 without one). The table has no `page_id` index, so a
+ * page's read walks the primary key from its cursor through every page's
+ * receipts; a cursor at this watermark keeps that walk to the routing horizon
+ * however long the page has been silent. Nothing the router would route lies
+ * at or below it: a capture stamps `received_at` before it allocates its id,
+ * so a receipt below the watermark was received before the watermark's
+ * receipt was captured — past the horizon, or short of it by no more than
+ * that capture's wait in its connection's queue. Served by a backward scan of
+ * the primary key that stops at the first receipt older than the horizon (the
+ * horizon's rows of all pages).
  */
-export async function wsRouterStartCursor(
+export async function wsRouterHorizonWatermark(
   db: Database,
-  input: { pageId: number; horizonMs: number },
+  input: { horizonMs: number },
 ): Promise<number> {
-  const result = await db.execute<{ id: string | null }>(sql`
-    select max(observation_id)::text as id
+  const result = await db.execute<{ id: string }>(sql`
+    select observation_id::text as id
       from fansly_ws_decode_receipts
-     where page_id = ${input.pageId}
-       and received_at <= clock_timestamp() - ${input.horizonMs}::double precision * interval '1 millisecond'
+     where received_at <= clock_timestamp() - ${input.horizonMs}::double precision * interval '1 millisecond'
+     order by observation_id desc
+     limit 1
   `);
   return Number(result.rows[0]?.id ?? 0);
 }

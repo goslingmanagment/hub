@@ -64,7 +64,9 @@ decoder plus new chats, money, subscriptions and payouts) and one routing table 
   receipt, whichever driver wins it (I18). On `off`/`shadow` pages the hook only reads the page's mode.
 - **Shadow pages**: the actor reads the receipts past `sync_pages.ws_router_cursor` once per lap and routes them into
   shadow work; it never acks a receipt and never writes the overlay. A router that never ran starts 15 minutes back;
-  receipts older than that are passed over (history, not live demand).
+  receipts older than that are passed over (history, not live demand). The receipts have no `page_id` index, so a
+  lap that finds nothing of the page moves its cursor up to that 15-minute watermark (at most once a minute): a
+  silent page's read covers the horizon, not everything captured since its last receipt.
 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
