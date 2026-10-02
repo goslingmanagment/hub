@@ -276,6 +276,12 @@ vi.mock("../apps/runtime/src/services/golden-signals.ts", () => ({
 const fanslyWsLiveMocks = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   startFanslyWsLiveTimer: vi.fn(),
+  routeFanslyWsReceiptDemand: vi.fn(async () => {}),
+}));
+// Every ack of the timer routes its receipt through the Sync Engine's
+// post-ack hook (I18).
+vi.mock("../apps/runtime/src/sync/fansly/ws/route-receipt.ts", () => ({
+  routeFanslyWsReceiptDemand: fanslyWsLiveMocks.routeFanslyWsReceiptDemand,
 }));
 vi.mock("../apps/runtime/src/services/fansly-ws/live-apply.ts", () => ({
   startFanslyWsLiveTimer: fanslyWsLiveMocks.startFanslyWsLiveTimer.mockImplementation(() => ({
@@ -552,7 +558,9 @@ describe("worker startup", () => {
     expect(ofapiDmAnalyticsMocks.ensureOfapiDmAnalyticsSchedules).not.toHaveBeenCalled();
     expect(ofapiDmAnalyticsMocks.startOfapiDmAnalyticsWorker).toHaveBeenCalledWith(app, boss);
     expect(app.logger.info).toHaveBeenCalledWith("Worker started");
-    expect(fanslyWsLiveMocks.startFanslyWsLiveTimer).toHaveBeenCalledWith(app);
+    expect(fanslyWsLiveMocks.startFanslyWsLiveTimer).toHaveBeenCalledWith(app, {
+      afterAck: fanslyWsLiveMocks.routeFanslyWsReceiptDemand,
+    });
 
     await expect(getRawPayloadCleanupHandler(boss)()).resolves.toBeUndefined();
     expect(dbMocks.deleteExpiredPendingDeviceTokens).toHaveBeenCalledTimes(1);
