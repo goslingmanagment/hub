@@ -6,7 +6,8 @@
  * of `agentRouteSchemas` carries one. The owner's history requests mirror the
  * agent operations in `routes-agent.ts` and share their wire shapes, so an
  * owner and an agent read the same request the same way (plan §4.1: agents and
- * the owner are equal requesters).
+ * the owner are equal requesters). The page status and the work rows ("why
+ * waiting") share theirs with `agentSyncStatus` / `agentSyncWhy` the same way.
  *
  * `routes.ts` spreads `syncRouteSchemas` into `routeSchemas`; the dashboard and
  * the owner console reach them through the generated SDK with a cookie.
@@ -24,6 +25,10 @@ import {
   agentHistoryRequestParamsSchema,
   agentHistoryRequestSchema,
   agentHistoryRequestStateEnum,
+  agentSyncPageStatusSchema,
+  agentSyncResourceKeyEnum,
+  agentSyncWorkSchema,
+  agentSyncWorkStateEnum,
 } from "./routes-agent.ts";
 
 /** The agent create body without the agent-plane claim. */
@@ -82,7 +87,133 @@ export const syncHistoryRequestsResponseSchema = z.object({
   requests: z.array(agentHistoryRequestSchema).max(200),
 }).strict();
 
+// ── page status, work, "sync now" ──────────────────────────────────────────
+
+/** The registry's resource files (the part of a key before the dot). Pinned
+ *  equal to `ResourceFile` of the registry by `tests/sync-status-contracts.test.ts`. */
+export const syncResourceFileEnum = z.enum([
+  "account",
+  "ws",
+  "dm-conversations",
+  "dm-messages",
+  "dm-live",
+  "transactions",
+  "top-spenders",
+  "fan-earnings",
+  "purchases",
+  "payouts",
+  "subscribers",
+  "followers",
+  "fan-profiles",
+  "notifications",
+  "posts",
+  "post-replies",
+  "catalog",
+  "media-stats",
+  "stats",
+  "media-download",
+  "repair",
+  "probe",
+]);
+
+export const syncPagesResponseSchema = z.object({
+  pages: z.array(agentSyncPageStatusSchema).max(200),
+}).strict();
+
+export const syncPageWorkQuerySchema = z.object({
+  resource: agentSyncResourceKeyEnum.optional(),
+  subject: z.string().max(200).optional(),
+  state: agentSyncWorkStateEnum.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();
+
+export const syncPageWorkResponseSchema = z.object({
+  /** Newest first. */
+  work: z.array(agentSyncWorkSchema).max(200),
+}).strict();
+
+export const syncPageWorkParamsSchema = z.object({
+  ...agentHistoryPageParamsSchema.shape,
+  workId: z.coerce.number().int().positive(),
+}).strict();
+
+export const syncPageWorkGetResponseSchema = z.object({
+  work: agentSyncWorkSchema,
+}).strict();
+
+export const syncPageRefreshBodySchema = z.object({
+  /** Only the polls of these resource files; omitted: every poll of the page. */
+  resources: z.array(syncResourceFileEnum).min(1).max(syncResourceFileEnum.options.length).optional(),
+}).strict();
+
+export const syncPageRefreshResponseSchema = z.object({
+  /** Poll rows made due now. */
+  bumped: z.number().int().nonnegative(),
+  /** The page runs in shadow: the bumped polls are simulated, nothing is sent. */
+  shadow: z.boolean(),
+}).strict();
+
 export const syncRouteSchemas = {
+  syncPages: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary:
+      "Every Fansly page's engine status: owner, pause record, sends by class, queue by why it waits, holds,"
+      + " breakers, request progress (Fansly Sync Engine). Off and shadow pages report their shadow journal",
+    response: {
+      200: syncPagesResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  syncPageWork: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "A page's work rows, newest first, each with why it waits (Fansly Sync Engine)",
+    params: agentHistoryPageParamsSchema,
+    querystring: syncPageWorkQuerySchema,
+    response: {
+      200: syncPageWorkResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  syncPageWorkGet: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary:
+      "One work row of a page and why it waits: the status link a queued \"enqueue and wait\" call answers with",
+    params: syncPageWorkParamsSchema,
+    response: {
+      200: syncPageWorkGetResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
+  syncPageRefresh: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary:
+      "Sync now: the page's poll rows (or those of the named resource files) become due now; 202 with how many."
+      + " 409 sync_page_off on a page no actor runs",
+    params: agentHistoryPageParamsSchema,
+    body: syncPageRefreshBodySchema,
+    response: {
+      202: syncPageRefreshResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      // sync_page_off
+      409: errorResponseSchema,
+    },
+  },
+
   syncHistoryRequests: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -152,3 +283,10 @@ export type SyncHistoryRequestCancelBody = z.infer<typeof syncHistoryRequestCanc
 export type SyncHistoryRequestCancelResponse = z.infer<typeof syncHistoryRequestCancelResponseSchema>;
 export type SyncHistoryRequestsQuery = z.infer<typeof syncHistoryRequestsQuerySchema>;
 export type SyncHistoryRequestsResponse = z.infer<typeof syncHistoryRequestsResponseSchema>;
+export type SyncResourceFile = z.infer<typeof syncResourceFileEnum>;
+export type SyncPagesResponse = z.infer<typeof syncPagesResponseSchema>;
+export type SyncPageWorkQuery = z.infer<typeof syncPageWorkQuerySchema>;
+export type SyncPageWorkResponse = z.infer<typeof syncPageWorkResponseSchema>;
+export type SyncPageWorkGetResponse = z.infer<typeof syncPageWorkGetResponseSchema>;
+export type SyncPageRefreshBody = z.infer<typeof syncPageRefreshBodySchema>;
+export type SyncPageRefreshResponse = z.infer<typeof syncPageRefreshResponseSchema>;

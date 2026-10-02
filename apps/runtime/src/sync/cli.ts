@@ -14,7 +14,7 @@ import {
   explainSyncWork,
   findSyncPageByLabel,
   OWNER_PAGE_MODES,
-  readSyncPageStatus,
+  readSyncPageStatuses,
   requestSyncProbe,
 } from "./inspect.ts";
 
@@ -219,9 +219,7 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         const pages = options.page === undefined
           ? await listSyncPages(db)
           : [await findSyncPageByLabel(db, options.page)];
-        const statuses = [];
-        for (const row of pages) statuses.push(await readSyncPageStatus(db, rawConfig, row));
-        deps.print(json(statuses));
+        deps.print(json(await readSyncPageStatuses(db, rawConfig, pages)));
       });
     });
 

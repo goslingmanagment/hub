@@ -82,6 +82,8 @@ describe("hub CLI: the command surface", () => {
       "agentPersonTimeline",
       "agentResolve",
       "agentSearchMessages",
+      "agentSyncStatus",
+      "agentSyncWhy",
       "agentThreadMessages",
       "agentThreads",
     ]);
@@ -343,6 +345,35 @@ describe("hub CLI: request building", () => {
     expect((calls[1]?.input as { body: Record<string, unknown> }).body).toMatchObject({
       includeThreads: false,
     });
+  });
+
+  it("asks the sync engine's status of every page, or of one", async () => {
+    const calls: Array<{ method: string; input: unknown }> = [];
+    await run(["sync-status"], { calls });
+    await run(["sync-status", "--page-label", "lora-1"], { calls });
+    expect(calls).toEqual([
+      { method: "agentSyncStatus", input: { query: {} } },
+      { method: "agentSyncStatus", input: { query: { pageLabel: "lora-1" } } },
+    ]);
+  });
+
+  it("asks why a registry key waits, with an optional subject, and refuses a key outside the registry", async () => {
+    const calls: Array<{ method: string; input: unknown }> = [];
+    await run(["sync-why", "--page-label", "lora-1", "--resource", "transactions.head"], { calls });
+    await run(["sync-why", "--page-label", "lora-1", "--resource", "dm-messages.head", "--subject", "810272281019305984"], { calls });
+    expect(calls).toEqual([
+      { method: "agentSyncWhy", input: { params: { pageLabel: "lora-1" }, query: { resource: "transactions.head" } } },
+      {
+        method: "agentSyncWhy",
+        input: { params: { pageLabel: "lora-1" }, query: { resource: "dm-messages.head", subject: "810272281019305984" } },
+      },
+    ]);
+    const refused: Array<{ method: string; input: unknown }> = [];
+    const unknown = await run(["sync-why", "--page-label", "lora-1", "--resource", "transactions"], { calls: refused });
+    expect(unknown.exitCode).toBe(HUB_EXIT_ERROR);
+    const noPage = await run(["sync-why", "--resource", "transactions.head"], { calls: refused });
+    expect(noPage.exitCode).toBe(HUB_EXIT_ERROR);
+    expect(refused).toHaveLength(0);
   });
 });
 

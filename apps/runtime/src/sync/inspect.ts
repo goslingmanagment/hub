@@ -1,6 +1,9 @@
 import {
+  bumpPagePolls,
   confirmSyncOwnersStopped,
   countSendsSince,
+  getSyncAttemptSummaries,
+  getSyncWork,
   getWorkForStatus,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
@@ -11,10 +14,14 @@ import {
   upsertDemand,
   type Database,
   type SetSyncPageModeResult,
+  type SyncAttemptSummary,
+  type SyncEngineWorkClass,
   type SyncPageMode,
   type SyncPageRow,
   type SyncRegistryOverride,
+  type SyncWorkKind,
   type SyncWorkRow,
+  type SyncWorkState,
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
@@ -34,8 +41,9 @@ import {
 
 // The owner's view and levers of the engine (design §3.9, §7.6): page status,
 // "why is this waiting", the mode lever (off ↔ shadow only, I17), pauses,
-// registry overrides and the ownership confirmation. The CLI calls these; the
-// owner routes (S2-12) will call the same functions.
+// registry overrides, "sync now" and the ownership confirmation. The owner CLI,
+// the owner routes (`modules/sync-engine`) and the agent plane's status and
+// "why" (`modules/agent-read/handlers-sync.ts`) call these same functions.
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -93,15 +101,35 @@ function statusWork(work: SyncWorkRow): StatusWork {
   };
 }
 
+/** S as the actor reads it (the live owner key, I4). */
+export async function readPauseSettingMs(db: Database, rawConfig: AppConfig): Promise<number> {
+  return (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
+}
+
+/** The status of several pages, S read once (`sync page status`, the owner
+ *  and agent status routes). */
+export async function readSyncPageStatuses(
+  db: Database,
+  rawConfig: AppConfig,
+  pages: readonly SyncPageRow[],
+): Promise<PageStatus[]> {
+  if (pages.length === 0) return [];
+  const settingMs = await readPauseSettingMs(db, rawConfig);
+  const statuses: PageStatus[] = [];
+  for (const page of pages) statuses.push(await readSyncPageStatus(db, rawConfig, page, page.dbNow, settingMs));
+  return statuses;
+}
+
 /** The page status (design §3.9) from the database. */
 export async function readSyncPageStatus(
   db: Database,
   rawConfig: AppConfig,
   page: SyncPageRow,
   now: Date = page.dbNow,
+  settingMsRead?: number,
 ): Promise<PageStatus> {
   const shadow = statusJournalIsShadow(page);
-  const settingMs = (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
+  const settingMs = settingMsRead ?? await readPauseSettingMs(db, rawConfig);
   const works = await getWorkForStatus(db, {
     pageId: page.pageId,
     shadow,
@@ -136,9 +164,72 @@ export async function readSyncPageStatus(
 }
 
 export interface WorkWhy {
-  work: { id: number; resource: string; subject: string; class: string; state: string; dueAt: Date; demandRevision: number; appliedRevision: number; attempts: number; lastErrorClass: string | null; closeReason: string | null; result: unknown };
+  work: {
+    id: number;
+    resource: string;
+    subject: string;
+    /** The shadow journal: simulated work, nothing was sent. */
+    shadow: boolean;
+    kind: SyncWorkKind;
+    class: SyncEngineWorkClass;
+    state: SyncWorkState;
+    dueAt: Date;
+    demandRevision: number;
+    appliedRevision: number;
+    attempts: number;
+    failureCount: number;
+    breakerUntil: Date | null;
+    blockedByVendorAt: Date | null;
+    lastErrorClass: string | null;
+    lastAttempt: SyncAttemptSummary | null;
+    closedAt: Date | null;
+    closeReason: string | null;
+    result: unknown;
+  };
   /** Null for closed work: it waits for nothing. */
   waiting: WorkExplanation | null;
+}
+
+/** Why each of `rows` (one page's) waits, with each row's last attempt. */
+async function workWhys(
+  db: Database,
+  page: SyncPageRow,
+  rows: readonly SyncWorkRow[],
+  settingMs: number,
+  now: Date,
+): Promise<WorkWhy[]> {
+  const runtime = {
+    slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
+  };
+  const attempts = await getSyncAttemptSummaries(
+    db,
+    rows.map((row) => row.lastAttemptId).filter((id): id is number => id !== null),
+  );
+  return rows.map((work) => ({
+    work: {
+      id: work.id,
+      resource: work.resource,
+      subject: work.subject,
+      shadow: work.shadow,
+      kind: work.kind,
+      class: work.class,
+      state: work.state,
+      dueAt: work.dueAt,
+      demandRevision: work.demandRevision,
+      appliedRevision: work.appliedRevision,
+      attempts: work.attemptsCount,
+      failureCount: work.failureCount,
+      breakerUntil: work.breakerUntil,
+      blockedByVendorAt: work.blockedByVendorAt,
+      lastErrorClass: work.lastErrorClass,
+      lastAttempt: work.lastAttemptId === null ? null : attempts.get(work.lastAttemptId) ?? null,
+      closedAt: work.closedAt,
+      closeReason: work.closeReason,
+      // What a finished step left (a probe's outcome, a walk's receipt).
+      result: work.result,
+    },
+    waiting: explainWork(statusWork(work), statusPage(page), runtime, now),
+  }));
 }
 
 /** "Why is this waiting" (`sync why`): every open row of the key, or the
@@ -147,17 +238,18 @@ export async function explainSyncWork(
   db: Database,
   rawConfig: AppConfig,
   page: SyncPageRow,
-  input: { resource: string; subject?: string },
+  input: { resource: string; subject?: string; limit?: number },
   now: Date = page.dbNow,
 ): Promise<WorkWhy[]> {
   const shadow = statusJournalIsShadow(page);
-  const settingMs = (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
+  const settingMs = await readPauseSettingMs(db, rawConfig);
   let rows = await getWorkForStatus(db, {
     pageId: page.pageId,
     shadow,
     resource: input.resource,
     ...(input.subject === undefined ? {} : { subject: input.subject }),
     states: ["open", "running", "quarantined"],
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
   });
   if (rows.length === 0 && input.subject !== undefined) {
     const closed = await latestClosedWorkForKey(db, {
@@ -168,27 +260,45 @@ export async function explainSyncWork(
     });
     rows = closed === null ? [] : [closed];
   }
-  const runtime = {
-    slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
-  };
-  return rows.map((work) => ({
-    work: {
-      id: work.id,
-      resource: work.resource,
-      subject: work.subject,
-      class: work.class,
-      state: work.state,
-      dueAt: work.dueAt,
-      demandRevision: work.demandRevision,
-      appliedRevision: work.appliedRevision,
-      attempts: work.attemptsCount,
-      lastErrorClass: work.lastErrorClass,
-      closeReason: work.closeReason,
-      // What a finished step left (a probe's outcome, a walk's receipt).
-      result: work.result,
-    },
-    waiting: explainWork(statusWork(work), statusPage(page), runtime, now),
-  }));
+  return workWhys(db, page, rows, settingMs, now);
+}
+
+/** A page's work rows in the journal it runs, newest first (owner route
+ *  `syncPageWork`), each with why it waits. */
+export async function listSyncPageWork(
+  db: Database,
+  rawConfig: AppConfig,
+  page: SyncPageRow,
+  input: { resource?: string; subject?: string; state?: SyncWorkState; limit: number; offset: number },
+  now: Date = page.dbNow,
+): Promise<WorkWhy[]> {
+  const settingMs = await readPauseSettingMs(db, rawConfig);
+  const rows = await getWorkForStatus(db, {
+    pageId: page.pageId,
+    shadow: statusJournalIsShadow(page),
+    ...(input.resource === undefined ? {} : { resource: input.resource }),
+    ...(input.subject === undefined ? {} : { subject: input.subject }),
+    ...(input.state === undefined ? {} : { states: [input.state] }),
+    limit: input.limit,
+    offset: input.offset,
+  });
+  return workWhys(db, page, rows, settingMs, now);
+}
+
+/** One work row of a page (either journal) and why it waits; null when the
+ *  id names no row of this page — the status link of a queued "enqueue and
+ *  wait" call (design §7.3). */
+export async function getSyncPageWork(
+  db: Database,
+  rawConfig: AppConfig,
+  page: SyncPageRow,
+  workId: number,
+  now: Date = page.dbNow,
+): Promise<WorkWhy | null> {
+  const row = await getSyncWork(db, workId);
+  if (row === null || row.pageId !== page.pageId) return null;
+  const [why] = await workWhys(db, page, [row], await readPauseSettingMs(db, rawConfig), now);
+  return why ?? null;
 }
 
 export class SyncOwnerLeverError extends Error {
@@ -196,6 +306,35 @@ export class SyncOwnerLeverError extends Error {
     super(message);
     this.name = "SyncOwnerLeverError";
   }
+}
+
+/** A lever that needs a running actor, asked of a page that is `off`. */
+export class SyncPageOffError extends SyncOwnerLeverError {
+  constructor(label: string, lever: string) {
+    super(`${label} is off: no actor runs it, so ${lever} has nothing to move (sync page mode --to shadow first)`);
+    this.name = "SyncPageOffError";
+  }
+}
+
+/**
+ * "Sync now" (design §7.3; owner route `syncPageRefresh`): the page's poll
+ * rows — or those of the given resource files — become due now, in the journal
+ * the page runs (shadow polls on an `off`/`shadow` page are simulated: nothing
+ * is sent). An `off` page has no actor to serve them and is refused.
+ */
+export async function refreshSyncPage(
+  db: Database,
+  page: Pick<SyncPageRow, "pageId" | "pageLabel" | "mode">,
+  files?: readonly string[],
+): Promise<{ bumped: number; shadow: boolean }> {
+  if (page.mode === "off") throw new SyncPageOffError(page.pageLabel ?? String(page.pageId), "sync now");
+  const shadow = statusJournalIsShadow(page);
+  const bumped = await bumpPagePolls(db, {
+    pageId: page.pageId,
+    shadow,
+    ...(files === undefined ? {} : { files }),
+  });
+  return { bumped, shadow };
 }
 
 /** `sync page mode`: only `off ↔ shadow`. A target outside those two is
