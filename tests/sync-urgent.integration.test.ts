@@ -2,7 +2,16 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncWork, setRegistryOverride, settleWork, type Database, type SettleWorkInput } from "@agency_hub_core/db";
+import {
+  createFanslyPage,
+  createModel,
+  createOnlyFansPage,
+  getSyncWork,
+  setRegistryOverride,
+  settleWork,
+  type Database,
+  type SettleWorkInput,
+} from "@agency_hub_core/db";
 
 import {
   createWorkDoneWake,
@@ -103,6 +112,20 @@ describe("enqueue and wait: a page that is not live", () => {
         });
         expect(result, `${page.label} ${resource}`).toEqual({ state: "not_live" });
       }
+    }
+    expect(changedTables(before, await tableCounts(testDb.pool))).toEqual([]);
+  });
+
+  it("answers not_live on a page the engine has no row for: a Fansly page onboarded since the host started, an OnlyFans page", async (context) => {
+    if (!testDb) return context.skip();
+    const model = await createModel(db(), { slug: "model-unlisted", name: "unlisted" });
+    const fansly = await createFanslyPage(db(), { modelId: model!.id, label: "fansly-unlisted" });
+    const onlyFans = await createOnlyFansPage(db(), { modelId: model!.id, label: "of-unlisted" });
+    const before = await tableCounts(testDb.pool);
+    for (const pageId of [fansly!.id, onlyFans!.id]) {
+      expect(await countRows(testDb.pool, "select count(*)::int as n from sync_pages where page_id = $1", [pageId])).toBe(0);
+      const result = await enqueueAndWait({ db: db() }, { pageId, resource: "account.verify", waitMs: 1_000 });
+      expect(result, `page ${pageId}`).toEqual({ state: "not_live" });
     }
     expect(changedTables(before, await tableCounts(testDb.pool))).toEqual([]);
   });

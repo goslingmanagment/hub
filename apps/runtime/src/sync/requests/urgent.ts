@@ -21,12 +21,14 @@ import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 // actor's answer — up to 15–30 s, then "queued" with the work's status link.
 //
 // A page that is not `live` answers `not_live` before anything is written:
-// the caller takes its legacy path. In step 2 every page is `off` or `shadow`,
-// so every call answers `not_live` (the engine cannot send before the step-3
-// switch, I17). Which keys a caller may enqueue is the registry's word: an
-// entry with the `api` trigger (`account.verify`, `account.identity`,
-// `media-download.fetch`); its class, coalescing and deadline come from the
-// entry, as for any other demand.
+// the caller takes its legacy path. That includes a page with no `sync_pages`
+// row yet (onboarded since the host started) and a page of another platform;
+// only an id that names no page at all is refused (`no_page`). In step 2
+// every page is `off` or `shadow`, so every call answers `not_live` (the
+// engine cannot send before the step-3 switch, I17). Which keys a caller may
+// enqueue is the registry's word: an entry with the `api` trigger
+// (`account.verify`, `account.identity`, `media-download.fetch`); its class,
+// coalescing and deadline come from the entry, as for any other demand.
 
 /** How long a caller waits by default before it answers `queued`. */
 export const URGENT_WAIT_DEFAULT_MS = 15_000;
@@ -118,7 +120,12 @@ async function enqueue(db: Database, spec: ResourceSpec, input: EnqueueAndWaitIn
     `);
     const mode = locked.rows[0]?.mode;
     if (mode === undefined) {
-      throw new UrgentWorkRefusedError("no_page", `No Fansly sync page ${input.pageId} (sync_pages has no row)`);
+      // No engine row: a Fansly page onboarded since the host last started
+      // (`ensureFanslySyncPages` gives it its row, mode `off`) or a page of
+      // another platform. Either way the engine does not run it: not live.
+      const known = await txDb.execute<{ id: string }>(sql`select id::text as id from pages where id = ${input.pageId}`);
+      if (known.rows.length > 0) return { kind: "not_live" };
+      throw new UrgentWorkRefusedError("no_page", `No page ${input.pageId}`);
     }
     if (mode !== "live") return { kind: "not_live" };
     const page = await getSyncPage(txDb, input.pageId);
