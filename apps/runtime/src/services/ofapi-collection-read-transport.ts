@@ -34,6 +34,13 @@ import {
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
 import { OfapiGovernedRequestError } from "./ofapi.ts";
 
+/** Capture admission refused the read before any vendor request was made. */
+export class OfapiCollectionAdmissionError extends Error {
+  constructor(readonly reason: string) {
+    super(`Capture admission: ${reason}`);
+  }
+}
+
 /** Preserve explicitly selected jobs created under the old catalog category.
  * This does not change interactive gateway admission or the DB job's limits. */
 export function matchesOfapiCollectionJobCategory(
@@ -210,7 +217,7 @@ export async function captureOfapiCollectionRead(
       deadlineAt,
     });
     if (!reservation.admitted)
-      throw new Error(`Capture admission: ${reservation.reason}`);
+      throw new OfapiCollectionAdmissionError(reservation.reason);
     let raw;
     try {
       raw = await app.ofapi.dispatchGovernedRaw(

@@ -14,8 +14,9 @@
 //      window no longer exists on the platform: retire it exactly like the
 //      Fansly anchor ('missing_from_sync_window' — a re-appearing row
 //      reactivates through the normal upsert path).
-// Pages the backfill reports blocked are skipped whole — no expiry without
-// fresh scan evidence.
+// No expiry without fresh scan evidence: only a page whose rescan read the
+// vendor feed to its end may retire rows (`rescanProvesWindow`); every other
+// page is skipped whole and its stale rows wait for the next run.
 
 import {
   countActivePendingTransactionsByIds,
@@ -28,7 +29,10 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
-import { runOfapiTransactionsBackfill } from "./ofapi-transactions-backfill.ts";
+import {
+  runOfapiTransactionsBackfill,
+  type OfapiTransactionsBackfillPageResult,
+} from "./ofapi-transactions-backfill.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OFAPI_PENDING_RECONCILE_QUEUE = "ofapi.pending.reconcile";
@@ -37,16 +41,38 @@ export const OFAPI_PENDING_RECONCILE_QUEUE = "ofapi.pending.reconcile";
  * a week covers every observed legitimate straggler. */
 export const STALE_PENDING_AGE_DAYS = 7;
 
+/**
+ * Whether one page's rescan may justify expiry: it sent at least one request,
+ * read the feed to its end and got rows back. A refused first reservation
+ * (credit floor, day budget), a capped or budget-cut walk and an empty feed
+ * prove nothing about the stale rows. 2026-09-06: a 479-credit balance under
+ * the 500 floor made zero requests, the page still reported `written`, and 21
+ * payments that OnlyFans still counts were retired.
+ */
+export function rescanProvesWindow(page: OfapiTransactionsBackfillPageResult): boolean {
+  return page.status !== "blocked" &&
+    page.pageId !== null &&
+    page.apiPages > 0 &&
+    page.rawRows > 0 &&
+    (page.paginationStopReason === "completed" ||
+      page.paginationStopReason === "reached_window_end");
+}
+
 export interface OfapiPendingReconcileResult {
   stalePendings: number;
   pagesTouched: number;
   expired: number;
   /** Stale rows no longer pending after the rescan (settled or negated). */
   settledByRescan: number;
-  /** Rows STILL active+pending after rescan+retire — must be 0; nonzero
-   * means something re-asserts pending (see the ingest supersession fix). */
+  /** Rows on proven pages STILL active+pending after rescan+retire — must
+   * be 0; nonzero means something re-asserts pending (see the ingest
+   * supersession fix). */
   unresolved: number;
+  /** Stale rows on blocked or unscanned pages, left for the next run. */
+  deferred: number;
   blockedPages: string[];
+  /** Pages that were not blocked, but whose rescan proved nothing. */
+  unscannedPages: string[];
   skipped: "disabled" | null;
 }
 
@@ -60,7 +86,9 @@ export async function runOfapiPendingReconcile(
     expired: 0,
     settledByRescan: 0,
     unresolved: 0,
+    deferred: 0,
     blockedPages: [],
+    unscannedPages: [],
     skipped: null,
   };
   // Same master switch as every writer into the transactions truth table
@@ -96,17 +124,29 @@ export async function runOfapiPendingReconcile(
   const blockedPages = backfill.pages
     .filter((page) => page.status === "blocked")
     .map((page) => page.pageLabel);
-  const blockedPageIds = new Set(
-    backfill.pages
-      .filter((page) => page.status === "blocked" && page.pageId !== null)
-      .map((page) => page.pageId),
+  const unscanned = backfill.pages.filter(
+    (page) => page.status !== "blocked" && !rescanProvesWindow(page),
+  );
+  if (unscanned.length > 0) {
+    app.logger.warn({
+      pages: unscanned.map((page) => ({
+        page: page.pageLabel,
+        apiPages: page.apiPages,
+        rawRows: page.rawRows,
+        stopReason: page.paginationStopReason,
+        budgetBlock: page.budgetBlock,
+      })),
+    }, "OFAPI pending reconcile: rescan proved nothing, expiry deferred");
+  }
+  const provenPageIds = new Set(
+    backfill.pages.filter(rescanProvesWindow).map((page) => page.pageId),
   );
 
   let expired = 0;
   let pagesTouched = 0;
   if (mode === "write") {
     for (const [platformAccountId, rows] of byPage) {
-      if (blockedPageIds.has(platformAccountId)) {
+      if (!provenPageIds.has(platformAccountId)) {
         continue;
       }
       pagesTouched += 1;
@@ -130,19 +170,21 @@ export async function runOfapiPendingReconcile(
   // Honest accounting: re-read the original rows instead of arithmetic —
   // the first prod run "reported" 156 settled while an ingest loop was
   // quietly re-asserting pending underneath.
+  const provenRows = stale.filter((row) => provenPageIds.has(row.platformAccountId));
   const unresolved = mode === "write"
-    ? await countActivePendingTransactionsByIds(app.db, stale.map((row) => row.id))
+    ? await countActivePendingTransactionsByIds(app.db, provenRows.map((row) => row.id))
     : 0;
-  const blockedRows = stale.filter((row) => blockedPageIds.has(row.platformAccountId)).length;
   const result: OfapiPendingReconcileResult = {
     stalePendings: stale.length,
     pagesTouched,
     expired,
     settledByRescan: mode === "write"
-      ? Math.max(0, stale.length - expired - unresolved - blockedRows)
+      ? Math.max(0, provenRows.length - expired - unresolved)
       : 0,
     unresolved,
+    deferred: stale.length - provenRows.length,
     blockedPages,
+    unscannedPages: unscanned.map((page) => page.pageLabel),
     skipped: null,
   };
   app.logger.info(result, "OFAPI pending reconcile complete");
