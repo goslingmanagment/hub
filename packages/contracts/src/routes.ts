@@ -7876,6 +7876,9 @@ const baseRouteSchemas = {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Verify stored credentials for a page",
+    description:
+      "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live), "
+      + "which verifies its session itself; nothing was sent.",
     params: pageParamsSchema,
     response: {
       200: verifyPageResponseSchema,
@@ -7883,12 +7886,16 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
   adminUpdateCredentials: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
     summary: "Update credentials for an existing page",
+    description:
+      "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live); "
+      + "nothing was sent and nothing was stored.",
     params: pageParamsSchema,
     body: updateCredentialsBodySchema,
     response: {
@@ -7897,6 +7904,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      409: errorResponseSchema,
     },
   },
   adminLogs: {

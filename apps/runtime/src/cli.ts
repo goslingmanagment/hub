@@ -71,6 +71,11 @@ import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-
 import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
 import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
 import {
+  assertLegacyOwnsFanslyPageId,
+  assertLegacyOwnsFanslyPageLabels,
+  SYNC_ENGINE_HINTS,
+} from "./services/sync-engine-guard.ts";
+import {
   removeVoiceProfile,
   setVoiceProfile,
   showVoiceProfile,
@@ -1041,6 +1046,9 @@ export function buildProgram() {
         if (!thread) {
           throw new Error(`DM thread ${threadId} not found`);
         }
+        // Step-3 design §3.1 item 11: the worker's lease would refuse the job
+        // on a page the Fansly Sync Engine owns; say so before queueing it.
+        await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);
         // The one worker refusal the owner controls from here, read-only: a job
         // the worker would refuse on the depth cap is not queued at all. Every
         // other check stays the worker's, under the lease.
@@ -1715,6 +1723,8 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
+        // Step-3 design §3.1 item 10: the engine verifies its own pages.
+        await assertLegacyOwnsFanslyPageLabels(app, [options.page], SYNC_ENGINE_HINTS.verify);
         const context = await resolvePageContext(app, options.page);
         const egressSummaryPromise = resolvePageEgressSummary({
           pageLabel: context.page.label,
@@ -3165,6 +3175,12 @@ export function buildProgram() {
         console.log(`notes_deactivated=${result.totalNotesDeactivated}`);
         console.log(`aliases_set=${result.totalAliasesSet}`);
         console.log(`aliases_cleared=${result.totalAliasesCleared}`);
+        if (result.skippedEngineOwnedPages.length > 0) {
+          console.log(
+            `skipped_engine_pages=${result.skippedEngineOwnedPages.join(",")} `
+              + "(on the Fansly Sync Engine: `pnpm cli sync work enqueue --page <label> --resource fan-profiles.alias-backfill`)",
+          );
+        }
       } finally {
         await app.close();
       }

@@ -57686,6 +57686,7 @@
         "tags": [
           "admin"
         ],
+        "description": "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live); nothing was sent and nothing was stored.",
         "requestBody": {
           "required": true,
           "content": {
@@ -57968,6 +57969,38 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -57978,6 +58011,7 @@
         "tags": [
           "admin"
         ],
+        "description": "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live), which verifies its session itself; nothing was sent.",
         "parameters": [
           {
             "schema": {
@@ -58134,6 +58168,38 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {

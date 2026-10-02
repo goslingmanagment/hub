@@ -2,8 +2,8 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark, listEventAccounts, listEventsSince, setProjectionWatermark, isFanslyWsHintDrainDue,
-  lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent, requestPageSync,
-  tryAcquireDmArchiveWriterFenceLock, type Database,
+  isFanslyPageEngineOwned, lockFanslyWsGeneration, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent,
+  requestPageSync, tryAcquireDmArchiveWriterFenceLock, type Database,
 } from "@agency_hub_core/db";
 import { FANSLY_WS_HINT_TYPES, resolveFanslyWsHintPolicy } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
@@ -28,7 +28,19 @@ const DRAIN_WAKE_INTERVAL_MS = 5 * 60_000;
 
 /** Existing minutely projector: events -> operational receipts/dirty queue.
  * No HTTP. One bounded ledger page per account/tick, including when disabled.
- * Minimal diagnostic callers without config are explicitly default-off. */
+ * Minimal diagnostic callers without config are explicitly default-off.
+ *
+ * A page the Fansly Sync Engine owns (`handover`/`live`, step-3 design §3.1
+ * item 6) still has every event filed, under no policy: a hint is filed
+ * `disabled`, nothing is written to the `fansly_ws_dm` plane and the fenced DM
+ * stream is never woken (its socket receipts route their demand in the
+ * engine's post-ack hook, I18). A deletion keeps its `mutation_debt` receipt:
+ * that receipt is the only input of the minutely deletion reconcile, which
+ * marks on every page (item 12), and a frame the legacy socket captured
+ * before the switch can reach this projector only after it. That frame was
+ * acked in shadow, where `dm-live.deletions` writes nothing, so without the
+ * receipt its deletion would never be marked. The mode is read per event,
+ * in the event's transaction, and again before the wake. */
 export async function runFanslyWsHintProjection(
   app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>,
   input?: { accountId?: number | null },
@@ -66,7 +78,10 @@ export async function runFanslyWsHintProjection(
             or (e.scope_type = 'fan' and e.plan->'resolvedFanGroupIds' ? ${groupRef ?? ""})
           ) limit 1`);
         if (erased.rows.length) return false;
-        const currentPolicy = policy && await readFanslyPageGeneration(db, page.label) === policy.generation ? policy : null;
+        // The policy in force for this event: none on a page the engine owns
+        // (the receipt is still filed) or after a generation change.
+        const currentPolicy = policy && !(await isFanslyPageEngineOwned(db, accountId)).owned
+          && await readFanslyPageGeneration(db, page.label) === policy.generation ? policy : null;
         return routeFanslyWsHintEvent(db, {
           id: event.id, pageId: accountId, observationId: event.observationId!,
           receivedAt: new Date(signal.receivedAt), generation: signal.generation,
@@ -79,8 +94,9 @@ export async function runFanslyWsHintProjection(
     }
     if (events.length) await setProjectionWatermark(app.db, FANSLY_WS_HINT_PROJECTION, accountId, events.at(-1)!.accountSeq);
     // Retrying this existing scheduler request after a crash is safe: the
-    // subject queue, not the wakeup, owns target/revision custody.
-    if (policy) {
+    // subject queue, not the wakeup, owns target/revision custody. A page the
+    // engine owns is never woken: its legacy DM stream is fenced.
+    if (policy && !(await isFanslyPageEngineOwned(app.db, accountId)).owned) {
       const due = await app.db.execute(sql`select 1 from subject_refresh_state where page_id = ${accountId}
         and plane = 'fansly_ws_dm' and requested_revision > applied_revision and next_due_at <= now()
         and backfill_cursor->>'generation' = ${policy.generation} limit 1`);

@@ -353,7 +353,12 @@ export async function runAgentHydrationCycle(
   return result;
 }
 
-/** Undecided or never-dispatched approvals whose expiry has passed. */
+/** Undecided or never-dispatched approvals whose expiry has passed. Like the
+ * reconcile and the stuck sweep below, it never sees a row the Fansly Sync
+ * Engine serves (`FANSLY_SYNC_ENGINE_HYDRATION_LANE`, filtered by the list):
+ * that row mirrors a history request, and a page the engine owns gets its
+ * legacy-state rows converted by the switch, not dispatched (step-3 design
+ * §3.1 item 8). */
 async function expireAgentHydration(app: AppContext): Promise<number> {
   const rows = await listExpirableAgentHydrationRequests(app.db, { limit: SWEEP_BATCH_LIMIT });
   let expired = 0;

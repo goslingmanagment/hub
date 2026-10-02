@@ -13,6 +13,7 @@ import {
   getNotificationIncidentByKey,
   incrementAiMediaDescribeRefusals,
   insertAiGenerationContent,
+  isFanslyPageEngineOwned,
   isAiMediaContentRefused,
   isAiMediaRefRefused,
   reserveAiGatewayUsageEvent,
@@ -139,6 +140,22 @@ export async function downloadAiMediaForDescribe(
   const mode = (await getSyncPage(app.db, input.pageId))?.mode ?? null;
   if (mode === "live") return downloadThroughSyncEngine(app, input);
   if (mode === "handover") return { ok: false as const, reason: "send_guard" as const, httpStatus: null };
+  return downloadAiMediaThroughPageEgress(app, { url: input.url, pageId: input.pageId });
+}
+
+/** The describer's legacy download: through the page's own egress, the CDN
+ *  hop under the page's send guard (`off`/`shadow` pages). */
+export async function downloadAiMediaThroughPageEgress(
+  app: AppContext,
+  input: { url: string; pageId: number },
+): Promise<MediaDownloadResult> {
+  // A page the Fansly Sync Engine owns sends nothing through the legacy path
+  // (step-3 design §3.1 item 9): like a closed send guard, nothing was sent
+  // and the row looks again later. (The router above sends a `live` page
+  // through its actor; this catches a page that switched since it looked.)
+  if ((await isFanslyPageEngineOwned(app.db, input.pageId)).owned) {
+    return { ok: false, reason: "send_guard", httpStatus: null };
+  }
   const egress = await resolveEgress(app, { kind: "page", pageId: input.pageId });
   try {
     // Plan §2.5: a Fansly CDN hop rides the page's send guard; the download
