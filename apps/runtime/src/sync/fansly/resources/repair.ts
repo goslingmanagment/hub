@@ -40,7 +40,10 @@ import { applyListPage } from "./dm-conversations.ts";
 //           the next page while the page is full and its oldest chat is not
 //           older than the window's start; consecutive pages ≥ 5 s apart
 //           (owner decision №14: the list is read rarely; a list 429 holds
-//           only the list keys, this one among them);
+//           only the list keys, this one among them). The spacing is the
+//           cursor's `nextListAt`, checked by the plan: a new demand pulls
+//           the row's due time to now, never a list page closer than 5 s to
+//           the previous one — nor a restarted pass's first page;
 //   then  — the money head (`transactions.head`, urgent) and the subscribers
 //           poll (due now), the two other things a socket says live;
 //   wait  — until every work the pass asked for has served its demand, or
@@ -87,6 +90,10 @@ export interface RepairCursor {
   spawned: Array<{ resource: string; subject: string }>;
   /** ISO: when the wait began (wait phase). */
   waitStartedAt: string | null;
+  /** ISO: the earliest instant the next list page of this row may be read
+   *  (the previous page's apply + `REPAIR_LIST_SPACING_MS`); kept across a
+   *  restarted pass. */
+  nextListAt: string | null;
 }
 
 /** What one list step carries from its plan to its apply. */
@@ -128,7 +135,28 @@ export function parseRepairCursor(value: unknown): RepairCursor | null {
       return typeof key.resource === "string" && typeof key.subject === "string" ? [{ resource: key.resource, subject: key.subject }] : [];
     })
     : [];
-  return { phase, pass, offset, pageCount: count(record.pageCount) ?? 0, spawned, waitStartedAt: iso(record.waitStartedAt) };
+  return {
+    phase,
+    pass,
+    offset,
+    pageCount: count(record.pageCount) ?? 0,
+    spawned,
+    waitStartedAt: iso(record.waitStartedAt),
+    nextListAt: iso(record.nextListAt),
+  };
+}
+
+/** The earliest instant the row's next list page may be read (null: now).
+ *  Read from any cursor — one under way, or the reset of a restarted pass. */
+export function repairNextListAt(cursor: unknown): Date | null {
+  const at = iso(recordOf(cursor).nextListAt);
+  return at === null ? null : new Date(at);
+}
+
+/** The cursor a restarted pass starts from: no pass, the list spacing kept. */
+function restartCursor(cursor: unknown): Record<string, unknown> {
+  const at = iso(recordOf(cursor).nextListAt);
+  return at === null ? {} : { nextListAt: at };
 }
 
 function parseStep(value: unknown): RepairStep | null {
@@ -182,6 +210,15 @@ export const repairWsGapModule: ResourceModule = {
     // Live only: a shadow page has no socket and no gap of its own (I14).
     if (ctx.shadow) return { kind: "done", reason: "shadow_no_socket" };
     const cursor = parseRepairCursor(work.cursor);
+    if (cursor === null || cursor.phase === "list") {
+      // Owner decision №14 [E1]: a list page of this row is never read
+      // sooner than 5 s after the previous one, whatever pulled the row's
+      // due time forward (a reconnect, an unbindable frame).
+      const notBefore = repairNextListAt(work.cursor);
+      if (notBefore !== null && ctx.now.getTime() < notBefore.getTime()) {
+        return { kind: "wait", reason: "not_due", until: notBefore };
+      }
+    }
     if (cursor === null) {
       // A new pass: its window and targets, read-only; they travel with the
       // first list step and become the cursor in its apply.
@@ -229,6 +266,9 @@ export const repairWsGapModule: ResourceModule = {
     const oldest = oldestHeadOf(outcome.items);
     const more = page.data.length >= LIMIT && oldest !== null && oldest.getTime() >= Date.parse(pass.since);
     const counters = { ...outcome.counters, repair_list_pages: 1 };
+    // The next list page of this row — this pass's, or a restarted pass's
+    // first — is due no sooner than this (owner decision №14).
+    const nextListAt = new Date(input.now.getTime() + REPAIR_LIST_SPACING_MS);
     if (more) {
       return {
         work: {
@@ -240,8 +280,9 @@ export const repairWsGapModule: ResourceModule = {
             pageCount,
             spawned: mergeSpawned(prior?.spawned ?? [], outcome.followups),
             waitStartedAt: null,
+            nextListAt: nextListAt.toISOString(),
           } satisfies RepairCursor,
-          nextDueAt: new Date(input.now.getTime() + REPAIR_LIST_SPACING_MS),
+          nextDueAt: nextListAt,
         },
         followups: outcome.followups,
         counters,
@@ -264,6 +305,7 @@ export const repairWsGapModule: ResourceModule = {
           pageCount,
           spawned: mergeSpawned(prior?.spawned ?? [], followups),
           waitStartedAt: input.now.toISOString(),
+          nextListAt: nextListAt.toISOString(),
         } satisfies RepairCursor,
         nextDueAt: input.now,
       },
@@ -276,7 +318,7 @@ export const repairWsGapModule: ResourceModule = {
     const cursor = parseRepairCursor(input.work.cursor);
     if (cursor === null || cursor.phase !== "wait") {
       // Nothing to stamp yet (the cursor is not at its wait): start over.
-      return { work: { satisfiesRevision: false, cursor: {}, nextDueAt: input.now }, followups: [] };
+      return { work: { satisfiesRevision: false, cursor: restartCursor(input.work.cursor), nextDueAt: input.now }, followups: [] };
     }
     const stamped = await stampFanslyWsGapReconciled(tx, {
       pageId: input.pageId,
@@ -294,8 +336,15 @@ export const repairWsGapModule: ResourceModule = {
     // A reconnect or an unbindable frame during the pass: a new pass on the
     // same row (its window and targets are read again); else the work is done.
     if (input.work.demandRevision > cursor.pass.startedRevision) {
+      // The new pass's first list page keeps the spacing from this pass's last.
+      const notBefore = repairNextListAt(input.work.cursor);
       return {
-        work: { satisfiesRevision: false, cursor: {}, result, nextDueAt: input.now },
+        work: {
+          satisfiesRevision: false,
+          cursor: restartCursor(input.work.cursor),
+          result,
+          nextDueAt: notBefore !== null && notBefore.getTime() > input.now.getTime() ? notBefore : input.now,
+        },
         followups: [],
         counters: { repair_stamped: stamped, repair_passes_restarted: 1 },
       };

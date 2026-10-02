@@ -319,6 +319,48 @@ describe("repair.ws-gap", () => {
     expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 1, stamped: 1 } });
   }, 60_000);
 
+  it("keeps its list pages ≥ 5 s apart when new demand pulls the row forward, across a restarted pass too", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const now = Date.now();
+    await connection(pageId, { gapAgoMs: 15 * MINUTE, verifiedAgoMs: 1_000 });
+    // Page 1 inside the window, page 2 older: the first pass reads two pages;
+    // the restarted pass (no unreconciled connection: its window starts at
+    // the row's first demand − 60 s) stops after one.
+    const page1: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 100 + i, headId: messageOf(100 + i), headAtMs: now - (5 * MINUTE + i * 1_000) }));
+    const page2: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 300 + i, headId: messageOf(300 + i), headAtMs: now - 3 * 3_600_000 }));
+    await seedThreads(pageId, [...page1, ...page2].map((chat) => chat.n));
+    await demand(pageId, "repair.ws-gap");
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls());
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport, ownRef: OWN_ID });
+    const running = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      // Between the first pass's two pages, an unbindable frame asks for a
+      // repair again: the open row's due time is pulled to now.
+      await waitFor(async () => {
+        const row = await workRow(pageId, "repair.ws-gap");
+        return row?.cursor.phase === "list" && row.cursor.offset === 100 ? true : null;
+      }, 30_000, "the first pass between its pages");
+      await demand(pageId, "repair.ws-gap");
+      await waitFor(async () => ((await workRow(pageId, "repair.ws-gap"))?.state === "done" ? true : null), 45_000, "the restarted pass");
+    } finally {
+      stop.abort();
+      await running;
+    }
+    const reads = await listOffsets(pageId, "repair.ws-gap");
+    expect(reads.map((read) => read.offset)).toEqual([0, 100, 0]);
+    for (let i = 1; i < reads.length; i += 1) {
+      expect(reads[i]!.sent_at.getTime() - reads[i - 1]!.sent_at.getTime(), `list read ${i}`).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+    }
+    const listHits = transport.hits.filter((hit) => hit.spec === "messaging.groups");
+    expect(listHits).toHaveLength(3);
+    for (let i = 1; i < listHits.length; i += 1) {
+      expect(listHits[i]!.mono - listHits[i - 1]!.mono, `list hit ${i}`).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+    }
+    expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 0, listPages: 1 } });
+  }, 75_000);
+
   it("a repair the router asked for without a connection reads back from its first demand − 60 s and stamps nothing", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
