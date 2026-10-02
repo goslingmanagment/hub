@@ -25,6 +25,7 @@ import {
   PlatformAccountIdentityImmutableError,
   quarantineWork,
   recordApplyFailure,
+  recordSyncPageIdentity,
   recoverUnfinishedAttempts,
   setNetworkFailureStreak,
   setPageHold,
@@ -123,6 +124,18 @@ export class ApplyDeferred extends Error {
   }
 }
 
+/** A resource refuses to apply an answer it cannot vouch for (an empty first
+ *  page against known members, unmapped rows, a deactivation past its safety
+ *  ceiling): deterministic — the step's writes roll back, the work and the
+ *  attempt are quarantined with the raw answer kept, alert 2. Never retried
+ *  on its own; the owner re-applies or overrides it. */
+export class ApplyQuarantine extends Error {
+  constructor(readonly reason: string, readonly detail: Readonly<Record<string, unknown>> = {}) {
+    super(`apply quarantined: ${reason}`);
+    this.name = "ApplyQuarantine";
+  }
+}
+
 /** A journaled answer the wire contract refuses (on re-parse from the journal,
  *  or by a resource's own deeper check): deterministic, quarantined. */
 export class FanslyContractViolationError extends Error {
@@ -141,7 +154,17 @@ export interface SyncLogger {
 
 /** The journal body of a 2xx answer (`observations.payload`). */
 export interface CaptureCodec {
-  prepare(input: { spec: FanslyWireId; kind: string; response: unknown; module: ResourceModule }): unknown;
+  prepare(input: {
+    spec: FanslyWireId;
+    kind: string;
+    response: unknown;
+    /** The wire contract accepted `response` (false: journaled, then quarantined). */
+    contractAccepted: boolean;
+    /** The request the answer serves (a walk's position, for kinds whose
+     *  journal names it). */
+    request: RequestPlan;
+    module: ResourceModule;
+  }): unknown;
 }
 
 /**
@@ -584,6 +607,8 @@ export async function capture(
           spec: admission.request.spec,
           kind: wireSpec.kind,
           response: read.response,
+          contractAccepted: read.kind === "accepted",
+          request: admission.request,
           module,
         }),
       }
@@ -808,6 +833,7 @@ export function errorName(error: unknown): string {
   const state = sqlStateOf(error);
   if (state !== null) return state;
   if (error instanceof ApplyDeferred) return `deferred:${error.reason}`;
+  if (error instanceof ApplyQuarantine) return `quarantine:${error.reason}`;
   if (error instanceof Error) return error.name || "Error";
   return "unknown";
 }
@@ -831,7 +857,7 @@ export function applyErrorScope(error: unknown): ApplyErrorScope | null {
 export function classifyApplyError(error: unknown): ApplyErrorKind {
   for (const link of errorChain(error)) {
     if (link instanceof ApplyDeferred || isCapturePayloadUnavailable(link)) return "deferred";
-    if (link instanceof FanslyContractViolationError) return "deterministic";
+    if (link instanceof FanslyContractViolationError || link instanceof ApplyQuarantine) return "deterministic";
   }
   if (applyErrorScope(error) !== null) return "deterministic";
   const state = sqlStateOf(error);
@@ -895,10 +921,10 @@ export async function apply(
   inMemory: { response: unknown; parsed: unknown } | null = null,
 ): Promise<ApplyOutcome> {
   try {
-    return await inTx(d.db, async (tx): Promise<ApplyOutcome> => {
+    const applied = await inTx(d.db, async (tx) => {
       await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "share" });
       const attempt = await lockAttemptForApply(tx, attemptId);
-      if (attempt === null || attempt.shadow) return "nothing";
+      if (attempt === null || attempt.shadow) return "nothing" as const;
       const spec = d.registry.spec(attempt.resource);
       if (spec === null) throw new ApplyDeferred("no_registry_entry");
       const module = await d.registry.module(attempt.resource);
@@ -924,6 +950,7 @@ export async function apply(
       await fault(d, "in_apply");
       const result = await module.apply(tx, {
         pageId: d.pageId,
+        now: d.clock.wallNow(),
         ownRef: d.ownRef,
         work,
         attempt,
@@ -960,11 +987,39 @@ export async function apply(
         await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
       }
       await markApplied(tx, { attemptId });
-      return "applied";
+      return {
+        outcome: "applied" as const,
+        counters: result.counters ?? null,
+        pageIdentity: result.pageIdentity ?? null,
+        resource: attempt.resource,
+      };
     });
+    if (applied === "nothing") return "nothing";
+    for (const [name, by] of Object.entries(applied.counters ?? {})) {
+      d.metrics.increment("sync_apply_effect", { resource: applied.resource, effect: name }, by);
+    }
+    if (applied.pageIdentity !== null) await recordIdentity(d, applied.pageIdentity.accountId);
+    return applied.outcome;
   } catch (error) {
     if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
     return recordApplyError(d, attemptId, error);
+  }
+}
+
+/** The page's identity after an applied `/account/me` (status only: the
+ *  identity guard is `updatePageMetadata` inside the apply). Its own small
+ *  fenced transaction — tx 3 holds the page row FOR SHARE, and upgrading that
+ *  lock while the heartbeat waits on the row would deadlock. A failure is
+ *  logged; the next read writes it again. */
+async function recordIdentity(d: CommitDeps, accountId: string): Promise<void> {
+  try {
+    await inTx(d.db, async (tx) => {
+      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+      await recordSyncPageIdentity(tx, { pageId: d.pageId, generation: d.generation, accountId });
+    });
+  } catch (error) {
+    if (error instanceof OwnershipLostError) throw error;
+    d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync: the page identity could not be recorded");
   }
 }
 
@@ -1062,7 +1117,15 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
   });
   d.metrics.increment("sync_apply_errors", { kind, error: name });
   const log = kind === "transient" || kind === "deferred" ? d.logger.warn.bind(d.logger) : d.logger.error.bind(d.logger);
-  log({ pageId: d.pageId, attemptId, kind, error: name, quarantined: settled.quarantined }, "Fansly sync: apply failed");
+  const refusal = [...errorChain(error)].find((link): link is ApplyQuarantine => link instanceof ApplyQuarantine);
+  log({
+    pageId: d.pageId,
+    attemptId,
+    kind,
+    error: name,
+    quarantined: settled.quarantined,
+    ...(refusal === undefined ? {} : { refusal: refusal.detail }),
+  }, "Fansly sync: apply failed");
   if (settled.alerts.length > 0) await openAlerts(d, settled.alerts, { attemptId });
   return kind;
 }

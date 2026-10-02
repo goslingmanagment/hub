@@ -82,8 +82,9 @@ describe("the registry rules", () => {
     expect(metrics.get("sync_not_implemented")).toBe(1);
   });
 
-  it("step 2 ships the Fansly table empty: a shadow page is owned and idle", () => {
-    expect(FANSLY_RESOURCE_SPECS).toEqual([]);
+  it("the Fansly table's entries without code wait on their dependency (sync-registry-coverage pins the rest)", () => {
+    expect(FANSLY_RESOURCE_SPECS.some((entry) => entry.module === undefined)).toBe(true);
+    expect(FANSLY_RESOURCE_SPECS.find((entry) => entry.key === "subscribers.poll")?.module).toBeTypeOf("function");
   });
 
   it("polls: live-only entries never in shadow, the page's period override, a switched-off key", () => {

@@ -1,4 +1,4 @@
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import {
@@ -235,6 +235,11 @@ export async function listFanslyFanPageIdentityBackfillTargets(
   db: Database,
   input?: {
     platformAccountIds?: number[];
+    /** Keyset of a one-page walk (the Sync Engine's alias backfill): only
+     *  fans whose platform user id sorts after this one. */
+    afterPlatformUserId?: string | null;
+    /** At most this many targets (a one-page walk's batch). */
+    limit?: number;
   },
 ) {
   const clauses = [eq(pages.platform, "fansly")];
@@ -245,8 +250,15 @@ export async function listFanslyFanPageIdentityBackfillTargets(
     }
     clauses.push(inArray(fanPages.platformAccountId, input.platformAccountIds));
   }
+  const keyset = input?.afterPlatformUserId ?? null;
+  if (keyset !== null) {
+    if (input?.platformAccountIds?.length !== 1) {
+      throw new Error("A keyset over alias backfill targets walks exactly one page");
+    }
+    clauses.push(gt(fans.platformUserId, keyset));
+  }
 
-  return db.select({
+  const query = db.select({
     platformAccountId: fanPages.platformAccountId,
     pageLabel: pages.label,
     fanId: fanPages.fanId,
@@ -256,4 +268,5 @@ export async function listFanslyFanPageIdentityBackfillTargets(
     .innerJoin(pages, eq(pages.id, fanPages.platformAccountId))
     .where(and(...clauses))
     .orderBy(pages.label, fans.platformUserId);
+  return input?.limit === undefined ? query : query.limit(Math.max(1, input.limit));
 }
