@@ -304,7 +304,23 @@ describe("the shadow report (design §3.12)", () => {
     // Not judged counts as not matched: 3 matches of 4 observations.
     await observe("account_me", "skip:body_unavailable", 1);
     const partial = (await report()).journal!.replay.find((row) => row.kind === "account_me");
-    expect(partial).toMatchObject({ total: 5, matched: 3, excused: 1, ratio: 0.75, meetsTarget: false });
+    expect(partial).toMatchObject({ total: 5, matched: 3, excused: 1, ratio: 0.75, meetsTarget: false, matchedVia: {} });
+
+    // A match through a named legacy rule stays a match, counted per rule and
+    // listed; a page legacy never stored leaves the ratio under its own name.
+    await observe("dm_messages", "match", 3);
+    await observe("dm_messages", "match:via:legacy_unstored_below_window", 4);
+    await observe("dm_messages", "skip:legacy_unstored_below_complete_claim", 7);
+    const named = await report();
+    expect(named.journal!.replay.find((row) => row.kind === "dm_messages")).toMatchObject({
+      total: 3, matched: 2, notReplayable: 1, excused: 1, ratio: 1, meetsTarget: true,
+      matchedVia: { legacy_unstored_below_window: 1 },
+    });
+    expect(named.summary).toContainEqual("B5 matched through a legacy rule: dm_messages legacy_unstored_below_window 1");
+    expect(named.summary).toContainEqual(expect.stringContaining(
+      "dm_messages legacy_unstored_below_complete_claim 1 (legacy journal-only read, older than every stored row of a chat "
+        + "legacy claims complete: LEGACY COVERAGE DEFECT, left out)",
+    ));
   });
 
   it("a window that starts before the deploy is no acceptance window; the whole report runs on a read-only connection", async (context) => {
@@ -407,6 +423,7 @@ function createStubRegistry(): Pick<EngineRegistry, "module"> {
       if (verdict === "throw") throw new Error("boom");
       if (verdict === "write") await insertAuditEvent(replayCtx.db, { source: "test", eventType: "test.replay_write" });
       if (verdict?.startsWith("skip:") === true) return { kind: "not_replayable" as const, reason: verdict.slice("skip:".length) };
+      if (verdict?.startsWith("match:via:") === true) return { kind: "match" as const, via: [verdict.slice("match:via:".length)] };
       return verdict === "match" ? { kind: "match" as const } : { kind: "mismatch" as const, reason: "differs" };
     },
   } as unknown as ResourceModule;

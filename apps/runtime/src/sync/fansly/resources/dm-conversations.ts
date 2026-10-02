@@ -4,6 +4,7 @@ import {
   countPageDmThreadsByGeneration,
   countPageDmVisibleThreads,
   getSyncPage,
+  listLegacyWsHintMembershipPending,
   listOpenWorkSubjects,
   listPageDmThreadIdsStampedWithGeneration,
   listPageDmThreadListStates,
@@ -58,6 +59,7 @@ import {
 } from "../lib/conversation-list.ts";
 import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/replay-rules.ts";
 
 // `dm-conversations.head`, `.full`, `.find`, `.detail`, `.ws-down` (plan §6.2,
 // §7 p.3 and p.6; design §5.3): the conversation list
@@ -422,7 +424,10 @@ async function applyListPage(
  * partner when the group names exactly one besides the page (its fan ensured
  * unverified), the detail's head when it is newer than the stored one; the
  * list's own fields and the exclusion stay as they are. A new thread is
- * created from the detail alone (D5).
+ * created from the detail alone (D5) only for a direct chat: a detail that
+ * names no single partner (the page's own mass-message container, a group of
+ * several) creates nothing — a thread for it would be a visible inbox row
+ * with nobody in it, re-found by every later own message into it.
  */
 async function applyGroupDetail(
   tx: Database,
@@ -433,6 +438,13 @@ async function applyGroupDetail(
   const [existing = null] = await listPageDmThreadListStates(tx, { platformAccountId: input.pageId, platformConversationIds: [groupId] });
   const resolved = resolveGroupDetail({ detail: input.detail, existing, pageAccountId, now: input.now });
   const partner = resolved.partnerPlatformUserId;
+  if (existing === null && partner === null) {
+    return {
+      followups: [],
+      counters: { detail_not_a_chat: 1 },
+      result: { groupId, threadId: null, created: false, notAChat: true, type: input.detail.type, members: resolved.members },
+    };
+  }
   const fanMap = partner === null
     ? new Map<string, number>()
     : await upsertHydratedFansForPage(tx, { platformAccountId: input.pageId, accounts: [], unverifiedIds: [partner] });
@@ -493,7 +505,7 @@ async function applyGroupDetail(
       created: written.inserted,
       partner: written.partnerPlatformUserId,
       detailPartner: partner,
-      members: nonPageMembers(input.detail.users, pageAccountId).length,
+      members: resolved.members,
     },
   };
 }
@@ -600,7 +612,12 @@ async function replayConversationList(observation: ReplayObservation, ctx: Repla
  * Replay of a legacy `group_detail` observation: a body legacy refused (kept
  * as `{contractAccepted: false, raw}`) is refused by the new contract too; an
  * accepted one names a thread of the page whose stored partner is the
- * detail's single non-page member (or the row changed later).
+ * detail's single non-page member (or the row changed later). Without a
+ * thread: a detail that is no direct chat matches (neither side stores one);
+ * a direct chat legacy's socket-hint path journaled and deferred on purpose
+ * (its own `membership_pending` record of the group) is legacy's gap — it
+ * stored nothing, the engine's `.find` creates the thread (D5); any other is
+ * `thread_missing`.
  */
 async function replayGroupDetail(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
   const payload = recordOf(observation.payload);
@@ -617,8 +634,15 @@ async function replayGroupDetail(observation: ReplayObservation, ctx: ReplayCont
   const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
   if (facts?.externalId == null) return { kind: "not_replayable", reason: "page_account_unknown" };
   const [state] = await listPageDmThreadListStates(ctx.db, { platformAccountId: ctx.pageId, platformConversationIds: [parsed.value.id] });
-  if (state === undefined) return { kind: "mismatch", reason: "thread_missing", detail: { groupId: parsed.value.id } };
   const members = nonPageMembers(parsed.value.users, facts.externalId);
+  if (state === undefined) {
+    if (members.length !== 1) {
+      return { kind: "match", detail: { notAChat: true, members: members.length, type: parsed.value.type }, via: [DETAIL_NOT_A_CHAT] };
+    }
+    const deferred = await listLegacyWsHintMembershipPending(ctx.db, { pageId: ctx.pageId, groupRefs: [parsed.value.id] });
+    if (deferred.includes(parsed.value.id)) return { kind: "not_replayable", reason: LEGACY_WS_HINT_MEMBERSHIP_PENDING };
+    return { kind: "mismatch", reason: "thread_missing", detail: { groupId: parsed.value.id } };
+  }
   const partner = members.length === 1 ? members[0]! : null;
   if (partner !== null && state.partnerPlatformUserId !== partner && !changedSince(state, observation.receivedAt)) {
     return { kind: "mismatch", reason: "partner_differs", detail: { groupId: parsed.value.id } };
@@ -958,7 +982,13 @@ const findModule: ResourceModule = {
         pageId: input.pageId, now: input.now, key: FIND_KEY, detail: input.parsed as FanslyGroupDetail, followupClass: "urgent",
       });
       return {
-        work: { satisfiesRevision: true, close: "done", closeReason: "found_by_detail", cursor: { step: "detail" }, result: applied.result },
+        work: {
+          satisfiesRevision: true,
+          close: "done",
+          closeReason: applied.result.notAChat === true ? "not_a_chat" : "found_by_detail",
+          cursor: { step: "detail" },
+          result: applied.result,
+        },
         followups: applied.followups,
         counters: applied.counters,
       };
@@ -1017,7 +1047,12 @@ const detailModule: ResourceModule = {
       pageId: input.pageId, now: input.now, key: DETAIL_KEY, detail: input.parsed as FanslyGroupDetail, followupClass: "planned",
     });
     return {
-      work: { satisfiesRevision: true, close: "done", closeReason: "detail_applied", result: applied.result },
+      work: {
+        satisfiesRevision: true,
+        close: "done",
+        closeReason: applied.result.notAChat === true ? "not_a_chat" : "detail_applied",
+        result: applied.result,
+      },
       followups: applied.followups,
       counters: applied.counters,
     };

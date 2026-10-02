@@ -76,6 +76,29 @@ function deletionsCte(scope: FanslyWsDeletionScope): SQL {
     )`;
 }
 
+/** Which of these messages of one group carry an exact deletion receipt
+ *  (the fact `deletionsCte` reads, through the partial index
+ *  fansly_ws_hint_exact_delete). Read-only: the shadow report's replay judges
+ *  rows a journal-only read served moments before Fansly deleted them. */
+export async function listFanslyWsExactDeletedMessageRefs(
+  db: Database,
+  input: { pageId: number; groupRef: string; messageRefs: readonly string[] },
+): Promise<string[]> {
+  const refs = [...new Set(input.messageRefs)];
+  if (refs.length === 0) return [];
+  const result = await db.execute<{ messageRef: string }>(sql`
+    select distinct r.message_ref as "messageRef"
+      from fansly_ws_hint_receipts r
+     where r.page_id = ${input.pageId}
+       and r.group_ref = ${input.groupRef}
+       and r.message_ref = any(${sql.param(refs)}::text[])
+       and r.outcome = 'mutation_debt'
+       and r.generation is not null
+     order by 1
+  `);
+  return result.rows.map((row) => row.messageRef);
+}
+
 /** Hot rows still live for an exact deletion. Joined through the
  * (account, message) index, then checked against the thread's native group. */
 const hotTargetsFrom = sql`

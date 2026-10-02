@@ -537,6 +537,39 @@ describe("dm-conversations.find and .detail", () => {
     expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
   });
 
+  it("a group detail that is no direct chat (the page's own mass-message container) creates nothing (D5)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const at = NOW_MS - 2 * HOUR;
+    await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: at, newestStored: messageOf(1) }]);
+    const fansBefore = await countRows(testDb.pool, "select count(*)::int as n from fans");
+    // Production shape (lilly-1/lilly-2): type 3, the page alone, recipients
+    // lists, the page's own broadcast (type 3, correlated to the group) as head.
+    const container = {
+      ...groupDetail(9, [], { id: messageOf(9, 3), atMs: NOW_MS - 60_000, senderId: OWN_ID }),
+      type: 3,
+      groupFlags: 62,
+      recipients: [{ id: "920000000000000001", type: 30001 }],
+    };
+    container.lastMessage = { ...container.lastMessage!, type: 3, correlationId: groupOf(9) as never };
+    await makeDue(pageId, false, "dm-conversations.find", groupOf(9));
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "messaging.groups") return okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: at }]));
+      if (req.spec === "group.detail") return okResponse(container);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "dm-conversations.find"))?.state === "done");
+
+    expect(hits).toEqual(["messaging.groups", "group.detail"]);
+    expect(await workRow(pageId, "dm-conversations.find")).toMatchObject({
+      close_reason: "not_a_chat",
+      result: { groupId: groupOf(9), threadId: null, created: false, notAChat: true, type: 3, members: 0 },
+    });
+    expect(await thread(pageId, 9)).toBeNull();
+    expect(await countRows(testDb.pool, "select count(*)::int as n from fans")).toBe(fansBefore);
+    expect(await subjectsOf(pageId, "dm-messages.head")).toEqual([]);
+    expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
+  });
+
   it("a chat on the list head is found with one read, and only its own read is urgent", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");

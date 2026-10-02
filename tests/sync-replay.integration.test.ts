@@ -358,7 +358,13 @@ describe("every replay owner of the registry", () => {
     const diverged: Entry[] = [
       { kind: "account_me", payload: { account: { id: "300000000000000999", username: "other", displayName: null, createdAt: 0 } }, expect: mismatch("account_differs") },
       { kind: "dm_conversations", payload: retarget(list, "group_alpha", "group_omega"), expect: mismatch("threads_missing") },
-      { kind: "group_detail", payload: retarget(detail, "group_alpha", "group_omega"), expect: mismatch("thread_missing") },
+      // A direct chat (the page and one fan) legacy has no thread for and no
+      // deferral of its own on record.
+      {
+        kind: "group_detail",
+        payload: retarget(retarget(detail, "group_alpha", "group_omega"), "acct_creator", HARNESS_OWN_REF),
+        expect: mismatch("thread_missing"),
+      },
       {
         kind: "dm_messages",
         payload: { messages: dmPage.messages.map((message, index) => (index === 1 ? { ...message, content: "edited" } : message)) },

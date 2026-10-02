@@ -310,6 +310,10 @@ export function listPageUnchanged(items: readonly Pick<ResolvedListItem, "unchan
 /** What a group detail says about its thread (`.find`, `.detail`). */
 export interface ResolvedGroupDetail {
   groupId: string;
+  /** How many members the group has besides the page: a detail creates a
+   *  thread only for exactly one (D5) — the page's own mass-message container
+   *  (a type-3 group of the page alone) and a group of several are no chat. */
+  members: number;
   /** The single non-page member, or null (none, or several). */
   partnerPlatformUserId: string | null;
   writtenPartnerId: string | null;
@@ -342,7 +346,7 @@ export function resolveGroupDetail(input: {
       now: input.now,
     })
     : null;
-  return { groupId: input.detail.id, partnerPlatformUserId: partner, writtenPartnerId, head };
+  return { groupId: input.detail.id, members: members.length, partnerPlatformUserId: partner, writtenPartnerId, head };
 }
 
 // ── follow-ups: does a chat need a message read? ────────────────────────────

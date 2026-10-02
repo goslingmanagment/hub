@@ -16,6 +16,7 @@ import type { WsItem } from "./decode.ts";
 // | message created, own, mass broadcast                      | none (decision №9, D22)                        |
 // | message created, own, not a broadcast                     | dm-messages.head (normal window)               |
 // | message created, excluded thread                          | none (overlay "API недоступен", decision №8)   |
+// | message created, own, mass-message container (type 3)     | none (never a chat, [A6])                      |
 // | message created, unknown or unbound thread                | dm-conversations.find                          |
 // | message created, already confirmed by REST                | none                                           |
 // | message deleted                                           | dm-live.deletions (no HTTP)                    |
@@ -45,6 +46,16 @@ export const FANSLY_TRANSACTION_STATUS_SETTLED = 2;
  * broadcast whose marker changes.
  */
 export const OWN_BROADCAST_MESSAGE_TYPE = 2;
+/**
+ * [A6], measured on the production journal (to 2026-10-02): a mass message
+ * the page sends to lists also lands as an own `message.type = 3` in its
+ * container group — a type-3 group holding the page alone, its recipients
+ * lists, the frame's `correlationId` the group's own id, never on the list
+ * (one frame on each of lilly-1 and lilly-2 in 7 days; 4 of 174 legacy group
+ * details since 2026-09-17). It is no chat: an unknown or unbound one is
+ * never looked for.
+ */
+export const OWN_MASS_MESSAGE_CONTAINER_TYPE = 3;
 /** Rate fallback: more than this many own messages in distinct chats … */
 export const OWN_BROADCAST_FALLBACK_CHATS = 20;
 /** … within this window make every own message a broadcast (the peak of
@@ -105,6 +116,7 @@ function routeItem(item: WsItem, ctx: RouteContext): DemandSignal[] {
       const thread = ctx.thread(groupId);
       if (thread.excluded) return [];
       if (!thread.known || !thread.bound) {
+        if (item.isOwn && item.message.type === OWN_MASS_MESSAGE_CONTAINER_TYPE) return [];
         return [{ resource: "dm-conversations.find", subject: groupId, demand: { reason: "ws:message_unknown_chat" } }];
       }
       // A late frame of a message REST already confirmed: nothing to read.
