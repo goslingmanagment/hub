@@ -1937,8 +1937,8 @@ export const aiPersonaUpsertParamsSchema = z.object({
 export const aiPersonaUpsertBodySchema = z.object({
   displayName: z.string().min(1).max(120),
   systemBlock: z.string().min(1).max(50_000),
-  // Omitted keeps shipped clients on their transitional last-write-wins lane.
-  // null is create-only; a number is an optimistic active-revision update.
+  // Historical shape of the retired legacy write (aiPersonaUpsert answers 409
+  // whatever the body says). Owner writes use adminAiPersonaUpdateBodySchema.
   expectedVersion: z.number().int().positive().nullable().optional(),
 }).strict();
 
@@ -5652,12 +5652,16 @@ const baseRouteSchemas = {
     },
   },
   aiGatewayStream: {
-    auth: { kind: "apiKey" },
+    // A raw prompt sent on the agency's provider keys is owner content: no
+    // device token of any role reaches this route. Clients stream through
+    // aiFeatureStream, where the hub assembles the prompt itself.
+    auth: { kind: "owner-session" },
     tags: ["usage"],
-    summary: "Stream a chatter AI generation through the core gateway",
-    description: "Default-off ChatMuse gateway for desktop AI generations. The runtime route "
-      + "uses chatter device-token auth, validates the prompt-stream request contract, and must not "
-      + "reach provider network while the gateway flag is disabled.",
+    summary: "Stream a raw-prompt AI generation through the core gateway (owner session only)",
+    description: "Owner cookie session only. Client AI goes through "
+      + "`POST /api/v1/ai/features/:feature`, which builds the prompt in the hub; a device token "
+      + "of any role is refused here. The route validates the prompt-stream request contract and "
+      + "must not reach provider network while the gateway flag is disabled.",
     body: aiGatewayStreamBodySchema,
     response: {
       200: z.unknown(),
@@ -6995,13 +6999,18 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  // Legacy full-text persona routes. Persona prompts are owner content: all
+  // three are owner-session only, and the two writes are retired in favour of
+  // the versioned, audited admin lane (adminAiPersona*). Clients read
+  // aiPersonaCatalog, which never carries prompt text.
   aiPersonasList: {
-    auth: { kind: "apiKey" },
+    auth: { kind: "owner-session" },
     tags: ["usage"],
-    summary: "List kernel AI personas (the desktop picker's source)",
+    summary: "List active AI personas with full prompt text (legacy; owner session only)",
     response: {
       200: aiPersonasResponseSchema,
       401: errorResponseSchema,
+      403: errorResponseSchema,
     },
   },
   aiPersonaCatalog: {
@@ -7028,27 +7037,29 @@ const baseRouteSchemas = {
     },
   },
   aiPersonaUpsert: {
-    auth: { kind: "apiKey" },
+    auth: { kind: "owner-session" },
     tags: ["usage"],
-    summary: "Create or update a kernel AI persona",
+    summary: "Retired legacy persona write (owner session only; answers 409, use the admin persona routes)",
     params: aiPersonaUpsertParamsSchema,
     body: aiPersonaUpsertBodySchema,
     response: {
       200: aiPersonaSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
+      403: errorResponseSchema,
       409: errorResponseSchema,
     },
   },
   aiPersonaArchive: {
-    auth: { kind: "apiKey" },
+    auth: { kind: "owner-session" },
     tags: ["usage"],
-    summary: "Archive a kernel AI persona (soft retire)",
+    summary: "Retired legacy persona archive (owner session only; answers 409, use the admin persona routes)",
     params: aiPersonaUpsertParamsSchema,
     querystring: aiPersonaArchiveQuerySchema,
     response: {
       200: z.object({ archived: z.boolean(), version: z.number().int().positive() }),
       401: errorResponseSchema,
+      403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
     },

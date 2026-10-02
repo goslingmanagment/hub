@@ -189,11 +189,11 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — |
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
-| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `apiKey` | — | — |
+| POST | `/api/v1/ai/gateway/stream` | `aiGatewayStream` | `owner-session` | — | — |
 | GET | `/api/v1/ai/persona-catalog` | `aiPersonaCatalog` | `apiKey` | — | — |
-| GET | `/api/v1/ai/personas` | `aiPersonasList` | `apiKey` | — | — |
-| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `apiKey` | — | — |
-| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `apiKey` | — | — |
+| GET | `/api/v1/ai/personas` | `aiPersonasList` | `owner-session` | — | — |
+| DELETE | `/api/v1/ai/personas/:key` | `aiPersonaArchive` | `owner-session` | — | — |
+| PUT | `/api/v1/ai/personas/:key` | `aiPersonaUpsert` | `owner-session` | — | — |
 | GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — |
 | GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — |
 | GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — |

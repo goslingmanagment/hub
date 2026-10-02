@@ -2,6 +2,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { archiveAiPersona, upsertAiPersona } from "@agency_hub_core/db";
+import type { AiGatewayProvider } from "../apps/runtime/src/services/ai-gateway.ts";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -99,7 +100,7 @@ describe("AI persona owner administration", () => {
     await testDb?.stop();
   });
 
-  it("keeps full prompt text owner-only while both bearer forms receive metadata", async (context) => {
+  it("keeps full prompt text owner-session only while every bearer receives metadata", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -143,19 +144,23 @@ describe("AI persona owner administration", () => {
       ]);
       expect(catalog.body).not.toContain("SECRET");
 
-      const admin = await server.inject({
-        method: "GET",
-        url: "/api/v1/admin/ai/personas",
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(admin.statusCode, admin.body).toBe(403);
+      // Neither full-text lane admits a bearer: the console list was always
+      // owner-session, and the legacy list is since the persona cutover.
+      for (const url of ["/api/v1/admin/ai/personas", "/api/v1/ai/personas"]) {
+        const denied = await server.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(denied.statusCode, `${url} ${denied.body}`).toBe(403);
+        expect(denied.body).not.toContain("SECRET");
+      }
     }
 
-    const anonymous = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/ai/personas",
-    });
-    expect(anonymous.statusCode).toBe(401);
+    for (const url of ["/api/v1/admin/ai/personas", "/api/v1/ai/personas"]) {
+      const anonymous = await server.inject({ method: "GET", url });
+      expect(anonymous.statusCode, url).toBe(401);
+    }
     const anonymousMutation = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ai/personas",
@@ -167,49 +172,167 @@ describe("AI persona owner administration", () => {
     });
     expect(anonymousMutation.statusCode).toBe(401);
 
-    const legacyFullText = await server.inject({
-      method: "GET",
-      url: "/api/v1/ai/personas",
-      headers: { authorization: `Bearer ${chatterKey}` },
-    });
-    expect(legacyFullText.statusCode, legacyFullText.body).toBe(200);
-    expect(legacyFullText.body).toContain("SECRET ACTIVE PROMPT");
-    expect(legacyFullText.body).not.toContain("SECRET ARCHIVED PROMPT");
+    const leadCookie = await loginCookie("lead", "lead-secret");
+    for (const url of ["/api/v1/admin/ai/personas", "/api/v1/ai/personas"]) {
+      const lead = await server.inject({ method: "GET", url, headers: { cookie: leadCookie } });
+      expect(lead.statusCode, `${url} ${lead.body}`).toBe(403);
+    }
 
-    const lead = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/ai/personas",
-      headers: { cookie: await loginCookie("lead", "lead-secret") },
-    });
-    expect(lead.statusCode, lead.body).toBe(403);
-
+    const ownerCookie = await loginCookie("owner", "owner-secret");
     const owner = await server.inject({
       method: "GET",
       url: "/api/v1/admin/ai/personas",
-      headers: { cookie: await loginCookie("owner", "owner-secret") },
+      headers: { cookie: ownerCookie },
     });
     expect(owner.statusCode, owner.body).toBe(200);
     expect(owner.body).toContain("SECRET ACTIVE PROMPT");
     expect(owner.body).toContain("SECRET ARCHIVED PROMPT");
+
+    // The legacy list keeps its shape for the owner: active rows only.
+    const ownerLegacy = await server.inject({
+      method: "GET",
+      url: "/api/v1/ai/personas",
+      headers: { cookie: ownerCookie },
+    });
+    expect(ownerLegacy.statusCode, ownerLegacy.body).toBe(200);
+    expect(ownerLegacy.body).toContain("SECRET ACTIVE PROMPT");
+    expect(ownerLegacy.body).not.toContain("SECRET ARCHIVED PROMPT");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("keeps owner mutations read-only while the shipped legacy write lane remains open", async (context) => {
+  it("closes the legacy write lane: bearers 403, the owner 409 with a pointer, nothing written", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
-    const legacyKey = "legacy.persona";
-    const created = await server.inject({
-      method: "PUT",
-      url: `/api/v1/ai/personas/${legacyKey}`,
-      headers: { authorization: `Bearer ${chatterKey}` },
-      payload: {
-        displayName: "Legacy dotted key",
-        systemBlock: "legacy prompt",
-      },
+    const seeded = await upsertAiPersona(appContext.db, {
+      key: "custom:legacy-target",
+      displayName: "Target",
+      systemBlock: "original prompt",
+      expectedVersion: null,
     });
-    expect(created.statusCode, created.body).toBe(200);
-    expect(created.json()).toMatchObject({ key: legacyKey, version: 1 });
+
+    for (const token of [chatterKey, deviceToken]) {
+      const headers = { authorization: `Bearer ${token}` };
+      const create = await server.inject({
+        method: "PUT",
+        url: "/api/v1/ai/personas/custom:bearer-new",
+        headers,
+        payload: { displayName: "New", systemBlock: "bearer-created", expectedVersion: null },
+      });
+      expect(create.statusCode, create.body).toBe(403);
+      const overwrite = await server.inject({
+        method: "PUT",
+        url: `/api/v1/ai/personas/${seeded.key}`,
+        headers,
+        payload: { displayName: "Hijacked", systemBlock: "hijacked prompt" },
+      });
+      expect(overwrite.statusCode, overwrite.body).toBe(403);
+      const archive = await server.inject({
+        method: "DELETE",
+        url: `/api/v1/ai/personas/${seeded.key}`,
+        headers,
+      });
+      expect(archive.statusCode, archive.body).toBe(403);
+    }
+
+    const cookie = await loginCookie("owner", "owner-secret");
+    const ownerPut = await server.inject({
+      method: "PUT",
+      url: `/api/v1/ai/personas/${seeded.key}`,
+      headers: { cookie },
+      payload: { displayName: "Owner legacy", systemBlock: "owner legacy prompt", expectedVersion: 1 },
+    });
+    expect(ownerPut.statusCode, ownerPut.body).toBe(409);
+    expect(ownerPut.json().message).toContain("/api/v1/admin/ai/personas");
+    const ownerDelete = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/ai/personas/${seeded.key}?expectedVersion=1`,
+      headers: { cookie },
+    });
+    expect(ownerDelete.statusCode, ownerDelete.body).toBe(409);
+
+    const rows = await testDb.pool.query<{ key: string; revision: string; archived: boolean; system_block: string }>(
+      "select key, revision::text, archived_at is not null as archived, system_block from ai_personas order by key",
+    );
+    expect(rows.rows).toEqual([
+      { key: seeded.key, revision: "1", archived: false, system_block: "original prompt" },
+    ]);
+    const audit = await testDb.pool.query("select 1 from audit_events where event_type like 'ai_persona.%'");
+    expect(audit.rowCount).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("closes the raw prompt gateway to bearers while the owner session still reaches it", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    let providerCalls = 0;
+    const provider: AiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        providerCalls += 1;
+        yield* [];
+        throw new Error("must not be reached");
+      },
+    };
+    appContext.aiGatewayProvider = provider;
+    const body = {
+      clientRequestId: "00000000-0000-4000-8000-000000000001",
+      feature: "fast-reply",
+      pageLabel: "no-such-page",
+      platform: "onlyfans",
+      platformUserId: "123",
+      conversationId: "123",
+      model: "anthropic:claude-sonnet-4-6",
+      reasoningEffort: "low",
+      isRegeneration: false,
+      prompt: {
+        systemBlocks: [{ text: "raw system", cache: "none" }],
+        userBlocks: [{ text: "raw user", cache: "none" }],
+      },
+    };
+    for (const token of [chatterKey, deviceToken]) {
+      const denied = await server.inject({
+        method: "POST",
+        url: "/api/v1/ai/gateway/stream",
+        headers: { authorization: `Bearer ${token}` },
+        payload: body,
+      });
+      expect(denied.statusCode, denied.body).toBe(403);
+    }
+    const lead = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai/gateway/stream",
+      headers: { cookie: await loginCookie("lead", "lead-secret") },
+      payload: body,
+    });
+    expect(lead.statusCode, lead.body).toBe(403);
+    // The owner passes the auth layer and lands on ordinary page resolution.
+    const owner = await server.inject({
+      method: "POST",
+      url: "/api/v1/ai/gateway/stream",
+      headers: { cookie: await loginCookie("owner", "owner-secret") },
+      payload: body,
+    });
+    expect(owner.statusCode, owner.body).toBe(404);
+    expect(providerCalls).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lets the owner create, edit and archive every listed key, legacy-created ones included", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    // A row the retired legacy API could create: its key is outside the admin
+    // create policy, and the admin path params must still reach it.
+    const legacyKey = "legacy.persona";
+    await upsertAiPersona(appContext.db, {
+      key: legacyKey,
+      displayName: "Legacy dotted key",
+      systemBlock: "legacy prompt",
+      expectedVersion: null,
+    });
 
     const cookie = await loginCookie("owner", "owner-secret");
     const updated = await server.inject({
@@ -222,48 +345,54 @@ describe("AI persona owner administration", () => {
         expectedVersion: 1,
       },
     });
-    expect(updated.statusCode, updated.body).toBe(409);
-    expect(updated.body).toContain("read-only");
+    expect(updated.statusCode, updated.body).toBe(200);
+    expect(updated.json()).toMatchObject({
+      key: legacyKey,
+      displayName: "Owner-managed legacy key",
+      systemBlock: "owner prompt",
+      version: 2,
+      status: "active",
+    });
 
     const archived = await server.inject({
       method: "DELETE",
       url: `/api/v1/admin/ai/personas/${legacyKey}?expectedVersion=2`,
       headers: { cookie },
     });
-    expect(archived.statusCode, archived.body).toBe(409);
+    expect(archived.statusCode, archived.body).toBe(200);
+    expect(archived.json()).toMatchObject({ key: legacyKey, version: 3, status: "archived" });
 
-    const unchanged = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/ai/personas",
-      headers: { cookie },
-    });
-    expect(unchanged.statusCode, unchanged.body).toBe(200);
-    expect(unchanged.json().personas).toContainEqual(expect.objectContaining({
-      key: legacyKey,
-      displayName: "Legacy dotted key",
-      version: 1,
-      status: "active",
-    }));
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("validates owner input, then rejects valid mutations without exposing admin routes to bearers", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-    const cookie = await loginCookie("owner", "owner-secret");
     const created = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ai/personas",
       headers: { cookie },
       payload: {
-        key: "custom:blocked",
-        displayName: "Blocked",
+        key: "custom:fresh",
+        displayName: "Fresh",
         systemBlock: "valid owner prompt",
       },
     });
-    expect(created.statusCode, created.body).toBe(409);
+    expect(created.statusCode, created.body).toBe(200);
+    expect(created.json()).toMatchObject({ key: "custom:fresh", version: 1, status: "active" });
 
+    const list = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json().personas).toEqual([
+      expect.objectContaining({ key: "custom:fresh", version: 1, status: "active" }),
+      expect.objectContaining({ key: legacyKey, version: 3, status: "archived" }),
+    ]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("validates owner input and keeps admin mutations closed to bearers and team leads", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("owner", "owner-secret");
     const whitespaceOnly = await server.inject({
       method: "POST",
       url: "/api/v1/admin/ai/personas",
@@ -275,12 +404,25 @@ describe("AI persona owner administration", () => {
       },
     });
     expect(whitespaceOnly.statusCode, whitespaceOnly.body).toBe(400);
+    const badKey = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key: "bad key!", displayName: "Bad", systemBlock: "prompt" },
+    });
+    expect(badKey.statusCode, badKey.body).toBe(400);
 
-    for (const token of [chatterKey, deviceToken]) {
+    const leadCookie = await loginCookie("lead", "lead-secret");
+    const principals = [
+      { authorization: `Bearer ${chatterKey}` },
+      { authorization: `Bearer ${deviceToken}` },
+      { cookie: leadCookie },
+    ];
+    for (const headers of principals) {
       const deniedMutation = await server.inject({
         method: "POST",
         url: "/api/v1/admin/ai/personas",
-        headers: { authorization: `Bearer ${token}` },
+        headers,
         payload: {
           key: "custom:denied",
           displayName: "Denied",
@@ -289,21 +431,166 @@ describe("AI persona owner administration", () => {
       });
       expect(deniedMutation.statusCode, deniedMutation.body).toBe(403);
     }
+    const rows = await testDb.pool.query("select 1 from ai_personas");
+    expect(rows.rowCount).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("changes the opaque definition identity only when exact definition bytes change", async (context) => {
+  it("keeps create-only strict and never resurrects an archived tombstone", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
-    const key = "custom:definition-identity";
-    const write = (systemBlock: string) => server!.inject({
-      method: "PUT",
-      url: `/api/v1/ai/personas/${key}`,
-      headers: { authorization: `Bearer ${chatterKey}` },
-      payload: { displayName: "Definition Identity", systemBlock },
+    const cookie = await loginCookie("owner", "owner-secret");
+    const key = "custom:tombstone";
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key, displayName: "Tombstone regression", systemBlock: "Must remain archived" },
     });
-    const read = async () => {
+    expect(created.statusCode, created.body).toBe(200);
+
+    const duplicate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key, displayName: "Duplicate", systemBlock: "second create" },
+    });
+    expect(duplicate.statusCode, duplicate.body).toBe(409);
+
+    const archived = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/ai/personas/${key}?expectedVersion=1`,
+      headers: { cookie },
+    });
+    expect(archived.statusCode, archived.body).toBe(200);
+
+    const catalog = await server.inject({
+      method: "GET",
+      url: "/api/v1/ai/persona-catalog",
+      headers: { authorization: `Bearer ${chatterKey}` },
+    });
+    expect(catalog.json().personas).toContainEqual({
+      status: "archived",
+      key,
+      displayName: "Tombstone regression",
+      version: 2,
+      definitionId: expect.any(String),
+    });
+    expect(catalog.body).not.toContain("Must remain archived");
+
+    // No lane brings it back: create is create-only against the tombstone, an
+    // update needs an ACTIVE revision, and the legacy LWW lane is retired.
+    const recreate = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key, displayName: "Stale desktop cache", systemBlock: "Must not unarchive" },
+    });
+    expect(recreate.statusCode, recreate.body).toBe(409);
+    const updateArchived = await server.inject({
+      method: "PUT",
+      url: `/api/v1/admin/ai/personas/${key}`,
+      headers: { cookie },
+      payload: { displayName: "Revive", systemBlock: "revived", expectedVersion: 2 },
+    });
+    expect(updateArchived.statusCode, updateArchived.body).toBe(409);
+    const archiveAgain = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/ai/personas/${key}?expectedVersion=2`,
+      headers: { cookie },
+    });
+    expect(archiveAgain.statusCode, archiveAgain.body).toBe(409);
+    const unknown = await server.inject({
+      method: "DELETE",
+      url: "/api/v1/admin/ai/personas/custom:never-existed?expectedVersion=1",
+      headers: { cookie },
+    });
+    expect(unknown.statusCode, unknown.body).toBe(404);
+
+    const state = await testDb.pool.query<{ revision: string; archived: boolean }>(
+      "select revision::text, archived_at is not null as archived from ai_personas where key = $1",
+      [key],
+    );
+    expect(state.rows).toEqual([{ revision: "2", archived: true }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("allows exactly one expected-version winner and rejects stale writers", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("owner", "owner-secret");
+    const key = "custom:cas";
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key, displayName: "CAS seed", systemBlock: "initial" },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+
+    const write = (displayName: string, systemBlock: string, expectedVersion: number) => server!.inject({
+      method: "PUT",
+      url: `/api/v1/admin/ai/personas/${key}`,
+      headers: { cookie },
+      payload: { displayName, systemBlock, expectedVersion },
+    });
+    const [left, right] = await Promise.all([
+      write("Left writer", "left won", 1),
+      write("Right writer", "right won", 1),
+    ]);
+    expect([left.statusCode, right.statusCode].sort()).toEqual([200, 409]);
+    const winner = (left.statusCode === 200 ? left : right).json() as {
+      displayName: string;
+      systemBlock: string;
+      version: number;
+    };
+    expect(winner.version).toBe(2);
+
+    const stale = await write("Stale retry", "must not overwrite the winner", 1);
+    expect(stale.statusCode, stale.body).toBe(409);
+
+    const staleArchive = await server.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/ai/personas/${key}?expectedVersion=1`,
+      headers: { cookie },
+    });
+    expect(staleArchive.statusCode, staleArchive.body).toBe(409);
+
+    const list = await server.inject({
+      method: "GET",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+    });
+    expect(list.json().personas).toEqual([
+      expect.objectContaining({
+        key,
+        displayName: winner.displayName,
+        systemBlock: winner.systemBlock,
+        version: 2,
+        status: "active",
+      }),
+    ]);
+
+    // Exactly the changes that happened are audited: one create, one update.
+    const audit = await testDb.pool.query<{ event_type: string }>(
+      "select event_type from audit_events where event_type like 'ai_persona.%' order by id",
+    );
+    expect(audit.rows.map((row) => row.event_type)).toEqual([
+      "ai_persona.created",
+      "ai_persona.updated",
+    ]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("audits every owner change with definition identities and no prompt text", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("owner", "owner-secret");
+    const key = "custom:audited";
+    const catalogEntry = async () => {
       const response = await server!.inject({
         method: "GET",
         url: "/api/v1/ai/persona-catalog",
@@ -315,17 +602,99 @@ describe("AI persona owner administration", () => {
         definitionId: string;
       };
     };
+    const update = (systemBlock: string, expectedVersion: number) => server!.inject({
+      method: "PUT",
+      url: `/api/v1/admin/ai/personas/${key}`,
+      headers: { cookie },
+      payload: { displayName: "Audited", systemBlock, expectedVersion },
+    });
 
-    expect((await write("first bytes")).statusCode).toBe(200);
-    const first = await read();
-    expect((await write("second bytes")).statusCode).toBe(200);
-    const second = await read();
-    expect(second.version).toBe(first.version + 1);
+    expect((await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/ai/personas",
+      headers: { cookie },
+      payload: { key, displayName: "Audited", systemBlock: "PROMPT BYTES ONE" },
+    })).statusCode).toBe(200);
+    const first = await catalogEntry();
+    expect((await update("PROMPT BYTES TWO", 1)).statusCode).toBe(200);
+    const second = await catalogEntry();
+    // Same bytes again: a new revision, but the same definition identity.
+    expect((await update("PROMPT BYTES TWO", 2)).statusCode).toBe(200);
+    const third = await catalogEntry();
     expect(second.definitionId).not.toBe(first.definitionId);
+    expect(third.definitionId).toBe(second.definitionId);
+    expect(third.version).toBe(3);
+    expect((await server.inject({
+      method: "DELETE",
+      url: `/api/v1/admin/ai/personas/${key}?expectedVersion=3`,
+      headers: { cookie },
+    })).statusCode).toBe(200);
 
-    // The shipped reconnect replay is a true no-op: revision, timestamp, and
-    // content identity all remain stable for identical bytes.
-    expect((await write("second bytes")).statusCode).toBe(200);
-    expect(await read()).toEqual(second);
+    const audit = await testDb.pool.query<{
+      event_type: string;
+      actor_user_id: number;
+      source: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `select event_type, actor_user_id::int as actor_user_id, source, metadata
+         from audit_events where event_type like 'ai_persona.%' order by id`,
+    );
+    const ownerId = await fixtureUserId(appContext, "owner");
+    expect(audit.rows).toEqual([
+      {
+        event_type: "ai_persona.created",
+        actor_user_id: ownerId,
+        source: "api",
+        metadata: {
+          personaKey: key,
+          displayName: "Audited",
+          version: 1,
+          previousVersion: null,
+          definitionId: first.definitionId,
+          previousDefinitionId: null,
+          systemBlockChars: "PROMPT BYTES ONE".length,
+        },
+      },
+      {
+        event_type: "ai_persona.updated",
+        actor_user_id: ownerId,
+        source: "api",
+        metadata: expect.objectContaining({
+          version: 2,
+          previousVersion: 1,
+          definitionId: second.definitionId,
+          previousDefinitionId: first.definitionId,
+        }),
+      },
+      {
+        event_type: "ai_persona.updated",
+        actor_user_id: ownerId,
+        source: "api",
+        metadata: expect.objectContaining({
+          version: 3,
+          previousVersion: 2,
+          definitionId: second.definitionId,
+          previousDefinitionId: second.definitionId,
+        }),
+      },
+      {
+        event_type: "ai_persona.archived",
+        actor_user_id: ownerId,
+        source: "api",
+        metadata: expect.objectContaining({
+          version: 4,
+          previousVersion: 3,
+          definitionId: second.definitionId,
+        }),
+      },
+    ]);
+    expect(JSON.stringify(audit.rows)).not.toContain("PROMPT BYTES");
+    // The audit choke point journals each change as an operator observation
+    // too, built from the same prompt-free metadata checked above.
+    const journal = await testDb.pool.query<{ producer: string; payload: unknown }>(
+      "select producer, payload from observations where kind like 'ai_persona.%' order by id",
+    );
+    expect(journal.rows.map((row) => row.producer)).toEqual(Array(4).fill("api:admin"));
+    expect(JSON.stringify(journal.rows)).not.toContain("PROMPT BYTES");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
