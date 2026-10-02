@@ -3,6 +3,7 @@ import {
   countSyncAttemptsByKey,
   listSyncAdmissions,
   listSyncRunAttempts,
+  listSyncWorkOpenAt,
   readFirstShadowAdmissions,
   readLedgerTransactionsCreatedAt,
   readLegacyMessageArrivals,
@@ -161,6 +162,19 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
       + "needs no volume on the page: the page's own demand rows hold the reads its frames imply against the shadow's, "
       + "so it is listed. Counterparts that never run in shadow by design — live-only keys, history requests — are "
       + "listed, not required.",
+  },
+  {
+    id: "A1.floor-scheduled",
+    text: "A legacy stream that would be not yet judgeable on a page (no shadow attempt there yet, the page's shadow "
+      + "history shorter than the stream's shortest key recurrence + 2 min) is scheduled instead and does not fail the "
+      + "floor's exception when every key of the stream that recurs by itself has a shadow work row on the page, open at "
+      + "the window end, on its schedule: due after the window end (a due row waits up to 2 min for its slot) and no later "
+      + "than the row's placement + the key's recurrence + 2 min; a row whose first read came after the window end counts "
+      + "when that read was admitted by the same bound. A key without such a row, a row due and not admitted by the window "
+      + "end, a quarantined row, or a row due later than its bound leaves the stream not yet judgeable (and lacking once "
+      + "the history passes the recurrence). Why: a one-hour window cannot observe a daily key's first run; the engine's "
+      + "schedule, with rule A1.poll-schedule failing a late poll, keeps the no-missing-coverage check without waiting a day "
+      + "(owner decision, 2026-10-02).",
   },
   {
     id: "A1.poll-schedule",
@@ -658,6 +672,10 @@ export interface CounterpartCheck {
    *  its shadow history is shorter than their shortest recurrence: not yet
    *  judgeable, so the exception fails (like an unknown rate). */
   pending: Array<{ ref: string; why: string }>;
+  /** A legacy stream that would be pending, whose every self-recurring key has
+   *  its shadow work row on the page on schedule at the window end, its first
+   *  run not due yet (rule A1.floor-scheduled; does not fail the exception). */
+  scheduled: Array<{ ref: string; why: string }>;
   /** A legacy stream only demand drives (no key recurs by itself) without a
    *  shadow attempt on the page: none was due by the page's own frames and
    *  applies, which its demand rows judge (listed, not required). */
@@ -673,6 +691,59 @@ export interface PageShadowHistory {
   attempts: ReadonlyMap<string, number>;
   /** That history's length; null without a shadow admission. */
   historyMs: number | null;
+  /** The page's shadow work rows open at the window end (`endMs`), per key
+   *  (rule A1.floor-scheduled). Absent: no stream is judged scheduled. */
+  schedule?: { endMs: number; rows: ReadonlyMap<string, readonly ScheduleRow[]> };
+}
+
+/** A key's shadow work row on a page, open at the window end (rule A1.floor-scheduled). */
+export interface ScheduleRow {
+  /** Its placement (`created_at`). */
+  createdMs: number;
+  /** Its due time as read: a read after the window end moves it. */
+  dueMs: number;
+  /** Its first attempt's admission; null before one. */
+  firstAdmittedMs: number | null;
+  quarantined: boolean;
+}
+
+/** Whether a key's work on the page is on its schedule at the window end. */
+export type KeySchedule = { onSchedule: true; what: string } | { onSchedule: false; fault: string };
+
+function iso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Rule A1.floor-scheduled for one self-recurring key with no shadow attempt on
+ * the page in its history: every row of the key open at the window end is on
+ * its schedule — due after the window end (within the admission slack of it),
+ * no later than its placement + the key's recurrence + the slack — or its
+ * first read, after the window end, was admitted by that bound. No row, a row
+ * due and not admitted by the window end, a quarantined row or a row due past
+ * its bound is off schedule.
+ */
+export function keyOnSchedule(input: { key: string; rows: readonly ScheduleRow[]; recurrenceMs: number; endMs: number }): KeySchedule {
+  if (input.rows.length === 0) return { onSchedule: false, fault: `${input.key}: no shadow work row on the page at the window end` };
+  const what: string[] = [];
+  for (const row of input.rows) {
+    const dueByMs = row.createdMs + input.recurrenceMs + POLL_DUE_SLACK_MS;
+    const bound = `placed ${iso(row.createdMs)} + ${durationText(input.recurrenceMs)} + 2 min = ${iso(dueByMs)}`;
+    if (row.firstAdmittedMs !== null) {
+      if (row.firstAdmittedMs > dueByMs) {
+        return { onSchedule: false, fault: `${input.key}: its first read admitted ${iso(row.firstAdmittedMs)}, after its bound (${bound})` };
+      }
+      what.push(`${input.key} first read admitted ${iso(row.firstAdmittedMs)}, by its bound (${bound})`);
+      continue;
+    }
+    if (row.quarantined) return { onSchedule: false, fault: `${input.key}: its row is quarantined` };
+    if (row.dueMs + POLL_DUE_SLACK_MS < input.endMs) {
+      return { onSchedule: false, fault: `${input.key}: due ${iso(row.dueMs)}, not admitted by the window end` };
+    }
+    if (row.dueMs > dueByMs) return { onSchedule: false, fault: `${input.key}: due ${iso(row.dueMs)}, later than its bound (${bound})` };
+    what.push(`${input.key} due ${iso(row.dueMs)} (${bound})`);
+  }
+  return { onSchedule: true, what: what.join(" and ") };
 }
 
 function hoursText(ms: number): string {
@@ -687,7 +758,9 @@ function hoursText(ms: number): string {
  * on the page within its shadow history (rule A1.floor). Other pages' volume
  * never counts. Without an attempt yet, a page whose history is shorter than
  * the stream's shortest key recurrence (+ the admission slack) is not yet
- * judgeable, and past it lacks one. A stream only demand drives (the socket,
+ * judgeable — scheduled instead when every recurring key's row is on its
+ * schedule at the window end (rule A1.floor-scheduled, `keyOnSchedule`) —
+ * and past it lacks one. A stream only demand drives (the socket,
  * an apply, an owner's or the API's request) needs no volume: the page's
  * demand rows hold its frames' reads against the shadow's, so it is listed.
  */
@@ -697,7 +770,7 @@ export function legacyCounterparts(input: {
   specsByRef: ReadonlyMap<string, readonly ResourceSpec[]>;
   shadow: PageShadowHistory;
 }): CounterpartCheck {
-  const check: CounterpartCheck = { lacking: [], pending: [], onDemand: [], notInShadow: [] };
+  const check: CounterpartCheck = { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] };
   for (const [ref, attempts] of [...input.legacy].sort(([a], [b]) => a.localeCompare(b))) {
     if (attempts <= 0) continue;
     const specs = input.specsByRef.get(ref) ?? [];
@@ -715,7 +788,10 @@ export function legacyCounterparts(input: {
     if (shadow > 0) continue;
     const historyMs = input.shadow.historyMs;
     const history = historyMs === null ? "no shadow history" : `${hoursText(historyMs)} of shadow history`;
-    const periodic = steady.map((spec) => recurrenceMs(spec, input.page)).filter((ms): ms is number => ms !== null && ms > 0);
+    const periodic = steady.flatMap((spec) => {
+      const ms = recurrenceMs(spec, input.page);
+      return ms !== null && ms > 0 ? [{ key: spec.key, ms }] : [];
+    });
     if (periodic.length === 0) {
       check.onDemand.push({
         ref,
@@ -723,9 +799,27 @@ export function legacyCounterparts(input: {
       });
       continue;
     }
-    const dueWithinMs = Math.min(...periodic) + POLL_DUE_SLACK_MS;
+    const dueWithinMs = Math.min(...periodic.map((entry) => entry.ms)) + POLL_DUE_SLACK_MS;
     if (historyMs === null || historyMs < dueWithinMs) {
-      check.pending.push({ ref, why: `not yet judgeable: legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; its keys' first run is due within ${hoursText(dueWithinMs)} of the shadow's start` });
+      // Rule A1.floor-scheduled: the engine holds every recurring key's first
+      // run on its schedule, not yet due.
+      const plan = input.shadow.schedule;
+      const keys = historyMs === null || plan === undefined
+        ? null
+        : periodic.map((entry) => keyOnSchedule({ key: entry.key, rows: plan.rows.get(entry.key) ?? [], recurrenceMs: entry.ms, endMs: plan.endMs }));
+      if (keys !== null && keys.every((key) => key.onSchedule)) {
+        check.scheduled.push({
+          ref,
+          why: `legacy ${attempts} on its A2 basis, the shadow none yet in ${history} on the page; on its schedule: ${keys.map((key) => key.onSchedule ? key.what : "").join("; ")}`,
+        });
+        continue;
+      }
+      const off = keys === null ? [] : keys.flatMap((key) => key.onSchedule ? [] : [key.fault]);
+      check.pending.push({
+        ref,
+        why: `not yet judgeable: legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; its keys' first run is due within ${hoursText(dueWithinMs)} of the shadow's start`
+          + `${off.length === 0 ? "" : `; not on its schedule (rule A1.floor-scheduled): ${off.join("; ")}`}`,
+      });
     } else {
       check.lacking.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page` });
     }
@@ -1482,6 +1576,25 @@ async function legacyVolume(
     }
     return [pageId, { attempts, historyMs: from === undefined ? null : endMs - from.getTime() }];
   }));
+  // The rows of the keys that recur by themselves, open at the window end
+  // (rule A1.floor-scheduled: a stream whose first run is not yet due).
+  const recurring = [...new Set(FANSLY_RESOURCE_SPECS
+    .filter((spec) => runsIn(spec, true) && input.pages.some((page) => (recurrenceMs(spec, page) ?? 0) > 0))
+    .map((spec) => spec.key))];
+  const open = await listSyncWorkOpenAt(db, { pageIds, shadow: true, resources: recurring, at: input.window.end });
+  for (const [pageId, history] of shadowByPage) {
+    const rows = new Map<string, ScheduleRow[]>();
+    for (const row of open) {
+      if (row.pageId !== pageId) continue;
+      rows.set(row.resource, [...(rows.get(row.resource) ?? []), {
+        createdMs: row.createdAt.getTime(),
+        dueMs: row.dueAt.getTime(),
+        firstAdmittedMs: row.firstAdmittedAt?.getTime() ?? null,
+        quarantined: row.state === "quarantined",
+      }]);
+    }
+    shadowByPage.set(pageId, { ...history, schedule: { endMs, rows } });
+  }
   return { rows, byPage, shadowByPage, specsByRef };
 }
 

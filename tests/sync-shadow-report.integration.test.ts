@@ -257,7 +257,7 @@ describe("the shadow report (design §3.12)", () => {
 
     expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 43, violations: 0 }] });
     expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
-    expect(window.rules.map((rule) => rule.id)).toEqual(["A1.rate", "A1.ceiling", "A1.floor", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only"]);
+    expect(window.rules.map((rule) => rule.id)).toEqual(["A1.rate", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only"]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
     expect(report.summary).toContainEqual(expect.stringMatching(
@@ -266,6 +266,81 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
+  });
+
+  it("part A: a stream not yet run on the page is scheduled when its recurring key's work row is on schedule at the window end (rule A1.floor-scheduled)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    // A legacy fan earnings request 2 h before the window; the shadow's
+    // roster walk has not run on the page in its 1.5 h of history.
+    const run = await testDb.pool.query<{ id: string }>(
+      `insert into sync_runs (page_id, stream, source, outcome, started_at, finished_at, stats)
+       values ($1, 'fan_earnings', 'scheduled', 'succeeded', $2, $2, '{}'::jsonb) returning id`,
+      [page.pageId, at(-2 * 60 * MINUTE)],
+    );
+    await testDb.pool.query(
+      `insert into sync_http_attempts (page_id, sync_run_id, provider, stream, operation, logical_request_id, attempt_number, state, started_at, response_body_bytes)
+       values ($1, $2, 'fansly', 'fan_earnings', 'earnings.fan', 'request', 1, 'success', $3, 100)`,
+      [page.pageId, Number(run.rows[0]!.id), at(-2 * 60 * MINUTE)],
+    );
+    // The roster's row, placed at the shadow's start, due 20 h later: within
+    // its placement + 24 h + 2 min.
+    const roster = await testDb.pool.query<{ id: string }>(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, due_at)
+       values ($1, true, 'fan-earnings.roster', '', 'goal', 'planned', $2, $2::timestamptz + interval '20 hours') returning id`,
+      [page.pageId, at(-30 * MINUTE)],
+    );
+    // A row closed before the window end is not open at it.
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, due_at, state, closed_at, close_reason)
+       values ($1, true, 'fan-earnings.roster', 'old', 'goal', 'planned', $2, $2, 'cancelled', $3, 'test')`,
+      [page.pageId, at(-40 * MINUTE), at(-35 * MINUTE)],
+    );
+    const report = async () => {
+      const built = await buildShadowReport(ctx(), {
+        pages: await listSyncPages(db()),
+        registry: createStubRegistry(),
+        window: { start, end },
+        journal: null,
+        maxListed: 50,
+      });
+      return built;
+    };
+    const scheduled = await report();
+    expect(scheduled.window!.demand[0]!.floor.counterparts).toMatchObject({
+      lacking: [],
+      pending: [],
+      scheduled: [{
+        ref: "stream:fan_earnings",
+        why: `legacy 1 on its A2 basis, the shadow none yet in 1.5 h of shadow history on the page; on its schedule: fan-earnings.roster due ${
+          new Date(at(-30 * MINUTE).getTime() + 20 * 3_600_000).toISOString()} (placed ${at(-30 * MINUTE).toISOString()} + 24 h + 2 min = ${
+          new Date(at(-30 * MINUTE).getTime() + 24 * 3_600_000 + 2 * MINUTE).toISOString()})`,
+      }],
+    });
+    expect(scheduled.summary).toContainEqual(expect.stringMatching(/; scheduled, first run not yet due \(rule A1\.floor-scheduled\): stream:fan_earnings \(/));
+    expect(scheduled.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor-scheduled: /));
+    // Its due time passed inside the window and no read was admitted: not yet judgeable.
+    await testDb.pool.query(`update sync_work set due_at = $2 where id = $1`, [Number(roster.rows[0]!.id), at(30 * MINUTE)]);
+    const overdue = await report();
+    expect(overdue.window!.demand[0]!.floor.counterparts).toMatchObject({
+      scheduled: [],
+      pending: [{
+        ref: "stream:fan_earnings",
+        why: expect.stringMatching(new RegExp(`; not on its schedule \\(rule A1\\.floor-scheduled\\): fan-earnings\\.roster: due ${
+          at(30 * MINUTE).toISOString().replace(/\./g, "\\.")}, not admitted by the window end$`)),
+      }],
+    });
+    // Read after the window end by its bound (its due time moved on): on schedule again.
+    await testDb.pool.query(`update sync_work set due_at = $2 where id = $1`, [Number(roster.rows[0]!.id), new Date(end.getTime() + 30 * 3_600_000)]);
+    await shadowAttempt(page.pageId, { resource: "fan-earnings.roster", workClass: "planned", at: new Date(end.getTime() + 5 * MINUTE), workId: Number(roster.rows[0]!.id) });
+    const read = await report();
+    expect(read.window!.demand[0]!.floor.counterparts).toMatchObject({ pending: [], scheduled: [{ ref: "stream:fan_earnings" }] });
+    expect(read.window!.demand[0]!.floor.counterparts.scheduled[0]!.why)
+      .toContain(`fan-earnings.roster first read admitted ${new Date(end.getTime() + 5 * MINUTE).toISOString()}, by its bound`);
   });
 
   it("part B: replays newest first since a date and at least N per kind; a failing or writing replay costs only its verdict", async (context) => {

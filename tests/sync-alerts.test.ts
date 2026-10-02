@@ -47,6 +47,7 @@ import {
   type CounterpartCheck,
   type KeyRun,
   type RunAttempt,
+  type ScheduleRow,
 } from "../apps/runtime/src/sync/report/shadow-window.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6) as pure rules,
@@ -485,7 +486,7 @@ function periodic(firstMs: number, everyMs: number, untilMs: number): KeyRun[] {
 
 const shadowPage = (label: string, registryOverrides: Record<string, unknown> = {}) =>
   ({ pageId: 5, pageLabel: label, mode: "shadow" as const, registryOverrides });
-const NO_GAPS: CounterpartCheck = { lacking: [], pending: [], onDemand: [], notInShadow: [] };
+const NO_GAPS: CounterpartCheck = { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] };
 
 /**
  * lilly-2 in 2026-10-02 11:50–12:50: 20 poll requests, its daily follower
@@ -527,7 +528,7 @@ function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRu
 describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
   it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.ceiling", "A1.floor", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
+      "A1.rate", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
     ]);
     expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A1.ceiling")!.text).toContain("at most 100 an hour");
     for (const ref of Object.keys(LEGACY_REGIME_SINCE)) {
@@ -644,7 +645,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const demand = demandOfPage(shadowPage("lilly-2"), {
       window: WINDOW, observed, reads: undefined,
       facts: { runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:23Z") },
-      counterparts: { lacking: [], pending: [], onDemand: [], notInShadow: [{ ref: "sender:ws_connect", why: "live_only" }] },
+      counterparts: { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [{ ref: "sender:ws_connect", why: "live_only" }] },
     });
     expect(demand.steadyStateRaw).toBe(206);
     // 20 + 186/24 + 152/24 + 2/6 + 11/24 + 1/22 + 6/24 + 2/24 + 1/6
@@ -690,7 +691,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     expect(missed.floor).toMatchObject({ below: true, holds: false, outside: ["dm-messages.head"] });
     expect(missed.passes).toBe(false);
     // Below the floor with a legacy stream the shadow never matched.
-    const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }], pending: [], onDemand: [], notInShadow: [] } });
+    const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }], pending: [], scheduled: [], onDemand: [], notInShadow: [] } });
     expect(lacking.floor).toMatchObject({ below: true, holds: false });
     expect(lacking.passes).toBe(false);
   });
@@ -888,6 +889,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     expect(legacyCounterparts({ page: shadowPage("ari-1"), legacy, specsByRef, shadow })).toEqual({
       lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }],
       pending: [],
+      scheduled: [],
       onDemand: [],
       notInShadow: [{ ref: "sender:media_download", why: "live_only" }, { ref: "sender:targeted_backfill", why: "history_requests" }],
     });
@@ -906,7 +908,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     const legacy = new Map([["stream:fan_earnings", 29]]);
     const check = (attempts: Map<string, number>, historyMs: number | null) =>
       legacyCounterparts({ page: shadowPage("lilly-1"), legacy, specsByRef, shadow: { attempts, historyMs } });
-    expect(check(new Map([["fan-earnings.roster", 2]]), 4.5 * HOUR)).toEqual({ lacking: [], pending: [], onDemand: [], notInShadow: [] });
+    expect(check(new Map([["fan-earnings.roster", 2]]), 4.5 * HOUR)).toEqual({ lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] });
     // lilly-1 4.5 h into shadow, its daily roster walk not yet due: not yet judgeable.
     expect(check(new Map(), 4.5 * HOUR)).toEqual({
       lacking: [],
@@ -914,6 +916,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
         ref: "stream:fan_earnings",
         why: "not yet judgeable: legacy 29 on its A2 basis, the shadow none in 4.5 h of shadow history on the page; its keys' first run is due within 24.03 h of the shadow's start",
       }],
+      scheduled: [],
       onDemand: [],
       notInShadow: [],
     });
@@ -930,7 +933,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
       specsByRef: new Map(["stream:dm_messages", "sender:ws_hint"].map((ref) => [ref, specsOf(ref)] as const)),
       shadow: { attempts: new Map([["dm-conversations.head", 6]]), historyMs: 2.69 * HOUR },
     });
-    expect(dm).toMatchObject({ lacking: [], pending: [] });
+    expect(dm).toMatchObject({ lacking: [], pending: [], scheduled: [] });
     expect(dm.onDemand.map((entry) => entry.ref)).toEqual(["sender:ws_hint", "stream:dm_messages"]);
     expect(dm.onDemand[1]!.why).toBe("legacy 1 on its A2 basis; only demand drives dm-messages.head, dm-messages.catchup, fan-profiles.probe, "
       + "none in 2.69 h of shadow history on the page (its demand rows judge the page's frames)");
@@ -944,6 +947,74 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     expect(judge(check(new Map([["fan-earnings.roster", 2]]), 4.5 * HOUR))).toMatchObject({ floor: { below: true, holds: true }, passes: true });
     expect(judge(check(new Map(), 4.5 * HOUR))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
     expect(judge(check(new Map(), 25 * HOUR))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
+  });
+
+  it("rule A1.floor-scheduled: a stream whose recurring keys' rows are on schedule at the window end is scheduled; a missing, overdue or late row leaves it not yet judgeable", () => {
+    // lilly-1 in 11:50–12:50, 2.67 h into shadow: 29 legacy fan_earnings
+    // requests, its daily roster walk not run yet on the page.
+    const specsByRef = new Map(["stream:fan_earnings", "stream:stats_snapshot"].map((ref) => [ref, specsOf(ref)] as const));
+    const placed = T("2026-10-02T10:09:40Z");
+    const row = (extra: Partial<ScheduleRow> = {}): ScheduleRow => ({ createdMs: placed, dueMs: T("2026-10-03T09:40:00Z"), firstAdmittedMs: null, quarantined: false, ...extra });
+    const check = (rows: Record<string, ScheduleRow[]>, legacy = new Map([["stream:fan_earnings", 29]])) => legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy,
+      specsByRef,
+      shadow: { attempts: new Map(), historyMs: WINDOW.endMs - T("2026-10-02T10:09:35Z"), schedule: { endMs: WINDOW.endMs, rows: new Map(Object.entries(rows)) } },
+    });
+    const bound = "placed 2026-10-02T10:09:40.000Z + 24 h + 2 min = 2026-10-03T10:11:40.000Z";
+    // Due tomorrow 09:40, within its placement + 24 h + 2 min: scheduled.
+    expect(check({ "fan-earnings.roster": [row()] })).toEqual({
+      lacking: [],
+      pending: [],
+      scheduled: [{
+        ref: "stream:fan_earnings",
+        why: `legacy 29 on its A2 basis, the shadow none yet in 2.67 h of shadow history on the page; on its schedule: fan-earnings.roster due 2026-10-03T09:40:00.000Z (${bound})`,
+      }],
+      onDemand: [],
+      notInShadow: [],
+    });
+    // Due a minute before the window end, waiting for its slot: still on schedule.
+    expect(check({ "fan-earnings.roster": [row({ dueMs: WINDOW.endMs - MINUTE })] }).scheduled).toHaveLength(1);
+    // Its first read came after the window end, by its bound: on schedule.
+    expect(check({ "fan-earnings.roster": [row({ dueMs: T("2026-10-04T09:40:00Z"), firstAdmittedMs: T("2026-10-02T13:40:00Z") })] }).scheduled).toHaveLength(1);
+    const pendingWhy = (rows: Record<string, ScheduleRow[]>, legacy?: Map<string, number>) => {
+      const result = check(rows, legacy);
+      expect(result.scheduled).toEqual([]);
+      expect(result.pending).toHaveLength(1);
+      return result.pending[0]!.why;
+    };
+    const notYet = "not yet judgeable: legacy 29 on its A2 basis, the shadow none in 2.67 h of shadow history on the page; its keys' first run is due within 24.03 h of the shadow's start; not on its schedule (rule A1.floor-scheduled): ";
+    // No row of the key: the engine holds no read of it.
+    expect(pendingWhy({})).toBe(`${notYet}fan-earnings.roster: no shadow work row on the page at the window end`);
+    // Due in the window and not admitted by its end: overdue.
+    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))
+      .toBe(`${notYet}fan-earnings.roster: due 2026-10-02T12:30:00.000Z, not admitted by the window end`);
+    // Due later than its placement + 24 h + 2 min: late.
+    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-03T10:30:00Z") })] }))
+      .toBe(`${notYet}fan-earnings.roster: due 2026-10-03T10:30:00.000Z, later than its bound (${bound})`);
+    // Its first read after the window end came past the bound: late.
+    expect(pendingWhy({ "fan-earnings.roster": [row({ firstAdmittedMs: T("2026-10-03T11:00:00Z") })] }))
+      .toBe(`${notYet}fan-earnings.roster: its first read admitted 2026-10-03T11:00:00.000Z, after its bound (${bound})`);
+    expect(pendingWhy({ "fan-earnings.roster": [row({ quarantined: true })] })).toBe(`${notYet}fan-earnings.roster: its row is quarantined`);
+    // Every recurring key of the stream needs its row: stats.daily's alone does not schedule the 22-hourly stats.hourly.
+    expect(pendingWhy({ "stats.daily": [row()] }, new Map([["stream:stats_snapshot", 11]])))
+      .toMatch(/^not yet judgeable: .*; not on its schedule \(rule A1\.floor-scheduled\): stats\.hourly: no shadow work row on the page at the window end$/);
+    // Past the shortest recurrence the schedule no longer helps: it lacks one.
+    expect(legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy: new Map([["stream:fan_earnings", 29]]),
+      specsByRef,
+      shadow: { attempts: new Map(), historyMs: 25 * HOUR, schedule: { endMs: WINDOW.endMs, rows: new Map([["fan-earnings.roster", [row()]]]) } },
+    })).toMatchObject({ lacking: [{ ref: "stream:fan_earnings" }], pending: [], scheduled: [] });
+    // The floor's exception: scheduled holds, a missing or overdue row fails.
+    const fixture = lilly2();
+    const judge = (counterparts: CounterpartCheck) => demandOfPage(shadowPage("lilly-1"), {
+      window: WINDOW, observed: fixture.observed, reads: undefined,
+      facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: null }, counterparts,
+    });
+    expect(judge(check({ "fan-earnings.roster": [row()] }))).toMatchObject({ floor: { below: true, holds: true }, passes: true });
+    expect(judge(check({}))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
+    expect(judge(check({ "fan-earnings.roster": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
   });
 
   it("the shadow's timeline estimate is the page size legacy measured (15 posts a page)", () => {

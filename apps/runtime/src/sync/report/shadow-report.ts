@@ -199,7 +199,8 @@ function demandLine(page: PageDemand): string {
     parts.push(page.inBand ? `band ${page.band.min}–${page.band.max}` : `above the band ${page.band.min}–${page.band.max}`);
   } else {
     const { counterparts } = page.floor;
-    const listed = `${counterparts.onDemand.length === 0 ? "" : `; on demand, none due on the page: ${counterparts.onDemand.map((entry) => entry.ref).join(", ")}`}`
+    const listed = `${counterparts.scheduled.length === 0 ? "" : `; scheduled, first run not yet due (rule A1.floor-scheduled): ${counterparts.scheduled.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
+      + `${counterparts.onDemand.length === 0 ? "" : `; on demand, none due on the page: ${counterparts.onDemand.map((entry) => entry.ref).join(", ")}`}`
       + `${counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`;
     parts.push(page.floor.holds === true
       ? `below ${page.band.min}: the floor's exception holds (rule A1.floor: every modelled resource at its expectation, every legacy stream with a shadow counterpart on the page${listed})`
