@@ -36,9 +36,45 @@ export const FANSLY_SEND_GUARD_CLOSED_SUBKEY = "send_guard_closed";
 /** Plan §2.4/§10: two sends of one page closer than the pause setting. Must
  * never happen; the latch stays open for an hour after the last one seen. */
 export const FANSLY_PACE_VIOLATION_SUBKEY = "pace_violation";
+/** Plan §10, design §9.6: the Fansly Sync Engine's five alerts, one subKey
+ * each under the kind `fansly_sync_engine` (0233). 1–4 are page-scoped, 5
+ * (`process`) is global. */
+export const SYNC_ENGINE_ALERT_SUBKEYS = ["page_stopped", "live_degraded", "freshness", "stuck", "process"] as const;
+export type SyncEngineAlertSubKey = (typeof SYNC_ENGINE_ALERT_SUBKEYS)[number];
+/** Alert 1's pace-violation latch: its own key (a refresh of `page_stopped`
+ * for a 429 must not overwrite it, and that latch resolves by itself once the
+ * page is clean), resolved only by the owner (`pnpm cli sync alerts ack`). */
+export const SYNC_ENGINE_PACE_VIOLATION_SUBKEY = "page_stopped:pace_violation";
+export type SyncEngineIncidentSubKey = SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY;
 
-type IncidentApp = Pick<AppContext, "db"> & {
-  logger: Pick<AppContext["logger"], "warn">;
+const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineIncidentSubKey, string> = {
+  page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
+  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than the pause setting",
+  live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
+  freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
+  stuck: "🚨 Fansly Sync Engine work stuck (a request or a planned resource without progress)",
+  process: "🚨 Fansly Sync Engine process silent — no sync heartbeat for 2 min while a page is in the engine",
+};
+
+const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineIncidentSubKey, string> = {
+  page_stopped: "Fansly Sync Engine page running again (10 min clean)",
+  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
+  live_degraded: "Fansly Sync Engine live path healthy again",
+  freshness: "Fansly Sync Engine freshness back within bounds",
+  stuck: "Fansly Sync Engine work progressing again",
+  process: "Fansly Sync Engine heartbeat back",
+};
+
+function syncEngineSubKey(subKey: string | null | undefined): SyncEngineIncidentSubKey | null {
+  return subKey !== null && subKey !== undefined && Object.hasOwn(SYNC_ENGINE_OPEN_TITLES, subKey)
+    ? subKey as SyncEngineIncidentSubKey
+    : null;
+}
+
+/** What a producer needs: the database and somewhere to say that an open or
+ *  resolve failed (any logger with a structured `warn`). */
+export type IncidentApp = Pick<AppContext, "db"> & {
+  logger: { warn(obj: object, msg?: string): void };
 };
 type CriticalIncidentApp = IncidentApp;
 
@@ -109,6 +145,12 @@ function openTitleForIncident(
   }
   if (input.kind === "sync_silent" && input.subKey === FANSLY_PACE_VIOLATION_SUBKEY) {
     return "🚨 Fansly pace violated: two requests of a page closer than the pause setting";
+  }
+  // The engine's alerts: one kind, a title per alert — the owner acts on the
+  // first line.
+  if (input.kind === "fansly_sync_engine") {
+    const subKey = syncEngineSubKey(input.subKey);
+    return subKey === null ? "🚨 Fansly Sync Engine alert" : SYNC_ENGINE_OPEN_TITLES[subKey];
   }
   switch (input.kind) {
     case "auth_blocked":
@@ -267,6 +309,10 @@ function resolveDetailForIncident(
         return "No Fansly pace violation for an hour";
       }
       return "Fansly sync chunks starting again";
+    case "fansly_sync_engine": {
+      const subKey = syncEngineSubKey(input.subKey);
+      return subKey === null ? "Fansly Sync Engine alert cleared" : SYNC_ENGINE_RESOLVE_DETAILS[subKey];
+    }
     case "ofapi_chargebacks_reconcile_failed":
       return "OFAPI chargebacks reconcile recovered";
     case "ofapi_link_stats_reconcile_failed":
@@ -786,6 +832,55 @@ export async function resolveFanslyPaceViolationIncident(
     subKey: FANSLY_PACE_VIOLATION_SUBKEY,
     recoveredAt: input.recoveredAt,
   });
+}
+
+/**
+ * Plan §10, design §9.6: open one of the engine's alerts. Page alerts (1–4)
+ * name the page; alert 5 is global (`pageId` null). `occurredAt` is the
+ * condition's own instant (a pace violation's send): an occurrence older than
+ * the owner's acknowledgement is suppressed by the latch's recovery guard.
+ */
+export async function notifySyncEngineIncident(
+  app: IncidentApp,
+  input: {
+    subKey: SyncEngineIncidentSubKey;
+    pageId: number | null;
+    pageLabel: string | null;
+    /** The condition, from the closed per-alert vocabulary (`rate_limit`, `handover_stuck`, …). */
+    detail: string;
+    errorSummary: string;
+    occurredAt: Date;
+  },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "fansly_sync_engine",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: input.pageId === null ? null : "fansly",
+    subKey: input.subKey,
+    errorCode: input.detail,
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveSyncEngineIncident(
+  app: IncidentApp,
+  input: { subKey: SyncEngineIncidentSubKey; pageId: number | null; pageLabel: string | null; recoveredAt: Date },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: "fansly_sync_engine",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: input.pageId === null ? null : "fansly",
+    subKey: input.subKey,
+    recoveredAt: input.recoveredAt,
+  });
+}
+
+/** The latch key of one engine alert (what `sync alerts` reads back). */
+export function syncEngineIncidentKey(input: { subKey: SyncEngineIncidentSubKey; pageId: number | null }): string {
+  return incidentKey({ kind: "fansly_sync_engine", platformAccountId: input.pageId, subKey: input.subKey });
 }
 
 type GlobalIncidentKind =

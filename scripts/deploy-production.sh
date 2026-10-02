@@ -553,6 +553,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # it runs unchanged; requests are accepted only on live pages, so in step 2
   # both stay empty.
   "0232_history_requests.sql"
+  # Fansly Sync Engine alerts (design §2.6, §9.6): one enum value,
+  # notification_incident_kind 'fansly_sync_engine'. The previous image never
+  # produces it. Only a latch opened before the rollback could reach it: its
+  # paging sweep skips that row with a warning (per-incident isolation) and its
+  # incidents list refuses to serialize it until the row is resolved or a
+  # forward deploy returns.
+  "0233_fansly_sync_engine_incident_kind.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

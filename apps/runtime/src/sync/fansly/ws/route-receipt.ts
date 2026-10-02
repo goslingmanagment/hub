@@ -16,14 +16,13 @@ import {
   type UpsertDemandInput,
   type WsRouterReceipt,
 } from "@agency_hub_core/db";
-import { FANSLY_WS_CAPTURE_KIND, wsObject } from "@agency_hub_core/shared";
 
 import type { ShadowFeed } from "../../engine/actor.ts";
 import type { CommitDeps } from "../../engine/commit.ts";
 import { noopMetrics, type Metrics } from "../../engine/ports.ts";
 import { demandToUpsert, type DemandSignal, type EngineResourceSpec } from "../../engine/resource.ts";
 import { fanslyResourceSpec } from "../registry.ts";
-import { decodeFanslyWsFrame, type WsItem } from "./decode.ts";
+import { decodeFanslyWsFrame, socketFrameOf, type WsItem } from "./decode.ts";
 import {
   isOwnBroadcastMarked,
   mergeDemandSignals,
@@ -227,12 +226,6 @@ interface PageWindow extends ShadowWsFeedState {
   generation: bigint;
 }
 
-/** The frame of a captured receipt, or null when it is not a socket frame. */
-function frameOf(payload: unknown): string | null {
-  const envelope = wsObject(payload);
-  return envelope?.codec === FANSLY_WS_CAPTURE_KIND && typeof envelope.frame === "string" ? envelope.frame : null;
-}
-
 /**
  * Route one shadow page's receipts past its cursor into shadow work (one
  * lap's worth). Generation-fenced: a foreign generation throws
@@ -297,7 +290,7 @@ export async function routeShadowReceipts(
         const payload = options.resolvePayload === undefined
           ? receipt.payload
           : await options.resolvePayload(d.db, receipt.observationId, { payload: receipt.payload, payloadRef: receipt.payloadRef });
-        frame = frameOf(payload);
+        frame = socketFrameOf(payload);
       } catch (error) {
         d.logger.warn({ pageId: d.pageId, observationId: receipt.observationId, err: errorClass(error) },
           "Fansly sync shadow: a WS receipt's body is unreadable; it is passed over");
@@ -364,6 +357,40 @@ export async function routeShadowReceipts(
   if (result.unreadable > 0) d.metrics.increment("sync_shadow_ws_receipts", { pageId: d.pageId, outcome: "unreadable" }, result.unreadable);
   if (result.routed > 0) d.metrics.increment("sync_shadow_ws_receipts", { pageId: d.pageId, outcome: "routed" }, result.routed);
   return result;
+}
+
+/**
+ * Offline routing (the shadow report's decision check, design §3.12 A3): the
+ * demand each of a page's decoded receipts would raise when routed at its own
+ * receipt time, against the page's thread and ledger facts as they stand now,
+ * with the broadcast rate fallback replayed in receipt order. Reads only.
+ */
+export async function routeReceiptsOffline(
+  db: Database,
+  input: { pageId: number; receipts: ReadonlyArray<{ atMs: number; items: readonly WsItem[] }> },
+): Promise<Array<{ atMs: number; signals: DemandSignal[] }>> {
+  if (input.receipts.length === 0) return [];
+  const window = new OwnBroadcastWindow();
+  const ordered = [...input.receipts].sort((a, b) => a.atMs - b.atMs).map((receipt) => {
+    for (const item of receipt.items) {
+      if (item.kind === "message_created" && item.isOwn) window.record(item.message.groupId, receipt.atMs);
+    }
+    return { ...receipt, fallback: unmarkedOwnMessages(receipt.items).length > 0 && window.activeAt(receipt.atMs) };
+  });
+  const ctx = await loadRouteContext(db, {
+    pageId: input.pageId,
+    nowMs: 0,
+    items: ordered.flatMap((receipt) => receipt.items),
+    ownBroadcast: () => false,
+  });
+  return ordered.map((receipt) => ({
+    atMs: receipt.atMs,
+    signals: routeWsItems(receipt.items, {
+      ...ctx,
+      nowMs: receipt.atMs,
+      ownBroadcastActive: (item) => isOwnBroadcastMarked(item) || receipt.fallback,
+    }),
+  }));
 }
 
 /**

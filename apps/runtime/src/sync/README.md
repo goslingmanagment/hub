@@ -26,7 +26,8 @@ sync/
     actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step and the no-HTTP outcomes
     shadow.ts                the shadow transport (no socket, no credentials)
-    alerts.ts, metrics.ts    plan §10
+    alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
+    metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
@@ -34,6 +35,7 @@ sync/
     ws/                      decode, router, the post-ack routing hook (live) and the shadow WS feed
     lib/                     chain rules, walk helpers
   requests/                  history requests, ETA, enqueue-and-wait
+  report/                    `sync shadow report`: part A (the live window), part B (the past journal)
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -220,6 +222,35 @@ Two deterministic errors stop more than their work: an identity error (`Platform
 `onOutcome` as `identity_mismatch` (page hold until new credentials, alerts 1 and 2), and a wrong transactions writer
 holds the resource file (30 min → 2 h → 6 h).
 
+## Alerts, metrics and the shadow report
+
+Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
+`live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
+transaction (a 429, a refused credential, another identity, a pace violation); `engine/alerts.ts` re-derives every
+condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
+view. A pace violation has its own latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the
+evaluator also re-reads the journal's new live sends, so a violation the capture path could not report still opens
+it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
+never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
+process cannot report its own death. `pnpm cli sync alerts status` shows what holds per page.
+
+The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
+vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families
+(confirmation lag, REST mismatches by field, money lag from a socket frame to the ledger, history requests and the
+ETA's fact over forecast). The ops sampler records a compact set every 5 minutes: aggregates per journal (`sync_*`
+for switched pages, `sync_shadow_*` for shadow ones) — per-page series would double the sample table for figures the
+page status already shows.
+
+`pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only):
+part A over the live hour in one repeatable-read transaction — demand against a computed expectation (poll periods
+plus the reads the hour's socket frames imply after coalescing; walks listed apart), the legacy engine's volume of
+the hour per stream and sender with the reason it differs, the live-path decisions (a fan message or a new ledger
+row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
+the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
+observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
+counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
+step-3 switch.
+
 ## Recipes
 
 | Change | Where |
@@ -236,3 +267,6 @@ holds the resource file (30 min → 2 h → 6 h).
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
 | One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
+| What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
+| An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
+| The shadow acceptance | `pnpm cli sync shadow report --window <start>/<end> --out <path>` (part B alone: `--part b`, outside 00:00–05:00 UTC) |

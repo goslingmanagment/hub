@@ -12,6 +12,10 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { sampleSyncEngineMetrics, syncMetricsDue } from "../sync/engine/metrics.ts";
+import { createFanslyRegistry } from "../sync/fansly/registry.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
+import { fanslyWsLivePayloadResolver } from "./fansly-ws/live-apply.ts";
 import {
   computeHealthFloorBacklogMs,
   computeQuarantineGaugeSamples,
@@ -319,6 +323,9 @@ export async function computeGoldenSignals(
   };
 }
 
+/** The blind-spot latch of the engine's families (`golden_signal_lag:global:sync_engine_metrics`). */
+export const SYNC_ENGINE_METRICS_PROBE = "sync_engine_metrics";
+
 export interface GoldenSignalRunResult {
   sampled: number;
   pruned: number;
@@ -364,8 +371,26 @@ export function resetGoldenSignalPruneTick() {
  *   backlog, so it carries the breach from here on. */
 export async function runGoldenSignalSample(
   app: Pick<AppContext, "db" | "config" | "logger">,
+  /** `syncEngine`: also record the Fansly Sync Engine's families (the worker
+   *  passes it every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`). */
+  options: { syncEngine?: boolean } = {},
 ): Promise<GoldenSignalRunResult> {
   const { samples, failedProbes } = await computeGoldenSignals(app);
+  // The Fansly Sync Engine's families (design §9.5, [A11]): hourly windows,
+  // recorded every few minutes. Threshold-free; a failed probe latches like
+  // any other blind spot.
+  if (options.syncEngine === true) {
+    try {
+      samples.push(...await sampleSyncEngineMetrics(app.db, {
+        registry: createFanslyRegistry(),
+        settingMs: (await loadEffectiveConfig(app.db, app.config)).fanslyDefaultDelayMs,
+        resolvePayload: fanslyWsLivePayloadResolver(app),
+      }));
+    } catch (error) {
+      app.logger.warn({ err: error }, "golden-signal Fansly sync engine probe failed");
+      failedProbes.push(SYNC_ENGINE_METRICS_PROBE);
+    }
+  }
   await insertOpsMetricSamples(app.db, samples);
   const pruned = pruneTick++ % PRUNE_EVERY_RUNS === 0
     ? await pruneOpsMetricSamples(app.db, RETENTION_DAYS)
@@ -502,7 +527,7 @@ export function startGoldenSignalWorker(
   boss: Pick<PgBoss, "work">,
 ): Promise<string> {
   return boss.work(OPS_METRICS_SAMPLE_QUEUE, { batchSize: 1 }, async () => {
-    const result = await runGoldenSignalSample(app);
+    const result = await runGoldenSignalSample(app, { syncEngine: syncMetricsDue(new Date()) });
     if (result.breaches.length > 0) {
       app.logger.warn({ breaches: result.breaches }, "golden-signal p95 over threshold");
     }

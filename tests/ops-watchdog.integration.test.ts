@@ -72,13 +72,13 @@ async function openIncidents(): Promise<string[]> {
 describe("ops watchdog (W5.2 / A53)", () => {
   it("opens nothing inside the boot grace window (deploy-restart guard)", async () => {
     const result = await runOpsWatchdogCheck(appStub(), { startedAtMs: Date.now() });
-    expect(result).toEqual({ bootGrace: true, schedulerFresh: false, samplerFresh: false, syncStalled: false });
+    expect(result).toEqual({ bootGrace: true, schedulerFresh: false, samplerFresh: false, syncStalled: false, syncEngineSilent: false });
     expect(await openIncidents()).toEqual([]);
   });
 
   it("opens both silences on an empty database, resolves each on recovery", async () => {
     const first = await runOpsWatchdogCheck(appStub(), { startedAtMs: PAST_BOOT_GRACE() });
-    expect(first).toEqual({ bootGrace: false, schedulerFresh: false, samplerFresh: false, syncStalled: false });
+    expect(first).toEqual({ bootGrace: false, schedulerFresh: false, samplerFresh: false, syncStalled: false, syncEngineSilent: false });
     expect(await openIncidents()).toEqual(["ops_sampler_silent", "scheduler_silent"]);
 
     // Scheduler heartbeat lands → scheduler_silent resolves, sampler stays.

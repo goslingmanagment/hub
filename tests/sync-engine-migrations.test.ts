@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FANSLY_SEND_GUARD_OWNER_ENGINES,
+  notificationIncidentKindEnum,
   HISTORY_DEPTH_KINDS,
   HISTORY_INPUT_KINDS,
   HISTORY_ITEM_REFUSALS,
@@ -30,8 +31,7 @@ import {
 } from "@agency_hub_core/db";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
-// each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration; the last
-// step-2 PR (0233) adds its own here.
+// each in ROLLBACK_COMPATIBLE_MIGRATIONS. One block per migration.
 
 function stripComments(text: string): string {
   return text
@@ -372,6 +372,26 @@ describe("0232_history_requests.sql", () => {
     const names = (table: unknown) => Object.values(table as Record<string, { name?: unknown }>).map((column) => column.name);
     expect(names(historyRequests)).toEqual(expect.arrayContaining(["request_ref", "estimate_at_submit", "items_terminal"]));
     expect(names(historyRequestItems)).toEqual(expect.arrayContaining(["anchor_upward_count", "fan_platform_user_id", "final"]));
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0233_fansly_sync_engine_incident_kind.sql", () => {
+  const migration = "0233_fansly_sync_engine_incident_kind.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const statements = topLevelStatements(stripComments(text));
+
+  it("adds one incident kind and nothing else", () => {
+    expect(statements).toEqual(["ALTER TYPE notification_incident_kind ADD VALUE IF NOT EXISTS 'fansly_sync_engine'"]);
+  });
+
+  it("is mirrored in drizzle, the repository union and the API contract", () => {
+    expect(notificationIncidentKindEnum.enumValues).toContain("fansly_sync_engine");
+    expect(readFileSync("packages/db/src/repositories/notifications.ts", "utf8")).toContain(`| "fansly_sync_engine"`);
+    expect(readFileSync("packages/contracts/src/routes.ts", "utf8")).toMatch(/notificationIncidentKindEnum = z\.enum\(\[[^\]]*"fansly_sync_engine"/);
   });
 
   it("allows application rollback after the additive migration", () => {
