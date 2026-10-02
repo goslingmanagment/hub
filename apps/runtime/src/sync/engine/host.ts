@@ -467,9 +467,9 @@ export class SyncEngineHost {
     // actor exists, stopped before the page's safe release. It is the page's
     // socket owner: `ws.connect` plans by its state, the transport sends the
     // Upgrade through its handshake (a test's `liveSocket` stands in for it).
-    const standIn = mode === "live" && this.#o.liveSocket !== undefined;
-    const ws = mode === "live" && !standIn ? this.#createWsSource(page, generation) : null;
-    const socket: LivePageSocket | null = standIn ? this.#o.liveSocket!(page) : ws;
+    const ws = mode === "live" ? this.#createWsSource(page, generation) : null;
+    const standIn = mode === "live" ? this.#o.liveSocket : undefined;
+    const socket: LivePageSocket | null = standIn === undefined ? ws : standIn(page);
     const socketRef: LivePageSocketRef = () => socket;
     try {
       const settingMs = await this.#pause.readSettingMs();
@@ -560,6 +560,8 @@ export class SyncEngineHost {
   }
 
   #createWsSource(page: SyncPageRow, generation: bigint): FanslyWsSource | null {
+    // TESTS ONLY: a stand-in owns the page's socket; no source competes for it.
+    if (this.#o.liveSocket !== undefined) return null;
     if (page.pageLabel === null) {
       this.#o.logger.error({ pageId: page.pageId }, "Fansly sync host: a live page without a label has no socket");
       return null;
