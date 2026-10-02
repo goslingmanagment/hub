@@ -751,6 +751,38 @@ describe("dm-messages.history", () => {
     });
     expect((await workRow(pageId, "dm-messages.history", 15))?.close_reason).toBe("history_complete");
   });
+
+  it("a short head page is never the start of a chat: only the empty page below it completes (owner decision №3, I10)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    // A new chat of 3 messages the hub holds nothing of: its head page is short.
+    const threadId = await seedThread(pageId, { n: 20 });
+    const registry = await registryFor(pageId);
+    await demand(pageId, "dm-messages.head", 20, [msg(3)]);
+    const head = await runLive(pageId, registry, serve(groupOf(20), range(1, 3)),
+      async () => (await workRow(pageId, "dm-messages.head", 20))?.state === "done");
+    expect(head.requests.map(beforeOf)).toEqual([null]);
+    expect(await thread(threadId)).toMatchObject({
+      head_confirmed_id: msg(3), contiguous_oldest_id: msg(1), contiguous_count: 3, history_state: "partial",
+      history_proof: null, history_proof_observation_id: null, stored_message_count: 3,
+      message_coverage_status: "partial_window", message_backfill_complete: false,
+    });
+    expect(await workRow(pageId, "dm-messages.head", 20)).toMatchObject({ close_reason: "confirmed" });
+
+    // A history request reads below the short page; the empty answer proves the start.
+    await demand(pageId, "dm-messages.history", 20, []);
+    const history = await runLive(pageId, registry, serve(groupOf(20), range(1, 3)),
+      async () => (await workRow(pageId, "dm-messages.history", 20))?.state === "done");
+    expect(history.requests.map(beforeOf)).toEqual([msg(1)]);
+    const proofAttempt = await testDb.pool.query<{ obs: string }>(
+      "select observation_id::text as obs from sync_attempts where page_id = $1 and resource = 'dm-messages.history'",
+      [pageId],
+    );
+    expect(await thread(threadId)).toMatchObject({
+      history_state: "complete", history_proof: "empty_page", history_proof_observation_id: proofAttempt.rows[0]!.obs,
+      contiguous_count: 3, message_coverage_status: "complete", message_backfill_complete: true,
+    });
+  });
 });
 
 describe("dm-messages in shadow and replay", () => {

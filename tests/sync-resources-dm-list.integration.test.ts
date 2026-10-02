@@ -19,9 +19,6 @@ import {
   createEngineRegistry,
   pollsFor,
   type EngineRegistry,
-  type EngineResourceSpec,
-  type RequestPlan,
-  type ResourceModule,
 } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
@@ -199,12 +196,8 @@ async function seedThreads(pageId: number, threads: readonly SeedThread[]): Prom
 
 /** A registry of every Fansly entry whose standing polls are parked far
  *  ahead, so only the work a test makes due runs. */
-async function quietRegistry(
-  pageId: number,
-  shadow: boolean,
-  specs: readonly EngineResourceSpec[] = FANSLY_RESOURCE_SPECS,
-): Promise<EngineRegistry> {
-  const registry = createEngineRegistry(specs);
+async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
+  const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
@@ -631,21 +624,14 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
 
   it("holds only list work: dm-messages.head and transactions.head still go out while the list waits (design §5.3, §3.8)", async (context) => {
     if (!testDb) return context.skip();
-    // `transactions.head` runs its own module (S2-07b). `dm-messages.head` has
-    // none yet (S2-08b): a stand-in sends one request on its own route, which
-    // pins the engine's side — the pick, the hold, the admission — for it.
-    const messagesStandIn: ResourceModule = {
-      plan: async (work) => ({
-        kind: "request",
-        request: { spec: "messages.page", params: { groupId: work.subject, before: null } } satisfies RequestPlan,
-      }),
-      apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    };
-    const specs = FANSLY_RESOURCE_SPECS.map((spec) =>
-      spec.key === "dm-messages.head" ? { ...spec, module: async () => messagesStandIn } : spec);
+    // Both run their own modules (S2-07b `transactions.head`, S2-08b
+    // `dm-messages.head`): what is pinned is the engine's side — the pick, the
+    // hold, the admission — and that each read still applies while held.
     const pageId = await seedPage("live");
-    const registry = await quietRegistry(pageId, false, specs);
+    const registry = await quietRegistry(pageId, false);
+    // The chat the message arrives in: bound, nothing stored, no chain yet.
+    const headAtMs = NOW_MS - 60_000;
+    await seedThreads(pageId, [{ n: 3, headId: messageOf(3), headAtMs }]);
 
     // The list read takes a 429.
     await makeDue(pageId, false, "dm-conversations.head");
@@ -668,15 +654,23 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
     );
     await makeDue(pageId, false, "dm-messages.head", groupOf(3));
     await makeDue(pageId, false, "transactions.head");
+    const message = {
+      id: messageOf(3), type: 1, dataVersion: 1, content: "hello", groupId: groupOf(3), senderId: fanOf(3),
+      correlationId: null, inReplyTo: null, inReplyToRoot: null, createdAt: Math.floor(headAtMs / 1000),
+      attachments: [], embeds: [], interactions: [], likes: [],
+    };
     const second = await drive(pageId, "live", registry, (req) => {
-      if (req.spec === "messages.page") return okResponse({ messages: [] });
+      if (req.spec === "messages.page") return okResponse({ messages: [message] });
       if (req.spec === "transactions.page") return okResponse({ total: 0, data: [] });
       throw new Error(`unexpected ${req.spec}`);
     }, async () => (await workRow(pageId, "dm-messages.head"))?.state === "done" &&
       (await workRow(pageId, "transactions.head"))?.state === "done");
 
-    // Both went out; the list did not.
+    // Both went out; the list did not. The message read applied: its head
+    // starts the chat's chain (one short page: partial, never complete).
     expect([...second.hits].sort()).toEqual(["messages.page", "transactions.page"]);
+    expect((await workRow(pageId, "dm-messages.head"))!.close_reason).toBe("confirmed");
+    expect(await thread(pageId, 3)).toMatchObject({ head_confirmed_id: messageOf(3), history_state: "partial", stored_message_count: 1 });
     const page = await testDb.pool.query<{ hold_kind: string | null; hold: { kind: string } }>(
       "select hold_kind, resource_holds -> 'dm-conversations' as hold from sync_pages where page_id = $1",
       [pageId],
