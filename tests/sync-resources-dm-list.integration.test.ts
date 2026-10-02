@@ -570,6 +570,27 @@ describe("dm-conversations.find and .detail", () => {
     expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
   });
 
+  it("a group detail naming several members besides the page creates nothing either (D5)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const fansBefore = await countRows(testDb.pool, "select count(*)::int as n from fans");
+    const group = groupDetail(10, [fanOf(10), fanOf(11)], { id: messageOf(10, 2), atMs: NOW_MS - 60_000, senderId: fanOf(10) });
+    await makeDue(pageId, false, "dm-conversations.detail", groupOf(10));
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "group.detail") return okResponse(group);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "dm-conversations.detail"))?.state === "done");
+
+    expect(hits).toEqual(["group.detail"]);
+    expect(await workRow(pageId, "dm-conversations.detail")).toMatchObject({
+      close_reason: "not_a_chat",
+      result: { groupId: groupOf(10), threadId: null, created: false, notAChat: true, type: 1, members: 2 },
+    });
+    expect(await thread(pageId, 10)).toBeNull();
+    expect(await countRows(testDb.pool, "select count(*)::int as n from fans")).toBe(fansBefore);
+    expect(await subjectsOf(pageId, "dm-messages.head")).toEqual([]);
+  });
+
   it("a chat on the list head is found with one read, and only its own read is urgent", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");
