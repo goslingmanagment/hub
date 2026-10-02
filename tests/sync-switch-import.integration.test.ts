@@ -184,6 +184,28 @@ describe("the switch's legacy import: holds (I.4)", () => {
     expect(handed.kind).toBe("handed");
     expect((handed as { lastCompletedAt: Date }).lastCompletedAt.getTime()).toBeGreaterThanOrEqual(legacyUntil.getTime());
   }, 60_000);
+
+  for (const [file, kind] of [["dm-conversations", "rate_limit_list"], ["media-stats", "rate_limit_media_stats"]] as const) {
+    it(`a rollback moves the legacy guard past an endpoint group's 429 hold in force (${kind}; legacy has no endpoint holds)`, async (context) => {
+      if (!testDb) return context.skip();
+      const page = await handoverPage(`import-holds-${file}`);
+      await importOnce(page);
+      const until = (await testDb.pool.query<{ until: Date }>(
+        `update sync_pages
+            set resource_holds = jsonb_build_object($2::text, jsonb_build_object(
+                  'until', clock_timestamp() + interval '2 minutes', 'step', 3, 'since', clock_timestamp(), 'kind', $3::text)),
+                owner_released_at = clock_timestamp(), owner_release_generation = owner_generation
+          where page_id = $1
+        returning (resource_holds -> $2::text ->> 'until')::timestamptz as until`,
+        [page.pageId, file, kind],
+      )).rows[0]!.until;
+      await ensureFanslyPageSendGuard(db(), page.pageId);
+      await testDb.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [page.pageId]);
+      const handed = await handFanslySendGuardBackToLegacy(db(), { pageId: page.pageId });
+      expect(handed.kind).toBe("handed");
+      expect((handed as { lastCompletedAt: Date }).lastCompletedAt.getTime()).toBeGreaterThanOrEqual(until.getTime());
+    }, 60_000);
+  }
 });
 
 describe("the switch's legacy import: chat breakers (I.3)", () => {
