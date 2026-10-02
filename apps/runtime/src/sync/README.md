@@ -36,7 +36,15 @@ sync/
   requests/                  history requests, ETA, enqueue-and-wait
 ```
 
-Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet.
+Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
+lists every resource from the start: an entry whose code has not landed has no `module`, so its work waits on
+`dependency` and counts `sync_not_implemented`.
+
+A resource never sends a second request inside its apply. When an apply learns it needs more (the profiles of new
+subscribers, a fresh `/account/me` counter, a follower reconcile), it returns that as demand: a follow-up work row,
+or a plan that waits on `dependency` and makes the other work due. Fan profiles are one batch walk per page
+(`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
+to 100 of them not looked up through the page within the day.
 
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses

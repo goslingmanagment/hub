@@ -1,3 +1,17 @@
+import {
+  buildFanslySubscriptionRows,
+  expectedFollowersReconcileTerminalPageCount,
+  findUnmappedFollowerIds,
+  FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS,
+  FOLLOWERS_RECONCILE_PAGE_SIZE,
+  FOLLOWERS_RECONCILE_RETRY_DELAY_MS,
+  isStatedEmptyActiveSnapshot,
+  SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS,
+  SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS,
+  SUBSCRIBERS_MAX_WALK_RESTARTS,
+  SUBSCRIBERS_WALK_RESTART_DELAY_MS,
+  uniqueFollowerIds,
+} from "./audience-rules.ts";
 import { readFollowersReconcileCompletion } from "./followers-reconcile-completion.ts";
 import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import { FOLLOWERS_RECONCILE_FLOOR_DEFERRAL, followersReconcileFloor } from "./followers-reconcile-floor.ts";
@@ -67,12 +81,10 @@ import {
   type SyncStream,
   type UpsertFanPageInput,
   type UpsertPageFollowInput,
-  type UpsertPageSubscriptionInput,
 } from "@agency_hub_core/db";
 import {
   FANSLY_MAPPER_VERSION,
   FanslyApiError,
-  mapFanslySubscriptionStatus,
   type FanslyAccount,
   type FanslyFollower,
 } from "@agency_hub_core/fansly";
@@ -80,7 +92,6 @@ import {
   compareFanslyFollowIds,
   fanslyFollowIdToDate,
   isFanslyDmMessageSyncExcluded,
-  millsFromInteger,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
@@ -216,34 +227,11 @@ const DM_MESSAGES_PARTNER_UNRESOLVABLE_FAILURE_STREAK_THRESHOLD = 3;
 // The deferral (or, with nothing left to wait for, quality hold) of a
 // dm_messages chunk whose only work was threads the breaker deferred.
 const FANSLY_DM_THREADS_DEFERRED = "fansly_dm_threads_deferred";
-const FOLLOWERS_RECONCILE_PAGE_SIZE = 100;
-const FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS = 2;
-const FOLLOWERS_RECONCILE_RETRY_DELAY_MS = 15 * 60_000;
-const SUBSCRIBERS_MAX_WALK_RESTARTS = 2;
-const SUBSCRIBERS_WALK_RESTART_DELAY_MS = 60_000;
-// Most current subscriptions a stated-empty active snapshot retires on its
-// own, each already lapsed with auto-renew off before the walk began. A share
-// cannot tell one-to-zero from ten-thousand-to-zero; any larger or unexplained
-// drop needs the account counter's confirmation below or keeps the
-// empty-first-page guard.
-const SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS = 5;
-// A stated zero the lapsed rule cannot explain is accepted when Fansly's own
-// /account/me subscriberCount, which the light and followers streams write to
-// the page hourly, also reads 0 and was verified no earlier than this long
-// before the walk began. The counter trails a lapse by about a day, which is
-// the confirmation pause.
-const SUBSCRIBERS_EMPTY_SNAPSHOT_COUNTER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_TRANSACTION_SCAN_BATCHES_PER_CHUNK = 4;
 const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-function expectedFollowersReconcileTerminalPageCount(observedCount: number) {
-  // `done` means the terminal page is short. An exact multiple therefore has
-  // one final empty page; every other count ends on its last partial page.
-  return Math.floor(observedCount / FOLLOWERS_RECONCILE_PAGE_SIZE) + 1;
-}
 
 function purchaseHistoryCaptureBlockError(
   capture: FanslyPurchaseHistoryCaptureClassification,
@@ -397,14 +385,6 @@ async function triggerFollowersReconcileAnomaly(
 
 type FollowerMappingStream = "followers" | "followers_reconcile";
 
-function uniqueFollowerIds(followers: FanslyFollower[]) {
-  return Array.from(new Set(
-    followers
-      .map((follower) => follower.followerId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0),
-  ));
-}
-
 async function hydrateFanslyFollowerRows(
   app: AppContext,
   input: {
@@ -478,13 +458,6 @@ async function hydrateFanslyFollowerRows(
     reusedIds: fallbackHydration.reusedIds,
     lookup: fallbackHydration.lookup,
   };
-}
-
-function findUnmappedFollowerIds(
-  sourceFollowerIds: string[],
-  fanMap: Map<string, number>,
-) {
-  return sourceFollowerIds.filter((id) => !fanMap.has(id));
 }
 
 async function recordFollowerMappingBlockedAnomaly(
@@ -1547,27 +1520,6 @@ function subscribersWalkFence(state: SubscribersCursorState) {
   return new Date(state.walkStartedAt);
 }
 
-/**
- * A zero the provider states outright: an accepted contract on the first and
- * terminal page of an active walk, an explicit active total of zero, and
- * nothing positive earlier in the same walk. An empty array alone (a missing
- * total, an absent or rejected contract) is not a statement of zero.
- */
-function isStatedEmptyActiveSnapshot(
-  state: SubscribersCursorState,
-  page: { contractAccepted?: boolean; total?: number | null; items: unknown[]; done: boolean },
-  totalChanged: boolean,
-) {
-  return state.mode === "active" &&
-    state.offset === 0 &&
-    state.observedCount === 0 &&
-    !totalChanged &&
-    page.contractAccepted === true &&
-    page.done &&
-    page.items.length === 0 &&
-    page.total === 0;
-}
-
 /** The stats trail of a revision whose walks could not be certified past the restart bound. */
 function subscribersWithheldStats(
   state: Pick<SubscribersCursorState, "activeWithheldReason" | "historyWithheldReason">,
@@ -1859,51 +1811,13 @@ export async function fanslySubscribersChunk(
         lookup: hydratedFans.lookup,
       });
 
-      const subscriptionInputs: UpsertPageSubscriptionInput[] = [];
-      const fanPageInputs: UpsertFanPageInput[] = [];
-      for (const item of page.items) {
-        const fanId = fanMap.get(item.subscriberId);
-        if (!fanId) {
-          continue;
-        }
-
-        const sourceCreatedAt = item.createdAt ? new Date(item.createdAt) : null;
-        const endsAt = item.endsAt ? new Date(item.endsAt) : null;
-        const autoRenew = item.autoRenew === null ? null : item.autoRenew === 1;
-        const canonicalStatus = mapFanslySubscriptionStatus(item.status);
-        subscriptionInputs.push({
-          platformSubscriptionId: item.id,
-          platformAccountId: input.pageContext.page.id,
-          fanId,
-          platformHistoryId: item.historyId,
-          subscriptionTierId: item.subscriptionTierId,
-          subscriptionTierName: item.subscriptionTierName,
-          subscriptionTierColor: item.subscriptionTierColor,
-          planId: item.planId,
-          rawStatus: item.status,
-          canonicalStatus,
-          priceMills: millsFromInteger(item.price),
-          renewPriceMills: millsFromInteger(item.renewPrice),
-          autoRenew,
-          billingCycleDays: item.billingCycle,
-          durationDays: item.duration,
-          renewDate: item.renewDate ? new Date(item.renewDate) : null,
-          sourceCreatedAt,
-          sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
-          endsAt,
-          lastSeenGeneration: state.generation,
-        });
-        if (state.mode === "active") {
-          fanPageInputs.push({
-            fanId,
-            platformAccountId: input.pageContext.page.id,
-            isSubscriber: true,
-            subscriberSince: sourceCreatedAt,
-            subscriptionExpiresAt: endsAt,
-            autoRenew,
-          });
-        }
-      }
+      const { subscriptions: subscriptionInputs, fanPages: fanPageInputs } = buildFanslySubscriptionRows({
+        platformAccountId: input.pageContext.page.id,
+        generation: state.generation,
+        mode: state.mode,
+        items: page.items,
+        fanMap,
+      });
 
       if (state.mode === "active") {
         await upsertPageSubscriptions(dbTx, subscriptionInputs);
