@@ -261,6 +261,15 @@ describe("the Fansly registry table", () => {
     }
   });
 
+  it("only the owner-protected walks take a page override of their cadence or tiers (owner decision №6)", () => {
+    const overridable = FANSLY_RESOURCE_SPECS.filter((spec) => spec.pageOverride !== undefined);
+    expect(overridable.map((spec) => [spec.key, spec.pageOverride])).toEqual([["catalog.vault", "cadence"], ["media-stats.walk", "tiers"]]);
+    for (const spec of overridable) {
+      expect(spec.ownerProtected, spec.key).toBe(true);
+      expect(spec.pageOverride === "cadence" ? spec.cadence : spec.tiers, spec.key).toBeDefined();
+    }
+  });
+
   it("the vault walk stands over the projected album list, re-checked daily (design §5.17, owner decision №6)", () => {
     const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue !== true);
     expect(standing.map((spec) => [spec.key, spec.kind, spec.standing!.recheckMs])).toEqual([["catalog.vault", "goal", 86_400_000]]);

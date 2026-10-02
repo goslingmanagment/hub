@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 
 import { Command, InvalidArgumentError } from "commander";
 
-import { listSyncPages } from "@agency_hub_core/db";
+import { listSyncPages, type SyncRegistryOverride, type SyncRegistryTierOverride } from "@agency_hub_core/db";
 
 import { createSyncContext, type SyncContext } from "./context.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
@@ -61,6 +61,25 @@ function parseJsonObject(value: string): Record<string, unknown> {
     throw new InvalidArgumentError(`Expected a JSON object, received "${value}"`);
   }
   return parsed as Record<string, unknown>;
+}
+
+/** `--tiers`: the age tiers as the registry writes them, e.g.
+ *  `[{"maxAgeDays":30,"everyMs":86400000},…,{"maxAgeDays":null,"everyMs":2592000000}]`. */
+function parseTiers(value: string): SyncRegistryTierOverride[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new InvalidArgumentError(`Expected a JSON list of {maxAgeDays, everyMs}, received "${value}"`);
+  }
+  const tiers = Array.isArray(parsed) ? parsed : [];
+  const valid = tiers.length > 0 && tiers.every((tier: unknown) => {
+    const record = typeof tier === "object" && tier !== null && !Array.isArray(tier) ? tier as Record<string, unknown> : null;
+    return record !== null && Object.keys(record).every((key) => key === "maxAgeDays" || key === "everyMs")
+      && typeof record.everyMs === "number" && (record.maxAgeDays === null || typeof record.maxAgeDays === "number");
+  });
+  if (!valid) throw new InvalidArgumentError(`Expected a JSON list of {maxAgeDays, everyMs}, received "${value}"`);
+  return tiers as SyncRegistryTierOverride[];
 }
 
 function collect(value: string, previous: string[] = []): string[] {
@@ -149,21 +168,37 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
 
   page
     .command("override")
-    .description("a page's period of one registry key, switch it off, or clear the override")
+    .description("a page's frequency of one registry key (a poll's period, the vault walk's periods, the media-stats tiers), switch it off, or clear the override")
     .requiredOption("--page <label>", "the Fansly page")
     .requiredOption("--resource <key>", "the registry key")
-    .option("--period-ms <n>", "the poll period for this page", parsePositiveMs)
+    .option("--period-ms <n>", "the poll period, or a cadence walk's incremental period (catalog.vault)", parsePositiveMs)
+    .option("--full-period-ms <n>", "a cadence walk's full-sweep period (catalog.vault)", parsePositiveMs)
+    .option("--tiers <json>", "a tiered walk's age tiers (media-stats.walk), as the registry lists them", parseTiers)
     .option("--disable", "stop this key on this page", false)
     .option("--clear", "back to the registry's value", false)
     .option("--owner-approved", "the owner approved a change of an owner-protected key (decision №6)", false)
-    .action(async (options: { page: string; resource: string; periodMs?: number; disable: boolean; clear: boolean; ownerApproved: boolean }) => {
-      const chosen = [options.periodMs !== undefined, options.disable, options.clear].filter(Boolean).length;
-      if (chosen !== 1) throw new Error("override takes exactly one of --period-ms, --disable, --clear");
-      const override = options.clear
+    .action(async (options: {
+      page: string;
+      resource: string;
+      periodMs?: number;
+      fullPeriodMs?: number;
+      tiers?: SyncRegistryTierOverride[];
+      disable: boolean;
+      clear: boolean;
+      ownerApproved: boolean;
+    }) => {
+      const periods = options.periodMs !== undefined || options.fullPeriodMs !== undefined;
+      const chosen = [periods, options.tiers !== undefined, options.disable, options.clear].filter(Boolean).length;
+      if (chosen !== 1) throw new Error("override takes exactly one of --period-ms/--full-period-ms, --tiers, --disable, --clear");
+      const override: SyncRegistryOverride | null = options.clear
         ? null
         : options.disable
           ? { enabled: false as const }
-          : { everyMs: options.periodMs! };
+          : options.tiers !== undefined
+            ? { tiers: options.tiers }
+            : options.periodMs !== undefined
+              ? { everyMs: options.periodMs, ...(options.fullPeriodMs === undefined ? {} : { fullEveryMs: options.fullPeriodMs }) }
+              : { fullEveryMs: options.fullPeriodMs! };
       await withContext(deps, async ({ db }) => {
         await changeSyncRegistryOverride(db, createFanslyRegistry(), {
           pageLabel: options.page,

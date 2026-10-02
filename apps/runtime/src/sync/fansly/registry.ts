@@ -44,18 +44,13 @@ export type WalkKind =
 /** A legacy stream or sender (maps/senders.md §3) an entry takes over. */
 export type LegacyRef = { stream: SyncStream } | { sender: FanslySendSource };
 
-export interface TierSpec { maxAgeDays: number | null; everyMs: number }
+export type { TierSpec } from "../engine/resource.ts";
 
 export interface ResourceSpec extends EngineResourceSpec {
   file: ResourceFile;
   /** What one work row is about. */
   subject: "page" | "thread" | "target" | "fan" | "post" | "media";
   triggers: readonly Trigger[];
-  /** Goals re-evaluated on a cadence (a walk's due subjects, a daily
-   *  incremental / weekly full sweep); polls use `period`. */
-  cadence?: { everyMs: number; fullEveryMs?: number };
-  /** Subject-queue walks by age tier (owner decision №6 for media stats). */
-  tiers?: readonly TierSpec[];
   /** A new walk starts at most this long after the previous one started
    *  (followers reconcile: the owner's daily floor). */
   minIntervalMs?: number;
@@ -522,9 +517,10 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // A standing walk over the albums the catalog projection lists: it looks
     // at them daily (an album whose head or count moved is walked again —
     // incremental daily) and an album walked a week ago is due again (full
-    // weekly); `catalog.fixed` makes it due as soon as it listed the albums.
+    // weekly; a page's override changes either period, owner decision №6);
+    // `catalog.fixed` makes it due as soon as it listed the albums.
     key: "catalog.vault", file: "catalog", subject: "page", kind: "goal", class: "planned",
-    triggers: ["poll", "apply:catalog.fixed"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY },
+    triggers: ["poll", "apply:catalog.fixed"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY }, pageOverride: "cadence",
     standing: { recheckMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "vault_walk", walk: "cursor-walk", http: true, evidence: true, fence: "none", ownerProtected: true,
     operations: ["vault.media"], replayKinds: ["vault_media"],
@@ -546,10 +542,12 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     // A standing walk over the `media_stats` queue the media-plane and
     // engagement projectors seed and dirty (design §4.3); it re-checks the
     // queue every 6 h when nothing is due (the legacy stream's cadence). The
-    // tiers are the queue's: ≤ 30 d daily, 31–90 d weekly, older monthly (D19).
+    // tiers are the queue's: ≤ 30 d daily, 31–90 d weekly, older monthly (D19);
+    // a page's override replaces them (owner decision №6, `--owner-approved`).
     key: "media-stats.walk", file: "media-stats", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue", "poll"],
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 90, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
+    pageOverride: "tiers",
     standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none", ownerProtected: true,
     operations: ["media.offer_stats"], replayKinds: ["media_offer_stats"], subjectQueue: true, queuePlane: "media_stats",

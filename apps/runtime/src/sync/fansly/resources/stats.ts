@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import type { CaptureCoverageProof, CaptureCoverageStatus, Database } from "@agency_hub_core/db";
+import type { CaptureCoverageProof, CaptureCoverageStatus, Database, SyncPageRow } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
@@ -48,14 +48,15 @@ import {
   type EarningsBackfillState,
 } from "../../../services/sync/fansly-stats.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import type {
-  ApplyInput,
-  ApplyResult,
-  LegacyImport,
-  RequestPlan,
-  ResourceModule,
-  ShadowResult,
-  StepPlan,
+import {
+  effectivePeriodMs,
+  type ApplyInput,
+  type ApplyResult,
+  type LegacyImport,
+  type RequestPlan,
+  type ResourceModule,
+  type ShadowResult,
+  type StepPlan,
 } from "../../engine/resource.ts";
 import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
@@ -78,7 +79,9 @@ import { fanslyResourceSpec } from "../registry.ts";
 // hourly (poll, 22 h [A15]): the trailing 25 hours at hourly buckets — the
 // only hours the route serves; a hole between two captures is written down
 // for good. The next capture is never planned further out than the legacy
-// 23-hour spacing two windows need to meet.
+// 23-hour spacing two windows need to meet — including the first one after
+// the switch, which the import makes due by legacy's last capture instead of
+// the poll row's random phase.
 //
 // backfill (goal: owner, or the switch for a page still in its first-enable
 // history): the trailing daily window once, then calendar month by month down
@@ -459,12 +462,25 @@ function parseHourlyCursor(value: unknown): StatsHourlyCursor {
   };
 }
 
-/** The next capture: the period ±10 %, never past the spacing two hourly
- *  windows need to meet (`HOURLY_CAPTURE_SPACING_MS`). */
-export function nextHourlyCaptureAt(now: Date, random: number): Date {
-  const everyMs = fanslyResourceSpec(HOURLY_KEY)?.period?.everyMs ?? 22 * HOUR_MS;
+/** The next capture: the page's period (the registry's 22 h unless the page
+ *  overrides it) ±10 %, never past the spacing two hourly windows need to
+ *  meet (`HOURLY_CAPTURE_SPACING_MS`). */
+export function nextHourlyCaptureAt(now: Date, random: number, page: Pick<SyncPageRow, "registryOverrides">): Date {
+  const everyMs = effectivePeriodMs(fanslyResourceSpec(HOURLY_KEY)!, page) ?? 22 * HOUR_MS;
   const jittered = everyMs * (0.9 + 0.2 * Math.min(Math.max(random, 0), 1));
   return new Date(now.getTime() + Math.round(Math.min(jittered, HOURLY_CAPTURE_SPACING_MS)));
+}
+
+/** When the first capture after the switch is due (A15): within the period
+ *  of legacy's last capture, so the two 25-hour windows meet — at once when
+ *  that is already past, or when legacy never captured. Never the poll row's
+ *  random phase, which could put the two captures up to 45 h apart. */
+export function firstHourlyCaptureAt(lastCapturedAt: string | null, now: Date): Date {
+  const lastMs = lastCapturedAt === null ? Number.NaN : Date.parse(lastCapturedAt);
+  if (!Number.isFinite(lastMs)) return now;
+  const everyMs = fanslyResourceSpec(HOURLY_KEY)?.period?.everyMs ?? 22 * HOUR_MS;
+  const dueMs = lastMs + Math.min(everyMs, HOURLY_CAPTURE_SPACING_MS);
+  return new Date(Math.min(Math.max(dueMs, now.getTime()), now.getTime() + HOURLY_CAPTURE_SPACING_MS));
 }
 
 const hourlyModule: ResourceModule = {
@@ -536,7 +552,7 @@ const hourlyModule: ResourceModule = {
         close: "done",
         closeReason: "hourly_captured",
         cursor: next,
-        nextDueAt: nextHourlyCaptureAt(input.now, Math.random()),
+        nextDueAt: nextHourlyCaptureAt(input.now, Math.random(), input.page),
       },
       followups: [],
       counters,
@@ -544,7 +560,10 @@ const hourlyModule: ResourceModule = {
   },
 
   async shadow(_work, _request, ctx): Promise<ShadowResult> {
-    return { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", nextDueAt: nextHourlyCaptureAt(ctx.now, Math.random()) }, followups: [] };
+    return {
+      work: { satisfiesRevision: true, close: "done", closeReason: "shadow", nextDueAt: nextHourlyCaptureAt(ctx.now, Math.random(), ctx.page) },
+      followups: [],
+    };
   },
 
   async importLegacy(tx, page): Promise<LegacyImport> {
@@ -554,7 +573,11 @@ const hourlyModule: ResourceModule = {
       lastServedBefore: legacy?.lastHourlyServedBefore ?? null,
       last: null,
     };
-    return { cursors: [{ resource: HOURLY_KEY, subject: "", cursor }], notes: { hourly: legacy === null ? "none" : "page_sync_cursors.stats_snapshot" } };
+    const dueAt = firstHourlyCaptureAt(cursor.lastCapturedAt, new Date());
+    return {
+      cursors: [{ resource: HOURLY_KEY, subject: "", cursor, dueAt }],
+      notes: { hourly: legacy === null ? "none" : "page_sync_cursors.stats_snapshot", hourlyDueAt: dueAt.toISOString() },
+    };
   },
 };
 

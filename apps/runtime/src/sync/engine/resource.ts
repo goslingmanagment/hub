@@ -44,6 +44,14 @@ export interface CoalesceSpec {
   fast?: { quietMs: number; maxMs: number };
 }
 
+/** One age tier of a subject-queue walk: items up to `maxAgeDays` old (null:
+ *  every older item) are due again `everyMs` after a visit. */
+export interface TierSpec { maxAgeDays: number | null; everyMs: number }
+
+/** A goal re-evaluated on a cadence: an incremental look every `everyMs`, a
+ *  full sweep every `fullEveryMs`. */
+export interface CadenceSpec { everyMs: number; fullEveryMs?: number }
+
 export interface SloSpec {
   /** When the result of urgent work is due (its deadline). */
   resultMs?: number;
@@ -78,6 +86,17 @@ export interface EngineResourceSpec {
   subjectQueue?: boolean;
   /** Owner decision №6: a frequency change needs the owner (`--owner-approved`). */
   ownerProtected?: true;
+  /** Goals re-evaluated on a cadence (a walk's due subjects, a daily
+   *  incremental / weekly full sweep); polls use `period`. */
+  cadence?: CadenceSpec;
+  /** Subject-queue walks by age tier (owner decision №6 for media stats). */
+  tiers?: readonly TierSpec[];
+  /** What a page override may change besides a poll's period (design §4.2;
+   *  owner decision №6: "changed per page by an override, without a
+   *  deploy"): the `cadence` periods or the age `tiers`. Set only where the
+   *  module reads them back through `effectiveCadence` / `effectiveTiers`, so
+   *  an override the owner CLI accepts is never one the engine ignores. */
+  pageOverride?: "cadence" | "tiers";
   /** A goal the page always keeps one open row of — a walk over a queue other
    *  writers fill (the `subject_refresh_state` planes the projectors seed,
    *  design §4.3): created like a poll row (random phase over `recheckMs`)
@@ -186,6 +205,8 @@ export interface ApplyInput {
   observation: { id: number; receivedAt: Date };
   /** The erasure fence is held (resources with `fence: 'dm_archive'`). */
   fenced: boolean;
+  /** The page as the apply transaction reads it (its registry overrides). */
+  page: SyncPageRow;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
 }
@@ -241,9 +262,13 @@ export type ReplayVerdict =
   | { kind: "not_replayable"; reason: string };
 
 /** What the step-3 switch carries over from the legacy engine for one key
- *  (design §11.1 C): the cursor its live work row starts from. */
+ *  (design §11.1 C): the cursor its live work row starts from, and — for a key
+ *  whose continuity hangs on when legacy last read (the hourly stats' 25-hour
+ *  window, A15) — when that row is first due. The switch's import writes
+ *  both; without `dueAt` the row keeps its own schedule (a poll's random
+ *  phase). A `dueAt` in the past means at once. */
 export interface LegacyImport {
-  cursors: ReadonlyArray<{ resource: ResourceKey; subject: string; cursor: unknown }>;
+  cursors: ReadonlyArray<{ resource: ResourceKey; subject: string; cursor: unknown; dueAt?: Date }>;
   /** Where each imported value came from (the switch report). */
   notes: Readonly<Record<string, unknown>>;
 }
@@ -356,18 +381,41 @@ export function createEngineRegistry(
   };
 }
 
-/** `sync_pages.registry_overrides[key]` as the engine reads it. */
-export type RegistryOverride = { everyMs: number } | { enabled: false };
+/** `sync_pages.registry_overrides[key]` as the engine reads it (the shapes
+ *  `setRegistryOverride` stores): a poll's period, a cadence goal's
+ *  incremental (`everyMs`) and full (`fullEveryMs`) periods, a tiered walk's
+ *  age tiers, or the key switched off. */
+export type RegistryOverride =
+  | { everyMs?: number; fullEveryMs?: number }
+  | { tiers: ReadonlyArray<{ maxAgeDays: number | null; everyMs: number }> }
+  | { enabled: false };
 
+function positiveMs(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/** The page's override of `key`, or null. A stored value of no known shape
+ *  (or with a bad number) is not an override: the registry's value stands. */
 export function registryOverride(page: Pick<SyncPageRow, "registryOverrides">, key: ResourceKey): RegistryOverride | null {
   const raw = page.registryOverrides[key];
   if (typeof raw !== "object" || raw === null) return null;
   const record = raw as Record<string, unknown>;
   if (record.enabled === false) return { enabled: false };
-  if (typeof record.everyMs === "number" && Number.isSafeInteger(record.everyMs) && record.everyMs > 0) {
-    return { everyMs: record.everyMs };
+  if (Array.isArray(record.tiers)) {
+    const tiers = record.tiers.map((entry: unknown) => {
+      const tier = typeof entry === "object" && entry !== null ? entry as Record<string, unknown> : {};
+      const everyMs = positiveMs(tier.everyMs);
+      const maxAgeDays = tier.maxAgeDays === null ? null : positiveMs(tier.maxAgeDays);
+      return everyMs === null || (maxAgeDays === null && tier.maxAgeDays !== null) ? null : { maxAgeDays, everyMs };
+    });
+    if (tiers.length === 0 || tiers.some((tier) => tier === null)) return null;
+    return { tiers: tiers as Array<{ maxAgeDays: number | null; everyMs: number }> };
   }
-  return null;
+  const everyMs = positiveMs(record.everyMs);
+  const fullEveryMs = positiveMs(record.fullEveryMs);
+  if ((record.everyMs !== undefined && everyMs === null) || (record.fullEveryMs !== undefined && fullEveryMs === null)) return null;
+  if (everyMs === null && fullEveryMs === null) return null;
+  return { ...(everyMs === null ? {} : { everyMs }), ...(fullEveryMs === null ? {} : { fullEveryMs }) };
 }
 
 /** A key the owner switched off for the page (`{enabled:false}`). */
@@ -376,11 +424,70 @@ export function resourceDisabled(page: Pick<SyncPageRow, "registryOverrides">, k
   return override !== null && "enabled" in override;
 }
 
+/** Why `override` cannot be `spec`'s page override (null: it can). A poll
+ *  takes its period; an entry with `pageOverride` its cadence periods or its
+ *  tiers; any entry can be switched off. */
+export function registryOverrideProblem(spec: EngineResourceSpec, override: RegistryOverride): string | null {
+  if ("enabled" in override) return null;
+  if ("tiers" in override) {
+    if (spec.pageOverride !== "tiers" || spec.tiers === undefined) return "it has no age tiers a page can change";
+    return tierOverrideProblem(spec.tiers, override.tiers);
+  }
+  if (spec.kind === "poll") {
+    if (override.fullEveryMs !== undefined) return "a poll has no full sweep: its override is its period";
+    return override.everyMs === undefined ? "a poll's override is its period" : null;
+  }
+  if (spec.pageOverride === "cadence" && spec.cadence !== undefined) {
+    if (override.fullEveryMs !== undefined && spec.cadence.fullEveryMs === undefined) return "it has no full sweep";
+    return null;
+  }
+  return "it is not a poll: it has no period";
+}
+
+/** Why `tiers` cannot replace an entry's `base` tiers (null: they can): as
+ *  many tiers, ages rising, the last one open-ended, every period positive. */
+export function tierOverrideProblem(base: readonly TierSpec[], tiers: readonly TierSpec[]): string | null {
+  if (tiers.length !== base.length) return `${base.length} tiers expected, received ${tiers.length}`;
+  let previous = 0;
+  for (const [index, tier] of tiers.entries()) {
+    if (!Number.isSafeInteger(tier.everyMs) || tier.everyMs <= 0) return `tier ${index + 1}: everyMs must be a positive integer`;
+    if (index === tiers.length - 1) {
+      if (tier.maxAgeDays !== null) return "the last tier takes every older item: its maxAgeDays is null";
+    } else if (tier.maxAgeDays === null || !Number.isSafeInteger(tier.maxAgeDays) || tier.maxAgeDays <= previous) {
+      return `tier ${index + 1}: maxAgeDays must be an integer above ${previous}`;
+    } else {
+      previous = tier.maxAgeDays;
+    }
+  }
+  return null;
+}
+
+/** A tiered walk's age tiers on a page: the page's override (owner decision
+ *  №6), else the entry's. An override that does not fit the entry's tiers is
+ *  not one. Null for an entry without tiers. */
+export function effectiveTiers(spec: EngineResourceSpec, page: Pick<SyncPageRow, "registryOverrides">): readonly TierSpec[] | null {
+  if (spec.tiers === undefined) return null;
+  const override = spec.pageOverride === "tiers" ? registryOverride(page, spec.key) : null;
+  if (override !== null && "tiers" in override && tierOverrideProblem(spec.tiers, override.tiers) === null) return override.tiers;
+  return spec.tiers;
+}
+
+/** A cadence goal's periods on a page: each one the page overrides (owner
+ *  decision №6), else the entry's. Null for an entry without a cadence. */
+export function effectiveCadence(spec: EngineResourceSpec, page: Pick<SyncPageRow, "registryOverrides">): CadenceSpec | null {
+  if (spec.cadence === undefined) return null;
+  const override = spec.pageOverride === "cadence" ? registryOverride(page, spec.key) : null;
+  if (override === null || "enabled" in override || "tiers" in override) return spec.cadence;
+  const fullEveryMs = spec.cadence.fullEveryMs === undefined ? undefined : override.fullEveryMs ?? spec.cadence.fullEveryMs;
+  return { everyMs: override.everyMs ?? spec.cadence.everyMs, ...(fullEveryMs === undefined ? {} : { fullEveryMs }) };
+}
+
 /** `effectivePeriod` (design §4.2): the page's override, else the entry's. */
 export function effectivePeriodMs(spec: EngineResourceSpec, page: Pick<SyncPageRow, "registryOverrides">): number | null {
   const override = registryOverride(page, spec.key);
-  if (override !== null && "everyMs" in override) return override.everyMs;
-  return spec.period?.everyMs ?? null;
+  if (spec.period === undefined) return null;
+  if (override !== null && "everyMs" in override && override.everyMs !== undefined) return override.everyMs;
+  return spec.period.everyMs;
 }
 
 /** Whether an entry runs on a page in this mode. */

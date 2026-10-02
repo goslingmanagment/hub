@@ -5,17 +5,21 @@ import {
   ensureDomainEventPartitions,
   ensurePollRows,
   getSyncPage,
+  listMediaStatsRefreshChunk,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
+import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { projectionBehind } from "../apps/runtime/src/sync/fansly/lib/projection-lag.ts";
-import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
+import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { mediaStatsOwnerTiers, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
+import { statsModule } from "../apps/runtime/src/sync/fansly/resources/stats.ts";
+import { changeSyncRegistryOverride, requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { allZeroBody, statsBody } from "./helpers/fansly-media-stats-fixtures.ts";
 import {
   resetIntegrationDatabase,
@@ -384,6 +388,50 @@ describe("catalog.vault", () => {
     expect(walked.hits).toEqual(["vault.media"]);
     expect(await coverage(pageId, "catalog_vault_media", "A1")).toMatchObject({ status: "provider_exhausted", reason_code: "album_empty" });
   });
+
+  it("the page's full-sweep override (owner decision №6) re-walks an album the registry's weekly sweep leaves, without a deploy", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, label } = await seedPage("live");
+    await seedAlbum(pageId, "A1", 2, "M2");
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "catalog.vault");
+    const walkedOn = new Date(Date.now() - 3 * DAY_MS).toISOString().slice(0, 10);
+    await setCursor(pageId, "catalog.vault", {
+      afterAlbumRef: "A1",
+      seeded: true,
+      vaultWalk: {
+        A1: {
+          ...emptyAlbumWalk(),
+          done: true,
+          completedAtLastItemRef: "M2",
+          completedOnUtcDay: walkedOn,
+          lastCompleteWalkAt: `${walkedOn}T01:00:00.000Z`,
+          proof: { walkRef: "w", startedAt: `${walkedOn}T00:00:00.000Z`, expectedCount: 2, headRef: "M2", seenMediaRefs: ["M2", "M1"], observationRefs: [1], valid: true },
+        },
+      },
+    });
+    const answer = (req: FanslyWireRequest) => okResponse(query(req, "before") === "0"
+      ? { albumMedia: [{ id: "AM2", albumId: "A1", mediaId: "M2" }, { id: "AM1", albumId: "A1", mediaId: "M1" }], media: [] }
+      : { albumMedia: [], media: [] });
+    const weekly = await drive(pageId, "live", registry, answer, async () => (await workRow(pageId, "catalog.vault"))?.waiting_reason === "not_due");
+    expect(weekly.hits).toEqual([]);
+
+    const fanslyRegistry = createFanslyRegistry();
+    await expect(changeSyncRegistryOverride(db(), fanslyRegistry, {
+      pageLabel: label, resource: "catalog.vault", override: { fullEveryMs: 2 * DAY_MS }, ownerApproved: false,
+    })).rejects.toThrow(/owner-approved/);
+    expect(await changeSyncRegistryOverride(db(), fanslyRegistry, {
+      pageLabel: label, resource: "catalog.vault", override: { fullEveryMs: 2 * DAY_MS }, ownerApproved: true,
+    })).toBe(true);
+    await makeDue(pageId, false, "catalog.vault");
+    const rewalked = await drive(pageId, "live", registry, answer,
+      async () => (await workRow(pageId, "catalog.vault"))?.waiting_reason === "not_due" && (await attempts(pageId, "catalog.vault")) === 2);
+    expect(rewalked.hits).toEqual(["vault.media", "vault.media"]);
+    const walk = (await workRow(pageId, "catalog.vault"))!;
+    expect(walk.cursor).toMatchObject({ vaultWalk: { A1: { done: true, completedOnUtcDay: new Date().toISOString().slice(0, 10) } } });
+    // Nothing left to walk: it rests for the incremental period (24 h).
+    expect(walk.due_at.getTime() - Date.now()).toBeGreaterThan(20 * HOUR_MS);
+  });
 });
 
 describe("catalog.hydrate", () => {
@@ -593,6 +641,104 @@ describe("media-stats.walk", () => {
     expect(await attempts(pageId, "media-stats.walk")).toBe(2);
   });
 
+  it("a stored visit that no longer replays (a deploy changed a visit rule) is abandoned: the walk starts afresh and keeps running", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    await seedQueueItem(pageId, ITEM_FRESH, { ageDays: 10 });
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    // The visit in flight began under other rules: the window it recorded is
+    // not one today's code asks for.
+    const [candidate] = await listMediaStatsRefreshChunk(db(), {
+      pageId, limit: 1, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+    });
+    const begun = startMediaVisit(candidate!, { longTailWindowMode: "unproven", longTailWindowAnnounced: false, longTailProbeFailedDay: null }, new Date());
+    await setCursor(pageId, "media-stats.walk", {
+      visit: { ...begun, outcomes: [{ key: "86400000:1:2", ok: { servedAfterMs: 1, servedBeforeMs: 2, empty: false, buckets: 1, observationId: 1 } }] },
+    });
+    const metrics = new RecordingMetrics();
+    const { requests } = await drive(pageId, "live", registry, mediaAnswer({ zeroAfterFirstOf: ITEM_FRESH }),
+      async () => (await workRow(pageId, "media-stats.walk"))?.waiting_reason === "not_due", { metrics });
+
+    // A fresh first visit (the walk from today down to the item's creation),
+    // the plan never failing on the stale one.
+    expect(metrics.get("sync_plan_errors")).toBe(0);
+    expect(windowsOf(requests, ITEM_FRESH)).toHaveLength(2);
+    expect(await mediaRow(pageId, ITEM_FRESH)).toMatchObject({ known_count: 3, consecutive_failures: 0 });
+    const walk = (await workRow(pageId, "media-stats.walk"))!;
+    expect(walk.state).toBe("open");
+    expect(walk.cursor).toMatchObject({ visit: null, last: { subjectRef: ITEM_FRESH, outcome: "visited" } });
+    // The step that replaced it says which visit it abandoned.
+    const steps = await testDb.pool.query<{ abandoned: string | null; outcomes: number }>(
+      `select request -> 'step' ->> 'abandoned' as abandoned, jsonb_array_length(request -> 'step' -> 'visit' -> 'outcomes') as outcomes
+         from sync_attempts where page_id = $1 and resource = 'media-stats.walk' order by id`,
+      [pageId],
+    );
+    expect(steps.rows).toEqual([{ abandoned: ITEM_FRESH, outcomes: 0 }, { abandoned: null, outcomes: 1 }]);
+  });
+
+  it("a captured step whose visit no longer replays is applied without a look: the item backs off, the walk is never quarantined", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    await seedQueueItem(pageId, ITEM_FRESH, { ageDays: 10 });
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    const respond = mediaAnswer({ zeroAfterFirstOf: ITEM_FRESH });
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req) => respond(req);
+    const dying = await makeTestActor({
+      db: db(), pageId, mode: "live", registry, ownRef: OWN_ID, capture: fanslyCaptureCodec, transport,
+      faults: (at) => {
+        if (at === "after_capture") throw new SyncCrashFault(at);
+      },
+    });
+    await expect(dying.actor.run({ stop: dying.stop.signal, abort: dying.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
+    // A deploy between the capture and the apply moved a visit rule: the
+    // stored visit now asks for another window than the one journaled.
+    await testDb.pool.query(
+      `update sync_attempts
+          set request = jsonb_set(request, '{step,visit,snapshot,nowMs}', to_jsonb((request #>> '{step,visit,snapshot,nowMs}')::bigint - 86400000))
+        where page_id = $1 and resource = 'media-stats.walk'`,
+      [pageId],
+    );
+    const restarted = await drive(pageId, "live", registry, respond,
+      async () => ((await workRow(pageId, "media-stats.walk"))?.result as { outcome?: string } | null)?.outcome === "abandoned");
+    expect(restarted.hits).toEqual([]);
+    expect(await attempts(pageId, "media-stats.walk")).toBe(1);
+    const walk = (await workRow(pageId, "media-stats.walk"))!;
+    expect(walk.state).toBe("open");
+    expect(walk.cursor).toMatchObject({ visit: null, last: { subjectRef: ITEM_FRESH, outcome: "abandoned", reason: "window_changed" } });
+    // The item backs off on its own ladder; the answer stays in the journal.
+    expect(await mediaRow(pageId, ITEM_FRESH)).toMatchObject({ consecutive_failures: 1, last_visited_at: null });
+    expect((await observations(pageId)).map((row) => row.kind)).toEqual(["media_offer_stats"]);
+  });
+
+  it("a page's tiers override (owner decision №6) changes which items are due and when again, without a deploy", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId, label } = await seedPage("live");
+    // A 60-day item visited 3 days ago: weekly by the registry's tiers.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 3, backfillCursor: BACKFILL_DONE });
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    const weekly = await drive(pageId, "live", registry, mediaAnswer(), async () => (await workRow(pageId, "media-stats.walk"))?.waiting_reason === "not_due");
+    expect(weekly.hits).toEqual([]);
+
+    const tiers = [{ maxAgeDays: 30, everyMs: DAY_MS }, { maxAgeDays: 90, everyMs: 2 * DAY_MS }, { maxAgeDays: null, everyMs: 30 * DAY_MS }];
+    const fanslyRegistry = createFanslyRegistry();
+    await expect(changeSyncRegistryOverride(db(), fanslyRegistry, { pageLabel: label, resource: "media-stats.walk", override: { tiers }, ownerApproved: false }))
+      .rejects.toThrow(/owner-approved/);
+    await expect(changeSyncRegistryOverride(db(), fanslyRegistry, { pageLabel: label, resource: "media-stats.walk", override: { everyMs: DAY_MS }, ownerApproved: true }))
+      .rejects.toThrow(/not a poll/);
+    expect(await changeSyncRegistryOverride(db(), fanslyRegistry, { pageLabel: label, resource: "media-stats.walk", override: { tiers }, ownerApproved: true }))
+      .toBe(true);
+    expect((await getSyncPage(db(), pageId))!.registryOverrides).toEqual({ "media-stats.walk": { tiers } });
+    await makeDue(pageId, false, "media-stats.walk");
+    const { requests } = await drive(pageId, "live", registry, mediaAnswer(), async () => (await mediaRow(pageId, ITEM_MID))?.known_count !== null);
+    expect(requests.map((req) => query(req, "mediaOfferId"))).toEqual([ITEM_MID]);
+    const mid = (await mediaRow(pageId, ITEM_MID))!;
+    expect(mid.next_due_at!.getTime() - mid.last_visited_at!.getTime()).toBe(2 * DAY_MS);
+  });
+
   it("shadow walks every due item once with its estimated windows and writes nothing but its own attempts", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage("shadow");
@@ -733,6 +879,45 @@ describe("stats.hourly", () => {
     const poll = (await workRow(pageId, "stats.hourly"))!;
     expect(poll.due_at.getTime() - Date.now()).toBeLessThanOrEqual(23 * HOUR_MS);
     expect(poll.due_at.getTime() - Date.now()).toBeGreaterThan(19 * HOUR_MS);
+  });
+
+  it("the switch's import makes the first capture due by legacy's last one, so the two windows meet (A15)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    const legacyState = (capturedAt: Date) => JSON.stringify({
+      version: 2,
+      mode: "steady",
+      utcDay: new Date().toISOString().slice(0, 10),
+      lastHourlyCapturedAt: capturedAt.toISOString(),
+      lastHourlyServedBefore: capturedAt.toISOString(),
+    });
+    const hourly = statsModule("hourly");
+    // Legacy captured 2 h ago: the first capture comes 22 h after it.
+    const recent = new Date(Date.now() - 2 * HOUR_MS);
+    await testDb.pool.query("insert into page_sync_cursors (page_id, stream, state) values ($1, 'stats_snapshot', $2::jsonb)", [pageId, legacyState(recent)]);
+    const soon = (await hourly.importLegacy!(db(), { pageId })).cursors[0]!;
+    expect(soon.dueAt!.getTime()).toBe(recent.getTime() + 22 * HOUR_MS);
+
+    // Legacy captured 23 h ago: due at once.
+    const old = new Date(Date.now() - 23 * HOUR_MS);
+    await testDb.pool.query("update page_sync_cursors set state = $2::jsonb where page_id = $1 and stream = 'stats_snapshot'", [pageId, legacyState(old)]);
+    const imported = await hourly.importLegacy!(db(), { pageId });
+    const [entry] = imported.cursors;
+    expect(entry).toMatchObject({ resource: "stats.hourly", subject: "", cursor: { lastCapturedAt: old.toISOString() } });
+    expect(entry!.dueAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(imported.notes).toMatchObject({ hourlyDueAt: entry!.dueAt!.toISOString() });
+
+    // The live row as the switch writes it — the imported cursor, due at
+    // `dueAt` instead of its random phase (parked a day out here): the first
+    // capture's window meets legacy's last one, no hole is recorded.
+    const registry = await quietRegistry(pageId, false);
+    await testDb.pool.query(
+      "update sync_work set cursor = $3::jsonb, due_at = $4 where page_id = $1 and resource = $2 and not shadow and state = 'open'",
+      [pageId, "stats.hourly", JSON.stringify(entry!.cursor), entry!.dueAt],
+    );
+    await drive(pageId, "live", registry, statsAnswer, async () => (await attempts(pageId, "stats.hourly")) === 1);
+    expect(await coverageScopes(pageId, "stats_account_hourly")).toEqual(["steady"]);
+    expect((await workRow(pageId, "stats.hourly"))!.cursor).toMatchObject({ last: { gap: false } });
   });
 });
 

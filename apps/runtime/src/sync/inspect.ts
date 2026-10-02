@@ -13,12 +13,13 @@ import {
   type SetSyncPageModeResult,
   type SyncPageMode,
   type SyncPageRow,
+  type SyncRegistryOverride,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
-import { demandToUpsert, type EngineRegistry } from "./engine/resource.ts";
+import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import {
   buildPageStatus,
@@ -250,16 +251,17 @@ export async function changeSyncPagePause(
   return updated;
 }
 
-/** `sync page override`: a page's period of one registry key, switching it
- *  off, or clearing the override. An owner-protected key (owner decision №6)
- *  needs `ownerApproved`. */
+/** `sync page override`: a page's period of one registry key (a poll's
+ *  period; the vault walk's incremental and full periods; the media-stats
+ *  walk's age tiers), switching it off, or clearing the override. An
+ *  owner-protected key (owner decision №6) needs `ownerApproved`. */
 export async function changeSyncRegistryOverride(
   db: Database,
   registry: EngineRegistry,
   input: {
     pageLabel: string;
     resource: string;
-    override: { everyMs: number } | { enabled: false } | null;
+    override: SyncRegistryOverride | null;
     ownerApproved: boolean;
   },
 ): Promise<boolean> {
@@ -270,9 +272,8 @@ export async function changeSyncRegistryOverride(
       `${input.resource} follows owner decision №6 (economical frequencies): changing it needs --owner-approved`,
     );
   }
-  if (input.override !== null && "everyMs" in input.override && spec.kind !== "poll") {
-    throw new SyncOwnerLeverError(`${input.resource} is not a poll: it has no period`);
-  }
+  const problem = input.override === null ? null : registryOverrideProblem(spec, input.override);
+  if (problem !== null) throw new SyncOwnerLeverError(`${input.resource}: ${problem}`);
   const page = await findSyncPageByLabel(db, input.pageLabel);
   return setRegistryOverride(db, { pageId: page.pageId, key: input.resource, override: input.override });
 }

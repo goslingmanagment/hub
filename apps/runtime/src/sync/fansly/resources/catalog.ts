@@ -32,21 +32,24 @@ import {
 import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
 import { observeVaultWalkPage, vaultWalkIsComplete, type VaultWalkProof } from "../../../services/sync/vault-walk-proof.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import type {
-  ApplyInput,
-  ApplyResult,
-  DemandSignal,
-  LegacyImport,
-  RequestPlan,
-  ResourceModule,
-  ShadowResult,
-  StepPlan,
+import {
+  effectiveCadence,
+  type ApplyInput,
+  type ApplyResult,
+  type CadenceSpec,
+  type DemandSignal,
+  type LegacyImport,
+  type RequestPlan,
+  type ResourceModule,
+  type ShadowResult,
+  type StepPlan,
 } from "../../engine/resource.ts";
 import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts } from "../lib/page-facts.ts";
 import { projectionBehind } from "../lib/projection-lag.ts";
 import { standingRecheckAt } from "../lib/subject-queue.ts";
+import { fanslyResourceSpec } from "../registry.ts";
 
 // `catalog.fixed`, `catalog.vault`, `catalog.hydrate` (plan §5, design §5.17,
 // owner decision №6 "экономно"): the page's inventory. Every answer is
@@ -64,7 +67,8 @@ import { standingRecheckAt } from "../lib/subject-queue.ts";
 // `before` = the last row's id, down to an empty page, ≤ 400 pages an album.
 // The albums come from the projection, in a durable rotation, never-completed
 // first; an album is walked again when its head or count moved, its proof is
-// missing, or its last walk is a week old (incremental daily, full weekly). A
+// missing, or its last walk is a week old (incremental daily, full weekly —
+// owner decision №6; a page's override changes either period). A
 // new walk waits while album events of the page are not projected yet, so it
 // never walks a list the last `.fixed` read has not reached. An empty first
 // page of a non-empty album, a cursor that does not move, rows without ids or
@@ -82,9 +86,16 @@ const FIXED_KEY = "catalog.fixed";
 const VAULT_KEY = "catalog.vault";
 const HYDRATE_KEY = "catalog.hydrate";
 const DAY_MS = 86_400_000;
-/** The vault walk looks at its albums again this long after it found none to
- *  walk (incremental daily; a week-old walk is due again by the album rule). */
-export const CATALOG_VAULT_RECHECK_MS = DAY_MS;
+/** The vault walk's cadence (owner decision №6): it looks at its albums
+ *  again `everyMs` after it found none to walk (incremental daily), and an
+ *  album walked `fullEveryMs` ago is due again (full weekly) — the registry's
+ *  values, or the page's override (`sync page override --resource
+ *  catalog.vault --period-ms/--full-period-ms --owner-approved`). */
+export function vaultCadence(page: Parameters<typeof effectiveCadence>[1]): Required<CadenceSpec> {
+  const cadence = effectiveCadence(fanslyResourceSpec(VAULT_KEY)!, page);
+  if (cadence === null || cadence.fullEveryMs === undefined) throw new Error(`${VAULT_KEY} needs a cadence with a full sweep`);
+  return { everyMs: cadence.everyMs, fullEveryMs: cadence.fullEveryMs };
+}
 /** Rows `/media/vaultnew` serves a page (production 2026-10: 50). Shadow only:
  *  an album's walk length is estimated from its item count. */
 export const VAULT_PAGE_ESTIMATE = 50;
@@ -330,12 +341,13 @@ function vaultStepOf(request: Pick<RequestPlan, "step">): VaultStep | null {
 }
 
 /** An album's walk is due again: its head or count moved, its proof is
- *  missing or stale, or its last walk is a week old (legacy rule). */
-function rewalkDue(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string): boolean {
+ *  missing or stale, or its last walk is `fullEveryMs` old (legacy rule: a
+ *  week, by UTC day). */
+function rewalkDue(walk: VaultAlbumWalkState, album: VaultAlbum, utcDay: string, fullEveryMs: number): boolean {
   return walk.completedAtLastItemRef !== album.lastItemRef
     || walk.proof === undefined || walk.proof.expectedCount !== album.itemCount
     || walk.completedOnUtcDay === undefined
-    || Date.parse(utcDay) - Date.parse(walk.completedOnUtcDay) >= 7 * DAY_MS;
+    || Date.parse(utcDay) - Date.parse(walk.completedOnUtcDay) >= fullEveryMs;
 }
 
 /** The album the walk serves next and its effective walk state (the legacy
@@ -345,6 +357,7 @@ export function chooseVaultAlbum(
   albums: readonly VaultAlbum[],
   cursor: Pick<VaultCursor, "vaultWalk" | "afterAlbumRef">,
   utcDay: string,
+  fullEveryMs: number,
 ): { album: VaultAlbum; walk: VaultAlbumWalkState; start: boolean; parked: VaultStep["parked"] } | null {
   const start = albums.findIndex((album) => album.albumRef === cursor.afterAlbumRef) + 1;
   const rotated = [...albums.slice(start), ...albums.slice(0, start)];
@@ -355,7 +368,7 @@ export function chooseVaultAlbum(
   const parked: VaultStep["parked"] = [];
   for (const album of ordered) {
     let walk = cursor.vaultWalk[album.albumRef] ?? emptyAlbumWalk();
-    if (walk.done && rewalkDue(walk, album, utcDay)) walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: walk.lastCompleteWalkAt };
+    if (walk.done && rewalkDue(walk, album, utcDay, fullEveryMs)) walk = { ...emptyAlbumWalk(), lastCompleteWalkAt: walk.lastCompleteWalkAt };
     if (walk.done) continue;
     // A walk without an inventory proof (fresh, re-opened, or a legacy tail)
     // starts its generation at the head.
@@ -411,9 +424,10 @@ const vaultModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     let cursor = parseVaultCursor(work.cursor);
     if (ctx.shadow) cursor = await shadowVaultWalk(ctx.db, ctx.pageId, cursor);
+    const cadence = vaultCadence(ctx.page);
     const albums = await listCreatorVaultAlbumsForWalk(ctx.db, ctx.pageId);
-    const choice = albums.length === 0 ? null : chooseVaultAlbum(albums, cursor, fanslyUtcDayKey(ctx.now));
-    if (choice === null) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, CATALOG_VAULT_RECHECK_MS) };
+    const choice = albums.length === 0 ? null : chooseVaultAlbum(albums, cursor, fanslyUtcDayKey(ctx.now), cadence.fullEveryMs);
+    if (choice === null) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, cadence.everyMs) };
     // A new walk waits for the album list the last `.fixed` read put in the
     // journal; a walk under way finishes the album it started.
     if (choice.start && await projectionBehind(ctx.db, { pageId: ctx.pageId, projection: FANSLY_CATALOG_PROJECTION, eventTypes: ALBUM_EVENT_TYPES })) {

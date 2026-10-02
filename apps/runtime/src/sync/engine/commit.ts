@@ -1010,6 +1010,10 @@ export async function apply(
         parsed = reparsed.value;
       }
       await fault(d, "in_apply");
+      // Read once: the module sees the page's overrides, the settle below
+      // the same row (the page row is the actor's; no resource writes it).
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
       const result = await module.apply(tx, {
         pageId: d.pageId,
         now: d.clock.wallNow(),
@@ -1021,6 +1025,7 @@ export async function apply(
         response,
         observation: { id: attempt.observationId!, receivedAt: attempt.observationReceivedAt! },
         fenced,
+        page,
         ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
       if (d.canonicalize !== undefined && result.canonicalized !== true) {
@@ -1034,7 +1039,6 @@ export async function apply(
       // sync_work after every event append (lock order): the work row, then
       // the follow-ups in (resource, subject) order.
       const now = d.clock.wallNow();
-      const page = await getSyncPage(tx, d.pageId);
       const settle = settleInputOf(d, work, spec, result.work, attempt.demandRevision ?? work.demandRevision, page, now);
       const breakerSet = work.failureCount !== 0 || work.breakerUntil !== null || work.blockedByVendorAt !== null;
       await settleWork(tx, {

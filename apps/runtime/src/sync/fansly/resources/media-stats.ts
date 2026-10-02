@@ -16,6 +16,7 @@ import {
   type MediaStatsTiers,
   type SubjectQueueKeyset,
   type SyncAttemptRow,
+  type SyncPageRow,
 } from "@agency_hub_core/db";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
@@ -51,14 +52,15 @@ import {
 } from "../../../services/sync/fansly-media-stats.ts";
 import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../../../services/sync/fansly-stats.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import type {
-  ApplyInput,
-  ApplyResult,
-  LegacyImport,
-  RequestPlan,
-  ResourceModule,
-  ShadowResult,
-  StepPlan,
+import {
+  effectiveTiers,
+  type ApplyInput,
+  type ApplyResult,
+  type LegacyImport,
+  type RequestPlan,
+  type ResourceModule,
+  type ShadowResult,
+  type StepPlan,
 } from "../../engine/resource.ts";
 import { replayByCanonicalDrafts } from "../lib/family-replay.ts";
 import {
@@ -71,7 +73,6 @@ import {
   shadowPassWaitUntil,
   standingRecheckAt,
   type ShadowPass,
-  type SubjectQueueWalk,
 } from "../lib/subject-queue.ts";
 import { fanslyResourceSpec } from "../registry.ts";
 
@@ -106,6 +107,14 @@ import { fanslyResourceSpec } from "../registry.ts";
 // item's queue-row breaker opens (the engine's subject ladder) and the
 // backfill windows it had journaled stay in its cursor; a refused 90-day
 // window first tries the split plan, exactly as legacy.
+//
+// A visit replays only under the rules it began with. One in flight across a
+// deploy that changed a visit rule (`steadyWindows`, the backfill constants
+// shared with the legacy lane) no longer replays: it is ABANDONED, never
+// fatal — the plan drops it and starts the next due item afresh, an apply
+// whose step it was ends it without a look (the answer stays journaled and
+// canonicalized) and opens the item's queue-row breaker, so a visit that never
+// replays costs that item its backoff ladder, never the page's walk.
 
 const KEY = "media-stats.walk";
 const PLANE = "media_stats";
@@ -134,9 +143,11 @@ function int(value: unknown): number | null {
 
 // ── the tiers (owner decision №6, from the registry) ─────────────────────────
 
-/** The registry's tiers of `media-stats.walk` as the chunk query takes them. */
-export function mediaStatsOwnerTiers(): MediaStatsTiers {
-  const tiers = fanslyResourceSpec(KEY)?.tiers ?? [];
+/** The tiers of `media-stats.walk` on this page as the chunk query takes
+ *  them: the registry's (owner decision №6), or the page's override (`sync
+ *  page override --resource media-stats.walk --tiers … --owner-approved`). */
+export function mediaStatsOwnerTiers(page: Pick<SyncPageRow, "registryOverrides">): MediaStatsTiers {
+  const tiers = effectiveTiers(fanslyResourceSpec(KEY)!, page) ?? [];
   const [fresh, mid, old] = tiers;
   if (fresh?.maxAgeDays == null || mid?.maxAgeDays == null || old === undefined) {
     throw new Error(`${KEY} needs three tiers (fresh, mid, older)`);
@@ -157,7 +168,7 @@ export function tierEveryMs(tiers: MediaStatsTiers, tier: MediaStatsTier): numbe
 
 export function pickDueMedia(
   db: Database,
-  input: { pageId: number; now: Date; limit: number; after: SubjectQueueKeyset | null },
+  input: { pageId: number; now: Date; limit: number; after: SubjectQueueKeyset | null; tiers: MediaStatsTiers },
 ): Promise<MediaStatsRefreshCandidate[]> {
   return listMediaStatsRefreshChunk(db, {
     pageId: input.pageId,
@@ -165,16 +176,10 @@ export function pickDueMedia(
     now: input.now,
     // Not read: the owner's tiers carry the long-tail interval.
     longTailCycleDays: 30,
-    tiers: mediaStatsOwnerTiers(),
+    tiers: input.tiers,
     ...(input.after === null ? {} : { after: input.after }),
   });
 }
-
-/** The media-stats queue in walk order (design §4.3 helper shape). */
-export const MEDIA_STATS_QUEUE: SubjectQueueWalk<MediaStatsRefreshCandidate> = {
-  plane: PLANE,
-  pickDue: pickDueMedia,
-};
 
 // ── one visit, replayed ──────────────────────────────────────────────────────
 
@@ -240,7 +245,7 @@ export type MediaVisitRun =
   };
 
 /** The replay asked for a different window than the one the step answered:
- *  the visit is not the one the plan made (never in a correct run). */
+ *  the visit began under other visit rules (a deploy while it was in flight). */
 export class MediaVisitDivergedError extends Error {
   constructor(readonly expected: string, readonly recorded: string) {
     super(`Media-stats visit replay diverged: asked ${expected}, the step answered ${recorded}`);
@@ -586,12 +591,30 @@ export function runMediaVisit(visit: MediaVisit): MediaVisitRun {
   }
 }
 
+/** `runMediaVisit`, or null when the visit no longer replays under today's
+ *  rules (it is abandoned, never fatal). */
+export function replayMediaVisit(visit: MediaVisit): MediaVisitRun | null {
+  try {
+    return runMediaVisit(visit);
+  } catch (error) {
+    if (error instanceof MediaVisitDivergedError) return null;
+    throw error;
+  }
+}
+
+/** A visit exactly as the journal and the cursor will hold it (JSON), so the
+ *  plan that asks for a window and the apply that replays the stored visit
+ *  read the same values. */
+function asStored(visit: MediaVisit): MediaVisit {
+  return JSON.parse(JSON.stringify(visit)) as MediaVisit;
+}
+
 /** The visit of a queue candidate, as it begins now. */
 export function startMediaVisit(candidate: MediaStatsRefreshCandidate, page: MediaStatsPageState, now: Date): MediaVisit {
   // Read into a local: the platform-branch ratchet greps for a literal
   // comparison on a name that ends in `platform`.
   const publishedAt = candidate.createdAtPlatform;
-  return {
+  return asStored({
     snapshot: {
       subjectRef: candidate.subjectRef,
       tier: candidate.tier,
@@ -604,7 +627,7 @@ export function startMediaVisit(candidate: MediaStatsRefreshCandidate, page: Med
       page: { ...page },
     },
     outcomes: [],
-  };
+  });
 }
 
 /** The window outcome of one served answer (legacy `requestWindow`'s
@@ -704,17 +727,24 @@ function pageStateOf(cursor: MediaStatsPageState): MediaStatsPageState {
   };
 }
 
-/** The step a request carries: the visit as the plan made it. */
+/** The step a request carries: the visit as the plan made it, and the item
+ *  whose stored visit the plan abandoned to make it (counted by the apply). */
 interface MediaStatsStep {
   visit?: MediaVisit;
   shadowVisit?: ShadowVisit;
+  abandoned?: string;
 }
 
 function stepOf(request: Pick<RequestPlan, "step">): MediaStatsStep {
   const record = recordOf(request.step);
   const visit = parseVisit(record.visit);
   const shadowVisit = parseShadowVisit(record.shadowVisit);
-  return { ...(visit === null ? {} : { visit }), ...(shadowVisit === null ? {} : { shadowVisit }) };
+  const abandoned = text(record.abandoned);
+  return {
+    ...(visit === null ? {} : { visit }),
+    ...(shadowVisit === null ? {} : { shadowVisit }),
+    ...(abandoned === null ? {} : { abandoned }),
+  };
 }
 
 function windowRequest(subjectRef: string, window: Window, step: MediaStatsStep): RequestPlan<"media.offer_stats"> {
@@ -732,19 +762,20 @@ function sameWindow(request: RequestPlan, subjectRef: string, window: Window): b
 }
 
 /** The window an attempt asked for and how it failed, folded into the visit
- *  it served (the plan's view of a failed step: the real status). */
+ *  it served (the plan's view of a failed step: the real status). Null when
+ *  the visit asks for nothing more, or no longer replays. */
 function failedVisitOf(attempt: SyncAttemptRow): MediaVisit | null {
   const visit = stepOf({ step: recordOf(attempt.request).step }).visit;
   if (visit === undefined) return null;
-  const run = runMediaVisit(visit);
-  if (run.kind !== "need") return null;
-  return {
+  const run = replayMediaVisit(visit);
+  if (run === null || run.kind !== "need") return null;
+  return asStored({
     ...visit,
     outcomes: [...visit.outcomes, {
       key: run.window.key,
       failed: { httpStatus: attempt.httpStatus, retryAfter: attempt.retryAfterMs !== null },
     }],
-  };
+  });
 }
 
 /** Estimated windows of one visit (shadow): a first visit's walk holds its
@@ -803,14 +834,17 @@ async function legacyMediaStatsCursor(db: Database, pageId: number) {
 
 // ── the module ───────────────────────────────────────────────────────────────
 
-async function planShadow(cursor: MediaStatsWalkCursor, ctx: { db: Database; pageId: number; now: Date }): Promise<StepPlan> {
+async function planShadow(
+  cursor: MediaStatsWalkCursor,
+  ctx: { db: Database; pageId: number; now: Date; tiers: MediaStatsTiers },
+): Promise<StepPlan> {
   const visit = cursor.shadowVisit;
   if (visit !== null && visit.done < visit.steps) {
     const [window] = steadyWindows(visit.tier, ctx.now, cursor.longTailWindowMode);
     return { kind: "request", request: windowRequest(visit.subjectRef, window!, { shadowVisit: visit }) };
   }
   const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
-  const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after });
+  const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, tiers: ctx.tiers });
   if (candidate === undefined) {
     return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, MEDIA_STATS_RECHECK_MS) };
   }
@@ -832,20 +866,29 @@ async function planShadow(cursor: MediaStatsWalkCursor, ctx: { db: Database; pag
 export const mediaStatsWalkModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseMediaStatsWalkCursor(work.cursor);
-    if (ctx.shadow) return planShadow(cursor, ctx);
+    const tiers = mediaStatsOwnerTiers(ctx.page);
+    if (ctx.shadow) return planShadow(cursor, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, tiers });
     let page = pageStateOf(cursor);
     let visit = cursor.visit;
-    // The previous step failed: a failure about the item ended its visit
-    // (its breaker is open, its progress kept at the capture) unless a
-    // refused 90-day window falls back to the split plan; any other failure
-    // (the page's: pace, network, credentials) asks the same window again.
+    let abandoned: string | null = null;
+    // The previous step's request failed (an applied attempt is already
+    // folded into the cursor's visit, whatever failed after it): a failure
+    // about the item ended its visit (its breaker is open, its progress kept
+    // at the capture) unless a refused 90-day window falls back to the split
+    // plan; any other failure (the page's: pace, network, credentials) asks
+    // the same window again.
     if (work.lastErrorClass !== null && work.lastAttemptId !== null) {
       const attempt = await getSyncAttempt(ctx.db, work.lastAttemptId);
-      const asked = attempt === null ? undefined : stepOf({ step: recordOf(attempt.request).step }).visit;
+      const asked = attempt === null || attempt.applyState === "applied"
+        ? undefined
+        : stepOf({ step: recordOf(attempt.request).step }).visit;
       if (attempt !== null && asked !== undefined) {
-        if (attempt.errorClass !== null && SUBJECT_ERRORS.has(attempt.errorClass)) {
+        if (replayMediaVisit(asked) === null) {
+          abandoned = asked.snapshot.subjectRef;
+          visit = null;
+        } else if (attempt.errorClass !== null && SUBJECT_ERRORS.has(attempt.errorClass)) {
           const failed = failedVisitOf(attempt);
-          const run = failed === null ? null : runMediaVisit(failed);
+          const run = failed === null ? null : replayMediaVisit(failed);
           if (failed !== null && run !== null && run.kind === "need") {
             return { kind: "request", request: windowRequest(failed.snapshot.subjectRef, run.window, { visit: failed }) };
           }
@@ -857,43 +900,46 @@ export const mediaStatsWalkModule: ResourceModule = {
       }
     }
     if (visit !== null) {
-      const run = runMediaVisit(visit);
-      if (run.kind === "need") return { kind: "request", request: windowRequest(visit.snapshot.subjectRef, run.window, { visit }) };
+      const run = replayMediaVisit(visit);
+      if (run === null) abandoned = visit.snapshot.subjectRef;
+      else if (run.kind === "need") return { kind: "request", request: windowRequest(visit.snapshot.subjectRef, run.window, { visit }) };
     }
-    const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: null });
+    const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: null, tiers });
     if (candidate === undefined) return { kind: "wait", reason: "not_due", until: standingRecheckAt(ctx.now, MEDIA_STATS_RECHECK_MS) };
     const fresh = startMediaVisit(candidate, page, ctx.now);
     const run = runMediaVisit(fresh);
     // Every visit reads at least the tier's refresh: a visit asking for
     // nothing would be picked again at once.
     if (run.kind !== "need") return { kind: "quarantine", reason: "media_visit_without_window" };
-    return { kind: "request", request: windowRequest(candidate.subjectRef, run.window, { visit: fresh }) };
+    return {
+      kind: "request",
+      request: windowRequest(candidate.subjectRef, run.window, { visit: fresh, ...(abandoned === null ? {} : { abandoned }) }),
+    };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
     const now = input.now;
     const cursor = parseMediaStatsWalkCursor(input.work.cursor);
-    const asked = stepOf(input.request).visit;
+    const step = stepOf(input.request);
+    const asked = step.visit;
     if (asked === undefined) throw new ApplyQuarantine("media_stats_step_missing");
-    let pending: MediaVisitRun;
-    try {
-      pending = runMediaVisit(asked);
-    } catch (error) {
-      if (error instanceof MediaVisitDivergedError) throw new ApplyQuarantine("media_stats_visit_diverged", { expected: error.expected, recorded: error.recorded });
-      throw error;
-    }
     const subjectRef = asked.snapshot.subjectRef;
-    if (pending.kind !== "need" || !sameWindow(input.request, subjectRef, pending.window)) {
-      throw new ApplyQuarantine("media_stats_step_mismatch", { subjectRef });
-    }
     const counters: Record<string, number> = {};
-    const folded = mediaWindowOutcome(pending.window, { subjectRef, response: input.response, observationId: input.observation.id });
-    if (folded.refusal !== null) counters[folded.refusal] = 1;
-    const visit: MediaVisit = { ...asked, outcomes: [...asked.outcomes, folded.outcome] };
-    const run = runMediaVisit(visit);
-    for (const [name, by] of Object.entries(run.counters)) counters[name] = (counters[name] ?? 0) + by;
-
-    let next: MediaStatsWalkCursor = { ...cursor, ...run.page, visit: null, shadow: EMPTY_SHADOW_PASS, shadowVisit: null };
+    // The plan dropped a stored visit that no longer replays to make this one.
+    if (step.abandoned !== undefined) counters.media_visit_abandoned = 1;
+    const pending = replayMediaVisit(asked);
+    const replays = pending !== null && pending.kind === "need" && sameWindow(input.request, subjectRef, pending.window);
+    let visit: MediaVisit = asked;
+    let run: MediaVisitRun | null = null;
+    let next: MediaStatsWalkCursor = { ...cursor, visit: null, shadow: EMPTY_SHADOW_PASS, shadowVisit: null };
+    if (replays) {
+      const folded = mediaWindowOutcome(pending.window, { subjectRef, response: input.response, observationId: input.observation.id });
+      if (folded.refusal !== null) counters[folded.refusal] = 1;
+      visit = asStored({ ...asked, outcomes: [...asked.outcomes, folded.outcome] });
+      run = runMediaVisit(visit);
+      for (const [name, by] of Object.entries(run.counters)) counters[name] = (counters[name] ?? 0) + by;
+      next = { ...next, ...run.page };
+    }
     // The free signal (zero calls): today's top-50 jump the queue, once a UTC
     // day, when the walk next applies anything.
     const today = fanslyUtcDayKey(now);
@@ -908,7 +954,7 @@ export const mediaStatsWalkModule: ResourceModule = {
       next = { ...next, topMarkedDay: today };
     }
 
-    if (run.kind === "need") {
+    if (run !== null && run.kind === "need") {
       return {
         work: { satisfiesRevision: false, nextDueAt: now, cursor: { ...next, visit } },
         followups: [],
@@ -916,7 +962,24 @@ export const mediaStatsWalkModule: ResourceModule = {
       };
     }
     let receipt: Record<string, unknown>;
-    if (run.kind === "failed") {
+    if (run === null) {
+      // The visit this step served does not replay to the window it asked
+      // for: it began under other visit rules (a deploy between its plan and
+      // this apply, a re-apply from the journal after the restart). It ends
+      // without a look — the answer stays journaled and canonicalized — and
+      // its item's breaker opens, so a visit that never replays costs that
+      // item its ladder, never the walk: the next plan starts the next due
+      // item afresh under today's rules.
+      await recordQueueSubjectFailures(tx, { pageId: input.pageId, plane: PLANE, subjectRefs: [subjectRef], now });
+      receipt = {
+        subjectRef,
+        outcome: "abandoned",
+        reason: pending === null ? "visit_diverged" : "window_changed",
+        windows: asked.outcomes.length,
+        at: now.toISOString(),
+      };
+      counters.media_visit_abandoned = (counters.media_visit_abandoned ?? 0) + 1;
+    } else if (run.kind === "failed") {
       // A 2xx that is no answer about this item: its breaker, and the windows
       // its walk had accepted stay in its cursor.
       await recordQueueSubjectFailures(tx, { pageId: input.pageId, plane: PLANE, subjectRefs: [subjectRef], now });
@@ -932,7 +995,7 @@ export const mediaStatsWalkModule: ResourceModule = {
         tier: asked.snapshot.tier,
         knownCount: run.visited.knownCount,
         visitedAt: now,
-        nextDueAt: new Date(now.getTime() + tierEveryMs(mediaStatsOwnerTiers(), asked.snapshot.tier)),
+        nextDueAt: new Date(now.getTime() + tierEveryMs(mediaStatsOwnerTiers(input.page), asked.snapshot.tier)),
         backfillCursor: run.visited.backfillCursor,
         clearDirty: run.visited.clearDirty,
       });
@@ -970,14 +1033,15 @@ export const mediaStatsWalkModule: ResourceModule = {
     await recordQueueSubjectFailures(tx, { pageId: work.pageId, plane: PLANE, subjectRefs: [subjectRef], now: new Date() });
     // Keep what the walk accepted before the failed window (its status is
     // read by the next plan, which may still fall back from a refused 90-day
-    // window; the visit then writes its cursor anyway).
-    const pending = runMediaVisit(visit);
-    if (pending.kind !== "need") return;
-    const run = runMediaVisit({
+    // window; the visit then writes its cursor anyway). A visit that no
+    // longer replays keeps nothing: the plan abandons it.
+    const pending = replayMediaVisit(visit);
+    if (pending === null || pending.kind !== "need") return;
+    const run = replayMediaVisit({
       ...visit,
       outcomes: [...visit.outcomes, { key: pending.window.key, failed: { httpStatus: null, retryAfter: false } }],
     });
-    if (run.kind === "failed" && run.progress !== null) {
+    if (run !== null && run.kind === "failed" && run.progress !== null) {
       await recordMediaStatsBackfillCursor(tx, { pageId: work.pageId, subjectRef, backfillCursor: run.progress });
     }
   },

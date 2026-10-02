@@ -124,6 +124,32 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     });
   });
 
+  it("sync page override takes the vault walk's periods and the media-stats tiers (owner decision №6)", async () => {
+    await run([
+      "sync", "page", "override", "--page", "lora-1", "--resource", "catalog.vault",
+      "--period-ms", "43200000", "--full-period-ms", "259200000", "--owner-approved",
+    ]);
+    expect(mocks.changeSyncRegistryOverride).toHaveBeenLastCalledWith({}, expect.anything(), {
+      pageLabel: "lora-1",
+      resource: "catalog.vault",
+      override: { everyMs: 43_200_000, fullEveryMs: 259_200_000 },
+      ownerApproved: true,
+    });
+    await run(["sync", "page", "override", "--page", "lora-1", "--resource", "catalog.vault", "--full-period-ms", "259200000", "--owner-approved"]);
+    expect(mocks.changeSyncRegistryOverride.mock.lastCall![2]).toMatchObject({ override: { fullEveryMs: 259_200_000 } });
+    const tiers = [{ maxAgeDays: 14, everyMs: 43_200_000 }, { maxAgeDays: 60, everyMs: 259_200_000 }, { maxAgeDays: null, everyMs: 1_209_600_000 }];
+    await run(["sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", JSON.stringify(tiers), "--owner-approved"]);
+    expect(mocks.changeSyncRegistryOverride.mock.lastCall![2]).toEqual({
+      pageLabel: "lora-1", resource: "media-stats.walk", override: { tiers }, ownerApproved: true,
+    });
+    await expect(run(["sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", "[1]"]))
+      .rejects.toThrow("Expected a JSON list of {maxAgeDays, everyMs}");
+    await expect(run([
+      "sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", JSON.stringify(tiers), "--period-ms", "1000",
+    ])).rejects.toThrow("override takes exactly one of");
+    expect(mocks.changeSyncRegistryOverride).toHaveBeenCalledTimes(3);
+  });
+
   it("sync page status --page reads that page only", async () => {
     await run(["sync", "page", "status", "--page", "lora-1"]);
     expect(mocks.findSyncPageByLabel).toHaveBeenCalledWith({}, "lora-1");

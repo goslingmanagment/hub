@@ -199,7 +199,7 @@ describe("the legacy call of the media-stats chunk is unchanged", () => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage();
     await seedQueueFixture(pageId);
-    for (const tiers of [undefined, mediaStatsOwnerTiers()]) {
+    for (const tiers of [undefined, mediaStatsOwnerTiers({ registryOverrides: {} })]) {
       const options = { pageId, now: NOW, longTailCycleDays: 30, ...(tiers === undefined ? {} : { tiers }) };
       const all = await listMediaStatsRefreshChunk(db(), { ...options, limit: 100 });
       expect(all.length).toBeGreaterThan(8);
@@ -222,7 +222,7 @@ describe("the legacy call of the media-stats chunk is unchanged", () => {
     await seedQueueFixture(pageId);
     const tierOf = (rows: MediaStatsRefreshCandidate[]) => new Map(rows.map((row) => [row.subjectRef, row.tier]));
     const legacy = tierOf(await listMediaStatsRefreshChunk(db(), { pageId, limit: 100, now: NOW, longTailCycleDays: 30 }));
-    const owner = tierOf(await listMediaStatsRefreshChunk(db(), { pageId, limit: 100, now: NOW, longTailCycleDays: 30, tiers: mediaStatsOwnerTiers() }));
+    const owner = tierOf(await listMediaStatsRefreshChunk(db(), { pageId, limit: 100, now: NOW, longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }) }));
     // 100 days: mid by the code, the long tail by the owner's tiers; due
     // weekly by the code (visited 12 days ago), not due monthly.
     expect(legacy.get(ref(7))).toBe("mid");
@@ -328,7 +328,7 @@ async function parity(input: {
     cursorText: page.longTailWindowMode,
     state: { ...emptyFanslyMediaStatsCursorState(NOW), seedComplete: true, ...page },
   });
-  const [candidate] = await listMediaStatsRefreshChunk(db(), { pageId, limit: 1, now: NOW, longTailCycleDays: 30, tiers: mediaStatsOwnerTiers() });
+  const [candidate] = await listMediaStatsRefreshChunk(db(), { pageId, limit: 1, now: NOW, longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }) });
   expect(candidate?.subjectRef).toBe(subjectRef);
   const engine = engineVisit(candidate!, page, input.respond(subjectRef));
   const legacy = await legacyVisit(pageId, syncRunId, subjectRef, input.respond(subjectRef));

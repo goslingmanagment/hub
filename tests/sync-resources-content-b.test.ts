@@ -5,12 +5,15 @@ import type { MediaStatsRefreshCandidate } from "@agency_hub_core/db";
 import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
 import { monthIndexOf } from "../apps/runtime/src/services/sync/fansly-stats.ts";
 import { requestJsonOf, requestOfAttempt } from "../apps/runtime/src/sync/engine/commit.ts";
-import { chooseVaultAlbum, servedCardIds } from "../apps/runtime/src/sync/fansly/resources/catalog.ts";
+import { registryOverride, registryOverrideProblem } from "../apps/runtime/src/sync/engine/resource.ts";
+import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { chooseVaultAlbum, servedCardIds, vaultCadence } from "../apps/runtime/src/sync/fansly/resources/catalog.ts";
 import {
   estimateVisitWindows,
   MediaVisitDivergedError,
   mediaStatsOwnerTiers,
   mediaWindowOutcome,
+  replayMediaVisit,
   runMediaVisit,
   startMediaVisit,
   tierEveryMs,
@@ -22,6 +25,7 @@ import {
 import { probeRequestOf } from "../apps/runtime/src/sync/fansly/resources/probe.ts";
 import {
   advanceStatsBackfill,
+  firstHourlyCaptureAt,
   foldStatsBackfill,
   nextHourlyCaptureAt,
   type StatsBackfillState,
@@ -36,6 +40,8 @@ import { allZeroBody, statsBody } from "./helpers/fansly-media-stats-fixtures.ts
 const NOW = new Date("2026-10-02T12:00:00.000Z");
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
+const WEEK = 7 * DAY;
+const NO_OVERRIDES = { registryOverrides: {} };
 const SUBJECT = "777000000000000001";
 const UNPROVEN: MediaStatsPageState = { longTailWindowMode: "unproven", longTailWindowAnnounced: false, longTailProbeFailedDay: null };
 
@@ -95,11 +101,65 @@ const zeros = (window: MediaWindowRequest): Answer => ({
 });
 const span = (window: MediaWindowRequest) => [(NOW.getTime() - window.afterMs) / DAY, (NOW.getTime() - window.beforeMs) / DAY];
 
+const TIERS_OVERRIDE = [{ maxAgeDays: 14, everyMs: 12 * HOUR }, { maxAgeDays: 60, everyMs: 3 * DAY }, { maxAgeDays: null, everyMs: 14 * DAY }];
+const overriding = (key: string, value: unknown) => ({ registryOverrides: { [key]: value } });
+
 describe("media-stats: the owner's tiers (decision №6, D19)", () => {
   it("are the registry's: ≤ 30 d daily, 31–90 d weekly, older monthly", () => {
-    const tiers = mediaStatsOwnerTiers();
+    const tiers = mediaStatsOwnerTiers(NO_OVERRIDES);
     expect(tiers).toEqual({ freshDays: 30, midDays: 90, freshEveryMs: DAY, midEveryMs: 7 * DAY, oldEveryMs: 30 * DAY });
     expect([tierEveryMs(tiers, "fresh"), tierEveryMs(tiers, "mid"), tierEveryMs(tiers, "long_tail")]).toEqual([DAY, 7 * DAY, 30 * DAY]);
+  });
+
+  it("a page's tiers override replaces them on that page, without a deploy; one that does not fit is no override", () => {
+    expect(mediaStatsOwnerTiers(overriding("media-stats.walk", { tiers: TIERS_OVERRIDE }))).toEqual({
+      freshDays: 14, midDays: 60, freshEveryMs: 12 * HOUR, midEveryMs: 3 * DAY, oldEveryMs: 14 * DAY,
+    });
+    const registry = mediaStatsOwnerTiers(NO_OVERRIDES);
+    for (const tiers of [
+      TIERS_OVERRIDE.slice(1),
+      [TIERS_OVERRIDE[1], TIERS_OVERRIDE[0], TIERS_OVERRIDE[2]],
+      [TIERS_OVERRIDE[0], TIERS_OVERRIDE[1], { maxAgeDays: 400, everyMs: DAY }],
+      [TIERS_OVERRIDE[0], TIERS_OVERRIDE[1], { maxAgeDays: null, everyMs: 0 }],
+    ]) {
+      expect(mediaStatsOwnerTiers(overriding("media-stats.walk", { tiers }))).toEqual(registry);
+    }
+    // Another key's override, or a period, leaves them alone.
+    expect(mediaStatsOwnerTiers(overriding("posts.engagement", { tiers: TIERS_OVERRIDE }))).toEqual(registry);
+    expect(mediaStatsOwnerTiers(overriding("media-stats.walk", { everyMs: HOUR }))).toEqual(registry);
+  });
+});
+
+describe("registry overrides: the shapes a page stores and which key takes which (design §4.2, owner decision №6)", () => {
+  const spec = (key: string) => fanslyResourceSpec(key)!;
+
+  it("reads back a period, the cadence periods, the tiers or a switch-off; anything else is no override", () => {
+    expect(registryOverride(overriding("a.b", { everyMs: 5 }), "a.b")).toEqual({ everyMs: 5 });
+    expect(registryOverride(overriding("a.b", { fullEveryMs: 7 }), "a.b")).toEqual({ fullEveryMs: 7 });
+    expect(registryOverride(overriding("a.b", { everyMs: 5, fullEveryMs: 7 }), "a.b")).toEqual({ everyMs: 5, fullEveryMs: 7 });
+    expect(registryOverride(overriding("a.b", { tiers: TIERS_OVERRIDE }), "a.b")).toEqual({ tiers: TIERS_OVERRIDE });
+    expect(registryOverride(overriding("a.b", { enabled: false }), "a.b")).toEqual({ enabled: false });
+    for (const bad of [{}, { everyMs: 0 }, { everyMs: 5, fullEveryMs: -1 }, { tiers: [] }, { tiers: [{ maxAgeDays: 3 }] }, { tiers: [{ maxAgeDays: "x", everyMs: 1 }] }, "5"]) {
+      expect(registryOverride(overriding("a.b", bad), "a.b"), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it("takes each shape only where the module reads it back", () => {
+    expect(registryOverrideProblem(spec("media-stats.walk"), { tiers: TIERS_OVERRIDE })).toBeNull();
+    expect(registryOverrideProblem(spec("media-stats.walk"), { tiers: TIERS_OVERRIDE.slice(1) })).toMatch(/3 tiers expected/);
+    expect(registryOverrideProblem(spec("media-stats.walk"), { everyMs: DAY })).toMatch(/not a poll/);
+    expect(registryOverrideProblem(spec("catalog.vault"), { everyMs: 12 * HOUR, fullEveryMs: 3 * DAY })).toBeNull();
+    expect(registryOverrideProblem(spec("catalog.vault"), { fullEveryMs: 3 * DAY })).toBeNull();
+    expect(registryOverrideProblem(spec("catalog.vault"), { tiers: TIERS_OVERRIDE })).toMatch(/no age tiers/);
+    expect(registryOverrideProblem(spec("catalog.fixed"), { everyMs: 12 * HOUR })).toBeNull();
+    expect(registryOverrideProblem(spec("catalog.fixed"), { everyMs: 12 * HOUR, fullEveryMs: DAY })).toMatch(/full sweep/);
+    // Code values, not the owner's: their modules do not read an override.
+    expect(registryOverrideProblem(spec("posts.engagement"), { tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 180, everyMs: DAY }, { maxAgeDays: null, everyMs: DAY }] }))
+      .toMatch(/no age tiers/);
+    expect(registryOverrideProblem(spec("fan-earnings.roster"), { everyMs: DAY })).toMatch(/not a poll/);
+    for (const key of ["media-stats.walk", "catalog.vault", "catalog.fixed", "posts.engagement"]) {
+      expect(registryOverrideProblem(spec(key), { enabled: false }), key).toBeNull();
+    }
   });
 });
 
@@ -124,6 +184,17 @@ describe("media-stats: one visit, one window a step", () => {
     expect(first.kind).toBe("need");
     const forged: MediaVisit = { ...visit, outcomes: [{ key: "86400000:1:2", ok: { servedAfterMs: null, servedBeforeMs: null, empty: false, buckets: 1, observationId: 1 } }] };
     expect(() => runMediaVisit(forged)).toThrow(MediaVisitDivergedError);
+    // What the walk sees: a visit that no longer replays (other visit rules
+    // since it began) is abandoned, never thrown at the walk.
+    expect(replayMediaVisit(forged)).toBeNull();
+    expect(replayMediaVisit(visit)).toEqual(first);
+  });
+
+  it("begins in the form the journal stores, so the plan and the apply replay the same values", () => {
+    const visit = startMediaVisit(candidate({ ageDays: 10, createdAtPlatform: new Date(Number.NaN) }), UNPROVEN, NOW);
+    expect(visit).toEqual(JSON.parse(JSON.stringify(visit)));
+    expect(visit.snapshot.createdAtPlatformMs).toBeNull();
+    expect(runMediaVisit(JSON.parse(JSON.stringify(visit)) as MediaVisit)).toEqual(runMediaVisit(visit));
   });
 
   it("a visited mid item reads its 30-day refresh only; a late one reads the hole below it too", () => {
@@ -240,30 +311,40 @@ describe("catalog: the vault walk's album choice (legacy rotation)", () => {
 
   it("serves never-completed albums first, round robin after the last served", () => {
     const albums = [album("a1"), album("a2"), album("a3")];
-    const choice = chooseVaultAlbum(albums, { vaultWalk: { a1: walked("a1", "2026-10-01") }, afterAlbumRef: "a2" }, "2026-10-02");
+    const choice = chooseVaultAlbum(albums, { vaultWalk: { a1: walked("a1", "2026-10-01") }, afterAlbumRef: "a2" }, "2026-10-02", WEEK);
     expect(choice).toMatchObject({ album: { albumRef: "a3" }, start: true, parked: [] });
     expect(choice!.walk.beforeRef).toBe("0");
-    expect(chooseVaultAlbum(albums, { vaultWalk: { a1: walked("a1", "2026-10-01"), a3: walked("a3", "2026-10-01") }, afterAlbumRef: "a3" }, "2026-10-02"))
+    expect(chooseVaultAlbum(albums, { vaultWalk: { a1: walked("a1", "2026-10-01"), a3: walked("a3", "2026-10-01") }, afterAlbumRef: "a3" }, "2026-10-02", WEEK))
       .toMatchObject({ album: { albumRef: "a2" } });
+  });
+
+  it("re-walks an album as soon as the page's full-sweep override says (owner decision №6)", () => {
+    const fresh = { a1: walked("a1", "2026-09-29") };
+    expect(vaultCadence(NO_OVERRIDES)).toEqual({ everyMs: DAY, fullEveryMs: WEEK });
+    const cadence = vaultCadence(overriding("catalog.vault", { fullEveryMs: 3 * DAY }));
+    expect(cadence).toEqual({ everyMs: DAY, fullEveryMs: 3 * DAY });
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02", WEEK)).toBeNull();
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02", cadence.fullEveryMs)).toMatchObject({ start: true });
+    expect(vaultCadence(overriding("catalog.vault", { everyMs: 12 * HOUR, fullEveryMs: 14 * DAY }))).toEqual({ everyMs: 12 * HOUR, fullEveryMs: 14 * DAY });
   });
 
   it("re-walks an album whose head or count moved, or whose walk is a week old; rests when every album is walked", () => {
     const fresh = { a1: walked("a1", "2026-10-01") };
-    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02")).toBeNull();
-    const moved = chooseVaultAlbum([album("a1", 3, "a1-newer")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02");
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02", WEEK)).toBeNull();
+    const moved = chooseVaultAlbum([album("a1", 3, "a1-newer")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02", WEEK);
     expect(moved).toMatchObject({ start: true, walk: { done: false, lastCompleteWalkAt: "2026-10-01T01:00:00.000Z" } });
-    expect(chooseVaultAlbum([album("a1", 4)], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02")).not.toBeNull();
-    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-08")).not.toBeNull();
-    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-07")).toBeNull();
+    expect(chooseVaultAlbum([album("a1", 4)], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-02", WEEK)).not.toBeNull();
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-08", WEEK)).not.toBeNull();
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: fresh, afterAlbumRef: null }, "2026-10-07", WEEK)).toBeNull();
   });
 
   it("continues a walk under way at its cursor, and parks an imported one at a repeated cursor or the page cap", () => {
     const midway = { ...emptyAlbumWalk(), beforeRef: "m50", lastRequestedBefore: "0", sawRows: true, pages: 1, proof: walked("a1", "2026-10-01").proof };
-    expect(chooseVaultAlbum([album("a1")], { vaultWalk: { a1: midway }, afterAlbumRef: null }, "2026-10-02"))
+    expect(chooseVaultAlbum([album("a1")], { vaultWalk: { a1: midway }, afterAlbumRef: null }, "2026-10-02", WEEK))
       .toMatchObject({ start: false, walk: { beforeRef: "m50" } });
     const stuck = { ...midway, lastRequestedBefore: "m50" };
     const capped = { ...midway, beforeRef: "m99", pages: 400 };
-    const choice = chooseVaultAlbum([album("a1"), album("a2"), album("a3")], { vaultWalk: { a1: stuck, a2: capped }, afterAlbumRef: null }, "2026-10-02");
+    const choice = chooseVaultAlbum([album("a1"), album("a2"), album("a3")], { vaultWalk: { a1: stuck, a2: capped }, afterAlbumRef: null }, "2026-10-02", WEEK);
     expect(choice).toMatchObject({ album: { albumRef: "a3" }, parked: [{ album: { albumRef: "a1" }, reason: "repeat_request" }, { album: { albumRef: "a2" }, reason: "page_cap" }] });
   });
 
@@ -371,9 +452,25 @@ describe("stats: the history walks, one request a step", () => {
 
 describe("stats: the hourly capture's spacing", () => {
   it("is the 22 h period ±10 %, never past the 23 h two windows need to meet", () => {
-    expect(nextHourlyCaptureAt(NOW, 0).getTime() - NOW.getTime()).toBe(Math.round(22 * HOUR * 0.9));
-    expect(nextHourlyCaptureAt(NOW, 0.5).getTime() - NOW.getTime()).toBe(22 * HOUR);
-    expect(nextHourlyCaptureAt(NOW, 1).getTime() - NOW.getTime()).toBe(23 * HOUR);
+    expect(nextHourlyCaptureAt(NOW, 0, NO_OVERRIDES).getTime() - NOW.getTime()).toBe(Math.round(22 * HOUR * 0.9));
+    expect(nextHourlyCaptureAt(NOW, 0.5, NO_OVERRIDES).getTime() - NOW.getTime()).toBe(22 * HOUR);
+    expect(nextHourlyCaptureAt(NOW, 1, NO_OVERRIDES).getTime() - NOW.getTime()).toBe(23 * HOUR);
+  });
+
+  it("takes the page's period override, still never past 23 h", () => {
+    expect(nextHourlyCaptureAt(NOW, 0.5, overriding("stats.hourly", { everyMs: 12 * HOUR })).getTime() - NOW.getTime()).toBe(12 * HOUR);
+    expect(nextHourlyCaptureAt(NOW, 0.5, overriding("stats.hourly", { everyMs: 30 * HOUR })).getTime() - NOW.getTime()).toBe(23 * HOUR);
+  });
+
+  it("the first capture after the switch is due by legacy's last one (A15), never by the poll row's random phase", () => {
+    const ago = (hours: number) => new Date(NOW.getTime() - hours * HOUR).toISOString();
+    expect(firstHourlyCaptureAt(ago(2), NOW).getTime()).toBe(NOW.getTime() + 20 * HOUR);
+    // Already past the period (or never captured, or unreadable): at once.
+    expect(firstHourlyCaptureAt(ago(23), NOW)).toEqual(NOW);
+    expect(firstHourlyCaptureAt(null, NOW)).toEqual(NOW);
+    expect(firstHourlyCaptureAt("not a date", NOW)).toEqual(NOW);
+    // A last capture stamped ahead of this clock: never more than 23 h out.
+    expect(firstHourlyCaptureAt(ago(-5), NOW).getTime()).toBe(NOW.getTime() + 23 * HOUR);
   });
 });
 
