@@ -49,6 +49,10 @@ export const STEADY_STATE_BAND_PER_HOUR = { min: 40, max: 100 } as const;
  *  at once), so a gap longer than this after a step's completion starts a new
  *  run. Below (1 − jitter) × the shortest poll period (5 min), pinned by test. */
 export const POLL_RUN_GAP_MS = 120_000;
+/** A run still stepping in the window ran away (rules A1.poll-schedule,
+ *  A1.rate) past `factor` × the key's largest earlier run + `slackSteps`
+ *  requests (a head check that found a few more pages is no runaway). */
+export const RUNAWAY_RUN = { factor: 2, slackSteps: 10 } as const;
 /** A due poll waits for its planned slot (the pacer, the planned round robin). */
 export const POLL_DUE_SLACK_MS = 120_000;
 /** Clock tolerance of the early-run check. */
@@ -133,9 +137,12 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
     text: "A key that runs on a fixed period longer than the window — a poll, or a walk with a minimum interval "
       + "(followers.reconcile) — counts in the steady state as its run size × window / period, the rate the plan's "
       + "estimate is (plan §13: 40–100 an hour is the same row as 1–2.5 thousand a day). The run size is its newest "
-      + "shadow run that finished before the window end, within 1.1 × the period + 1 h; the window's attempts of a run "
-      + "that came early (a demand bump, an owner's walk within the interval) count besides. Without such a run the "
-      + "steady state is unknown and A1 fails until the key has run.",
+      + "regular shadow run that finished before the window end, within 1.1 × the period + 1 h. Counted besides: the "
+      + "window's attempts of a run that came early (a demand bump, an owner's walk within the interval), and those of "
+      + "any other run beyond its first run-size requests (a run that never finishes or grows past the sizing run "
+      + "counts as it steps). A walk still stepping inside the window with more than 2 × its largest earlier walk + 10 "
+      + "requests is a runaway and fails A1 on any page. Without a sizing run the steady state is unknown and A1 fails "
+      + "until the key has run.",
   },
   {
     id: "A1.ceiling",
@@ -146,16 +153,27 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
     id: "A1.floor",
     text: "Below 40 an hour a page passes only when every resource of the page with a computed expectation is at it "
       + "(no row outside, every poll on schedule) and every legacy stream or sender with traffic on the page (on its "
-      + "A2 basis) has a shadow counterpart: a registry key that runs in shadow on the page, and shadow volume in the "
-      + "stream's A2 row (legacy volume against a shadow of 0 lacks one). Counterparts that never run in shadow by "
-      + "design — live-only keys, history requests — are listed, not required.",
+      + "A2 basis) has a shadow counterpart on that page: a registry key that runs in shadow there and has shadow "
+      + "attempts on the page within its shadow history (from its first shadow admission, at most 7 days); other "
+      + "pages' volume never counts. A page whose shadow history is still shorter than the stream's shortest key "
+      + "recurrence + 2 min, without an attempt yet, is not yet judgeable and fails the exception like an unknown rate. "
+      + "A stream only demand drives (the socket, an apply, an owner's or the API's request; no key recurs by itself) "
+      + "needs no volume on the page: the page's own demand rows hold the reads its frames imply against the shadow's, "
+      + "so it is listed. Counterparts that never run in shadow by design — live-only keys, history requests — are "
+      + "listed, not required.",
   },
   {
     id: "A1.poll-schedule",
-    text: "Polls are judged in runs, not requests (a snapshot sequence or a cursor walk is one run of many requests): "
-      + "a run starts 0.9–1.1 × the period after the previous run's completion (+ 2 min admission), earlier only on a "
-      + "demand bump (a new demand_revision); the first run within one period (+ 2 min) of the poll row's placement; "
-      + "no poll overdue at the window end. A poll off this schedule fails A1 on any page.",
+    text: "Polls are judged in runs, not requests (a snapshot sequence or a cursor walk is one run of many requests; "
+      + "a single-request poll's run is its one request): a run starts 0.9–1.1 × the period after the previous run's "
+      + "completion (+ 2 min admission), earlier only on a demand bump (a new demand_revision); the first run within one "
+      + "period (+ 2 min) of the poll row's placement; no poll overdue at the window end. Every run that steps inside "
+      + "the window is judged, the one that began before it included; such a run with more than 2 × the key's largest "
+      + "earlier run + 10 requests, or still stepping longer after it began than the period (at most the window), is a "
+      + "runaway. A poll off this schedule or with a runaway run fails A1 on any page. Demand runs are held against "
+      + "the reads the window's socket frames imply: 0.5–2× where only the socket bumps the poll; where an apply or a "
+      + "dependency bumps it too, at least 0.5× those reads and at most the period's runs + 2× those reads; a row "
+      + "outside is listed (rule A1.floor).",
   },
   {
     id: "A2.rate",
@@ -217,19 +235,32 @@ export interface KeyRun {
 
 export type RunAttempt = Pick<SyncRunAttempt, "workId" | "demandRevision"> & { sentMs: number; doneMs: number; workClosedMs: number | null };
 
+/** How a key's attempts group into runs: a poll's by the run gap, a
+ *  single-request poll's (`walk: "single"`) one attempt each, a walk's by its
+ *  work row. */
+export type RunGrouping = "poll" | "single" | "walk";
+
+export function runGroupingOf(spec: Pick<ResourceSpec, "kind" | "walk">): RunGrouping {
+  if (spec.kind !== "poll") return "walk";
+  return spec.walk === "single" ? "single" : "poll";
+}
+
 /**
  * A key's attempts (one subject, send order) as runs. A poll's run is its
  * consecutive steps: a new run starts after a gap longer than
  * `POLL_RUN_GAP_MS` or at a new demand revision (a bump is a read of its own).
- * A walk's run is its work row (a walk closes its row; the next walk is a new
- * one); attempts without a row fall back to the gap rule.
+ * A single-request poll's run is its one attempt: a re-run seconds later is a
+ * run of its own, never merged. A walk's run is its work row (a walk closes
+ * its row; the next walk is a new one); attempts without a row fall back to
+ * the gap rule.
  */
-export function runsOf(attempts: readonly RunAttempt[], by: "poll" | "walk"): KeyRun[] {
+export function runsOf(attempts: readonly RunAttempt[], by: RunGrouping): KeyRun[] {
   const runs: KeyRun[] = [];
   let current: KeyRun | null = null;
   for (const attempt of [...attempts].sort((a, b) => a.sentMs - b.sentMs)) {
     const gap = current === null ? Number.POSITIVE_INFINITY : attempt.sentMs - current.doneMs;
     const fresh = current === null
+      || by === "single"
       || (by === "walk" && (attempt.workId !== current.workId || (attempt.workId === null && gap > POLL_RUN_GAP_MS)))
       || (by === "poll" && (gap > POLL_RUN_GAP_MS || attempt.demandRevision !== current.demandRevision));
     if (fresh) {
@@ -270,15 +301,71 @@ export interface PollSchedule {
   late: Array<{ at: Date; afterMs: number }>;
   /** No run by the window end although one was due. */
   overdue: { dueBy: Date } | null;
+  /** Runs still stepping in the window that ran away (`runawayRuns`). */
+  runaway: RunawayRun[];
+}
+
+/** A run still stepping inside the window past its bound (rules
+ *  A1.poll-schedule, A1.rate). */
+export interface RunawayRun {
+  at: Date;
+  attempts: number;
+  spanMs: number;
+  /** `size`: more requests than `RUNAWAY_RUN` × the largest earlier run;
+   *  `span`: still stepping longer after it began than `limitMs`. */
+  bound: "size" | "span";
+  limit: number;
+}
+
+function stepsInWindow(run: KeyRun, window: { startMs: number; endMs: number }): boolean {
+  return run.startMs < window.endMs && run.lastSentMs >= window.startMs;
+}
+
+function attemptsInWindow(sentMs: readonly number[], window: { startMs: number; endMs: number }): number {
+  return sentMs.filter((ms) => ms >= window.startMs && ms < window.endMs).length;
 }
 
 /**
- * Judge a poll's runs over the window: each run against the previous run's
- * completion (due 0.9–1.1 × period later; earlier only at a new demand
- * revision), the first run against the row's placement (due within one
- * period), and the window end against the last run (rule A1.poll-schedule).
- * `runs` are the key's runs from at least 1.1 × period + slack before the
- * window: the newest that started before the window is the anchor.
+ * The runs of a key that are still stepping inside the window and ran away:
+ * more requests than `RUNAWAY_RUN.factor` × the key's largest earlier run +
+ * `RUNAWAY_RUN.slackSteps`, or (`spanLimitMs`, a poll: its period, at most
+ * the window) still stepping longer than that after the run began — a round
+ * of a poll ends before the next one is due, and a re-admission loop faster
+ * than the run gap is one long run. A run that began before the window counts
+ * when it still steps inside it. Without an earlier run only the span bounds.
+ */
+export function runawayRuns(input: {
+  runs: readonly KeyRun[];
+  window: { startMs: number; endMs: number };
+  spanLimitMs: number | null;
+}): RunawayRun[] {
+  const runaway: RunawayRun[] = [];
+  let largest: number | null = null;
+  for (const run of input.runs) {
+    if (stepsInWindow(run, input.window)) {
+      const attempts = run.sentMs.length;
+      const spanMs = run.lastSentMs - run.startMs;
+      const sizeLimit = largest === null ? null : RUNAWAY_RUN.factor * largest + RUNAWAY_RUN.slackSteps;
+      if (sizeLimit !== null && attempts > sizeLimit) {
+        runaway.push({ at: new Date(run.startMs), attempts, spanMs, bound: "size", limit: sizeLimit });
+      } else if (input.spanLimitMs !== null && spanMs > input.spanLimitMs) {
+        runaway.push({ at: new Date(run.startMs), attempts, spanMs, bound: "span", limit: input.spanLimitMs });
+      }
+    }
+    largest = Math.max(largest ?? 0, run.sentMs.length);
+  }
+  return runaway;
+}
+
+/**
+ * Judge a poll's runs over the window: each run that steps inside it — the
+ * window's own runs and the anchor (the newest run that began before it)
+ * while it still steps — against the previous run's completion (due 0.9–1.1 ×
+ * period later; earlier only at a new demand revision), the first run against
+ * the row's placement (due within one period), the window end against the
+ * last run, and every such run against its runaway bounds (rule
+ * A1.poll-schedule). `runs` are the key's runs from at least 1.1 × period +
+ * slack before the window.
  */
 export function judgePollRuns(input: {
   periodMs: number;
@@ -287,11 +374,12 @@ export function judgePollRuns(input: {
   runs: readonly KeyRun[];
 }): PollSchedule {
   const { periodMs, window } = input;
+  const windowMs = window.endMs - window.startMs;
   const lateAfterMs = (1 + POLL_JITTER) * periodMs + POLL_DUE_SLACK_MS;
   const earlyBeforeMs = (1 - POLL_JITTER) * periodMs - EARLY_TOLERANCE_MS;
-  const before = input.runs.filter((run) => run.startMs < window.startMs);
-  const inWindow = input.runs.filter((run) => run.startMs >= window.startMs && run.startMs < window.endMs);
-  const anchor = before.at(-1) ?? null;
+  const started = input.runs.filter((run) => run.startMs < window.endMs);
+  const inWindow = started.filter((run) => run.startMs >= window.startMs);
+  const anchor = started.filter((run) => run.startMs < window.startMs).at(-1) ?? null;
   // The first run of a row placed with a random phase is due within one period.
   const placedDueBy = input.placementMs === null ? null : input.placementMs + periodMs + POLL_DUE_SLACK_MS;
   const schedule: PollSchedule = {
@@ -300,8 +388,8 @@ export function judgePollRuns(input: {
     attemptsPerRun: inWindow.map((run) => run.sentMs.length),
     demandRuns: 0,
     expectedRuns: {
-      min: Math.floor((window.endMs - window.startMs) / ((1 + POLL_JITTER) * periodMs)),
-      max: Math.ceil((window.endMs - window.startMs) / ((1 - POLL_JITTER) * periodMs)),
+      min: Math.floor(windowMs / ((1 + POLL_JITTER) * periodMs)),
+      max: Math.ceil(windowMs / ((1 - POLL_JITTER) * periodMs)),
     },
     previous: anchor !== null
       ? { doneAt: new Date(anchor.doneMs) }
@@ -309,47 +397,80 @@ export function judgePollRuns(input: {
     early: [],
     late: [],
     overdue: null,
+    runaway: runawayRuns({ runs: started, window, spanLimitMs: Math.min(periodMs, windowMs) }),
   };
-  let previous: KeyRun | null = anchor;
-  for (const run of inWindow) {
+  for (const [index, run] of started.entries()) {
+    const own = run.startMs >= window.startMs;
+    // The anchor is judged only while it still steps inside the window.
+    if (!own && !(run === anchor && stepsInWindow(run, window))) continue;
+    const previous = index === 0 ? null : started[index - 1]!;
     if (previous !== null) {
       const gap = run.startMs - previous.doneMs;
       const bumped = run.demandRevision !== previous.demandRevision;
-      if (bumped) schedule.demandRuns += 1;
-      else if (gap < earlyBeforeMs) schedule.early.push({ at: new Date(run.startMs), afterMs: gap });
+      if (bumped) {
+        if (own) schedule.demandRuns += 1;
+      } else if (gap < earlyBeforeMs) {
+        schedule.early.push({ at: new Date(run.startMs), afterMs: gap });
+      }
       if (gap > lateAfterMs) schedule.late.push({ at: new Date(run.startMs), afterMs: gap });
-    } else if (placedDueBy !== null && run.startMs > placedDueBy) {
+    } else if (own && placedDueBy !== null && run.startMs > placedDueBy) {
       schedule.late.push({ at: new Date(run.startMs), afterMs: run.startMs - input.placementMs! });
     }
-    previous = run;
   }
-  const dueBy = previous !== null ? previous.doneMs + lateAfterMs : placedDueBy;
+  const last = started.at(-1) ?? null;
+  const dueBy = last !== null ? last.doneMs + lateAfterMs : placedDueBy;
   if (dueBy !== null && dueBy < window.endMs) schedule.overdue = { dueBy: new Date(dueBy) };
   return schedule;
 }
 
+function minutesText(ms: number): string {
+  return `${(ms / 60_000).toFixed(1)} min`;
+}
+
+/** Why runs ran away (one clause per run). */
+export function runawayText(runaway: readonly RunawayRun[]): string[] {
+  return runaway.map((run) => run.bound === "size"
+    ? `runaway: the run of ${run.at.toISOString()} still steps inside the window at ${run.attempts} requests, `
+      + `more than ${run.limit} (${RUNAWAY_RUN.factor} × the largest earlier run + ${RUNAWAY_RUN.slackSteps})`
+    : `runaway: the run of ${run.at.toISOString()} still steps inside the window ${minutesText(run.spanMs)} after it began `
+      + `(${run.attempts} requests), longer than ${minutesText(run.limit)}`);
+}
+
+/** At most this many runs of one fault are named; the rest are counted. */
+const LISTED_RUN_FAULTS = 3;
+
+function listedFaults(faults: readonly string[], what: string): string[] {
+  if (faults.length <= LISTED_RUN_FAULTS) return [...faults];
+  return [...faults.slice(0, LISTED_RUN_FAULTS), `… and ${faults.length - LISTED_RUN_FAULTS} more ${what} runs`];
+}
+
 /** Why a poll is off its schedule (null: on it). */
 export function pollScheduleFault(schedule: PollSchedule): string | null {
-  const minutes = (ms: number) => `${(ms / 60_000).toFixed(1)} min`;
   const faults = [
-    ...schedule.early.map((run) => `early: a run at ${run.at.toISOString()} ${minutes(run.afterMs)} after the previous one at the same demand revision`),
-    ...schedule.late.map((run) => `late: a run at ${run.at.toISOString()} ${minutes(run.afterMs)} after the previous one`),
+    ...listedFaults(schedule.early.map((run) => `early: a run at ${run.at.toISOString()} ${minutesText(run.afterMs)} after the previous one at the same demand revision`), "early"),
+    ...listedFaults(schedule.late.map((run) => `late: a run at ${run.at.toISOString()} ${minutesText(run.afterMs)} after the previous one`), "late"),
     ...(schedule.overdue === null ? [] : [`overdue: no run since one was due by ${schedule.overdue.dueBy.toISOString()}`]),
+    ...runawayText(schedule.runaway),
   ];
-  return faults.length === 0 ? null : `${faults.join("; ")} (period ${minutes(schedule.periodMs)}, rule A1.poll-schedule)`;
+  return faults.length === 0 ? null : `${faults.join("; ")} (period ${minutesText(schedule.periodMs)}, rule A1.poll-schedule)`;
 }
 
 /** A key's count at its rate (rule A1.rate). */
 export interface RateCount {
   periodMs: number;
-  /** Requests of its newest run that finished before the window end, within
-   *  the look-back; null without one. */
+  /** Requests of its newest regular (not early) run that finished before the
+   *  window end, within the look-back (else of its newest finished run); null
+   *  without one. */
   runSize: number | null;
   runAt: Date | null;
   /** The window's attempts of runs that came early (a demand bump, an owner's
    *  walk within the interval): counted besides the rate. */
   extra: number;
-  /** runSize × window / period + extra; null without a run size. */
+  /** The window's attempts of every other run beyond its first `runSize`
+   *  requests (a run still going, or grown past the sizing run — a runaway
+   *  walk or poll): counted besides the rate. */
+  beyond: number;
+  /** runSize × window / period + extra + beyond; null without a run size. */
   counted: number | null;
 }
 
@@ -360,40 +481,57 @@ export function runLookbackMs(periodMs: number): number {
 
 /**
  * A key that runs on a fixed period longer than the window counted at its
- * rate: its newest finished run's requests × window / period (rule A1.rate).
- * A poll's run is finished once another began or no step followed within the
- * run gap before the window end; a walk's once its row closed. `interval`:
- * a walk whose period is its minimum interval between starts.
+ * rate: its newest regular finished run's requests × window / period (rule
+ * A1.rate). A poll's run is finished once another began or no step followed
+ * within the run gap before the window end (a single-request poll's at its
+ * completion); a walk's once its row closed. A run is early when it began
+ * sooner than 0.9 × the period after the previous one's completion (a walk:
+ * than its minimum interval after the previous one's start); the window's
+ * attempts of an early run count besides, and so do those of every other run
+ * beyond its first `runSize` requests — a run that never finishes or grows
+ * past the sizing run counts as it steps, a normal one stays
+ * phase-independent. `interval`: a walk whose period is its minimum interval
+ * between starts.
  */
 export function rateCount(input: {
   periodMs: number;
   window: { startMs: number; endMs: number };
   runs: readonly KeyRun[];
   kind: "poll" | "interval";
+  single?: boolean;
 }): RateCount {
   const { periodMs, window, runs } = input;
-  const finished = runs.filter((run, index) => run.startMs < window.endMs && run.startMs >= window.endMs - runLookbackMs(periodMs) && (
+  const early = runs.map((run, index) => {
+    if (index === 0) return false;
+    const previous = runs[index - 1]!;
+    return input.kind === "interval"
+      ? run.startMs - previous.startMs < periodMs
+      : run.startMs - previous.doneMs < (1 - POLL_JITTER) * periodMs - EARLY_TOLERANCE_MS;
+  });
+  const finished = runs.map((run, index) => run.startMs < window.endMs && run.startMs >= window.endMs - runLookbackMs(periodMs) && (
     (index < runs.length - 1 && runs[index + 1]!.startMs < window.endMs)
     || (input.kind === "interval" && run.workId !== null
       ? run.workClosedMs !== null && run.workClosedMs <= window.endMs
-      : run.lastSentMs + POLL_RUN_GAP_MS <= window.endMs)));
-  const newest = finished.at(-1) ?? null;
-  let extra = 0;
-  for (const [index, run] of runs.entries()) {
-    if (run.startMs < window.startMs || run.startMs >= window.endMs || index === 0) continue;
-    const previous = runs[index - 1]!;
-    const early = input.kind === "interval"
-      ? run.startMs - previous.startMs < periodMs
-      : run.startMs - previous.doneMs < (1 - POLL_JITTER) * periodMs - EARLY_TOLERANCE_MS;
-    if (early) extra += run.sentMs.filter((ms) => ms >= window.startMs && ms < window.endMs).length;
-  }
+      : input.single === true
+        ? run.doneMs <= window.endMs
+        : run.lastSentMs + POLL_RUN_GAP_MS <= window.endMs)));
+  const newestIndex = (regular: boolean) => finished.findLastIndex((done, index) => done && (!regular || !early[index]));
+  const sizing = newestIndex(true) >= 0 ? newestIndex(true) : newestIndex(false);
+  const newest = sizing >= 0 ? runs[sizing]! : null;
   const runSize = newest === null ? null : newest.sentMs.length;
+  let extra = 0;
+  let beyond = 0;
+  for (const [index, run] of runs.entries()) {
+    if (early[index]) extra += attemptsInWindow(run.sentMs, window);
+    else if (runSize !== null) beyond += attemptsInWindow(run.sentMs.slice(runSize), window);
+  }
   return {
     periodMs,
     runSize,
     runAt: newest === null ? null : new Date(newest.startMs),
     extra,
-    counted: runSize === null ? null : runSize * ((window.endMs - window.startMs) / periodMs) + extra,
+    beyond,
+    counted: runSize === null ? null : runSize * ((window.endMs - window.startMs) / periodMs) + extra + beyond,
   };
 }
 
@@ -516,23 +654,50 @@ export function legacyVolumeRow(input: {
 export interface CounterpartCheck {
   /** A legacy stream or sender with traffic on the page and no shadow counterpart. */
   lacking: Array<{ ref: string; why: string }>;
+  /** A legacy stream whose keys have not run in shadow on the page yet while
+   *  its shadow history is shorter than their shortest recurrence: not yet
+   *  judgeable, so the exception fails (like an unknown rate). */
+  pending: Array<{ ref: string; why: string }>;
+  /** A legacy stream only demand drives (no key recurs by itself) without a
+   *  shadow attempt on the page: none was due by the page's own frames and
+   *  applies, which its demand rows judge (listed, not required). */
+  onDemand: Array<{ ref: string; why: string }>;
   /** Counterparts that never run in shadow by design (listed, not required). */
   notInShadow: Array<{ ref: string; why: "live_only" | "history_requests" }>;
 }
 
+/** The page's own shadow facts the counterpart check reads (rule A1.floor). */
+export interface PageShadowHistory {
+  /** Shadow attempts per key on the page from its first shadow admission
+   *  (at most 7 days back) to the window end. */
+  attempts: ReadonlyMap<string, number>;
+  /** That history's length; null without a shadow admission. */
+  historyMs: number | null;
+}
+
+function hoursText(ms: number): string {
+  return `${roundTo2(ms / HOUR_MS)} h`;
+}
+
 /**
  * Whether every legacy stream or sender with traffic on the page (`legacy`:
- * its attempts on the row's comparison basis) has a shadow counterpart on the
- * page: a registry key that runs in shadow there (not live-only, not switched
- * off, not a history request), and shadow volume on the row (rule A1.floor).
+ * its attempts on the page on the row's comparison basis) has a shadow
+ * counterpart on the same page: a registry key that runs in shadow there (not
+ * live-only, not switched off, not a history request) and has shadow attempts
+ * on the page within its shadow history (rule A1.floor). Other pages' volume
+ * never counts. Without an attempt yet, a page whose history is shorter than
+ * the stream's shortest key recurrence (+ the admission slack) is not yet
+ * judgeable, and past it lacks one. A stream only demand drives (the socket,
+ * an apply, an owner's or the API's request) needs no volume: the page's
+ * demand rows hold its frames' reads against the shadow's, so it is listed.
  */
 export function legacyCounterparts(input: {
   page: Pick<SyncPageRow, "registryOverrides">;
   legacy: ReadonlyMap<string, number>;
   specsByRef: ReadonlyMap<string, readonly ResourceSpec[]>;
-  rows: ReadonlyMap<string, Pick<LegacyVolumeRow, "legacy" | "shadow" | "basis">>;
+  shadow: PageShadowHistory;
 }): CounterpartCheck {
-  const check: CounterpartCheck = { lacking: [], notInShadow: [] };
+  const check: CounterpartCheck = { lacking: [], pending: [], onDemand: [], notInShadow: [] };
   for (const [ref, attempts] of [...input.legacy].sort(([a], [b]) => a.localeCompare(b))) {
     if (attempts <= 0) continue;
     const specs = input.specsByRef.get(ref) ?? [];
@@ -546,9 +711,23 @@ export function legacyCounterparts(input: {
       }
       continue;
     }
-    const row = input.rows.get(ref);
-    if (row !== undefined && row.legacy > 0 && row.shadow === 0) {
-      check.lacking.push({ ref, why: `legacy ${row.legacy}, the shadow none (${row.basis})` });
+    const shadow = steady.reduce((total, spec) => total + (input.shadow.attempts.get(spec.key) ?? 0), 0);
+    if (shadow > 0) continue;
+    const historyMs = input.shadow.historyMs;
+    const history = historyMs === null ? "no shadow history" : `${hoursText(historyMs)} of shadow history`;
+    const periodic = steady.map((spec) => recurrenceMs(spec, input.page)).filter((ms): ms is number => ms !== null && ms > 0);
+    if (periodic.length === 0) {
+      check.onDemand.push({
+        ref,
+        why: `legacy ${attempts} on its A2 basis; only demand drives ${steady.map((spec) => spec.key).join(", ")}, none in ${history} on the page (its demand rows judge the page's frames)`,
+      });
+      continue;
+    }
+    const dueWithinMs = Math.min(...periodic) + POLL_DUE_SLACK_MS;
+    if (historyMs === null || historyMs < dueWithinMs) {
+      check.pending.push({ ref, why: `not yet judgeable: legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; its keys' first run is due within ${hoursText(dueWithinMs)} of the shadow's start` });
+    } else {
+      check.lacking.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page` });
     }
   }
   return check;
@@ -907,6 +1086,11 @@ export interface PageRunFacts {
 
 const NO_RUN_FACTS: PageRunFacts = { runs: new Map(), placements: new Map(), firstShadowMs: null };
 
+/** What a key counted at its rate counts besides (rule A1.rate). */
+function besidesText(rate: RateCount): string {
+  return `${rate.extra > 0 ? `, + ${rate.extra} of an early run` : ""}${rate.beyond > 0 ? `, + ${rate.beyond} beyond the run size` : ""}`;
+}
+
 function roundTo2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -964,12 +1148,25 @@ export function demandOfPage(
     if (workClass === "urgent" || workClass === "requests" || workClass === "planned") attempts[workClass] += observed;
     const runs = input.facts.runs.get(key) ?? [];
     const ratePeriod = spec === undefined ? null : ratePeriodMs(spec, page, windowMs);
-    const rate = ratePeriod === null ? null : rateCount({ ...ratePeriod, window: input.window, runs });
+    const rate = ratePeriod === null
+      ? null
+      : rateCount({ ...ratePeriod, window: input.window, runs, single: spec !== undefined && runGroupingOf(spec) === "single" });
     if (spec?.kind === "goal") {
       const oneTimeBacklog = isOneTimeWalk(spec);
       walks.push({ resource: key, observed, oneTimeBacklog });
       if (oneTimeBacklog || workClass === "requests") continue;
       count(key, observed, rate);
+      // A walk on a minimum interval that keeps stepping past its earlier
+      // walks' size ran away (rule A1.rate).
+      const runaway = rate === null ? [] : runawayRuns({ runs, window: input.window, spanLimitMs: null });
+      const runawayFault = runaway.length === 0 ? null : `${runawayText(runaway).join("; ")} (rule A1.rate)`;
+      if (runawayFault !== null) scheduleFaults.push(`${key}: ${runawayFault}`);
+      const reason = rate === null
+        ? "a recurring walk: its steps are not modelled per resource; counted in the steady state as observed"
+        : rate.counted === null
+          ? `a walk at most every ${durationText(rate.periodMs)}: no finished walk to size it yet (rule A1.rate)`
+          : `a walk at most every ${durationText(rate.periodMs)}: counted at its rate, ${rate.runSize} steps per `
+            + `${durationText(rate.periodMs)} (the walk of ${rate.runAt!.toISOString()}${besidesText(rate)}; rule A1.rate)`;
       rows.push({
         resource: key,
         class: workClass,
@@ -979,13 +1176,8 @@ export function demandOfPage(
         ratio: null,
         runs: null,
         rate,
-        verdict: "not_modelled",
-        reason: rate === null
-          ? "a recurring walk: its steps are not modelled per resource; counted in the steady state as observed"
-          : rate.counted === null
-            ? `a walk at most every ${durationText(rate.periodMs)}: no finished walk to size it yet (rule A1.rate)`
-            : `a walk at most every ${durationText(rate.periodMs)}: counted at its rate, ${rate.runSize} steps per `
-              + `${durationText(rate.periodMs)} (the walk of ${rate.runAt!.toISOString()}${rate.extra > 0 ? `, + ${rate.extra} of an early walk` : ""}; rule A1.rate)`,
+        verdict: runawayFault === null ? "not_modelled" : "outside",
+        reason: runawayFault === null ? reason : `${reason}; ${runawayFault}`,
       });
       continue;
     }
@@ -1022,7 +1214,9 @@ export function demandOfPage(
   const ceiling = unknownRunSize.length > 0 ? "unknown" : steadyState <= band.max ? "ok" : "over";
   const outside = rows.filter((row) => row.verdict === "outside");
   const below = steadyState < band.min;
-  const holds = below ? outside.length === 0 && input.counterparts.lacking.length === 0 : null;
+  const holds = below
+    ? outside.length === 0 && input.counterparts.lacking.length === 0 && input.counterparts.pending.length === 0
+    : null;
   return {
     page: page.pageLabel ?? String(page.pageId),
     mode: page.mode,
@@ -1043,8 +1237,9 @@ export function demandOfPage(
 }
 
 /** A poll's row: its schedule in runs (rule A1.poll-schedule); its demand
- *  runs against the reads the window's frames imply where only the socket
- *  bumps it. */
+ *  runs against the reads the window's frames imply — both ways where only
+ *  the socket bumps it, one-sided below and loosely above where an apply or a
+ *  dependency bumps it too. */
 function pollRow(input: {
   spec: ResourceSpec;
   key: string;
@@ -1072,14 +1267,35 @@ function pollRow(input: {
     + `${sizes.length === 0 ? "" : sizes.every((n) => n === 1) ? ` × 1 request` : ` of ${sizes.join(", ")} requests`}`
     + `${schedule.demandRuns === 0 ? "" : ` (${schedule.demandRuns} on a demand bump)`}; ${schedule.expectedRuns.min}–${schedule.expectedRuns.max} due `
     + `every ${durationText(input.periodMs)} ±10 %`
-    + `${input.rate === null ? "" : input.rate.counted === null ? "; no finished run to size its rate" : `; counted at its rate, ${input.rate.runSize} per ${durationText(input.periodMs)}`}`;
+    + `${input.rate === null ? "" : input.rate.counted === null ? "; no finished run to size its rate" : `; counted at its rate, ${input.rate.runSize} per ${durationText(input.periodMs)}${besidesText(input.rate)}`}`;
   const fault = pollScheduleFault(schedule);
   if (fault !== null) return { ...base, expected: socket, ratio: null, verdict: "outside", reason: `${runsText}; ${fault}` };
-  // Demand runs are judged against the frames only where the socket (and the
-  // period) alone bump the poll; an apply's or a dependency's bump is not modelled.
+  // Where only the socket (and the period) bump the poll, its demand runs are
+  // held against the frames' reads both ways. Where an apply or a dependency
+  // bumps it too (transactions.rescan, account.poll), those bumps only add
+  // runs: the frames' reads still bound it from below (at least 0.5×), and the
+  // period's runs + 2× the frames' reads from above (a self-bump loop).
   const socketOnly = input.spec.triggers.every((trigger) => trigger === "poll" || trigger.startsWith("ws"));
   if (!socketOnly) {
-    return { ...base, expected: socket, ratio: null, verdict: "ok", reason: schedule.demandRuns === 0 ? runsText : `${runsText}; demand from applies not modelled` };
+    const reads = socket ?? 0;
+    const demandText = `${schedule.demandRuns} demand run${schedule.demandRuns === 1 ? "" : "s"} vs ${reads} socket read${reads === 1 ? "" : "s"}`;
+    const atMost = schedule.expectedRuns.max + EXPECTATION_RATIO_BAND.max * reads;
+    if (reads >= 1 && schedule.demandRuns < EXPECTATION_RATIO_BAND.min * reads) {
+      return {
+        ...base, expected: socket, ratio: schedule.demandRuns / reads, verdict: "outside",
+        reason: `${runsText}; ${demandText}: fewer than ${EXPECTATION_RATIO_BAND.min}× the reads the frames imply (other bumps only add runs)`,
+      };
+    }
+    if (schedule.demandRuns > atMost) {
+      return {
+        ...base, expected: socket, ratio: reads === 0 ? null : schedule.demandRuns / reads, verdict: "outside",
+        reason: `${runsText}; ${demandText}: more than the period's ${schedule.expectedRuns.max} runs + ${EXPECTATION_RATIO_BAND.max}× the frames' reads (${atMost}) explain`,
+      };
+    }
+    return {
+      ...base, expected: socket, ratio: reads === 0 ? null : schedule.demandRuns / reads, verdict: "ok",
+      reason: schedule.demandRuns === 0 && socket === null ? runsText : `${runsText}; ${demandText} (at least ${EXPECTATION_RATIO_BAND.min}× the frames' reads; applies and dependencies add runs)`,
+    };
   }
   if (socket === null && schedule.demandRuns === 0) return { ...base, expected: null, ratio: null, verdict: "ok", reason: runsText };
   const demand = demandJudgement(schedule.demandRuns, socket ?? 0);
@@ -1163,7 +1379,7 @@ async function readRunFacts(
         doneMs: attempt.doneAt.getTime(),
         workClosedMs: attempt.workClosedAt?.getTime() ?? null,
       }));
-      if (ofKey.length > 0) runs.set(spec.key, runsOf(ofKey, spec.kind === "poll" ? "poll" : "walk"));
+      if (ofKey.length > 0) runs.set(spec.key, runsOf(ofKey, runGroupingOf(spec)));
     }
     facts.set(page.pageId, {
       runs,
@@ -1175,10 +1391,12 @@ async function readRunFacts(
 }
 
 /** The legacy volume of part A (design §3.12 A2) and, per page, each stream's
- *  or sender's legacy traffic on its row's basis (rule A1.floor). */
+ *  or sender's legacy traffic on its row's basis and the page's own shadow
+ *  history (rule A1.floor). */
 interface LegacyVolume {
   rows: LegacyVolumeRow[];
   byPage: Map<number, Map<string, number>>;
+  shadowByPage: Map<number, PageShadowHistory>;
   specsByRef: Map<string, ResourceSpec[]>;
 }
 
@@ -1254,7 +1472,17 @@ async function legacyVolume(
       byPage.get(pageId)!.set(ref, legacyOf(rate ?? inWindow, ref, pageId));
     }
   }
-  return { rows, byPage, specsByRef };
+  // Each page's own shadow attempts per key over its history (A1.floor's
+  // counterparts: never another page's volume).
+  const shadowByPage = new Map<number, PageShadowHistory>(pageIds.map((pageId) => {
+    const from = firstShadow.get(pageId);
+    const attempts = new Map<string, number>();
+    for (const row of historyCounts) {
+      if (row.pageId === pageId) attempts.set(row.resource, (attempts.get(row.resource) ?? 0) + row.attempts);
+    }
+    return [pageId, { attempts, historyMs: from === undefined ? null : endMs - from.getTime() }];
+  }));
+  return { rows, byPage, shadowByPage, specsByRef };
 }
 
 async function liveDecision(
@@ -1388,7 +1616,6 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
 
   // A2: the legacy engine's hour (A1's floor reads its counterparts).
   const legacy = await legacyVolume(db, { pages: input.pages, window: input.window, observed });
-  const legacyRows = new Map(legacy.rows.map((row) => [row.ref, row]));
 
   const runFacts = await readRunFacts(db, { pages: input.pages, window: input.window, firstShadow });
   const demand = input.pages.map((page) => demandOfPage(page, {
@@ -1400,7 +1627,7 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
       page,
       legacy: legacy.byPage.get(page.pageId) ?? new Map(),
       specsByRef: legacy.specsByRef,
-      rows: legacyRows,
+      shadow: legacy.shadowByPage.get(page.pageId) ?? { attempts: new Map(), historyMs: null },
     }),
   }));
 

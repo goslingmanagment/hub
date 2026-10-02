@@ -186,7 +186,8 @@ function demandLine(page: PageDemand): string {
   const perHour = page.band.max / STEADY_STATE_BAND_PER_HOUR.max;
   const rated = page.resources
     .filter((row) => row.rate !== null && row.rate.counted !== null && row.rate.runSize !== null && row.rate.runSize > 0)
-    .map((row) => `${row.resource} ${row.rate!.runSize}/${row.rate!.periodMs / 3_600_000} h`);
+    .map((row) => `${row.resource} ${row.rate!.runSize}/${row.rate!.periodMs / 3_600_000} h`
+      + `${row.rate!.extra + row.rate!.beyond > 0 ? ` + ${row.rate!.extra + row.rate!.beyond}` : ""}`);
   const parts = [
     `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
       + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
@@ -198,13 +199,17 @@ function demandLine(page: PageDemand): string {
     parts.push(page.inBand ? `band ${page.band.min}–${page.band.max}` : `above the band ${page.band.min}–${page.band.max}`);
   } else {
     const { counterparts } = page.floor;
-    const notInShadow = counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`;
+    const listed = `${counterparts.onDemand.length === 0 ? "" : `; on demand, none due on the page: ${counterparts.onDemand.map((entry) => entry.ref).join(", ")}`}`
+      + `${counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`;
     parts.push(page.floor.holds === true
-      ? `below ${page.band.min}: the floor's exception holds (rule A1.floor: every modelled resource at its expectation, every legacy stream with a shadow counterpart${notInShadow})`
+      ? `below ${page.band.min}: the floor's exception holds (rule A1.floor: every modelled resource at its expectation, every legacy stream with a shadow counterpart on the page${listed})`
       : `below ${page.band.min}: the floor's exception FAILS (rule A1.floor${page.floor.outside.length === 0 ? "" : `; outside: ${page.floor.outside.join(", ")}`}`
-        + `${counterparts.lacking.length === 0 ? "" : `; no shadow counterpart: ${counterparts.lacking.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}${notInShadow})`);
+        + `${counterparts.lacking.length === 0 ? "" : `; no shadow counterpart on the page: ${counterparts.lacking.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
+        + `${counterparts.pending.length === 0 ? "" : `; counterpart NOT YET JUDGEABLE: ${counterparts.pending.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}${listed})`);
   }
-  parts.push(page.scheduleFaults.length === 0 ? "polls on schedule" : `polls OFF SCHEDULE (rule A1.poll-schedule): ${page.scheduleFaults.join("; ")}`);
+  parts.push(page.scheduleFaults.length === 0
+    ? "polls on schedule, no runaway run"
+    : `OFF SCHEDULE or RUNAWAY (rules A1.poll-schedule, A1.rate): ${page.scheduleFaults.join("; ")}`);
   // Rows outside their expectation other than a poll off schedule (named above).
   const offSchedule = new Set(page.scheduleFaults.map((fault) => fault.slice(0, fault.indexOf(":"))));
   const outsideRows = page.outside.filter((row) => !offSchedule.has(row.resource));

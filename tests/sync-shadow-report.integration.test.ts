@@ -151,6 +151,22 @@ describe("the shadow report (design §3.12)", () => {
     for (let i = 0; i < 24; i += 1) {
       await shadowAttempt(page.pageId, { resource: "followers.reconcile", workClass: "planned", at: at(48 * MINUTE + i * 4_000), workId: Number(walk.rows[0]!.id) });
     }
+    // Legacy requests of two streams on the page (rule A1.floor's per-page
+    // counterparts): the account light poll in the window, its shadow poll
+    // only before it (the page's history counts); the fan earnings 2 h
+    // before, no roster walk in the page's 1.5 h of shadow history yet.
+    for (const [stream, operation, startedAt] of [["light", "account.me", at(5 * MINUTE)], ["fan_earnings", "earnings.fan", at(-2 * 60 * MINUTE)]] as const) {
+      const run = await testDb.pool.query<{ id: string }>(
+        `insert into sync_runs (page_id, stream, source, outcome, started_at, finished_at, stats)
+         values ($1, $2, 'scheduled', 'succeeded', $3, $3, '{}'::jsonb) returning id`,
+        [page.pageId, stream, startedAt],
+      );
+      await testDb.pool.query(
+        `insert into sync_http_attempts (page_id, sync_run_id, provider, stream, operation, logical_request_id, attempt_number, state, started_at, response_body_bytes)
+         values ($1, $2, 'fansly', $3, $4, 'request', 1, 'success', $5, 100)`,
+        [page.pageId, Number(run.rows[0]!.id), stream, operation, startedAt],
+      );
+    }
     // The describer's CDN download of the legacy engine: live-only in the registry.
     await testDb.pool.query(
       `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
@@ -198,7 +214,14 @@ describe("the shadow report (design §3.12)", () => {
     expect(demand.floor).toMatchObject({
       below: true,
       holds: false,
-      counterparts: { lacking: [], notInShadow: [{ ref: "sender:media_download", why: "live_only" }] },
+      // The socket hints' and the light poll's counterparts ran on this page in
+      // its 1.5 h of shadow history; the daily roster walk is not due yet.
+      counterparts: {
+        lacking: [],
+        pending: [{ ref: "stream:fan_earnings", why: expect.stringMatching(/^not yet judgeable: legacy 1 on its A2 basis, the shadow none in 1\.5 h of shadow history on the page; /) }],
+        onDemand: [],
+        notInShadow: [{ ref: "sender:media_download", why: "live_only" }],
+      },
     });
 
     expect(window.livePath.fanMessages).toMatchObject({
@@ -238,9 +261,9 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /^A1 lilly-1: steady 6\.46 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run yet of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; polls OFF SCHEDULE \(rule A1\.poll-schedule\): .* — FAIL$/,
+      /^A1 lilly-1: steady 6\.46 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run yet of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; OFF SCHEDULE or RUNAWAY \(rules A1\.poll-schedule, A1\.rate\): .* — FAIL$/,
     ));
-    expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\).*; live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
+    expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
   });
