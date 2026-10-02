@@ -631,22 +631,19 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
 
   it("holds only list work: dm-messages.head and transactions.head still go out while the list waits (design §5.3, §3.8)", async (context) => {
     if (!testDb) return context.skip();
-    // The two entries have no modules yet (S2-08b, the money rows): stand-ins
-    // send one request on each entry's own route. What is pinned is the
-    // engine's side — the pick, the hold, the admission — for these keys.
-    const standIn = (request: (work: { subject: string }) => RequestPlan): ResourceModule => ({
-      plan: async (work) => ({ kind: "request", request: request(work) }),
+    // `transactions.head` runs its own module (S2-07b). `dm-messages.head` has
+    // none yet (S2-08b): a stand-in sends one request on its own route, which
+    // pins the engine's side — the pick, the hold, the admission — for it.
+    const messagesStandIn: ResourceModule = {
+      plan: async (work) => ({
+        kind: "request",
+        request: { spec: "messages.page", params: { groupId: work.subject, before: null } } satisfies RequestPlan,
+      }),
       apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
       shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
-    });
-    const standIns: Record<string, ResourceModule> = {
-      "dm-messages.head": standIn((work) => ({ spec: "messages.page", params: { groupId: work.subject, before: null } })),
-      "transactions.head": standIn(() => ({ spec: "transactions.page", params: { limit: 10, offset: 0 } })),
     };
-    const specs = FANSLY_RESOURCE_SPECS.map((spec) => {
-      const module = standIns[spec.key];
-      return module === undefined ? spec : { ...spec, module: async () => module };
-    });
+    const specs = FANSLY_RESOURCE_SPECS.map((spec) =>
+      spec.key === "dm-messages.head" ? { ...spec, module: async () => messagesStandIn } : spec);
     const pageId = await seedPage("live");
     const registry = await quietRegistry(pageId, false, specs);
 
