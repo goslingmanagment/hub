@@ -26,6 +26,8 @@ import { createHash } from "node:crypto";
 
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 
+import type { CaptureCodec } from "../engine/commit.ts";
+
 import { FANSLY_CATALOG_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-catalog.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-payouts.ts";
 import { FANSLY_STATS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-stats.ts";
@@ -65,9 +67,10 @@ export interface FanslyServedResponse {
   response: unknown;
   /**
    * The wire contract's verdict on `response`. Only `false` matters, and only
-   * for the follower and conversation kinds: a refused body is journaled in
-   * the nested `{contractAccepted: false, responseShape, captured}` form, so
-   * replay cannot mistake the trim's fallback arrays for a valid empty page.
+   * for the kinds whose legacy lane journals a refused body apart: followers
+   * and conversations in the nested `{contractAccepted: false, responseShape,
+   * captured}` form, so replay cannot mistake the trim's fallback arrays for a
+   * valid empty page; the raw-wrapped kinds as `{contractAccepted: false, raw}`.
    */
   contractAccepted?: boolean;
   /** `post_replies` only (required there): the walk the request served. */
@@ -91,6 +94,11 @@ export interface FanslyJournalBody {
 const CATALOG_KINDS: ReadonlySet<string> = new Set(FANSLY_CATALOG_CANONICALIZED_KINDS);
 const PAYOUT_KINDS: ReadonlySet<string> = new Set(FANSLY_PAYOUTS_CANONICALIZED_KINDS);
 const STATS_KINDS: ReadonlySet<string> = new Set(FANSLY_STATS_CANONICALIZED_KINDS);
+/** Kinds journaled verbatim whose refused body the legacy lane wraps as
+ *  `{contractAccepted: false, raw}` (subscribers: executor-handlers.ts
+ *  `fanslySubscribersChunk`). A resource that journals another such kind adds
+ *  it here with its port. */
+const RAW_WRAPPED_REFUSAL_KINDS: ReadonlySet<string> = new Set(["subscribers"]);
 
 /** Step 1 (+ the mapper version that goes with it): the lane's own trim. */
 function trimForKind(kind: string, served: FanslyServedResponse): { body: unknown; mapperVersion: string } {
@@ -106,6 +114,9 @@ function trimForKind(kind: string, served: FanslyServedResponse): { body: unknow
       body: captureFanslyMessagingGroupsPayload(response, served.contractAccepted),
       mapperVersion: FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
     };
+  }
+  if (served.contractAccepted === false && RAW_WRAPPED_REFUSAL_KINDS.has(kind)) {
+    return { body: { contractAccepted: false, raw: response }, mapperVersion: FANSLY_MAPPER_VERSION };
   }
   if (kind === "notifications") {
     return { body: trimFanslyNotificationsPayload(response), mapperVersion: FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION };
@@ -154,3 +165,19 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     loneSurrogatesReplaced: surrogates.replaced,
   };
 }
+
+/**
+ * The Fansly journal of the engine's capture (tx 2): every served response
+ * becomes exactly the body the legacy lane journals for it, by its kind. The
+ * reply walk's position comes from the request (`post.replies` names the
+ * post in its path).
+ */
+export const fanslyCaptureCodec: CaptureCodec = {
+  prepare({ kind, response, contractAccepted, request }) {
+    const params = request.params as { postId?: unknown; before?: unknown };
+    const walk = request.spec === "post.replies" && typeof params.postId === "string"
+      ? { postId: params.postId, before: typeof params.before === "string" ? params.before : null }
+      : undefined;
+    return prepareJournalBody({ kind }, { response, contractAccepted, ...(walk === undefined ? {} : { walk }) }).payload;
+  },
+};
