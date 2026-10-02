@@ -203,6 +203,51 @@ export async function readSyncLivePathFacts(
   };
 }
 
+/** The page's socket as the status shows it (`PageStatus.ws`). */
+export interface SyncPageWsStatus {
+  /** The newest connection row is open and renewed within the stale bound. */
+  connected: boolean;
+  /** When the newest connection started (null: the page never had one). */
+  since: Date | null;
+  /** The coverage gap the newest connection opened with. */
+  gapSince: Date | null;
+  /** Receipts of the window the overlay acked as decode debt. */
+  decodeDebt: number;
+}
+
+/** The page's socket for the engine status of a `handover`/`live` page:
+ *  its newest connection row and the decode debt of the window. */
+export async function readSyncPageWsStatus(
+  db: Database,
+  input: { pageId: number; decodeWindowMs: number },
+): Promise<SyncPageWsStatus> {
+  const connection = await db.execute<{ connected: boolean; since: Date | string; gapSince: Date | string | null }>(sql`
+    select (c.closed_at is null
+             and c.last_guard_at > statement_timestamp() - ${SYNC_WS_CONNECTION_STALE_MS}::double precision * interval '1 millisecond')
+             as connected,
+           c.started_at as since,
+           c.gap_since as "gapSince"
+      from fansly_ws_connections c
+     where c.page_id = ${input.pageId}
+     order by c.started_at desc
+     limit 1
+  `);
+  const decode = await db.execute<{ debt: number }>(sql`
+    select count(*)::int as debt
+      from fansly_ws_decode_receipts r
+     where r.observation_id > ${receiptIdFloorSql(sql`statement_timestamp() - ${input.decodeWindowMs}::double precision * interval '1 millisecond'`)}
+       and r.page_id = ${input.pageId}
+       and r.live_state = 'debt'
+  `);
+  const row = connection.rows[0];
+  return {
+    connected: row?.connected === true,
+    since: toDate(row?.since),
+    gapSince: toDate(row?.gapSince),
+    decodeDebt: Number(decode.rows[0]?.debt ?? 0),
+  };
+}
+
 /**
  * The newest receipt id received at or before `at` (0 without one). The
  * receipts have no time index: a backward scan of the primary key stops at the

@@ -13,6 +13,7 @@ import {
   insertDeliveryAttempt,
   listDeliveryAttempts,
   listNotificationIncidentsWithPages,
+  listSyncPages,
   recoverAndResolveNotificationIncident,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
@@ -105,7 +106,12 @@ import {
   resumeSyncBlock,
   triggerSyncBlock,
 } from "../../services/sync-blocks.ts";
-import { requestAllPagesSync, requestPageSync } from "../../services/sync-control.ts";
+import { requestAllPagesSync, requestPageSync, resolveStreamsForScope } from "../../services/sync-control.ts";
+import {
+  engineOwnedSyncPageByLabel,
+  triggerEngineStreams,
+  type EngineLeverOutcome,
+} from "../../services/sync-engine-levers.ts";
 import {
   getSyncMonitorRecentRequests,
   getSyncMonitorSnapshot,
@@ -731,7 +737,20 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     const { pageLabel, scope } = request.body;
-    await getPageSummary(appContext, pageLabel);
+    const summary = await getPageSummary(appContext, pageLabel);
+    // A page the Fansly Sync Engine owns: the scope's streams become the
+    // engine's polls due now (live); a page being switched refuses (409).
+    const engine = await engineOwnedSyncPageByLabel(appContext.db, pageLabel);
+    if (engine !== null) {
+      const outcome = await triggerEngineStreams(appContext.db, engine, resolveStreamsForScope(summary.platform, scope));
+      await recordAudit(appContext, {
+        ...auditCtx(principal),
+        eventType: "admin.sync_trigger",
+        metadata: { pageLabel, scope, engine: outcome },
+      });
+      reply.code(202);
+      return { accepted: true as const, pageLabel, scope };
+    }
     if (!boss) throw new Error("Job queue not available");
     await requestPageSync(appContext, boss, {
       pageLabel,
@@ -753,17 +772,32 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     if (!boss) throw new Error("Job queue not available");
+    // Pages the Fansly Sync Engine owns are refreshed by the engine (live)
+    // or left alone (handover: neither engine reads during the switch).
+    const enginePages = await listSyncPages(appContext.db, { modes: ["handover", "live"] });
+    const engine: Array<{ pageLabel: string } & EngineLeverOutcome> = [];
+    for (const page of enginePages) {
+      if (page.mode !== "live") continue;
+      const outcome = await triggerEngineStreams(
+        appContext.db,
+        page as typeof page & { mode: "live" },
+        resolveStreamsForScope("fansly", "all"),
+      );
+      engine.push({ pageLabel: page.pageLabel ?? String(page.pageId), ...outcome });
+    }
     const results = await requestAllPagesSync(appContext, boss, {
       scope: "all",
       reason: "manual",
+      excludePageIds: new Set(enginePages.map((page) => page.pageId)),
     });
+    const pagesQueued = results.length + engine.length;
     await recordAudit(appContext, {
       ...auditCtx(principal),
       eventType: "admin.sync_trigger_all",
-      metadata: { scope: "all", pagesQueued: results.length },
+      metadata: { scope: "all", pagesQueued, ...(engine.length === 0 ? {} : { engine }) },
     });
     reply.code(202);
-    return { accepted: true as const, pagesQueued: results.length };
+    return { accepted: true as const, pagesQueued };
   });
 
   server.post("/api/v1/admin/sync/blocks/trigger", {

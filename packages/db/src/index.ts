@@ -175,6 +175,7 @@ export * from "./repositories/sync/ws-router.ts";
 export * from "./repositories/sync/ws-gap.ts";
 export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/observability.ts";
+export * from "./repositories/sync/legacy-streams.ts";
 export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";

@@ -1005,6 +1005,37 @@ export async function setPagePause(
   return getSyncPage(db, input.pageId);
 }
 
+/**
+ * Add keys to (`add`) and take keys out of (`remove`) a page's paused set in
+ * one statement — the set's other keys are kept whatever another lever wrote
+ * meanwhile (`setPagePause({resources})` REPLACES the set). A key in both
+ * lists ends paused. Null: no row for the page.
+ */
+export async function adjustPausedResources(
+  db: Database,
+  input: { pageId: number; add?: readonly string[]; remove?: readonly string[]; note?: string | null },
+): Promise<SyncPageRow | null> {
+  const add = [...new Set(input.add ?? [])].sort();
+  const remove = [...new Set(input.remove ?? [])].sort();
+  for (const resource of [...add, ...remove]) {
+    if (!SYNC_RESOURCE_KEY_PATTERN.test(resource)) throw new Error(`Not a resource key: ${resource}`);
+  }
+  const result = await db.execute(sql`
+    update sync_pages
+       set paused_resources = array(
+             select distinct k
+               from unnest(paused_resources || ${textArrayParam(add)}) as k
+              where not (k = any(${textArrayParam(remove)})) or k = any(${textArrayParam(add)})
+              order by k),
+           pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+  `);
+  if ((result.rowCount ?? 0) === 0) return null;
+  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return getSyncPage(db, input.pageId);
+}
+
 /** One age tier of a tiered walk's override: items up to `maxAgeDays` old
  *  (null: every older item) are due again `everyMs` after a visit. */
 export interface SyncRegistryTierOverride {

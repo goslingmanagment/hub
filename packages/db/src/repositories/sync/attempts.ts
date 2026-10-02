@@ -36,6 +36,12 @@ export type SyncAttemptOutcome = (typeof SYNC_ATTEMPT_OUTCOMES)[number];
 export const SYNC_APPLY_STATES = ["none", "captured", "applied", "deferred", "quarantined", "skipped"] as const;
 export type SyncApplyState = (typeof SYNC_APPLY_STATES)[number];
 
+/** `apply_error` prefix of an attempt quarantined because its journaled body
+ *  can no longer be read (`CapturePayloadUnavailableError` past the grace):
+ *  there is nothing left to re-apply, so an owner requeue opens its work for
+ *  a fresh read instead (`requeueQuarantinedWork`). */
+export const SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE = "payload_unavailable:";
+
 export const SYNC_SEND_MARKS = ["request_start", "completion_fallback", "shadow"] as const;
 export type SyncSendMark = (typeof SYNC_SEND_MARKS)[number];
 

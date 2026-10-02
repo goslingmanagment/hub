@@ -28,6 +28,7 @@
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
 import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+import { fanslyEngineStreamKeysValuesSql } from "./sync/legacy-streams.ts";
 
 import {
   FANSLY_MEDIA_STAT_TYPES,
@@ -530,6 +531,34 @@ const TIP_GOALS = `
   where ranked.goal_rank = 1
 `;
 
+// A page the Fansly Sync Engine owns (`handover`/`live`, design step 3 §3.2
+// item 6) has frozen legacy rows: its streams are reported from the engine's
+// live work instead, each registry key counted under the legacy stream(s) it
+// takes over (`FANSLY_ENGINE_LEGACY_STREAMS`). Per stream:
+//   - status: `failed` while a key's work is quarantined or blocked by the
+//     vendor, `paused` when the page or every key of the stream is paused,
+//     `running` while a read is in flight, else `ok`; the streak is the
+//     largest open subject breaker. Both from the page's active rows
+//     (`sync_work_open_uniq`).
+//   - cursor and success: the newest applied read. A page-level key's is the
+//     newest applied attempt of its three newest live rows, however old
+//     (`sync_work_key_recent`, then `sync_attempts_work`: a poll keeps one
+//     row for good, a goal a few). A thread / target / fan key has no index
+//     to its newest row across subjects, so its newest applied attempt is
+//     looked up among the page's attempts of the last 24 h, newest first,
+//     first hit (`sync_attempts_page_admitted`).
+//   - failure: when a standing failure was last seen — an active row that is
+//     quarantined, blocked by the vendor, or whose last outcome failed (a
+//     subject's final 404 is an answer, a read the pacer never sent is not a
+//     failure): its last attempt's completion when that attempt failed, else
+//     the row's own update (a plan error). A later success clears it, as it
+//     clears the streak.
+// A stream is listed once the engine has something to say about it: an
+// active row, a live page-level row, or a subject-level read applied within
+// the last 24 h. Every lookup is bounded per key, never by the journal's length: evidence
+// attempts are kept for good (`sync/retention.ts`), so an aggregate over a
+// page's whole `sync_attempts` would grow with every live read.
+const FANSLY_ENGINE_STREAM_KEYS = fanslyEngineStreamKeysValuesSql();
 const SYNC_STREAMS = `
   select ss.page_id       as k_page_id,
          p.platform::text as k_platform,
@@ -545,6 +574,91 @@ const SYNC_STREAMS = `
   from page_sync_states ss
   join pages p on p.id = ss.page_id
   left join page_sync_cursors c on c.page_id = ss.page_id and c.stream = ss.stream
+  where not exists (
+    select 1 from sync_pages esp
+     where esp.page_id = ss.page_id and esp.mode in ('handover', 'live'))
+  union all
+  select sp.page_id       as k_page_id,
+         p.platform::text as k_platform,
+         sp.page_id::text || ':' || s.stream as k_key,
+         greatest(wk.updated_at, wk.failed_at, pk.updated_at, pk.applied_at, sk.applied_at) as k_occurred_at,
+         null::text       as k_fan,
+         s.stream         as f_stream,
+         case
+           when coalesce(wk.failed, false) then 'failed'
+           when sp.paused_all or s.keys <@ sp.paused_resources then 'paused'
+           when coalesce(wk.running, false) then 'running'
+           else 'ok'
+         end              as f_sync_status,
+         greatest(pk.applied_at, sk.applied_at) as f_cursor_at,
+         greatest(pk.applied_at, sk.applied_at) as f_succeeded_at,
+         wk.failed_at     as f_failed_at,
+         coalesce(wk.failures, 0)::int as f_consecutive_failures
+  from sync_pages sp
+  join pages p on p.id = sp.page_id
+  cross join (${FANSLY_ENGINE_STREAM_KEYS}) as s(stream, keys, page_keys, subject_keys)
+  left join lateral (
+    select bool_or(kw.running) as running,
+           bool_or(kw.failed) as failed,
+           max(kw.failures) as failures,
+           max(kw.updated_at) as updated_at,
+           max(kw.failed_at) as failed_at
+      from unnest(s.keys) as k(resource)
+      cross join lateral (
+        -- Per key, so it stays one index range of the key's active rows.
+        select bool_or(w.state = 'running') as running,
+               bool_or(w.state = 'quarantined' or w.blocked_by_vendor_at is not null) as failed,
+               max(w.failure_count) as failures,
+               max(w.updated_at) as updated_at,
+               max(case when la.apply_state = 'quarantined' or la.error_class is not null
+                        then coalesce(la.completed_at, la.admitted_at)
+                        else w.updated_at end) filter (
+                 where w.state = 'quarantined'
+                    or w.blocked_by_vendor_at is not null
+                    or w.last_error_class not in ('subject_terminal', 'not_sent')
+               ) as failed_at
+          from sync_work w
+          left join sync_attempts la on la.id = w.last_attempt_id
+         where w.page_id = sp.page_id
+           and not w.shadow
+           and w.state in ('open', 'running', 'quarantined')
+           and w.resource = k.resource
+      ) kw
+  ) wk on true
+  left join lateral (
+    select max(r.updated_at) as updated_at, max(r.applied_at) as applied_at
+      from unnest(s.page_keys) as k(resource)
+      cross join lateral (
+        select w.updated_at,
+               (select a.applied_at
+                  from sync_attempts a
+                 where a.work_id = w.id
+                   and a.applied_at is not null
+                 order by a.id desc
+                 limit 1) as applied_at
+          from sync_work w
+         where w.page_id = sp.page_id
+           and w.resource = k.resource
+           and w.subject = ''
+           and not w.shadow
+         order by w.id desc
+         limit 3
+      ) r
+  ) pk on true
+  left join lateral (
+    select a.applied_at
+      from sync_attempts a
+     where cardinality(s.subject_keys) > 0
+       and a.page_id = sp.page_id
+       and a.admitted_at >= now() - interval '24 hours'
+       and a.resource = any(s.subject_keys)
+       and not a.shadow
+       and a.applied_at is not null
+     order by a.admitted_at desc
+     limit 1
+  ) sk on true
+  where sp.mode in ('handover', 'live')
+    and coalesce(wk.updated_at, pk.updated_at, sk.applied_at) is not null
 `;
 
 // ── endpoints-cover (WP-S1) sources ─────────────────────────────────────────

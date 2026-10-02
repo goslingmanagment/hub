@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
+import { SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE } from "./attempts.ts";
 import { SYNC_RESOURCE_KEY_PATTERN, SYNC_RESOURCE_FILE_PATTERN } from "./pages.ts";
 import {
   generationParam,
@@ -813,21 +814,63 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   };
 }
 
+/** What a quarantine left on its work row (`sync_work.result.quarantine`,
+ *  design step 3 §3.2 item 5): why, the refusing resource's own account of it
+ *  (an `ApplyQuarantine` detail, a contract violation's field), the attempt
+ *  that carried the answer, and when. The owner's levers read it. */
+export interface SyncWorkQuarantineRecord {
+  reason: string;
+  detail: Record<string, unknown>;
+  attemptId: number | null;
+  at: string;
+}
+
+/** The quarantine record of a work row's `result`, or null. */
+export function syncWorkQuarantineOf(result: unknown): SyncWorkQuarantineRecord | null {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
+  const record = (result as Record<string, unknown>).quarantine;
+  if (typeof record !== "object" || record === null || Array.isArray(record)) return null;
+  const value = record as Record<string, unknown>;
+  if (typeof value.reason !== "string" || typeof value.at !== "string") return null;
+  const detail = typeof value.detail === "object" && value.detail !== null && !Array.isArray(value.detail)
+    ? value.detail as Record<string, unknown>
+    : {};
+  const attemptId = typeof value.attemptId === "number" && Number.isSafeInteger(value.attemptId) ? value.attemptId : null;
+  return { reason: value.reason, detail, attemptId, at: value.at };
+}
+
 /**
  * Quarantine a work row (contract violation, deterministic apply error, a
  * body unreadable for good; §9): it takes no admission until the owner
- * requeues it; new demand still merges into it. False: not open/running.
+ * requeues it; new demand still merges into it. Its `result.quarantine`
+ * records why (`detail`, the attempt), in the same fenced transaction, so the
+ * owner's levers (`sync work list`, the followers override) can read what the
+ * apply refused; the rest of `result` is kept. False: not open/running.
  */
 export async function quarantineWork(
   db: Database,
-  input: { workId: number; generation: bigint; errorClass: string },
+  input: {
+    workId: number;
+    generation: bigint;
+    errorClass: string;
+    detail?: Readonly<Record<string, unknown>>;
+    attemptId?: number | null;
+  },
 ): Promise<boolean> {
+  const record = sql`jsonb_build_object(
+    'reason', ${input.errorClass}::text,
+    'detail', ${jsonParam(input.detail ?? {})},
+    'attemptId', ${input.attemptId ?? null}::bigint,
+    'at', to_jsonb(clock_timestamp()))`;
   const result = await db.execute(sql`
     update sync_work
        set state = 'quarantined',
            waiting_reason = 'quarantined',
            waiting_until = null,
            last_error_class = ${input.errorClass},
+           result = case when jsonb_typeof(result) = 'object'
+             then result || jsonb_build_object('quarantine', ${record})
+             else jsonb_build_object('quarantine', ${record}) end,
            owner_generation = ${generationParam(input.generation)},
            updated_at = clock_timestamp()
      where id = ${input.workId}
@@ -867,6 +910,124 @@ export async function setSyncWorkSecretParams(
            updated_at = clock_timestamp()
      where id = ${input.workId}
        and state in ('open', 'running')
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** One row `requeueQuarantinedWork` took out of quarantine. */
+export interface RequeuedSyncWork {
+  id: number;
+  resource: string;
+  subject: string;
+  /** The row's last attempt goes back to the apply from its journaled answer
+   *  (no request); null: the row was opened and its next step plans anew. */
+  reapplyAttemptId: number | null;
+}
+
+/**
+ * The owner's requeue of quarantined work (design step 3 §3.2 item 5, plan
+ * §9: "после исправления — повторное применение из журнала без HTTP").
+ *
+ * A row whose last attempt is a live attempt quarantined with an answer in
+ * the journal is re-applied from it: the attempt becomes `deferred` (due now,
+ * failures reset) and the row `running` — the state of a captured answer
+ * whose apply is pending, so the actor's apply drain (and a restart's
+ * recovery) applies it and no pick admits a new read of the key before that.
+ * Every other quarantined row (a plan quarantine, a shadow row, an answer
+ * whose body is gone from the journal — its attempt quarantined as
+ * `SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE`) opens due now for a fresh read.
+ * Both drop `result.quarantine`; a second refusal writes a new one. Only rows
+ * of the page in `quarantined` are touched; NOTIFY wakes the page's actor at
+ * commit.
+ */
+export async function requeueQuarantinedWork(
+  db: Database,
+  input: { pageId: number; workIds?: readonly number[]; resources?: readonly string[]; shadow?: boolean },
+): Promise<RequeuedSyncWork[]> {
+  for (const resource of input.resources ?? []) assertResourceKey(resource);
+  const ids = input.workIds === undefined ? null : [...new Set(input.workIds)].map(String);
+  const idFilter = ids === null ? sql`` : sql`and w.id = any(${sql.param(ids)}::bigint[])`;
+  const resourceFilter = input.resources === undefined || input.resources.length === 0
+    ? sql``
+    : sql`and w.resource = any(${textArrayParam(input.resources)})`;
+  const shadowFilter = input.shadow === undefined ? sql`` : sql`and w.shadow = ${input.shadow}::boolean`;
+  const result = await db.execute<{ id: string; resource: string; subject: string; reapplyAttemptId: string | null }>(sql`
+    with target as (
+      select w.id, w.last_attempt_id
+        from sync_work w
+       where w.page_id = ${input.pageId}
+         and w.state = 'quarantined'
+         ${idFilter}
+         ${resourceFilter}
+         ${shadowFilter}
+       order by w.id
+         for update of w
+    ),
+    reapply as (
+      update sync_attempts a
+         set apply_state = 'deferred',
+             apply_retry_at = clock_timestamp(),
+             apply_failures = 0,
+             apply_error = null
+        from target t
+       where a.id = t.last_attempt_id
+         and a.page_id = ${input.pageId}
+         and not a.shadow
+         and a.apply_state = 'quarantined'
+         and a.observation_id is not null
+         and not starts_with(coalesce(a.apply_error, ''), ${SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE})
+      returning a.id, a.work_id
+    )
+    update sync_work w
+       set state = case when r.id is not null then 'running' else 'open' end,
+           waiting_reason = case when r.id is not null then 'running' end,
+           waiting_until = null,
+           due_at = case when r.id is not null then w.due_at else clock_timestamp() end,
+           result = case when jsonb_typeof(w.result) = 'object' then nullif(w.result - 'quarantine', '{}'::jsonb) else w.result end,
+           updated_at = clock_timestamp()
+      from target t
+      left join reapply r on r.work_id = t.id
+     where w.id = t.id
+    returning w.id::text as id, w.resource, w.subject, r.id::text as "reapplyAttemptId"
+  `);
+  if (result.rows.length > 0) await notifyWork(db, input.pageId);
+  return result.rows
+    .map((row) => ({
+      id: Number(row.id),
+      resource: row.resource,
+      subject: row.subject,
+      reapplyAttemptId: row.reapplyAttemptId === null ? null : Number(row.reapplyAttemptId),
+    }))
+    .sort((a, b) => a.id - b.id);
+}
+
+/**
+ * Close a quarantined row by an owner's decision (the followers blast-radius
+ * override applied its deactivation; an owner reset of the walk): `done` or
+ * `cancelled` with the reason, the cursor/proof the decision leaves (the next
+ * row of the key reads the newest closed one's), `result.quarantine` dropped.
+ * The caller holds the row (`lockWorkRows`). False: not quarantined any more.
+ */
+export async function closeQuarantinedWork(
+  db: Database,
+  input: { workId: number; to: "done" | "cancelled"; closeReason: string; cursor?: unknown; proof?: unknown },
+): Promise<boolean> {
+  const done = input.to === "done";
+  const result = await db.execute(sql`
+    update sync_work
+       set state = ${input.to}::text,
+           closed_at = clock_timestamp(),
+           close_reason = ${input.closeReason},
+           applied_revision = case when ${done} then demand_revision else applied_revision end,
+           cursor = case when ${input.cursor !== undefined} then ${jsonParam(input.cursor ?? {})} else cursor end,
+           proof = case when ${input.proof !== undefined} then ${nullableJsonParam(input.proof)} else proof end,
+           result = case when jsonb_typeof(result) = 'object' then nullif(result - 'quarantine', '{}'::jsonb) else result end,
+           secret_params = null,
+           waiting_reason = null,
+           waiting_until = null,
+           updated_at = clock_timestamp()
+     where id = ${input.workId}
+       and state = 'quarantined'
   `);
   return (result.rowCount ?? 0) > 0;
 }
@@ -1208,4 +1369,119 @@ export async function latestClosedWorkForKey(
   `);
   const row = result.rows[0];
   return row ? normalizeWorkRow(row) : null;
+}
+
+/** The live work of one resource key of a page, in aggregate (the legacy
+ *  status surfaces of an engine-owned page, design step 3 §3.2). */
+export interface SyncWorkResourceCounts {
+  pageId: number;
+  resource: string;
+  /** Rows open, running or quarantined (any subject). */
+  active: number;
+  running: number;
+  quarantined: number;
+  blockedByVendor: number;
+  /** The largest subject-breaker failure count among those rows. */
+  maxFailureCount: number;
+  /** The earliest due time of an open row. */
+  nextDueAt: Date | null;
+}
+
+/** Per page and key: the live rows that are open, running or quarantined,
+ *  counted (one index range of `sync_work_open_uniq` per page). */
+export async function countActiveLiveWorkByResource(
+  db: Database,
+  input: { pageIds: readonly number[] },
+): Promise<SyncWorkResourceCounts[]> {
+  const pageIds = [...new Set(input.pageIds)];
+  if (pageIds.length === 0) return [];
+  const result = await db.execute<{
+    pageId: string;
+    resource: string;
+    active: number;
+    running: number;
+    quarantined: number;
+    blockedByVendor: number;
+    maxFailureCount: number | null;
+    nextDueAt: Date | string | null;
+  }>(sql`
+    select w.page_id::text as "pageId",
+           w.resource,
+           count(*)::int as active,
+           (count(*) filter (where w.state = 'running'))::int as running,
+           (count(*) filter (where w.state = 'quarantined'))::int as quarantined,
+           (count(*) filter (where w.blocked_by_vendor_at is not null))::int as "blockedByVendor",
+           max(w.failure_count)::int as "maxFailureCount",
+           min(w.due_at) filter (where w.state = 'open') as "nextDueAt"
+      from sync_work w
+     where w.page_id = any(${sql.param(pageIds.map(String))}::bigint[])
+       and not w.shadow
+       and w.state in ('open', 'running', 'quarantined')
+     group by w.page_id, w.resource
+     order by w.page_id, w.resource
+  `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    active: Number(row.active),
+    running: Number(row.running),
+    quarantined: Number(row.quarantined),
+    blockedByVendor: Number(row.blockedByVendor),
+    maxFailureCount: Number(row.maxFailureCount ?? 0),
+    nextDueAt: toDate(row.nextDueAt),
+  }));
+}
+
+/**
+ * When each page-level key (subject '') of a page was last applied live: the
+ * newest applied attempt of the key's three newest live rows (a poll keeps one
+ * row for good, a goal a few), each read backwards along `sync_attempts_work`
+ * — never a scan of the page's whole attempt journal.
+ */
+export async function lastLiveAppliedAtByResource(
+  db: Database,
+  input: { pageId: number; resources: readonly string[] },
+): Promise<Map<string, Date>> {
+  const resources = [...new Set(input.resources)];
+  for (const resource of resources) assertResourceKey(resource);
+  if (resources.length === 0) return new Map();
+  const result = await db.execute<{ resource: string; appliedAt: Date | string | null }>(sql`
+    select k.resource,
+           (select max(recent.applied_at)
+              from (select (select a.applied_at
+                              from sync_attempts a
+                             where a.work_id = w.id
+                               and a.applied_at is not null
+                             order by a.id desc
+                             limit 1) as applied_at
+                      from sync_work w
+                     where w.page_id = ${input.pageId}
+                       and w.resource = k.resource
+                       and w.subject = ''
+                       and not w.shadow
+                     order by w.id desc
+                     limit 3) recent) as "appliedAt"
+      from unnest(${textArrayParam(resources)}) as k(resource)
+  `);
+  const applied = new Map<string, Date>();
+  for (const row of result.rows) {
+    const at = toDate(row.appliedAt);
+    if (at !== null) applied.set(row.resource, at);
+  }
+  return applied;
+}
+
+/** The due time of the page's oldest open urgent live work that is due now
+ *  (null: none) — `/health/sync`'s urgent age (`sync_work_runnable`). */
+export async function oldestDueLiveUrgentWork(db: Database, input: { pageId: number }): Promise<Date | null> {
+  const result = await db.execute<{ dueAt: Date | string | null }>(sql`
+    select min(w.due_at) as "dueAt"
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and not w.shadow
+       and w.class = 'urgent'
+       and w.state = 'open'
+       and w.due_at <= clock_timestamp()
+  `);
+  return toDate(result.rows[0]?.dueAt);
 }
