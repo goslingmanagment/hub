@@ -108450,11 +108450,11 @@
     },
     "/api/v1/ai/gateway/stream": {
       "post": {
-        "summary": "Stream a chatter AI generation through the core gateway",
+        "summary": "Stream a raw-prompt AI generation through the core gateway (owner session only)",
         "tags": [
           "usage"
         ],
-        "description": "Default-off ChatMuse gateway for desktop AI generations. The runtime route uses chatter device-token auth, validates the prompt-stream request contract, and must not reach provider network while the gateway flag is disabled.",
+        "description": "Owner cookie session only. Client AI goes through `POST /api/v1/ai/features/:feature`, which builds the prompt in the hub; a device token of any role is refused here. The route validates the prompt-stream request contract and must not reach provider network while the gateway flag is disabled.",
         "requestBody": {
           "required": true,
           "content": {
@@ -108642,7 +108642,7 @@
         },
         "security": [
           {
-            "bearerAuth": []
+            "cookieAuth": []
           }
         ],
         "responses": {
@@ -109021,13 +109021,13 @@
     },
     "/api/v1/ai/personas": {
       "get": {
-        "summary": "List kernel AI personas (the desktop picker's source)",
+        "summary": "List active AI personas with full prompt text (legacy; owner session only)",
         "tags": [
           "usage"
         ],
         "security": [
           {
-            "bearerAuth": []
+            "cookieAuth": []
           }
         ],
         "responses": {
@@ -109117,13 +109117,45 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/ai/personas/{key}": {
       "put": {
-        "summary": "Create or update a kernel AI persona",
+        "summary": "Retired legacy persona write (owner session only; answers 409, use the admin persona routes)",
         "tags": [
           "usage"
         ],
@@ -109180,7 +109212,7 @@
         ],
         "security": [
           {
-            "bearerAuth": []
+            "cookieAuth": []
           }
         ],
         "responses": {
@@ -109291,6 +109323,38 @@
               }
             }
           },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
           "409": {
             "description": "Default Response",
             "content": {
@@ -109326,7 +109390,7 @@
         }
       },
       "delete": {
-        "summary": "Archive a kernel AI persona (soft retire)",
+        "summary": "Retired legacy persona archive (owner session only; answers 409, use the admin persona routes)",
         "tags": [
           "usage"
         ],
@@ -109354,7 +109418,7 @@
         ],
         "security": [
           {
-            "bearerAuth": []
+            "cookieAuth": []
           }
         ],
         "responses": {
@@ -109384,6 +109448,38 @@
             }
           },
           "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {

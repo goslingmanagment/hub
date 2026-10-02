@@ -18,6 +18,22 @@ describe("AI persona contracts", () => {
     expect(routeSchemas).not.toHaveProperty("aiPersonaStates");
   });
 
+  it("keeps every full-text and raw-prompt route off the bearer lane (persona cutover)", () => {
+    // Prompt text and raw prompts are owner content. Widening any of these back
+    // to a device token is its own reviewed change, not a declaration edit.
+    for (const key of [
+      "aiPersonasList",
+      "aiPersonaUpsert",
+      "aiPersonaArchive",
+      "aiGatewayStream",
+    ] as const) {
+      expect(routeSchemas[key].auth, key).toEqual({ kind: "owner-session" });
+    }
+    // What the clients use stays on the bearer lane.
+    expect(routeSchemas.aiPersonaCatalog.auth).toEqual({ kind: "apiKey" });
+    expect(routeSchemas.aiFeatureStream.auth).toEqual({ kind: "apiKey" });
+  });
+
   it("publishes persona-definition conflicts on the feature route", () => {
     expect(routeSchemas.aiFeatureStream.response).toHaveProperty("409");
   });

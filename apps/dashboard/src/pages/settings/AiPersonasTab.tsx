@@ -19,8 +19,6 @@ import { ModalShell } from "@/components/shared/ModalShell";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 
-const ADMIN_PERSONA_MUTATIONS_ENABLED = false;
-
 function conflictMessage(error: unknown) {
   return error instanceof KernelApiError && error.status === 409
     ? "This persona changed on the server. The list was refreshed; reopen it and try again."
@@ -57,19 +55,14 @@ export function AiPersonasTab() {
             <p className="mt-1 text-xs text-text-muted">
               Global prompt content. Desktop and browser clients only select from this catalog.
             </p>
-            <p className="mt-1 text-xs text-warning">
-              Read only during the fleet transition. Owner mutations unlock only after legacy client writes are closed.
-            </p>
           </div>
-          {ADMIN_PERSONA_MUTATIONS_ENABLED && (
-            <button
-              type="button"
-              onClick={() => setShowCreate(true)}
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
-            >
-              Create Persona
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:opacity-90"
+          >
+            Create Persona
+          </button>
         </div>
 
         {isError && data && <StaleDataNotice error={error} className="mb-3" />}
@@ -109,7 +102,7 @@ export function AiPersonasTab() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {ADMIN_PERSONA_MUTATIONS_ENABLED && persona.status === "active" ? (
+                      {persona.status === "active" ? (
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
@@ -127,7 +120,7 @@ export function AiPersonasTab() {
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs text-text-muted">Read only</span>
+                        <span className="text-xs text-text-muted">—</span>
                       )}
                     </td>
                   </tr>
@@ -138,11 +131,11 @@ export function AiPersonasTab() {
         )}
       </div>
 
-      {ADMIN_PERSONA_MUTATIONS_ENABLED && showCreate && <CreatePersonaModal onClose={() => setShowCreate(false)} />}
-      {ADMIN_PERSONA_MUTATIONS_ENABLED && editPersona && (
+      {showCreate && <CreatePersonaModal onClose={() => setShowCreate(false)} />}
+      {editPersona && (
         <EditPersonaModal persona={editPersona} onClose={() => setEditPersona(null)} />
       )}
-      {ADMIN_PERSONA_MUTATIONS_ENABLED && archivePersona && (
+      {archivePersona && (
         <ArchivePersonaConfirm
           persona={archivePersona}
           onClose={() => setArchivePersona(null)}

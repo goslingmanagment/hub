@@ -29,7 +29,9 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // Stage 29 — the DP 6-A restricted capture class. A completion round-trips
 // with its content captured owner-readable and team-lead-unreadable (the
 // passport's headline test); acceptance events correlate by generation ref;
-// budget breaches deny with the typed outcome.
+// budget breaches deny with the typed outcome. The raw prompt route that drives
+// these generations is owner-session only since the persona cutover, so the
+// owner's cookie sends them; clients generate through the feature lane.
 
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
@@ -162,7 +164,7 @@ describe("restricted capture class (Stage 29)", () => {
     const response = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/gateway/stream",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { cookie: await sessionCookieFor("resto-owner", "owner-secret") },
       payload: body,
     });
     expect(response.statusCode, response.body).toBe(200);
@@ -233,7 +235,7 @@ describe("restricted capture class (Stage 29)", () => {
     const first = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/gateway/stream",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { cookie: await sessionCookieFor("resto-owner", "owner-secret") },
       payload: gatewayBody(),
     });
     expect(first.statusCode, first.body).toBe(200);
@@ -241,7 +243,7 @@ describe("restricted capture class (Stage 29)", () => {
     const denied = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/gateway/stream",
-      headers: { authorization: `Bearer ${chatterKey}` },
+      headers: { cookie: await sessionCookieFor("resto-owner", "owner-secret") },
       payload: gatewayBody(),
     });
     expect(denied.statusCode, denied.body).toBe(429);

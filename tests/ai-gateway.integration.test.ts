@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
@@ -37,11 +37,21 @@ import {
   providerStreamInterruptionFixture,
 } from "./fixtures/provider-failures.ts";
 
+// Fixture passwords hash at minimum cost; sign-in still runs the real argon2
+// verify (tests/helpers/cheap-argon2.ts).
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
+// The raw prompt route is owner-session only since the persona cutover: the
+// owner's cookie drives the gateway internals here, and a chatter's device
+// token is kept only to prove it is refused. Clients generate through the
+// feature lane (ai-feature-service.integration).
+
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let apiServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterKey = "";
-let chatterUserId = 0;
+let ownerCookie = "";
+let ownerUserId = 0;
 let onlyFansPageId = 0;
 
 beforeAll(async () => {
@@ -83,6 +93,15 @@ beforeEach(async (context) => {
     label: "lora-fansly",
   });
 
+  const owner = await createUserAccount(appContext, {
+    username: "gateway-owner",
+    role: "owner",
+    password: "owner-secret",
+  }, { source: "cli" });
+  if (!owner) {
+    throw new Error("Expected owner user to be created");
+  }
+  ownerUserId = owner.id;
   const chatter = await createUserAccount(appContext, {
     username: "chatter",
     role: "chatter",
@@ -90,7 +109,6 @@ beforeEach(async (context) => {
   if (!chatter) {
     throw new Error("Expected chatter user to be created");
   }
-  chatterUserId = chatter.id;
   chatterKey = (await issueChatterDeviceToken(appContext, {
     username: "chatter",
     pageLabel: "lora-of",
@@ -98,6 +116,17 @@ beforeEach(async (context) => {
 
   apiServer = await buildApiServer(appContext);
   await apiServer.ready();
+  const login = await apiServer.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { username: "gateway-owner", password: "owner-secret" },
+  });
+  const setCookie = login.headers["set-cookie"];
+  const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
+  if (login.statusCode !== 200 || typeof cookie !== "string") {
+    throw new Error(`owner login failed: ${login.statusCode} ${login.body}`);
+  }
+  ownerCookie = cookie.split(";")[0]!;
 });
 
 function gatewayBody(overrides: Record<string, unknown> = {}) {
@@ -119,11 +148,14 @@ function gatewayBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function streamGateway(body: Record<string, unknown>, key = chatterKey) {
+function streamGateway(
+  body: Record<string, unknown>,
+  headers: Record<string, string> = { cookie: ownerCookie },
+) {
   return apiServer!.inject({
     method: "POST",
     url: "/api/v1/ai/gateway/stream",
-    headers: { authorization: `Bearer ${key}` },
+    headers,
     payload: body,
   });
 }
@@ -172,13 +204,19 @@ function successfulProvider(
 }
 
 describe("ChatMuse AI gateway runtime gate", () => {
-  it("requires a chatter API key and fails closed while the staged flag is disabled", async () => {
+  it("requires an owner session and fails closed while the staged flag is disabled", async () => {
     const anonymous = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/gateway/stream",
       payload: gatewayBody(),
     });
     expect(anonymous.statusCode, anonymous.body).toBe(401);
+
+    // A chatter's device token is refused on its own assigned page.
+    const chatter = await streamGateway(gatewayBody(), {
+      authorization: `Bearer ${chatterKey}`,
+    });
+    expect(chatter.statusCode, chatter.body).toBe(403);
 
     const response = await streamGateway(gatewayBody({
       pageLabel: "definitely-not-a-page",
@@ -194,13 +232,19 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(usageRows.rows[0]?.count).toBe(0);
   });
 
-  it("checks page authorization only after the gateway flag is enabled", async () => {
+  it("checks page resolution only after the gateway flag is enabled", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
 
-    const unassigned = await streamGateway(gatewayBody({
-      pageLabel: "lora-vip-of",
+    // The flag being on does not open the route to a device token.
+    const chatter = await streamGateway(gatewayBody(), {
+      authorization: `Bearer ${chatterKey}`,
+    });
+    expect(chatter.statusCode, chatter.body).toBe(403);
+
+    const unknown = await streamGateway(gatewayBody({
+      pageLabel: "definitely-not-a-page",
     }));
-    expect(unassigned.statusCode, unassigned.body).toBe(404);
+    expect(unknown.statusCode, unknown.body).toBe(404);
 
     const platformMismatch = await streamGateway(gatewayBody({
       pageLabel: "lora-fansly",
@@ -251,7 +295,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = 5_000_000;
 
     await insertAiUsageEvents(appContext.db, {
-      userId: chatterUserId,
+      userId: ownerUserId,
       events: [{
         clientEventId: randomUUID(),
         feature: "fast-reply",
@@ -858,7 +902,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
     const staleClientRequestId = randomUUID();
     const staleReservedAt = new Date(Date.now() - AI_GATEWAY_STALE_RESERVATION_MS - 60_000);
     const reserved = await reserveAiGatewayUsageEvent(appContext.db, {
-      userId: chatterUserId,
+      userId: ownerUserId,
       event: {
         clientEventId: staleClientRequestId,
         feature: "fast-reply",
