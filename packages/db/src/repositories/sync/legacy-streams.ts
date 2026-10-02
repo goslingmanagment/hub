@@ -52,23 +52,57 @@ export const FANSLY_ENGINE_LEGACY_STREAMS: ReadonlyArray<readonly [string, reado
   ["stats.backfill", ["stats_snapshot"]],
 ];
 
+/** The keys of that table whose work carries a subject (a thread, a target, a
+ *  fan) rather than the page, in registry order (`ResourceSpec.subject`,
+ *  pinned by tests/sync-legacy-streams.test.ts). A page-level key's newest
+ *  row is one index step away (`sync_work_key_recent`); a subject-level key's
+ *  newest row across all its subjects is not, so the `sync_streams` dataset
+ *  reads those keys from the page's recent attempts instead. */
+export const FANSLY_ENGINE_SUBJECT_LEVEL_KEYS: readonly string[] = [
+  "dm-conversations.find",
+  "dm-conversations.detail",
+  "dm-messages.head",
+  "dm-messages.catchup",
+  "dm-messages.history",
+  "purchases.targets",
+  "fan-profiles.probe",
+];
+
 const SQL_SAFE_TOKEN = /^[a-z][a-z0-9_.-]*$/;
 
+function sqlToken(value: string): string {
+  if (!SQL_SAFE_TOKEN.test(value)) throw new Error(`Not a registry name: ${value}`);
+  return `'${value}'`;
+}
+
+function sqlTextArray(values: readonly string[]): string {
+  return values.length === 0 ? "'{}'::text[]" : `array[${values.map(sqlToken).join(", ")}]::text[]`;
+}
+
 /**
- * The table as a SQL `values` list `(resource, stream)` — one row per pair —
- * for a derived table in a code-constant SQL source. Every token is checked
- * against a closed alphabet at module load, so nothing but registry names can
- * reach the text.
+ * The table per legacy stream, as a SQL `values` list
+ * `(stream, keys, page_keys, subject_keys)` — one row per stream in order of
+ * first appearance, each array in registry order: every key that takes the
+ * stream over, then the same keys split into page-level and subject-level
+ * ones — for a derived table in a code-constant SQL source. Every token is
+ * checked against a closed alphabet at module load, so nothing but registry
+ * names can reach the text.
  */
-export function fanslyEngineLegacyStreamValuesSql(): string {
-  const pairs: string[] = [];
+export function fanslyEngineStreamKeysValuesSql(): string {
+  const keysByStream = new Map<string, string[]>();
   for (const [resource, streams] of FANSLY_ENGINE_LEGACY_STREAMS) {
     for (const stream of streams) {
-      if (!SQL_SAFE_TOKEN.test(resource) || !SQL_SAFE_TOKEN.test(stream)) {
-        throw new Error(`Not a registry name: ${resource} / ${stream}`);
-      }
-      pairs.push(`('${resource}', '${stream}')`);
+      const keys = keysByStream.get(stream) ?? [];
+      keys.push(resource);
+      keysByStream.set(stream, keys);
     }
   }
-  return `values ${pairs.join(", ")}`;
+  const subjectLevel = new Set(FANSLY_ENGINE_SUBJECT_LEVEL_KEYS);
+  const rows = [...keysByStream].map(([stream, keys]) => `(${[
+    sqlToken(stream),
+    sqlTextArray(keys),
+    sqlTextArray(keys.filter((key) => !subjectLevel.has(key))),
+    sqlTextArray(keys.filter((key) => subjectLevel.has(key))),
+  ].join(", ")})`);
+  return `values ${rows.join(",\n         ")}`;
 }

@@ -132,16 +132,18 @@ equal by `tests/sync-legacy-streams.test.ts`). `off`/`shadow` pages are untouche
 | Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each legacy stream from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
 | Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates as on a legacy page and closes the row done |
-| Dataset `sync_streams` | rows from the live journal per legacy stream: `failed` (quarantined / vendor-blocked) > `paused` > `running` > `ok` |
+| Dataset `sync_streams` | rows from the live work per legacy stream: `failed` (quarantined / vendor-blocked) > `paused` > `running` > `ok`; success = the newest applied read (a page-level key's at any age, a thread / target / fan key's within 24 h); failure = a standing one (an active row whose last outcome failed); every lookup bounded per key, never by the journal's length |
 
 A quarantine records why in `sync_work.result.quarantine` (`{reason, detail, attemptId, at}`: an `ApplyQuarantine`
 detail or a contract violation's field). `pnpm cli sync work list --page P [--state quarantined] [--resource R]`
 shows it; `pnpm cli sync work requeue --page P --work <id> | --quarantined [--resource R]` takes rows out of
 quarantine — a live row whose last attempt holds a captured answer goes back to `running` with that attempt
-`deferred`, so the actor re-applies it from the journal before any new read (no request); other rows open due now
-(audited `admin.sync_work_requeue`). `pnpm cli sync work enqueue --page P --resource <key> [--subject S]
-[--params <json>]` files the owner's own demand for a key with the `owner` trigger on a live page (audited
-`admin.sync_work_enqueue`).
+`deferred`, so the actor re-applies it from the journal before any new read (no request); other rows, and a row
+whose captured body can no longer be read (`apply_error` `payload_unavailable:…`), open due now (audited
+`admin.sync_work_requeue`). It touches only the journal the page runs (live on `handover`/`live`, shadow otherwise),
+and `--work` ids are all-or-nothing. `pnpm cli sync work enqueue --page P --resource <key> [--subject S]
+[--params <json>]` files the owner's own demand for a key with the `owner` trigger on a live page; `--subject` only
+for a key that runs per subject (audited `admin.sync_work_enqueue`).
 
 `requests/urgent.ts` is how the API and the CLIs ask the actor for a read instead of calling Fansly: `enqueueAndWait`
 upserts the work of a registry key with the `api` trigger and waits up to 15–30 s for `applied_revision` to reach the

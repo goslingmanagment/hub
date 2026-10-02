@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_DATASET_SQL,
   FANSLY_ENGINE_LEGACY_STREAMS,
-  fanslyEngineLegacyStreamValuesSql,
+  FANSLY_ENGINE_SUBJECT_LEVEL_KEYS,
+  fanslyEngineStreamKeysValuesSql,
   syncWorkQuarantineOf,
 } from "@agency_hub_core/db";
 
@@ -30,6 +31,13 @@ describe("legacy stream ↔ registry key", () => {
   it("the database copy is exactly the table the registry generates", () => {
     expect(FANSLY_ENGINE_LEGACY_STREAMS.map(([key, streams]) => [key, [...streams]]))
       .toEqual(fanslyLegacyStreamTable().map(([key, streams]) => [key, [...streams]]));
+  });
+
+  it("the database copy's subject-level keys are the table's keys whose work carries a subject", () => {
+    const tableKeys = new Set(fanslyLegacyStreamTable().map(([key]) => key));
+    expect([...FANSLY_ENGINE_SUBJECT_LEVEL_KEYS]).toEqual(
+      FANSLY_RESOURCE_SPECS.filter((spec) => tableKeys.has(spec.key) && spec.subject !== "page").map((spec) => spec.key),
+    );
   });
 
   it("every legacy stream an entry names maps back to that entry", () => {
@@ -61,16 +69,32 @@ describe("legacy stream ↔ registry key", () => {
     expect(fanslyStreamPollSeconds("purchase_history")).toBe(0);
   });
 
-  it("the sync_streams dataset reads the table as a closed values list", () => {
-    const values = fanslyEngineLegacyStreamValuesSql();
-    expect(values.startsWith("values ('account.poll', 'light')")).toBe(true);
-    expect(values).toContain("('fan-profiles.lookup', 'followers_reconcile')");
+  it("the sync_streams dataset reads the table per stream as a closed values list", () => {
+    const values = fanslyEngineStreamKeysValuesSql();
+    expect(values.startsWith("values ('light', array['account.poll']::text[], array['account.poll']::text[], '{}'::text[])"))
+      .toBe(true);
+    // A stream's keys, then its page-level and its subject-level keys.
+    expect(values).toContain(
+      "('dm_messages', array['dm-messages.head', 'dm-messages.catchup', 'dm-messages.history', 'fan-profiles.probe']::text[], "
+        + "'{}'::text[], array['dm-messages.head', 'dm-messages.catchup', 'dm-messages.history', 'fan-profiles.probe']::text[])",
+    );
+    expect(values).toContain(
+      "('followers_reconcile', array['followers.reconcile', 'fan-profiles.lookup']::text[], "
+        + "array['followers.reconcile', 'fan-profiles.lookup']::text[], '{}'::text[])",
+    );
+    // One row per stream the table names.
+    const streams = new Set(FANSLY_ENGINE_LEGACY_STREAMS.flatMap(([, owned]) => owned));
+    expect(values.match(/\('[a-z_]+', array\[/g)).toHaveLength(streams.size);
     expect(values).not.toMatch(/[;"\\]/);
     const source = AGENT_DATASET_SQL.sync_streams!.source;
     expect(source).toContain(values);
-    // Engine-owned pages leave the legacy branch and come from the live journal.
+    // Engine-owned pages leave the legacy branch and come from the live work.
     expect(source).toMatch(/esp\.mode in \('handover', 'live'\)/);
-    expect(source).toMatch(/from sync_work w[\s\S]*where not w\.shadow/);
+    expect(source).toMatch(/from sync_work w[\s\S]*where w\.page_id = sp\.page_id\s+and not w\.shadow/);
+    // Never an aggregate over the page's whole attempt journal: per row
+    // (`a.work_id = w.id`) or within the last day of the page's attempts.
+    expect(source).not.toMatch(/from sync_attempts a\s+join/);
+    expect(source).toMatch(/a\.admitted_at >= now\(\) - interval '24 hours'/);
     expect(AGENT_DATASET_SQL.sync_streams!.readPlanes).toEqual([]);
   });
 });

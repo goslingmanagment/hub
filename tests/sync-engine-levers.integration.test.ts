@@ -12,6 +12,7 @@ import {
   ensurePollRows,
   getSyncPage,
   setPagePause,
+  SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE,
   upsertDemand,
   upsertFans,
   type Database,
@@ -21,6 +22,7 @@ import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fans
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
 import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { ApplyQuarantine } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -59,8 +61,9 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
  *  - the followers blast-radius override reads the engine walk the apply
  *    quarantined (`result.quarantine`, its cursor) and closes it;
  *  - `sync work requeue` re-applies a captured answer from the journal with
- *    no request at the origin; `sync work enqueue` files the owner's demand on
- *    a live page only; both are audited.
+ *    no request at the origin, opens an answer whose body is gone for a fresh
+ *    read, and touches only the journal the page runs; `sync work enqueue`
+ *    files the owner's demand on a live page only; both are audited.
  */
 
 let testDb: StartedTestDatabase | null = null;
@@ -536,6 +539,113 @@ describe("sync work requeue and enqueue", () => {
     expect(await dueNow(pages.live, "plan.stuck")).toBe(true);
   }, 60_000);
 
+  it("an answer whose journaled body is gone opens for a fresh read instead of re-applying", async () => {
+    let restored = false;
+    const module: ResourceModule = {
+      plan: async () => ({ kind: "request", request: pollsRequest }),
+      apply: async () => {
+        if (!restored) {
+          throw new CapturePayloadUnavailableError({
+            envelope: "observation", envelopeId: 1, bucketMonth: "2026-10-01", objectId: 2, reason: "missing" as never, readMode: "serve",
+          });
+        }
+        return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
+      },
+      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+    };
+    const registry = testRegistry([testSpec("gone.read", module)]);
+    await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "gone.read", kind: "trigger", class: "urgent" });
+    const transport = new ScriptedLiveTransport();
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId: pages.live, mode: "live", registry, transport, alerts: new RecordingAlerts(),
+    });
+    const run = actor.run({ stop: stop.signal, abort: abort.signal });
+    let workId = 0;
+    try {
+      // A fresh answer that cannot be read is retried...
+      const attemptId = await waitFor(async () => {
+        const row = await testDb!.pool.query<{ id: string }>(
+          "select id::text from sync_attempts where page_id = $1 and resource = 'gone.read' and apply_state = 'deferred'",
+          [pages.live],
+        );
+        return row.rows[0]?.id ?? null;
+      }, 30_000, "the deferred apply");
+      // ...until it has been unreadable past the grace: then it is quarantined.
+      await testDb!.pool.query(
+        `update sync_attempts set completed_at = completed_at - interval '20 minutes', apply_retry_at = clock_timestamp()
+          where id = $1`,
+        [attemptId],
+      );
+      const quarantined = await waitFor(async () => {
+        const row = await testDb!.pool.query<{ workId: string; applyError: string; observationId: string | null }>(
+          `select w.id::text as "workId", a.apply_error as "applyError", a.observation_id::text as "observationId"
+             from sync_work w join sync_attempts a on a.id = w.last_attempt_id
+            where w.page_id = $1 and w.resource = 'gone.read' and w.state = 'quarantined' and a.apply_state = 'quarantined'`,
+          [pages.live],
+        );
+        return row.rows[0] ?? null;
+      }, 30_000, "the quarantine");
+      workId = Number(quarantined.workId);
+      expect(quarantined.applyError.startsWith(SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE)).toBe(true);
+      // The observation is still referenced: only its body is gone.
+      expect(quarantined.observationId).not.toBeNull();
+      expect(transport.hits).toHaveLength(1);
+
+      // The owner requeues it: nothing to re-apply, so the key reads again.
+      restored = true;
+      const printed: string[] = [];
+      await cli(printed).parseAsync(["node", "sync", "work", "requeue", "--page", "lilly-1", "--work", String(workId)]);
+      expect(JSON.parse(printed.join("\n"))).toMatchObject({
+        requeued: [{ work: workId, resource: "gone.read", via: "run_again" }],
+      });
+      await waitFor(async () => {
+        const row = await testDb!.pool.query<{ state: string }>("select state from sync_work where id = $1", [workId]);
+        return row.rows[0]?.state === "done" ? true : null;
+      }, 30_000, "the fresh read");
+    } finally {
+      stop.abort();
+      await run;
+    }
+    expect(transport.hits).toHaveLength(2);
+    const attempts = await testDb!.pool.query<{ applyState: string }>(
+      `select apply_state as "applyState" from sync_attempts where page_id = $1 and resource = 'gone.read' order by id`,
+      [pages.live],
+    );
+    expect(attempts.rows.map((row) => row.applyState)).toEqual(["quarantined", "applied"]);
+  }, 60_000);
+
+  it("requeues only quarantined rows of the journal the page runs, all or nothing", async () => {
+    const quarantine = async (pageId: number, resource: string): Promise<number> => {
+      const work = await upsertDemand(db(), { pageId, shadow: false, resource, kind: "trigger", class: "urgent" });
+      await testDb!.pool.query(
+        "update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where id = $1",
+        [work.id],
+      );
+      return work.id;
+    };
+    const stateOf = async (workId: number): Promise<string | undefined> =>
+      (await testDb!.pool.query<{ state: string }>("select state from sync_work where id = $1", [workId])).rows[0]?.state;
+    // A live row left on a page rolled back to shadow: re-armed there, its
+    // answer would be applied at the next switch.
+    const stale = await quarantine(pages.legacy, "fix.read");
+    await expect(cli([]).parseAsync(["node", "sync", "work", "requeue", "--page", "ari-1", "--work", String(stale)]))
+      .rejects.toThrow(/not a quarantined row of ari-1's shadow journal \(shadow\): work \d+; nothing requeued/);
+    expect(await stateOf(stale)).toBe("quarantined");
+    // On a live page, one row that is not quarantined refuses the whole list.
+    const stuck = await quarantine(pages.live, "fix.read");
+    const open = await upsertDemand(db(), { pageId: pages.live, shadow: false, resource: "other.read", kind: "trigger", class: "urgent" });
+    await expect(cli([]).parseAsync([
+      "node", "sync", "work", "requeue", "--page", "lilly-1", "--work", String(stuck), "--work", String(open.id),
+    ])).rejects.toThrow(new RegExp(`live journal \\(live\\): work ${open.id}; nothing requeued`));
+    expect(await stateOf(stuck)).toBe("quarantined");
+    expect(await countRows(testDb!.pool, "select count(*)::int as n from audit_events where event_type = $1", [SYNC_WORK_REQUEUE_AUDIT_EVENT])).toBe(0);
+    // The quarantined row alone goes.
+    const printed: string[] = [];
+    await cli(printed).parseAsync(["node", "sync", "work", "requeue", "--page", "lilly-1", "--work", String(stuck)]);
+    expect(JSON.parse(printed.join("\n"))).toMatchObject({ requeued: [{ work: stuck, via: "run_again" }] });
+    expect(await stateOf(stuck)).toBe("open");
+  });
+
   it("enqueue files the owner's demand for an owner key of a live page, audited; every other page or key is refused", async () => {
     const printed: string[] = [];
     await cli(printed).parseAsync(["node", "sync", "work", "enqueue", "--page", "lilly-1", "--resource", "transactions.backfill"]);
@@ -555,6 +665,10 @@ describe("sync work requeue and enqueue", () => {
       .rejects.toThrow(/shadow: owner work is enqueued only on a live page/);
     await expect(cli([]).parseAsync(["node", "sync", "work", "enqueue", "--page", "lilly-1", "--resource", "account.verify"]))
       .rejects.toThrow(/sync work enqueue takes one of/);
+    // A page-level key takes no subject: it would start a second walk.
+    await expect(cli([]).parseAsync([
+      "node", "sync", "work", "enqueue", "--page", "lilly-1", "--resource", "transactions.backfill", "--subject", "123",
+    ])).rejects.toThrow(/transactions\.backfill is the page's own work: it takes no --subject/);
     expect(await countRows(testDb!.pool, "select count(*)::int as n from audit_events where event_type = $1", [SYNC_WORK_ENQUEUE_AUDIT_EVENT])).toBe(1);
     // A second enqueue merges into the open row.
     const again: string[] = [];

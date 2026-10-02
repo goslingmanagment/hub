@@ -33,6 +33,7 @@ import {
   setResourceHold,
   settleAttemptWithoutCapture,
   settleWork,
+  SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE,
   tryAcquireDmArchiveWriterFenceLock,
   upsertDemands,
   type Database,
@@ -1174,7 +1175,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
     if (kind === "deferred" || kind === "transient") {
       const payloadGone = [...errorChain(error)].some((link) => isCapturePayloadUnavailable(link));
       if (payloadGone && answerAgeMs > PAYLOAD_UNAVAILABLE_QUARANTINE_MS) {
-        quarantine = await markAttemptQuarantined(tx, { attemptId, error: name });
+        quarantine = await markAttemptQuarantined(tx, { attemptId, error: `${SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE}${name}` });
       } else {
         await markDeferred(tx, { attemptId, error: name, retryInMs });
       }

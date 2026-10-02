@@ -447,8 +447,12 @@ export const SYNC_WORK_ENQUEUE_AUDIT_EVENT = "admin.sync_work_enqueue";
  * page out of quarantine — the given rows, or every quarantined row of the
  * journal the page runs (of one key with `resources`). A live row whose last
  * attempt holds a captured answer re-applies it from the journal (no request,
- * plan §9); the rest open due now. The requeue and its audit row commit
- * together; the actor wakes at commit.
+ * plan §9); the rest open due now. Only the journal the page runs: a live row
+ * left on a page rolled back to `shadow` stays quarantined (re-armed there,
+ * its answer would be applied at the next switch, however stale). Given rows
+ * are all-or-nothing — one that is not a quarantined row of that journal
+ * refuses the whole requeue. The requeue and its audit row commit together;
+ * the actor wakes at commit.
  */
 export async function requeueSyncWork(
   db: Database,
@@ -464,15 +468,27 @@ export async function requeueSyncWork(
     throw new SyncOwnerLeverError("say what to requeue: --work <id> or --quarantined [--resource <key>]");
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
+  const shadow = statusJournalIsShadow(page);
+  const workIds = input.workIds === undefined || input.workIds.length === 0 ? null : [...new Set(input.workIds)];
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     const requeued = await requeueQuarantinedWork(txDb, {
       pageId: page.pageId,
-      ...(input.workIds === undefined || input.workIds.length === 0
-        ? { shadow: statusJournalIsShadow(page) }
-        : { workIds: input.workIds }),
+      shadow,
+      ...(workIds === null ? {} : { workIds }),
       ...(input.resources === undefined || input.resources.length === 0 ? {} : { resources: input.resources }),
     });
+    if (workIds !== null) {
+      const taken = new Set(requeued.map((row) => row.id));
+      const refused = workIds.filter((id) => !taken.has(id));
+      if (refused.length > 0) {
+        // Rolls the transaction back: nothing requeued, nothing audited.
+        throw new SyncOwnerLeverError(
+          `not a quarantined row of ${input.pageLabel}'s ${shadow ? "shadow" : "live"} journal (${page.mode}): `
+          + `work ${refused.join(", ")}; nothing requeued`,
+        );
+      }
+    }
     await insertAuditEvent(txDb, {
       platformAccountId: page.pageId,
       source: "cli",
@@ -527,6 +543,16 @@ export async function enqueueOwnerSyncWork(
   }
   const spec = registry.spec(input.resource);
   if (spec === null) throw new SyncOwnerLeverError(`No registry entry ${input.resource}`);
+  // One open row per (key, subject): a page-level key given a subject would
+  // start a second, parallel walk of the same key.
+  const subjectKind = FANSLY_RESOURCE_SPECS.find((candidate) => candidate.key === input.resource)?.subject ?? "page";
+  const subject = input.subject ?? "";
+  if (subjectKind === "page" && subject !== "") {
+    throw new SyncOwnerLeverError(`${input.resource} is the page's own work: it takes no --subject (asked: ${subject})`);
+  }
+  if (subjectKind !== "page" && subject === "") {
+    throw new SyncOwnerLeverError(`${input.resource} runs per ${subjectKind}: name one with --subject`);
+  }
   const page = await findSyncPageByLabel(db, input.pageLabel);
   if (page.mode !== "live") {
     throw new SyncOwnerLeverError(
@@ -536,7 +562,7 @@ export async function enqueueOwnerSyncWork(
   const upsert = demandToUpsert(
     {
       resource: input.resource,
-      ...(input.subject === undefined ? {} : { subject: input.subject }),
+      ...(subject === "" ? {} : { subject }),
       ...(input.params === undefined ? {} : { params: input.params }),
       demand: { reason: "owner" },
     },
@@ -555,7 +581,7 @@ export async function enqueueOwnerSyncWork(
         actor: input.actor,
         pageLabel: input.pageLabel,
         resource: input.resource,
-        subject: input.subject ?? "",
+        subject,
         params: input.params ?? null,
         workId: result.id,
         created: result.created,

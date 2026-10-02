@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
+import { SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE } from "./attempts.ts";
 import { SYNC_RESOURCE_KEY_PATTERN, SYNC_RESOURCE_FILE_PATTERN } from "./pages.ts";
 import {
   generationParam,
@@ -898,9 +899,11 @@ export interface RequeuedSyncWork {
  * whose apply is pending, so the actor's apply drain (and a restart's
  * recovery) applies it and no pick admits a new read of the key before that.
  * Every other quarantined row (a plan quarantine, a shadow row, an answer
- * gone from the journal) opens due now. Both drop `result.quarantine`; a
- * second refusal writes a new one. Only rows of the page in `quarantined`
- * are touched; NOTIFY wakes the page's actor at commit.
+ * whose body is gone from the journal — its attempt quarantined as
+ * `SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE`) opens due now for a fresh read.
+ * Both drop `result.quarantine`; a second refusal writes a new one. Only rows
+ * of the page in `quarantined` are touched; NOTIFY wakes the page's actor at
+ * commit.
  */
 export async function requeueQuarantinedWork(
   db: Database,
@@ -937,6 +940,7 @@ export async function requeueQuarantinedWork(
          and not a.shadow
          and a.apply_state = 'quarantined'
          and a.observation_id is not null
+         and not starts_with(coalesce(a.apply_error, ''), ${SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE})
       returning a.id, a.work_id
     )
     update sync_work w
