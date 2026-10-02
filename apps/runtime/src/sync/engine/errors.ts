@@ -570,7 +570,7 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
           ...base,
           networkFailureStreak: streakReset,
           work: held
-            ? { action: "reopen", dueAt: null, waitingReason: "resource_hold", waitingUntil: breakerUntil }
+            ? { action: "reopen", dueAt: breakerUntil, waitingReason: "resource_hold", waitingUntil: breakerUntil }
             : reopenNow,
         };
       }
@@ -593,9 +593,9 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
           kind: "rate_limit_list",
           lastRateLimitAt: now,
         },
-        // A key that can only read the list waits for the hold (no immediate
-        // retry); `.find` goes on to `group.detail` at once.
-        work: held ? { action: "reopen", dueAt: null, waitingReason: "resource_hold", waitingUntil: until } : reopenNow,
+        // A key that can only read the list is due again at the hold's end (no
+        // immediate retry); `.find` goes on to `group.detail` at once.
+        work: held ? { action: "reopen", dueAt: until, waitingReason: "resource_hold", waitingUntil: until } : reopenNow,
         alerts: sustained ? [{ subKey: "page_stopped", detail: "rate_limit_list" }] : [],
       };
     }

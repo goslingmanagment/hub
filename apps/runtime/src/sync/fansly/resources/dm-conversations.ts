@@ -32,6 +32,7 @@ import {
 
 import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
+import { listRateLimitHold, type ResourceHoldEntry } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -75,7 +76,9 @@ import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 //   the offset), restart the walk under a new generation after 60 s, at most
 //   twice; past that it closes withheld.
 // - find (urgent, a socket event in an unknown chat): the list head; if the
-//   chat is not on it, its group detail, which creates the thread (D5).
+//   chat is not on it, its group detail, which creates the thread (D5). While
+//   a list 429 holds the list (owner decision 2026-10-02, `rate_limit_list`:
+//   only the keys that can only read the list wait), straight to the detail.
 // - detail (planned, from a list apply): the group detail of a chat whose
 //   partner the list could not name; a 5xx breaks only this chat (§9).
 // - ws-down (urgent, live only, step 3): the list head every 30 s while the
@@ -939,9 +942,12 @@ const findModule: ResourceModule = {
     const groupId = work.subject;
     if (groupId.length === 0) return { kind: "quarantine", reason: "find_without_chat" };
     const cursor = parseFindCursor(work.cursor);
+    // While a list 429 holds the list (owner decision 2026-10-02), the chat is
+    // found through its group detail alone.
+    const listHeld = listRateLimitHold(ctx.page.resourceHolds as Record<string, ResourceHoldEntry>, ctx.now) !== null;
     return planWithIdentity(FIND_KEY, ctx, () => ({
       kind: "request",
-      request: !ctx.shadow && cursor.step === "detail" ? detailRequest(groupId) : listRequest(0),
+      request: !ctx.shadow && (cursor.step === "detail" || listHeld) ? detailRequest(groupId) : listRequest(0),
     }));
   },
 

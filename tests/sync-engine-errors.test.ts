@@ -341,7 +341,10 @@ describe("sync errors: a 429 on the conversation list", () => {
       expect(decision.pageHold).toEqual({ action: "keep" });
       if (decision.resourceHold.action !== "set") throw new Error("no list hold");
       expect(decision.resourceHold).toMatchObject({ file: "dm-conversations", kind: "rate_limit_list", lastRateLimitAt: NOW });
-      expect(decision.work).toEqual({ action: "reopen", dueAt: null, waitingReason: "resource_hold", waitingUntil: decision.resourceHold.until });
+      // Due again at the hold's end, not before: the held row never looks due to the idle actor.
+      expect(decision.work).toEqual({
+        action: "reopen", dueAt: decision.resourceHold.until, waitingReason: "resource_hold", waitingUntil: decision.resourceHold.until,
+      });
       seconds.push((decision.resourceHold.until.getTime() - NOW.getTime()) / 1_000);
       alerted.push(decision.alerts.length > 0);
       // The hold ran out before the next try (the next try is never sooner).
@@ -424,6 +427,9 @@ describe("sync errors: a 429 on the conversation list", () => {
     });
     const kept = onOutcome(input("rate_limit_list", { resource: "dm-conversations.find", httpStatus: 429, page: breaker }));
     expect(kept.resourceHold).toEqual({ action: "keep" });
+    const keptHead = onOutcome(input("rate_limit_list", { resource: "dm-conversations.head", httpStatus: 429, page: breaker }));
+    expect(keptHead.resourceHold).toEqual({ action: "keep" });
+    expect(keptHead.work).toEqual({ action: "reopen", dueAt: at(20 * MIN), waitingReason: "resource_hold", waitingUntil: at(20 * MIN) });
     const listInForce = listHold({ until: at(10_000).toISOString(), lastRateLimitAt: NOW.toISOString() });
     const escalated = onOutcome(input("subject_failure", { resource: "dm-conversations.detail", recentFailedSubjects: 5, page: listInForce }));
     expect(escalated.resourceHold).toEqual({ action: "set", file: "dm-conversations", until: at(30 * MIN), step: 1 });

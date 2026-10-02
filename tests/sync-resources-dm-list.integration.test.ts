@@ -1,3 +1,5 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +14,7 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
+import type { Wake } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
@@ -560,6 +563,124 @@ describe("dm-conversations.find and .detail", () => {
     const page = await testDb.pool.query("select hold_kind, resource_holds from sync_pages where page_id = $1", [pageId]);
     expect(page.rows[0]).toEqual({ hold_kind: null, resource_holds: {} });
     expect(await thread(pageId, 5)).toMatchObject({ partner: null, metadata: { unresolvedIdentity: true } });
+  });
+});
+
+describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
+  function accountMe() {
+    return { account: { id: OWN_ID, username: "model", displayName: "Model", followCount: 0, subscriberCount: 0 } };
+  }
+
+  it("holds only the list: the page and every other resource go on, and .find goes straight to the group detail", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    await testDb.pool.query("update pages set last_verified_at = clock_timestamp() - interval '3 hours' where id = $1", [pageId]);
+    await makeDue(pageId, false, "dm-conversations.head");
+    await makeDue(pageId, false, "account.poll");
+    const metrics = new RecordingMetrics();
+    const first = await runLive(pageId, (req) => {
+      if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
+      if (req.spec === "account.me") return okResponse(accountMe());
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await countRows(testDb!.pool,
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'account.poll' and apply_state = 'applied'", [pageId])) === 1
+      && (await countRows(testDb!.pool,
+        "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.head' and http_status = 429", [pageId])) === 1,
+    { metrics });
+
+    // One list read, no retry while held; the page's other work went out.
+    expect(first.hits.filter((spec) => spec === "messaging.groups")).toHaveLength(1);
+    expect(first.hits).toContain("account.me");
+    const page = await testDb.pool.query<{ hold_kind: string | null; hold: { kind: string; step: number; until: string } }>(
+      "select hold_kind, resource_holds -> 'dm-conversations' as hold from sync_pages where page_id = $1",
+      [pageId],
+    );
+    expect(page.rows[0]!.hold_kind).toBeNull();
+    expect(page.rows[0]!.hold).toMatchObject({ kind: "rate_limit_list", step: 1 });
+    const untilMs = new Date(page.rows[0]!.hold.until).getTime() - Date.now();
+    expect(untilMs).toBeLessThanOrEqual(5_000);
+    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: "resource_hold" });
+    expect(metrics.get("sync_list_rate_limited")).toBe(1);
+
+    // While the list is held, a chat the socket names is found by its detail alone.
+    await testDb.pool.query(
+      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{dm-conversations,until}',
+              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
+      [pageId],
+    );
+    await makeDue(pageId, false, "dm-conversations.find", groupOf(8));
+    const second = await drive(pageId, "live", createEngineRegistry(FANSLY_RESOURCE_SPECS), (req) => {
+      if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "dm-conversations.find"))?.state === "done");
+    expect(second.hits).toEqual(["group.detail"]);
+    expect((await workRow(pageId, "dm-conversations.find"))!.close_reason).toBe("found_by_detail");
+    expect(await subjectsOf(pageId, "dm-messages.head")).toEqual([groupOf(8)]);
+  });
+
+  it("keeps the idle actor asleep while the list is held: a held row is never due to it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    // Both list walks due: one takes the 429, the other is held before it is sent.
+    await makeDue(pageId, false, "dm-conversations.head");
+    await makeDue(pageId, false, "dm-conversations.full");
+    const registry = await quietRegistry(pageId, false);
+    // The production wake answers a wait of 0 ms at once (host-ports.ts).
+    const productionWake: Wake = {
+      async wait(_pageId, ms, signal) {
+        if (signal.aborted || !(ms > 0)) return "timeout";
+        await sleep(ms, undefined, { signal }).catch(() => undefined);
+        return "timeout";
+      },
+    };
+    let statements = 0;
+    const counted = new Proxy(db() as object, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") return value;
+        const bound = (value as (...args: unknown[]) => unknown).bind(target);
+        if (prop !== "execute" && prop !== "transaction") return bound;
+        return (...args: unknown[]) => {
+          statements += 1;
+          return bound(...args);
+        };
+      },
+    }) as Database;
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req) => {
+      if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
+      throw new Error(`unexpected ${req.spec}`);
+    };
+    const { actor, stop, abort } = await makeTestActor({
+      db: counted, pageId, mode: "live", registry, transport, wake: productionWake, metrics: new RecordingMetrics(),
+    });
+    const run = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      await waitFor(async () => ((await countRows(testDb!.pool,
+        "select count(*)::int as n from sync_attempts where page_id = $1 and http_status = 429", [pageId])) === 1 ? true : null),
+      30_000, "the list 429");
+      // Inside the first list hold (5 s): an idle lap a second, not a spin.
+      const before = statements;
+      await sleep(2_000);
+      expect((statements - before) / 2).toBeLessThan(50);
+    } finally {
+      stop.abort();
+      await run;
+    }
+    expect(transport.hits.map((hit) => hit.spec)).toEqual(["messaging.groups"]);
+    const held = await testDb.pool.query<{ resource: string; due_at: Date; waiting_reason: string | null }>(
+      `select resource, due_at, waiting_reason from sync_work
+        where page_id = $1 and shadow = false and resource in ('dm-conversations.head', 'dm-conversations.full') and state = 'open'`,
+      [pageId],
+    );
+    const hold = await testDb.pool.query<{ until: string }>(
+      "select resource_holds -> 'dm-conversations' ->> 'until' as until from sync_pages where page_id = $1",
+      [pageId],
+    );
+    // The walk that met the 429 is due again at the hold's end, not at once.
+    const answered = held.rows.find((row) => row.waiting_reason === "resource_hold");
+    expect(answered).toBeDefined();
+    expect(answered!.due_at.getTime()).toBe(new Date(hold.rows[0]!.until).getTime());
   });
 });
 

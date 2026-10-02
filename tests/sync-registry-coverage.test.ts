@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getSyncStreamsForPlatform } from "@agency_hub_core/db";
 import { FANSLY_SEND_SOURCES, fanslyWireSpec, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 
+import { LIST_RATE_LIMIT_HELD_KEYS, LIST_RATE_LIMIT_ROUTE } from "../apps/runtime/src/sync/engine/errors.ts";
 import { NOT_IMPLEMENTED_RECHECK_MS } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
@@ -127,6 +128,16 @@ describe("the Fansly registry table", () => {
     for (const key of ["dm-conversations.head", "dm-conversations.full"]) expect(byKey(key).kind, key).toBe("poll");
     expect(byKey("dm-conversations.full").period?.everyMs).toBe(86_400_000);
     expect(byKey("dm-conversations.head").period?.everyMs).toBe(30 * 60_000);
+  });
+
+  it("a list 429 holds exactly the keys that can only read the list (owner decision 2026-10-02)", () => {
+    const listOnly = FANSLY_RESOURCE_SPECS
+      .filter((spec) => spec.operations.length > 0 && spec.operations.every((operation) => operation === LIST_RATE_LIMIT_ROUTE))
+      .map((spec) => spec.key)
+      .sort();
+    expect([...LIST_RATE_LIMIT_HELD_KEYS].sort()).toEqual(listOnly);
+    // `.find` reads the list too, but goes on through the group detail.
+    expect(byKey("dm-conversations.find").operations).toEqual([LIST_RATE_LIMIT_ROUTE, "group.detail"]);
   });
 
   it("I12: a history walk only on a request", () => {
