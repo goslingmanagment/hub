@@ -12,7 +12,11 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { checkFanslyIdentityThroughEngine, trustStoredFanslyCredentials } from "../apps/runtime/src/services/sync-engine-account.ts";
+import {
+  checkFanslyIdentityThroughEngine,
+  runFanslyIdentityCheck,
+  trustStoredFanslyCredentials,
+} from "../apps/runtime/src/services/sync-engine-account.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -271,6 +275,51 @@ describe("the credentials generation of a live page", () => {
     expect(page.holdKind).toBeNull();
     expect(page.credentialsGeneration).toBe(await storedGeneration(r.page));
     expect(await verifyAttempts(r.page.pageId)).toBe(1);
+  }, 60_000);
+
+  it("a candidate identity check's 429 under an auth hold keeps the auth hold: nothing goes out before the 429 ends, the stored session's read waits for the renewal", async (context) => {
+    if (!testDb) return context.skip();
+    let throttled = 0;
+    const r = await rig([(request) => {
+      if (request.url.pathname !== "/api/v1/account/me" || request.headers.authorization !== "fresh-token" || throttled > 0) return null;
+      throttled += 1;
+      return { status: 429, headers: { "content-type": "application/json", "retry-after": "2" }, body: JSON.stringify({ success: false }) };
+    }]);
+    const failed = await storedGeneration(r.page);
+    await holdAuth(r.page, failed);
+    await urgent(r.page.pageId, "u1");
+    await startHost(r, 37);
+    const page = { id: r.page.pageId, label: r.page.pageLabel };
+    const fresh = { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
+    const checked = runFanslyIdentityCheck(appContext(), page, { session: fresh });
+
+    // The 429 is carried beside the auth hold: neither replaced nor lifted.
+    await until(async () => (await getSyncPage(db(), r.page.pageId))!.holdDetail.timedHold !== undefined, 15_000, "the candidate's 429");
+    const held = (await getSyncPage(db(), r.page.pageId))!;
+    expect(held.holdKind).toBe("auth");
+    expect(held.holdDetail.credentialsGeneration).toBe(failed);
+    const carried = held.holdDetail.timedHold as { kind: string; until: string };
+    expect(carried.kind).toBe("rate_limit");
+    const holdEnd = new Date(carried.until).getTime();
+
+    // The check runs again only after the 429 ended, and passes.
+    expect(await checked).toMatchObject({ matches: true });
+    const identities = r.server.arrivalsAt("/api/v1/account/me");
+    expect(identities.map((arrival) => arrival.status)).toEqual([429, 200]);
+    expect(identities[1]!.wallMs).toBeGreaterThanOrEqual(holdEnd);
+    // The auth hold outlived the 429: the stored session that failed sends nothing.
+    await new Promise((resolve) => setTimeout(resolve, 4 * S));
+    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
+    expect((await getSyncPage(db(), r.page.pageId))!.holdKind).toBe("auth");
+
+    // The renewal (stored and trusted, as the credentials route does) lifts it.
+    await db().transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await storeFanslySession(tx, r.page.pageId, JSON.stringify(encryptJson(fresh, HARNESS_ENCRYPTION_KEY, 1)), 1);
+      await trustStoredFanslyCredentials(tx, page);
+    });
+    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the read after the renewal");
+    expect(r.identityTokens.at(-1)).toBe("fresh-token");
   }, 60_000);
 
   it("a proxy change: the identity check rides the candidate proxy, and the next request leaves through the new one", async (context) => {

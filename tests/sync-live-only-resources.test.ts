@@ -155,6 +155,9 @@ describe("the journal of the routes without a request line (J7)", () => {
     expect(JSON.stringify(json)).not.toContain("SECRET");
     expect(JSON.stringify(json)).not.toContain("cdn3.fansly.com");
     expect(requestJsonOf({ spec: "ws.upgrade", params: {} })).toEqual({ spec: "ws.upgrade", host: "ws", params: {} });
+    // The Upgrade carries the page's stored session: its digest is journaled.
+    expect(requestJsonOf({ spec: "ws.upgrade", params: {} }, { url: "socket-owner:ws.upgrade", credentialsGeneration: "a".repeat(64) }))
+      .toEqual({ spec: "ws.upgrade", host: "ws", params: {}, credentialsGeneration: "a".repeat(64) });
   });
 });
 

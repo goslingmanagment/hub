@@ -112,6 +112,25 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(facts({ page: { holdKind: "rate_limit", holdUntil: at(-1), holdSince: at(-MINUTE) } }))).toEqual({});
   });
 
+  it("alert 1: a 429 or network hold carried beside an auth hold is listed too", () => {
+    const carried = (kind: string, untilMs: number, detail: Record<string, unknown> = {}) => facts({
+      page: {
+        holdKind: "auth",
+        holdUntil: new Date(8.64e15),
+        holdSince: at(-MINUTE),
+        holdDetail: { credentialsGeneration: "gen-1", timedHold: { kind, until: at(untilMs).toISOString(), detail } },
+      },
+    });
+    const reasons = (input: PageAlertFacts) => evaluatePageAlerts(input, registry)
+      .flatMap((entry) => entry.reasons.map((reason) => reason.detail));
+    expect(evaluate(carried("rate_limit", MINUTE, { lastRateLimitAt: at(-1_000).toISOString() }))).toEqual({ page_stopped: "auth" });
+    expect(reasons(carried("rate_limit", MINUTE))).toEqual(["auth", "rate_limit"]);
+    expect(reasons(carried("rate_limit", -1))).toEqual(["auth"]);
+    expect(reasons(carried("network", MINUTE, { networkSince: at(-NETWORK_ALERT_AFTER_MS - MINUTE).toISOString() })))
+      .toEqual(["auth", "network"]);
+    expect(reasons(carried("network", MINUTE, { networkSince: at(-MINUTE).toISOString() }))).toEqual(["auth"]);
+  });
+
   it("alert 1: a network hold pages only after 10 min without the network", () => {
     const network = (sinceMs: number) => facts({
       page: { holdKind: "network", holdUntil: at(MINUTE), holdSince: at(-MINUTE), holdDetail: { networkSince: at(-sinceMs).toISOString() } },

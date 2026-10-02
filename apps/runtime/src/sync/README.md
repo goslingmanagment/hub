@@ -248,8 +248,13 @@ Credentials (step 3): every live API request carries the digest of the stored se
 (`account.verify`, `account.identity`) and the actor asks for one verify. An auth/identity hold names the digest that
 failed: stored credentials that change out of band lift it for one verify; otherwise only an `account.identity`
 check of a candidate session/proxy (the owner's credentials or proxy change, sealed in the work's secret) passes it,
-and storing a matching candidate makes its digest the trusted one, which lifts the hold. The egress follows the
-digest (a changed proxy is resolved again before the next request).
+and storing a matching candidate makes its digest the trusted one, which lifts the hold. The socket's Upgrade
+(`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
+hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
+hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
+check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
+it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
+auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
 
 ## Legacy fences (step 3)
 
@@ -291,7 +296,8 @@ stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
-engine with its floor past the engine's last send and the end of an engine 429/list/network hold, live work
+engine with its floor past the engine's last send and the end of an engine 429/list/network hold (also one an auth
+hold carries), live work
 cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
 state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
 auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays

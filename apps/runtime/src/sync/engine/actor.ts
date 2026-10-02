@@ -234,7 +234,8 @@ export class SyncActor {
     const now = d.clock.wallNow();
     if (this.#unverified !== null && credentialsVerifiedSince(this.#unverified, page.credentialsGeneration)) this.#unverified = null;
     const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly: this.#unverified !== null });
-    const picked = gate.exemptIdentity && activePageHold(page, now) !== null
+    const held = activePageHold(page, now);
+    const picked = gate.exemptIdentity && held !== null && held.timed === null
       ? await this.#pickExemptIdentity(page)
       : await this.#pick(page, now, exclusions);
     if (picked === null) {
@@ -416,6 +417,10 @@ export class SyncActor {
     const now = d.clock.wallNow();
     const hold = activePageHold(page, now);
     if (hold === null) return { open: true, page, exemptIdentity: false };
+    // A 429/network hold in force — the page's own, or one carried beside an
+    // auth/identity hold — exempts nothing, a candidate identity check
+    // included: closed until it ends.
+    if (hold.timed !== null) return { open: false, waitMs: hold.timed.until.getTime() - now.getTime() };
     if (d.mode === "live" && (hold.kind === "auth" || hold.kind === "identity_mismatch")) {
       // G14: an auth/identity hold names the credentials that failed. (a)
       // Stored credentials that changed since (out of band) lift it for one
