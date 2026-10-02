@@ -49,7 +49,8 @@ import {
 // §5.15). Journaled exactly as the legacy `posts` stream journals: timeline
 // pages and `GET /post?ids=` reads as `posts`, the companion tips read as
 // `post_tips` (an answer that escapes its requested posts or receiver in the
-// existing quarantine envelope, fansly/capture.ts). The rows become events by
+// existing quarantine envelope, fansly/capture.ts; one that is not an array
+// raw, counted, and walked past as legacy does). The rows become events by
 // inline canonicalization (`pull/posts`) and the `creator_posts` projection,
 // which seeds the reply and engagement queues in its own transaction.
 //
@@ -130,6 +131,8 @@ interface PostsWalk {
   /** The walk ends once the pending tips are read. */
   end: PostsWalkEnd | null;
   tipsScopeDrifts: number;
+  /** Tips answers that were not an array (journaled, counted, walked past). */
+  tipsContractDrifts: number;
 }
 
 export interface PostsWalkCursor {
@@ -158,6 +161,7 @@ export function parsePostsWalkCursor(value: unknown): PostsWalkCursor {
     pendingTips: stringList(walkRecord.pendingTips),
     end,
     tipsScopeDrifts: count(walkRecord.tipsScopeDrifts) ?? 0,
+    tipsContractDrifts: count(walkRecord.tipsContractDrifts) ?? 0,
   };
   return {
     headPostId: text(record.headPostId),
@@ -180,6 +184,7 @@ function freshWalk(anchorPostId: string | null, cutoffAt: string | null): PostsW
     pendingTips: null,
     end: null,
     tipsScopeDrifts: 0,
+    tipsContractDrifts: 0,
   };
 }
 
@@ -287,6 +292,7 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
           anchorReached: finished.anchorReached,
           headPostId,
           tipsScopeDrifts: finished.tipsScopeDrifts,
+          tipsContractDrifts: finished.tipsContractDrifts,
         };
         const next: PostsWalkCursor = {
           headPostId,
@@ -308,6 +314,14 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
         const targetIds = requestedTargetIds(input.request);
         if (walk.pendingTips === null || !sameIds(targetIds, walk.pendingTips)) {
           throw new ApplyQuarantine("post_tips_cursor_mismatch", { requested: targetIds.length, pending: walk.pendingTips?.length ?? null });
+        }
+        // The companion read is attribution, not the timeline's source of
+        // posts (legacy: "do not wedge the whole posts lane"): an answer that
+        // is not an array is journaled raw and counted, and the walk goes on.
+        if (!Array.isArray(input.response)) {
+          counters.post_tips_contract_drift = 1;
+          walk = { ...walk, pendingTips: null, tipsContractDrifts: walk.tipsContractDrifts + 1 };
+          return walk.end === null ? goOn(walk) : complete(walk.end, walk);
         }
         const scope = inspectFanslyPostTipsScope(input.response, { requestedTargetIds: targetIds, receiverId: input.ownRef ?? "" });
         if (!scope.accepted) counters.post_tips_scope_drift = 1;

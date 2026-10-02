@@ -168,19 +168,31 @@ export interface CaptureCodec {
     ownRef?: string | null;
     module: ResourceModule;
   }): unknown;
+  /**
+   * The answer an apply from the journal works on (tx 3 after a restart, a
+   * transient apply error or a deferral, I8): the journal body with every
+   * envelope `prepare` put around the served answer taken off again, so the
+   * re-parse and the apply see what the in-memory apply saw. Trims and token
+   * strips stay (design §3.11: the apply prefers the in-memory answer for
+   * them). A body that is not this request's answer throws `ApplyQuarantine`.
+   */
+  served(input: { spec: FanslyWireId; kind: string; payload: unknown; request: RequestPlan }): unknown;
 }
 
 /**
  * The engine's journal transform: the resource's own trim, then the signed CDN
  * tokens stripped for the kinds the legacy journal strips them for, then every
  * unpaired UTF-16 surrogate replaced (json/jsonb refuse one). The served object
- * is never mutated.
+ * is never mutated. It adds no envelope, so the journal body is the answer.
  */
 export const defaultCaptureCodec: CaptureCodec = {
   prepare({ kind, response, module }) {
     let body = module.journal === undefined ? response : module.journal(response);
     if (fanslyCdnTokenStripApplies("fansly", kind)) body = stripFanslySignedCdnTokens(body);
     return replaceJournalLoneSurrogates(body).value;
+  },
+  served({ payload }) {
+    return payload;
   },
 };
 
@@ -893,7 +905,7 @@ export function deferredRetryInMs(answerAgeMs: number): number {
   return DEFERRED_RETRY_CAP_MS;
 }
 
-async function readJournaledResponse(
+async function readJournalBody(
   tx: Database,
   d: CommitDeps,
   attempt: SyncAttemptRow,
@@ -953,8 +965,17 @@ export async function apply(
       if (inMemory !== null) {
         ({ response, parsed } = inMemory);
       } else {
-        response = await readJournaledResponse(tx, d, attempt);
-        const reparsed = fanslyWireSpec(request.spec).parse(response, request.params as never);
+        // The journal holds the answer inside the envelopes its kind carries
+        // (a reply page's walk, a tips answer's scope quarantine): the codec
+        // takes them off before the same parse the capture ran.
+        const wire = fanslyWireSpec(request.spec);
+        response = (d.capture ?? defaultCaptureCodec).served({
+          spec: request.spec,
+          kind: wire.kind,
+          payload: await readJournalBody(tx, d, attempt),
+          request,
+        });
+        const reparsed = wire.parse(response, request.params as never);
         if (!reparsed.ok) throw new FanslyContractViolationError(reparsed.violation.field, reparsed.violation.detail);
         parsed = reparsed.value;
       }

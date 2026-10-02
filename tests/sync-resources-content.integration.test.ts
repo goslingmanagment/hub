@@ -10,6 +10,7 @@ import {
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 import { FANSLY_NOTIFICATION_DECLARED_TYPE_CODES } from "@agency_hub_core/shared";
 
+import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import type { SettingsSource } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_POST_TIPS_SCOPE_QUARANTINE, fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
@@ -39,8 +40,9 @@ import {
 // the production capture codec: a scripted live transport answers each wire
 // route; shadow runs the same registry with no transport at all. What is
 // pinned: each walk keeps its position in its work row and stops where the
-// legacy lane stops; the journal carries the legacy envelopes; the coverage
-// claims the legacy lanes write; the subject-queue walks stand open over the
+// legacy lane stops; the journal carries the legacy envelopes, and an answer
+// applied from the journal (after a crash) does what it does in memory; the
+// coverage claims the legacy lanes write; the subject-queue walks stand open over the
 // projector-fed queues, write each subject's visit or breaker on its queue row,
 // and move on past a failing subject; a shadow pass walks every due subject
 // once and writes nothing but its own work and attempts.
@@ -225,6 +227,54 @@ async function runLive(
   const registry = await quietRegistry(pageId, false);
   await options.prepare?.(registry);
   return drive(pageId, "live", registry, respond, until, options);
+}
+
+/**
+ * A live run whose process dies right after the capture of the first answer
+ * `crashOn` picks (journaled, not applied); the restarted owner applies that
+ * answer from the journal without asking again (I8), then runs on.
+ */
+async function runLiveCrashingAfterCapture(
+  pageId: number,
+  respond: Responder,
+  crashOn: (req: FanslyWireRequest) => boolean,
+  until: () => Promise<boolean>,
+  options: { alerts?: RecordingAlerts } = {},
+) {
+  const registry = await quietRegistry(pageId, false);
+  const transport = new ScriptedLiveTransport();
+  transport.respond = (req) => respond(req);
+  const firstRequests: FanslyWireRequest[] = [];
+  let crashArmed = false;
+  transport.onHit = async (req) => {
+    firstRequests.push(req);
+    if (crashOn(req)) crashArmed = true;
+  };
+  const dying = await makeTestActor({
+    db: db(),
+    pageId,
+    mode: "live",
+    registry,
+    ownRef: OWN_ID,
+    capture: fanslyCaptureCodec,
+    transport,
+    faults: (at) => {
+      if (at === "after_capture" && crashArmed) throw new SyncCrashFault(at);
+    },
+  });
+  await expect(dying.actor.run({ stop: dying.stop.signal, abort: dying.abort.signal })).rejects.toBeInstanceOf(SyncCrashFault);
+  const restarted = await drive(pageId, "live", registry, respond, until, options);
+  return { firstHits: firstRequests.map((req) => req.spec), firstRequests, ...restarted };
+}
+
+/** Each attempt of a resource: who made it, what it read, how it applied. */
+async function attemptLog(pageId: number, resource: string) {
+  const result = await testDb!.pool.query<{ owner_generation: string; operation: string; apply_state: string }>(
+    `select owner_generation::text, operation, apply_state from sync_attempts
+      where page_id = $1 and resource = $2 and not shadow order by id`,
+    [pageId, resource],
+  );
+  return result.rows;
 }
 
 interface WorkRowView {
@@ -459,6 +509,75 @@ describe("posts.refresh", () => {
     expect(journal[3]!.payload).toMatchObject({ quarantine: FANSLY_POST_TIPS_SCOPE_QUARANTINE, requestedTargetIds: [P(2), P(1)] });
   });
 
+  it("a tips answer outside its scope, applied from the journal after a crash, is counted as in memory and the walk goes on", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    await makeDue(pageId, false, "posts.refresh");
+    const alerts = new RecordingAlerts();
+    const { firstHits, hits } = await runLiveCrashingAfterCapture(pageId, (req) => {
+      if (req.spec === "posts.timeline") {
+        return okResponse({
+          posts: query(req, "before") === "0"
+            ? [timelinePost(P(4), daysAgo(1)), timelinePost(P(3), daysAgo(2))]
+            : [timelinePost(P(2), daysAgo(20)), timelinePost(P(1), daysAgo(30))],
+        });
+      }
+      if (req.spec === "posts.tips") return okResponse([{ id: "900000000000000002", receiverId: "399999999999999999", targetId: P(9), amount: 5000 }]);
+      throw new Error(`unexpected ${req.spec}`);
+    }, (req) => req.spec === "posts.tips", async () => (await attempts(pageId, "posts.refresh")) === 4, { alerts });
+
+    // The dead owner's tips answer is applied from the journal, never asked again.
+    expect(firstHits).toEqual(["posts.timeline", "posts.tips"]);
+    expect(hits).toEqual(["posts.timeline", "posts.tips"]);
+    expect(await attemptLog(pageId, "posts.refresh")).toEqual([
+      { owner_generation: "1", operation: "posts.timeline", apply_state: "applied" },
+      { owner_generation: "1", operation: "posts.tips", apply_state: "applied" },
+      { owner_generation: "2", operation: "posts.timeline", apply_state: "applied" },
+      { owner_generation: "2", operation: "posts.tips", apply_state: "applied" },
+    ]);
+    const poll = await workRow(pageId, "posts.refresh");
+    expect(poll!.state).toBe("open");
+    expect(poll!.cursor).toMatchObject({ walk: null, last: { end: "cutoff_reached", pages: 2, captured: 4, tipsScopeDrifts: 2 } });
+    expect(alerts.opened.filter((alert) => alert.detail === "quarantined")).toEqual([]);
+    const journal = await observations(pageId);
+    expect(journal[1]!.payload).toMatchObject({ quarantine: FANSLY_POST_TIPS_SCOPE_QUARANTINE, requestedTargetIds: [P(4), P(3)] });
+  });
+
+  it("a tips answer that is not an array is journaled raw and counted, and the walk reaches the next timeline page", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    await makeDue(pageId, false, "posts.refresh");
+    const alerts = new RecordingAlerts();
+    const drifted = { tips: [{ id: "900000000000000001" }], cursor: "x" };
+    const { hits, requests } = await runLive(pageId, (req) => {
+      if (req.spec === "posts.timeline") {
+        return okResponse({
+          posts: query(req, "before") === "0"
+            ? [timelinePost(P(4), daysAgo(1)), timelinePost(P(3), daysAgo(2))]
+            : [timelinePost(P(2), daysAgo(20)), timelinePost(P(1), daysAgo(30))],
+        });
+      }
+      if (req.spec === "posts.tips") return okResponse(query(req, "targetIds")!.startsWith(P(4)) ? drifted : []);
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await attempts(pageId, "posts.refresh")) === 4, { alerts });
+
+    // Legacy: "do not wedge the whole posts lane because one optional
+    // companion contract changed".
+    expect(hits).toEqual(["posts.timeline", "posts.tips", "posts.timeline", "posts.tips"]);
+    expect(query(requests[2]!, "before")).toBe(P(3));
+    const poll = await workRow(pageId, "posts.refresh");
+    expect(poll!.state).toBe("open");
+    expect(poll!.cursor).toMatchObject({
+      walk: null,
+      last: { end: "cutoff_reached", pages: 2, captured: 4, tipsContractDrifts: 1, tipsScopeDrifts: 0 },
+    });
+    expect(await attempts(pageId, "posts.refresh", "apply_state = 'quarantined'")).toBe(0);
+    expect(alerts.opened.filter((alert) => alert.detail === "quarantined")).toEqual([]);
+    const journal = await observations(pageId);
+    expect(journal.map((row) => row.kind)).toEqual(["posts", "post_tips", "posts", "post_tips"]);
+    expect(journal[1]!.payload).toEqual(drifted);
+  });
+
   it("the full backfill walks to an empty page and records the tips backfill", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");
@@ -605,6 +724,31 @@ describe("post-replies.walk", () => {
     expect(journal.map((row) => row.kind)).toEqual(["post_replies", "post_replies", "account_lookup"]);
     expect(journal[0]!.payload).toMatchObject({ walk: { postId: P(1), before: null }, response: { posts: expect.any(Array) } });
     expect(journal[1]!.payload).toMatchObject({ walk: { postId: P(1), before: "8000000000000000101" } });
+    expect(await coverage(pageId, "post_replies")).toMatchObject({ status: "provider_exhausted", expected_count: 1, observed_unique_count: 1 });
+  });
+
+  it("a full page applied from the journal after a crash pages on exactly as the in-memory apply does", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    await seedPost(pageId, P(1), daysAgo(1));
+    await makeDue(pageId, false, "post-replies.walk");
+    const { firstRequests, requests } = await runLiveCrashingAfterCapture(pageId, (req) => okResponse({
+      posts: query(req, "before") === null ? replies(repliesPostId(req), 120, 20) : replies(repliesPostId(req), 100, 3),
+      accounts: [],
+    }), () => true, async () => (await workRow(pageId, "post-replies.walk"))?.waiting_reason === "not_due");
+
+    expect(firstRequests.map((req) => [repliesPostId(req), query(req, "before")])).toEqual([[P(1), null]]);
+    // The restarted owner reads the journaled first page (no second bare
+    // call) and goes on with its cursor.
+    expect(requests.map((req) => [repliesPostId(req), query(req, "before")])).toEqual([[P(1), "8000000000000000101"]]);
+    expect(await attemptLog(pageId, "post-replies.walk")).toEqual([
+      { owner_generation: "1", operation: "post.replies", apply_state: "applied" },
+      { owner_generation: "2", operation: "post.replies", apply_state: "applied" },
+    ]);
+    expect(await queueRow(pageId, "post_replies", P(1))).toMatchObject({ consecutive_failures: 0, known_count: 23 });
+    const walk = await workRow(pageId, "post-replies.walk");
+    expect(walk).toMatchObject({ state: "open", waiting_reason: "not_due", failure_count: 0 });
+    expect(walk!.cursor).toMatchObject({ paginationMode: "before", walk: null, last: { postId: P(1), pages: 2, replies: 23 } });
     expect(await coverage(pageId, "post_replies")).toMatchObject({ status: "provider_exhausted", expected_count: 1, observed_unique_count: 1 });
   });
 

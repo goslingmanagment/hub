@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { fanslyWireSpec } from "@agency_hub_core/fansly";
 import { FANSLY_NOTIFICATION_DECLARED_TYPE_CODES, FANSLY_NOTIFICATION_TYPE_GROUPS } from "@agency_hub_core/shared";
 
 import { inspectFanslyPostTipsScope } from "../apps/runtime/src/services/sync/posts.ts";
-import { createEngineRegistry, pollsFor, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { ApplyQuarantine, defaultCaptureCodec } from "../apps/runtime/src/sync/engine/commit.ts";
+import { createEngineRegistry, pollsFor, type RequestPlan, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   FANSLY_POST_TIPS_SCOPE_QUARANTINE,
   fanslyCaptureCodec,
   prepareJournalBody,
+  servedFromJournalBody,
 } from "../apps/runtime/src/sync/fansly/capture.ts";
 import {
   advanceShadowPass,
@@ -207,9 +210,53 @@ describe("the engine's journal of the content routes", () => {
     // Without the page's own id there is no receiver to check against.
     expect(fanslyCaptureCodec.prepare({ spec: "posts.tips", kind: "post_tips", response: escaped, contractAccepted: true, request, module }))
       .toEqual(escaped);
-    // A non-array answer is the wire contract's to refuse, not the scope's.
+    // A non-array answer has no scope to check: journaled raw, as legacy
+    // journals it (the posts walk counts it and moves on).
+    expect(fanslyCaptureCodec.prepare({ spec: "posts.tips", kind: "post_tips", response: { x: 1 }, contractAccepted: true, request, ownRef: OWN, module }))
+      .toEqual({ x: 1 });
     expect(prepareJournalBody({ kind: "post_tips" }, { response: { x: 1 }, contractAccepted: false, tipsScope: { requestedTargetIds: ["p1"], receiverId: OWN } }).payload)
       .toEqual({ x: 1 });
+  });
+
+  it("the tips companion read is journal-first: the wire refuses no body, the walk judges it", () => {
+    const spec = fanslyWireSpec("posts.tips");
+    const params = { targetIds: ["p1"] };
+    expect(spec.parse([{ id: "t1" }], params)).toEqual({ ok: true, value: [{ id: "t1" }] });
+    expect(spec.parse({ tips: [] }, params)).toEqual({ ok: true, value: { tips: [] } });
+  });
+
+  it("an apply from the journal gets back the very answer the capture served, out of each envelope", () => {
+    const replies = (postId: string, before: string | null): RequestPlan => ({ spec: "post.replies", params: { postId, before } });
+    const page = { posts: Array.from({ length: 20 }, (_, index) => ({ id: String(900 - index), accountId: "77", content: "x" })) };
+    const tipsRequest: RequestPlan = { spec: "posts.tips", params: { targetIds: ["p1", "p2"] } };
+    const escaped = [{ id: "t2", receiverId: "399999999999999999", targetId: "p9" }];
+    const roundTrip = (spec: RequestPlan["spec"], kind: string, request: RequestPlan, response: unknown) => fanslyCaptureCodec.served({
+      spec,
+      kind,
+      request,
+      payload: JSON.parse(JSON.stringify(fanslyCaptureCodec.prepare({ spec, kind, response, contractAccepted: true, request, ownRef: OWN, module }))),
+    });
+
+    for (const before of [null, "881"]) {
+      expect(roundTrip("post.replies", "post_replies", replies("555", before), page)).toEqual(page);
+    }
+    // A 204's empty marker and an absent answer come back as they went in.
+    expect(roundTrip("post.replies", "post_replies", replies("555", null), { __empty: true, httpStatus: 204 })).toEqual({ __empty: true, httpStatus: 204 });
+    expect(roundTrip("posts.tips", "post_tips", tipsRequest, escaped)).toEqual(escaped);
+    expect(roundTrip("posts.tips", "post_tips", tipsRequest, [{ id: "t1", receiverId: OWN, targetId: "p1" }])).toEqual([{ id: "t1", receiverId: OWN, targetId: "p1" }]);
+    expect(roundTrip("posts.tips", "post_tips", tipsRequest, { drifted: true })).toEqual({ drifted: true });
+    const timeline: RequestPlan = { spec: "posts.timeline", params: { accountId: OWN, before: "0" } };
+    expect(roundTrip("posts.timeline", "posts", timeline, { posts: [] })).toEqual({ posts: [] });
+
+    // A body of another walk is not this request's answer.
+    const journaled = fanslyCaptureCodec.prepare({ spec: "post.replies", kind: "post_replies", response: page, contractAccepted: true, request: replies("555", null), module });
+    expect(() => fanslyCaptureCodec.served({ spec: "post.replies", kind: "post_replies", request: replies("556", null), payload: journaled }))
+      .toThrow(ApplyQuarantine);
+    expect(() => fanslyCaptureCodec.served({ spec: "post.replies", kind: "post_replies", request: replies("555", "881"), payload: journaled }))
+      .toThrow(ApplyQuarantine);
+    expect(servedFromJournalBody("post_replies", page)).toBeNull();
+    // The default codec adds no envelope and takes none off.
+    expect(defaultCaptureCodec.served({ spec: "post.replies", kind: "post_replies", request: replies("555", null), payload: journaled })).toBe(journaled);
   });
 
   it("journals notifications and timeline pages as the legacy lanes do", () => {
