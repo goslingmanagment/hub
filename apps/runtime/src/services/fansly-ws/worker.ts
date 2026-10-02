@@ -14,6 +14,7 @@ import { FanslyPageSendClosedError, fanslyPageSendGuard } from "../fansly-send-g
 import {
   FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsConnectionTiming, type FanslyWsStopReason,
 } from "./connection.ts";
+import { routeFanslyWsReceiptDemand } from "../../sync/fansly/ws/route-receipt.ts";
 import { createFanslyWsLiveApplier } from "./live-apply.ts";
 
 /** Told about every committed frame, after the commit and outside the serial
@@ -173,7 +174,8 @@ async function runPage(
       };
       // Check once more before opening, then at capture commit and every 5s.
       await validate(owned.db);
-      const live = createFanslyWsLiveApplier(app);
+      // The applier acks and routes each receipt (I18: the engine's post-ack hook).
+      const live = createFanslyWsLiveApplier(app, { afterAck: routeFanslyWsReceiptDemand });
       applier = live;
       reason = await receiveFanslyConnection({
         open: () => openFanslyReceiverSocket(egress, admitted), token, signal: controller.signal, timing,

@@ -1,9 +1,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   applyFanslyWsLiveReceipt, confirmDmLiveMessages, listPendingFanslyWsLiveReceipts,
-  type FanslyWsLiveApplyResult, type FanslyWsLivePayloadResolver,
+  type FanslyWsLiveAfterAck, type FanslyWsLiveApplyResult, type FanslyWsLivePayloadResolver,
 } from "@agency_hub_core/db";
 import type { AppContext } from "../../bootstrap.ts";
+import { routeFanslyWsReceiptDemand } from "../../sync/fansly/ws/route-receipt.ts";
 import { resolveCapturePayloadRow } from "../payload-reader.ts";
 
 // The live overlay's drivers (plan §7.2). One idempotent apply
@@ -12,7 +13,12 @@ import { resolveCapturePayloadRow } from "../payload-reader.ts";
 // connection's applier below), at worker start and on the worker timer (every
 // pending receipt of every page, so a page whose socket is down, blocked or
 // disabled is still applied). Losing any one path loses nothing: the receipt
-// stays pending until some path acks it. Step 1: no HTTP, no work.
+// stays pending until some path acks it. No HTTP.
+//
+// Every path passes the Sync Engine's post-ack hook (design §6.3, I18): it
+// routes the receipt's demand in the transaction that acks it, so whichever
+// driver wins a receipt routes it exactly once. On a page the engine does not
+// own (`off`/`shadow`) the hook reads the page's mode and does nothing.
 
 type LiveApp = Pick<AppContext, "db" | "logger">;
 
@@ -39,9 +45,10 @@ export async function applyFanslyWsLive(
   app: LiveApp,
   observationId: number,
   resolvePayload: FanslyWsLivePayloadResolver = fanslyWsLivePayloadResolver(app),
+  afterAck: FanslyWsLiveAfterAck = routeFanslyWsReceiptDemand,
 ): Promise<FanslyWsLiveApplyResult | null> {
   try {
-    const result = await applyFanslyWsLiveReceipt(app.db, { observationId, resolvePayload });
+    const result = await applyFanslyWsLiveReceipt(app.db, { observationId, resolvePayload, afterAck });
     if ("dataError" in result) {
       app.logger.warn({ observationId, errorClass: result.dataError },
         "Fansly live overlay frame refused by the database on every attempt; the receipt is acked as debt");
@@ -58,8 +65,12 @@ export async function applyFanslyWsLive(
  * time, so a burst never takes more than one pool connection per page and a
  * slow event-counter lock never stalls the capture writer. A full queue only
  * defers a receipt to the worker timer. */
-export function createFanslyWsLiveApplier(app: LiveApp, options: { maxQueued?: number } = {}) {
+export function createFanslyWsLiveApplier(
+  app: LiveApp,
+  options: { maxQueued?: number; afterAck?: FanslyWsLiveAfterAck } = {},
+) {
   const maxQueued = options.maxQueued ?? 1024;
+  const afterAck = options.afterAck ?? routeFanslyWsReceiptDemand;
   const resolvePayload = fanslyWsLivePayloadResolver(app);
   const queue: number[] = [];
   let closed = false;
@@ -70,7 +81,7 @@ export function createFanslyWsLiveApplier(app: LiveApp, options: { maxQueued?: n
     active = true;
     idle = (async () => {
       try {
-        while (queue.length > 0) await applyFanslyWsLive(app, queue.shift()!, resolvePayload);
+        while (queue.length > 0) await applyFanslyWsLive(app, queue.shift()!, resolvePayload, afterAck);
       } finally { active = false; }
     })();
   }
@@ -111,8 +122,12 @@ export const FANSLY_WS_LIVE_TIMER: Readonly<FanslyWsLiveTimerTiming> = Object.fr
  * receipts that keep failing for a while (an erasure in flight, a held lock)
  * never starve the ones behind them. The first tick runs at start: that is
  * the start-up replay. */
-export function startFanslyWsLiveTimer(app: LiveApp, options: { timing?: FanslyWsLiveTimerTiming } = {}) {
+export function startFanslyWsLiveTimer(
+  app: LiveApp,
+  options: { timing?: FanslyWsLiveTimerTiming; afterAck?: FanslyWsLiveAfterAck } = {},
+) {
   const timing = options.timing ?? FANSLY_WS_LIVE_TIMER;
+  const afterAck = options.afterAck ?? routeFanslyWsReceiptDemand;
   const resolvePayload = fanslyWsLivePayloadResolver(app);
   let stopped = false;
   let ticking: Promise<void> | null = null;
@@ -125,7 +140,7 @@ export function startFanslyWsLiveTimer(app: LiveApp, options: { timing?: FanslyW
     after = pending.length < timing.replayBatch ? 0 : pending.at(-1)!;
     for (const observationId of pending) {
       if (stopped) return;
-      await applyFanslyWsLive(app, observationId, resolvePayload);
+      await applyFanslyWsLive(app, observationId, resolvePayload, afterAck);
     }
     if (!stopped) await confirmDmLiveMessages(app.db, { limit: timing.parityBatch });
   }

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
 import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
 import { applyFanslyWsLive, fanslyWsLivePayloadResolver } from "./services/fansly-ws/live-apply.ts";
+import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -2063,7 +2064,7 @@ export function buildProgram() {
             pageId: stored.page.id, afterObservationId: after, limit: 20,
           });
           for (const observationId of pending) {
-            const result = await applyFanslyWsLive(app, observationId, resolvePayload);
+            const result = await applyFanslyWsLive(app, observationId, resolvePayload, routeFanslyWsReceiptDemand);
             const key = result?.status ?? "failed";
             live[key] = (live[key] ?? 0) + 1;
           }

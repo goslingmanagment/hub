@@ -180,9 +180,9 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a and S2-08a ship account, subscribers, followers, fan-profiles and dm-conversations; every other entry waits on its dependency", async () => {
+  it("S2-07a ships account, subscribers, followers and fan-profiles, S2-08a dm-conversations, S2-10 dm-live; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
-    expect([...new Set(implemented)].sort()).toEqual(["account", "dm-conversations", "fan-profiles", "followers", "subscribers"]);
+    expect([...new Set(implemented)].sort()).toEqual(["account", "dm-conversations", "dm-live", "fan-profiles", "followers", "subscribers"]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
     for (const spec of FANSLY_RESOURCE_SPECS) {

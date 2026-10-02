@@ -1,5 +1,6 @@
 import { startFanslyWsWorker } from "./services/fansly-ws/worker.ts";
 import { startFanslyWsLiveTimer } from "./services/fansly-ws/live-apply.ts";
+import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
 import { ensureOfapiMediaQueue, OFAPI_MEDIA_SWEEP_QUEUE, runOfapiMediaUploadSweep } from "./services/ofapi-media-worker.ts";
 import { ensureOfapiBindingReconcileQueue, OFAPI_BINDING_RECONCILE_QUEUE, runOfapiBindingReconcile } from "./services/ofapi-binding-reconcile.ts";
 import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./services/ofapi-collection-runner.ts";
@@ -637,8 +638,10 @@ export async function startWorkerServices(
   const fanslyFastLane = createFanslyFastLane(app);
   const fanslyWs = startFanslyWsWorker(app, { onCaptured: fanslyFastLane.onCaptured });
   // Live overlay replay + passive parity over every Fansly page (plan §7.2);
-  // its first pass at start is the start-up replay. No HTTP, no work.
-  const fanslyWsLive = startFanslyWsLiveTimer(app);
+  // its first pass at start is the start-up replay. No HTTP. Each ack routes
+  // the receipt's demand on pages the Sync Engine owns (I18; a no-op on
+  // `off`/`shadow` pages).
+  const fanslyWsLive = startFanslyWsLiveTimer(app, { afterAck: routeFanslyWsReceiptDemand });
   const domainEventsSmoke = startDomainEventsSmokeConsumer(app);
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);

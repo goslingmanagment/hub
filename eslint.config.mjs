@@ -150,7 +150,10 @@ export default tseslint.config(
           name: "undici", importNames: ["WebSocket", "default"],
           allowTypeImports: true, message: websocketMessage,
         }],
-        patterns: [{ group: ["ws", "ws/**"], allowTypeImports: true, message: websocketMessage }],
+        // The `ws` package and its subpaths only: a gitignore-style group
+        // "ws" would also match any local folder named `ws` (the Sync
+        // Engine's `sync/fansly/ws/` decoder and router open no socket).
+        patterns: [{ regex: "^ws(?:/|$)", allowTypeImports: true, message: websocketMessage }],
       }],
     },
   },
