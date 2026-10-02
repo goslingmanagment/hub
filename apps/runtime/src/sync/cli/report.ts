@@ -22,9 +22,9 @@ import { pageLabel, parseDurationMs } from "./chain.ts";
 // takes it as `--shadow-report <path>`).
 
 export interface SyncReportCliDeps {
-  /** The process's context; with its env config the report's module checks
-   *  read the live settings (else the registry defaults). */
-  openContext(): Promise<Pick<SyncContext, "db" | "logger" | "close"> & Partial<Pick<SyncContext, "rawConfig">>>;
+  /** The process's context: its env config under the live overlay is what the
+   *  report's module checks read, as the engine host does. */
+  openContext(): Promise<Pick<SyncContext, "db" | "logger" | "rawConfig" | "close">>;
   print(line: string): void;
   writeFile(path: string, text: string): Promise<void>;
   now(): Date;
@@ -82,7 +82,7 @@ function cliActor(): string {
 
 async function withContext<T>(
   deps: SyncReportCliDeps,
-  body: (ctx: Pick<SyncContext, "db" | "logger"> & Partial<Pick<SyncContext, "rawConfig">>) => Promise<T>,
+  body: (ctx: Pick<SyncContext, "db" | "logger" | "rawConfig">) => Promise<T>,
 ): Promise<T> {
   const ctx = await deps.openContext();
   try {
@@ -175,7 +175,7 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
             : null,
           maxListed: options.maxListed,
           resolvePayload: fanslyWsLivePayloadResolver(ctx),
-          ...(ctx.rawConfig === undefined ? {} : { settings: createEffectiveConfigSettingsSource(ctx.db, ctx.rawConfig) }),
+          settings: createEffectiveConfigSettingsSource(ctx.db, ctx.rawConfig),
         });
         const text = json(report);
         if (options.out !== undefined) await deps.writeFile(options.out, `${text}\n`);

@@ -17,6 +17,7 @@ import {
 import { createLogger } from "@agency_hub_core/shared";
 
 import { buildSyncReportCommandGroup } from "../apps/runtime/src/sync/cli/report.ts";
+import { createEffectiveConfigSettingsSource, type SettingsSource } from "../apps/runtime/src/sync/engine/ports.ts";
 import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
@@ -24,7 +25,7 @@ import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/r
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
-import { changedTables, setModeDirect, tableCounts } from "./helpers/sync-engine-host.ts";
+import { changedTables, setModeDirect, tableCounts, testConfig } from "./helpers/sync-engine-host.ts";
 
 // `pnpm cli sync shadow report` (design §3.12) over a fixture: part A in its
 // read-only window transaction (demand vs the computed expectation, the legacy
@@ -60,7 +61,13 @@ function db(): Database {
 }
 
 function ctx() {
-  return { db: db(), logger };
+  return { db: db(), logger, rawConfig: testConfig(testDb!.connectionString) };
+}
+
+/** The live settings as the engine host reads them: the env config under the
+ *  database's overrides. */
+function liveSettings(): SettingsSource {
+  return createEffectiveConfigSettingsSource(db(), testConfig(testDb!.connectionString));
 }
 
 async function shadowPage(): Promise<WsCapturePage> {
@@ -220,6 +227,7 @@ describe("the shadow report (design §3.12)", () => {
       [page.pageId, randomUUID(), randomUUID(), at(33 * MINUTE)],
     );
     const report = await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
       window: { start, end: new Date(start.getTime() + 3_600_000) },
@@ -357,6 +365,7 @@ describe("the shadow report (design §3.12)", () => {
     );
     const report = async () => {
       const built = await buildShadowReport(ctx(), {
+        settings: liveSettings(),
         pages: await listSyncPages(db()),
         registry: createStubRegistry(),
         window: { start, end },
@@ -433,6 +442,7 @@ describe("the shadow report (design §3.12)", () => {
     // A transactions step asks for no walk: nothing is due.
     expect(await step()).toEqual([]);
     const report = await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     });
     const counterparts = report.window!.demand[0]!.floor.counterparts;
@@ -493,6 +503,7 @@ describe("the shadow report (design §3.12)", () => {
       );
     }
     const counterparts = async () => (await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
     // Untouched since: the subject was due 30 min before the end, the driver
@@ -527,6 +538,7 @@ describe("the shadow report (design §3.12)", () => {
     const end = new Date(start.getTime() + 3_600_000);
     await seedWindow(page, start);
     const report = async () => (await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     }));
     // Never run, its row on schedule: assumed.
@@ -585,6 +597,7 @@ describe("the shadow report (design §3.12)", () => {
     );
     await queued("950000000000000001", at(-24 * 60 * MINUTE), at(-24 * 60 * MINUTE));
     const report = async () => (await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
     const idle = await report();
@@ -615,6 +628,7 @@ describe("the shadow report (design §3.12)", () => {
       module: async (key) => key === "post-replies.walk" ? { ...(await real.module(key)), dueAtLook } : real.module(key),
     });
     const reportWith = async (registry: Pick<EngineRegistry, "module">) => (await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()), registry, window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
     const never = await reportWith(withCheck(async () => ({ count: 0, examples: [], queued: 2 })));
@@ -628,6 +642,52 @@ describe("the shadow report (design §3.12)", () => {
     }));
     expect(failing).toMatchObject({ lacking: [], idle: [] });
     expect(failing.pending[0]!.why).toMatch(/\(rule A1\.floor-idle\): post-replies\.walk: looked .*; its look check failed: .*no_such_table/);
+  });
+
+  it("part A: the replies walk's look is re-run under the live re-walk cycle, never the registry default (rule A1.floor-idle)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    await seedWindow(page, start);
+    await legacyRequest(page.pageId, "post_replies", "post.replies", at(10 * MINUTE));
+    const look = at(20 * MINUTE);
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, updated_at, due_at, waiting_reason)
+       values ($1, true, 'post-replies.walk', '', 'goal', 'planned', $2, $3, $3::timestamptz + interval '6 hours', 'not_due')`,
+      [page.pageId, at(-30 * MINUTE), look],
+    );
+    // Production since 2026-09-30: a 30-day cycle in the live overlay (the
+    // registry default is 14). A post walked 20 days before the look was not
+    // due to the engine's plan.
+    await testDb.pool.query(
+      `insert into config_settings (scope_type, scope_id, key, value) values ('global', 0, 'fanslyRepliesRewalkCycleDays', '30'::jsonb)`,
+    );
+    const walked = new Date(look.getTime() - 20 * 24 * 3_600_000);
+    await testDb.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, created_at, updated_at) values ($1, 'post_replies', $2, $3, $3, $3)`,
+      [page.pageId, "950000000000000003", walked],
+    );
+    const report = async (settings: SettingsSource) => (await buildShadowReport(ctx(), {
+      settings,
+      pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
+    })).window!.demand[0]!.floor.counterparts;
+
+    // The live 30 days: nothing was due at the look — idle.
+    expect(await report(liveSettings())).toMatchObject({ lacking: [], pending: [], idle: [{ ref: "stream:post_replies" }] });
+    // A 14-day live cycle would have had the post due at the look: missed.
+    const fourteen: SettingsSource = { read: async () => ({ ...testConfig(testDb!.connectionString), fanslyRepliesRewalkCycleDays: 14 }) };
+    const missed = await report(fourteen);
+    expect(missed).toMatchObject({ idle: [], pending: [] });
+    expect(missed.lacking[0]!.why).toMatch(/post-replies\.walk: looked .* finds 1 due and untouched since \(950000000000000003\)$/);
+    // No settings source (a caller outside the CLI): the check cannot re-run
+    // the plan's pick, so it fails — not judgeable, never a missed look.
+    const unknown = await report(undefined as never);
+    expect(unknown).toMatchObject({ lacking: [], idle: [] });
+    expect(unknown.pending[0]!.why).toMatch(
+      /\(rule A1\.floor-idle\): post-replies\.walk: looked .*; its look check failed: no live settings: the walk's pick reads fanslyRepliesRewalkCycleDays live/,
+    );
   });
 
   it("rule A1.rate-assumed: each module's estimate is the steps its shadow run takes, over the page's own facts", async (context) => {
@@ -706,6 +766,7 @@ describe("the shadow report (design §3.12)", () => {
       await observe(verdict, new Date(now - (180 + i) * MINUTE));
     }
     const report = await buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
       window: null,
@@ -757,6 +818,7 @@ describe("the shadow report (design §3.12)", () => {
       });
     };
     const report = async () => buildShadowReport(ctx(), {
+      settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
       window: null,
@@ -854,7 +916,9 @@ describe("the shadow report (design §3.12)", () => {
     const printed: string[] = [];
     try {
       await buildSyncReportCommandGroup({
-        openContext: async () => ({ db: createDb(readOnlyPool) as unknown as Database, logger, close: async () => undefined }),
+        openContext: async () => ({
+          db: createDb(readOnlyPool) as unknown as Database, logger, rawConfig: testConfig(testDb!.connectionString), close: async () => undefined,
+        }),
         print: (line) => void printed.push(line),
         writeFile: async () => undefined,
         now: () => new Date(),
