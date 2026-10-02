@@ -167,6 +167,7 @@ export * from "./repositories/sync/retention.ts";
 export * from "./repositories/sync/thread-chain.ts";
 export * from "./repositories/sync/conversation-list.ts";
 export * from "./repositories/sync/dm-messages.ts";
+export * from "./repositories/sync/subject-queue.ts";
 // The WebSocket demand router's reads (design §6).
 export * from "./repositories/sync/ws-router.ts";
 export * from "./repositories/projection-debt.ts";

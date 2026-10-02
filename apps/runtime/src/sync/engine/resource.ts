@@ -10,7 +10,7 @@ import {
 } from "@agency_hub_core/db";
 import type { FanslyWireId, FanslyWireParams } from "@agency_hub_core/fansly";
 
-import { noopMetrics, type Metrics } from "./ports.ts";
+import { noopMetrics, type Metrics, type SettingsSource } from "./ports.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The resource contract of the Fansly Sync Engine (design §4.1): what a
@@ -78,6 +78,12 @@ export interface EngineResourceSpec {
   subjectQueue?: boolean;
   /** Owner decision №6: a frequency change needs the owner (`--owner-approved`). */
   ownerProtected?: true;
+  /** A goal the page always keeps one open row of — a walk over a queue other
+   *  writers fill (the `subject_refresh_state` planes the projectors seed,
+   *  design §4.3): created like a poll row (random phase over `recheckMs`)
+   *  and never closed by its module, which re-checks its queue at least every
+   *  `recheckMs` while nothing in it is due. */
+  standing?: { recheckMs: number };
   /** The entry's code. Absent while it has not landed: the key's work waits
    *  on `dependency` and counts `not_implemented` (design §12, S2-07a). */
   module?: () => Promise<ResourceModule>;
@@ -142,6 +148,8 @@ export interface PlanContext {
   now: Date;
   page: SyncPageRow;
   registry: EngineRegistry;
+  /** The live settings (absent: the registry defaults). */
+  settings?: SettingsSource;
 }
 
 export interface ShadowContext {
@@ -149,6 +157,7 @@ export interface ShadowContext {
   pageId: number;
   now: Date;
   page: SyncPageRow;
+  settings?: SettingsSource;
 }
 
 export interface ApplyInput {
@@ -168,6 +177,8 @@ export interface ApplyInput {
   observation: { id: number; receivedAt: Date };
   /** The erasure fence is held (resources with `fence: 'dm_archive'`). */
   fenced: boolean;
+  /** The live settings (absent: the registry defaults). */
+  settings?: SettingsSource;
 }
 
 export interface ApplyResult<C = unknown> {
@@ -246,8 +257,10 @@ export interface ResourceModule<C = unknown> {
    *  live work starts from. */
   importLegacy?(tx: Database, page: { pageId: number }): Promise<LegacyImport>;
   /** A subject-queue walk's subject outcome (the breaker lives on the queue
-   *  row). `step.request` names the subject the failed request was about: the
-   *  walk row's own subject is the page's. */
+   *  row). `step.request` names the subject(s) the failed step asked for (the
+   *  walk row's own subject is the page's); the breaker fields are the work
+   *  row's ladder, which a queue walk replaces by its own queue row's (design
+   *  §4.3). Runs in the capture transaction. */
   onSubjectOutcome?(
     tx: Database,
     work: SyncWorkRow,
@@ -311,6 +324,9 @@ export function createEngineRegistry(
     if (spec.kind === "poll" && (spec.period === undefined || !(spec.period.everyMs > 0))) {
       throw new Error(`Sync poll ${spec.key} needs a positive period`);
     }
+    if (spec.standing !== undefined && (spec.kind !== "goal" || !(spec.standing.recheckMs > 0))) {
+      throw new Error(`Sync standing walk ${spec.key} must be a goal with a positive re-check period`);
+    }
     byKey.set(spec.key, spec);
   }
   const modules = new Map<string, Promise<ResourceModule>>();
@@ -363,18 +379,31 @@ export function runsIn(spec: EngineResourceSpec, shadow: boolean): boolean {
   return !(shadow && spec.liveOnly === true);
 }
 
-/** The poll rows a page should have (`ensurePollRows`): every enabled poll
- *  entry that runs in this mode, with its effective period. */
+/** One standing row of a page: a poll, or a standing walk (`kind: 'goal'`). */
+export interface StandingRow {
+  resource: string;
+  class: WorkClass;
+  everyMs: number;
+  kind?: "goal";
+}
+
+/** The standing rows a page should have (`ensurePollRows`): every enabled poll
+ *  entry that runs in this mode, with its effective period, and every enabled
+ *  standing walk with its re-check period. */
 export function pollsFor(
   registry: EngineRegistry,
   page: Pick<SyncPageRow, "registryOverrides">,
   shadow: boolean,
-): Array<{ resource: string; class: WorkClass; everyMs: number }> {
-  const polls: Array<{ resource: string; class: WorkClass; everyMs: number }> = [];
+): StandingRow[] {
+  const polls: StandingRow[] = [];
   for (const spec of registry.specs) {
-    if (spec.kind !== "poll" || !runsIn(spec, shadow) || resourceDisabled(page, spec.key)) continue;
-    const everyMs = effectivePeriodMs(spec, page);
-    if (everyMs !== null) polls.push({ resource: spec.key, class: spec.class, everyMs });
+    if (!runsIn(spec, shadow) || resourceDisabled(page, spec.key)) continue;
+    if (spec.kind === "poll") {
+      const everyMs = effectivePeriodMs(spec, page);
+      if (everyMs !== null) polls.push({ resource: spec.key, class: spec.class, everyMs });
+    } else if (spec.kind === "goal" && spec.standing !== undefined) {
+      polls.push({ resource: spec.key, class: spec.class, everyMs: spec.standing.recheckMs, kind: "goal" });
+    }
   }
   return polls;
 }
