@@ -2438,6 +2438,7 @@ export const agentSyncResourceKeyEnum = z.enum([
   "media-download.fetch",
   "repair.ws-gap",
   "probe.manual",
+  "probe.excluded-chat",
 ]);
 
 const agentSyncCountSchema = z.number().int().nonnegative();

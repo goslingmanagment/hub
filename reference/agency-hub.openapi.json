@@ -90062,7 +90062,8 @@
                 "stats.backfill",
                 "media-download.fetch",
                 "repair.ws-gap",
-                "probe.manual"
+                "probe.manual",
+                "probe.excluded-chat"
               ]
             },
             "in": "query",
@@ -153512,7 +153513,8 @@
                 "stats.backfill",
                 "media-download.fetch",
                 "repair.ws-gap",
-                "probe.manual"
+                "probe.manual",
+                "probe.excluded-chat"
               ]
             },
             "in": "query",

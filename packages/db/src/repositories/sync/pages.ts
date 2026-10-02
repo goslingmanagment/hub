@@ -74,6 +74,9 @@ export interface SyncPageRow {
   lastSendAttemptId: number | null;
   lastCompletedAt: Date | null;
   wsRouterCursor: number;
+  /** Owner decision №8 (0235): DM exclusion reasons the engine no longer
+   *  applies on this page (`sync excluded lift`). */
+  liftedDmExclusions: string[];
   createdAt: Date;
   updatedAt: Date;
   dbNow: Date;
@@ -152,6 +155,7 @@ type PageSqlRow = {
   lastSendAttemptId: string | null;
   lastCompletedAt: Date | string | null;
   wsRouterCursor: string;
+  liftedDmExclusions: string[] | null;
   createdAt: Date | string;
   updatedAt: Date | string;
   dbNow: Date | string;
@@ -200,6 +204,7 @@ const pageColumns = sql`
   sp.last_send_attempt_id::text as "lastSendAttemptId",
   sp.last_completed_at as "lastCompletedAt",
   sp.ws_router_cursor::text as "wsRouterCursor",
+  sp.lifted_dm_exclusions as "liftedDmExclusions",
   sp.created_at as "createdAt",
   sp.updated_at as "updatedAt",
   clock_timestamp() as "dbNow"
@@ -255,6 +260,7 @@ function normalizePageRow(row: PageSqlRow): SyncPageRow {
     lastSendAttemptId: toNumber(row.lastSendAttemptId),
     lastCompletedAt: toDate(row.lastCompletedAt),
     wsRouterCursor: Number(row.wsRouterCursor),
+    liftedDmExclusions: row.liftedDmExclusions ?? [],
     createdAt: toRequiredDate(row.createdAt),
     updatedAt: toRequiredDate(row.updatedAt),
     dbNow: toRequiredDate(row.dbNow),
@@ -1058,6 +1064,62 @@ export async function setResourceHold(
        ${ownedPageFilter(input.generation)}
   `);
   await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+}
+
+/**
+ * Owner decision №8 (0235): add `reason` to a LIVE page's lifted DM
+ * exclusions (idempotent), locking the page row as the actor's commits do
+ * (`for no key update`) — it waits for an apply of the page's actor in
+ * flight, so the next list apply reads the new list. Null:
+ * the page is not live (nothing written). The caller clears the reason from
+ * the page's threads in the same transaction (`liftSyncDmExclusion`).
+ */
+export async function addSyncPageLiftedDmExclusion(
+  db: Database,
+  input: { pageId: number; reason: string },
+): Promise<{ lifted: string[]; added: boolean } | null> {
+  const result = await db.execute<{ lifted: string[] | null; added: boolean }>(sql`
+    with before as (
+      select sp.page_id, sp.lifted_dm_exclusions as lifted
+        from sync_pages sp
+       where sp.page_id = ${input.pageId} and sp.mode = 'live'
+       for no key update
+    )
+    update sync_pages sp
+       set lifted_dm_exclusions = case
+             when ${input.reason}::text = any(before.lifted) then before.lifted
+             else array_append(before.lifted, ${input.reason}::text) end,
+           updated_at = clock_timestamp()
+      from before
+     where sp.page_id = before.page_id
+    returning sp.lifted_dm_exclusions as lifted, not (${input.reason}::text = any(before.lifted)) as added
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : { lifted: row.lifted ?? [], added: row.added === true };
+}
+
+/** Take `reason` off a page's lifted DM exclusions, in any mode. Null: no
+ *  row for the page. */
+export async function removeSyncPageLiftedDmExclusion(
+  db: Database,
+  input: { pageId: number; reason: string },
+): Promise<{ lifted: string[]; removed: boolean; mode: SyncPageMode } | null> {
+  const result = await db.execute<{ lifted: string[] | null; removed: boolean; mode: SyncPageMode }>(sql`
+    with before as (
+      select sp.page_id, sp.lifted_dm_exclusions as lifted
+        from sync_pages sp
+       where sp.page_id = ${input.pageId}
+       for no key update
+    )
+    update sync_pages sp
+       set lifted_dm_exclusions = array_remove(before.lifted, ${input.reason}::text),
+           updated_at = clock_timestamp()
+      from before
+     where sp.page_id = before.page_id
+    returning sp.lifted_dm_exclusions as lifted, (${input.reason}::text = any(before.lifted)) as removed, sp.mode
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : { lifted: row.lifted ?? [], removed: row.removed === true, mode: row.mode };
 }
 
 /**

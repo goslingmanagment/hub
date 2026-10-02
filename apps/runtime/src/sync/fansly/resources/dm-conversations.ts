@@ -317,6 +317,10 @@ export async function applyListPage(
   });
   const existingByGroup = new Map(states.map((state) => [state.platformConversationId, state] as const));
   const probes = await freshProbeAnswers(tx, { pageId: input.pageId, states, now: input.now });
+  // The page row: its lifted exclusions (owner decision №8) and the engine's
+  // start on it (the follow-ups).
+  const page = await getSyncPage(tx, input.pageId);
+  const liftedExclusions = page?.liftedDmExclusions ?? [];
 
   const items = rows.map((item) => {
     const existing = existingByGroup.get(item.groupId) ?? null;
@@ -329,6 +333,7 @@ export async function applyListPage(
       existing,
       pageAccountId,
       probe: partner === null ? null : probes.get(partner) ?? null,
+      liftedExclusions,
     }, input.now);
   });
 
@@ -384,6 +389,7 @@ export async function applyListPage(
     bump("head_time_implausible", item.head.timestampImplausible);
     bump("scalar_drift", item.scalarDrift);
     bump("partner_missing_from_accounts", item.aggregationMissing);
+    bump("partner_missing_lifted", item.aggregationMissing && item.messageSyncExcludedReason === null);
     bump("partner_contradictory", item.contradictory);
     const servedAt = item.head.embeddedMessageId === item.head.listMessageId ? item.head.servedAt : null;
     threads.push({
@@ -403,7 +409,6 @@ export async function applyListPage(
       followupClass: input.classOf(item.groupId),
     });
   }
-  const page = await getSyncPage(tx, input.pageId);
   const followups = await threadFollowups(tx, {
     pageId: input.pageId,
     shadow: false,

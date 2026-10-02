@@ -154,8 +154,13 @@ describe("the Fansly registry table", () => {
       .map((spec) => [spec.key, spec.subjectScopedAuthStatuses]);
     // A CDN hop carries no session: its 401/403 is the signed URL's; an
     // identity check carries a candidate: its 401/403 is the candidate's
-    // (S3-05). (S3-06 adds probe.excluded-chat with [403].)
-    expect(scoped).toEqual([["account.identity", [401, 403]], ["media-download.fetch", [401, 403]]]);
+    // (S3-05); an excluded chat may be forbidden while the session is fine
+    // (S3-06) — its 401 stays the page's.
+    expect(scoped).toEqual([
+      ["account.identity", [401, 403]],
+      ["media-download.fetch", [401, 403]],
+      ["probe.excluded-chat", [403]],
+    ]);
     expect(byKey("ws.connect").operations).toEqual(["ws.upgrade"]);
     expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
     expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);
@@ -172,7 +177,7 @@ describe("the Fansly registry table", () => {
     const keys = (predicate: (spec: ResourceSpec) => boolean) => FANSLY_RESOURCE_SPECS.filter(predicate).map((spec) => spec.key).sort();
     expect(keys((spec) => spec.ownerProtected === true)).toEqual(["catalog.fixed", "catalog.vault", "media-stats.walk"]);
     expect(keys((spec) => spec.liveOnly === true)).toEqual([
-      "account.identity", "dm-conversations.ws-down", "media-download.fetch", "repair.ws-gap", "ws.connect",
+      "account.identity", "dm-conversations.ws-down", "media-download.fetch", "probe.excluded-chat", "repair.ws-gap", "ws.connect",
     ]);
     expect(keys((spec) => spec.evidence)).toEqual([
       "catalog.vault", "dm-messages.catchup", "dm-messages.head", "dm-messages.history",

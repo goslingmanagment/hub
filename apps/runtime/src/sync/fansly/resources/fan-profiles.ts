@@ -246,7 +246,11 @@ export const fanProfilesProbeModule: ResourceModule = {
       });
     }
     const conversationId = probeConversationId(input.work);
-    const excluded = resolution === "unresolved" && conversationId !== null
+    // A reason the page lifted (owner decision №8) is never assigned again.
+    const lifted = input.page.liftedDmExclusions.includes(
+      FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+    );
+    const excluded = resolution === "unresolved" && conversationId !== null && !lifted
       ? await excludePageDmConversationMessageSync(tx, {
         conversationId,
         platformAccountId: input.pageId,

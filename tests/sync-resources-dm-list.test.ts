@@ -271,6 +271,35 @@ describe("resolveConversationListItem", () => {
     });
   });
 
+  it("a reason the page lifted (owner decision №8) is never assigned to a bound thread; an unbound one keeps it", () => {
+    const missingAccounts = { accountsById: new Map([[OTHER, account(OTHER)]]) };
+    const lifted = [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS];
+    // Bound before (a pass never unbinds): the lifted reason is not assigned,
+    // the pass still ensures no fan and asks for no detail.
+    expect(resolveConversationListItem(input({ ...missingAccounts, liftedExclusions: lifted }), NOW)).toMatchObject({
+      aggregationMissing: true,
+      hydrate: null,
+      needsGroupDetail: false,
+      messageSyncExcludedReason: null,
+    });
+    // Unbound: the engine reads no unbound chat, the lift cleared only bound ones.
+    expect(resolveConversationListItem(input({ ...missingAccounts, liftedExclusions: lifted, existing: state({ fanId: null }) }), NOW))
+      .toMatchObject({ messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS });
+    expect(resolveConversationListItem(input({ ...missingAccounts, liftedExclusions: lifted, existing: null }), NOW))
+      .toMatchObject({ messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS });
+    // Another reason lifted, or none: excluded as before.
+    for (const other of [[], [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP]]) {
+      expect(resolveConversationListItem(input({ ...missingAccounts, liftedExclusions: other }), NOW).messageSyncExcludedReason)
+        .toBe(FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS);
+    }
+    // A stored unresolvable reason the page lifted is not kept (and not probed).
+    const unresolvable = state({ metadata: { messageSyncExcludedReason: FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } });
+    expect(resolveConversationListItem(input({
+      existing: unresolvable,
+      liftedExclusions: [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP],
+    }), NOW)).toMatchObject({ messageSyncExcludedReason: null, probeDue: false });
+  });
+
   it("keeps the stored count when a served scalar is not an integer", () => {
     const item = resolveConversationListItem(input({
       item: row({ unreadCount: "7" as unknown as number }),

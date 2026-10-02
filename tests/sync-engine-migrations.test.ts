@@ -29,7 +29,9 @@ import {
   SYNC_WORK_KINDS,
   SYNC_WORK_STATES,
   SYNC_MEDIA_HANDOFF_MAX_BYTES,
+  SYNC_LIFTABLE_DM_EXCLUSIONS,
   syncMediaHandoff,
+  syncPages,
 } from "@agency_hub_core/db";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
@@ -442,6 +444,44 @@ describe("0234_sync_media_handoff.sql", () => {
   it("is mirrored in drizzle", () => {
     const names = Object.values(syncMediaHandoff as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
     expect(names).toEqual(expect.arrayContaining(["page_id", "description_id", "work_id", "content_type", "byte_count", "bytes", "expires_at"]));
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0235_sync_pages_lifted_dm_exclusions.sql", () => {
+  const migration = "0235_sync_pages_lifted_dm_exclusions.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("is purely additive: one catalog-only column, its check (added not valid, then validated) and a comment", () => {
+    expect(statements).toEqual([
+      "alter table sync_pages add column if not exists lifted_dm_exclusions text[] not null default '{}'",
+      "do $$…$$",
+      "alter table sync_pages validate constraint sync_pages_lifted_dm_exclusions_check",
+      expect.stringMatching(/^comment on column sync_pages\.lifted_dm_exclusions is 'Owner decision №8: /),
+    ]);
+    expect(sql).toMatch(
+      /if not exists \(select 1 from pg_constraint where conname = 'sync_pages_lifted_dm_exclusions_check'\) then\s+alter table sync_pages add constraint sync_pages_lifted_dm_exclusions_check\s+check \(lifted_dm_exclusions <@ array\[[^\]]*\]::text\[\]\) not valid;/,
+    );
+    expect(sql).not.toMatch(/\b(drop|rename|truncate|delete|update)\b/i);
+  });
+
+  it("admits exactly the two exclusion reasons the shared vocabulary has", () => {
+    const list = sql.slice(sql.indexOf("lifted_dm_exclusions <@ array["));
+    const reasons = [...list.slice(0, list.indexOf("]")).matchAll(/'([a-z_]+)'/g)].map((match) => match[1]!);
+    expect(reasons).toEqual([...SYNC_LIFTABLE_DM_EXCLUSIONS]);
+  });
+
+  it("keeps the table-level read grant (no grant of its own)", () => {
+    expect(sql).not.toMatch(/grant/i);
+  });
+
+  it("is mirrored in drizzle", () => {
+    expect((syncPages as unknown as Record<string, { name?: unknown }>).liftedDmExclusions?.name).toBe("lifted_dm_exclusions");
   });
 
   it("allows application rollback after the additive migration", () => {
