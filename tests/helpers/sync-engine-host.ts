@@ -16,7 +16,13 @@ import { loadConfig, type AppConfig } from "@agency_hub_core/shared";
 import type { Pool } from "pg";
 
 import { SyncActor, type ActorDeps } from "../../apps/runtime/src/sync/engine/actor.ts";
-import type { CaptureCodec, SyncFaultHook, SyncLogger } from "../../apps/runtime/src/sync/engine/commit.ts";
+import type {
+  CaptureCodec,
+  SyncFaultHook,
+  SyncLogger,
+  ThreadChainChangedHook,
+  WorkClosedHook,
+} from "../../apps/runtime/src/sync/engine/commit.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import {
   systemClock,
@@ -43,6 +49,7 @@ import {
   ShadowTransport,
   type PageTransport,
 } from "../../apps/runtime/src/sync/engine/shadow.ts";
+import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "../../apps/runtime/src/sync/requests/history.ts";
 
 // Shared doubles of the Fansly Sync Engine host and actor for the integration
 // tests: a page with its sync row, test-only registry entries, a scripted live
@@ -266,6 +273,10 @@ export interface TestActorOptions {
   capture?: CaptureCodec;
   /** The live settings resources read (default: the registry defaults). */
   settings?: SettingsSource;
+  /** The history-request hooks of the commits (default: the production
+   *  ones, as `main.ts` wires them; null: none). */
+  onThreadChainChanged?: ThreadChainChangedHook | null;
+  onWorkClosed?: WorkClosedHook | null;
 }
 
 /** Acquire the page and build an actor on it with a small test setting. */
@@ -311,6 +322,8 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     ...(options.faults === undefined ? {} : { faults: options.faults }),
     ...(options.capture === undefined ? {} : { capture: options.capture }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
+    ...(options.onThreadChainChanged === null ? {} : { onThreadChainChanged: options.onThreadChainChanged ?? onHistoryThreadChainChanged }),
+    ...(options.onWorkClosed === null ? {} : { onWorkClosed: options.onWorkClosed ?? onHistoryWorkClosed }),
   };
   return {
     actor: new SyncActor(deps),

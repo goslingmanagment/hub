@@ -8,6 +8,8 @@ import { decryptJsonWithKeyVersion, fanslyWsCaptureContainsSubject } from "@agen
 import {
   type CapturePayloadErasureSubject,
   capturePayloadErasureSubject,
+  refreshHistoryRequestCompletion,
+  type Database,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -924,6 +926,14 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
     target: "ai_media_descriptions",
     reach: "predicate",
   },
+  // Fansly Sync Engine history requests (0232): a fan of a request, as given
+  // or as the chat's partner. historyItemPred: `fan_platform_user_id = ref or
+  // conversation_ref in the fan's chats or the input names the fan`.
+  {
+    column: "history_request_items.fan_platform_user_id",
+    target: "history_request_items",
+    reach: "predicate",
+  },
 ];
 
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
@@ -976,12 +986,23 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // (`/account?ids=` batches, `correlationAccountId=` of fan earnings) and the
   // work's cursor, goal, proof or result. Erasure outranks the evidence
   // retention of attempts.
+  // The fan's DM threads, resolved BEFORE those threads (and their messages)
+  // are deleted, so message-keyed children can still be matched through them.
+  const threadPred = sql`t.platform_account_id in ${scope.pageIds}
+    and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
   const syncWorkPred = sql`page_id in ${scope.pageIds} and (subject in ${wsGroupRefs}
     or ${fanRefTextMatchSql(ref, sql.raw("jsonb_build_array(params, cursor, goal, proof, result)"))})`;
   targets.push({
     plane: "hot", target: "sync_work", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from sync_work where ${syncWorkPred}`),
-    run: tx => execCount(tx, sql`delete from sync_work where ${syncWorkPred}`),
+    run: async (tx) => {
+      // Lock order (design §3.7: page_dm_threads before sync_work): the fan's
+      // chats are taken before their work rows, as a history intake takes
+      // the chats its fans reference before the chats' work. The chats
+      // themselves are deleted further down.
+      await tx.execute(sql`select t.id from page_dm_threads t where ${threadPred} order by t.id for update of t`);
+      return execCount(tx, sql`delete from sync_work where ${syncWorkPred}`);
+    },
   });
   const syncAttemptPred = sql`page_id in ${scope.pageIds} and (subject in ${wsGroupRefs}
     or ${fanRefTextMatchSql(ref, sql.raw("request"))})`;
@@ -989,6 +1010,29 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "sync_attempts", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from sync_attempts where ${syncAttemptPred}`),
     run: tx => execCount(tx, sql`delete from sync_attempts where ${syncAttemptPred}`),
+  });
+  // History requests (0232): the fan's items — given by fan id, or by a chat
+  // (conversation ref, chat URL) of the fan. The request row keeps only
+  // digests and counts, and is settled again: a request whose last open fan
+  // was this one is done now — nothing else would reach it (every settling
+  // path finds a request through an open fan, and the chat's work is gone).
+  // Requests before items (§3.7).
+  const historyItemPred = sql`page_id in ${scope.pageIds} and (fan_platform_user_id = ${ref}
+    or conversation_ref in ${wsGroupRefs} or input_ref in ${wsGroupRefs} or ${fanRefTextMatchSql(ref, sql.raw("input_ref"))})`;
+  targets.push({
+    plane: "hot", target: "history_request_items", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from history_request_items where ${historyItemPred}`),
+    run: async (tx) => {
+      const requests = await tx.execute<{ id: string }>(sql`
+        select r.id::text as id
+          from history_requests r
+         where r.id in (select request_id from history_request_items where ${historyItemPred})
+         order by r.id
+           for update of r`);
+      const erased = await execCount(tx, sql`delete from history_request_items where ${historyItemPred}`);
+      await refreshHistoryRequestCompletion(tx as unknown as Database, requests.rows.map((row) => Number(row.id)));
+      return erased;
+    },
   });
 
   targets.push({
@@ -1031,16 +1075,12 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     );
   }
 
-  // The fan's DM threads, resolved BEFORE those threads (and their messages)
-  // are deleted, so message-keyed children can still be matched through them.
-  const threadPred = sql`t.platform_account_id in ${scope.pageIds}
-    and (t.fan_id = ${fanId} or t.platform_conversation_id = ${ref})`;
-
   // Resolved before ledger lineage is collected: creator-sent events use the
   // messaging group id as conversation_ref and must be deleted with this fan.
   const fanGroupIds = scope.fanGroupIds;
 
-  // The fan's DM threads; messages ride the FK cascade but are counted.
+  // The fan's DM threads (`threadPred`, above with the engine's work rows);
+  // messages ride the FK cascade but are counted.
   targets.push({
     plane: "hot",
     target: "page_dm_messages",
@@ -1607,6 +1647,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // journal; both cascade on pages, which erasure keeps.
     ["fansly_send_log", "page_id"],
     ["fansly_page_send_guards", "page_id"],
+    // Fansly Sync Engine history requests (0232): the fans of a request before
+    // the request (the items also cascade on it). RESTRICT FKs on pages.
+    ["history_request_items", "page_id"],
+    ["history_requests", "page_id"],
     // Fansly Sync Engine (0228): the page's attempt journal, its work queue and
     // its engine row (mode, ownership, holds). RESTRICT FKs; erasure keeps pages.
     ["sync_attempts", "page_id"],

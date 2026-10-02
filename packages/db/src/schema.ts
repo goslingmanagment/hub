@@ -1076,6 +1076,123 @@ export const syncAttempts = pgTable(
   }),
 );
 
+// 0232 (plan §4, design §2.5): history requests of agents and the owner. The
+// fans of one chat share the chat's `dm-messages.history` work; progress is
+// read from the chain columns of page_dm_threads (repositories/sync/history-requests.ts).
+export const historyRequests = pgTable(
+  "history_requests",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    requestRef: uuid("request_ref").notNull().unique(),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    requesterKind: text("requester_kind")
+      .$type<"agent_key" | "owner_session" | "owner_cli" | "legacy_hydration_wrapper" | "switch_migration">()
+      .notNull(),
+    requesterAgentKeyId: bigint("requester_agent_key_id", { mode: "number" })
+      .references(() => agentKeys.id, { onDelete: "restrict" }),
+    requesterUserId: bigint("requester_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    depthKind: text("depth_kind").$type<"all" | "latest" | "before_boundary">().notNull(),
+    depthN: integer("depth_n"),
+    depthBoundaryAt: timestamp("depth_boundary_at", { withTimezone: true }),
+    depthBoundaryMessageRef: text("depth_boundary_message_ref"),
+    reasonSha256: text("reason_sha256").notNull(),
+    reasonLength: integer("reason_length").notNull(),
+    state: text("state").$type<"open" | "done" | "cancelled">().notNull().default("open"),
+    itemsTotal: integer("items_total").notNull(),
+    itemsTerminal: integer("items_terminal").notNull().default(0),
+    estimateAtSubmit: jsonbSafe("estimate_at_submit").$type<Record<string, unknown>>().notNull(),
+    lastServedAt: timestamp("last_served_at", { withTimezone: true }),
+    legacyHydrationRequestId: bigint("legacy_hydration_request_id", { mode: "number" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelReasonSha256: text("cancel_reason_sha256"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (table) => ({
+    idempotencyIdx: uniqueIndex("history_requests_idempotency").on(
+      table.requesterKind,
+      sql`coalesce(${table.requesterAgentKeyId}, 0)`,
+      sql`coalesce(${table.requesterUserId}, 0)`,
+      table.idempotencyKey,
+    ),
+    pageOpenIdx: index("history_requests_page_open")
+      .on(table.pageId, table.lastServedAt.asc().nullsFirst(), table.id)
+      .where(sql`${table.state} = 'open'`),
+    pageCreatedIdx: index("history_requests_page_created").on(table.pageId, table.createdAt.desc()),
+    requesterIdsCheck: check(
+      "history_requests_requester_ids_check",
+      sql`num_nonnulls(${table.requesterAgentKeyId}, ${table.requesterUserId}) <= 1`,
+    ),
+    depthLatestCheck: check(
+      "history_requests_depth_latest_check",
+      sql`(${table.depthKind} = 'latest') = (${table.depthN} is not null)`,
+    ),
+    depthBoundaryCheck: check(
+      "history_requests_depth_boundary_check",
+      sql`(${table.depthKind} = 'before_boundary') = (num_nonnulls(${table.depthBoundaryAt}, ${table.depthBoundaryMessageRef}) = 1)`,
+    ),
+    doneCheck: check("history_requests_done_check", sql`(${table.state} = 'done') = (${table.doneAt} is not null)`),
+    cancelledCheck: check(
+      "history_requests_cancelled_check",
+      sql`(${table.state} = 'cancelled') = (${table.cancelledAt} is not null)`,
+    ),
+  }),
+);
+
+export const historyRequestItems = pgTable(
+  "history_request_items",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    requestId: bigint("request_id", { mode: "number" })
+      .notNull()
+      .references(() => historyRequests.id, { onDelete: "cascade" }),
+    pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "restrict" }),
+    ordinal: integer("ordinal").notNull(),
+    inputKind: text("input_kind").$type<"fan_platform_user_id" | "conversation_ref" | "chat_url">().notNull(),
+    inputRef: text("input_ref").notNull(),
+    fanPlatformUserId: text("fan_platform_user_id"),
+    fanId: bigint("fan_id", { mode: "number" }),
+    threadId: bigint("thread_id", { mode: "number" }).references(() => pageDmThreads.id, { onDelete: "set null" }),
+    conversationRef: text("conversation_ref"),
+    state: text("state").$type<"refused" | "queued" | "loading" | "ready" | "blocked" | "cancelled">().notNull(),
+    refusal: text("refusal").$type<"not_found" | "excluded" | "page_erased" | "duplicate">(),
+    excludedReason: text("excluded_reason"),
+    workId: bigint("work_id", { mode: "number" }),
+    anchorMessageId: text("anchor_message_id"),
+    anchorFixedAt: timestamp("anchor_fixed_at", { withTimezone: true }),
+    anchorUpwardCount: bigint("anchor_upward_count", { mode: "number" }),
+    anchorChainEpoch: integer("anchor_chain_epoch"),
+    estimateReadsMin: integer("estimate_reads_min"),
+    estimateReads: integer("estimate_reads"),
+    readsSpent: integer("reads_spent").notNull().default(0),
+    lastServedAt: timestamp("last_served_at", { withTimezone: true }),
+    satisfiedAt: timestamp("satisfied_at", { withTimezone: true }),
+    satisfiedBy: text("satisfied_by").$type<"empty_page" | "latest_n" | "boundary" | "already_satisfied">(),
+    satisfiedOldestId: text("satisfied_oldest_id"),
+    satisfiedCount: integer("satisfied_count"),
+    final: jsonbSafe("final").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+  },
+  (table) => ({
+    ordinalUniq: unique("history_request_items_ordinal_uniq").on(table.requestId, table.ordinal),
+    inputUniq: unique("history_request_items_input_uniq").on(table.requestId, table.inputKind, table.inputRef),
+    rrIdx: index("history_request_items_rr")
+      .on(table.requestId, table.lastServedAt.asc().nullsFirst(), table.ordinal)
+      .where(sql`${table.state} in ('queued', 'loading', 'blocked')`),
+    workIdx: index("history_request_items_work")
+      .on(table.workId)
+      .where(sql`${table.state} in ('queued', 'loading', 'blocked')`),
+    threadIdx: index("history_request_items_thread")
+      .on(table.threadId)
+      .where(sql`${table.state} in ('queued', 'loading', 'blocked')`),
+    refusedCheck: check("history_request_items_refused_check", sql`(${table.state} = 'refused') = (${table.refusal} is not null)`),
+  }),
+);
+
 export const pageSyncCursors = pgTable(
   "page_sync_cursors",
   {
