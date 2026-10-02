@@ -7,6 +7,12 @@ import type { SyncContext } from "../context.ts";
 import type { EngineRegistry, ReplayVerdict } from "../engine/resource.ts";
 import { checkEndRule, type EndRulePageReport } from "../fansly/lib/chain-checks.ts";
 import {
+  LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM,
+  LEGACY_UNSTORED_BELOW_WINDOW,
+  LEGACY_UNSTORED_DELETED_ON_PLATFORM,
+  LEGACY_WS_HINT_MEMBERSHIP_PENDING,
+} from "../fansly/lib/replay-rules.ts";
+import {
   rebuildPageChains,
   type ChainRebuildPageReport,
   type ScanGovernor,
@@ -27,12 +33,24 @@ import { backtestPageEta, type EtaBacktestPageReport } from "../requests/eta-bac
 
 /** The share of each resource's replayed observations that must match. */
 export const REPLAY_MATCH_TARGET = 0.999;
-/** Not-replayable reasons that are legacy's own refusals: legacy journaled
- *  only a trimmed refused body or a rejection receipt, so it stored no fact to
- *  compare with. Only these leave B5's denominator. Every other not-replayable
- *  observation (no body, a page without identity, nothing parsed, no replay at
- *  all) was not compared, and counts as not matched. */
-export const REPLAY_EXCUSED_REASONS: ReadonlySet<string> = new Set(["legacy_refused_body_trimmed", "legacy_rejection_receipt"]);
+/** Not-replayable reasons where legacy stored no fact to compare with, each
+ *  with how the summary names it: legacy's own refusals (it journaled only a
+ *  trimmed refused body or a rejection receipt), a chat legacy's socket-hint
+ *  path deferred on purpose and never stored (D5 creates it), and DM rows
+ *  legacy's journal-only readers never stored (`lib/replay-rules.ts`; each
+ *  checked row by row, never a whole reader skipped). Only these leave B5's
+ *  denominator. Every other not-replayable observation (no body, a page
+ *  without identity, nothing parsed, no replay at all) was not compared, and
+ *  counts as not matched. */
+export const REPLAY_EXCUSED_REASON_NOTES: Readonly<Record<string, string>> = {
+  legacy_refused_body_trimmed: "legacy refusal",
+  legacy_rejection_receipt: "legacy refusal",
+  [LEGACY_WS_HINT_MEMBERSHIP_PENDING]: "legacy deferred the chat and never stored it; D5 creates it",
+  [LEGACY_UNSTORED_BELOW_WINDOW]: "legacy journal-only read, older than every stored row",
+  [LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM]: "legacy journal-only read, older than every stored row of a chat legacy claims complete: LEGACY COVERAGE DEFECT",
+  [LEGACY_UNSTORED_DELETED_ON_PLATFORM]: "legacy journal-only read of rows Fansly deleted before legacy stored them",
+};
+export const REPLAY_EXCUSED_REASONS: ReadonlySet<string> = new Set(Object.keys(REPLAY_EXCUSED_REASON_NOTES));
 /** The 16.09 end-of-history counterexamples (raw 2975891 and 2975902: a head
  *  of 24 of 25 between full pages, design §8.3). */
 export const SEPTEMBER_16_COUNTEREXAMPLE_RAW_IDS: readonly number[] = [2975891, 2975902];
@@ -46,9 +64,12 @@ export interface ReplayKindReport {
   matched: number;
   mismatched: number;
   notReplayable: number;
-  /** Not-replayable observations that are legacy's own refusals
-   *  (`REPLAY_EXCUSED_REASONS`), left out of the ratio. */
+  /** Not-replayable observations where legacy stored no fact to compare
+   *  with (`REPLAY_EXCUSED_REASONS`), left out of the ratio. */
   excused: number;
+  /** Matches that needed a named legacy rule (`ReplayVerdict.via`): the
+   *  observations per rule, counted within `matched`. */
+  matchedVia: Record<string, number>;
   /** matched / (total − excused): design §3.12 B5's matched / total; null
    *  when nothing is left to judge. */
   ratio: number | null;
@@ -126,6 +147,7 @@ export async function replayResources(
         mismatched: 0,
         notReplayable: 0,
         excused: 0,
+        matchedVia: {},
         ratio: null,
         meetsTarget: null,
         oldestReceivedAt: null,
@@ -177,8 +199,10 @@ export async function replayResources(
                 ? { kind: "not_replayable", reason: "body_unavailable" }
                 : { kind: "mismatch", reason: `replay_failed:${errorName(error)}` };
             }
-            if (verdict.kind === "match") report.matched += 1;
-            else if (verdict.kind === "not_replayable") {
+            if (verdict.kind === "match") {
+              report.matched += 1;
+              for (const rule of new Set(verdict.via ?? [])) report.matchedVia[rule] = (report.matchedVia[rule] ?? 0) + 1;
+            } else if (verdict.kind === "not_replayable") {
               report.notReplayable += 1;
               report.notReplayableReasons[verdict.reason] = (report.notReplayableReasons[verdict.reason] ?? 0) + 1;
             } else {

@@ -6,11 +6,13 @@ import {
   getOpenWorkForKey,
   isDmArchiveScopeFenced,
   listDomainEventsByDedupKeys,
+  listFanslyWsExactDeletedMessageRefs,
   listOpenHistoryItems,
   listPageDmThreadListStates,
   listStoredDmMessagesForReplay,
   listUnrecordedMediaOrders,
   lockWorkRows,
+  readLegacyDmStoredWindow,
   readThreadChain,
   readThreadStoredFacts,
   resolveWorkDemandMessageIds,
@@ -67,6 +69,11 @@ import {
 } from "../lib/chain.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
+import {
+  LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM,
+  LEGACY_UNSTORED_BELOW_WINDOW,
+  LEGACY_UNSTORED_DELETED_ON_PLATFORM,
+} from "../lib/replay-rules.ts";
 import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
 import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";
 
@@ -940,13 +947,50 @@ async function shadowStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: { 
 
 // ── replay (design §3.12 B5) ────────────────────────────────────────────────
 
+/** The rows of a journaled page legacy never stored, one by one
+ *  (`lib/replay-rules.ts`): deleted on Fansly (an exact socket receipt),
+ *  older than every row legacy stored for the chat (in a chat legacy calls
+ *  complete, apart), or unexplained — a hole inside legacy's stored window,
+ *  or a chat it stored nothing of, is never excused. */
+async function classifyUnstoredRows(
+  db: Database,
+  input: { pageId: number; groupId: string; threadId: number; ids: readonly string[] },
+): Promise<{ gap: Record<string, number>; unexplained: string[] }> {
+  const window = await readLegacyDmStoredWindow(db, { conversationId: input.threadId });
+  const deleted = new Set(await listFanslyWsExactDeletedMessageRefs(db, {
+    pageId: input.pageId,
+    groupRef: input.groupId,
+    messageRefs: input.ids,
+  }));
+  const gap: Record<string, number> = {
+    [LEGACY_UNSTORED_DELETED_ON_PLATFORM]: 0,
+    [LEGACY_UNSTORED_BELOW_WINDOW]: 0,
+    [LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM]: 0,
+  };
+  const unexplained: string[] = [];
+  for (const id of input.ids) {
+    if (deleted.has(id)) {
+      gap[LEGACY_UNSTORED_DELETED_ON_PLATFORM]! += 1;
+    } else if (window.lowestStoredId !== null && compareFanslySnowflakeIds(id, window.lowestStoredId) === -1) {
+      gap[window.legacyClaimsComplete ? LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM : LEGACY_UNSTORED_BELOW_WINDOW]! += 1;
+    } else {
+      unexplained.push(id);
+    }
+  }
+  return { gap, unexplained };
+}
+
 /**
  * Replay of a legacy `dm_messages` observation: the new contract and the
  * chain page rules accept the journaled page (a body legacy refused is
  * journaled as `{contractAccepted: false, raw}` and must be refused again),
  * and every normalized row is in `page_dm_messages` with the same sender role,
  * `created_at`, tip cents and content — a row re-read later (newer
- * `synced_at`) or deleted since counts as a match.
+ * `synced_at`) or deleted since counts as a match. A row legacy never stored
+ * is judged by `classifyUnstoredRows`: when each one is legacy's named gap
+ * (its journal-only readers: the B1 walk's dropped staged pages, the AI fast
+ * lane and accelerator), the stored rows decide — a match naming the gap, or,
+ * when legacy stored none of the page, not replayable under the gap's name.
  */
 async function replayMessagesPage(observation: ReplayObservation, ctx: ReplayContext): Promise<ReplayVerdict> {
   const payload = recordOf(observation.payload);
@@ -1009,11 +1053,39 @@ async function replayMessagesPage(observation: ReplayObservation, ctx: ReplayCon
   if (missing.length === 0 && differs.length === 0) {
     return { kind: "match", detail: { served: page.messages.length, unparseable: normalized.unparseable.length } };
   }
-  return {
-    kind: "mismatch",
-    reason: missing.length > 0 ? "rows_missing" : "rows_differ",
-    detail: { served: page.messages.length, missing: missing.length, differs: differs.length, examples: [...missing, ...differs].slice(0, 5) },
-  };
+  const unstored = missing.length === 0
+    ? { gap: {}, unexplained: [] }
+    : await classifyUnstoredRows(ctx.db, { pageId: ctx.pageId, groupId, threadId: thread.id, ids: missing });
+  const named = Object.entries(unstored.gap).filter(([, n]) => n > 0);
+  const legacyGap = Object.fromEntries(named);
+  if (differs.length > 0 || unstored.unexplained.length > 0) {
+    return {
+      kind: "mismatch",
+      reason: unstored.unexplained.length > 0 ? "rows_missing" : "rows_differ",
+      detail: {
+        served: page.messages.length,
+        missing: unstored.unexplained.length,
+        differs: differs.length,
+        examples: [...unstored.unexplained, ...differs].slice(0, 5),
+        ...(named.length === 0 ? {} : { legacyGap }),
+      },
+    };
+  }
+  const compared = normalized.rows.length - missing.length;
+  if (compared > 0) {
+    return {
+      kind: "match",
+      detail: { served: page.messages.length, compared, unparseable: normalized.unparseable.length, legacyGap },
+      via: named.map(([rule]) => rule).sort(),
+    };
+  }
+  // Legacy stored none of the page: nothing to compare with.
+  const reason = (unstored.gap[LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM] ?? 0) > 0
+    ? LEGACY_UNSTORED_BELOW_COMPLETE_CLAIM
+    : unstored.gap[LEGACY_UNSTORED_DELETED_ON_PLATFORM] === missing.length
+      ? LEGACY_UNSTORED_DELETED_ON_PLATFORM
+      : LEGACY_UNSTORED_BELOW_WINDOW;
+  return { kind: "not_replayable", reason };
 }
 
 // ── modules ─────────────────────────────────────────────────────────────────

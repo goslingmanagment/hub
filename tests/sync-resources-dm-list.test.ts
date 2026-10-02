@@ -332,7 +332,22 @@ describe("resolveGroupDetail", () => {
 
   it("several members name no partner, and the stored one stays", () => {
     const resolved = resolveGroupDetail({ detail: detail([PAGE, FAN, OTHER], null), existing: state(), pageAccountId: PAGE, now: NOW });
-    expect(resolved).toMatchObject({ partnerPlatformUserId: null, writtenPartnerId: FAN, head: null });
+    expect(resolved).toMatchObject({ members: 2, partnerPlatformUserId: null, writtenPartnerId: FAN, head: null });
+  });
+
+  it("counts the members besides the page: a direct chat has one, the page's mass-message container none", () => {
+    expect(resolveGroupDetail({ detail: detail([PAGE, FAN], {}), existing: null, pageAccountId: PAGE, now: NOW }))
+      .toMatchObject({ members: 1, partnerPlatformUserId: FAN });
+    // Production shape (lilly-1/lilly-2): type 3, the page alone, recipients
+    // lists, the page's own broadcast as its head.
+    const container = {
+      ...detail([PAGE], { senderId: PAGE, type: 3, correlationId: GROUP }),
+      type: 3,
+      groupFlags: 62,
+      recipients: [{ type: 30001, id: "920000000000000001" }],
+    };
+    expect(resolveGroupDetail({ detail: container, existing: null, pageAccountId: PAGE, now: NOW }))
+      .toMatchObject({ members: 0, partnerPlatformUserId: null, writtenPartnerId: null });
   });
 });
 

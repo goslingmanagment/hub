@@ -8,7 +8,7 @@ import { ScanGovernor, type ScanPacing } from "../fansly/lib/chain-rebuild.ts";
 import {
   backtestEta,
   checkChains,
-  REPLAY_EXCUSED_REASONS,
+  REPLAY_EXCUSED_REASON_NOTES,
   replayResources,
   SEPTEMBER_16_COUNTEREXAMPLE_RAW_IDS,
   type ChainCheckReport,
@@ -216,13 +216,21 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     lines.push(`B5 replay: ${journal.replay.reduce((total, row) => total + row.total, 0)} observations; `
       + `${below.length === 0 ? "every resource ≥ 99.9 %" : `below 99.9 %: ${below.join(", ")}`}`
       + `${none.length === 0 ? "" : `; not replayable (no observation): ${none.join(", ")}`}`);
-    // What was not compared, per kind and reason: legacy's own refusals are
-    // left out of the ratio, every other reason counts as not matched.
+    // What was not compared, per kind and reason: where legacy stored no fact
+    // to compare with, the reason is named and left out of the ratio; every
+    // other reason counts as not matched.
     const skipped = journal.replay.filter((row) => row.notReplayable > 0).map((row) => `${row.kind} `
       + Object.entries(row.notReplayableReasons)
-        .map(([reason, count]) => `${reason} ${count}${REPLAY_EXCUSED_REASONS.has(reason) ? " (legacy refusal, left out)" : ""}`)
+        .map(([reason, count]) => {
+          const note = REPLAY_EXCUSED_REASON_NOTES[reason];
+          return `${reason} ${count}${note === undefined ? "" : ` (${note}, left out)`}`;
+        })
         .join(", "));
     if (skipped.length > 0) lines.push(`B5 not replayable: ${skipped.join("; ")}`);
+    // Matches that needed a named legacy rule, per kind and rule.
+    const via = journal.replay.filter((row) => Object.keys(row.matchedVia).length > 0).map((row) => `${row.kind} `
+      + Object.entries(row.matchedVia).map(([rule, count]) => `${rule} ${count}`).join(", "));
+    if (via.length > 0) lines.push(`B5 matched through a legacy rule: ${via.join("; ")}`);
     const hits = journal.chains.reduce((total, row) => total + ("error" in row.endRule ? 0 : row.endRule.emptyPageSoundness.hits.length), 0);
     lines.push(`B6 chains: 16.09 counterexamples listed ${journal.septemberSixteen.listed.length}/${journal.septemberSixteen.expected.length}, `
       + `empty-page soundness hits ${hits}`);
