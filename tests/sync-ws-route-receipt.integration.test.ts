@@ -153,7 +153,8 @@ describe("the post-ack routing hook (I18)", () => {
       // The fan's two messages (one frame) and the chatter's reply; the own broadcast none.
       { resource: "dm-messages.head", subject: GROUP, shadow: false, class: "urgent", state: "open", revision: 2, messageIds: [fan.id, media.id, reply.id].sort(), txIds: [] },
       { resource: "payouts.daily", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
-      { resource: "purchases.targets", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
+      // The PPV order's target, one walk row of its own (never a subject-less row).
+      { resource: "purchases.targets", subject: "media:970000000000000001", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
       { resource: "subscribers.poll", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
       { resource: "transactions.head", subject: "", shadow: false, class: "urgent", state: "open", revision: 3, messageIds: [], txIds: ["930000000000000001"] },
       // Only the settlement of a row the ledger holds as pending.
@@ -164,7 +165,7 @@ describe("the post-ack routing hook (I18)", () => {
     // event, the result within 10 s.
     expect(head.due_in_ms).toBeLessThanOrEqual(6_100);
     expect(head.deadline_in_ms).toBeLessThanOrEqual(10_100);
-    expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ ids: ["media:970000000000000001"] });
+    expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ target: { kind: "media", id: "970000000000000001" } });
   });
 
   it("a handover page is routed too; its work waits for the actor", async (context) => {

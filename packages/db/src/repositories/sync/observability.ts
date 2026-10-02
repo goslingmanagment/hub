@@ -602,6 +602,8 @@ export interface SyncWorkOpenAt {
   waitingReason: string | null;
   /** The admission of the row's first attempt (null before one). */
   firstAdmittedAt: Date | null;
+  /** The row's cursor as it stands now (what its next plan reads). */
+  cursor: unknown;
 }
 
 /**
@@ -625,9 +627,10 @@ export async function listSyncWorkOpenAt(
     updatedAt: Date | string;
     waitingReason: string | null;
     firstAdmittedAt: Date | string | null;
+    cursor: unknown;
   }>(sql`
     select w.page_id::text as "pageId", w.resource, w.subject, w.state, w.created_at as "createdAt", w.due_at as "dueAt",
-           w.closed_at as "closedAt", w.updated_at as "updatedAt", w.waiting_reason as "waitingReason",
+           w.closed_at as "closedAt", w.updated_at as "updatedAt", w.waiting_reason as "waitingReason", w.cursor,
            (select a.admitted_at from sync_attempts a where a.work_id = w.id order by a.id limit 1) as "firstAdmittedAt"
       from sync_work w
      where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
@@ -648,6 +651,7 @@ export async function listSyncWorkOpenAt(
     updatedAt: toRequiredDate(row.updatedAt),
     waitingReason: row.waitingReason,
     firstAdmittedAt: toDate(row.firstAdmittedAt),
+    cursor: row.cursor ?? null,
   }));
 }
 

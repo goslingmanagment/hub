@@ -57,6 +57,7 @@ import {
   type ApplyInput,
   type ApplyResult,
   type LegacyImport,
+  type LocalApplyInput,
   type RequestPlan,
   type ResourceModule,
   type ShadowResult,
@@ -67,6 +68,7 @@ import {
   advanceShadowPass,
   clearQueueSubjectBlocks,
   currentShadowPass,
+  dueAtLookOf,
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
@@ -863,11 +865,47 @@ async function planShadow(
   return { kind: "request", request: windowRequest(candidate.subjectRef, window!, { shadowVisit }) };
 }
 
+/** Mark the page's latest top-50 media dirty, due now (the items visited
+ *  within the day left alone); how many were marked. */
+async function markTopMedia(tx: Database, pageId: number, now: Date): Promise<number> {
+  const marked = await markMediaStatsTopMediaDirty(tx, {
+    pageId,
+    limit: TOP_MEDIA_MARK_LIMIT,
+    dueAt: now,
+    visitedSince: new Date(now.getTime() - DAY_MS),
+  });
+  return marked.marked;
+}
+
 export const mediaStatsWalkModule: ResourceModule = {
+  /** The shadow report's look check (rule A1.floor-idle): `planShadow`'s pick
+   *  at the look, less what changed since. */
+  async dueAtLook(work, ctx) {
+    const cursor = parseMediaStatsWalkCursor(work.cursor);
+    const visit = cursor.shadowVisit;
+    // A visit in flight asks its next window: such a look reads, never waits.
+    if (visit !== null && visit.done < visit.steps) return { count: 0, examples: [] };
+    const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
+    const tiers = mediaStatsOwnerTiers(ctx.page);
+    return dueAtLookOf(ctx.db, {
+      pageId: ctx.pageId,
+      plane: PLANE,
+      at: ctx.now,
+      pick: (limit) => pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after, tiers }),
+    });
+  },
+
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseMediaStatsWalkCursor(work.cursor);
     const tiers = mediaStatsOwnerTiers(ctx.page);
     if (ctx.shadow) return planShadow(cursor, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, tiers });
+    // The free signal (zero calls): today's top-50 jump the queue once a UTC
+    // day, marked before the pick as legacy marks them — also on a day the
+    // queue holds nothing else due, when no apply would run. Never between a
+    // visit's steps or after a failed step (their plan comes first).
+    if (cursor.topMarkedDay !== fanslyUtcDayKey(ctx.now) && cursor.visit === null && work.lastErrorClass === null) {
+      return { kind: "local", reason: "top_media_mark" };
+    }
     let page = pageStateOf(cursor);
     let visit = cursor.visit;
     let abandoned: string | null = null;
@@ -917,6 +955,20 @@ export const mediaStatsWalkModule: ResourceModule = {
     };
   },
 
+  /** The plan's `top_media_mark` (live): today's top-50 marked, the walk
+   *  picks again at once. */
+  async applyLocal(tx, input: LocalApplyInput): Promise<ApplyResult> {
+    const cursor = parseMediaStatsWalkCursor(input.work.cursor);
+    const today = fanslyUtcDayKey(input.now);
+    if (cursor.topMarkedDay === today) return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
+    const marked = await markTopMedia(tx, input.pageId, input.now);
+    return {
+      work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { ...cursor, topMarkedDay: today } satisfies MediaStatsWalkCursor },
+      followups: [],
+      counters: { top_media_marked: marked },
+    };
+  },
+
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
     const now = input.now;
     const cursor = parseMediaStatsWalkCursor(input.work.cursor);
@@ -940,17 +992,11 @@ export const mediaStatsWalkModule: ResourceModule = {
       for (const [name, by] of Object.entries(run.counters)) counters[name] = (counters[name] ?? 0) + by;
       next = { ...next, ...run.page };
     }
-    // The free signal (zero calls): today's top-50 jump the queue, once a UTC
-    // day, when the walk next applies anything.
+    // Today's top-50 not marked yet (a visit ran across midnight, or a step
+    // failed before the plan's mark): marked with this apply.
     const today = fanslyUtcDayKey(now);
     if (cursor.topMarkedDay !== today) {
-      const marked = await markMediaStatsTopMediaDirty(tx, {
-        pageId: input.pageId,
-        limit: TOP_MEDIA_MARK_LIMIT,
-        dueAt: now,
-        visitedSince: new Date(now.getTime() - DAY_MS),
-      });
-      counters.top_media_marked = marked.marked;
+      counters.top_media_marked = await markTopMedia(tx, input.pageId, now);
       next = { ...next, topMarkedDay: today };
     }
 

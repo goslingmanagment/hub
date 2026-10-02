@@ -1,4 +1,5 @@
 import type { DemandSignal } from "../../engine/resource.ts";
+import type { PurchaseTarget } from "../resources/purchases.ts";
 import type { WsItem } from "./decode.ts";
 
 // The WebSocket demand router (design §6.2): decoded socket items → demand
@@ -24,7 +25,7 @@ import type { WsItem } from "./decode.ts";
 // | transaction status 1, type ≠ 16012                        | transactions.head (2 s fixed window)           |
 // | transaction status 2 of a pending ledger row              | transactions.rescan (now)                      |
 // | transaction type 16012 (payout)                           | payouts.daily (now)                            |
-// | PPV order                                                 | transactions.head + purchases.targets (media/bundle ids) |
+// | PPV order                                                 | transactions.head + purchases.targets (one per media/bundle) |
 // | wallet                                                    | transactions.head                              |
 // | subscription                                              | transactions.head + subscribers.poll (now)     |
 // | payout request                                            | payouts.daily (now)                            |
@@ -159,13 +160,21 @@ function routeItem(item: WsItem, ctx: RouteContext): DemandSignal[] {
       return [];
     }
     case "order": {
-      const targets = [
-        ...(item.accountMediaId === null ? [] : [`media:${item.accountMediaId}`]),
-        ...(item.accountMediaBundleId === null ? [] : [`bundle:${item.accountMediaBundleId}`]),
+      const targets: PurchaseTarget[] = [
+        ...(item.accountMediaId === null ? [] : [{ kind: "media" as const, id: item.accountMediaId }]),
+        ...(item.accountMediaBundleId === null ? [] : [{ kind: "bundle" as const, id: item.accountMediaBundleId }]),
       ];
+      // One walk row per target, as `purchaseTargetFollowups` names it (the
+      // subject `media:<id>` | `bundle:<id>` and the target in the params): a
+      // row without its target could only be quarantined.
       return [
         { resource: "transactions.head", demand: { reason: "ws:order" } },
-        ...(targets.length === 0 ? [] : [{ resource: "purchases.targets", ids: targets, demand: { reason: "ws:order" } }]),
+        ...targets.map((target): DemandSignal => ({
+          resource: "purchases.targets",
+          subject: `${target.kind}:${target.id}`,
+          params: { target },
+          demand: { reason: "ws:order" },
+        })),
       ];
     }
     case "wallet":

@@ -457,8 +457,13 @@ the hour is too quiet), the pacer's self-check; part B over the past journal —
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
 step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
-`report/shadow-window.ts`: A1.rate, A1.ceiling, A1.floor, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only),
-every report prints the rule it applied.
+`report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.floor, A1.floor-scheduled, A1.floor-queue,
+A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only), every report prints the rule it applied.
+Three of them ask the resource modules read-only questions (`ResourceModule`): `estimateRunSteps` sizes a key on a
+period longer than the hour before its first shadow run (its `shadow()` estimate, A1.rate-assumed), `queueNextDueAt`
+says when a queue walk without a standing row is next asked for (`fan-earnings.roster`, A1.floor-queue), and
+`dueAtLook` re-runs a standing walk's look over the subjects nobody changed since (A1.floor-idle); the registry test
+pins that every such key implements its question.
 
 ## Recipes
 

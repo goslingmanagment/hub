@@ -759,7 +759,20 @@ async function applyReconcileVerify(
   };
 }
 
+/** The steps of a reconcile walk: the start and terminal `/account/me` and
+ *  every followers page to the short one, over the page's follower count
+ *  (the shadow's estimate at a walk's start, and the shadow report's assumed
+ *  run size, rule A1.rate-assumed). */
+async function reconcileWalkSteps(db: Database, pageId: number): Promise<number> {
+  const facts = await readFanslyPageFacts(db, pageId);
+  return offsetWalkPages({ total: facts?.followerCount ?? null, limit: FANSLY_FOLLOWERS_PAGE_LIMIT, statedTotal: false }) + 2;
+}
+
 export const followersReconcileModule: ResourceModule = {
+  async estimateRunSteps(_work, ctx): Promise<number> {
+    return reconcileWalkSteps(ctx.db, ctx.pageId);
+  },
+
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseFollowersReconcileCursor(work.cursor);
     const phase = reconcilePhase(cursor, ctx.shadow);
@@ -797,13 +810,8 @@ export const followersReconcileModule: ResourceModule = {
   async shadow(work, _request, ctx): Promise<ShadowResult> {
     const cursor = parseFollowersReconcileCursor(work.cursor);
     const startedAt = cursor.shadow?.startedAt ?? ctx.now.toISOString();
-    const step = await (async () => {
-      if (cursor.shadow !== null) return advanceShadowWalk(cursor.shadow, () => 1);
-      const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
-      // Start and terminal `/account/me` + every page to the short one.
-      const pages = offsetWalkPages({ total: facts?.followerCount ?? null, limit: FANSLY_FOLLOWERS_PAGE_LIMIT, statedTotal: false });
-      return advanceShadowWalk(null, () => pages + 2);
-    })();
+    const steps = cursor.shadow === null ? await reconcileWalkSteps(ctx.db, ctx.pageId) : cursor.shadow.steps;
+    const step = advanceShadowWalk(cursor.shadow, () => steps);
     if (!step.finished) {
       return {
         work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: { ...step.progress, startedAt } } },

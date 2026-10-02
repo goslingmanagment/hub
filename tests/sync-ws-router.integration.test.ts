@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   acquireSyncPageOwnership,
   getSyncPage,
+  getSyncWork,
   OwnershipLostError,
   type Database,
 } from "@agency_hub_core/db";
@@ -340,7 +341,17 @@ describe("the shadow WS feed (design §6.4)", () => {
       .toEqual([{ state: "done", close_reason: "shadow_no_writes" }]);
     const rows = await work(page.pageId);
     expect(rows.find((row) => row.resource === "dm-messages.head")).toMatchObject({ shadow: true, subject: GROUP, messageIds: [fan.id] });
-    expect(rows.find((row) => row.resource === "purchases.targets")).toMatchObject({ shadow: true });
+    // The PPV order's target is a walk row of its own that plans its order
+    // history read (never a subject-less row quarantined as
+    // `purchase_target_unknown`).
+    const target = rows.find((row) => row.resource === "purchases.targets");
+    expect(target).toMatchObject({ shadow: true, subject: "media:740000000000000001" });
+    expect(target!.state).not.toBe("quarantined");
+    const [targetRow] = await query<{ id: string }>("select id from sync_work where resource = 'purchases.targets' and shadow");
+    const plan = await (await createFanslyRegistry().module("purchases.targets")).plan((await getSyncWork(db(), Number(targetRow!.id)))!, {
+      db: db(), pageId: page.pageId, shadow: true, now: new Date(), page: (await getSyncPage(db(), page.pageId))!, registry: createFanslyRegistry(),
+    });
+    expect(plan).toMatchObject({ kind: "request", request: { spec: "media.order_history", params: { target: { kind: "media", id: "740000000000000001" }, before: null } } });
     expect((await getSyncPage(db(), page.pageId))!.wsRouterCursor).toBe(ids.at(-1));
     // I14: the engine's own tables only; no ack, no overlay, no domain write.
     const changed = changedTables(before, await tableCounts(testDb.pool));

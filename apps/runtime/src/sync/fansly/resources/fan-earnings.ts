@@ -227,6 +227,83 @@ export async function fanEarningsRosterFollowups(
   }];
 }
 
+/**
+ * When the transactions steps of the page next ask for a roster walk, the
+ * queue as it stands at `at` (read-only; the shadow report, rule
+ * A1.floor-queue): the earliest instant `fanEarningsRosterFollowups` finds a
+ * subject due — a mark or retry at its `next_due_at`, a spender of the page
+ * never read at once, one read before at its last read + the roster age, each
+ * no earlier than its open claim or retry hold. Shadow also keeps its pass
+ * rhythm: while a pass runs, at once; within a day of the last pass, a mark
+ * newer than it at its time and everything else when the day is over. Null:
+ * no subject comes due without a new write.
+ */
+export async function fanEarningsRosterNextDueAt(
+  db: Database,
+  input: { pageId: number; at: Date; shadow: boolean; maxAgeMs?: number },
+): Promise<Date | null> {
+  const at = input.at;
+  let passClosedAt: Date | null = null;
+  if (input.shadow) {
+    const pass = await db.execute<{ open: boolean; closedAt: Date | string | null }>(sql`
+      select bool_or(closed_at is null or closed_at > ${at}) as open, max(closed_at) filter (where closed_at <= ${at}) as "closedAt"
+        from sync_work
+       where page_id = ${input.pageId} and shadow and resource = ${FAN_EARNINGS_ROSTER_KEY} and created_at <= ${at}
+    `);
+    const row = pass.rows[0];
+    if (row?.open === true) return at;
+    const closedAt = row?.closedAt ? new Date(row.closedAt) : null;
+    passClosedAt = closedAt !== null && at.getTime() - closedAt.getTime() < FAN_EARNINGS_SHADOW_PASS_EVERY_MS ? closedAt : null;
+  }
+  const fullFrom = passClosedAt === null ? null : new Date(passClosedAt.getTime() + FAN_EARNINGS_SHADOW_PASS_EVERY_MS);
+  const ageMs = input.maxAgeMs ?? FAN_EARNINGS_ROSTER_MAX_AGE_MS;
+  const result = await db.execute<{ dueAt: Date | string | null }>(sql`
+    with planes(plane) as (
+      values ('fan_earnings_lifetime'), ('fan_earnings_monthly')
+    ), roster as (
+      select f.platform_user_id as fan_ref
+        from page_fans pf
+        join fans f on f.id = pf.fan_id
+       where pf.platform_account_id = ${input.pageId}
+         and pf.total_creator_net_mills > 0
+    ), subjects as (
+      -- Each spender of the page in both windows (never read: due at once).
+      select s.next_due_at as marked,
+             coalesce(s.last_visited_at + make_interval(secs => ${ageMs / 1000}), '-infinity'::timestamptz) as aged,
+             greatest(case when s.claim_token is not null then s.claim_expires_at end, s.retry_after_at) as held
+        from roster r
+       cross join planes p
+        left join subject_refresh_state s
+          on s.page_id = ${input.pageId} and s.plane = p.plane and s.subject_ref = r.fan_ref
+      union all
+      -- Marks and retries of subjects that are no spender (any more).
+      select s.next_due_at, null,
+             greatest(case when s.claim_token is not null then s.claim_expires_at end, s.retry_after_at)
+        from subject_refresh_state s
+        join planes p on p.plane = s.plane
+       where s.page_id = ${input.pageId}
+         and s.next_due_at is not null
+         and not exists (select 1 from roster r where r.fan_ref = s.subject_ref)
+    ), due as (
+      select case
+               when ${fullFrom}::timestamptz is null then greatest(least(marked, aged), held)
+               else least(
+                 -- the pass over the marks newer than the last pass
+                 case when marked > ${passClosedAt}::timestamptz then greatest(marked, held) end,
+                 -- the next full pass
+                 greatest(least(marked, aged), held, ${fullFrom}::timestamptz))
+             end as due_at
+        from subjects
+    )
+    select min(due_at) as "dueAt" from due where due_at is not null
+  `);
+  const raw = result.rows[0]?.dueAt ?? null;
+  if (raw === null) return null;
+  const dueAt = raw instanceof Date ? raw : new Date(raw);
+  // '-infinity' (a spender never read): due at once.
+  return Number.isFinite(dueAt.getTime()) ? dueAt : at;
+}
+
 /** The page's open claim of one subject (the actor is its only claimant). */
 async function readClaim(db: Database, input: { pageId: number } & FanEarningsSubject): Promise<FanEarningsClaim | null> {
   const result = await db.execute<{ token: string; revision: string }>(sql`
@@ -415,6 +492,10 @@ export const fanEarningsRosterModule: ResourceModule = {
       },
       followups: [],
     };
+  },
+
+  async queueNextDueAt(ctx) {
+    return fanEarningsRosterNextDueAt(ctx.db, { pageId: ctx.pageId, at: ctx.now, shadow: true });
   },
 
   replay: replayFanEarnings,

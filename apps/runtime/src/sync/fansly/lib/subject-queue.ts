@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+
 import {
   clearSubjectQueueBlocks,
   recordSubjectQueueFailures,
@@ -8,6 +10,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { BLOCKED_PROBE_EVERY_MS, SUBJECT_BLOCK_AFTER, SUBJECT_BREAKER_LADDER_MS } from "../../engine/errors.ts";
+import type { LookCheck } from "../../engine/resource.ts";
 
 // Subject-queue walks of the Fansly Sync Engine (design §4.3, D2).
 //
@@ -128,4 +131,38 @@ export function advanceShadowPass(input: {
     return { pass, nextDueAt: shadowPassWaitUntil(pass, input.now, input.recheckMs) };
   }
   return { pass: { after: last.keyset, startedAt, ended: false }, nextDueAt: input.now };
+}
+
+// ── the shadow report's look check (rule A1.floor-idle) ─────────────────────
+
+/** A look check reads at most this many due subjects of one queue (its count
+ *  is a lower bound past it). */
+export const LOOK_CHECK_LIMIT = 5_000;
+/** Due subjects a look check names. */
+const LOOK_CHECK_EXAMPLES = 5;
+
+/**
+ * What a standing walk's look at `at` should have read (`dueAtLook`): the
+ * subjects its own pick finds due at that instant (`pick`, in walk order, at
+ * most `LOOK_CHECK_LIMIT`), less every subject a writer changed after it — a
+ * subject legacy read, dirtied or seeded since stands as it does now, not as
+ * the look saw it. Read-only.
+ */
+export async function dueAtLookOf(
+  db: Database,
+  input: { pageId: number; plane: string; at: Date; pick: (limit: number) => Promise<ReadonlyArray<{ subjectRef: string }>> },
+): Promise<LookCheck> {
+  const picked = [...new Set((await input.pick(LOOK_CHECK_LIMIT)).map((subject) => subject.subjectRef))];
+  if (picked.length === 0) return { count: 0, examples: [] };
+  const result = await db.execute<{ subjectRef: string }>(sql`
+    select subject_ref as "subjectRef"
+      from subject_refresh_state
+     where page_id = ${input.pageId}
+       and plane = ${input.plane}
+       and subject_ref = any(${sql.param(picked)}::text[])
+       and updated_at <= ${input.at}
+  `);
+  const untouched = new Set(result.rows.map((row) => row.subjectRef));
+  const due = picked.filter((ref) => untouched.has(ref));
+  return { count: due.length, examples: due.slice(0, LOOK_CHECK_EXAMPLES) };
 }

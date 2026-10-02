@@ -838,7 +838,20 @@ function restartOrWithhold(
   };
 }
 
+/** The pages a full sweep of the list reads: the page's visible chats at
+ *  `LIMIT` a page, the list stating no total, so it ends on a short page (the
+ *  shadow's estimate at a sweep's start, and the shadow report's assumed run
+ *  size, rule A1.rate-assumed). */
+async function fullSweepPages(db: Database, pageId: number): Promise<number> {
+  const total = await countPageDmVisibleThreads(db, pageId);
+  return offsetWalkPages({ total, limit: LIMIT, statedTotal: false });
+}
+
 const fullModule: ResourceModule = {
+  async estimateRunSteps(_work, ctx): Promise<number> {
+    return fullSweepPages(ctx.db, ctx.pageId);
+  },
+
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseDmListFullCursor(work.cursor);
     const offset = ctx.shadow ? (cursor.shadow?.done ?? 0) * LIMIT : cursor.walk?.offset ?? 0;
@@ -930,9 +943,8 @@ const fullModule: ResourceModule = {
 
   async shadow(work, _request, ctx): Promise<ShadowResult> {
     const cursor = parseDmListFullCursor(work.cursor);
-    const total = await countPageDmVisibleThreads(ctx.db, ctx.pageId);
-    // The list states no total: the walk ends on a short page.
-    const step = advanceShadowWalk(cursor.shadow, () => offsetWalkPages({ total, limit: LIMIT, statedTotal: false }));
+    const pages = cursor.shadow === null ? await fullSweepPages(ctx.db, ctx.pageId) : cursor.shadow.steps;
+    const step = advanceShadowWalk(cursor.shadow, () => pages);
     const states = await listPageDmThreadListStatesByRecency(ctx.db, {
       platformAccountId: ctx.pageId,
       offset: (step.progress.done - 1) * LIMIT,

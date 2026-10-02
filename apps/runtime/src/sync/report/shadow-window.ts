@@ -16,6 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { quantileOf } from "../engine/metrics.ts";
+import type { SettingsSource } from "../engine/ports.ts";
 import {
   effectiveCadence,
   effectivePeriodMs,
@@ -24,8 +25,10 @@ import {
   runsIn,
   type CoalesceSpec,
   type DemandSignal,
+  type EngineRegistry,
+  type LookCheck,
 } from "../engine/resource.ts";
-import { FANSLY_RESOURCE_SPECS, type LegacyRef, type ResourceSpec } from "../fansly/registry.ts";
+import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type LegacyRef, type ResourceSpec } from "../fansly/registry.ts";
 import { decodedReceiptsInWindow } from "../fansly/ws/money-frames.ts";
 import { routeReceiptsOffline } from "../fansly/ws/route-receipt.ts";
 import { FANSLY_PAYOUT_TRANSACTION_TYPE, FANSLY_TRANSACTION_STATUS_NEW } from "../fansly/ws/router.ts";
@@ -58,6 +61,17 @@ export const RUNAWAY_RUN = { factor: 2, slackSteps: 10 } as const;
 export const POLL_DUE_SLACK_MS = 120_000;
 /** Clock tolerance of the early-run check. */
 const EARLY_TOLERANCE_MS = 1_000;
+/** A standing walk's look is re-run this long before its row's update (the
+ *  plan's clock ran before its commit; rule A1.floor-idle). */
+export const LOOK_CLOCK_TOLERANCE_MS = 60_000;
+/**
+ * A subject-queue walk without a standing row is asked for by the steps of
+ * these polls whenever its queue holds a due subject (rule A1.floor-queue):
+ * `fan-earnings.roster` by every transactions step (`fanEarningsRosterFollowups`).
+ */
+export const QUEUE_WALK_DRIVERS: Readonly<Record<string, readonly string[]>> = {
+  "fan-earnings.roster": ["transactions.insurance", "transactions.rescan"],
+};
 /** The legacy volume of a stream is compared over the legacy week (A2.rate). */
 const LEGACY_WEEK_MS = 7 * DAY_MS;
 /** A resource outside this ratio of its expectation is listed with its reason. */
@@ -87,7 +101,8 @@ const LEGACY_VOLUME_NOTES: Readonly<Record<string, string>> = {
   "stream:followers_reconcile": "the reconcile walk runs at most daily (the owner's floor)",
   "stream:dm_conversations": "the full list sweep is daily instead of 6-hourly; the socket and .head every 30 min cover discovery (A14)",
   "stream:dm_messages": "only chats with demand are read (socket, list follow-ups); no B1 5 % cap, no history walk without a request",
-  "stream:media_stats": "owner decision №6 tiers (30 / 90 days / monthly)",
+  "stream:media_stats": "owner decision №6 tiers (30 / 90 days / monthly); legacy's figure also holds its immediate 5xx retries, "
+    + "which the engine never makes (the §9 queue breaker)",
   "stream:catalog": "owner decision №6: the vault walk is a daily incremental and a weekly full sweep",
   "stream:transactions": "the head is read on socket money news; the insurance poll every 5 min, the rescan hourly",
   "stream:notifications": "one forward poll every 30 min",
@@ -142,8 +157,22 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
       + "window's attempts of a run that came early (a demand bump, an owner's walk within the interval), and those of "
       + "any other run beyond its first run-size requests (a run that never finishes or grows past the sizing run "
       + "counts as it steps). A walk still stepping inside the window with more than 2 × its largest earlier walk + 10 "
-      + "requests is a runaway and fails A1 on any page. Without a sizing run the steady state is unknown and A1 fails "
-      + "until the key has run.",
+      + "requests is a runaway and fails A1 on any page. Without a sizing run it counts at its assumed size (rule "
+      + "A1.rate-assumed); a key with neither is unknown and A1 fails until the key has run.",
+  },
+  {
+    id: "A1.rate-assumed",
+    text: "A key counted at its rate with no finished shadow run of its own on the page counts at the steps its shadow "
+      + "run would take if it started at the window end: the estimate the key's shadow step fixes at a run's start, by "
+      + "the same code, over the page's facts in the report's snapshot (design §3.12 \"Walk progress\": computed, not "
+      + "guessed) — a single-request poll 1; a snapshot sequence its reads (catalog.fixed 6, 5 without the page's own "
+      + "account id; payouts.daily 2; stats.daily its 10 reads, the discovery list's second page and 2 more pages per "
+      + "broadcast list not at its floor); an offset walk floor(total / 100) + 1 over the page's own count "
+      + "(dm-conversations.full its visible chats, followers.reconcile its follower count + the start and verify reads); "
+      + "posts.refresh 2 × (ceil(the stored posts of its look-back / 15) + 1). In shadow the measured size is this same "
+      + "estimate, so no margin is added. The page says the ceiling stands on assumed sizes and names them; the key's "
+      + "first finished run replaces its assumption, and a run that grows past it counts its excess as it steps (rule "
+      + "A1.rate).",
   },
   {
     id: "A1.ceiling",
@@ -161,7 +190,8 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
       + "A stream only demand drives (the socket, an apply, an owner's or the API's request; no key recurs by itself) "
       + "needs no volume on the page: the page's own demand rows hold the reads its frames imply against the shadow's, "
       + "so it is listed. Counterparts that never run in shadow by design — live-only keys, history requests — are "
-      + "listed, not required.",
+      + "listed, not required, and so is a stream whose recurring keys found nothing due on the page (rules "
+      + "A1.floor-queue, A1.floor-idle).",
   },
   {
     id: "A1.floor-scheduled",
@@ -175,6 +205,31 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
       + "the history passes the recurrence). Why: a one-hour window cannot observe a daily key's first run; the engine's "
       + "schedule, with rule A1.poll-schedule failing a late poll, keeps the no-missing-coverage check without waiting a day "
       + "(owner decision, 2026-10-02).",
+  },
+  {
+    id: "A1.floor-queue",
+    text: "A subject-queue walk without a standing row (fan-earnings.roster) recurs through its queue, not through a "
+      + "row: the steps of its driver (every transactions step, the 5-minute insurance poll among them) ask for a walk "
+      + "whenever a subject is due. Without a shadow attempt on the page and without an open row at the window end, "
+      + "the key is idle — at any history length — while its queue, as the shadow walks it (its daily pass rhythm "
+      + "included; read as it stands at the report), holds no subject due by the window end − 2 min; the report names "
+      + "the next subject's due time. A subject due earlier and no row leaves the stream not yet judgeable, and lacking "
+      + "once it has been due longer than 1.1 × the driver's period + 2 min. An open row is judged by rule "
+      + "A1.floor-scheduled at any history length.",
+  },
+  {
+    id: "A1.floor-idle",
+    text: "A standing walk over a queue other writers keep current (media-stats.walk, posts.engagement, "
+      + "post-replies.walk, catalog.vault) reads only what is due, so while legacy still reads the same queues the "
+      + "shadow often finds nothing due. Without a shadow attempt on the page such a key is idle — at any history "
+      + "length — when its row, open at the window end, looked at its queue and found nothing due (its last plan set "
+      + "a re-check without a read), that look's next look is due no later than the look + the key's re-check + 2 min "
+      + "and was not overdue at the window end (the row is read as it stands at the report: a look after the window end "
+      + "counts within the re-check + 2 min after it), and the key's own shadow pick, re-run read-only at the look (1 min "
+      + "before the row's update), finds no subject due among those no writer has changed since — one that legacy read, dirtied or "
+      + "seeded after the look stands as it does now. A subject that pick finds is a look that missed due work: the "
+      + "stream lacks a counterpart at once. Any other fault leaves it not yet judgeable, and lacking past the "
+      + "re-check + 2 min of history. A row that never looked yet is judged by rule A1.floor-scheduled.",
   },
   {
     id: "A1.poll-schedule",
@@ -486,6 +541,9 @@ export interface RateCount {
   beyond: number;
   /** runSize × window / period + extra + beyond; null without a run size. */
   counted: number | null;
+  /** What sized it: its own finished run, the shadow's run estimate (rule
+   *  A1.rate-assumed), or nothing. */
+  sizedBy: "run" | "assumed" | null;
 }
 
 /** How far back a key with this period is read (its anchor, its newest run). */
@@ -513,6 +571,9 @@ export function rateCount(input: {
   runs: readonly KeyRun[];
   kind: "poll" | "interval";
   single?: boolean;
+  /** The steps of a shadow run started at the window end (rule
+   *  A1.rate-assumed): the size while no finished run sizes the key. */
+  assumedSize?: number | null;
 }): RateCount {
   const { periodMs, window, runs } = input;
   const early = runs.map((run, index) => {
@@ -532,7 +593,10 @@ export function rateCount(input: {
   const newestIndex = (regular: boolean) => finished.findLastIndex((done, index) => done && (!regular || !early[index]));
   const sizing = newestIndex(true) >= 0 ? newestIndex(true) : newestIndex(false);
   const newest = sizing >= 0 ? runs[sizing]! : null;
-  const runSize = newest === null ? null : newest.sentMs.length;
+  const assumed = newest === null && input.assumedSize !== undefined && input.assumedSize !== null && input.assumedSize >= 1
+    ? input.assumedSize
+    : null;
+  const runSize = newest !== null ? newest.sentMs.length : assumed;
   let extra = 0;
   let beyond = 0;
   for (const [index, run] of runs.entries()) {
@@ -546,6 +610,7 @@ export function rateCount(input: {
     extra,
     beyond,
     counted: runSize === null ? null : runSize * ((window.endMs - window.startMs) / periodMs) + extra + beyond,
+    sizedBy: newest !== null ? "run" : assumed !== null ? "assumed" : null,
   };
 }
 
@@ -568,19 +633,29 @@ export function ratePeriodMs(spec: ResourceSpec, page: Pick<SyncPageRow, "regist
 
 /**
  * How often a key recurs by itself on a page: a poll's period, a walk's
- * minimum interval, a standing walk's re-check, a cadence goal's period; 0
- * when the socket drives it (any hour may hold its reads); null without a
- * recurrence of its own (one-time backfills, api/owner/request, apply
- * follow-ups) or switched off on the page.
+ * minimum interval, a standing walk's re-check, a subject-queue walk's
+ * cadence (the roster's daily pass); 0 when the socket drives it (any hour
+ * may hold its reads); null without a recurrence of its own (one-time
+ * backfills, api/owner/request, apply follow-ups) or switched off on the
+ * page. A cadence counts only for a subject-queue walk: elsewhere it is no
+ * schedule the engine keeps.
  */
 export function recurrenceMs(spec: ResourceSpec, page: Pick<SyncPageRow, "registryOverrides">): number | null {
   if (resourceDisabled(page, spec.key)) return null;
   if (spec.kind === "poll") return effectivePeriodMs(spec, page);
   if (spec.minIntervalMs !== undefined) return spec.minIntervalMs;
   if (spec.standing !== undefined) return spec.standing.recheckMs;
-  const cadence = effectiveCadence(spec, page);
-  if (cadence !== null) return cadence.everyMs;
+  if (spec.subjectQueue === true) {
+    const cadence = effectiveCadence(spec, page);
+    if (cadence !== null) return cadence.everyMs;
+  }
   return spec.triggers.some((trigger) => trigger.startsWith("ws")) ? 0 : null;
+}
+
+/** A subject-queue walk without a standing row: its driver's steps ask for a
+ *  walk whenever its queue holds a due subject (rule A1.floor-queue). */
+export function isQueueWalk(spec: Pick<ResourceSpec, "subjectQueue" | "standing">): boolean {
+  return spec.subjectQueue === true && spec.standing === undefined;
 }
 
 export type LegacyBasis = "window" | "7d_rate" | "live_only";
@@ -676,6 +751,11 @@ export interface CounterpartCheck {
    *  its shadow work row on the page on schedule at the window end, its first
    *  run not due yet (rule A1.floor-scheduled; does not fail the exception). */
   scheduled: Array<{ ref: string; why: string }>;
+  /** A legacy stream whose every self-recurring key found nothing due on the
+   *  page: a queue walk whose queue holds no due subject (rule
+   *  A1.floor-queue), a standing walk whose verified look found none (rule
+   *  A1.floor-idle). Listed; does not fail the exception. */
+  idle: Array<{ ref: string; why: string }>;
   /** A legacy stream only demand drives (no key recurs by itself) without a
    *  shadow attempt on the page: none was due by the page's own frames and
    *  applies, which its demand rows judge (listed, not required). */
@@ -692,8 +772,19 @@ export interface PageShadowHistory {
   /** That history's length; null without a shadow admission. */
   historyMs: number | null;
   /** The page's shadow work rows open at the window end (`endMs`), per key
-   *  (rule A1.floor-scheduled). Absent: no stream is judged scheduled. */
-  schedule?: { endMs: number; rows: ReadonlyMap<string, readonly ScheduleRow[]> };
+   *  (rule A1.floor-scheduled), and the queues of its queue walks (rule
+   *  A1.floor-queue). Absent: no stream is judged scheduled or idle. */
+  schedule?: { endMs: number; rows: ReadonlyMap<string, readonly ScheduleRow[]>; queues?: ReadonlyMap<string, QueueFact> };
+}
+
+/** A queue walk's queue at the window end (rule A1.floor-queue). */
+export interface QueueFact {
+  /** When the shadow's driver next asks for a walk (`queueNextDueAt`); null:
+   *  no subject comes due without a new write. */
+  nextDueMs: number | null;
+  /** A due subject has its walk row within this long (1.1 × the driver's
+   *  period + the admission slack). */
+  askedWithinMs: number;
 }
 
 /** A key's shadow work row on a page, open at the window end (rule A1.floor-scheduled). */
@@ -708,6 +799,9 @@ export interface ScheduleRow {
   /** When a plan last found nothing due and set its re-check without a read
    *  (`waiting_reason` not_due; the row's `updated_at`); null otherwise. */
   recheckedMs?: number | null;
+  /** A standing walk's look re-run at `recheckedMs` − the clock tolerance
+   *  (its `dueAtLook`, rule A1.floor-idle); absent when not run. */
+  dueAtLook?: LookCheck | { error: string };
 }
 
 /** Whether a key's work on the page is on its schedule at the window end. */
@@ -754,8 +848,137 @@ export function keyOnSchedule(input: { key: string; rows: readonly ScheduleRow[]
   return { onSchedule: true, what: what.join(" and ") };
 }
 
+/** A walk judged by its queue or its looks (rules A1.floor-queue,
+ *  A1.floor-idle): `idle` when it found nothing due; `missed` when its queue
+ *  or its look check shows due work it did not take — a gap at once. */
+export type WalkStanding =
+  | { onSchedule: true; idle: boolean; what: string }
+  | { onSchedule: false; missed: boolean; fault: string };
+
+/**
+ * Rule A1.floor-queue for a subject-queue walk without an open row at the
+ * window end: idle while its queue (as the shadow walks it) holds no subject
+ * due by the window end − the admission slack; a subject due earlier is not
+ * yet judgeable until its driver has had `askedWithinMs` to ask for the walk,
+ * then missed.
+ */
+export function queueOnSchedule(input: { key: string; queue: QueueFact; endMs: number }): WalkStanding {
+  const { key, queue, endMs } = input;
+  if (queue.nextDueMs === null) return { onSchedule: true, idle: true, what: `${key}: queue idle, no subject comes due without a new write` };
+  if (queue.nextDueMs + POLL_DUE_SLACK_MS >= endMs) {
+    return { onSchedule: true, idle: true, what: `${key}: queue idle, its next subject due ${iso(queue.nextDueMs)}` };
+  }
+  const asked = `its walk row is asked within ${minutesText(queue.askedWithinMs)} of a due subject`;
+  return queue.nextDueMs + queue.askedWithinMs < endMs
+    ? { onSchedule: false, missed: true, fault: `${key}: a subject due ${iso(queue.nextDueMs)} and no walk row by the window end (${asked})` }
+    : { onSchedule: false, missed: false, fault: `${key}: a subject due ${iso(queue.nextDueMs)}, no walk row yet (${asked})` };
+}
+
+/**
+ * Rule A1.floor-idle for a standing walk with no shadow attempt on the page:
+ * every row of the key open at the window end looked at its queue in time and
+ * found nothing due — its next look no later than the look + its re-check +
+ * the slack, not overdue at the window end (a look after the window end, the
+ * row as it stands now, counts within the re-check + the slack after it: the
+ * walk still looks on its re-check), and its own pick re-run at the look
+ * found no due subject untouched since (`dueAtLook`). A row that never looked
+ * is judged as a first run (`keyOnSchedule`); a read by its bound is on
+ * schedule.
+ */
+export function standingWalkOnSchedule(input: { key: string; rows: readonly ScheduleRow[]; recurrenceMs: number; endMs: number }): WalkStanding {
+  const { key, recurrenceMs, endMs } = input;
+  if (input.rows.length === 0) return { onSchedule: false, missed: false, fault: `${key}: no shadow work row on the page at the window end` };
+  const what: string[] = [];
+  let idle = true;
+  for (const row of input.rows) {
+    const lookMs = row.recheckedMs ?? null;
+    if (row.firstAdmittedMs !== null || row.quarantined || lookMs === null) {
+      const first = keyOnSchedule({ key, rows: [row], recurrenceMs, endMs });
+      if (!first.onSchedule) return { onSchedule: false, missed: false, fault: first.fault };
+      what.push(first.what);
+      idle = false;
+      continue;
+    }
+    const nextBoundMs = lookMs + recurrenceMs + POLL_DUE_SLACK_MS;
+    const lateLookBoundMs = endMs + recurrenceMs + POLL_DUE_SLACK_MS;
+    const look = `looked ${iso(lookMs)}${lookMs > endMs ? " (after the window end)" : ""}`;
+    if (lookMs > lateLookBoundMs) {
+      return {
+        onSchedule: false, missed: false,
+        fault: `${key}: ${look}, later than the window end + ${durationText(recurrenceMs)} + 2 min = ${iso(lateLookBoundMs)}: `
+          + "its state at the window end is not known — report a window that ends nearer to it",
+      };
+    }
+    if (lookMs <= endMs && row.dueMs + POLL_DUE_SLACK_MS < endMs) {
+      return { onSchedule: false, missed: false, fault: `${key}: ${look}, its next look due ${iso(row.dueMs)} and not taken by the window end` };
+    }
+    if (row.dueMs > nextBoundMs) {
+      return {
+        onSchedule: false, missed: false,
+        fault: `${key}: ${look}, its next look due ${iso(row.dueMs)}, later than the look + ${durationText(recurrenceMs)} + 2 min = ${iso(nextBoundMs)}`,
+      };
+    }
+    const check = row.dueAtLook;
+    if (check === undefined) return { onSchedule: false, missed: false, fault: `${key}: ${look} and found nothing due; no look check verifies it` };
+    if ("error" in check) return { onSchedule: false, missed: false, fault: `${key}: ${look}; its look check failed: ${check.error}` };
+    if (check.count > 0) {
+      return {
+        onSchedule: false, missed: true,
+        fault: `${key}: ${look} and found nothing due, yet its own pick re-run there finds ${check.count} due and untouched since (${check.examples.join(", ")})`,
+      };
+    }
+    what.push(`${key} ${look}, nothing due (its pick re-run there: none due and untouched since); next look ${iso(row.dueMs)} (by the look + ${durationText(recurrenceMs)} + 2 min)`);
+  }
+  return { onSchedule: true, idle, what: what.join(" and ") };
+}
+
 function hoursText(ms: number): string {
   return `${roundTo2(ms / HOUR_MS)} h`;
+}
+
+type FloorRule = "A1.floor-scheduled" | "A1.floor-queue" | "A1.floor-idle";
+
+/** How one self-recurring key of a stream without a shadow attempt on the
+ *  page stands at the window end (rule A1.floor and its named exceptions). */
+type KeyStanding =
+  | { ok: true; idle: boolean; what: string }
+  | { ok: false; lacking: boolean; rule: FloorRule | null; fault: string | null };
+
+function keyStanding(spec: ResourceSpec, recurrence: number, shadow: PageShadowHistory): KeyStanding {
+  const historyMs = shadow.historyMs;
+  const past = historyMs !== null && historyMs >= recurrence + POLL_DUE_SLACK_MS;
+  const plan = shadow.schedule;
+  if (historyMs === null || plan === undefined) return { ok: false, lacking: past, rule: null, fault: null };
+  const rows = plan.rows.get(spec.key) ?? [];
+  const queue = plan.queues?.get(spec.key);
+  if (isQueueWalk(spec) && rows.length === 0 && queue !== undefined) {
+    const judged = queueOnSchedule({ key: spec.key, queue, endMs: plan.endMs });
+    return judged.onSchedule
+      ? { ok: true, idle: true, what: judged.what }
+      : { ok: false, lacking: judged.missed, rule: "A1.floor-queue", fault: judged.fault };
+  }
+  if (spec.standing !== undefined) {
+    const judged = standingWalkOnSchedule({ key: spec.key, rows, recurrenceMs: recurrence, endMs: plan.endMs });
+    return judged.onSchedule
+      ? { ok: true, idle: judged.idle, what: judged.what }
+      : { ok: false, lacking: past || judged.missed, rule: "A1.floor-idle", fault: judged.fault };
+  }
+  // A queue walk's open row, at any history length (rule A1.floor-queue);
+  // any other key only while its first run may not be due yet.
+  if (past && !isQueueWalk(spec)) return { ok: false, lacking: true, rule: null, fault: null };
+  const judged = keyOnSchedule({ key: spec.key, rows, recurrenceMs: recurrence, endMs: plan.endMs });
+  return judged.onSchedule
+    ? { ok: true, idle: false, what: judged.what }
+    : { ok: false, lacking: past, rule: "A1.floor-scheduled", fault: judged.fault };
+}
+
+/** The faults of a stream's keys, grouped by the rule that names them. */
+function faultsText(faults: ReadonlyArray<{ rule: FloorRule | null; fault: string | null }>): string {
+  const rules: FloorRule[] = ["A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle"];
+  return rules.map((rule) => {
+    const named = faults.flatMap((entry) => entry.rule === rule && entry.fault !== null ? [entry.fault] : []);
+    return named.length === 0 ? "" : `; not on its schedule (rule ${rule}): ${named.join("; ")}`;
+  }).join("");
 }
 
 /**
@@ -764,13 +987,15 @@ function hoursText(ms: number): string {
  * counterpart on the same page: a registry key that runs in shadow there (not
  * live-only, not switched off, not a history request) and has shadow attempts
  * on the page within its shadow history (rule A1.floor). Other pages' volume
- * never counts. Without an attempt yet, a page whose history is shorter than
- * the stream's shortest key recurrence (+ the admission slack) is not yet
- * judgeable — scheduled instead when every recurring key's row is on its
- * schedule at the window end (rule A1.floor-scheduled, `keyOnSchedule`) —
- * and past it lacks one. A stream only demand drives (the socket,
- * an apply, an owner's or the API's request) needs no volume: the page's
- * demand rows hold its frames' reads against the shadow's, so it is listed.
+ * never counts. Without an attempt yet, each key that recurs by itself is
+ * judged at the window end: a key whose first run may not be due yet by its
+ * row's schedule (rule A1.floor-scheduled, `keyOnSchedule`), a queue walk by
+ * its queue (rule A1.floor-queue), a standing walk by its verified looks (rule
+ * A1.floor-idle). Every key on schedule: scheduled, or idle when each found
+ * nothing due; a missed due subject or a key past its recurrence: lacking;
+ * else not yet judgeable. A stream only demand drives (the socket, an apply,
+ * an owner's or the API's request) needs no volume: the page's demand rows
+ * hold its frames' reads against the shadow's, so it is listed.
  */
 export function legacyCounterparts(input: {
   page: Pick<SyncPageRow, "registryOverrides">;
@@ -778,7 +1003,7 @@ export function legacyCounterparts(input: {
   specsByRef: ReadonlyMap<string, readonly ResourceSpec[]>;
   shadow: PageShadowHistory;
 }): CounterpartCheck {
-  const check: CounterpartCheck = { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] };
+  const check: CounterpartCheck = { lacking: [], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [] };
   for (const [ref, attempts] of [...input.legacy].sort(([a], [b]) => a.localeCompare(b))) {
     if (attempts <= 0) continue;
     const specs = input.specsByRef.get(ref) ?? [];
@@ -798,7 +1023,7 @@ export function legacyCounterparts(input: {
     const history = historyMs === null ? "no shadow history" : `${hoursText(historyMs)} of shadow history`;
     const periodic = steady.flatMap((spec) => {
       const ms = recurrenceMs(spec, input.page);
-      return ms !== null && ms > 0 ? [{ key: spec.key, ms }] : [];
+      return ms !== null && ms > 0 ? [{ spec, ms }] : [];
     });
     if (periodic.length === 0) {
       check.onDemand.push({
@@ -807,30 +1032,26 @@ export function legacyCounterparts(input: {
       });
       continue;
     }
-    const dueWithinMs = Math.min(...periodic.map((entry) => entry.ms)) + POLL_DUE_SLACK_MS;
-    if (historyMs === null || historyMs < dueWithinMs) {
-      // Rule A1.floor-scheduled: the engine holds every recurring key's first
-      // run on its schedule, not yet due.
-      const plan = input.shadow.schedule;
-      const keys = historyMs === null || plan === undefined
-        ? null
-        : periodic.map((entry) => keyOnSchedule({ key: entry.key, rows: plan.rows.get(entry.key) ?? [], recurrenceMs: entry.ms, endMs: plan.endMs }));
-      if (keys !== null && keys.every((key) => key.onSchedule)) {
-        check.scheduled.push({
-          ref,
-          why: `legacy ${attempts} on its A2 basis, the shadow none yet in ${history} on the page; on its schedule: ${keys.map((key) => key.onSchedule ? key.what : "").join("; ")}`,
-        });
-        continue;
+    const keys = periodic.map((entry) => keyStanding(entry.spec, entry.ms, input.shadow));
+    const faults = keys.flatMap((key) => key.ok ? [] : [key]);
+    if (faults.length === 0) {
+      const what = keys.map((key) => key.ok ? key.what : "").join("; ");
+      if (keys.every((key) => key.ok && key.idle)) {
+        check.idle.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; nothing due: ${what}` });
+      } else {
+        check.scheduled.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none yet in ${history} on the page; on its schedule: ${what}` });
       }
-      const off = keys === null ? [] : keys.flatMap((key) => key.onSchedule ? [] : [key.fault]);
-      check.pending.push({
-        ref,
-        why: `not yet judgeable: legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; its keys' first run is due within ${hoursText(dueWithinMs)} of the shadow's start`
-          + `${off.length === 0 ? "" : `; not on its schedule (rule A1.floor-scheduled): ${off.join("; ")}`}`,
-      });
-    } else {
-      check.lacking.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page` });
+      continue;
     }
+    if (faults.some((fault) => fault.lacking)) {
+      check.lacking.push({ ref, why: `legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page${faultsText(faults)}` });
+      continue;
+    }
+    const dueWithinMs = Math.min(...periodic.map((entry) => entry.ms)) + POLL_DUE_SLACK_MS;
+    check.pending.push({
+      ref,
+      why: `not yet judgeable: legacy ${attempts} on its A2 basis, the shadow none in ${history} on the page; its keys' first run is due within ${hoursText(dueWithinMs)} of the shadow's start${faultsText(faults)}`,
+    });
   }
   return check;
 }
@@ -925,6 +1146,12 @@ export interface ShadowWindowInput {
   pages: readonly SyncPageRow[];
   resolvePayload?: FanslyWsLivePayloadResolver;
   maxListed: number;
+  /** The modules' read-only report checks (`estimateRunSteps`, `dueAtLook`,
+   *  `queueNextDueAt`); absent or not implemented: the rule they serve does
+   *  not apply (an unknown run size, an unverified look, a queue not read). */
+  registry?: Pick<EngineRegistry, "module">;
+  /** The live settings those checks read (absent: the registry defaults). */
+  settings?: SettingsSource;
 }
 
 export interface DemandRow {
@@ -957,12 +1184,19 @@ export interface PageDemand {
   steadyState: number;
   /** The same with every key as observed in the window. */
   steadyStateRaw: number;
-  /** Keys counted at their rate without a finished run to size them. */
+  /** Keys counted at their rate without a finished run or an estimate to
+   *  size them (the ceiling is unknown). */
   unknownRunSize: string[];
+  /** Keys counted at their rate on their assumed run size (rule
+   *  A1.rate-assumed): no finished shadow run of their own yet. */
+  assumedRunSize: Array<{ resource: string; steps: number; periodMs: number }>;
   band: { min: number; max: number };
   inBand: boolean;
   /** Rule A1.ceiling: at most `band.max`; unknown while a run size is. */
   ceiling: "ok" | "over" | "unknown";
+  /** What the steady state stands on: every rate key sized by its own run,
+   *  or some on their assumed size (rule A1.rate-assumed). */
+  ceilingBasis: "measured" | "assumed";
   /** Rule A1.floor: below `band.min`, whether its exception holds. */
   floor: { below: boolean; holds: boolean | null; outside: string[]; counterparts: CounterpartCheck };
   /** Polls off schedule (rule A1.poll-schedule). */
@@ -1184,6 +1418,9 @@ export interface PageRunFacts {
   placements: ReadonlyMap<string, number>;
   /** The page's first shadow admission: a poll without a row was placed then. */
   firstShadowMs: number | null;
+  /** Per rate key, the steps of a shadow run started at the window end (rule
+   *  A1.rate-assumed); a key without an estimate is absent. */
+  assumedSizes?: ReadonlyMap<string, number>;
 }
 
 const NO_RUN_FACTS: PageRunFacts = { runs: new Map(), placements: new Map(), firstShadowMs: null };
@@ -1228,6 +1465,7 @@ export function demandOfPage(
   let steadyState = 0;
   let steadyStateRaw = 0;
   const unknownRunSize: string[] = [];
+  const assumedRunSize: PageDemand["assumedRunSize"] = [];
   const scheduleFaults: string[] = [];
   const attempts = { urgent: 0, requests: 0, planned: 0 };
   const count = (key: string, observed: number, rate: RateCount | null) => {
@@ -1235,11 +1473,13 @@ export function demandOfPage(
     if (rate === null) {
       steadyState += observed;
     } else if (rate.counted === null) {
-      // Without a run to size it, only what the window saw (a lower bound).
+      // Without a run or an estimate to size it, only what the window saw (a
+      // lower bound).
       steadyState += observed;
       unknownRunSize.push(key);
     } else {
       steadyState += rate.counted;
+      if (rate.sizedBy === "assumed") assumedRunSize.push({ resource: key, steps: rate.runSize!, periodMs: rate.periodMs });
     }
   };
   for (const key of [...keys].sort()) {
@@ -1252,7 +1492,13 @@ export function demandOfPage(
     const ratePeriod = spec === undefined ? null : ratePeriodMs(spec, page, windowMs);
     const rate = ratePeriod === null
       ? null
-      : rateCount({ ...ratePeriod, window: input.window, runs, single: spec !== undefined && runGroupingOf(spec) === "single" });
+      : rateCount({
+        ...ratePeriod,
+        window: input.window,
+        runs,
+        single: spec !== undefined && runGroupingOf(spec) === "single",
+        assumedSize: input.facts.assumedSizes?.get(key) ?? null,
+      });
     if (spec?.kind === "goal") {
       const oneTimeBacklog = isOneTimeWalk(spec);
       walks.push({ resource: key, observed, oneTimeBacklog });
@@ -1266,9 +1512,12 @@ export function demandOfPage(
       const reason = rate === null
         ? "a recurring walk: its steps are not modelled per resource; counted in the steady state as observed"
         : rate.counted === null
-          ? `a walk at most every ${durationText(rate.periodMs)}: no finished walk to size it yet (rule A1.rate)`
-          : `a walk at most every ${durationText(rate.periodMs)}: counted at its rate, ${rate.runSize} steps per `
-            + `${durationText(rate.periodMs)} (the walk of ${rate.runAt!.toISOString()}${besidesText(rate)}; rule A1.rate)`;
+          ? `a walk at most every ${durationText(rate.periodMs)}: no finished walk to size it yet and no estimate (rule A1.rate)`
+          : rate.sizedBy === "assumed"
+            ? `a walk at most every ${durationText(rate.periodMs)}: no finished walk yet, counted at its assumed ${rate.runSize} steps per `
+              + `${durationText(rate.periodMs)}${besidesText(rate)} (rule A1.rate-assumed)`
+            : `a walk at most every ${durationText(rate.periodMs)}: counted at its rate, ${rate.runSize} steps per `
+              + `${durationText(rate.periodMs)} (the walk of ${rate.runAt!.toISOString()}${besidesText(rate)}; rule A1.rate)`;
       rows.push({
         resource: key,
         class: workClass,
@@ -1326,9 +1575,11 @@ export function demandOfPage(
     steadyState,
     steadyStateRaw,
     unknownRunSize,
+    assumedRunSize,
     band,
     inBand: steadyState >= band.min && steadyState <= band.max,
     ceiling,
+    ceilingBasis: assumedRunSize.length > 0 ? "assumed" : "measured",
     floor: { below, holds, outside: outside.map((row) => row.resource), counterparts: input.counterparts },
     scheduleFaults,
     passes: ceiling === "ok" && scheduleFaults.length === 0 && (!below || holds === true),
@@ -1369,7 +1620,13 @@ function pollRow(input: {
     + `${sizes.length === 0 ? "" : sizes.every((n) => n === 1) ? ` × 1 request` : ` of ${sizes.join(", ")} requests`}`
     + `${schedule.demandRuns === 0 ? "" : ` (${schedule.demandRuns} on a demand bump)`}; ${schedule.expectedRuns.min}–${schedule.expectedRuns.max} due `
     + `every ${durationText(input.periodMs)} ±10 %`
-    + `${input.rate === null ? "" : input.rate.counted === null ? "; no finished run to size its rate" : `; counted at its rate, ${input.rate.runSize} per ${durationText(input.periodMs)}${besidesText(input.rate)}`}`;
+    + `${input.rate === null
+      ? ""
+      : input.rate.counted === null
+        ? "; no finished run to size its rate and no estimate"
+        : input.rate.sizedBy === "assumed"
+          ? `; no finished run yet: counted at its assumed ${input.rate.runSize} per ${durationText(input.periodMs)}${besidesText(input.rate)} (rule A1.rate-assumed)`
+          : `; counted at its rate, ${input.rate.runSize} per ${durationText(input.periodMs)}${besidesText(input.rate)}`}`;
   const fault = pollScheduleFault(schedule);
   if (fault !== null) return { ...base, expected: socket, ratio: null, verdict: "outside", reason: `${runsText}; ${fault}` };
   // Where only the socket (and the period) bump the poll, its demand runs are
@@ -1450,10 +1707,61 @@ function demandRow(
   };
 }
 
+/** The report's view of one module check: the module of `key`, or null
+ *  without a registry. */
+async function reportModule(registry: Pick<EngineRegistry, "module"> | undefined, key: string) {
+  return registry === undefined ? null : registry.module(key);
+}
+
+/**
+ * Each rate key's assumed run size on each page (rule A1.rate-assumed): 1 for
+ * a single-request poll, else the module's `estimateRunSteps` from the open
+ * row's cursor at the window end, over the facts of the report's snapshot. A
+ * key whose module gives none (or no positive whole number) is left out.
+ */
+async function readAssumedSizes(
+  db: Database,
+  input: { pages: readonly SyncPageRow[]; window: { start: Date; end: Date }; registry?: Pick<EngineRegistry, "module">; settings?: SettingsSource },
+): Promise<Map<number, Map<string, number>>> {
+  const windowMs = input.window.end.getTime() - input.window.start.getTime();
+  const rated = (page: SyncPageRow) => FANSLY_RESOURCE_SPECS.filter((spec) => runsIn(spec, true) && ratePeriodMs(spec, page, windowMs) !== null);
+  const keys = [...new Set(input.pages.flatMap((page) => rated(page).map((spec) => spec.key)))];
+  const open = await listSyncWorkOpenAt(db, { pageIds: input.pages.map((page) => page.pageId), shadow: true, resources: keys, at: input.window.end });
+  const sizes = new Map<number, Map<string, number>>();
+  for (const page of input.pages) {
+    const ofPage = new Map<string, number>();
+    for (const spec of rated(page)) {
+      if (runGroupingOf(spec) === "single") {
+        ofPage.set(spec.key, 1);
+        continue;
+      }
+      const module = await reportModule(input.registry, spec.key);
+      if (module?.estimateRunSteps === undefined) continue;
+      const row = open.find((entry) => entry.pageId === page.pageId && entry.resource === spec.key && entry.subject === "");
+      const steps = await module.estimateRunSteps({ cursor: row?.cursor ?? null }, {
+        db,
+        pageId: page.pageId,
+        now: input.window.end,
+        page,
+        ...(input.settings === undefined ? {} : { settings: input.settings }),
+      });
+      if (Number.isSafeInteger(steps) && steps >= 1) ofPage.set(spec.key, steps);
+    }
+    sizes.set(page.pageId, ofPage);
+  }
+  return sizes;
+}
+
 /** Every page's runs of the keys judged in runs, from the longest look-back. */
 async function readRunFacts(
   db: Database,
-  input: { pages: readonly SyncPageRow[]; window: { start: Date; end: Date }; firstShadow: ReadonlyMap<number, Date> },
+  input: {
+    pages: readonly SyncPageRow[];
+    window: { start: Date; end: Date };
+    firstShadow: ReadonlyMap<number, Date>;
+    registry?: Pick<EngineRegistry, "module">;
+    settings?: SettingsSource;
+  },
 ): Promise<Map<number, PageRunFacts>> {
   const windowMs = input.window.end.getTime() - input.window.start.getTime();
   const specs = FANSLY_RESOURCE_SPECS.filter((spec) => runsIn(spec, true) && (spec.kind === "poll" || spec.minIntervalMs !== undefined));
@@ -1469,6 +1777,7 @@ async function readRunFacts(
     to: input.window.end,
   });
   const placements = await readSyncPollPlacements(db, { pageIds, shadow: true, before: input.window.end });
+  const assumed = await readAssumedSizes(db, input);
   const facts = new Map<number, PageRunFacts>();
   for (const page of input.pages) {
     const ofPage = attempts.filter((attempt) => attempt.pageId === page.pageId && attempt.subject === "");
@@ -1487,6 +1796,7 @@ async function readRunFacts(
       runs,
       placements: new Map(placements.filter((row) => row.pageId === page.pageId).map((row) => [row.resource, row.createdAt.getTime()])),
       firstShadowMs: input.firstShadow.get(page.pageId)?.getTime() ?? null,
+      assumedSizes: assumed.get(page.pageId) ?? new Map(),
     });
   }
   return facts;
@@ -1504,7 +1814,13 @@ interface LegacyVolume {
 
 async function legacyVolume(
   db: Database,
-  input: { pages: readonly SyncPageRow[]; window: { start: Date; end: Date }; observed: Map<number, Map<string, { class: string; attempts: number }>> },
+  input: {
+    pages: readonly SyncPageRow[];
+    window: { start: Date; end: Date };
+    observed: Map<number, Map<string, { class: string; attempts: number }>>;
+    registry?: Pick<EngineRegistry, "module">;
+    settings?: SettingsSource;
+  },
 ): Promise<LegacyVolume> {
   const pageIds = input.pages.map((page) => page.pageId);
   const endMs = input.window.end.getTime();
@@ -1590,19 +1906,55 @@ async function legacyVolume(
     .filter((spec) => runsIn(spec, true) && input.pages.some((page) => (recurrenceMs(spec, page) ?? 0) > 0))
     .map((spec) => spec.key))];
   const open = await listSyncWorkOpenAt(db, { pageIds, shadow: true, resources: recurring, at: input.window.end });
+  const shadowCtx = (page: SyncPageRow, now: Date) => ({
+    db, pageId: page.pageId, now, page, ...(input.settings === undefined ? {} : { settings: input.settings }),
+  });
   for (const [pageId, history] of shadowByPage) {
+    const page = input.pages.find((entry) => entry.pageId === pageId)!;
     const rows = new Map<string, ScheduleRow[]>();
     for (const row of open) {
       if (row.pageId !== pageId) continue;
-      rows.set(row.resource, [...(rows.get(row.resource) ?? []), {
+      const scheduleRow: ScheduleRow = {
         createdMs: row.createdAt.getTime(),
         dueMs: row.dueAt.getTime(),
         firstAdmittedMs: row.firstAdmittedAt?.getTime() ?? null,
         quarantined: row.state === "quarantined",
         recheckedMs: row.waitingReason === "not_due" ? row.updatedAt.getTime() : null,
-      }]);
+      };
+      // Rule A1.floor-idle: a standing walk with no shadow attempt on the page
+      // that looked and found nothing due has its look re-run.
+      const spec = fanslyResourceSpec(row.resource);
+      if (spec?.standing !== undefined && scheduleRow.recheckedMs !== null && (history.attempts.get(row.resource) ?? 0) === 0) {
+        const module = await reportModule(input.registry, row.resource);
+        if (module?.dueAtLook !== undefined) {
+          const lookAt = new Date(scheduleRow.recheckedMs! - LOOK_CLOCK_TOLERANCE_MS);
+          try {
+            scheduleRow.dueAtLook = await module.dueAtLook({ cursor: row.cursor }, shadowCtx(page, lookAt));
+          } catch (error) {
+            scheduleRow.dueAtLook = { error: error instanceof Error ? error.message : String(error) };
+          }
+        }
+      }
+      rows.set(row.resource, [...(rows.get(row.resource) ?? []), scheduleRow]);
     }
-    shadowByPage.set(pageId, { ...history, schedule: { endMs, rows } });
+    // Rule A1.floor-queue: the queue of each queue walk without an open row.
+    const queues = new Map<string, QueueFact>();
+    for (const spec of FANSLY_RESOURCE_SPECS) {
+      if (!isQueueWalk(spec) || !runsIn(spec, true) || resourceDisabled(page, spec.key) || rows.has(spec.key)) continue;
+      const drivers = (QUEUE_WALK_DRIVERS[spec.key] ?? []).flatMap((key) => {
+        const driver = fanslyResourceSpec(key);
+        const periodMs = driver === null || resourceDisabled(page, key) ? null : effectivePeriodMs(driver, page);
+        return periodMs === null ? [] : [periodMs];
+      });
+      const module = await reportModule(input.registry, spec.key);
+      if (drivers.length === 0 || module?.queueNextDueAt === undefined) continue;
+      const nextDue = await module.queueNextDueAt(shadowCtx(page, input.window.end));
+      queues.set(spec.key, {
+        nextDueMs: nextDue?.getTime() ?? null,
+        askedWithinMs: Math.ceil((1 + POLL_JITTER) * Math.min(...drivers)) + POLL_DUE_SLACK_MS,
+      });
+    }
+    shadowByPage.set(pageId, { ...history, schedule: { endMs, rows, queues } });
   }
   return { rows, byPage, shadowByPage, specsByRef };
 }
@@ -1737,9 +2089,13 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   const implied = await impliedReads(db, frames.byPage);
 
   // A2: the legacy engine's hour (A1's floor reads its counterparts).
-  const legacy = await legacyVolume(db, { pages: input.pages, window: input.window, observed });
+  const checks = {
+    ...(input.registry === undefined ? {} : { registry: input.registry }),
+    ...(input.settings === undefined ? {} : { settings: input.settings }),
+  };
+  const legacy = await legacyVolume(db, { pages: input.pages, window: input.window, observed, ...checks });
 
-  const runFacts = await readRunFacts(db, { pages: input.pages, window: input.window, firstShadow });
+  const runFacts = await readRunFacts(db, { pages: input.pages, window: input.window, firstShadow, ...checks });
   const demand = input.pages.map((page) => demandOfPage(page, {
     window: { startMs: start.getTime(), endMs: end.getTime() },
     observed: observed.get(page.pageId) ?? new Map(),

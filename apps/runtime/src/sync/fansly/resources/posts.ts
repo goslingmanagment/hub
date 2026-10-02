@@ -36,6 +36,7 @@ import {
   advanceShadowPass,
   clearQueueSubjectBlocks,
   currentShadowPass,
+  dueAtLookOf,
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
@@ -240,6 +241,13 @@ async function estimatedWalkSteps(db: Database, input: { pageId: number; cutoffA
   return input.cutoffAt === null ? 2 * pages - 1 : 2 * pages;
 }
 
+/** The steps of a shadow walk started at `now` (its `shadow()` estimate, and
+ *  the shadow report's assumed run size, rule A1.rate-assumed). */
+async function shadowWalkSteps(db: Database, input: { pageId: number; now: Date; bounded: boolean }): Promise<number> {
+  const cutoffAt = input.bounded ? refreshCutoffAt(input.now) : null;
+  return Math.max(1, await estimatedWalkSteps(db, { pageId: input.pageId, cutoffAt }));
+}
+
 async function newestPostIds(db: Database, pageId: number): Promise<string[]> {
   const result = await db.execute<{ id: string }>(sql`
     select platform_post_id as id from creator_posts
@@ -365,15 +373,15 @@ function walkModule(variant: "refresh" | "backfill"): ResourceModule {
 
     async shadow(work, _request, ctx): Promise<ShadowResult> {
       const cursor = parsePostsWalkCursor(work.cursor);
-      const cutoffAt = bounded ? refreshCutoffAt(ctx.now) : null;
-      const progress = cursor.shadow ?? {
-        steps: Math.max(1, await estimatedWalkSteps(ctx.db, { pageId: ctx.pageId, cutoffAt })),
-        done: 0,
-      };
+      const progress = cursor.shadow ?? { steps: await shadowWalkSteps(ctx.db, { pageId: ctx.pageId, now: ctx.now, bounded }), done: 0 };
       const step = advanceShadowWalk(progress, () => progress.steps);
       return step.finished
         ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: { ...cursor, shadow: null } }, followups: [] }
         : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, shadow: step.progress } }, followups: [] };
+    },
+
+    async estimateRunSteps(_work, ctx): Promise<number> {
+      return shadowWalkSteps(ctx.db, { pageId: ctx.pageId, now: ctx.now, bounded });
     },
 
     replay: replayByCanonicalDrafts,
@@ -447,6 +455,20 @@ async function engagementTiers(db: Database, input: { pageId: number; ids: reado
 }
 
 const engagementModule: ResourceModule = {
+  /** The shadow report's look check (rule A1.floor-idle): the shadow plan's
+   *  pick at the look, less what changed since. */
+  async dueAtLook(work, ctx) {
+    const cursor = parseEngagementCursor(work.cursor);
+    const pass = currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
+    if (pass.ended) return { count: 0, examples: [] };
+    return dueAtLookOf(ctx.db, {
+      pageId: ctx.pageId,
+      plane: POST_ENGAGEMENT_QUEUE.plane,
+      at: ctx.now,
+      pick: (limit) => POST_ENGAGEMENT_QUEUE.pickDue(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit, after: pass.after }),
+    });
+  },
+
   async plan(work, ctx): Promise<StepPlan> {
     const cursor = parseEngagementCursor(work.cursor);
     const pass = ctx.shadow ? currentShadowPass(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS) : EMPTY_SHADOW_PASS;

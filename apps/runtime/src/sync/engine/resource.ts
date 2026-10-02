@@ -290,6 +290,13 @@ export interface LocalApplyInput {
   ownRef: string | null;
 }
 
+/** A standing walk's look re-run (`ResourceModule.dueAtLook`): how many
+ *  subjects were due at the look and untouched since, and a few of them. */
+export interface LookCheck {
+  count: number;
+  examples: string[];
+}
+
 export interface ShadowResult<C = unknown> {
   work: WorkOutcome<C>;
   /** Demand the live apply would have created: upserted as shadow work. */
@@ -379,6 +386,23 @@ export interface ResourceModule<C = unknown> {
   outcome?(decision: OutcomeDecision, step: OutcomeStep): OutcomeDecision;
   /** Shadow: estimate the outcome of the step without an answer. */
   shadow(work: SyncWorkRow, request: RequestPlan, ctx: ShadowContext): Promise<ShadowResult<C>>;
+  /** Read-only (the shadow report, rule A1.rate-assumed): the steps a shadow
+   *  run of this key would take if it started at `ctx.now` from the work
+   *  row's cursor — the estimate its `shadow()` fixes at a run's start, by
+   *  the same helper. A multi-step key on a period longer than the report
+   *  window implements it (pinned by tests/sync-registry-coverage.test.ts). */
+  estimateRunSteps?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<number>;
+  /** Read-only, a standing walk (the shadow report, rule A1.floor-idle): the
+   *  subjects its own shadow pick finds due at `ctx.now` from the work row's
+   *  cursor, among those no writer has changed since — what a look at that
+   *  instant that found nothing due should have read. */
+  dueAtLook?(work: Pick<SyncWorkRow, "cursor">, ctx: ShadowContext): Promise<LookCheck>;
+  /** Read-only, a subject-queue walk without a standing row (the shadow
+   *  report, rule A1.floor-queue): the earliest instant from which the
+   *  shadow's driver asks for a walk of the page's queue as it stands at
+   *  `ctx.now` (in the past: a subject is due already); null when no subject
+   *  comes due without a new write. */
+  queueNextDueAt?(ctx: ShadowContext): Promise<Date | null>;
   /** The resource's own journal trim of the served answer (default: as served). */
   journal?(response: unknown): unknown;
   /** Read-only: one legacy observation of a kind this resource owns through
