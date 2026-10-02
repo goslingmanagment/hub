@@ -21,7 +21,7 @@ import {
   repairNextListAt,
   repairWsGapModule,
 } from "../apps/runtime/src/sync/fansly/resources/repair.ts";
-import { wsConnectOutcome, wsConnectPlan } from "../apps/runtime/src/sync/fansly/resources/ws-connect.ts";
+import { wsConnectModule, wsConnectOutcome, wsConnectPlan } from "../apps/runtime/src/sync/fansly/resources/ws-connect.ts";
 
 // The live-only resources of step 3 (design S3-04), their pure halves: what
 // `ws.connect` plans by the socket owner's state and what a handshake outcome
@@ -67,6 +67,18 @@ describe("ws.connect", () => {
     for (const state of ["blocked_generation", "stopped", null] as const) {
       expect(wsConnectPlan(state, NOW), String(state)).toEqual({ kind: "wait", reason: "dependency", until: new Date(NOW.getTime() + 60_000) });
     }
+  });
+
+  it("never asks for an Upgrade before the owner's reconnect ladder allows", () => {
+    const later = new Date(NOW.getTime() + 7_000);
+    for (const state of ["owning", "down"] as const) {
+      expect(wsConnectPlan(state, NOW, later), state).toEqual({ kind: "wait", reason: "not_due", until: later });
+      expect(wsConnectPlan(state, later, later), state).toMatchObject({ kind: "request" });
+      expect(wsConnectPlan(state, NOW, new Date(NOW.getTime() - 1)), state).toMatchObject({ kind: "request" });
+    }
+    // Through the module, from the owner the plan context names.
+    const ctx = { shadow: false, now: NOW, socket: { state: "down", connectNotBefore: later } } as unknown as PlanContext;
+    return expect(wsConnectModule.plan({} as SyncWorkRow, ctx)).resolves.toEqual({ kind: "wait", reason: "not_due", until: later });
   });
 
   it("sends a failed handshake back to the socket's ladder: no streak, no breaker, no hold", () => {

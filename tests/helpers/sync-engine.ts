@@ -122,6 +122,9 @@ export interface FakeAnswer {
   close?: boolean;
   /** Hold the answer back this long (a slow origin). */
   delayMs?: number;
+  /** Drip the body: the headers at once, then one byte every `everyMs` (an
+   *  origin that keeps the connection busy past any inactivity timer). */
+  drip?: { everyMs: number };
 }
 
 /** An origin route: an answer, or null for "not mine". */
@@ -143,9 +146,14 @@ export class FakeFanslyServer {
   closeShare = 0;
   /** Every answer is held back this long (on top of a route's own delay). */
   answerDelayMs = 0;
-  /** The status the next Upgrades of `/ws` are answered with (101 opens; 0
-   *  drops the connection without an answer). */
-  upgradeStatus: () => number = () => 101;
+  /** A WebSocket peer for every accepted Upgrade to `HARNESS_WS_PATH`, in
+   *  order. Without `onWebSocket` the harness hangs up after the 101. */
+  readonly wsPeers: FakeWsPeer[] = [];
+  /** Speaks the socket's protocol for each accepted Upgrade (null: hang up). */
+  onWebSocket: ((peer: FakeWsPeer) => void) | null = null;
+  /** The status of the next Upgrades (101 accepts; 0 drops the connection
+   *  without an answer). */
+  upgradeStatus: (index: number) => number = () => 101;
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
   #routes: FakeRoute[] = [];
@@ -228,7 +236,23 @@ export class FakeFanslyServer {
     const send = () => {
       arrival.status = answer.status;
       response.writeHead(answer.status, { ...(answer.headers ?? {}), ...(close ? { connection: "close" } : {}) });
-      response.end(answer.body ?? "");
+      const drip = answer.drip;
+      if (drip === undefined) {
+        response.end(answer.body ?? "");
+        return;
+      }
+      const body = Buffer.from(answer.body ?? "");
+      let at = 0;
+      const timer = setInterval(() => {
+        if (response.destroyed || at >= body.length) {
+          clearInterval(timer);
+          if (!response.destroyed) response.end();
+          return;
+        }
+        response.write(body.subarray(at, at + 1));
+        at += 1;
+      }, drip.everyMs);
+      response.once("close", () => clearInterval(timer));
     };
     const delayMs = this.answerDelayMs + (answer.delayMs ?? 0);
     if (delayMs > 0) setTimeout(send, delayMs);
@@ -245,7 +269,7 @@ export class FakeFanslyServer {
       socket.end("HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n");
       return;
     }
-    const status = this.upgradeStatus();
+    const status = this.upgradeStatus(this.arrivals.filter((item) => item.upgrade).length - 1);
     if (status === 0) {
       arrival.status = 0;
       socket.destroy();
@@ -260,8 +284,109 @@ export class FakeFanslyServer {
     const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
     socket.write("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n"
       + `sec-websocket-accept: ${accept}\r\n\r\n`);
-    // The frames of an open socket are not requests: the harness hangs up.
-    socket.end();
+    if (this.onWebSocket === null) {
+      // The frames of an open socket are not requests: the harness hangs up.
+      socket.end();
+      return;
+    }
+    const peer = new FakeWsPeer(socket);
+    this.wsPeers.push(peer);
+    this.onWebSocket(peer);
+  }
+}
+
+/** One server-side WebSocket frame (unmasked, FIN). */
+function wsFrame(opcode: number, payload: Buffer): Buffer {
+  const length = payload.length;
+  let header: Buffer;
+  if (length < 126) {
+    header = Buffer.from([0x80 | opcode, length]);
+  } else if (length < 65_536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x80 | opcode;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(length), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+/**
+ * The origin's end of one accepted WebSocket: reads the client's (masked)
+ * frames, answers pings and the close handshake, and sends text frames the
+ * test scripts. `onText` sees every text frame the client sent.
+ */
+export class FakeWsPeer {
+  readonly received: string[] = [];
+  closed = false;
+  onText: (text: string) => void = () => undefined;
+  readonly #socket: Socket;
+  #buffer = Buffer.alloc(0);
+
+  constructor(socket: Socket) {
+    this.#socket = socket;
+    socket.on("data", (chunk: Buffer) => this.#onData(chunk));
+    socket.once("close", () => {
+      this.closed = true;
+    });
+  }
+
+  send(text: string): void {
+    if (this.closed || this.#socket.destroyed) return;
+    this.#socket.write(wsFrame(0x1, Buffer.from(text)));
+  }
+
+  /** The close handshake from the origin's side. */
+  close(code = 1000): void {
+    if (this.closed || this.#socket.destroyed) return;
+    const payload = Buffer.alloc(2);
+    payload.writeUInt16BE(code, 0);
+    this.#socket.end(wsFrame(0x8, payload));
+  }
+
+  /** Drop the connection without a close frame. */
+  destroy(): void {
+    this.#socket.destroy();
+  }
+
+  #onData(chunk: Buffer): void {
+    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    for (;;) {
+      const buffer = this.#buffer;
+      if (buffer.length < 2) return;
+      const opcode = buffer[0]! & 0x0f;
+      const masked = (buffer[1]! & 0x80) !== 0;
+      let length = buffer[1]! & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (buffer.length < 4) return;
+        length = buffer.readUInt16BE(2);
+        offset = 4;
+      } else if (length === 127) {
+        if (buffer.length < 10) return;
+        length = Number(buffer.readBigUInt64BE(2));
+        offset = 10;
+      }
+      const mask = masked ? buffer.subarray(offset, offset + 4) : null;
+      if (masked) offset += 4;
+      if (buffer.length < offset + length) return;
+      const payload = Buffer.from(buffer.subarray(offset, offset + length));
+      if (mask !== null) for (let i = 0; i < payload.length; i += 1) payload[i]! ^= mask[i % 4]!;
+      this.#buffer = buffer.subarray(offset + length);
+      if (opcode === 0x1) {
+        const text = payload.toString("utf8");
+        this.received.push(text);
+        this.onText(text);
+      } else if (opcode === 0x8) {
+        this.#socket.end(wsFrame(0x8, payload.subarray(0, 2)));
+      } else if (opcode === 0x9) {
+        this.#socket.write(wsFrame(0xa, payload));
+      }
+    }
   }
 }
 

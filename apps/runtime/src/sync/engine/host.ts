@@ -3,14 +3,18 @@ import { sql } from "drizzle-orm";
 import {
   acquireSyncPageOwnership,
   ensureFanslySyncPages,
+  getSyncPage,
   heartbeatSyncPageOwner,
   listSyncPages,
+  lockOwnedPage,
   paceFloorFromDb,
+  upsertDemands,
   writeSafeRelease,
   type Database,
   type FanslySendHolderIdentity,
   type SyncPageOwnerRecord,
   type SyncPageRow,
+  type UpsertDemandInput,
 } from "@agency_hub_core/db";
 import { FANSLY_PAUSE_MIN_MS, type AppConfig } from "@agency_hub_core/shared";
 
@@ -21,6 +25,7 @@ import {
   type FanslySendOsProbe,
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { createPageTransport } from "../fansly/transport.ts";
+import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
 import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
 import { SyncActor, type ActorExit, type ShadowFeed } from "./actor.ts";
 import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
@@ -51,7 +56,7 @@ import {
   type Rng,
   type Wake,
 } from "./ports.ts";
-import type { EngineRegistry } from "./resource.ts";
+import { demandToUpsert, type DemandSignal, type EngineRegistry } from "./resource.ts";
 import { createLegacyShadowLatency, ShadowTransport, type PageTransport, type ShadowLatencySource } from "./shadow.ts";
 
 // The host (plan §2.4, §8; design §3.6): pages ↔ actors. It owns the process's
@@ -69,7 +74,11 @@ import { createLegacyShadowLatency, ShadowTransport, type PageTransport, type Sh
 //   3. every live admission needs the step-1 guard row handed to the engine
 //      (`owner_engine = 'fansly_sync_engine'`, checked in `lockOwnedPage`).
 // The live transport (`fansly/transport.ts`) is built in one place only: the
-// live branch below.
+// live branch below. A live page also gets its WebSocket source
+// (`fansly/ws/source.ts`, design §3.3, J6): created with the slot, started once
+// the actor exists, its Upgrade admitted by that actor like any request, and
+// stopped — the socket closed and its lock session ended — before the page's
+// safe release.
 
 /** The live loop runs only when this is true: false until the switch PR
  *  (S3-05). A `live` page is reported `ownership_unconfirmed` meanwhile. */
@@ -87,9 +96,12 @@ export const OWNERSHIP_ALERT_AFTER_MS = SYNC_OWNERSHIP_UNCONFIRMED_MS;
 /** A lost lock session is reopened after 1 s, doubling up to 30 s. */
 export const SESSION_RECONNECT_MIN_MS = 1_000;
 export const SESSION_RECONNECT_MAX_MS = 30_000;
-/** Shutdown: the request in flight (≤ 20 s total) and its commits. */
+/** Shutdown: the request in flight (≤ 20 s total) and its commits, and — in
+ *  parallel — a live page's socket drain (≤ 20 s) and overlay apply drain
+ *  (≤ 10 s). */
 export const SHUTDOWN_ACTOR_BUDGET_MS = 30_000;
-/** Shutdown: after a hard abort of what is left. */
+/** Shutdown: after a hard abort of what is left (the request, the drains).
+ *  30 + 5 s and the releases sit inside the container's 45 s stop grace. */
 export const SHUTDOWN_ABORT_BUDGET_MS = 5_000;
 
 export type HostPageState =
@@ -133,16 +145,30 @@ export interface SyncHostOptions {
   liveLoopEnabled?: boolean;
   /** TESTS ONLY: a pacer with a test setting floor. Never passed by `main.ts`. */
   pacerFactory?: (deps: PacerDeps) => Pacer;
-  /** TESTS ONLY: a stand-in for the live page transport (`socket` is the
-   *  page's socket owner the production transport sends `ws.upgrade` through). */
-  liveTransportFactory?: (page: SyncPageRow, options: { socket: LivePageSocketRef }) => Promise<PageTransport>;
-  /** The live page's WebSocket owner (design S3-03: the `FanslyWsSource` of
-   *  the slot): `ws.connect` plans by its state and the live transport sends
-   *  the Upgrade through its handshake. Absent, or null for a page: no socket
-   *  owner in this process — `ws.connect` waits on `dependency`. */
+  /** TESTS ONLY: a stand-in for the live page transport. `links.ws` is the
+   *  page's socket source, whose `handshake` runs the `ws.connect` Upgrade;
+   *  `links.socket` is the socket owner the production transport sends
+   *  `ws.upgrade` through (the source, or a test's `liveSocket`). */
+  liveTransportFactory?: (page: SyncPageRow, links: LivePageLinks) => Promise<PageTransport>;
+  /** TESTS ONLY: the socket source's scaled timing and socket opener. */
+  wsSourceOverrides?: Pick<FanslyWsSourceDeps, "timing" | "openSocket">;
+  /** TESTS ONLY: a stand-in for a live page's socket owner, in place of the
+   *  page's `FanslyWsSource` (none is created then): `ws.connect` plans by
+   *  its state and the live transport sends the Upgrade through its
+   *  handshake. Null for a page: no socket owner — `ws.connect` waits on
+   *  `dependency`. Never passed by `main.ts`. */
   liveSocket?: (page: SyncPageRow) => LivePageSocket | null;
   /** TESTS ONLY: crash points. */
   faults?: SyncFaultHook;
+}
+
+/** What a live page's transport is wired to besides its egress. */
+export interface LivePageLinks {
+  /** The page's socket source (null: the page has no label, or a test's
+   *  `liveSocket` stands in for it). */
+  ws: FanslyWsSource | null;
+  /** The page's socket owner the transport sends `ws.upgrade` through. */
+  socket: LivePageSocketRef;
 }
 
 interface PageSlot {
@@ -151,6 +177,9 @@ interface PageSlot {
   generation: bigint;
   actor: SyncActor;
   transport: PageTransport;
+  /** A live page's WebSocket (design §3.3, J6); none in shadow — the legacy
+   *  receiver owns a shadow page's socket. */
+  ws: FanslyWsSource | null;
   stop: AbortController;
   abort: AbortController;
   heartbeat: ReturnType<typeof setInterval>;
@@ -215,6 +244,11 @@ export class SyncEngineHost {
     return this.#session;
   }
 
+  /** A live page's socket source while its actor runs (null otherwise). */
+  wsSource(pageId: number): FanslyWsSource | null {
+    return this.#slots.get(pageId)?.ws ?? null;
+  }
+
   async start(): Promise<void> {
     const created = await ensureFanslySyncPages(this.#o.db, { createdBy: "sync:host" });
     if (created > 0) this.#o.logger.info({ created }, "Fansly sync: page rows created");
@@ -240,9 +274,12 @@ export class SyncEngineHost {
 
   /**
    * Graceful stop (SIGTERM): no new step on any page; the request in flight
-   * finishes (≤ 20 s) and is committed; whatever is still running after the
-   * budget is aborted (nothing more is sent); every page gets its safe release
-   * and its lock back; the session and the listener close.
+   * finishes (≤ 20 s) and is committed while, at the same time, every live
+   * page's socket stops reading and drains what it already received (≤ 20 s
+   * capture, ≤ 10 s overlay apply); whatever is still running after the
+   * budget is aborted (nothing more is sent, the drains are cut); every page
+   * gets its safe release — after its socket closed — and its lock back; the
+   * session and the listener close.
    */
   stop(): Promise<void> {
     this.#stopping ??= (async () => {
@@ -250,10 +287,16 @@ export class SyncEngineHost {
       this.#timer = null;
       await this.#tick?.catch(() => undefined);
       const slots = [...this.#slots.values()];
-      for (const slot of slots) slot.stop.abort();
+      for (const slot of slots) {
+        slot.stop.abort();
+        void slot.ws?.stop("disabled");
+      }
       const finished = await settleWithin(Promise.all(slots.map((slot) => slot.done)), SHUTDOWN_ACTOR_BUDGET_MS);
       if (!finished) {
-        for (const slot of this.#slots.values()) slot.abort.abort();
+        for (const slot of this.#slots.values()) {
+          slot.abort.abort();
+          void slot.ws?.stop("ownership_lost");
+        }
         await settleWithin(Promise.all(slots.map((slot) => slot.done)), SHUTDOWN_ABORT_BUDGET_MS);
       }
       for (const [pageId, generation] of this.#pendingRelease) {
@@ -420,8 +463,13 @@ export class SyncEngineHost {
     let transport: PageTransport | null = null;
     let pacer: Pacer;
     let ownRef: string | null;
-    // The live page's socket owner, read at every plan and every Upgrade.
-    const socket: LivePageSocket | null = mode === "live" ? this.#o.liveSocket?.(page) ?? null : null;
+    // A live page's socket (J6): created with the slot, started once its
+    // actor exists, stopped before the page's safe release. It is the page's
+    // socket owner: `ws.connect` plans by its state, the transport sends the
+    // Upgrade through its handshake (a test's `liveSocket` stands in for it).
+    const standIn = mode === "live" && this.#o.liveSocket !== undefined;
+    const ws = mode === "live" && !standIn ? this.#createWsSource(page, generation) : null;
+    const socket: LivePageSocket | null = standIn ? this.#o.liveSocket!(page) : ws;
     const socketRef: LivePageSocketRef = () => socket;
     try {
       const settingMs = await this.#pause.readSettingMs();
@@ -440,7 +488,7 @@ export class SyncEngineHost {
           clock: this.#clock,
           latency: this.#o.shadowLatency?.(pageId) ?? createLegacyShadowLatency({ db, pageId, clock: this.#clock, rng: this.#rng }),
         })
-        : await this.#liveTransport(page, socketRef);
+        : await this.#liveTransport(page, { ws, socket: socketRef });
     } catch (error) {
       // Nothing was sent under the new generation: release it at once.
       await transport?.close().catch(() => undefined);
@@ -484,6 +532,7 @@ export class SyncEngineHost {
       generation,
       actor,
       transport,
+      ws,
       stop,
       abort,
       keepLock: false,
@@ -497,16 +546,62 @@ export class SyncEngineHost {
     slot.done = actor.run({ stop: stop.signal, abort: abort.signal })
       .catch((error: unknown): ActorExit => ({ kind: "failed", error: errorName(error) }))
       .then((exit) => this.#onActorExit(slot, exit, session));
+    ws?.start();
   }
 
-  async #liveTransport(page: SyncPageRow, socket: LivePageSocketRef): Promise<PageTransport> {
-    if (this.#o.liveTransportFactory !== undefined) return this.#o.liveTransportFactory(page, { socket });
+  async #liveTransport(page: SyncPageRow, links: LivePageLinks): Promise<PageTransport> {
+    if (this.#o.liveTransportFactory !== undefined) return this.#o.liveTransportFactory(page, links);
     if (page.pageLabel === null) throw new Error(`Fansly sync page ${page.pageId} has no label`);
     return createPageTransport(
       { db: this.#o.db, config: this.#o.config },
       { pageId: page.pageId, pageLabel: page.pageLabel },
-      { socket },
+      { socket: links.socket },
     );
+  }
+
+  #createWsSource(page: SyncPageRow, generation: bigint): FanslyWsSource | null {
+    if (page.pageLabel === null) {
+      this.#o.logger.error({ pageId: page.pageId }, "Fansly sync host: a live page without a label has no socket");
+      return null;
+    }
+    return new FanslyWsSource({
+      db: this.#o.db,
+      config: this.#o.config,
+      logger: this.#o.logger,
+      clock: this.#clock,
+      metrics: this.#metrics,
+      connectionString: this.#o.connectionString,
+      pageId: page.pageId,
+      pageLabel: page.pageLabel,
+      rng: this.#rng,
+      alerts: this.#alerts,
+      enqueue: (signals) => this.#enqueueLiveDemand(page.pageId, generation, signals),
+      ...(this.#o.wsSourceOverrides?.timing === undefined ? {} : { timing: this.#o.wsSourceOverrides.timing }),
+      ...(this.#o.wsSourceOverrides?.openSocket === undefined ? {} : { openSocket: this.#o.wsSourceOverrides.openSocket }),
+    });
+  }
+
+  /** A socket source's demand (`ws.connect`, repair, `.ws-down`, verify):
+   *  one transaction fenced by the slot's generation, through the registry's
+   *  coalescing and SLO rules; a key the registry does not know is dropped. */
+  async #enqueueLiveDemand(pageId: number, generation: bigint, signals: readonly DemandSignal[]): Promise<void> {
+    const now = this.#clock.wallNow();
+    await this.#o.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      await lockOwnedPage(tx, { pageId, generation, lock: "no_key_update" });
+      const page = await getSyncPage(tx, pageId);
+      const upserts: UpsertDemandInput[] = [];
+      for (const signal of signals) {
+        const spec = this.#o.registry.spec(signal.resource);
+        if (spec === null) {
+          this.#metrics.increment("sync_ws_demand_unknown_resource", { resource: signal.resource });
+          continue;
+        }
+        const upsert = demandToUpsert(signal, spec, { pageId, shadow: false, now, ...(page === null ? {} : { page }) });
+        if (upsert !== null) upserts.push(upsert);
+      }
+      if (upserts.length > 0) await upsertDemands(tx, upserts);
+    });
   }
 
   #judge(previous: SyncPageOwnerRecord): string | null {
@@ -536,6 +631,9 @@ export class SyncEngineHost {
 
   async #onActorExit(slot: PageSlot, exit: ActorExit, session: PgOwnershipSession): Promise<void> {
     clearInterval(slot.heartbeat);
+    // J6: the socket is closed and its lock session ended BEFORE the safe
+    // release (bounded; a lost ownership does not drain).
+    await slot.ws?.stop(exit.kind === "ownership_lost" ? "ownership_lost" : "disabled");
     await slot.transport.close().catch(() => undefined);
     const foreign = exit.kind === "ownership_lost" && exit.foreign;
     if (!foreign) {

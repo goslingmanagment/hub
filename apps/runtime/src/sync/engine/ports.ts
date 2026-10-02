@@ -236,6 +236,11 @@ export type WsSourceState = "idle" | "owning" | "connecting" | "open" | "down" |
  */
 export interface LivePageSocket {
   readonly state: WsSourceState;
+  /** The reconnect ladder's earliest instant for the next Upgrade (null or
+   *  absent: now). The `ws.connect` demand carries it as its due time; a plan
+   *  that finds its row due earlier (a refused admission reopens a row at
+   *  once, a merged demand pulls it forward) waits until then. */
+  readonly connectNotBefore?: Date | null;
   /** The Upgrade of one admitted `ws.upgrade` step: `hooks.check` runs at
    *  undici's `onRequestStart`; resolves when the handshake settles (101 or
    *  another status, an error, a refusal). Never throws for an outcome. */

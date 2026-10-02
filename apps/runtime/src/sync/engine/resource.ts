@@ -171,14 +171,14 @@ export type StepPlan<C = unknown> =
   | { kind: "request"; request: RequestPlan }
   /** The goal is met without a request. */
   | { kind: "done"; cursor?: C; proof?: unknown; result?: unknown; reason: string }
+  /** A write the page needs that makes no request (design §3.3 item 3, E6):
+   *  the module's `applyLocal` runs in one generation-fenced transaction, under
+   *  the erasure fence when the entry declares one. Live only. */
+  | { kind: "local"; reason: string }
   /** Not now: a dependency, or not due. `until` null = re-check after
    *  `WAIT_RECHECK_MS`. */
   | { kind: "wait"; reason: "not_due" | "dependency"; until: Date | null; enqueue?: readonly DemandSignal[] }
-  | { kind: "quarantine"; reason: string }
-  /** A write without a request (design §3.3 item 3, E6): the module's
-   *  `applyLocal` in one generation-fenced transaction (with the erasure fence
-   *  when the entry takes it). Nothing is admitted or sent. */
-  | { kind: "local"; reason: string };
+  | { kind: "quarantine"; reason: string };
 
 export interface PlanContext {
   db: Database;
@@ -260,14 +260,6 @@ export interface OutcomeStep {
   outcome: "response" | "transport_error" | "timeout";
 }
 
-/** A local step (`StepPlan` `local`): a write without a request. */
-export interface LocalApplyInput {
-  pageId: number;
-  work: SyncWorkRow;
-  now: Date;
-  ownRef: string | null;
-}
-
 export interface ApplyResult<C = unknown> {
   work: WorkOutcome<C>;
   followups: readonly DemandSignal[];
@@ -285,6 +277,17 @@ export interface ApplyResult<C = unknown> {
    *  `sync_pages.identity_account_id`, written by the engine right after the
    *  apply commits (the page row is the actor's, never a resource's). */
   pageIdentity?: { accountId: string };
+}
+
+/** What a `local` step's write sees (`ResourceModule.applyLocal`). */
+export interface LocalApplyInput {
+  pageId: number;
+  /** The work as the slot picked it. */
+  work: SyncWorkRow;
+  /** The engine clock at the step. */
+  now: Date;
+  /** The page's native Fansly account id (`pages.external_page_id`). */
+  ownRef: string | null;
 }
 
 export interface ShadowResult<C = unknown> {
@@ -344,7 +347,8 @@ export interface ResourceModule<C = unknown> {
   /** Live, a route that journals nothing (`capture`): apply its in-memory
    *  answer (tx 3). Required for such routes; `apply` is never called for them. */
   applyAnswer?(tx: Database, input: AnswerApplyInput): Promise<ApplyResult<C>>;
-  /** Live, a `local` plan: the write without a request (tx of `commit.applyLocal`). */
+  /** Live: the write of a `local` plan, in the commit's fenced transaction
+   *  (after the page lock and the erasure fence, before the work row). */
   applyLocal?(tx: Database, input: LocalApplyInput): Promise<ApplyResult<C>>;
   /** The module's word on an outcome's consequences (`errors.onOutcome`), in
    *  the capture transaction: a failed WebSocket handshake goes to the

@@ -240,13 +240,9 @@ export class SyncActor {
       return null;
     }
     if (plan.kind === "local") {
-      // A write without a request (design §3.3 item 3): nothing is admitted,
-      // so the slot stays open for the next work.
-      if (shadow) {
-        await commitNoHttp(d, picked.work, { kind: "done", reason: `shadow:${plan.reason}` });
-      } else {
-        await applyLocal(d, picked.work, module);
-      }
+      // A write without a request (design §3.3 item 3): picked at a slot like
+      // any work, but nothing is admitted or sent, so the slot stays open.
+      await applyLocal(d, picked.work, module);
       return null;
     }
     if (plan.kind !== "request") {

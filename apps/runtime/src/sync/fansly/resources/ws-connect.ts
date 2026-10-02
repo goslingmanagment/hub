@@ -19,9 +19,11 @@ import type {
 // admission is one Upgrade. The frames that follow are not requests.
 //
 // - plan: an Upgrade only when the owner holds the socket lock and has no
-//   socket (`owning`, `down`); an open socket satisfies the work; otherwise
-//   (connecting, the session refused at the auth frame, no owner in this
-//   process) it waits on `dependency` — the owner raises demand again.
+//   socket (`owning`, `down`), and never before the owner's reconnect ladder
+//   allows (`connectNotBefore`: the row may be due sooner — a refused
+//   admission reopens it at once); an open socket satisfies the work;
+//   otherwise (connecting, the session refused at the auth frame, no owner in
+//   this process) it waits on `dependency` — the owner raises demand again.
 // - apply: the 101 closes the work; the connection row
 //   (`fansly_ws_connections`) is the record.
 // - outcome: a 401/403 at the handshake is the page's `auth` hold and a 429
@@ -43,11 +45,12 @@ export const WS_CONNECT_IDLE_RECHECK_MS = 60_000;
 
 export const WS_UPGRADE_REQUEST: RequestPlan<"ws.upgrade"> = { spec: "ws.upgrade", params: {} };
 
-/** The step for the owner's state (pure). */
-export function wsConnectPlan(state: WsSourceState | null, now: Date): StepPlan {
+/** The step for the owner's state and its ladder's instant (pure). */
+export function wsConnectPlan(state: WsSourceState | null, now: Date, notBefore: Date | null = null): StepPlan {
   switch (state) {
     case "owning":
     case "down":
+      if (notBefore !== null && notBefore.getTime() > now.getTime()) return { kind: "wait", reason: "not_due", until: notBefore };
       return { kind: "request", request: WS_UPGRADE_REQUEST };
     case "open":
       return { kind: "done", reason: "socket_open" };
@@ -93,7 +96,7 @@ export const wsConnectModule: ResourceModule = {
   async plan(_work, ctx: PlanContext): Promise<StepPlan> {
     // Live only: a shadow page never owns a socket (I14).
     if (ctx.shadow) return { kind: "done", reason: "shadow_no_socket" };
-    return wsConnectPlan(ctx.socket?.state ?? null, ctx.now);
+    return wsConnectPlan(ctx.socket?.state ?? null, ctx.now, ctx.socket?.connectNotBefore ?? null);
   },
 
   async apply(): Promise<ApplyResult> {
