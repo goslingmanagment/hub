@@ -168,6 +168,29 @@ export async function readOfapiStoredSnapshots(
     }),
   }));
 }
+/** The runtime's capture-admission refusal message prefix (ofapi-collection-read-transport.ts). */
+const CAPTURE_ADMISSION_PREFIX = "Capture admission: ";
+/**
+ * Scheduled runs parked as `paused` by a capture-admission refusal, before the
+ * runner learned to end them as failed, never dispatched that step. A paused
+ * background run blocks its category's schedule, so close these the same way
+ * the runner now does. Runs held for an uncertain or captured vendor outcome
+ * keep waiting for the owner.
+ */
+export async function closeAdmissionRefusedOfapiCollectionRuns(db: Database) {
+  const closed = await db.execute<{ id: string; page_id: string; category: string; reason: string }>(sql`
+    update ofapi_collection_jobs job set state='failed',
+      reason='scheduled_run_refused:' || substr(job.reason, ${CAPTURE_ADMISSION_PREFIX.length + 1}),
+      lease_token=null,lease_until=null,updated_at=now()
+    where job.state='paused' and job.purpose='background'
+      and left(job.reason, ${CAPTURE_ADMISSION_PREFIX.length}) = ${CAPTURE_ADMISSION_PREFIX}
+      and (job.lease_until is null or job.lease_until<=now())
+      and not exists(select 1 from ofapi_capture_jobs capture join ofapi_request_attempts attempt on attempt.capture_job_id=capture.id
+        where capture.kind='collection_read' and capture.page_id=job.page_id
+          and capture.target->>'collectionJobId'=job.id::text and attempt.state in ('reserved','dispatching'))
+    returning job.id,job.page_id,job.category,job.reason`);
+  return closed.rows.map(row => ({ id: row.id, pageId: Number(row.page_id), category: row.category, reason: row.reason }));
+}
 /** Schedule only explicitly configured non-baseline categories; never enables a collector. */
 export async function enqueueDueOfapiCollectionSchedules(
   db: Database,

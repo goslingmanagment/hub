@@ -806,6 +806,145 @@ describe("OFAPI chargebacks reconcile", () => {
     expect(result).toMatchObject({ skipped: "disabled", stalePendings: 0, expired: 0 });
   });
 
+  // Every listTransactions call answers the same single page.
+  function restTransactionsClient(input: {
+    items: Record<string, unknown>[];
+    calls: string[];
+  }): OfapiClient {
+    return {
+      async listTransactions(_context: unknown, accountId: string): Promise<OfapiListPage> {
+        input.calls.push(accountId);
+        return {
+          items: input.items,
+          hasNextPage: false,
+          nextMarker: null,
+          nextPageUrl: null,
+          meta: null,
+        };
+      },
+    } as unknown as OfapiClient;
+  }
+
+  const STALE_AT = () => new Date(Date.now() - 10 * 86_400_000);
+
+  function restTip(id: string, status: string) {
+    return {
+      id,
+      type: "tip",
+      status,
+      amount: "4.00",
+      net: "3.20",
+      createdAt: STALE_AT().toISOString(),
+      user: { id: 555101 },
+    };
+  }
+
+  async function seedStalePending(pageId: number, transactionId: string) {
+    await upsertTransaction(appContext.db, {
+      platformAccountId: pageId,
+      source: "ofapi:webhook",
+      transactionId,
+      rawType: "ofapi:tip",
+      canonicalType: "tip",
+      transactionState: "pending",
+      rawStatus: "pending",
+      grossAmountMills: 4_000n,
+      sourceDestinationAmountMills: 4_000n,
+      creatorNetAmountMills: 3_200n,
+      senderId: "555101",
+      occurredAt: STALE_AT(),
+    });
+  }
+
+  function reconcileContext() {
+    return createTestAppContext(testDb!, {
+      ofapiCreditLedgerEnabled: true,
+      ofapiSpendTransactionIngestEnabled: true,
+    });
+  }
+
+  it("a rescan refused at the credit floor retires nothing (2026-09-06)", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = reconcileContext();
+    const page = await seedOfapiPage("pend-floor", "acct_pend_floor");
+    await seedStalePending(page.id, "floor-1");
+    // The incident balance: fresh, 479 credits under the default 500 floor.
+    await testDb.pool.query(
+      "insert into ofapi_credit_state(id,last_balance,last_balance_at) values(1,479,now()) on conflict(id) do update set last_balance=479,last_balance_at=now()",
+    );
+    const calls: string[] = [];
+    appContext = { ...appContext, ofapi: restTransactionsClient({ items: [], calls }) };
+
+    const result = await runOfapiPendingReconcile(appContext);
+
+    expect(calls).toHaveLength(0);
+    expect(result).toMatchObject({
+      stalePendings: 1,
+      pagesTouched: 0,
+      expired: 0,
+      unresolved: 0,
+      deferred: 1,
+      blockedPages: [],
+      unscannedPages: [page.label],
+    });
+    expect(await rowState(page.id, "floor-1")).toEqual({ is_active: true, inactive_reason: null });
+  });
+
+  it("an empty rescan feed retires nothing", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = reconcileContext();
+    const page = await seedOfapiPage("pend-empty", "acct_pend_empty");
+    await seedStalePending(page.id, "empty-1");
+    const calls: string[] = [];
+    appContext = { ...appContext, ofapi: restTransactionsClient({ items: [], calls }) };
+
+    const result = await runOfapiPendingReconcile(appContext);
+
+    expect(calls).toEqual(["acct_pend_empty"]);
+    expect(result).toMatchObject({ expired: 0, deferred: 1, unscannedPages: [page.label] });
+    expect(await rowState(page.id, "empty-1")).toEqual({ is_active: true, inactive_reason: null });
+  });
+
+  it("a full rescan settles what it lists and retires what it no longer lists", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    appContext = reconcileContext();
+    const page = await seedOfapiPage("pend-full", "acct_pend_full");
+    await seedStalePending(page.id, "settle-1");
+    await seedStalePending(page.id, "gone-1");
+    const calls: string[] = [];
+    appContext = {
+      ...appContext,
+      ofapi: restTransactionsClient({ items: [restTip("settle-1", "done")], calls }),
+    };
+
+    const result = await runOfapiPendingReconcile(appContext);
+
+    expect(calls).toEqual(["acct_pend_full"]);
+    expect(result).toMatchObject({
+      stalePendings: 2,
+      pagesTouched: 1,
+      expired: 1,
+      settledByRescan: 1,
+      unresolved: 0,
+      deferred: 0,
+      unscannedPages: [],
+    });
+    expect(await rowState(page.id, "settle-1")).toEqual({ is_active: true, inactive_reason: null });
+    expect(await rowState(page.id, "gone-1")).toEqual({
+      is_active: false,
+      inactive_reason: "missing_from_sync_window",
+    });
+  });
+
   it("does nothing with the flag off", async (context) => {
     if (!testDb) {
       context.skip();
