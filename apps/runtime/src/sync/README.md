@@ -24,7 +24,7 @@ sync/
     host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
-    commit.ts                the four transactions of a step and the no-HTTP outcomes
+    commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
@@ -32,7 +32,8 @@ sync/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     resources/               one file per resource family
-    ws/                      decode, router, the post-ack routing hook (live) and the shadow WS feed
+    ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
+                             page's socket (`source.ts`)
     lib/                     chain rules, walk helpers
   requests/                  history requests, ETA, enqueue-and-wait
   report/                    `sync shadow report`: part A (the live window), part B (the past journal)
@@ -51,7 +52,8 @@ to 100 of them not looked up through the page within the day.
 A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
 `upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
 membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
-pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary`). A list head newer than what the message
+pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary` after a read,
+`syncLegacyThreadSummaryAfterDeletion` after a socket deletion). A list head newer than what the message
 reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
 
 A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
@@ -171,8 +173,29 @@ decoder plus new chats, money, subscriptions and payouts) and one routing table 
 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
-broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; the hot-table and
-archive marks of a live page land with the socket's live ownership (step 3).
+broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; on a live page it is a
+`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, picked at a
+slot like any work but admitting nothing): the page's hot rows of the message are marked (sticky), one deliverable
+`message.deleted` is appended and the archive tombstoned from it (tombstone-first, sticky against a later REST copy),
+and the stored window of every touched thread is recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays
+the conversation list's, the chain is untouched.
+
+**A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
+page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
+session for as long as it runs, the lock the legacy receiver takes, so the two never both own a page's socket. It never
+connects by itself: it raises `ws.connect` demand (at start, after each end on the step-1 reconnect ladder, after a
+credentials change), and the actor admits that step like any request; the transport runs `handshake()` inside it, whose
+Upgrade rides an engine lease over the pacer's one-shot check (the last check before the headers; one admission, one
+Upgrade). Frames are captured on the owning session, applied and acked by the connection's applier with the post-ack
+hook (what it leaves, the worker timer acks — and routes). A verified connection raises `repair.ws-gap`; a socket down
+for two minutes raises `dm-conversations.ws-down` once; the auth frame's refusal blocks the credentials generation
+(as in step 1), raises `account.verify` and alert 2, with no reconnect until the credentials change. Demand the
+database refused is written again: `ws.connect` (same due time) every 10 s while the source holds the lock and has no
+connection, `account.verify` while the generation stays refused, `repair.ws-gap` on the next guard, `.ws-down` on the
+next down check. The source stops
+before the page's safe release: a graceful stop (shutdown, mode change) captures what the socket already delivered
+(≤ 20 s) and applies it (≤ 10 s), then closes the connection row at the instant intake stopped — the next connection's
+`gap_since` — and the lock session; a lost ownership does not drain.
 
 ## Ownership
 
@@ -217,7 +240,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I6 | No automatic takeover from a live old process: an unconfirmed stop leaves the page `ownership_unconfirmed`; a lost lock session is never a confirmation, the owner's own safe release is. | `engine/host.ts` |
 | I7 | Every write of an actor is fenced by `owner_generation`. | `repositories/sync/pages.ts` `lockOwnedPage` |
 | I8 | The raw answer is committed before it is parsed; apply is replayable from the observation without HTTP. | `engine/commit.ts` |
-| I9 | The chain columns of a thread have one writer (`writeThreadChain`); the legacy coverage columns are written by the engine only on pages in `handover`/`live` (`syncLegacyThreadSummary`). | `repositories/sync/thread-chain.ts` |
+| I9 | The chain columns of a thread have one writer (`writeThreadChain`); the legacy coverage columns are written by the engine only on pages in `handover`/`live` (`syncLegacyThreadSummary`, `syncLegacyThreadSummaryAfterDeletion`). | `repositories/sync/thread-chain.ts` |
 | I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |

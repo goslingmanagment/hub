@@ -17,6 +17,7 @@ import {
   FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsConnectionTiming, type FanslyWsStopReason,
 } from "./connection.ts";
 import { routeFanslyWsReceiptDemand } from "../../sync/fansly/ws/route-receipt.ts";
+import { wsReconnectDelayMs } from "../../sync/fansly/ws/source.ts";
 import { createFanslyWsLiveApplier } from "./live-apply.ts";
 
 /** Told about every committed frame, after the commit and outside the serial
@@ -42,7 +43,8 @@ export interface FanslyWsWorkerTiming extends FanslyWsConnectionTiming {
   /** Page-loop pause while another session owns the page, and between
    * credential-generation re-checks after an auth refusal. */
   pagePauseMs: number;
-  /** Reconnect backoff base, doubled per unstable attempt. */
+  /** Reconnect backoff base, doubled per unstable attempt (the ladder is the
+   *  engine socket's, `wsReconnectDelayMs`). */
   backoffBaseMs: number;
   /** After the receiver stops, the overlay apply of captured frames gets at
    * most this long; the rest stays pending for the worker timer. With the
@@ -286,8 +288,7 @@ async function runPage(
       }
     } else {
       failures++;
-      const backoff = failures >= 10 ? 30 * 60_000 : Math.min(60_000, timing.backoffBaseMs * 2 ** Math.min(failures, 6));
-      await pause(signal, backoff * (0.8 + Math.random() * 0.4));
+      await pause(signal, wsReconnectDelayMs(failures, Math.random(), timing.backoffBaseMs));
     }
   }
 }

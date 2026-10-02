@@ -16,9 +16,11 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 //       short transaction (`writeRebuiltThreadChain`);
 //   legacy coverage columns (stored_*, message_coverage_status,
 //       message_backfill_complete, last_message_sync_at, last_fan/model_*)
-//       written by the engine ONLY through `syncLegacyThreadSummary`, which
-//       refuses a thread whose page is not `handover`/`live` — on every other
-//       page they belong to the legacy engine.
+//       written by the engine ONLY through `syncLegacyThreadSummary` (a read
+//       stored rows) and `syncLegacyThreadSummaryAfterDeletion` (a socket
+//       deletion marked one), which refuse a thread whose page is not
+//       `handover`/`live` — on every other page they belong to the legacy
+//       engine.
 // Neither writer touches the other group (nor `updated_at`, for the chain
 // writer), so a rebuild on a legacy page changes nothing a legacy reader sees.
 
@@ -688,6 +690,57 @@ export async function syncLegacyThreadSummary(
   if (row) {
     return { storedMessageCount: Number(row.storedMessageCount), messageCoverageStatus: row.messageCoverageStatus };
   }
+  const why = await tx.execute<{ mode: SyncPageMode | null }>(sql`
+    select sp.mode
+      from page_dm_threads t
+      left join sync_pages sp on sp.page_id = t.platform_account_id
+     where t.id = ${threadId}
+  `);
+  const found = why.rows[0];
+  throw new LegacyThreadSummaryRefusedError(threadId, found?.mode ?? null, found !== undefined);
+}
+
+/**
+ * Keep the legacy stored window of one thread honest after a WebSocket
+ * deletion marked a row of it on a page the engine owns (design §3.3 item 4,
+ * E7): `stored_message_count`, `newest/oldest_stored_message_id` and
+ * `last_fan/model_message_at`, recomputed from the thread's live rows
+ * (`page_dm_messages where deleted_at is null`, the window summary of
+ * `getPageDmMessageWindowSummary`). The head fields are the conversation
+ * list's, the coverage verdict follows the chain (a deletion changes neither),
+ * and the chain columns are untouched. Asserts in the same statement that the
+ * thread's page is `handover` or `live` and throws
+ * `LegacyThreadSummaryRefusedError` otherwise (I9), like
+ * `syncLegacyThreadSummary`.
+ */
+export async function syncLegacyThreadSummaryAfterDeletion(
+  tx: Database,
+  threadId: number,
+): Promise<{ storedMessageCount: number }> {
+  const result = await tx.execute<{ storedMessageCount: number }>(sql`
+    update page_dm_threads t
+       set stored_message_count = s.stored_count,
+           newest_stored_message_id = s.newest_id,
+           oldest_stored_message_id = s.oldest_id,
+           last_fan_message_at = s.last_fan_at,
+           last_model_message_at = s.last_model_at,
+           updated_at = clock_timestamp()
+      from sync_pages sp,
+           (select count(*)::int as stored_count,
+                   (array_agg(m.platform_message_id order by m.created_at desc, m.platform_message_id desc, m.id desc))[1] as newest_id,
+                   (array_agg(m.platform_message_id order by m.created_at asc, m.platform_message_id asc, m.id asc))[1] as oldest_id,
+                   max(m.created_at) filter (where m.sender_role = 'fan') as last_fan_at,
+                   max(m.created_at) filter (where m.sender_role = 'model') as last_model_at
+              from page_dm_messages m
+             where m.conversation_id = ${threadId}
+               and m.deleted_at is null) s
+     where t.id = ${threadId}
+       and sp.page_id = t.platform_account_id
+       and sp.mode in ('handover', 'live')
+    returning t.stored_message_count as "storedMessageCount"
+  `);
+  const row = result.rows[0];
+  if (row) return { storedMessageCount: Number(row.storedMessageCount) };
   const why = await tx.execute<{ mode: SyncPageMode | null }>(sql`
     select sp.mode
       from page_dm_threads t

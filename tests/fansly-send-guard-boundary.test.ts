@@ -103,7 +103,23 @@ describe("the Fansly send-guard boundary (plan §2.5)", () => {
       "scripts/fansly-ws/binding-preflight.ts",
       "scripts/fansly-ws/continuity-runtime.ts",
       "scripts/fansly-ws/probe.ts",
-    ]);
+      // The Sync Engine's socket of a live page (step-3 design §3.3): built
+      // only by the host's live loop (LIVE_LOOP_ENABLED = false until S3-05),
+      // its Upgrade admitted by the engine's pacer on an engine lease.
+      "apps/runtime/src/sync/fansly/ws/source.ts",
+    ].sort());
+  });
+
+  it("admits the engine socket's Upgrade on a lease over the pacer's check, through the receiver socket helper", () => {
+    const source = read("apps/runtime/src/sync/fansly/ws/source.ts");
+    expect(source).toContain("const lease = createEngineUpgradeLease(hooks, { pageId });");
+    expect(source).toContain("bind: (dispatcher) => composeFanslySendCheck(dispatcher, gate.check),");
+    expect(source).toContain("const gate = createOneShotSendCheck(hooks.check);");
+    expect(source).toContain("const opener = this.#d.openSocket ?? openFanslyReceiverSocket;");
+    expect(source).toContain("open: () => opener(egress, lease),");
+    // The opener is replaced only through the host's test-only option, which
+    // the runtime never passes (tests/sync-live-gate.integration.test.ts).
+    expect(read("apps/runtime/src/sync/main.ts")).not.toContain("wsSourceOverrides");
   });
 
   it("gives each sender outside the adapter the guard of its page with its own source", () => {

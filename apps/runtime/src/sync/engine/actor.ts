@@ -18,6 +18,7 @@ import {
 import {
   admit,
   apply,
+  applyLocal,
   capture,
   commitNoHttp,
   deferAfterPlanError,
@@ -232,6 +233,12 @@ export class SyncActor {
       });
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
+      return null;
+    }
+    if (plan.kind === "local") {
+      // A write without a request (design §3.3 item 3): picked at a slot like
+      // any work, but nothing is admitted or sent, so the slot stays open.
+      await applyLocal(d, picked.work, module);
       return null;
     }
     if (plan.kind !== "request") {
