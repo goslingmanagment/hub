@@ -748,6 +748,15 @@ you conclude anything from a zero.
 | `payouts` | payout requests with masked methods | `+ read:money` |
 | `capture_coverage` | how far back each plane reaches, as data | `read:datasets` |
 
+**OnlyFans payouts live elsewhere.** `payouts` above is Fansly's. For an
+OnlyFans page read `ofapi_payout_requests` (`+ read:money`, claim field
+`ofapiPayoutRequest`): one row per invoice as OnlyFans lists it, latest
+observation wins (`state` moves from `new` to its final value), with
+`amountMills`, `currency`, `state`, `rejectReason` and `requestedAt`. The
+scheduled read takes only the newest 50 requests per run; its `captureFloor` is
+the oldest request Hub holds, and anything earlier is "Hub holds no record",
+never "OnlyFans paid nothing".
+
 Two names moved. `purchase_history` is **gone from the catalog entirely** — it
 was never a dataset, only a sync-stream name with no serving table, and
 `message_media_sales` is what answers the question it stood for. `fan_earnings`
