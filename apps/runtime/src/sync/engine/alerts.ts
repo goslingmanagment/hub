@@ -27,7 +27,14 @@ import {
 } from "../../services/notification-incidents.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
 import type { SyncLogger } from "./commit.ts";
-import { carriedTimedHold, LIST_RATE_LIMIT_FILE, LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
+import {
+  carriedTimedHold,
+  ENDPOINT_RATE_GROUPS,
+  LIST_RATE_LIMIT_LADDER_MS,
+  NETWORK_ALERT_AFTER_MS,
+  resourceFileOf,
+  type EndpointRateGroup,
+} from "./errors.ts";
 import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 
@@ -135,10 +142,11 @@ function inForce(until: Date | null, now: Date): boolean {
   return until !== null && until.getTime() > now.getTime();
 }
 
-/** The list hold at the top of its ladder (alert 1 `rate_limit_list`). */
-function sustainedListHold(page: PageAlertFacts["page"], now: Date): Date | null {
-  const hold = page.resourceHolds[LIST_RATE_LIMIT_FILE];
-  if (hold?.kind !== "rate_limit_list" || !inForce(dateOf(hold.until), now)) return null;
+/** An endpoint group's hold at the top of its ladder (alert 1
+ *  `rate_limit_list`, `rate_limit_media_stats`). */
+function sustainedGroupHold(page: PageAlertFacts["page"], group: EndpointRateGroup, now: Date): Date | null {
+  const hold = page.resourceHolds[group.file];
+  if (hold?.kind !== group.kind || !inForce(dateOf(hold.until), now)) return null;
   return hold.step >= LIST_RATE_LIMIT_LADDER_MS.length ? dateOf(hold.since) : null;
 }
 
@@ -178,8 +186,10 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   const carried = carriedTimedHold(page);
   const carriedInForce = carried !== null && carried.until.getTime() > now.getTime() ? carried : null;
   if (carriedInForce?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: dateOf(carriedInForce.detail.lastRateLimitAt) });
-  const listSince = sustainedListHold(page, now);
-  if (listSince !== null) stopped.push({ detail: "rate_limit_list", since: listSince });
+  for (const group of ENDPOINT_RATE_GROUPS) {
+    const groupSince = sustainedGroupHold(page, group, now);
+    if (groupSince !== null) stopped.push({ detail: group.kind, since: groupSince });
+  }
   if (holdInForce && page.holdKind === "network") {
     const networkSince = dateOf(page.holdDetail.networkSince) ?? page.holdSince;
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });

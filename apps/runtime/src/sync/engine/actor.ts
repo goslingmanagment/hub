@@ -1,4 +1,5 @@
 import {
+  endpointSpacingRemainingMs,
   ensurePollRows,
   getSyncPage,
   LiveGateClosedError,
@@ -23,6 +24,7 @@ import {
   capture,
   commitNoHttp,
   deferAfterPlanError,
+  deferForEndpointSpacing,
   drainDueApplies,
   enqueueOwnDemand,
   errorName,
@@ -42,8 +44,10 @@ import {
   activePageHold,
   activeResourceHold,
   CREDENTIALS_CHECK_KEYS,
+  endpointRateGroupOfKind,
+  endpointRateGroupOfRoute,
+  isEndpointRateLimitKind,
   isResourceHoldExempt,
-  LIST_RATE_LIMIT_HELD_KEYS,
   resourceFileOf,
   type ResourceHoldEntry,
 } from "./errors.ts";
@@ -275,6 +279,16 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, plan);
       return null;
     }
+    // Owner decision №20: an endpoint group with a quota of its own (the
+    // media statistics) takes at most one request per its spacing on this
+    // page, on top of the pause S — whatever key, demand or restart asks.
+    // Nothing is admitted; the slot stays open for other work.
+    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now);
+    if (spacedUntil !== null) {
+      d.metrics.increment("sync_endpoint_spaced", { resource: picked.work.resource, shadow });
+      await deferForEndpointSpacing(d, picked.work, spacedUntil);
+      return null;
+    }
 
     if (!shadow && (await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
       // A slow lock session is not a lost one: skip this admission (nothing
@@ -405,6 +419,23 @@ export class SyncActor {
       }
     }
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
+  }
+
+  /** When the page may next admit a request on `route`'s endpoint group, if
+   *  that is later than now; null: now (or the route has no spacing). Read
+   *  from the attempt journal by the database clock, so a demand bump, a
+   *  restarted walk or a restarted process never shortens it. */
+  async #endpointSpacedUntil(route: string, now: Date): Promise<Date | null> {
+    const d = this.#d;
+    const group = endpointRateGroupOfRoute(route);
+    if (group === null || group.spacingMs === null) return null;
+    const remainingMs = await endpointSpacingRemainingMs(d.db, {
+      pageId: d.pageId,
+      shadow: d.mode === "shadow",
+      operations: [...group.routes],
+      spacingMs: group.spacingMs,
+    });
+    return remainingMs > 0 ? new Date(now.getTime() + remainingMs) : null;
   }
 
   async #gate(): Promise<Gate> {
@@ -573,8 +604,9 @@ export function credentialsVerifiedSince(
  * keys, keys switched off for the page, live-only keys in shadow, and the
  * files under a live resource hold — except a key a hold never stops
  * (`dm-messages.head`): its file's other known keys are listed one by one.
- * The conversation list's own 429 hold stops only the keys that can only
- * read the list (`LIST_RATE_LIMIT_HELD_KEYS`), whatever their file. The
+ * An endpoint group's own 429 hold stops only the group's keys (the keys that
+ * can only read the list, `LIST_RATE_LIMIT_HELD_KEYS`; the media-stats walk),
+ * whatever their file. The
  * owner's requests pause leaves the whole requests class out.
  */
 export interface PickExclusions {
@@ -604,9 +636,10 @@ export function pickExclusions(
   const holds = page.resourceHolds as Record<string, ResourceHoldEntry>;
   for (const [file, entry] of Object.entries(holds)) {
     if (!(new Date(entry.until).getTime() > now.getTime())) continue;
-    if (entry.kind === "rate_limit_list") {
+    if (isEndpointRateLimitKind(entry.kind)) {
+      const group = endpointRateGroupOfKind(entry.kind);
       for (const spec of registry.specs) {
-        if (LIST_RATE_LIMIT_HELD_KEYS.has(spec.key)) resources.add(spec.key);
+        if (group.heldKeys.has(spec.key)) resources.add(spec.key);
       }
       continue;
     }

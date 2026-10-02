@@ -2493,8 +2493,9 @@ export const agentSyncPageStatusSchema = z.object({
       file: z.string(),
       until: agentIsoTimestamp,
       step: agentSyncCountSchema,
-      /** The file's breaker, or the conversation list's own 429 hold. */
-      kind: z.enum(["breaker", "rate_limit_list"]),
+      /** The file's breaker, or an endpoint group's own 429 hold (the
+       *  conversation list's, the media statistics'). */
+      kind: z.enum(["breaker", "rate_limit_list", "rate_limit_media_stats"]),
     }).strict()),
   }).strict(),
   breakers: z.object({ open: agentSyncCountSchema, blockedByVendor: agentSyncCountSchema }).strict(),

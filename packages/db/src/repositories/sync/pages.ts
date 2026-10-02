@@ -99,16 +99,23 @@ export interface SyncPageOwnerRecord {
   stopConfirmedBy: string | null;
 }
 
+/** The 429 holds of an endpoint group with a quota of its own (owner
+ *  decisions №14 and №20): a 429 on the group's route holds only the keys
+ *  that read it, never the page. */
+export const SYNC_ENDPOINT_HOLD_KINDS = ["rate_limit_list", "rate_limit_media_stats"] as const;
+export type SyncEndpointHoldKind = (typeof SYNC_ENDPOINT_HOLD_KINDS)[number];
+
 /** `resource_holds[<file>]`: the §9 resource breaker of one resource file
- *  (no `kind`), or the conversation list's own 429 hold (`kind:
- *  'rate_limit_list'`, owner decision 2026-10-02) in the `dm-conversations`
- *  entry. */
+ *  (no `kind`), or an endpoint group's own 429 hold — the conversation list's
+ *  (`kind: 'rate_limit_list'`, owner decision №14) in the `dm-conversations`
+ *  entry, the media statistics' (`kind: 'rate_limit_media_stats'`, owner
+ *  decision №20) in the `media-stats` entry. */
 export interface SyncResourceHold {
   until: string;
   step: number;
   since: string;
-  kind?: "rate_limit_list";
-  /** The newest list 429 (the list ladder's reset clock). */
+  kind?: SyncEndpointHoldKind;
+  /** The newest 429 of the group (its ladder's reset clock). */
   lastRateLimitAt?: string;
 }
 
@@ -1029,8 +1036,9 @@ export async function setNetworkFailureStreak(
 
 /**
  * The §9 resource breaker of one resource file: `resource_holds[file] =
- * {until, step, since}`, or — with `kind: 'rate_limit_list'` — the list's own
- * 429 hold, which also keeps the instant of its newest 429; `hold: null` lifts
+ * {until, step, since}`, or — with an endpoint group's `kind` (`rate_limit_list`,
+ * `rate_limit_media_stats`) — that group's own 429 hold, which also keeps the
+ * instant of its newest 429; `hold: null` lifts
  * it. `since` carries over while the entry keeps its kind.
  */
 export async function setResourceHold(
@@ -1039,7 +1047,7 @@ export async function setResourceHold(
     pageId: number;
     generation?: bigint;
     file: string;
-    hold: { until: Date; step: number; kind?: "rate_limit_list"; lastRateLimitAt?: Date } | null;
+    hold: { until: Date; step: number; kind?: SyncEndpointHoldKind; lastRateLimitAt?: Date } | null;
   },
 ): Promise<void> {
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.file)) {

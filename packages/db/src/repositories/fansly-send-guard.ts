@@ -652,7 +652,7 @@ export async function handFanslySendGuardBackToLegacy(
              ${ENGINE_CARRIED_TIMED_HOLD_UNTIL},
              (select max((h.value ->> 'until')::timestamptz)
                 from jsonb_each(sp.resource_holds) h
-               where h.value ->> 'kind' = 'rate_limit_list'
+               where h.value ->> 'kind' in ('rate_limit_list', 'rate_limit_media_stats')
                  and (h.value ->> 'until')::timestamptz > clock_timestamp()))
       from sync_pages sp
      where g.page_id = ${input.pageId}
