@@ -64,6 +64,10 @@ const AGENT_OPERATIONS = [
   "agentHistoryRequestGet",
   "agentHistoryRequestCancel",
   "agentHistoryRequestList",
+  // The engine's status and "why waiting" (design §7.4): agentKey reads of the
+  // engine's own queue; the owner's twins live in routes-sync.ts.
+  "agentSyncStatus",
+  "agentSyncWhy",
 ] as const;
 
 describe("agent read plane: the operation surface", () => {
@@ -104,6 +108,7 @@ describe("agent read plane: the operation surface", () => {
       "agentDatasetQuery",
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
+      "agentSyncWhy",
       "agentThreadMessages",
     ]);
   });
@@ -150,6 +155,7 @@ describe("agent read plane: the operation surface", () => {
       "agentHistoryRequestCreate",
       "agentHistoryRequestGet",
       "agentHistoryRequestCancel",
+      "agentSyncWhy",
     ] as const) {
       const responses = (agentRouteSchemas[key] as { response: Record<string, unknown> }).response;
       expect(Object.keys(responses)).toContain("404");

@@ -39,6 +39,7 @@ import {
   handleAgentHistoryRequestGet,
   handleAgentHistoryRequestList,
 } from "./handlers-history.ts";
+import { handleAgentSyncStatus, handleAgentSyncWhy } from "./handlers-sync.ts";
 
 /**
  * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
@@ -299,6 +300,25 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentHistoryRequestList(appContext, principal, request.query);
   });
+
+  // --- The Fansly Sync Engine's status and "why waiting" (plan §10, design §7.4) ---
+  //
+  // Reads of the engine's own queue and journal: no platform call, no
+  // evidence plane. Off and shadow pages report their shadow journal.
+
+  server.get("/api/v1/agent/sync/pages", {
+    schema: routeSchemas.agentSyncStatus,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentSyncStatus(appContext, principal, request.query);
+  });
+
+  server.get("/api/v1/agent/pages/:pageLabel/sync/work", {
+    schema: routeSchemas.agentSyncWhy,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentSyncWhy(appContext, principal, request.params, request.query);
+  });
 }
 
 /**
@@ -373,3 +393,6 @@ export {
  * the login flow; what is under test is the seam.
  */
 export { handleAgentObservationPayload } from "./handlers-journal.ts";
+/** Which capabilities "why waiting" asks of a key (chat and fan subjects need
+ *  `read:messages` too): pinned against the registry's subject kinds. */
+export { agentSyncWhyCapabilities } from "./handlers-sync.ts";
