@@ -279,11 +279,12 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, plan);
       return null;
     }
-    // Owner decision №20: an endpoint group with a quota of its own (the
-    // media statistics) takes at most one request per its spacing on this
-    // page, on top of the pause S — whatever key, demand or restart asks.
-    // Nothing is admitted; the slot stays open for other work.
-    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now);
+    // Owner decisions №14, №20: an endpoint group with a quota of its own
+    // (the conversation list, the media statistics) takes at most one request
+    // per its spacing on this page, on top of the pause S — whatever key,
+    // demand or restart asks. Nothing is admitted; the slot stays open for
+    // other work.
+    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now, picked.work.class);
     if (spacedUntil !== null) {
       d.metrics.increment("sync_endpoint_spaced", { resource: picked.work.resource, shadow });
       await deferForEndpointSpacing(d, picked.work, spacedUntil);
@@ -424,8 +425,10 @@ export class SyncActor {
   /** When the page may next admit a request on `route`'s endpoint group, if
    *  that is later than now; null: now (or the route has no spacing). Read
    *  from the attempt journal by the database clock, so a demand bump, a
-   *  restarted walk or a restarted process never shortens it. */
-  async #endpointSpacedUntil(route: string, now: Date): Promise<Date | null> {
+   *  restarted walk or a restarted process never shortens it. A non-urgent
+   *  row comes due the group's head start later, so an urgent row put off by
+   *  the same spacing is due first and takes the route. */
+  async #endpointSpacedUntil(route: string, now: Date, workClass: SyncWorkRow["class"]): Promise<Date | null> {
     const d = this.#d;
     const group = endpointRateGroupOfRoute(route);
     if (group === null || group.spacingMs === null) return null;
@@ -435,7 +438,8 @@ export class SyncActor {
       operations: [...group.routes],
       spacingMs: group.spacingMs,
     });
-    return remainingMs > 0 ? new Date(now.getTime() + remainingMs) : null;
+    if (remainingMs <= 0) return null;
+    return new Date(now.getTime() + remainingMs + (workClass === "urgent" ? 0 : group.urgentHeadStartMs));
   }
 
   async #gate(): Promise<Gate> {

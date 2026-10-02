@@ -5,6 +5,7 @@ import { FANSLY_SEND_SOURCES, fanslyWireSpec, FANSLY_WIRE_SPECS, type FanslyWire
 
 import {
   ENDPOINT_RATE_GROUPS,
+  LIST_RATE_GROUP,
   LIST_RATE_LIMIT_HELD_KEYS,
   LIST_RATE_LIMIT_ROUTE,
   MEDIA_STATS_RATE_GROUP,
@@ -149,6 +150,33 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.find").operations).toEqual([LIST_RATE_LIMIT_ROUTE, "group.detail"]);
   });
 
+  it("the 5 s list spacing paces every key that reads the list, an urgent one first (owner decision №14)", () => {
+    // Every wire route on the endpoint is in the group: whatever key reads
+    // `/messaging/groups`, the spacing covers it.
+    const onEndpoint = Object.values(FANSLY_WIRE_SPECS)
+      .filter((spec) => spec.endpointTemplate === FANSLY_WIRE_SPECS[LIST_RATE_LIMIT_ROUTE].endpointTemplate)
+      .map((spec) => spec.id)
+      .sort();
+    expect(FANSLY_WIRE_SPECS[LIST_RATE_LIMIT_ROUTE].endpointTemplate).toBe("/messaging/groups");
+    expect(onEndpoint).toEqual([...LIST_RATE_GROUP.routes].sort());
+    const readers = FANSLY_RESOURCE_SPECS
+      .filter((spec) => spec.operations.some((operation) => LIST_RATE_GROUP.routes.has(operation)))
+      .map((spec) => [spec.key, spec.class]);
+    expect(readers).toEqual([
+      ["dm-conversations.head", "planned"],
+      ["dm-conversations.full", "planned"],
+      ["dm-conversations.find", "urgent"],
+      ["dm-conversations.ws-down", "urgent"],
+      ["repair.ws-gap", "urgent"],
+    ]);
+    // Urgent and planned keys share the route: a planned read the spacing
+    // puts off comes due after an urgent one. `.find` waits one spacing at
+    // most, which leaves half its 12 s for the group detail after it.
+    expect(LIST_RATE_GROUP.urgentHeadStartMs).toBeGreaterThan(0);
+    expect(LIST_RATE_GROUP.spacingMs).toBe(5_000);
+    expect(LIST_RATE_GROUP.spacingMs! + LIST_RATE_GROUP.urgentHeadStartMs).toBeLessThan((byKey("dm-conversations.find").slo?.resultMs ?? 0) / 2);
+  });
+
   it("a media-stats 429 holds, and the 5 s spacing paces, exactly the keys that read the media-stats endpoint (owner decision №20)", () => {
     // Every wire route on the endpoint is in the group: whatever key reads
     // `/it/moie/statsnew`, the group's hold and spacing cover it.
@@ -168,12 +196,16 @@ describe("the Fansly registry table", () => {
     for (const key of readers) {
       expect(byKey(key).operations.every((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)), key).toBe(true);
     }
-    // The groups: the list keeps owner decision №14 as it was (its spacing
-    // is `repair.ws-gap`'s own cursor), the media statistics are spaced 5 s.
-    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file, group.spacingMs])).toEqual([
-      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations", null],
-      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats", 5_000],
+    // The groups: both are spaced 5 s; only the list has urgent readers to
+    // let through first.
+    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file, group.spacingMs, group.urgentHeadStartMs])).toEqual([
+      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations", 5_000, 500],
+      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats", 5_000, 0],
     ]);
+    for (const group of ENDPOINT_RATE_GROUPS) {
+      const urgentReader = FANSLY_RESOURCE_SPECS.some((spec) => spec.class === "urgent" && spec.operations.some((operation) => group.routes.has(operation)));
+      expect(group.urgentHeadStartMs > 0, group.kind).toBe(urgentReader);
+    }
     // No two groups share a route or a hold entry.
     const routes = ENDPOINT_RATE_GROUPS.flatMap((group) => [...group.routes]);
     expect(new Set(routes).size).toBe(routes.length);

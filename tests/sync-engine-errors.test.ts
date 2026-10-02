@@ -15,6 +15,7 @@ import {
   LIST_RATE_LIMIT_HELD_KEYS,
   LIST_RATE_LIMIT_LADDER_MS,
   LIST_RATE_LIMIT_LADDER_RESET_MS,
+  LIST_SPACING_MS,
   listRateLimitHold,
   listRateLimitStep,
   MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
@@ -498,6 +499,8 @@ describe("sync errors: a 429 on the media statistics", () => {
       .toBe("rate_limit");
     expect(endpointRateGroupOfRoute("media.offer_stats")).toMatchObject({ spacingMs: MEDIA_STATS_SPACING_MS, file: "media-stats" });
     expect(MEDIA_STATS_SPACING_MS).toBe(5_000);
+    expect(endpointRateGroupOfRoute("messaging.groups")).toMatchObject({ spacingMs: LIST_SPACING_MS, file: "dm-conversations" });
+    expect(LIST_SPACING_MS).toBe(5_000);
   });
 
   it("holds only the media-stats walk, never the page: Retry-After, else 5 → 10 → … → 300 s", () => {

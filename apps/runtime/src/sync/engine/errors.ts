@@ -55,7 +55,11 @@ export const NETWORK_ALERT_AFTER_MS = 600_000;
  * 429 on 2026-06-03 lilly-2 and 2026-10-01 lora-1; 5 s never did). A 429 on
  * this route holds only the list — `resource_holds['dm-conversations']` with
  * kind `rate_limit_list` — never the page: live messages, money, group detail
- * and every other resource keep running.
+ * and every other resource keep running. Two requests on this route are at
+ * least `LIST_SPACING_MS` apart on one page, whatever key reads it (the
+ * head and full walks, `.find`, `.ws-down`, `repair.ws-gap`), on top of the
+ * page pause S (2026-10-03: a full walk went page to page at S, the
+ * 2026-10-01 pattern that drew three list 429s).
  */
 export const LIST_RATE_LIMIT_ROUTE = "messaging.groups";
 /** The `resource_holds` entry the list hold lives in. */
@@ -78,6 +82,14 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
   "dm-conversations.ws-down",
   "repair.ws-gap",
 ]);
+/** One request on the list route per this long per page, at most. */
+export const LIST_SPACING_MS = 5_000;
+/** A non-urgent list read the spacing puts off comes due this much after an
+ *  urgent one would: a new fan's `.find` (urgent, 12 s) waiting on the route
+ *  takes it before the walk's next page. The pick serves urgent work first
+ *  only among due rows, and two rows put off by the same spacing come due a
+ *  few milliseconds apart in either order. */
+export const LIST_SPACING_URGENT_HEAD_START_MS = 500;
 
 /**
  * Owner decision №20 (2026-10-02, after lilly-1's 429 at 21:12:04 UTC: the
@@ -117,9 +129,11 @@ export interface EndpointRateGroup {
   file: string;
   /** The keys its hold stops. */
   heldKeys: ReadonlySet<string>;
-  /** The engine's spacing of two requests on its routes per page; null: none
-   *  (the list's is `repair.ws-gap`'s own, owner decision №14 unchanged). */
+  /** The engine's spacing of two requests on its routes per page; null: none. */
   spacingMs: number | null;
+  /** How much later than an urgent row a non-urgent row the spacing puts off
+   *  comes due (0: no urgent key reads the group's routes). */
+  urgentHeadStartMs: number;
 }
 
 export const LIST_RATE_GROUP: EndpointRateGroup = {
@@ -127,7 +141,8 @@ export const LIST_RATE_GROUP: EndpointRateGroup = {
   routes: new Set([LIST_RATE_LIMIT_ROUTE]),
   file: LIST_RATE_LIMIT_FILE,
   heldKeys: LIST_RATE_LIMIT_HELD_KEYS,
-  spacingMs: null,
+  spacingMs: LIST_SPACING_MS,
+  urgentHeadStartMs: LIST_SPACING_URGENT_HEAD_START_MS,
 };
 
 export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
@@ -136,6 +151,7 @@ export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
   file: MEDIA_STATS_RATE_LIMIT_FILE,
   heldKeys: MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
   spacingMs: MEDIA_STATS_SPACING_MS,
+  urgentHeadStartMs: 0,
 };
 
 export const ENDPOINT_RATE_GROUPS: readonly EndpointRateGroup[] = [LIST_RATE_GROUP, MEDIA_STATS_RATE_GROUP];

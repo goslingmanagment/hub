@@ -402,10 +402,12 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
 transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
 except a 429 on an endpoint group with a quota of its own (`ENDPOINT_RATE_GROUPS`): the conversation list (owner
-decision №14) and the media statistics (owner decision №20), which holds only that group's keys. The media
-statistics are also spaced: the actor admits a request on `media.offer_stats` no sooner than 5 s after the page's
-previous one there (by the attempt journal, on top of `S`; a put-off row waits with `waiting_reason = 'pacer'`
-while other work takes the slot).
+decision №14) and the media statistics (owner decision №20), which holds only that group's keys. Both are also
+spaced: the actor admits a request on `messaging.groups` (the head and full walks, `.find`, `.ws-down`,
+`repair.ws-gap`) or on `media.offer_stats` no sooner than 5 s after the page's previous one on that route (by the
+attempt journal, on top of `S`; a put-off row waits with `waiting_reason = 'pacer'` while other work takes the
+slot). A non-urgent list read put off this way comes due 0.5 s after an urgent one would, so a new fan's `.find`
+waiting on the list takes it before the walk's next page and waits one spacing at most.
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |

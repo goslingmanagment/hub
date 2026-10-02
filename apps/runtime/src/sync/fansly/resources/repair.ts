@@ -43,7 +43,9 @@ import { applyListPage } from "./dm-conversations.ts";
 //           only the list keys, this one among them). The spacing is the
 //           cursor's `nextListAt`, checked by the plan: a new demand pulls
 //           the row's due time to now, never a list page closer than 5 s to
-//           the previous one — nor a restarted pass's first page;
+//           the previous one — nor a restarted pass's first page; the
+//           engine's own list spacing (`LIST_SPACING_MS`, by the attempt
+//           journal, whatever key read the list last) applies on top;
 //   then  — the money head (`transactions.head`, urgent) and the subscribers
 //           poll (due now), the two other things a socket says live;
 //   wait  — until every work the pass asked for has served its demand, or

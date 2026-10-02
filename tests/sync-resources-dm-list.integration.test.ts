@@ -243,7 +243,7 @@ async function drive(
   registry: EngineRegistry,
   respond: Responder | null,
   until: () => Promise<boolean>,
-  options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics } = {},
+  options: { alerts?: RecordingAlerts; metrics?: RecordingMetrics; timeoutMs?: number } = {},
 ) {
   const transport = respond === null ? undefined : new ScriptedLiveTransport();
   if (transport !== undefined && respond !== null) transport.respond = (req) => respond(req);
@@ -258,7 +258,7 @@ async function drive(
   });
   const run = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
-    await waitFor(async () => ((await until()) ? true : null), 30_000, "the work to settle");
+    await waitFor(async () => ((await until()) ? true : null), options.timeoutMs ?? 30_000, "the work to settle");
   } finally {
     stop.abort();
     await run;
@@ -266,7 +266,12 @@ async function drive(
   return { hits: transport?.hits.map((hit) => hit.spec) ?? [] };
 }
 
-async function runLive(pageId: number, respond: Responder, until: () => Promise<boolean>, options: { metrics?: RecordingMetrics } = {}) {
+async function runLive(
+  pageId: number,
+  respond: Responder,
+  until: () => Promise<boolean>,
+  options: { metrics?: RecordingMetrics; timeoutMs?: number } = {},
+) {
   const registry = await quietRegistry(pageId, false);
   return drive(pageId, "live", registry, respond, until, options);
 }
@@ -455,9 +460,10 @@ describe("dm-conversations.full", () => {
       const offset = offsetOf(req);
       offsets.push(offset);
       return okResponse(listPage(chats.slice(offset, offset + 100)));
-    }, async () => (await workRow(pageId, "dm-conversations.full"))?.cursor.last != null);
+    }, async () => (await workRow(pageId, "dm-conversations.full"))?.cursor.last != null, { timeoutMs: 60_000 });
 
-    // Five full pages and the empty one after them; not a single head read.
+    // Five full pages and the empty one after them, ≥ 5 s apart (owner
+    // decision №14); not a single head read.
     expect(hits).toEqual(Array(6).fill("messaging.groups"));
     expect(offsets).toEqual([0, 100, 200, 300, 400, 500]);
     const work = await workRow(pageId, "dm-conversations.full");
@@ -472,7 +478,7 @@ describe("dm-conversations.full", () => {
     expect(await countRows(testDb.pool,
       "select count(*)::int as n from page_dm_threads where platform_account_id = $1 and last_seen_generation = 1 and fan_id is not null", [pageId])).toBe(500);
     expect(await thread(pageId, 9999)).toMatchObject({ is_visible: true, last_seen_generation: null });
-  });
+  }, 90_000);
 
   it("restarts a walk the provider serves repeats to, under a new generation after a minute; past the bound it closes withheld", async (context) => {
     if (!testDb) return context.skip();
