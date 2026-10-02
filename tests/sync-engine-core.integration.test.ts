@@ -1007,7 +1007,7 @@ describe("sync_attempts", () => {
     await confirmSyncOwnersStopped(db(), { runningHosts: ["after-restart"], ownHost: "cli", confirmedBy: "test", dryRun: false });
     expect(await own(pageId, owner({ host: "after-restart" }))).toBe(generation + 1n);
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 2, shadowClosed: 1, workReopened: 3, appliesDue: 1 });
+      .toEqual({ unknown: 2, memorySkipped: 0, shadowClosed: 1, workReopened: 3, appliesDue: 1 });
     expect(await getSyncAttempt(db(), admitted.attemptId)).toMatchObject({ outcome: "unknown" });
     expect(await getSyncAttempt(db(), sent.attemptId)).toMatchObject({ outcome: "unknown" });
     expect(await getSyncAttempt(db(), shadow.attemptId)).toMatchObject({ outcome: "shadow", sendMark: "shadow", applyState: "skipped" });
@@ -1019,7 +1019,7 @@ describe("sync_attempts", () => {
     expect(states.get(shadow.workId)).toBe("open");
     expect(states.get(captured.workId)).toBe("running");
     expect(await inTx((tx) => recoverUnfinishedAttempts(tx, { pageId })))
-      .toEqual({ unknown: 0, shadowClosed: 0, workReopened: 0, appliesDue: 1 });
+      .toEqual({ unknown: 0, memorySkipped: 0, shadowClosed: 0, workReopened: 0, appliesDue: 1 });
   });
 });
 

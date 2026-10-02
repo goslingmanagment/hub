@@ -195,3 +195,57 @@ export type TransportOutcome =
 export interface Transport {
   send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
 }
+
+/**
+ * A request its transport cannot build at all, whatever the moment: the work
+ * carries no secret to send it with, or its URL names a host the engine never
+ * sends to. Thrown by `PageTransport.prepare` BEFORE anything is admitted; the
+ * actor closes the work without a request, `result` as its answer (a retry
+ * would meet the same refusal).
+ */
+export class UnsendableRequestError extends Error {
+  constructor(readonly reason: string, readonly result: unknown = { failure: reason }) {
+    super(`Fansly sync request cannot be sent: ${reason}`);
+    this.name = "UnsendableRequestError";
+  }
+}
+
+/** The box of `sync_work.secret_params` (design J7): a signed CDN URL, a
+ *  candidate identity — sealed with the app's key, the box of the page
+ *  credentials. The `sync` process holds one; an apply that learns a work's
+ *  next secret (a redirect's URL) seals it with it. Only the live transport
+ *  opens a secret (`decryptSyncWorkSecret`). */
+export interface SecretBox {
+  seal(value: unknown): string;
+}
+
+// ── the page's socket (step 3) ──────────────────────────────────────────────
+
+/** Where the page's WebSocket owner is (design S3-03 `FanslyWsSource`):
+ *  `owning` — it holds the socket lock `(58213, page)` and has no socket yet;
+ *  `down` — its socket closed; `blocked_generation` — the platform refused the
+ *  session's auth frame and nothing reconnects until the credentials change. */
+export type WsSourceState = "idle" | "owning" | "connecting" | "open" | "down" | "blocked_generation" | "stopped";
+
+/**
+ * The page's WebSocket owner as the engine sees it on a live page (design
+ * S3-03/S3-04): `ws.connect` plans by its state, and the live transport sends
+ * an admitted `ws.upgrade` through its handshake — the one physical Upgrade,
+ * whose send check is the admission's (I1–I3). The socket's frames are not
+ * requests.
+ */
+export interface LivePageSocket {
+  readonly state: WsSourceState;
+  /** The reconnect ladder's earliest instant for the next Upgrade (null or
+   *  absent: now). The `ws.connect` demand carries it as its due time; a plan
+   *  that finds its row due earlier (a refused admission reopens a row at
+   *  once, a merged demand pulls it forward) waits until then. */
+  readonly connectNotBefore?: Date | null;
+  /** The Upgrade of one admitted `ws.upgrade` step: `hooks.check` runs at
+   *  undici's `onRequestStart`; resolves when the handshake settles (101 or
+   *  another status, an error, a refusal). Never throws for an outcome. */
+  handshake(hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+}
+
+/** The live page's socket owner now, or null (none in this process). */
+export type LivePageSocketRef = () => LivePageSocket | null;

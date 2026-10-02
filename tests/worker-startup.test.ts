@@ -22,6 +22,7 @@ const dbMocks = vi.hoisted(() => ({
     durationMs: 0,
     budgetExhausted: false,
   })),
+  deleteExpiredSyncMediaHandoff: vi.fn(async () => 0),
   getLatestScheduledReportDateOnOrBefore: vi.fn(),
   getTelegramSettings: vi.fn(),
   // Voice-notes recovery jobs (Task 7): the nightly raw-payload cleanup handler
@@ -575,6 +576,9 @@ describe("worker startup", () => {
       app.db,
       dbMocks.deleteExpiredSyncObservability.mock.calls.at(-1)?.[1],
     );
+    // The engine's media handoff rows nobody consumed (0234) expire the same night.
+    expect(dbMocks.deleteExpiredSyncMediaHandoff).toHaveBeenCalledTimes(1);
+    expect(dbMocks.deleteExpiredSyncMediaHandoff).toHaveBeenCalledWith(app.db);
 
     await runtime.shutdown();
 

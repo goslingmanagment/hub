@@ -9,6 +9,7 @@ import {
   FANSLY_WIRE_SPECS,
   FanslySendRefusedError,
   fanslyWireSpec,
+  isFanslyApiWireId,
   isFanslyErrorEnvelope,
   isFanslyWireId,
   parseFanslyAccountMe,
@@ -37,16 +38,24 @@ function answer(status: number, bodyText: string, headers: Record<string, string
 }
 
 describe("the wire registry", () => {
-  it("declares one spec per id, each under a kind the observation registry already knows", () => {
+  it("declares one spec per id, each API route under a kind the observation registry already knows", () => {
     const registered = new Map(WRITTEN_OBSERVATION_KINDS.map((entry) => [entry.kind, entry.source]));
-    expect(FANSLY_WIRE_IDS).toHaveLength(39);
+    expect(FANSLY_WIRE_IDS).toHaveLength(41);
     for (const id of FANSLY_WIRE_IDS) {
       const spec = FANSLY_WIRE_SPECS[id];
       expect(spec.id, id).toBe(id);
-      expect(spec.host, id).toBe("api");
-      expect(registered.get(spec.kind), `${id} journals ${spec.kind}`).toBe("pull");
       expect(isFanslyWireId(id)).toBe(true);
+      if (spec.host !== "api") continue;
+      expect(spec.capture, id).toBeUndefined();
+      expect(spec.kind, id).not.toBeNull();
+      expect(registered.get(spec.kind!), `${id} journals ${spec.kind}`).toBe("pull");
+      expect(isFanslyApiWireId(id), id).toBe(true);
     }
+    // Step 3, live only: the socket's Upgrade and a CDN hop journal nothing.
+    expect(FANSLY_WIRE_IDS.filter((id) => FANSLY_WIRE_SPECS[id].host !== "api").map((id) => {
+      const spec = FANSLY_WIRE_SPECS[id];
+      return [id, spec.host, spec.kind, spec.capture];
+    })).toEqual([["ws.upgrade", "ws", null, "none"], ["cdn.media", "cdn", null, "bytes"]]);
     expect(isFanslyWireId("messages.pages")).toBe(false);
     expect(isFanslyWireId("toString")).toBe(false);
     expect(isFanslyWireId(null)).toBe(false);
@@ -250,6 +259,49 @@ describe("readFanslyWireResponse", () => {
     expect(parseFanslyEnvelope("not json")).toBeNull();
     expect(isFanslyErrorEnvelope({ success: false, error: { code: 500, details: " " } })).toBe(false);
     expect(isFanslyErrorEnvelope({ success: false, error: { code: 500, details: "gone" } })).toBe(true);
+  });
+});
+
+describe("the answers of the routes that journal nothing (step 3)", () => {
+  const upgrade = fanslyWireSpec("ws.upgrade");
+  const cdn = fanslyWireSpec("cdn.media");
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x7b]);
+
+  it("reads an Upgrade by its status: 101 opens the socket, the page-level statuses stay errors", () => {
+    expect(readFanslyWireResponse(upgrade, {}, answer(101, ""))).toEqual({ kind: "accepted", status: 101, response: { status: 101 }, value: { status: 101 } });
+    for (const status of [400, 401, 403, 404, 408, 429, 500, 503]) {
+      expect(readFanslyWireResponse(upgrade, {}, answer(status, "")), String(status)).toMatchObject({ kind: "http_error", status, envelope: null });
+    }
+  });
+
+  it("reads every CDN hop status as the hop's own answer, but the session's, the deadline's and the provider's pace", () => {
+    const ok = readFanslyWireResponse(cdn, { hop: 0 }, { ...answer(200, "", { "content-type": "image/jpeg" }), bodyBuffer: bytes });
+    expect(ok).toEqual({
+      kind: "accepted",
+      status: 200,
+      response: { status: 200, contentType: "image/jpeg", location: null, body: bytes, tooLarge: false },
+      value: { status: 200, contentType: "image/jpeg", location: null, body: bytes, tooLarge: false },
+    });
+    expect(readFanslyWireResponse(cdn, { hop: 0 }, answer(302, "", { location: "https://cdn3.fansly.com/x" })))
+      .toMatchObject({ kind: "accepted", value: { status: 302, location: "https://cdn3.fansly.com/x", body: null } });
+    expect(readFanslyWireResponse(cdn, { hop: 0 }, { ...answer(200, ""), bodyOverflow: true }))
+      .toMatchObject({ kind: "accepted", value: { status: 200, body: null, tooLarge: true } });
+    for (const status of [404, 410, 500, 502]) {
+      expect(readFanslyWireResponse(cdn, { hop: 1 }, answer(status, "nope")), String(status))
+        .toMatchObject({ kind: "accepted", value: { status, body: null } });
+    }
+    for (const status of [401, 403, 408, 429]) {
+      expect(readFanslyWireResponse(cdn, { hop: 0 }, answer(status, "")), String(status)).toMatchObject({ kind: "http_error", status });
+    }
+    expect(readFanslyWireResponse(cdn, { hop: 0 }, answer(503, "", { "retry-after": "30" })))
+      .toMatchObject({ kind: "http_error", status: 503, retryAfter: "30" });
+  });
+
+  it("has no API request line: its URL is not the API's", () => {
+    expect(() => buildFanslyWireUrl("cdn.media", { hop: 0 }, BASE_URL)).toThrow(RangeError);
+    expect(() => buildFanslyWireUrl("ws.upgrade", {}, BASE_URL)).toThrow(RangeError);
+    expect(isFanslyApiWireId("cdn.media")).toBe(false);
+    expect(isFanslyApiWireId("ws.upgrade")).toBe(false);
   });
 });
 

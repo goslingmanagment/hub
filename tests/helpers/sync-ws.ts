@@ -224,7 +224,9 @@ export function wsHostOptions(input: Parameters<typeof harnessHostOptions>[0] & 
   extraSpecs?: readonly EngineResourceSpec[];
   takeovers?: TakeoverRecord[];
 }): SyncHostOptions {
-  const base = harnessHostOptions({
+  // The page's real socket source, not the harness's stand-in owner: without
+  // `liveSocket` the host creates a `FanslyWsSource` per live slot.
+  const { liveSocket: _standIn, ...base } = harnessHostOptions({
     ...input,
     registry: input.registry ?? wsTestRegistry(input.sourceOf, input.extraSpecs),
   });

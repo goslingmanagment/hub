@@ -1,4 +1,10 @@
-import { buildFanslyWireTarget, fanslyWireSpec, isFanslyWireId, type FanslyWireId } from "@agency_hub_core/fansly";
+import {
+  buildFanslyWireTarget,
+  fanslyWireSpec,
+  isFanslyApiWireId,
+  isFanslyWireId,
+  type FanslyWireId,
+} from "@agency_hub_core/fansly";
 
 import type { ApplyInput, ApplyResult, RequestPlan, ResourceModule, ShadowResult, StepPlan } from "../../engine/resource.ts";
 
@@ -22,6 +28,9 @@ export function probeRequestOf(params: unknown): { request: RequestPlan } | { re
   const record = typeof params === "object" && params !== null && !Array.isArray(params) ? params as Record<string, unknown> : {};
   const operation = record.operation;
   if (!isFanslyWireId(operation)) return { refused: "probe_operation_unknown" };
+  // A CDN hop or the socket's Upgrade is no API read: it needs a work's
+  // secret or the page's socket owner.
+  if (!isFanslyApiWireId(operation)) return { refused: "probe_operation_not_api" };
   const wireParams = record.params === undefined ? {} : record.params;
   if (typeof wireParams !== "object" || wireParams === null || Array.isArray(wireParams)) return { refused: "probe_params_not_an_object" };
   try {

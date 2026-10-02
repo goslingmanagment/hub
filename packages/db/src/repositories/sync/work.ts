@@ -879,6 +879,41 @@ export async function quarantineWork(
   return (result.rowCount ?? 0) > 0;
 }
 
+// ── secret parameters (design J7) ─────────────────────────────────────────────
+
+/**
+ * The ciphertext of a work's secret parameters (a signed CDN URL, a candidate
+ * identity), or null. The ONLY reader of the column: the live page transport
+ * of the `sync` process decrypts it right before the request it is for; no
+ * other select of this module names it (`workColumns` leaves it out).
+ */
+export async function readSyncWorkSecretParams(db: Database, workId: number): Promise<string | null> {
+  const result = await db.execute<{ secret: string | null }>(sql`
+    select w.secret_params as secret from sync_work w where w.id = ${workId}
+  `);
+  return result.rows[0]?.secret ?? null;
+}
+
+/**
+ * Replace the secret parameters of an open or running work (the next hop of a
+ * CDN download: its redirect's URL, encrypted by the caller), fenced by the
+ * page generation like every write of an actor. False: the row is closed.
+ */
+export async function setSyncWorkSecretParams(
+  db: Database,
+  input: { workId: number; generation: bigint; secretParams: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_work
+       set secret_params = ${input.secretParams}::text,
+           owner_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where id = ${input.workId}
+       and state in ('open', 'running')
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** One row `requeueQuarantinedWork` took out of quarantine. */
 export interface RequeuedSyncWork {
   id: number;
@@ -995,6 +1030,31 @@ export async function closeQuarantinedWork(
        and state = 'quarantined'
   `);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * How many of these keys still have demand no step has served: an open (or
+ * running, or quarantined) live row whose `applied_revision` is behind its
+ * `demand_revision`. A row that closed, or a poll whose read since applied
+ * the demand, is served. Read by a repair waiting for the work it spawned.
+ */
+export async function countUnservedWorkForKeys(
+  db: Database,
+  input: { pageId: number; keys: ReadonlyArray<{ resource: string; subject: string }> },
+): Promise<number> {
+  if (input.keys.length === 0) return 0;
+  const result = await db.execute<{ n: string }>(sql`
+    select count(*)::text as n
+      from sync_work w
+      join unnest(${textArrayParam(input.keys.map((key) => key.resource))},
+                  ${textArrayParam(input.keys.map((key) => key.subject))}) as k(resource, subject)
+        on w.resource = k.resource and w.subject = k.subject
+     where w.page_id = ${input.pageId}
+       and not w.shadow
+       and w.state in ('open', 'running', 'quarantined')
+       and w.applied_revision < w.demand_revision
+  `);
+  return Number(result.rows[0]?.n ?? 0);
 }
 
 /** The end of a page's shadow (step 3 takeover, §11.1 C.1): every shadow row
@@ -1287,11 +1347,14 @@ export async function getWorkForStatus(
   return result.rows.map(normalizeWorkRow);
 }
 
-/** The newest closed row of a key (breaker carry-forward, status of closed work). */
+/** The newest closed row of a key (breaker carry-forward, status of closed
+ *  work); with `closedAfter`, only one that closed after that instant (a
+ *  caller reusing a recent result, e.g. the describer's earlier download). */
 export async function latestClosedWorkForKey(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subject: string },
+  input: { pageId: number; shadow: boolean; resource: string; subject: string; closedAfter?: Date },
 ): Promise<SyncWorkRow | null> {
+  const closedAfter = input.closedAfter === undefined ? sql`` : sql`and w.closed_at > ${timestampParam(input.closedAfter)}`;
   const result = await db.execute<WorkSqlRow>(sql`
     select ${workColumns}
       from sync_work w
@@ -1300,6 +1363,7 @@ export async function latestClosedWorkForKey(
        and w.subject = ${input.subject}
        and w.shadow = ${input.shadow}
        and w.closed_at is not null
+       ${closedAfter}
      order by w.id desc
      limit 1
   `);

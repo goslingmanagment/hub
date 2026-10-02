@@ -19,6 +19,9 @@ import { describe, expect, it } from "vitest";
 //   - the page_dm_messages prune (cache policy, archive-coverage-gated)
 //   - terminal typing command expiry after its short idempotency window
 //   - expired pending device-token custody (10-minute activation window)
+//   - expired Fansly Sync Engine media handoff rows (0234: transient chat-media
+//     bytes for the AI describer nobody consumed within 24 h; not a captured
+//     fact — owner decision №17)
 //   - pg-boss's own archival tables
 // Raw payloads (sync_raw_payloads) are explicitly NOT on that list: they are
 // captured facts, and the nightly `fansly.raw-payload-cleanup` job keeps only
@@ -191,6 +194,13 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/runtime-instances.ts",
   "packages/db/src/repositories/spenders.ts",
   "packages/db/src/repositories/sync.ts",
+  // Fansly Sync Engine media handoff (0234, owner decision №17): the
+  // transient buffer that carries a chat file's bytes from the `sync` process
+  // to the AI describer. The describer's read deletes the row it consumed; a
+  // row nobody consumed is deleted after its 24 h (the nightly retention job,
+  // and every new download of the page). A transient handoff buffer, not a
+  // captured fact: the description and the media metadata observation are.
+  "packages/db/src/repositories/sync/media-handoff.ts",
   // Fansly Sync Engine telemetry (0228), scheduled with the sync
   // observability sweep: closed work rows and terminal attempts that are not
   // coverage evidence, 30 days. No captured fact: raw responses live in

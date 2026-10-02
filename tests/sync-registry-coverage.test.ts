@@ -98,7 +98,7 @@ describe("the Fansly registry table", () => {
       const kinds = new Set(spec.operations.map((operation: FanslyWireId) => fanslyWireSpec(operation).kind));
       for (const kind of spec.replayKinds ?? []) expect(kinds.has(kind), `${spec.key} replays ${kind}`).toBe(true);
       if (spec.http) {
-        expect(spec.operations.length > 0 || ["ws.connect", "media-download.fetch", "probe.manual"].includes(spec.key), spec.key).toBe(true);
+        expect(spec.operations.length > 0 || spec.key === "probe.manual", spec.key).toBe(true);
       }
     }
   });
@@ -149,6 +149,24 @@ describe("the Fansly registry table", () => {
     expect(FANSLY_RESOURCE_SPECS.filter((spec) => spec.class === "requests").map((spec) => spec.key)).toEqual(["dm-messages.history"]);
   });
 
+  it("only the keys whose 401/403 is never the page session's scope them to the subject (G16, E8)", async () => {
+    const scoped = FANSLY_RESOURCE_SPECS.filter((spec) => spec.subjectScopedAuthStatuses !== undefined)
+      .map((spec) => [spec.key, spec.subjectScopedAuthStatuses]);
+    // A CDN hop carries no session: its 401/403 is the signed URL's. (S3-06
+    // adds probe.excluded-chat with [403].)
+    expect(scoped).toEqual([["media-download.fetch", [401, 403]]]);
+    expect(byKey("ws.connect").operations).toEqual(["ws.upgrade"]);
+    expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
+    expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);
+    const registry = createFanslyRegistry();
+    for (const key of ["ws.connect", "media-download.fetch"]) {
+      // Their answers are never journaled: applied from memory.
+      expect(typeof (await registry.module(key)).applyAnswer, key).toBe("function");
+      expect(typeof (await registry.module(key)).outcome, key).toBe("function");
+    }
+    expect(typeof (await registry.module("repair.ws-gap")).applyLocal).toBe("function");
+  });
+
   it("owner-protected, live-only, evidence and fence sets of design §2.9 and §4.4", () => {
     const keys = (predicate: (spec: ResourceSpec) => boolean) => FANSLY_RESOURCE_SPECS.filter(predicate).map((spec) => spec.key).sort();
     expect(keys((spec) => spec.ownerProtected === true)).toEqual(["catalog.fixed", "catalog.vault", "media-stats.walk"]);
@@ -181,13 +199,14 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a/b ship the audience and money resources, S2-08a/b dm-conversations and dm-messages, S2-09a/b the content resources, S2-10 dm-live; every other entry waits on its dependency", async () => {
+  it("S2-07a/b ship the audience and money resources, S2-08a/b dm-conversations and dm-messages, S2-09a/b the content resources, S2-10 dm-live, S3-04 the live-only ones; no entry waits on missing code", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
     expect([...new Set(implemented)].sort()).toEqual([
       "account", "catalog", "dm-conversations", "dm-live", "dm-messages", "fan-earnings", "fan-profiles", "followers",
-      "media-stats", "notifications", "payouts", "post-replies", "posts", "probe", "purchases", "stats", "subscribers",
-      "top-spenders", "transactions",
+      "media-download", "media-stats", "notifications", "payouts", "post-replies", "posts", "probe", "purchases", "repair",
+      "stats", "subscribers", "top-spenders", "transactions", "ws",
     ]);
+    expect(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).map((spec) => spec.key)).toEqual([]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
     for (const spec of FANSLY_RESOURCE_SPECS) {

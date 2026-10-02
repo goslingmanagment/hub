@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import type { Database } from "@agency_hub_core/db";
+import type { Database, SyncWorkRow } from "@agency_hub_core/db";
 import {
   buildFanslyWireUrl,
   fanslyWireSpec,
@@ -34,8 +34,10 @@ const SHADOW_BASE_URL = "https://shadow.invalid/api/v1";
 /** Builds the request of a plan and sends it — the actor's view of a page's
  *  transport (live: `fansly/transport.ts`; shadow: below). */
 export interface PageTransport {
-  /** The request of one plan, built right before its admission. */
-  prepare(request: RequestPlan): Promise<FanslyWireRequest>;
+  /** The request of one plan, built right before its admission; `context`
+   *  names the work it is for (a CDN hop reads the work's secret URL). Throws
+   *  `UnsendableRequestError` for a request that can never be sent. */
+  prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
   /** At most one physical request (none in shadow). */
   send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
   close(): Promise<void>;

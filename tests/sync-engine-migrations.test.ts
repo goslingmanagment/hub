@@ -28,6 +28,8 @@ import {
   SYNC_WORK_CLASSES,
   SYNC_WORK_KINDS,
   SYNC_WORK_STATES,
+  SYNC_MEDIA_HANDOFF_MAX_BYTES,
+  syncMediaHandoff,
 } from "@agency_hub_core/db";
 
 // Fansly Sync Engine migrations (design §2.1): forward-only, purely additive,
@@ -392,6 +394,54 @@ describe("0233_fansly_sync_engine_incident_kind.sql", () => {
     expect(notificationIncidentKindEnum.enumValues).toContain("fansly_sync_engine");
     expect(readFileSync("packages/db/src/repositories/notifications.ts", "utf8")).toContain(`| "fansly_sync_engine"`);
     expect(readFileSync("packages/contracts/src/routes.ts", "utf8")).toMatch(/notificationIncidentKindEnum = z\.enum\(\[[^\]]*"fansly_sync_engine"/);
+  });
+
+  it("allows application rollback after the additive migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});
+
+describe("0234_sync_media_handoff.sql", () => {
+  const migration = "0234_sync_media_handoff.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("is purely additive: one table, its indexes and comments", () => {
+    for (const statement of statements) {
+      expect(statement).toMatch(/^(create table if not exists sync_media_handoff \(|create index if not exists sync_media_handoff_|comment on )/);
+    }
+    expect(statements.filter((statement) => statement.startsWith("create index"))).toEqual([
+      "create index if not exists sync_media_handoff_description on sync_media_handoff (description_id)",
+      "create index if not exists sync_media_handoff_expires on sync_media_handoff (expires_at)",
+    ]);
+  });
+
+  it("is page-owned and follows its description, caps the bytes at the download cap and expires in a day", () => {
+    expect(sql).toContain("page_id bigint not null references pages(id) on delete cascade");
+    expect(sql).toContain("description_id bigint not null references ai_media_descriptions(id) on delete cascade");
+    expect(sql).toContain(`byte_count = octet_length(bytes) and byte_count between 0 and ${SYNC_MEDIA_HANDOFF_MAX_BYTES}`);
+    expect(SYNC_MEDIA_HANDOFF_MAX_BYTES).toBe(5 * 1024 * 1024);
+    expect(sql).toContain("expires_at timestamptz not null default clock_timestamp() + interval '24 hours'");
+  });
+
+  it("grants the read role nothing (chat media, read by the describer alone)", () => {
+    expect(statements.filter((statement) => /^(grant|do \$\$)/i.test(statement))).toEqual([]);
+    expect(sql).not.toMatch(/grant select/i);
+  });
+
+  it("comments every column", () => {
+    const body = sql.slice(sql.indexOf("create table if not exists sync_media_handoff ("), sql.indexOf(");"));
+    const columns = [...body.matchAll(/^\s{2}([a-z_0-9]+) (?:bigserial|bigint|text|integer|bytea|timestamptz)\b/gm)].map((match) => match[1]!);
+    expect(columns).toEqual(["id", "page_id", "description_id", "work_id", "content_type", "byte_count", "bytes", "created_at", "expires_at"]);
+    for (const column of columns.filter((name) => name !== "id")) {
+      expect(statements.some((statement) => statement.startsWith(`comment on column sync_media_handoff.${column} is '`)), column).toBe(true);
+    }
+  });
+
+  it("is mirrored in drizzle", () => {
+    const names = Object.values(syncMediaHandoff as unknown as Record<string, { name?: unknown }>).map((column) => column.name);
+    expect(names).toEqual(expect.arrayContaining(["page_id", "description_id", "work_id", "content_type", "byte_count", "bytes", "expires_at"]));
   });
 
   it("allows application rollback after the additive migration", () => {

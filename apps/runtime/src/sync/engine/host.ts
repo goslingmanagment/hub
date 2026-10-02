@@ -26,6 +26,7 @@ import {
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { createPageTransport } from "../fansly/transport.ts";
 import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
+import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
 import { SyncActor, type ActorExit, type ShadowFeed } from "./actor.ts";
 import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
@@ -47,6 +48,8 @@ import {
   systemClock,
   type AlertSink,
   type Clock,
+  type LivePageSocket,
+  type LivePageSocketRef,
   type Metrics,
   type PauseSource,
   type SettingsSource,
@@ -143,18 +146,29 @@ export interface SyncHostOptions {
   /** TESTS ONLY: a pacer with a test setting floor. Never passed by `main.ts`. */
   pacerFactory?: (deps: PacerDeps) => Pacer;
   /** TESTS ONLY: a stand-in for the live page transport. `links.ws` is the
-   *  page's socket source, whose `handshake` runs the `ws.connect` Upgrade. */
+   *  page's socket source, whose `handshake` runs the `ws.connect` Upgrade;
+   *  `links.socket` is the socket owner the production transport sends
+   *  `ws.upgrade` through (the source, or a test's `liveSocket`). */
   liveTransportFactory?: (page: SyncPageRow, links: LivePageLinks) => Promise<PageTransport>;
   /** TESTS ONLY: the socket source's scaled timing and socket opener. */
   wsSourceOverrides?: Pick<FanslyWsSourceDeps, "timing" | "openSocket">;
+  /** TESTS ONLY: a stand-in for a live page's socket owner, in place of the
+   *  page's `FanslyWsSource` (none is created then): `ws.connect` plans by
+   *  its state and the live transport sends the Upgrade through its
+   *  handshake. Null for a page: no socket owner — `ws.connect` waits on
+   *  `dependency`. Never passed by `main.ts`. */
+  liveSocket?: (page: SyncPageRow) => LivePageSocket | null;
   /** TESTS ONLY: crash points. */
   faults?: SyncFaultHook;
 }
 
 /** What a live page's transport is wired to besides its egress. */
 export interface LivePageLinks {
-  /** The page's socket source (null: the page has no label). */
+  /** The page's socket source (null: the page has no label, or a test's
+   *  `liveSocket` stands in for it). */
   ws: FanslyWsSource | null;
+  /** The page's socket owner the transport sends `ws.upgrade` through. */
+  socket: LivePageSocketRef;
 }
 
 interface PageSlot {
@@ -450,8 +464,13 @@ export class SyncEngineHost {
     let pacer: Pacer;
     let ownRef: string | null;
     // A live page's socket (J6): created with the slot, started once its
-    // actor exists, stopped before the page's safe release.
+    // actor exists, stopped before the page's safe release. It is the page's
+    // socket owner: `ws.connect` plans by its state, the transport sends the
+    // Upgrade through its handshake (a test's `liveSocket` stands in for it).
     const ws = mode === "live" ? this.#createWsSource(page, generation) : null;
+    const standIn = mode === "live" ? this.#o.liveSocket : undefined;
+    const socket: LivePageSocket | null = standIn === undefined ? ws : standIn(page);
+    const socketRef: LivePageSocketRef = () => socket;
     try {
       const settingMs = await this.#pause.readSettingMs();
       // I5: computed by the database clock, from every send of every owner.
@@ -469,7 +488,7 @@ export class SyncEngineHost {
           clock: this.#clock,
           latency: this.#o.shadowLatency?.(pageId) ?? createLegacyShadowLatency({ db, pageId, clock: this.#clock, rng: this.#rng }),
         })
-        : await this.#liveTransport(page, { ws });
+        : await this.#liveTransport(page, { ws, socket: socketRef });
     } catch (error) {
       // Nothing was sent under the new generation: release it at once.
       await transport?.close().catch(() => undefined);
@@ -503,6 +522,7 @@ export class SyncEngineHost {
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
+      ...(mode === "live" ? { socket: socketRef, secrets: createSyncWorkSecretBox(this.#o.config) } : {}),
     });
     const stop = new AbortController();
     const abort = new AbortController();
@@ -532,10 +552,16 @@ export class SyncEngineHost {
   async #liveTransport(page: SyncPageRow, links: LivePageLinks): Promise<PageTransport> {
     if (this.#o.liveTransportFactory !== undefined) return this.#o.liveTransportFactory(page, links);
     if (page.pageLabel === null) throw new Error(`Fansly sync page ${page.pageId} has no label`);
-    return createPageTransport({ db: this.#o.db, config: this.#o.config }, { pageId: page.pageId, pageLabel: page.pageLabel });
+    return createPageTransport(
+      { db: this.#o.db, config: this.#o.config },
+      { pageId: page.pageId, pageLabel: page.pageLabel },
+      { socket: links.socket },
+    );
   }
 
   #createWsSource(page: SyncPageRow, generation: bigint): FanslyWsSource | null {
+    // TESTS ONLY: a stand-in owns the page's socket; no source competes for it.
+    if (this.#o.liveSocket !== undefined) return null;
     if (page.pageLabel === null) {
       this.#o.logger.error({ pageId: page.pageId }, "Fansly sync host: a live page without a label has no socket");
       return null;

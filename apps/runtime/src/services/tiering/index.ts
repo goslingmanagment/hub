@@ -38,6 +38,9 @@ export const LAKE_EXCLUDED_TABLES = [
   // AI media describer (0212): the same restricted class.
   "ai_media_descriptions",
   "ai_media_description_links",
+  // The Fansly Sync Engine's transient chat-media handoff to the describer
+  // (0234, owner decision №17): chat image bytes, never a lake fact.
+  "sync_media_handoff",
 ] as const;
 
 interface TieredTableSpec {
