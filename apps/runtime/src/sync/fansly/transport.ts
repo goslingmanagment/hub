@@ -6,44 +6,65 @@ import {
   sendFanslyWireRequest,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
-import type { AppConfig } from "@agency_hub_core/shared";
+import {
+  createProxyRequestDispatcher,
+  type AppConfig,
+  type FanslySessionBundle,
+  type ProxyConfig,
+} from "@agency_hub_core/shared";
+import type { Dispatcher } from "undici";
 
 import { readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
 import { resolveEgress, type AppEgressContext } from "../../services/egress/resolver.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { decodeStoredFanslySession } from "../../services/page-context.ts";
+import { CREDENTIALS_CHECK_KEYS } from "../engine/errors.ts";
 import { REQUEST_TIMEOUT_MS } from "../engine/pacer.ts";
-import { UnsendableRequestError, type LivePageSocketRef, type SendHooks, type TransportOutcome } from "../engine/ports.ts";
+import {
+  CredentialsGenerationChangedError,
+  UnsendableRequestError,
+  type LivePageSocketRef,
+  type SendHooks,
+  type TransportOutcome,
+} from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
 import type { PageTransport } from "../engine/shadow.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 
-// The live page transport (design §3.10, S3-04 item 2): the ONE way a Fansly
-// request of a page leaves the `sync` process. Built only by the host's live
-// loop — which no step-2 build runs (`LIVE_LOOP_ENABLED = false`, I17) — over
-// the page's own egress (the page proxy is required: a proxyless Fansly page
-// is refused, fail closed). It neither paces nor retries: the pacer admitted
-// the request and its send check runs at undici's `onRequestStart`; a retry is
-// a new admission. Three hosts, one dispatcher, one check per request:
+// The live page transport (design §3.10, S3-04 item 2, step-3 §3.5 items 3–4):
+// the ONE way a Fansly request of a page leaves the `sync` process. Built only
+// by the host's live loop (`fansly/transport.ts` and `engine/host.ts` are the
+// two builders, pinned) over the page's own egress (the page proxy is
+// required: a proxyless Fansly page is refused, fail closed). It neither paces
+// nor retries: the pacer admitted the request and its send check runs at
+// undici's `onRequestStart`; a retry is a new admission. Three hosts, one
+// check per request:
 //
-// - api: the wire layer's single-request send with the page's session;
+// - api: the wire layer's single-request send with the page's session — or,
+//   for an identity check (`account.identity`), the candidate session/proxy of
+//   the work's secret, through a one-shot dispatcher for a candidate proxy
+//   (still this page's admission, owner decision №4);
 // - cdn: one hop of a chat file's download (`media-download.fetch`): the URL
 //   is the work's secret (`sync_work.secret_params`, decrypted here and
 //   nowhere else, design J7), its host must be a Fansly media CDN, no session
 //   headers, the body capped at the describer's 5 MiB;
-// - ws: the socket's Upgrade, sent by the page's socket owner (S3-03's
-//   `FanslyWsSource`) through its handshake with this admission's check.
+// - ws: the socket's Upgrade, sent by the page's socket owner (the slot's
+//   `FanslyWsSource`) through its handshake with this admission's check —
+//   only with the verified stored credentials, like an API request.
+//
+// Credentials (G1, G2, G18): every API request is built from a read-only
+// snapshot of the stored session and its digest (`readFanslyPageGeneration`,
+// the session AND the proxy). Unless the digest is the one the engine
+// verified (`sync_pages.credentials_generation`, written by an applied
+// `account.verify`) the request is refused before its admission with
+// `CredentialsGenerationChangedError` — a null verified digest counts as
+// changed, so a live page sends nothing but `account.verify` /
+// `account.identity` (the checks themselves) before its first verify. The
+// egress follows the digest: a changed proxy closes the dispatcher and
+// resolves the page egress again before the request is built.
 
-/** The page's stored credentials changed since the engine last verified the
- *  account behind them (`sync_pages.credentials_generation`): no request goes
- *  out until the identity check has run on the new generation (§5.1). */
-export class CredentialsGenerationChangedError extends Error {
-  constructor(readonly pageId: number) {
-    super(`Fansly sync page ${pageId}: the stored credentials changed since the last identity check`);
-    this.name = "CredentialsGenerationChangedError";
-  }
-}
+export { CredentialsGenerationChangedError };
 
 export interface PageTransportContext {
   db: Database;
@@ -67,26 +88,84 @@ export interface MediaDownloadSecret {
   url: string;
 }
 
+/** What an `account.identity` work's secret holds: the candidate the caller
+ *  wants to store, checked against the page before it is stored (step-3
+ *  §3.5 item 6). A missing half is the page's stored one. */
+export interface IdentityCandidateSecret {
+  session?: FanslySessionBundle;
+  proxy?: ProxyConfig;
+}
+
+/** The page egress and the credentials digest it was resolved under. */
+interface ResolvedEgress {
+  egress: AppEgressContext;
+  dispatcher: Dispatcher;
+  /** Null: the page has no stored credentials (no API request can be built). */
+  generation: string | null;
+}
+
+/** One read-only snapshot: the stored digest and the egress it belongs to. */
+async function resolvePageEgress(ctx: PageTransportContext, page: { pageId: number; pageLabel: string }): Promise<ResolvedEgress> {
+  const resolved = await ctx.db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    const generation = await readFanslyPageGeneration(tx, page.pageLabel).catch(() => null);
+    const egress = await resolveEgress({ db: tx, config: ctx.config }, { kind: "page", pageId: page.pageId });
+    return { generation, egress };
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  const dispatcher = resolved.egress.dispatcher;
+  if (dispatcher === null) {
+    await resolved.egress.close();
+    throw new BadRequestError(`Page "${page.pageLabel}" has no page egress; Fansly requests are refused`);
+  }
+  return { egress: resolved.egress, dispatcher, generation: resolved.generation };
+}
+
+/** The digest an identity check's candidate is known by (`params.candidate`). */
+function candidateGeneration(work: SyncWorkRow): string | null {
+  const params = work.params;
+  if (typeof params !== "object" || params === null) return null;
+  const candidate = (params as Record<string, unknown>).candidate;
+  if (typeof candidate !== "object" || candidate === null) return null;
+  const generation = (candidate as Record<string, unknown>).generation;
+  return typeof generation === "string" && generation.length > 0 ? generation : null;
+}
+
 /**
  * The live transport of one page. The session is read per API request inside
- * a read-only snapshot together with its generation (the same 64-hex digest
- * the WS receiver uses), and refused when it differs from the generation the
- * engine verified. One dispatcher per page, closed with the transport.
+ * a read-only snapshot together with its digest (the same 64-hex digest the
+ * WS receiver uses) and refused unless that is the digest the engine
+ * verified. One page dispatcher, replaced when the digest changes, closed
+ * with the transport.
  */
 export async function createPageTransport(
   ctx: PageTransportContext,
   page: { pageId: number; pageLabel: string },
   options: PageTransportOptions = {},
 ): Promise<PageTransport> {
-  const egress: AppEgressContext = await resolveEgress(ctx, { kind: "page", pageId: page.pageId });
-  const dispatcher = egress.dispatcher;
-  if (dispatcher === null) {
-    await egress.close();
-    throw new BadRequestError(`Page "${page.pageLabel}" has no page egress; Fansly requests are refused`);
-  }
+  let current = await resolvePageEgress(ctx, page);
   const cdnUrlAllowed = options.cdnUrlAllowed ?? isFanslyCdnUrl;
+  /** The one-shot dispatcher of the identity check prepared last (a candidate
+   *  proxy): used by its send, closed after it or when another is prepared. */
+  let candidate: { request: FanslyWireRequest; dispatcher: Dispatcher } | null = null;
+  let closed = false;
 
-  async function prepareApi(request: RequestPlan): Promise<FanslyWireRequest> {
+  async function dropCandidate(): Promise<void> {
+    const pending = candidate;
+    candidate = null;
+    await pending?.dispatcher.close().catch(() => undefined);
+  }
+
+  /** The proxy changed since the egress was resolved: resolve it again. */
+  async function followGeneration(generation: string | null): Promise<void> {
+    if (generation === null || generation === current.generation) return;
+    const next = await resolvePageEgress(ctx, page);
+    const previous = current;
+    current = next;
+    await previous.egress.close().catch(() => undefined);
+  }
+
+  async function prepareApi(request: RequestPlan, work: SyncWorkRow | undefined): Promise<FanslyWireRequest> {
+    const identity = work?.resource === "account.identity";
     const snapshot = await ctx.db.transaction(async (raw) => {
       const tx = raw as unknown as Database;
       const generation = await readFanslyPageGeneration(tx, page.pageLabel);
@@ -95,17 +174,49 @@ export async function createPageTransport(
         throw new BadRequestError(`Page "${page.pageLabel}" has no stored platform credentials`);
       }
       const verified = (await getSyncPage(tx, page.pageId))?.credentialsGeneration ?? null;
-      return { generation, verified, encryptedSession: stored.credentials.encryptedSession };
+      const secret = identity && work !== undefined ? await readSyncWorkSecretParams(tx, work.id) : null;
+      return { generation, verified, encryptedSession: stored.credentials.encryptedSession, secret };
     }, { isolationLevel: "repeatable read", accessMode: "read only" });
-    if (snapshot.verified !== null && snapshot.verified !== snapshot.generation) {
-      throw new CredentialsGenerationChangedError(page.pageId);
+    if (!CREDENTIALS_CHECK_KEYS.has(work?.resource ?? "") && snapshot.verified !== snapshot.generation) {
+      throw new CredentialsGenerationChangedError(page.pageId, snapshot.generation, snapshot.verified);
     }
-    const session = decodeStoredFanslySession(ctx, snapshot.encryptedSession, page.pageLabel);
-    return buildFanslyWireRequest(request.spec, request.params as never, {
-      baseUrl: ctx.config.fanslyBaseUrl,
-      session,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-    });
+    await followGeneration(snapshot.generation);
+    if (!identity || work === undefined) {
+      const session = decodeStoredFanslySession(ctx, snapshot.encryptedSession, page.pageLabel);
+      return {
+        ...buildFanslyWireRequest(request.spec, request.params as never, {
+          baseUrl: ctx.config.fanslyBaseUrl,
+          session,
+          timeoutMs: REQUEST_TIMEOUT_MS,
+        }),
+        credentialsGeneration: snapshot.generation,
+      };
+    }
+    // The identity check: the candidate of the work's secret, never stored.
+    const generation = candidateGeneration(work);
+    if (snapshot.secret === null || generation === null) {
+      throw new UnsendableRequestError("identity_candidate_missing", { failure: "identity_candidate_missing", matches: null });
+    }
+    let secret: IdentityCandidateSecret;
+    try {
+      secret = decryptSyncWorkSecret<IdentityCandidateSecret>(ctx.config, snapshot.secret);
+    } catch {
+      throw new UnsendableRequestError("secret_unreadable", { failure: "secret_unreadable", matches: null });
+    }
+    const session = secret.session ?? decodeStoredFanslySession(ctx, snapshot.encryptedSession, page.pageLabel);
+    const built: FanslyWireRequest = {
+      ...buildFanslyWireRequest(request.spec, request.params as never, {
+        baseUrl: ctx.config.fanslyBaseUrl,
+        session,
+        timeoutMs: REQUEST_TIMEOUT_MS,
+      }),
+      credentialsGeneration: generation,
+    };
+    await dropCandidate();
+    if (secret.proxy !== undefined) {
+      candidate = { request: built, dispatcher: createProxyRequestDispatcher(secret.proxy) };
+    }
+    return built;
   }
 
   /** One CDN hop: the URL the work's secret holds now (the signed URL, or the
@@ -124,28 +235,77 @@ export async function createPageTransport(
     if (!cdnUrlAllowed(url)) {
       throw new UnsendableRequestError("host_not_allowed", { failure: "host_not_allowed", httpStatus: null });
     }
+    // A hop carries no session, but it leaves through the page's proxy: a
+    // changed proxy is followed here too.
+    await followGeneration(await storedGeneration());
     return { spec: request.spec, url: url.toString(), headers: {}, timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS };
+  }
+
+  /**
+   * The socket's Upgrade (`ws.connect`): a marker — the socket owner builds
+   * and sends it with the page's stored session — under the same
+   * verified-credentials check as every API request (G2): unless the stored
+   * digest is the one the engine verified, nothing is admitted and the actor
+   * raises the verify. The marker names the digest it checked: the owner's
+   * handshake refuses to open the socket with any other stored credentials
+   * (they changed after this check), and an auth hold of the Upgrade is keyed
+   * on it.
+   */
+  async function prepareWs(request: RequestPlan): Promise<FanslyWireRequest> {
+    const snapshot = await ctx.db.transaction(async (raw) => {
+      const tx = raw as unknown as Database;
+      const generation = await readFanslyPageGeneration(tx, page.pageLabel);
+      const verified = (await getSyncPage(tx, page.pageId))?.credentialsGeneration ?? null;
+      return { generation, verified };
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+    if (snapshot.verified !== snapshot.generation) {
+      throw new CredentialsGenerationChangedError(page.pageId, snapshot.generation, snapshot.verified);
+    }
+    return {
+      spec: request.spec,
+      url: SOCKET_OWNER_URL,
+      headers: {},
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      credentialsGeneration: snapshot.generation,
+    };
+  }
+
+  async function storedGeneration(): Promise<string | null> {
+    try {
+      return await ctx.db.transaction(
+        async (raw) => readFanslyPageGeneration(raw as unknown as Database, page.pageLabel),
+        { isolationLevel: "repeatable read", accessMode: "read only" },
+      );
+    } catch {
+      return null;
+    }
   }
 
   return {
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
+      if (closed) throw new Error(`The live transport of page ${page.pageId} is closed`);
       switch (fanslyWireSpec(request.spec).host) {
         case "api":
-          return prepareApi(request);
+          return prepareApi(request, context?.work);
         case "cdn":
           return prepareCdn(request, context?.work);
         case "ws":
-          // A marker: the socket owner builds and sends the Upgrade itself.
-          return { spec: request.spec, url: SOCKET_OWNER_URL, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS };
+          return prepareWs(request);
       }
     },
     async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
       switch (fanslyWireSpec(req.spec).host) {
-        case "api":
-          return sendFanslyWireRequest(dispatcher, req, hooks, signal);
+        case "api": {
+          const oneShot = candidate !== null && candidate.request === req ? candidate.dispatcher : null;
+          try {
+            return await sendFanslyWireRequest(oneShot ?? current.dispatcher, req, hooks, signal);
+          } finally {
+            if (oneShot !== null) await dropCandidate();
+          }
+        }
         case "cdn":
           return absoluteLocation(await sendFanslyCdnRequest(
-            dispatcher,
+            current.dispatcher,
             { url: req.url, timeoutMs: req.timeoutMs, maxBytes: MEDIA_DOWNLOAD_MAX_BYTES },
             hooks,
             signal,
@@ -154,12 +314,15 @@ export async function createPageTransport(
           // Without a socket owner nothing is sent (its plan waits for one).
           const socket = options.socket?.() ?? null;
           if (socket === null) return { kind: "aborted_before_send", refusal: "lease_inactive" };
-          return socket.handshake(hooks, signal);
+          return socket.handshake(hooks, signal, { credentialsGeneration: req.credentialsGeneration ?? null });
         }
       }
     },
+    storedCredentialsGeneration: storedGeneration,
     async close() {
-      await egress.close().catch(() => undefined);
+      closed = true;
+      await dropCandidate();
+      await current.egress.close().catch(() => undefined);
     },
   };
 }

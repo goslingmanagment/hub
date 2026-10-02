@@ -5,8 +5,9 @@ physical request of the page passes one pacer, one queue (`sync_work`), one jour
 (`sync_attempts`). Plan: `docs/plans/2026-10-01-sync-engine/plan.md`. OnlyFans is not here.
 
 The engine lands in steps: step 2 runs it in **shadow** next to the legacy engine (it plans, paces and journals, but
-never sends); step 3 switches pages one by one; step 4 deletes the legacy code. Until the switch PR no build can send
-as the engine (`LIVE_LOOP_ENABLED = false`, `sync page mode` moves only `off ↔ shadow`, I17).
+never sends); step 3 switches pages one by one (`pnpm cli sync switch`, below); step 4 deletes the legacy code. A page
+sends as the engine only after the switch made it `live`, handed it the step-1 guard row and imported the legacy
+state; `sync page mode` moves pages only `off ↔ shadow` (I17).
 
 ## Map
 
@@ -35,8 +36,10 @@ sync/
     ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
                              page's socket (`source.ts`)
     lib/                     chain rules, walk helpers
-  requests/                  history requests, ETA, enqueue-and-wait
+  requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
   report/                    `sync shadow report`: part A (the live window), part B (the past journal)
+  switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
+                             `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -235,8 +238,23 @@ SIGTERM, a mode change or the loss of its lock session, once nothing is in fligh
 (`judgeFanslySendHolderTermination`: pid gone, pid reused, boot changed, or this container under a new pid namespace);
 or a Docker-level confirmation (`pnpm cli sync ownership confirm-stopped --running-hosts …`, run by the deploy). A lost
 lock session alone is never a confirmation. The first send after a takeover waits `1.2 × S` after every send the
-database knows of (I5). Until the switch PR no build runs a live loop (`LIVE_LOOP_ENABLED = false`): a page written
-`live` is reported and never acquired; `sync page mode` moves pages only between `off` and `shadow`.
+database knows of (I5). A `live` page is acquired only once the switch imported its legacy state
+(`legacy_imported_at`); without it the page waits (`legacy_not_imported`, alert after 2 min) and nothing is sent.
+`sync page mode` moves pages only between `off` and `shadow`.
+
+Credentials (step 3): every live API request carries the digest of the stored session and proxy
+(`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine verified
+(`sync_pages.credentials_generation`, written by an applied `account.verify`) only the identity checks go out
+(`account.verify`, `account.identity`) and the actor asks for one verify. An auth/identity hold names the digest that
+failed: stored credentials that change out of band lift it for one verify; otherwise only an `account.identity`
+check of a candidate session/proxy (the owner's credentials or proxy change, sealed in the work's secret) passes it,
+and storing a matching candidate makes its digest the trusted one, which lifts the hold. The socket's Upgrade
+(`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
+hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
+hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
+check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
+it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
+auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
 
 ## Legacy fences (step 3)
 
@@ -251,9 +269,42 @@ its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM s
 `mutation_debt` receipt, so a frame captured before the switch is still marked), the AI describer downloads nothing
 itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
 `scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
-command to use instead. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
+command to use instead — except the `/account/me` levers (page verify, credentials, proxy, `fansly:ws-policy`), which
+on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
+≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
+`handover`. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
 reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query, so leaving to `off`
 restores the legacy engine with no other action.
+
+## Switch and rollback (step 3)
+
+`pnpm cli sync switch --page P --shadow-report <path> [--dry-run]` moves one page to the live engine; it is resumable
+(where it stands is read from the mode, the guard owner, `legacy_imported_at`, `requests_enabled_at` and the page's
+newest `admin.sync_switch` / `admin.sync_rollback` audit row) and refuses a page a rollback left half done (J4).
+Phases: **A** mode `handover` (the legacy engine is fenced, the shadow actor releases, the host keeps the page's
+lock) and the guard row handed to the engine once no legacy request is in flight; **B** the legacy stop confirmed
+(`switch/legacy-stop.ts`: no running lease, open run, open HTTP attempt, open guarded send, socket lock holder or
+active thread backfill; the guard handed); **R** the final incremental chain rebuild; **I** the legacy import
+(`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers, head-debt
+catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or auth block carried,
+the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a new owner generation
+within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are open, the page's
+hydration requests become history requests (`switch_migration`). A or B timing out reverts to `shadow` (exit 2); no
+live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync switch check --page P
+--since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor refusals, nothing
+stuck, the SLOs, volume, restarts, open incidents).
+
+`pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
+stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
+engine with its floor past the engine's last send and the end of an engine 429/list/network hold (also one an auth
+hold carries), live work
+cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
+state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
+auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
+live, where the owner's credentials renewal runs its identity check under the hold and lifts it; a hold that came in
+while the actor stopped puts a page the rollback took from live back to live; a page in `handover` before the
+rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
+(J5). Runbook: step-3 design §6.
 
 ## Invariants
 
@@ -277,7 +328,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
-| I17 | No live sender before the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live`, and the legacy guard row handed to the engine — three independent gates. | `engine/host.ts` + `lockOwnedPage` + CLI |
+| I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,

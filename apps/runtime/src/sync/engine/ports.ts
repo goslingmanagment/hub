@@ -203,6 +203,28 @@ export interface Transport {
  * actor closes the work without a request, `result` as its answer (a retry
  * would meet the same refusal).
  */
+/** The page's stored credentials are not the ones the engine verified (or it
+ *  verified none yet): the live transport refuses every request but the
+ *  identity checks (`account.verify`, `account.identity`) before its
+ *  admission, and the actor asks for one `account.verify` (step-3 §3.5 item
+ *  3, G1/G2). */
+export class CredentialsGenerationChangedError extends Error {
+  constructor(
+    readonly pageId: number,
+    /** The digest of the credentials stored now. */
+    readonly storedGeneration: string,
+    /** The digest the engine verified last (null: none yet). */
+    readonly verifiedGeneration: string | null,
+  ) {
+    super(
+      verifiedGeneration === null
+        ? `Fansly sync page ${pageId}: the stored credentials were not verified by the engine yet`
+        : `Fansly sync page ${pageId}: the stored credentials changed since the last identity check`,
+    );
+    this.name = "CredentialsGenerationChangedError";
+  }
+}
+
 export class UnsendableRequestError extends Error {
   constructor(readonly reason: string, readonly result: unknown = { failure: reason }) {
     super(`Fansly sync request cannot be sent: ${reason}`);
@@ -243,8 +265,16 @@ export interface LivePageSocket {
   readonly connectNotBefore?: Date | null;
   /** The Upgrade of one admitted `ws.upgrade` step: `hooks.check` runs at
    *  undici's `onRequestStart`; resolves when the handshake settles (101 or
-   *  another status, an error, a refusal). Never throws for an outcome. */
-  handshake(hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome>;
+   *  another status, an error, a refusal). Never throws for an outcome.
+   *  `expect.credentialsGeneration`: the digest of the stored credentials the
+   *  transport checked against the verified one before the admission — the
+   *  socket opens only with those (other stored credentials: nothing is
+   *  sent, `aborted_before_send`). */
+  handshake(
+    hooks: SendHooks,
+    signal: AbortSignal,
+    expect?: { credentialsGeneration: string | null },
+  ): Promise<TransportOutcome>;
 }
 
 /** The live page's socket owner now, or null (none in this process). */

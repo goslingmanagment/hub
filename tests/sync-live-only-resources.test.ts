@@ -155,6 +155,9 @@ describe("the journal of the routes without a request line (J7)", () => {
     expect(JSON.stringify(json)).not.toContain("SECRET");
     expect(JSON.stringify(json)).not.toContain("cdn3.fansly.com");
     expect(requestJsonOf({ spec: "ws.upgrade", params: {} })).toEqual({ spec: "ws.upgrade", host: "ws", params: {} });
+    // The Upgrade carries the page's stored session: its digest is journaled.
+    expect(requestJsonOf({ spec: "ws.upgrade", params: {} }, { url: "socket-owner:ws.upgrade", credentialsGeneration: "a".repeat(64) }))
+      .toEqual({ spec: "ws.upgrade", host: "ws", params: {}, credentialsGeneration: "a".repeat(64) });
   });
 });
 
@@ -208,16 +211,20 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
 
   it("one function selects the column, and only the live page transport calls it", () => {
     expect(grep("select [^;]*secret_params")).toEqual(["packages/db/src/repositories/sync/work.ts"]);
-    expect(readFileSync("packages/db/src/repositories/sync/work.ts", "utf8").match(/select [^`]*secret_params/g)).toEqual([
+    // The candidate exemption of an auth hold (S3-05) only asks whether a
+    // work carries a secret; it never reads one.
+    const selects = readFileSync("packages/db/src/repositories/sync/work.ts", "utf8").match(/select [^`]*?secret_params[^\n]*/g) ?? [];
+    expect(selects.filter((line) => !line.includes("secret_params is not null")).map((line) => line.slice(0, 22))).toEqual([
       "select w.secret_params",
     ]);
+    expect(selects).toHaveLength(2);
     expect(grep("readSyncWorkSecretParams\\(")).toEqual([
       "apps/runtime/src/sync/fansly/transport.ts",
       "packages/db/src/repositories/sync/work.ts",
     ]);
   });
 
-  it("only the transport opens a secret; the box seals for the describer and for a redirect's next hop", () => {
+  it("only the transport opens a secret; the box seals for the describer, a redirect's next hop and a candidate identity", () => {
     expect(grep("decryptSyncWorkSecret[<(]")).toEqual([
       "apps/runtime/src/sync/fansly/transport.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
@@ -225,6 +232,7 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
     expect(readFileSync("apps/runtime/src/sync/requests/secret-params.ts", "utf8").match(/decryptSyncWorkSecret[<(]/g)).toHaveLength(1);
     expect(grep("encryptSyncWorkSecret[<(]")).toEqual([
       "apps/runtime/src/services/ai-media-describe/engine-download.ts",
+      "apps/runtime/src/services/sync-engine-account.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
     ]);
   });

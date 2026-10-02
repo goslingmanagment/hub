@@ -56,7 +56,7 @@ import {
 import { fanslyUnpacedSendGuard } from "../../services/fansly-send-guard/index.ts";
 import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
-import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "../../services/sync-engine-guard.ts";
+import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Catalog module (target §6.1): models, pages, credentials, proxies,
@@ -508,10 +508,11 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     try {
-      // Step-3 design §3.1 item 10: a page the Fansly Sync Engine owns is
-      // verified by the engine (409 here, before its context is resolved or
-      // anything is sent).
-      await assertLegacyOwnsFanslyPageLabels(appContext, [request.params.pageLabel], SYNC_ENGINE_HINTS.verify);
+      // Step-3 design §3.5 item 6: a live page is verified by its engine
+      // actor (`account.verify`, ≤ 30 s, else 409 queued); a page being
+      // switched answers 409 before anything is resolved or sent.
+      const onEngine = await verifyPageOnEngine(appContext, request.params.pageLabel);
+      if (onEngine !== null) return onEngine;
       const pageContext = await resolvePageContext(appContext, request.params.pageLabel);
       if (pageContext.platform !== "fansly") {
         // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted

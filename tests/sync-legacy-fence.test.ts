@@ -142,25 +142,27 @@ describe("the legacy processes ask before they act", () => {
     ["apps/runtime/src/services/ai-media-describe/fansly-source.ts", "maybeAccelerate", "isFanslyPageEngineOwned(app.db, row.pageId)"],
     ["apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress", "isFanslyPageEngineOwned(app.db, input.pageId)"],
     ["apps/runtime/src/services/fansly-ws-deletions.ts", "applyFanslyWsDeletions", "listEngineOwnedFanslyPages(db)"],
-    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "assertLegacyOwnsFanslyPage(app, stored.page"],
-    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "assertLegacyOwnsFanslyPageLabels(app, [pageLabel]"],
+    // S3-05: the /account/me levers route a live page through the engine and
+    // refuse a page being switched before anything is resolved or sent.
+    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "const route = await fanslyAccountRoute(app, stored.page)"],
+    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await fanslyAccountRoute(app, known.page)"],
     ["apps/runtime/src/services/fansly-replay-probe.ts", "runFanslyReplayProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
     ["apps/runtime/src/services/fansly-endpoint-probe.ts", "runFanslyEndpointProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
     ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels"],
     ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "listEngineOwnedFanslyPages(app.db)"],
-    ["apps/runtime/src/services/fansly-ws-policy-repair.ts", "inspectBinding", "assertLegacyOwnsFanslyPageLabels(app, [label]"],
+    ["apps/runtime/src/services/fansly-ws-policy-repair.ts", "inspectBinding", "await fanslyAccountRoute(app, known.page)"],
   ])("%s %s", (path, name, check) => {
     expect(functionBody(path, name)).toContain(check);
   });
 
-  it("the verify route, the CLI verify and the targeted backfill CLI refuse an engine page", () => {
+  it("the verify route and the CLI verify go through the engine (S3-05), the targeted backfill CLI refuses an engine page", () => {
     // Before the page's context is resolved (which may open a proxy incident).
     expect(source("apps/runtime/src/modules/catalog/index.ts")).toMatch(
-      /assertLegacyOwnsFanslyPageLabels\(appContext, \[request\.params\.pageLabel\][^;]*;\s*const pageContext = await resolvePageContext\(/,
+      /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;\s*const pageContext = await resolvePageContext\(/,
     );
     const cli = source("apps/runtime/src/cli.ts");
     expect(cli).toMatch(
-      /assertLegacyOwnsFanslyPageLabels\(app, \[options\.page\], SYNC_ENGINE_HINTS\.verify\);\s*const context = await resolvePageContext\(/,
+      /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?const context = await resolvePageContext\(/,
     );
     // `dm backfill-thread`: before the job is queued.
     const refusal = cli.indexOf("await assertLegacyOwnsFanslyPageId(app, thread.platformAccountId, SYNC_ENGINE_HINTS.history);");

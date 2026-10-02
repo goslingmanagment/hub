@@ -947,14 +947,21 @@ export async function handleSuccessfulPageVerificationRecovery(
     pageLabel: string;
     platform: "fansly" | "onlyfans";
     recoveredAt?: Date;
+    /** False for a page the Fansly Sync Engine owns: the legacy streams'
+     *  state is the legacy engine's own (step-3 J5) and is left as it is; only
+     *  the incidents resolve. */
+    unblockLegacyStreams?: boolean;
   },
 ): Promise<{ syncUnblocked: boolean }> {
   const recoveredAt = input.recoveredAt ?? new Date();
+  const { unblockLegacyStreams, ...incident } = input;
   try {
-    await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
-      maxFailureAt: recoveredAt,
-      now: recoveredAt,
-    });
+    if (unblockLegacyStreams !== false) {
+      await clearPageSyncAuthBlock(app.db, input.platformAccountId, {
+        maxFailureAt: recoveredAt,
+        now: recoveredAt,
+      });
+    }
   } catch (error) {
     // W3.3 (D4-N1): the streams are still blocked, so the incidents are
     // still TRUE — resolving them here would report a recovery that did not
@@ -968,19 +975,19 @@ export async function handleSuccessfulPageVerificationRecovery(
   }
 
   await resolveIncidentAndNotify(app, {
-    ...input,
+    ...incident,
     kind: "auth_blocked",
     recoveredAt,
   });
   await resolveIncidentAndNotify(app, {
-    ...input,
+    ...incident,
     kind: "proxy_failed",
     recoveredAt,
   });
   // W3.1: a successful verification reached Fansly, which the fail-closed
   // dispatcher only allows with a proxy present.
   await resolveIncidentAndNotify(app, {
-    ...input,
+    ...incident,
     kind: "proxy_missing",
     recoveredAt,
   });

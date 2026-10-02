@@ -93,7 +93,7 @@ async function peek<T>(promise: Promise<T>): Promise<T | "pending"> {
 }
 
 describe("enqueue and wait: a page that is not live", () => {
-  it("answers not_live on off, shadow and handover pages and writes nothing", async (context) => {
+  it("answers not_live on off and shadow pages, switching on a handover page (E10), and writes nothing", async (context) => {
     if (!testDb) return context.skip();
     const pages = [
       await seedSyncPage(handles(), { label: "page-off", mode: "off" }),
@@ -110,7 +110,7 @@ describe("enqueue and wait: a page that is not live", () => {
           ...(resource === "account.identity" ? { secretParams: "ciphertext" } : {}),
           waitMs: 1_000,
         });
-        expect(result, `${page.label} ${resource}`).toEqual({ state: "not_live" });
+        expect(result, `${page.label} ${resource}`).toEqual({ state: page.label === "page-handover" ? "switching" : "not_live" });
       }
     }
     expect(changedTables(before, await tableCounts(testDb.pool))).toEqual([]);

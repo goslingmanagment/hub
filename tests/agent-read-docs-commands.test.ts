@@ -254,13 +254,17 @@ describe("the skill doc names fields that exist", () => {
     expect(text).toContain("claim_not_declared");
   });
 
-  it("documents history requests as per page, with the hydration fallback", () => {
-    // SK17: until a page is switched to the Fansly Sync Engine its history
-    // requests answer 409, and the doc must send an agent to hydration there.
+  it("documents history requests as the path on live engine pages, with the hydration fallback", () => {
+    // Step 3 (S3-05): history requests are the primary path on a page the
+    // engine runs; elsewhere they answer 409 and the doc must send an agent to
+    // hydration, which on a live page is the one-fan wrapper.
     const text = docText(SKILL_DOC);
     expect(text).toContain("history_requests_unavailable_on_page");
-    expect(text).toContain("only on a\npage switched to the Fansly Sync Engine");
+    expect(text).toContain("the primary path on every page the Fansly Sync Engine runs");
     expect(text).toContain("use the hydration route above");
+    expect(text).toContain("the hydration route is a one-fan wrapper");
+    expect(text).toContain("fansly_page_switching");
+    expect(text).toContain("engine_managed");
     for (const command of ["history-request", "history-request-batch", "history-status", "history-cancel", "history-list"]) {
       expect(text, command).toContain(`hub ${command}`);
     }

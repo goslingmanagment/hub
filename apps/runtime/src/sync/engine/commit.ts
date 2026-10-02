@@ -60,6 +60,7 @@ import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../se
 import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import {
+  afterCredentialsHold,
   classifyWireOutcome,
   escalateResourceHold,
   onOutcome,
@@ -272,6 +273,9 @@ export interface AdmissionRecord {
   workClass: WorkClass;
   spec: EngineResourceSpec;
   request: RequestPlan;
+  /** The digest of the credentials the prepared request carries (null: a
+   *  route without a session, or a stand-in transport). */
+  credentialsGeneration?: string | null;
 }
 
 const MAX_FAILED_BODY_CHARS = 64 * 1024;
@@ -314,7 +318,10 @@ export function isAnswerInMemory(operation: string): boolean {
  *  Upgrade has nothing to name, and a CDN hop names only its hop and the
  *  sha256 of its URL path — the signed URL itself stays in the work's
  *  ciphertext. */
-export function requestJsonOf(request: RequestPlan, sent?: Pick<FanslyWireRequest, "url"> | null): {
+export function requestJsonOf(
+  request: RequestPlan,
+  sent?: Pick<FanslyWireRequest, "url" | "credentialsGeneration"> | null,
+): {
   spec: FanslyWireId;
   params: unknown;
   path?: string;
@@ -323,10 +330,15 @@ export function requestJsonOf(request: RequestPlan, sent?: Pick<FanslyWireReques
   hop?: number;
   pathSha256?: string | null;
   step?: unknown;
+  credentialsGeneration?: string;
 } {
   const host = fanslyWireSpec(request.spec).host;
   const step = request.step === undefined ? {} : { step: request.step };
-  if (host === "ws") return { spec: request.spec, host, params: {}, ...step };
+  // Not a secret: the sha256 of the stored (or candidate) credentials, so an
+  // auth hold names the credentials that failed (step-3 §3.5 item 3) — the
+  // Upgrade is sent with the page's stored session too.
+  const credentials = sent?.credentialsGeneration === undefined ? {} : { credentialsGeneration: sent.credentialsGeneration };
+  if (host === "ws") return { spec: request.spec, host, params: {}, ...step, ...credentials };
   if (host === "cdn") {
     const hop = Number((request.params as { hop?: unknown }).hop ?? 0);
     let pathSha256: string | null = null;
@@ -348,7 +360,14 @@ export function requestJsonOf(request: RequestPlan, sent?: Pick<FanslyWireReques
     path: target.pathname,
     query,
     ...(request.step === undefined ? {} : { step: request.step }),
+    ...credentials,
   };
+}
+
+/** The credentials digest an attempt's request carried (null: none journaled). */
+export function credentialsGenerationOfAttempt(attempt: Pick<SyncAttemptRow, "request">): string | null {
+  const stored = attempt.request as { credentialsGeneration?: unknown } | null;
+  return typeof stored?.credentialsGeneration === "string" ? stored.credentialsGeneration : null;
 }
 
 /** The request an attempt sent, as its plan made it (`step` included). */
@@ -448,8 +467,9 @@ export async function admit(
   request: RequestPlan,
   grant: SlotGrant,
   module: ResourceModule,
-  /** The request the transport built for the plan (a CDN hop's path digest). */
-  prepared: Pick<FanslyWireRequest, "url"> | null = null,
+  /** The request the transport built for the plan (a CDN hop's path digest,
+   *  the digest of the credentials it carries). */
+  prepared: Pick<FanslyWireRequest, "url" | "credentialsGeneration"> | null = null,
 ): Promise<AdmissionRecord | null> {
   const spec = d.registry.spec(picked.work.resource);
   if (spec === null) throw new Error(`No registry entry for ${picked.work.resource}`);
@@ -495,6 +515,7 @@ export async function admit(
       workClass: picked.workClass,
       spec,
       request,
+      credentialsGeneration: prepared?.credentialsGeneration ?? null,
     };
   });
 }
@@ -756,6 +777,63 @@ async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown
   return kind;
 }
 
+// ── credentials (step-3 §3.5 item 3, G1/G2/G14) ─────────────────────────────
+
+/** The demand an actor raises for its own page (an identity check after the
+ *  stored credentials changed): one generation-fenced transaction through the
+ *  registry's demand rules. False: a key the registry does not run here. */
+export async function enqueueOwnDemand(d: CommitDeps, signals: readonly DemandSignal[]): Promise<boolean> {
+  const now = d.clock.wallNow();
+  return inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const page = await getSyncPage(tx, d.pageId);
+    const upserts = upsertsOf(d, signals, page, now);
+    if (upserts.length > 0) await upsertDemands(tx, upserts);
+    return upserts.length > 0;
+  });
+}
+
+/**
+ * The stored credentials changed out of band while an auth/identity hold of
+ * the credentials that failed is in force (G14 (a)): the hold is lifted and
+ * one urgent `account.verify` raised, in one generation-fenced transaction —
+ * the transport admits nothing but that check until it passed. False: the
+ * hold is no longer the one read (another writer got there first).
+ */
+export async function liftHoldForChangedCredentials(
+  d: CommitDeps,
+  input: { holdKind: string; failedGeneration: string; storedGeneration: string },
+): Promise<boolean> {
+  const now = d.clock.wallNow();
+  const lifted = await inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const page = await getSyncPage(tx, d.pageId);
+    if (page === null || page.holdKind !== input.holdKind) return false;
+    const heldUnder = page.holdDetail.credentialsGeneration;
+    if ((typeof heldUnder === "string" ? heldUnder : page.credentialsGeneration) !== input.failedGeneration) return false;
+    // A 429/network hold the auth hold carried beside itself stays until its end.
+    const left = afterCredentialsHold(pageErrorState(page), now);
+    if (left.action === "set") {
+      await setPageHold(tx, { pageId: d.pageId, generation: d.generation, kind: left.kind, until: left.until, step: left.step, detail: left.detail });
+    } else {
+      await clearPageHold(tx, { pageId: d.pageId, generation: d.generation });
+    }
+    const upserts = upsertsOf(d, [{ resource: "account.verify", demand: { reason: "credentials_changed" } }], page, now);
+    if (upserts.length > 0) await upsertDemands(tx, upserts);
+    return true;
+  });
+  if (lifted) {
+    d.metrics.increment("sync_hold_lifted_credentials_changed", { pageId: d.pageId, kind: input.holdKind });
+    d.logger.warn({
+      pageId: d.pageId,
+      holdKind: input.holdKind,
+      failedGeneration: input.failedGeneration.slice(0, 12),
+      storedGeneration: input.storedGeneration.slice(0, 12),
+    }, "Fansly sync: the stored credentials changed under an auth hold; the hold is lifted for one account.verify");
+  }
+  return lifted;
+}
+
 /** A plan threw: the work waits a minute (an unexpected error of a module
  *  never stops the page). */
 export async function deferAfterPlanError(d: CommitDeps, work: SyncWorkRow, error: unknown): Promise<void> {
@@ -927,6 +1005,7 @@ export async function capture(
           exemptKeys: [...RESOURCE_HOLD_EXEMPT_KEYS],
         })
         : 0,
+      requestCredentialsGeneration: admission.credentialsGeneration ?? null,
     });
     // The resource's own word on what this outcome means for it (a failed
     // WebSocket handshake belongs to the socket's reconnect ladder).
@@ -1312,7 +1391,9 @@ export async function apply(
     for (const [name, by] of Object.entries(applied.counters ?? {})) {
       d.metrics.increment("sync_apply_effect", { resource: applied.resource, effect: name }, by);
     }
-    if (applied.pageIdentity !== null) await recordIdentity(d, applied.pageIdentity.accountId);
+    if (applied.pageIdentity !== null) {
+      await recordIdentity(d, applied.pageIdentity.accountId, applied.credentialsGeneration);
+    }
     return applied.outcome;
   } catch (error) {
     if (error instanceof SyncCrashFault || error instanceof OwnershipLostError) throw error;
@@ -1355,20 +1436,23 @@ async function settleApplied(
     outcome: "applied" as const,
     counters: result.counters ?? null,
     pageIdentity: result.pageIdentity ?? null,
+    // The digest the verified request carried: what the engine now trusts.
+    credentialsGeneration: credentialsGenerationOfAttempt(attempt),
     resource: attempt.resource,
   };
 }
 
-/** The page's identity after an applied `/account/me` (status only: the
- *  identity guard is `updatePageMetadata` inside the apply). Its own small
+/** The page's identity after an applied `/account/me` (the identity guard is
+ *  `updatePageMetadata` inside the apply) and the digest of the credentials
+ *  that request carried — the engine has verified them (G1). Its own small
  *  fenced transaction — tx 3 holds the page row FOR SHARE, and upgrading that
  *  lock while the heartbeat waits on the row would deadlock. A failure is
  *  logged; the next read writes it again. */
-async function recordIdentity(d: CommitDeps, accountId: string): Promise<void> {
+async function recordIdentity(d: CommitDeps, accountId: string, credentialsGeneration: string | null): Promise<void> {
   try {
     await inTx(d.db, async (tx) => {
       await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-      await recordSyncPageIdentity(tx, { pageId: d.pageId, generation: d.generation, accountId });
+      await recordSyncPageIdentity(tx, { pageId: d.pageId, generation: d.generation, accountId, credentialsGeneration });
     });
   } catch (error) {
     if (error instanceof OwnershipLostError) throw error;
@@ -1455,6 +1539,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         },
         subjectQueue,
         recentFailedSubjects: 0,
+        requestCredentialsGeneration: credentialsGenerationOfAttempt(attempt),
       });
       // The decision has no subject breaker, so no module hook is needed.
       await writeOutcomeDecision(tx, d, {

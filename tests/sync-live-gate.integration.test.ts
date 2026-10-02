@@ -29,9 +29,11 @@ import {
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
-// I17: no live sender before the step-3 switch. Three independent gates —
-// the constant, the page mode (reachable only through the switch), and the
-// step-1 guard row handed to the engine — each shown to hold on its own.
+// I17: no live sender without the step-3 switch. Independent gates — the
+// constant (true since S3-05, a host can still be built without a live loop),
+// the page mode (reachable only through the switch), the step-1 guard row
+// handed to the engine, and the switch's legacy import (J3) — each shown to
+// hold on its own.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -80,13 +82,13 @@ function hostOptions(overrides: Partial<SyncHostOptions>): SyncHostOptions {
 }
 
 describe("I17: the live gates", () => {
-  it("a page written 'live' is never acquired while LIVE_LOOP_ENABLED is false: no owner, no attempt, no transport", async (context) => {
+  it("a page written 'live' is never acquired by a host without a live loop: no owner, no attempt, no transport", async (context) => {
     if (!testDb) return context.skip();
-    expect(LIVE_LOOP_ENABLED).toBe(false);
     const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "fansly_sync_engine" });
     await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
     let transports = 0;
     const host = new SyncEngineHost(hostOptions({
+      liveLoopEnabled: false,
       liveTransportFactory: async () => {
         transports += 1;
         return new ScriptedLiveTransport();
@@ -106,7 +108,42 @@ describe("I17: the live gates", () => {
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts")).toBe(0);
   }, 30_000);
 
-  it("with the constant overridden, a guard row still owned by the legacy engine refuses every live admission", async (context) => {
+  it("a live page without the switch's legacy import is never acquired; once imported it runs (J3)", async (context) => {
+    if (!testDb) return context.skip();
+    expect(LIVE_LOOP_ENABLED).toBe(true);
+    const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "fansly_sync_engine" });
+    await testDb.pool.query("update sync_pages set legacy_imported_at = null where page_id = $1", [pageId]);
+    await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
+    const transport = new ScriptedLiveTransport();
+    let transports = 0;
+    const host = new SyncEngineHost(hostOptions({
+      liveTransportFactory: async () => {
+        transports += 1;
+        return transport;
+      },
+    }));
+    await host.start();
+    try {
+      await host.tick();
+      await sleep(1_000);
+      await host.tick();
+      expect(host.state(pageId)).toMatchObject({ kind: "waiting", reason: "legacy_not_imported" });
+      expect(transports).toBe(0);
+      expect((await getSyncPage(db(), pageId))!.owner.generation).toBe(0n);
+      expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts")).toBe(0);
+
+      // The switch's import is the gate left: stamped, the page runs.
+      await testDb.pool.query("update sync_pages set legacy_imported_at = clock_timestamp() where page_id = $1", [pageId]);
+      await waitFor(async () => (
+        await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where apply_state = 'applied'") === 1 ? true : null
+      ), 15_000, "the admission after the import");
+      expect(host.state(pageId)).toMatchObject({ kind: "running", mode: "live" });
+    } finally {
+      await host.stop();
+    }
+  }, 45_000);
+
+  it("a guard row still owned by the legacy engine refuses every live admission", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedSyncPage(handles(), { mode: "live", guard: "legacy" });
     await upsertDemand(db(), { pageId, shadow: false, resource: "gate.read", kind: "trigger", class: "urgent" });
@@ -165,8 +202,11 @@ describe("I17: the live gates", () => {
 describe("I17: source pins", () => {
   const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
-  it("LIVE_LOOP_ENABLED is false until the switch PR (S3-05)", () => {
-    expect(read("apps/runtime/src/sync/engine/host.ts")).toContain("export const LIVE_LOOP_ENABLED = false;");
+  it("LIVE_LOOP_ENABLED is the switch PR's flip (S3-05), and the host still gates a live loop on the legacy import", () => {
+    const host = read("apps/runtime/src/sync/engine/host.ts");
+    expect(host).toContain("export const LIVE_LOOP_ENABLED = true;");
+    expect(host).toContain('if (desired === "live" && page.legacyImportedAt === null) {');
+    expect(host).toContain('this.#markWaiting(page, "legacy_not_imported", UNCONFIRMED_RETRY_MS);');
   });
 
   it("the live transport is built in one place: the host's live branch", () => {

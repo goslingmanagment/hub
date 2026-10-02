@@ -199,26 +199,54 @@ rows could ever have answered you.
 
 ## Asking for more data (hydration)
 
-When the record does not reach far enough back, the remedy is hydration: the hub
-goes and fetches more from the platform. You never execute that yourself; it is an
-owner decision either way.
+When the record does not reach far enough back, the remedy is to have the hub
+fetch more from the platform. You never execute that yourself. Which route you
+use depends on the page:
 
-The response tells you when it is even possible. Look at the `remedy` on the
-relevant plane: a kind of `local_replay` or a hydration kind means more data is
-reachable. A kind of `none` with reason `no_remedy_exists` or
-`discarded_at_capture` means it is not recoverable at all, and no amount of asking
-will change that. Say so plainly instead of retrying.
+- **A page on the Fansly Sync Engine** — `hub sync-status --page-label <page>`
+  shows `mode: "live"` and its `requestsEnabledAt` has passed: file a **history
+  request** (next section). It needs no owner decision, reads whole chats or
+  their newest N messages for up to 1000 fans at once, and reports progress and
+  an estimate.
+- **A page being switched** — `mode: "handover"`: neither engine reads it for a
+  few minutes; both routes answer **409 `fansly_page_switching`**. Wait and
+  retry, do not refile under another key.
+- **Every other page** (`off`, `shadow`, OnlyFans): the hydration route below,
+  as before.
 
-**The request operations exist; this CLI has no command for them.** The API
-serves two of them and the `request:hydration` capability is real:
+The response tells you when more data is even possible. Look at the `remedy` on
+the relevant plane: a kind of `local_replay` or a hydration kind means more data
+is reachable. A kind of `none` with reason `no_remedy_exists` or
+`discarded_at_capture` means it is not recoverable at all, and no amount of
+asking will change that. Say so plainly instead of retrying.
+
+**The hydration route has no `hub` command.** The API serves two operations and
+the `request:hydration` capability is real:
 
 - `POST /api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests`
   files one. Body: a `target` of kind `thread_backfill_before` with EXACTLY one
   of `beforeAt` / `beforeMessageRef` (a boundary, not a window: "everything in
   this thread older than X"), a `reason`, an optional `maxCalls`, and a UUID
-  `idempotencyKey`. It answers **200, not 202**: it records an intent and queues
-  nothing. Only an owner decision can spend a vendor call.
+  `idempotencyKey`. It answers **200, not 202**: on a page outside the engine it
+  records an intent and queues nothing — only an owner decision can spend a
+  vendor call.
 - `GET /api/v1/agent/hydration-requests/:requestRef` polls the one you filed.
+
+**On a live engine page the hydration route is a one-fan wrapper.** The hub
+files the history request for you (that chat, depth "before your boundary") and
+the hydration request answers `dispatching` with `progress.executionRef` = the
+history request's ref (follow it with `hub history-status --request <ref>` if
+you like). Its state mirrors the history request's fan: `completed` — read to an
+EMPTY page, the chat's whole history is stored; `partially_completed` — read to
+your boundary, not proven complete; `failed` with `lastError: quarantined` —
+Fansly keeps refusing that chat, do not refile; `failed` with `lastError:
+vendor_unavailable` — the chat could not be read (not found, excluded);
+`expired` — the history request was cancelled, or the page went back to the
+legacy engine before it was served (refile there if you still need it). Nobody
+decides it: an owner
+decision on such a request answers 409 `engine_managed`. Before the page's
+requests open (the first switched page waits an hour) the request stays
+`requested` and is converted when they open.
 
 What each refusal means, so you do not retry the wrong thing:
 
@@ -229,16 +257,19 @@ What each refusal means, so you do not retry the wrong thing:
   not hold the page, or did not file that request.
 - **409 `hydration_not_admissible`**: the plane already told you there is no
   lane for this gap. Check the `remedy` you were given.
+- **409 `fansly_page_switching`**: the page is being switched to the engine;
+  retry in a few minutes.
 - **403 `agent_capability_missing`**: your key lacks `request:hydration`. Note
   that this is the one refusal on the plane that names a missing CAPABILITY; a
   page you were not granted, or a request that is not yours, is always the
   indistinguishable 404 above.
 
-**Who decides your request (decision #201).** A Fansly `thread_backfill_before`
-request may be approved by a versioned in-kernel policy instead of a human,
-within a daily call budget: your request's `decision.decisionSource` says which
-(`auto_policy` | `owner`), and an auto-approved run usually executes within a
-couple of minutes. What this means for how you file:
+**Who decides your request off the engine (decision #201).** A Fansly
+`thread_backfill_before` request on a page outside the engine may be approved by
+a versioned in-kernel policy instead of a human, within a daily call budget:
+your request's `decision.decisionSource` says which (`auto_policy` | `owner`),
+and an auto-approved run usually executes within a couple of minutes. What this
+means for how you file:
 
 - always state an explicit `maxCalls`, and keep it ≤ 40 (one full targeted run,
   ~1000 messages) — the policy clamps to 40 and NEVER widens what you asked;
@@ -255,20 +286,19 @@ couple of minutes. What this means for how you file:
   (a 500): its per-thread breaker now holds it, and the policy will not approve
   it again until the backoff lapses. Do not refile it meanwhile.
 
-Since `hub` has no command for it, from this CLI the useful half is still yours
-to do by hand: report the specific gap (page, thread, conversation ref, window,
-and the `remedy` the response carried) and hand it to the owner, who can run the
-backfill directly. That report IS the request.
+Since `hub` has no command for the hydration route, off the engine the useful
+half is still yours to do by hand: report the specific gap (page, thread,
+conversation ref, window, and the `remedy` the response carried) and hand it to
+the owner, who can run the backfill directly. That report IS the request.
 
 ## History requests (pages on the Fansly Sync Engine)
 
-History requests are the Fansly Sync Engine's way to read whole chats, or their
-newest N messages, for many fans at once. **They work page by page: only on a
-page switched to the Fansly Sync Engine.** On every other page the hub answers
-**409 `history_requests_unavailable_on_page`**; use the hydration route above,
-as before, and `hub history-request` prints that fallback in `error.hint` beside
-the refusal. Pages switch one at a time, so a script written against these
-commands keeps working as they do.
+History requests are how you read whole chats, or their newest N messages, for
+many fans at once: the primary path on every page the Fansly Sync Engine runs
+(`hub sync-status` shows `mode: "live"` and `requestsEnabledAt` has passed). On
+a page not switched yet, or before its requests open, the hub answers **409
+`history_requests_unavailable_on_page`**: use the hydration route above, and
+`hub history-request` prints that fallback in `error.hint` beside the refusal.
 
 What a request is:
 
@@ -381,10 +411,11 @@ it waits. Two read-only commands show it; both need `read:datasets`:
   `.detail`, `dm-live.deletions`, `fan-profiles.probe`) the key also needs
   `read:messages`.
 
-Until a page is switched to the engine (`off` or `shadow`, every page today)
-both answer from its SHADOW journal: `shadow: true` on every work row, the
-engine planned and paced the work but sent nothing. Read it as the engine's
-rehearsal, never as what Fansly answered. The waiting reasons are the closed
+Until a page is switched to the engine (`off` or `shadow`) both answer from its
+SHADOW journal: `shadow: true` on every work row, the engine planned and paced
+the work but sent nothing. Read it as the engine's rehearsal, never as what
+Fansly answered. On a `handover` or `live` page they answer from the live
+journal: what the engine actually asked Fansly and why the rest waits. The waiting reasons are the closed
 list above (`not_due`, `pacer`, `class_share`, `page_hold`, `resource_hold`,
 `subject_breaker`, `blocked_by_vendor`, `quarantined`, `paused`, `dependency`,
 `ownership_unconfirmed`, `running`); like history progress they are body

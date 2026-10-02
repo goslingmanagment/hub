@@ -10,8 +10,8 @@ export function featureState(feature: HubFeature, data: ConfigViewResponse): Fea
   const valueOf = (item: ConfigItem) => reportedValue(item, data.roleStatuses.map((entry) => entry.role));
   if (keys.some((key) => !items.has(key))) return { kind: "unavailable", label: "Нет в этой версии", detail: "Сервер не сообщил необходимые настройки." };
   if (feature.keys.some((key) => items.get(key)?.pendingApply)) return { kind: "pending", label: "Ждёт применения", detail: "Сохранённое значение ещё не подтверждено всеми процессами." };
-  // Match the API's expected api/worker roles and include every additional observed role.
-  const fleetKnown = ["api", "worker"].every((role) => data.roleStatuses.some((entry) => entry.role === role && entry.status === "active"))
+  // Match the API's expected api/worker/sync roles and include every additional observed role.
+  const fleetKnown = ["api", "worker", "sync"].every((role) => data.roleStatuses.some((entry) => entry.role === role && entry.status === "active"))
     && data.roleStatuses.every((entry) => entry.status === "active");
   if (!fleetKnown || keys.some((key) => valueOf(items.get(key)!) === undefined)) {
     return { kind: "unknown", label: "Нужно проверить", detail: "Нет согласованного актуального значения от всех частей Hub." };

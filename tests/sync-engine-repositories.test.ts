@@ -7,11 +7,11 @@ import { sortDemandSignals } from "@agency_hub_core/db";
 
 // Fansly Sync Engine core repositories (design §2.10): the structural pins.
 //
-// I17 — no build before the step-3 switch can make a page `handover`/`live`.
+// I17 — nothing but the step-3 switch can make a page `handover`/`live`.
 // `setSyncPageMode` moves a page there only with a switch capability, and the
 // capability is issued by `issueSyncSwitchCapability` alone. Its one sanctioned
-// production caller will be the switch/rollback CLI of S3-05, which adds itself
-// to the list below in that PR; until then only tests may issue one.
+// production caller is the switch/rollback CLI (S3-05, `sync/cli/switch.ts`);
+// otherwise only tests issue one.
 
 const root = join(__dirname, "..");
 
@@ -37,6 +37,7 @@ const SOURCES = ["apps/runtime/src", "packages"] as const;
 describe("Fansly Sync Engine repository boundaries", () => {
   it("issues the switch capability nowhere outside its own module (I17)", () => {
     expect(filesMatching("issueSyncSwitchCapability", SOURCES)).toEqual([
+      "apps/runtime/src/sync/cli/switch.ts",
       "packages/db/src/repositories/sync/pages.ts",
     ]);
   });

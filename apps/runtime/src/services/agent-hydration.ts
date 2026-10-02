@@ -52,6 +52,7 @@ import {
   resolveAgentHydrationBoundaryRef,
   listDispatchableAgentHydrationRequests,
   listDispatchingAgentHydrationRequests,
+  listEngineManagedAgentHydrationDispatches,
   listExpirableAgentHydrationRequests,
   listStuckAgentHydrationDispatches,
   rearmAgentHydrationRequest,
@@ -230,6 +231,9 @@ export interface AgentHydrationCycleResult {
   /** Auto-approved rows HELD back from dispatch because the policy mode left
    *  `enforce` after they were approved — the kill-switch's middle rung. */
   autoHeld: number;
+  /** Rows the Fansly Sync Engine served whose history request ended this
+   *  pass, settled to the state they mirror. */
+  engineSettled: number;
 }
 
 /**
@@ -256,6 +260,7 @@ export async function runAgentHydrationCycle(
     pageBusy: 0,
     autoApprove: null,
     autoHeld: 0,
+    engineSettled: 0,
   };
   // `off` freezes the decisions (nothing expires, nothing is approved or
   // dispatched) but not the bookkeeping below: a run dispatched before the
@@ -269,6 +274,7 @@ export async function runAgentHydrationCycle(
   // recovered — reconciliation only ever looks at `dispatching` rows.
   result.reconciled = await reconcileAgentHydrationDispatches(app, boss);
   result.swept = await sweepStuckAgentHydration(app, boss);
+  result.engineSettled = await settleEndedEngineHydration(app);
 
   // `off` and `request_only` stop HERE. Everything above is bookkeeping about
   // work that already happened; everything below starts new work.
@@ -351,6 +357,20 @@ export async function runAgentHydrationCycle(
     }
   }
   return result;
+}
+
+/**
+ * Bookkeeping of the rows the Fansly Sync Engine served (the wrapper's,
+ * step-3 design §3.5 item 10): once a row's history request is over, the row
+ * takes the terminal state it mirrors, so no legacy view or check sees it
+ * `dispatching` for good. The engine's request module (`requests/history.ts`)
+ * is loaded only when such a row exists, so the worker stays light.
+ */
+async function settleEndedEngineHydration(app: AppContext): Promise<number> {
+  const ended = await listEngineManagedAgentHydrationDispatches(app.db, { limit: 1, endedOnly: true });
+  if (ended.length === 0) return 0;
+  const { settleEngineManagedHydration } = await import("../sync/requests/legacy-hydration.ts");
+  return (await settleEngineManagedHydration({ db: app.db, rawConfig: app.config })).settled;
 }
 
 /** Undecided or never-dispatched approvals whose expiry has passed. Like the

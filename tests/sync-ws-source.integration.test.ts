@@ -295,6 +295,44 @@ describe("the page's socket in the sync process", () => {
     )).toBe(2);
   }, 90_000);
 
+  it("an Upgrade opens only with the stored credentials its admission checked: changed ones send nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    const { pageId } = r.page;
+    r.server.onWebSocket = (peer) => speakFansly(peer);
+    // `ws.connect` is paused: the source holds the lock and waits for an admission.
+    await testDb.pool.query("update sync_pages set paused_resources = array['ws.connect'] where page_id = $1", [pageId]);
+    const host = await startHost(r, { seed: 12 });
+    await until(async () => host.wsSource(pageId)?.state === "owning", 15_000, "the socket owner");
+    const source = host.wsSource(pageId)!;
+    const checks = { calls: 0 };
+    const hooks = {
+      check: () => {
+        checks.calls += 1;
+        return null;
+      },
+    };
+
+    // The stored credentials are not the ones the admission's check passed
+    // (they changed in between): no connection row, no Upgrade, no check.
+    const refused = await source.handshake(hooks, new AbortController().signal, { credentialsGeneration: "0".repeat(64) });
+    expect(refused).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
+    expect(checks.calls).toBe(0);
+    expect(upgrades(r)).toEqual([]);
+    expect(await connections(pageId)).toEqual([]);
+    expect(source.state).toBe("owning");
+
+    // The digest the admission checked opens it.
+    const verified = (await testDb.pool.query<{ generation: string }>(
+      "select credentials_generation as generation from sync_pages where page_id = $1", [pageId],
+    )).rows[0]!.generation;
+    const opened = await source.handshake(hooks, new AbortController().signal, { credentialsGeneration: verified });
+    expect(opened).toMatchObject({ kind: "response", status: 101 });
+    expect(checks.calls).toBe(1);
+    expect(upgrades(r)).toHaveLength(1);
+    expect((await connections(pageId)).map((row) => row.generation)).toEqual([verified]);
+  }, 60_000);
+
   it("the legacy receiver on the same database cannot take the page's socket while sync owns it (58213)", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

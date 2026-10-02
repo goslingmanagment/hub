@@ -915,13 +915,15 @@ function statusWorkOf(work: SyncWorkRow): StatusWork {
   };
 }
 
-/** What a request waits for as a whole: the page (no running live owner,
- *  an owner pause, a page hold), else nothing. */
+/** What a request waits for as a whole: the page (an owner pause, no running
+ *  live owner, a page hold), else nothing. The pause is named first (G19):
+ *  after a rollback the page is `off` with its requests paused, and its open
+ *  requests read `paused` (plan §15), not `ownership_unconfirmed`. */
 function requestWaiting(page: SyncPageRow | null, now: Date): { reason: WaitingReason; until: Date | null } | null {
   if (page === null) return { reason: "ownership_unconfirmed", until: null };
+  if (page.pausedAll || page.pausedRequests) return { reason: "paused", until: null };
   const status = statusPageOf(page);
   if (page.mode !== "live" || !ownerRunning(status, now)) return { reason: "ownership_unconfirmed", until: null };
-  if (page.pausedAll || page.pausedRequests) return { reason: "paused", until: null };
   const hold = activePageHold(status, now);
   if (hold !== null) return { reason: "page_hold", until: hold.until };
   return null;
@@ -958,7 +960,13 @@ function itemView(item: HistoryItemRow, depth: HistoryDepth, inputs: ViewInputs,
   const state = effectiveItemState(item, work);
   const open = OPEN_ITEM_STATES.has(state);
   const page = inputs.pages.get(item.pageId)?.page ?? null;
-  const waiting = open && work !== undefined && page !== null
+  // A paused page or requests class is named before the owner (G19), as for
+  // the request as a whole.
+  const paused = open && work !== undefined && page !== null && work.state !== "running"
+    && (page.pausedAll || (work.class === "requests" && page.pausedRequests));
+  const waiting = paused
+    ? { reason: "paused" as const, until: null }
+    : open && work !== undefined && page !== null
     ? explainWork(statusWorkOf(work), statusPageOf(page), {
       slotOpensAt: estimateSlotOpensAt({
         lastSendAt: page.lastSendAt,

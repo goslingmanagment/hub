@@ -367,9 +367,16 @@ export class FanslyWsSource {
    * session, open the connection row, open the socket on an engine lease
    * over `hooks.check`, and answer once the Upgrade settled — 101, another
    * status, an error, or a refusal of the check. The receiver keeps running
-   * after a 101. Never throws.
+   * after a 101. Never throws. With `expect.credentialsGeneration` (the
+   * digest the live transport checked against the verified one before the
+   * admission), stored credentials that changed since open nothing: the
+   * socket is asked for again, and that admission's check raises the verify.
    */
-  async handshake(hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
+  async handshake(
+    hooks: SendHooks,
+    signal: AbortSignal,
+    expect?: { credentialsGeneration: string | null },
+  ): Promise<TransportOutcome> {
     const { pageId, pageLabel, logger } = this.#d;
     const owner = this.#owner;
     if (owner === null || !owner.alive || this.#stopping !== null || this.#connection !== null
@@ -377,6 +384,7 @@ export class FanslyWsSource {
       this.#d.metrics.increment("sync_ws_handshake_refused", { pageId, state: this.#state });
       return { kind: "aborted_before_send", refusal: "lease_inactive" };
     }
+    const before = this.#state;
     this.#state = "connecting";
     this.#connectNotBefore = null;
     // This admitted step is the connection an unwritten demand asked for.
@@ -397,6 +405,15 @@ export class FanslyWsSource {
       return { kind: "transport_error", sent: false, message: "fansly_ws_prepare_failed" };
     }
     const { generation } = context;
+    if (expect !== undefined && expect.credentialsGeneration !== generation) {
+      // Not the credentials the admission checked: nothing is sent.
+      await context.egress.dispatcher?.destroy().catch(() => undefined);
+      this.#d.metrics.increment("sync_ws_handshake_refused", { pageId, state: "credentials_changed" });
+      logger.info({ pageId }, "Fansly sync WS: the stored credentials changed since the admission; no Upgrade with them");
+      this.#state = before;
+      void this.#requestConnect("ws_generation_changed");
+      return { kind: "aborted_before_send", refusal: "lease_inactive" };
+    }
     if (generation !== this.#lastGeneration) {
       this.#failures = 0;
       this.#lastGeneration = generation;

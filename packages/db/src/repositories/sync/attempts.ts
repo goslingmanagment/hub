@@ -744,6 +744,94 @@ export async function listSendsForPaceAudit(
   }));
 }
 
+/** One send of a page in the combined journal of both engines. */
+export interface CombinedFanslySend {
+  /** `engine` (a live `sync_attempts` row) or `legacy:<source>` (a
+   *  `fansly_send_log` row of the step-1 guard). */
+  journal: string;
+  /** The row's id in its journal. */
+  ref: string;
+  sentAt: Date;
+  settingMs: number;
+  prevJournal: string | null;
+  prevSentAt: Date | null;
+  /** Milliseconds since the previous send of EITHER journal (null: none). */
+  gapMs: number | null;
+  /** Closer than the setting in force for this send. */
+  violation: boolean;
+}
+
+/**
+ * Every send of a page from BOTH journals — live engine attempts and the
+ * step-1 legacy send log — in `sent_at` order, each with the gap to the
+ * previous send of either journal and the setting in force for the later one
+ * (step-3 design §3.5 item 2, G4, E12). The only place a pair of sends
+ * straddling the handover (or a rollback) is visible; used by `sync switch
+ * check`, the engine's alert evaluator on `handover`/`live` pages and the
+ * tests. The 10-minute look-back gives the window's first send its
+ * predecessor; rows before `since` are context only.
+ */
+export async function listCombinedFanslySendsForPaceAudit(
+  db: Database,
+  input: { pageId: number; since: Date; until?: Date | null },
+): Promise<CombinedFanslySend[]> {
+  const until = input.until === undefined || input.until === null
+    ? sql`'infinity'::timestamptz`
+    : sql`${input.until}::timestamptz`;
+  const result = await db.execute<{
+    journal: string;
+    ref: string;
+    sentAt: Date | string;
+    settingMs: number | string;
+    prevJournal: string | null;
+    prevSentAt: Date | string | null;
+    gapMs: number | string | null;
+  }>(sql`
+    with sends as (
+      select 'engine'::text as journal, a.id::text as ref, a.sent_at, a.setting_ms
+        from sync_attempts a
+       where a.page_id = ${input.pageId}
+         and not a.shadow
+         and a.sent_at is not null
+         and a.sent_at >= ${input.since}::timestamptz - interval '10 minutes'
+         and a.sent_at < ${until}
+      union all
+      select 'legacy:' || l.source, l.id::text, l.sent_at, l.setting_ms
+        from fansly_send_log l
+       where l.page_id = ${input.pageId}
+         and l.sent_at is not null
+         and l.sent_at >= ${input.since}::timestamptz - interval '10 minutes'
+         and l.sent_at < ${until}
+    ), ordered as (
+      select journal, ref, sent_at, setting_ms,
+             lag(journal) over w as prev_journal,
+             lag(sent_at) over w as prev_sent_at,
+             extract(epoch from (sent_at - lag(sent_at) over w)) * 1000 as gap_ms
+        from sends
+      window w as (order by sent_at, journal, ref)
+    )
+    select journal, ref, sent_at as "sentAt", setting_ms as "settingMs",
+           prev_journal as "prevJournal", prev_sent_at as "prevSentAt", gap_ms as "gapMs"
+      from ordered
+     where sent_at >= ${input.since}::timestamptz
+     order by sent_at, journal, ref
+  `);
+  return result.rows.map((row) => {
+    const settingMs = Number(row.settingMs);
+    const gapMs = row.gapMs === null ? null : Number(row.gapMs);
+    return {
+      journal: row.journal,
+      ref: row.ref,
+      sentAt: toRequiredDate(row.sentAt),
+      settingMs,
+      prevJournal: row.prevJournal,
+      prevSentAt: toDate(row.prevSentAt),
+      gapMs,
+      violation: gapMs !== null && gapMs < settingMs,
+    };
+  });
+}
+
 /**
  * The apply's entry (tx 3, design §3.7.3): the attempt row locked `for
  * update` while it still has something to apply (`captured` / `deferred`).

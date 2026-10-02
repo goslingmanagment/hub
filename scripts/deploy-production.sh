@@ -1580,6 +1580,8 @@ ARG APP_SOURCE_REVISION=unknown
 
 LABEL agency-hub.dependency-checksum="\${APP_DEPENDENCY_CHECKSUM}"
 LABEL agency-hub.source-revision="\${APP_SOURCE_REVISION}"
+# The overlay's own build identity (the base image carries its revision's).
+ENV GIT_SHA=\${APP_SOURCE_REVISION}
 
 COPY apps/dashboard/dist /app/apps/dashboard/dist
 COPY apps/runtime/dist /app/apps/runtime/dist

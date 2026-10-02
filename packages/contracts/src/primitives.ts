@@ -71,6 +71,10 @@ export const errorResponseSchema = z.object({
   // (token_revoked | token_expired) and `conflict` on account-link redemption
   // (used | expired | revoked). Optional, so every other error stays as it was.
   reason: z.string().optional(),
+  // Documented structured extension (docs/error-handling.md §3):
+  // `fansly_sync_work_queued` carries the status link of the Fansly Sync
+  // Engine work the request is still waiting in.
+  statusUrl: z.string().optional(),
 });
 
 export const paginationQuerySchema = z.object({

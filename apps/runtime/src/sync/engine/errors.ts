@@ -77,6 +77,16 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
   "repair.ws-gap",
 ]);
 
+/**
+ * The identity checks (step-3 §3.5 item 3, G1/G14): the only keys the live
+ * transport sends while the page's stored credentials are not the ones the
+ * engine verified — they are the check — and the actor picks nothing else
+ * meanwhile. `account.identity` work that carries a candidate is also the
+ * only work an auth/identity page hold lets through (its request uses the
+ * candidate, not the stored credentials that failed, E16).
+ */
+export const CREDENTIALS_CHECK_KEYS: ReadonlySet<string> = new Set(["account.verify", "account.identity"]);
+
 /** Statuses that are never a subject's terminal answer, whatever a resource
  *  declares: they are about the page or the wire. */
 const NEVER_TERMINAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
@@ -255,6 +265,12 @@ export interface OutcomeInput {
    *  request failed with `subject_failure` within RESOURCE_BREAKER_WINDOW_MS,
    *  this one included. Read only for `subject_failure`. */
   recentFailedSubjects: number;
+  /** The digest of the credentials the request carried
+   *  (`sync_attempts.request.credentialsGeneration`): an auth/identity hold
+   *  is keyed on the digest that FAILED (step-3 §3.5 item 3, G1/G14), so it
+   *  lifts when the stored credentials the engine trusts change. Absent: the
+   *  page's verified digest. */
+  requestCredentialsGeneration?: string | null;
 }
 
 export type PageHoldDecision =
@@ -379,25 +395,171 @@ export function activeResourceHold(
   return null;
 }
 
+/** A page hold that ends at an instant: a 429 or the network. */
+export type TimedPageHoldKind = Extract<PageHoldKind, "rate_limit" | "network">;
+/** A page hold that only new credentials lift. */
+export type CredentialsPageHoldKind = Extract<PageHoldKind, "auth" | "identity_mismatch">;
+
 /**
- * The page hold in force now, or null. An auth or identity hold is
- * indefinite until the page's credentials generation differs from the one
- * the hold was taken under (`hold_detail.credentialsGeneration`); the actor
- * then lifts it and queues an urgent identity check (plan §9).
+ * Where an auth/identity hold carries a 429/network hold beside itself
+ * (`hold_detail.timedHold = {kind, until, detail}`). The page row has one hold
+ * slot, but the two holds stop the page for different reasons and end
+ * differently: an auth hold taken over a 429 hold in force (the switch's
+ * import I.4: a legacy auth blocker over the carried legacy 429) must not end
+ * the 429, and a 429 or network failure of a candidate identity check under
+ * an auth hold (E16) must neither replace nor lift the auth hold. The page is
+ * held until the later of the two ends; while the timed one is in force
+ * nothing is admitted — not even a candidate identity check (a 429 hold
+ * exempts nothing).
  */
-export function activePageHold(
-  page: Pick<PageErrorState, "holdKind" | "holdUntil" | "holdDetail" | "credentialsGeneration">,
-  now: Date,
-): { kind: PageHoldKind; until: Date } | null {
-  if (page.holdKind === null || page.holdUntil === null) return null;
+export const CARRIED_TIMED_HOLD_FIELD = "timedHold";
+
+export function isCredentialsHoldKind(kind: PageHoldKind | null): kind is CredentialsPageHoldKind {
+  return kind === "auth" || kind === "identity_mismatch";
+}
+
+export function isTimedHoldKind(kind: PageHoldKind | null): kind is TimedPageHoldKind {
+  return kind === "rate_limit" || kind === "network";
+}
+
+export interface TimedPageHold {
+  kind: TimedPageHoldKind;
+  until: Date;
+  detail: Record<string, unknown>;
+}
+
+type HoldView = Pick<PageErrorState, "holdKind" | "holdUntil" | "holdDetail" | "credentialsGeneration">;
+
+/** The 429/network hold an auth/identity hold of the row carries, in force
+ *  or not (null: none). */
+export function carriedTimedHold(page: Pick<PageErrorState, "holdKind" | "holdDetail">): TimedPageHold | null {
+  if (!isCredentialsHoldKind(page.holdKind)) return null;
+  const carried = page.holdDetail[CARRIED_TIMED_HOLD_FIELD];
+  if (typeof carried !== "object" || carried === null) return null;
+  const { kind, until, detail } = carried as Record<string, unknown>;
+  if ((kind !== "rate_limit" && kind !== "network") || typeof until !== "string") return null;
+  const at = new Date(until);
+  if (Number.isNaN(at.getTime())) return null;
+  return { kind, until: at, detail: typeof detail === "object" && detail !== null ? { ...(detail as Record<string, unknown>) } : {} };
+}
+
+/** The 429/network hold in force now: the row's own, or the one an
+ *  auth/identity hold carries beside itself. */
+export function activeTimedHold(page: Pick<PageErrorState, "holdKind" | "holdUntil" | "holdDetail">, now: Date): TimedPageHold | null {
+  if (isTimedHoldKind(page.holdKind)) {
+    return page.holdUntil !== null && page.holdUntil.getTime() > now.getTime()
+      ? { kind: page.holdKind, until: page.holdUntil, detail: { ...page.holdDetail } }
+      : null;
+  }
+  const carried = carriedTimedHold(page);
+  return carried !== null && carried.until.getTime() > now.getTime() ? carried : null;
+}
+
+/**
+ * The auth or identity hold in force now, or null. It is indefinite until
+ * the credentials digest the engine trusts (`credentials_generation`, written
+ * after a matching identity check) differs from the one whose request failed
+ * (`hold_detail.credentialsGeneration`, step-3 §3.5 item 3). A stored digest
+ * that changed out of band is the actor's to notice (`SyncActor` lifts the
+ * hold for one `account.verify`).
+ */
+export function activeCredentialsHold(page: HoldView, now: Date): { kind: CredentialsPageHoldKind; until: Date } | null {
+  if (!isCredentialsHoldKind(page.holdKind) || page.holdUntil === null) return null;
   if (page.holdUntil.getTime() <= now.getTime()) return null;
-  if (page.holdKind === "auth" || page.holdKind === "identity_mismatch") {
-    const heldUnder = page.holdDetail.credentialsGeneration;
-    if (typeof heldUnder === "string" && page.credentialsGeneration !== null && heldUnder !== page.credentialsGeneration) {
-      return null;
-    }
+  const heldUnder = page.holdDetail.credentialsGeneration;
+  if (typeof heldUnder === "string" && page.credentialsGeneration !== null && heldUnder !== page.credentialsGeneration) {
+    return null;
   }
   return { kind: page.holdKind, until: page.holdUntil };
+}
+
+export interface ActivePageHold {
+  /** The auth/identity hold when one is in force, else the timed hold. */
+  kind: PageHoldKind;
+  /** The later end of the holds in force (indefinite for an auth/identity
+   *  hold). */
+  until: Date;
+  /** The 429/network hold in force — the page's own or the one carried beside
+   *  an auth/identity hold: nothing is admitted before it ends, a candidate
+   *  identity check included. */
+  timed: { kind: TimedPageHoldKind; until: Date } | null;
+}
+
+/**
+ * The page hold in force now, or null: an auth/identity hold by its
+ * credentials rule (`activeCredentialsHold`) and a 429/network hold until its
+ * end (`activeTimedHold`) — both when the row carries both, the page then
+ * held until the later of them ends.
+ */
+export function activePageHold(page: HoldView, now: Date): ActivePageHold | null {
+  const timed = activeTimedHold(page, now);
+  const credentials = activeCredentialsHold(page, now);
+  const timedView = timed === null ? null : { kind: timed.kind, until: timed.until };
+  if (credentials !== null) {
+    const until = timed !== null && timed.until.getTime() > credentials.until.getTime() ? timed.until : credentials.until;
+    return { kind: credentials.kind, until, timed: timedView };
+  }
+  return timed === null ? null : { kind: timed.kind, until: timed.until, timed: timedView };
+}
+
+type PageHoldSet = Extract<PageHoldDecision, { action: "set" }>;
+
+function carriedDetail(hold: TimedPageHold): Record<string, unknown> {
+  return { kind: hold.kind, until: hold.until.toISOString(), detail: hold.detail };
+}
+
+function withoutCarried(detail: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...detail };
+  delete rest[CARRIED_TIMED_HOLD_FIELD];
+  return rest;
+}
+
+/**
+ * The hold to write when `incoming` is taken over the row's current hold
+ * (pure; one slot, at most two holds):
+ * - an auth/identity hold over a 429/network hold in force (the row's own or
+ *   one it carries) carries that hold beside itself;
+ * - a 429/network hold under an auth/identity hold in force is carried beside
+ *   it — the auth/identity hold stays, and a carried hold that ends later
+ *   keeps its end;
+ * - a 429/network hold over another one in force keeps the later end;
+ * - anything else replaces the row's hold (a hold no longer in force is
+ *   history).
+ */
+export function combinePageHold(page: PageErrorState, incoming: PageHoldSet, now: Date): PageHoldSet {
+  const timed = activeTimedHold(page, now);
+  if (isCredentialsHoldKind(incoming.kind)) {
+    if (timed === null) return incoming;
+    return { ...incoming, detail: { ...withoutCarried(incoming.detail), [CARRIED_TIMED_HOLD_FIELD]: carriedDetail(timed) } };
+  }
+  const incomingUntil = incoming.until === "infinity" ? INDEFINITE_UNTIL : incoming.until;
+  const next: TimedPageHold = timed !== null && timed.until.getTime() > incomingUntil.getTime()
+    ? timed
+    : { kind: incoming.kind as TimedPageHoldKind, until: incomingUntil, detail: incoming.detail };
+  const credentials = activeCredentialsHold(page, now);
+  if (credentials !== null) {
+    return {
+      action: "set",
+      kind: credentials.kind,
+      until: isIndefinite(credentials.until) ? "infinity" : credentials.until,
+      step: incoming.step,
+      detail: { ...withoutCarried(page.holdDetail), [CARRIED_TIMED_HOLD_FIELD]: carriedDetail(next) },
+    };
+  }
+  return next === timed ? { action: "set", kind: next.kind, until: next.until, step: incoming.step, detail: next.detail } : incoming;
+}
+
+/**
+ * What lifting an auth/identity hold leaves on the row (the stored
+ * credentials changed out of band, G14 (a)): the 429/network hold it carried
+ * while that is still in force, else nothing.
+ */
+export function afterCredentialsHold(page: PageErrorState, now: Date): PageHoldDecision {
+  const carried = carriedTimedHold(page);
+  if (carried !== null && carried.until.getTime() > now.getTime()) {
+    return { action: "set", kind: carried.kind, until: carried.until, step: page.holdStep, detail: carried.detail };
+  }
+  return { action: "clear", resetStep: false };
 }
 
 /** The 429 ladder position to use now: the stored one, or 0 after an hour
@@ -486,8 +648,8 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
   switch (input.errorClass) {
     case "ok": {
       // A hold still in force is never lifted by an answer (none is admitted
-      // under one; an identity check under new credentials runs only after
-      // the actor lifted the old auth hold). A recorded hold that is no longer
+      // under one but a candidate identity check under an auth hold, whose
+      // answer leaves the hold to the credentials rule). A recorded hold that is no longer
       // in force — expired, or an auth/identity hold of older credentials — is
       // cleared, and the 429 ladder restarts after an hour without a 429.
       const holdInForce = activePageHold(page, now) !== null;
@@ -528,8 +690,12 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       }
       const until = later(now, ladder(NETWORK_PAUSE_LADDER_MS, streak - NETWORK_FAILURES_TO_PAUSE));
       // The hold is re-taken after every failed retry; the instant the network
-      // went away rides along in the detail so "> 10 min" is measurable.
-      const priorSince = page.holdKind === "network" ? sinceOf(page.holdDetail.networkSince) ?? page.holdSince : null;
+      // went away rides along in the detail so "> 10 min" is measurable (also
+      // from a network hold carried beside an auth hold).
+      const carried = carriedTimedHold(page);
+      const priorSince = page.holdKind === "network"
+        ? sinceOf(page.holdDetail.networkSince) ?? page.holdSince
+        : carried?.kind === "network" ? sinceOf(carried.detail.networkSince) : null;
       const networkSince = priorSince ?? now;
       const alerts: AlertDecision[] = now.getTime() - networkSince.getTime() > NETWORK_ALERT_AFTER_MS
         ? [{ subKey: "page_stopped", detail: "network" }]
@@ -537,13 +703,13 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streak,
-        pageHold: {
+        pageHold: combinePageHold(page, {
           action: "set",
           kind: "network",
           until,
           step: page.holdStep,
           detail: { streak, networkSince: networkSince.toISOString() },
-        },
+        }, now),
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: until },
         alerts,
       };
@@ -556,7 +722,9 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streakReset,
-        pageHold: {
+        // Under an auth hold (a candidate identity check's 429) the auth hold
+        // stays and carries this one beside itself (E16).
+        pageHold: combinePageHold(page, {
           action: "set",
           kind: "rate_limit",
           until,
@@ -566,7 +734,7 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
             retryAfterMs: input.retryAfterMs,
             lastRateLimitAt: now.toISOString(),
           },
-        },
+        }, now),
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: until },
         alerts: [{ subKey: "page_stopped", detail: "rate_limit" }],
       };
@@ -617,13 +785,13 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streakReset,
-        pageHold: {
+        pageHold: combinePageHold(page, {
           action: "set",
           kind: "auth",
           until: "infinity",
           step: page.holdStep,
-          detail: { status: input.httpStatus, credentialsGeneration: page.credentialsGeneration },
-        },
+          detail: { status: input.httpStatus, credentialsGeneration: failedGeneration(input) },
+        }, now),
         work: { action: "reopen", dueAt: null, waitingReason: "page_hold", waitingUntil: null },
         alerts: [{ subKey: "page_stopped", detail: "auth" }],
       };
@@ -632,13 +800,13 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       return {
         ...base,
         networkFailureStreak: streakReset,
-        pageHold: {
+        pageHold: combinePageHold(page, {
           action: "set",
           kind: "identity_mismatch",
           until: "infinity",
           step: page.holdStep,
-          detail: { credentialsGeneration: page.credentialsGeneration },
-        },
+          detail: { credentialsGeneration: failedGeneration(input) },
+        }, now),
         work: { action: "quarantine", reason: "identity_mismatch" },
         quarantineAttempt: true,
         alerts: [
@@ -687,6 +855,12 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
       };
     }
   }
+}
+
+/** The digest an auth/identity hold is keyed on: the request's, else the
+ *  page's verified one. */
+function failedGeneration(input: OutcomeInput): string | null {
+  return input.requestCredentialsGeneration ?? input.page.credentialsGeneration;
 }
 
 function sinceOf(value: unknown): Date | null {

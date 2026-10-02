@@ -19,7 +19,7 @@ const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegra
 // Roles we always expect a live process for, so a missing one is flagged even when
 // it has never reported (no row at all). Exported so the staged gate (getRunningFlagState)
 // can require an active instance of EVERY expected role before treating a flag as 'on'.
-export const EXPECTED_ROLES = ["api", "worker"] as const;
+export const EXPECTED_ROLES = ["api", "worker", "sync"] as const;
 
 // Marker for a row written under an older/mismatched snapshot shape: we can't trust its
 // value, but (unlike Stage A's silent drop) we surface the instance as state "unknown"

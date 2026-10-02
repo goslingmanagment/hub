@@ -2796,7 +2796,8 @@ export const agentRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // hydration_not_admissible | idempotency_mismatch
+      // hydration_not_admissible | idempotency_mismatch | fansly_page_switching
+      // (the Fansly page is being switched to the Fansly Sync Engine)
       409: errorResponseSchema,
       429: errorResponseSchema,
       503: errorResponseSchema,
@@ -2833,7 +2834,8 @@ export const agentRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // conflict (CAS) | hydration_proposal_stale | idempotency_mismatch
+      // conflict (CAS) | hydration_proposal_stale | idempotency_mismatch |
+      // engine_managed (a live Fansly page's request, served as a history request)
       409: errorResponseSchema,
       429: errorResponseSchema,
       503: errorResponseSchema,

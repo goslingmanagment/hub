@@ -133,6 +133,8 @@ export async function downloadThroughSyncEngine(
   }
   switch (waited.state) {
     case "not_live":
+    case "switching":
+      // Neither engine downloads for a page being switched (E10).
       return failed("send_guard");
     case "queued":
       return failed("timeout");

@@ -436,10 +436,10 @@ describe("admin config update api (Stage B1)", () => {
     });
 
     // The heartbeat snapshot is built from loadEffectiveConfig — exactly what the process now
-    // consumes — so running == override. Both expected roles (api + worker) must report it for
-    // pendingApply to clear (role-complete: a single role reporting can't clear it).
+    // consumes — so running == override. Every expected role (api + worker + sync) must report
+    // it for pendingApply to clear (role-complete: a single role reporting can't clear it).
     const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-    for (const role of ["api", "worker"]) {
+    for (const role of ["api", "worker", "sync"]) {
       await upsertInstanceHeartbeat(appContext.db, {
         role,
         instanceId: `${role}-1`,

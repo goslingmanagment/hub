@@ -178,9 +178,9 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
     const overrides = new Map<string, ConfigOverrideRecord>([
       ["transactionLookbackDays", { value: 7, version: 1 }],
     ]);
-    // Both expected roles active and matching → not pending (role-complete; see M1 below).
+    // Every expected role active and matching → not pending (role-complete; see M1 below).
     const view = assembleConfigView(
-      [row("api", "a1", RUNNING, FRESH), row("worker", "w1", RUNNING, FRESH)],
+      [row("api", "a1", RUNNING, FRESH), row("worker", "w1", RUNNING, FRESH), row("sync", "s1", RUNNING, FRESH)],
       NOW,
       overrides,
     );
@@ -229,6 +229,7 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
       [
         row("api", "a1", { transactionLookbackDays: 14 }, FRESH),
         row("worker", "w1", { transactionLookbackDays: 14 }, FRESH),
+        row("sync", "s1", { transactionLookbackDays: 14 }, FRESH),
       ],
       NOW,
       overrides,
@@ -238,11 +239,12 @@ describe("assembleConfigView overlay (Stage B1 live overrides)", () => {
 });
 
 describe("assembleConfigView server-computed runningState + desiredEffective (Stage C / M3)", () => {
-  it("boot key runningState='on' only when both expected roles report true (role-complete)", () => {
+  it("boot key runningState='on' only when every expected role reports true (role-complete)", () => {
     const view = assembleConfigView(
       [
         row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH),
         row("worker", "w1", { ofapiDmProjectionEnabled: true }, FRESH),
+        row("sync", "s1", { ofapiDmProjectionEnabled: true }, FRESH),
       ],
       NOW,
     );
@@ -260,6 +262,7 @@ describe("assembleConfigView server-computed runningState + desiredEffective (St
       [
         row("api", "a1", { ofapiDmProjectionEnabled: true }, FRESH),
         row("worker", "w1", { ofapiDmProjectionEnabled: false }, FRESH),
+        row("sync", "s1", { ofapiDmProjectionEnabled: true }, FRESH),
       ],
       NOW,
     );
@@ -420,10 +423,11 @@ describe("getRunningFlagState", () => {
     expect(getRunningFlagState(rows, KEY)).toBe("unknown");
   });
 
-  it("returns 'on' only when BOTH expected roles are active and every instance reports true", () => {
+  it("returns 'on' only when EVERY expected role is active and every instance reports true", () => {
     const rows = [
       row("api", "a1", { [KEY]: true }, FRESH),
       row("worker", "w1", { [KEY]: true }, FRESH),
+      row("sync", "s1", { [KEY]: true }, FRESH),
     ];
     expect(getRunningFlagState(rows, KEY)).toBe("on");
   });
@@ -432,6 +436,7 @@ describe("getRunningFlagState", () => {
     const rows = [
       row("api", "a1", { [KEY]: true }, FRESH),
       row("worker", "w1", { [KEY]: false }, FRESH),
+      row("sync", "s1", { [KEY]: true }, FRESH),
     ];
     expect(getRunningFlagState(rows, KEY)).toBe("off");
   });
