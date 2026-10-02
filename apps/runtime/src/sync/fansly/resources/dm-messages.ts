@@ -4,7 +4,9 @@ import {
   closeOpenWork,
   confirmDmLiveMessagesInTransaction,
   getOpenWorkForKey,
+  hasUnconfirmedDmLiveChatMessage,
   isDmArchiveScopeFenced,
+  latestClosedWorkForKey,
   listDomainEventsByDedupKeys,
   listLegacyDmHeadDebt,
   listLegacyDmQuarantines,
@@ -79,6 +81,7 @@ import {
   LEGACY_UNSTORED_DELETED_ON_PLATFORM,
 } from "../lib/replay-rules.ts";
 import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
+import { OWN_MASS_MESSAGE_CONTAINER_TYPE } from "../ws/router.ts";
 import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";
 
 // `dm-messages.head`, `.catchup`, `.history` (plan §6.2, §7 p.4, §4; design
@@ -115,12 +118,23 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // own probe); a page whose thread was deleted, unbound or excluded since the
 // plan only canonicalizes its observation under the same fence (stamped, so
 // the unfenced minutely sweep never appends it) and closes the work.
+//
+// A live head for a chat with no thread row at all (a fan's first chat the
+// legacy engine deferred until its list showed it — the takeover's carried
+// confirmations, step 3 import I.3b — or a row gone since the demand) asks
+// `dm-conversations.find` for it, as the router does for an unknown chat, but
+// only on the socket's evidence of a chat (an unconfirmed overlay row of a
+// demanded id, never the page's own mass-message container), at most once
+// per head row and for at most `DM_HEAD_FIND_WAIT_MAX_MS`: the find creates
+// the thread (list, else group detail, D5) and the head then reads it as any
+// other — or, if it finds no direct chat, the head closes `thread_missing`.
 
 export type DmMessagesVariant = "head" | "catchup" | "history";
 
 const HEAD_KEY = "dm-messages.head";
 const CATCHUP_KEY = "dm-messages.catchup";
 const HISTORY_KEY = "dm-messages.history";
+const FIND_KEY = "dm-conversations.find";
 
 const KEY_OF: Readonly<Record<DmMessagesVariant, string>> = {
   head: HEAD_KEY,
@@ -129,6 +143,12 @@ const KEY_OF: Readonly<Record<DmMessagesVariant, string>> = {
 };
 
 const LIMIT = FANSLY_MESSAGES_PAGE_LIMIT;
+
+/** A head for a chat without a thread row waits at most this long for the
+ *  `dm-conversations.find` it asked for. */
+export const DM_HEAD_FIND_WAIT_MAX_MS = 10 * 60_000;
+/** … and looks again this often while that find is open. */
+export const DM_HEAD_FIND_RECHECK_MS = 5_000;
 
 /** A demanded id the vendor's head does not show yet is read again after
  *  these delays, then settled `not_found` (plan §7 p.4: 15 s, 60 s). */
@@ -313,6 +333,41 @@ function demandWithinChain(demand: SyncWorkRow["demand"], chain: ThreadChain): b
   return demand.messageIds.every((id) => atMost(id, chain.headId!));
 }
 
+/**
+ * A live head whose chat has no thread row (see the header): the socket's
+ * evidence of a chat asks `dm-conversations.find` once and waits for it; the
+ * head re-plans when the find is done (the thread exists: read it; it does
+ * not: `thread_missing`). Without that evidence, after a find that ran since
+ * the head was created, behind a quarantined find, or past
+ * `DM_HEAD_FIND_WAIT_MAX_MS`, the head closes `thread_missing` — it never
+ * asks twice, and never reads a chat the find did not create.
+ */
+async function planChatFind(work: SyncWorkRow, ctx: { db: Database; pageId: number; now: Date }): Promise<StepPlan> {
+  const groupId = work.subject;
+  const missing: StepPlan = { kind: "done", reason: "thread_missing" };
+  if (ctx.now.getTime() - work.createdAt.getTime() >= DM_HEAD_FIND_WAIT_MAX_MS) return missing;
+  const evidence = await hasUnconfirmedDmLiveChatMessage(ctx.db, {
+    pageId: ctx.pageId,
+    groupId,
+    messageIds: work.demand.messageIds,
+    ownContainerType: OWN_MASS_MESSAGE_CONTAINER_TYPE,
+  });
+  if (!evidence) return missing;
+  const recheck = new Date(ctx.now.getTime() + DM_HEAD_FIND_RECHECK_MS);
+  const open = await getOpenWorkForKey(ctx.db, { pageId: ctx.pageId, shadow: false, resource: FIND_KEY, subject: groupId });
+  if (open !== null) return open.state === "quarantined" ? missing : { kind: "wait", reason: "dependency", until: recheck };
+  const ran = await latestClosedWorkForKey(ctx.db, {
+    pageId: ctx.pageId, shadow: false, resource: FIND_KEY, subject: groupId, closedAfter: work.createdAt,
+  });
+  if (ran !== null) return missing;
+  return {
+    kind: "wait",
+    reason: "dependency",
+    until: recheck,
+    enqueue: [{ resource: FIND_KEY, subject: groupId, demand: { reason: `dependency:${HEAD_KEY}` } }],
+  };
+}
+
 async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   db: Database; pageId: number; shadow: boolean; now: Date;
 }): Promise<StepPlan> {
@@ -322,6 +377,7 @@ async function planStep(variant: DmMessagesVariant, work: SyncWorkRow, ctx: {
   if (facts === null) return { kind: "quarantine", reason: "page_missing" };
   if (facts.externalId === null) return waitForPageIdentity(KEY_OF[variant], ctx.shadow, ctx.now);
   const thread = await readThread(ctx.db, ctx.pageId, groupId);
+  if (thread === null && variant === "head" && !ctx.shadow) return planChatFind(work, ctx);
   const skip = threadSkip(thread);
   if (skip !== null || thread === null) return { kind: "done", reason: skip ?? "thread_missing" };
   const cursor = parseDmMessagesCursor(work.cursor);
