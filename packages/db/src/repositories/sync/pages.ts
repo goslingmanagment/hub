@@ -397,6 +397,12 @@ function holdsSwitchCapability(capability: SyncSwitchCapability | undefined, pag
   return capability !== undefined && issuedSwitchCapabilities.has(capability) && capability.pageId === pageId;
 }
 
+/** Whether `capability` is a switch capability this module issued for
+ *  `pageId` (the switch's own final chain rebuild runs in `handover`, §8.2). */
+export function holdsSyncSwitchCapability(capability: SyncSwitchCapability | undefined, pageId: number): boolean {
+  return holdsSwitchCapability(capability, pageId);
+}
+
 /** Transitions the owner makes without a capability (`sync page mode`). */
 const OWNER_TRANSITIONS: ReadonlySet<string> = new Set(["off>shadow", "shadow>off"]);
 
