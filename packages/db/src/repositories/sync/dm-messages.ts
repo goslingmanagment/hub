@@ -57,6 +57,32 @@ export async function listStoredDmMessagesForReplay(
   }));
 }
 
+/** What legacy stored of one thread, for judging the rows of a journaled
+ *  page it did not store (design §3.12 B5): the oldest stored message by
+ *  snowflake order (deleted rows included: they were stored too), and whether
+ *  legacy marks the thread's history complete. */
+export interface LegacyDmStoredWindow {
+  lowestStoredId: string | null;
+  legacyClaimsComplete: boolean;
+}
+
+export async function readLegacyDmStoredWindow(
+  db: Database,
+  input: { conversationId: number },
+): Promise<LegacyDmStoredWindow> {
+  const result = await db.execute<{ lowestStoredId: string | null; legacyClaimsComplete: boolean | null }>(sql`
+    select (select min(m.platform_message_id::numeric)::text
+              from page_dm_messages m
+             where m.conversation_id = t.id
+               and m.platform_message_id ~ '^[0-9]{1,30}$') as "lowestStoredId",
+           t.message_coverage_status = 'complete' as "legacyClaimsComplete"
+      from page_dm_threads t
+     where t.id = ${input.conversationId}
+  `);
+  const row = result.rows[0];
+  return { lowestStoredId: row?.lowestStoredId ?? null, legacyClaimsComplete: row?.legacyClaimsComplete === true };
+}
+
 export interface SidecarOrderKey {
   /** `media_orders.media_offer_ref`: the bundle id, else the media id. */
   mediaOfferRef: string;

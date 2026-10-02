@@ -312,9 +312,13 @@ export interface ReplayContext {
 }
 
 /** What a replay concluded about one observation: the new wire contract and
- *  the resource's intended effects against what legacy stored. */
+ *  the resource's intended effects against what legacy stored. A match that
+ *  needed a named, checked legacy rule to hold (an older key scheme legacy
+ *  stored the same fact under, rows legacy never stored) names each rule in
+ *  `via`; the shadow report counts the observations of every rule, so no
+ *  such allowance is silent. */
 export type ReplayVerdict =
-  | { kind: "match"; detail?: Readonly<Record<string, unknown>> }
+  | { kind: "match"; detail?: Readonly<Record<string, unknown>>; via?: readonly string[] }
   | { kind: "mismatch"; reason: string; detail?: Readonly<Record<string, unknown>> }
   | { kind: "not_replayable"; reason: string };
 

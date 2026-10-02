@@ -362,7 +362,25 @@ describe("the report's and the sampler's pure parts", () => {
     // … but a kind of nothing else is no pass, nor is one where nothing was judged.
     expect(score({ total: 3, matched: 0, reasons: { legacy_refused_body_trimmed: 3 } })).toEqual({ excused: 3, ratio: null, meetsTarget: false });
     expect(score({ total: 3, matched: 0, reasons: { page_without_identity: 3 } })).toEqual({ excused: 0, ratio: 0, meetsTarget: false });
-    expect([...REPLAY_EXCUSED_REASONS].sort()).toEqual(["legacy_refused_body_trimmed", "legacy_rejection_receipt"]);
+    // Where legacy stored no fact to compare with, each by its own name
+    // (lib/replay-rules.ts); nothing else ever leaves the denominator.
+    expect([...REPLAY_EXCUSED_REASONS].sort()).toEqual([
+      "legacy_refused_body_trimmed",
+      "legacy_rejection_receipt",
+      "legacy_unstored_below_complete_claim",
+      "legacy_unstored_below_window",
+      "legacy_unstored_deleted_on_platform",
+      "legacy_ws_hint_membership_pending",
+    ]);
+    // dm_messages on 2026-10-02: 111 pages legacy stored none of, the rest compared.
+    expect(score({
+      total: 23_030,
+      matched: 22_919,
+      reasons: { legacy_unstored_below_window: 108, legacy_unstored_below_complete_claim: 3 },
+    })).toEqual({ excused: 111, ratio: 1, meetsTarget: true });
+    // group_detail: three direct chats legacy deferred; one unexplained still fails.
+    expect(score({ total: 174, matched: 170, reasons: { legacy_ws_hint_membership_pending: 3 } }))
+      .toMatchObject({ excused: 3, meetsTarget: false });
   });
 
   it("parses the report window", () => {
