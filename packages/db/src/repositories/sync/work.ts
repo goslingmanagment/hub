@@ -400,17 +400,25 @@ export async function upsertDemands(
 }
 
 /**
- * The registry's polls of a page (§4.2): one open `poll` row per enabled poll
- * key, created with a random phase (`due_at = now + everyMs × phase`, `phase`
- * from the database's `random()` unless given). A key that already has an open
- * row keeps it. Returns how many rows were created.
+ * The registry's standing rows of a page (§4.2, §4.3): one open row per
+ * enabled poll key, and per standing walk (a `goal` over a queue other writers
+ * fill, `kind: 'goal'`), created with a random phase (`due_at = now + everyMs
+ * × phase`, `phase` from the database's `random()` unless given). A key that
+ * already has an open row keeps it. Returns how many rows were created.
  */
 export async function ensurePollRows(
   db: Database,
   input: {
     pageId: number;
     shadow: boolean;
-    polls: ReadonlyArray<{ resource: string; class: SyncEngineWorkClass; everyMs: number; phase?: number }>;
+    polls: ReadonlyArray<{
+      resource: string;
+      class: SyncEngineWorkClass;
+      everyMs: number;
+      phase?: number;
+      /** Default `poll`; a standing walk is a `goal`. */
+      kind?: Extract<SyncWorkKind, "poll" | "goal">;
+    }>;
   },
 ): Promise<number> {
   if (input.polls.length === 0) return 0;
@@ -422,14 +430,16 @@ export async function ensurePollRows(
     if (poll.phase !== undefined && !(poll.phase >= 0 && poll.phase < 1)) {
       throw new Error(`Poll ${poll.resource}: phase must be in [0, 1), received ${poll.phase}`);
     }
-    return { resource: poll.resource, class: poll.class, every_ms: poll.everyMs, phase: poll.phase ?? null };
+    const kind = poll.kind ?? "poll";
+    if (kind !== "poll" && kind !== "goal") throw new Error(`Poll ${poll.resource}: a standing row is a poll or a goal`);
+    return { resource: poll.resource, class: poll.class, every_ms: poll.everyMs, phase: poll.phase ?? null, kind };
   });
   const result = await db.execute(sql`
     insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
-    select ${input.pageId}::bigint, ${input.shadow}::boolean, x.resource, '', 'poll', x.class,
+    select ${input.pageId}::bigint, ${input.shadow}::boolean, x.resource, '', x.kind, x.class,
            clock_timestamp() + (x.every_ms * coalesce(x.phase, random())) * interval '1 millisecond'
       from jsonb_to_recordset(${jsonParam(polls)})
-        as x(resource text, class text, every_ms double precision, phase double precision)
+        as x(resource text, class text, every_ms double precision, phase double precision, kind text)
      order by x.resource
     on conflict (page_id, shadow, resource, subject) where state in ('open', 'running', 'quarantined')
     do nothing

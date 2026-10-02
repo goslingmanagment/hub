@@ -67,7 +67,7 @@ import {
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
-import type { AlertSink, Clock, Metrics, Rng } from "./ports.ts";
+import type { AlertSink, Clock, Metrics, Rng, SettingsSource } from "./ports.ts";
 import {
   demandToUpsert,
   nextPollDueAt,
@@ -163,6 +163,9 @@ export interface CaptureCodec {
     /** The request the answer serves (a walk's position, for kinds whose
      *  journal names it). */
     request: RequestPlan;
+    /** The page's native account id (`pages.external_page_id`): the receiver
+     *  a scoped answer is checked against (absent: no scope check). */
+    ownRef?: string | null;
     module: ResourceModule;
   }): unknown;
 }
@@ -208,6 +211,8 @@ export interface CommitDeps {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  /** The live settings resources read (absent: the registry defaults). */
+  settings?: SettingsSource;
   faults?: SyncFaultHook;
 }
 
@@ -609,6 +614,7 @@ export async function capture(
           response: read.response,
           contractAccepted: read.kind === "accepted",
           request: admission.request,
+          ownRef: d.ownRef,
           module,
         }),
       }
@@ -687,6 +693,7 @@ export async function capture(
       work: admission.work,
       demandRevision: admission.demandRevision,
       subjectQueue: admission.spec.subjectQueue === true,
+      request: admission.request,
     }, decision, module);
     return { decision, paceGapMs: captured.paceGapMs };
   });
@@ -716,6 +723,8 @@ interface OutcomeTarget {
   /** The work's demand revision the attempt served (I11). */
   demandRevision: number;
   subjectQueue: boolean;
+  /** The request the attempt sent (a queue walk's subject is in it). */
+  request: RequestPlan | null;
 }
 
 async function writeOutcomeDecision(
@@ -747,13 +756,15 @@ async function writeOutcomeDecision(
   const work = target.work;
   if (work === null) return;
   const subjectQueue = target.subjectQueue;
-  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
+  if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined && target.request !== null) {
+    // A breaker reset (an answer after failures) is an `ok`, never a failure.
+    const breakerReset = !decision.subjectBreaker.terminal && decision.subjectBreaker.failureCount === 0;
     await module.onSubjectOutcome(tx, work, {
-      kind: decision.subjectBreaker.terminal ? "terminal" : "failure",
+      kind: decision.subjectBreaker.terminal ? "terminal" : breakerReset ? "ok" : "failure",
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
-    });
+    }, target.request);
   }
   const breaker = !subjectQueue && decision.subjectBreaker !== null
     ? {
@@ -959,6 +970,7 @@ export async function apply(
         response,
         observation: { id: attempt.observationId!, receivedAt: attempt.observationReceivedAt! },
         fenced,
+        ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
       if (d.canonicalize !== undefined) {
         await d.canonicalize(tx, {
@@ -1088,6 +1100,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         work,
         demandRevision: attempt.demandRevision ?? work?.demandRevision ?? 0,
         subjectQueue,
+        request: requestOfAttempt(attempt),
       }, decision, null);
       return { quarantined: true, alerts: decision.alerts };
     }

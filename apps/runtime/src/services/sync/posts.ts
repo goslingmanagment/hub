@@ -351,7 +351,9 @@ export function parsePostsCursorState(value: unknown): PostsCursorState | null {
   };
 }
 
-function fanslyPublishedAt(value: unknown): Date | null {
+/** A Fansly `createdAt` (seconds, milliseconds or ISO) as an instant (exported
+ *  for the Fansly Sync Engine's `posts` resource; unchanged here). */
+export function fanslyPublishedAt(value: unknown): Date | null {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     const date = new Date(value >= 1_000_000_000_000 ? value : value * 1_000);
     return Number.isNaN(date.getTime()) ? null : date;
@@ -367,7 +369,9 @@ function fanslyPublishedAtIsValid(value: unknown) {
   return fanslyPublishedAt(value) !== null;
 }
 
-function assertFanslyPostsPageContract(page: {
+/** The timeline page's item contract, checked AFTER the page is journaled
+ *  (exported for the Fansly Sync Engine's `posts` resource; unchanged here). */
+export function assertFanslyPostsPageContract(page: {
   contractAccepted: boolean;
   items: Array<{
     id?: unknown;

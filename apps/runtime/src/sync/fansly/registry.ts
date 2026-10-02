@@ -104,6 +104,13 @@ const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => as
   }
 };
 
+const notificationsModule = (variant: "forward" | "backfill") => async (): Promise<ResourceModule> =>
+  (await import("./resources/notifications.ts")).notificationsModule(variant);
+const postsModule = (variant: "refresh" | "backfill" | "engagement") => async (): Promise<ResourceModule> =>
+  (await import("./resources/posts.ts")).postsModule(variant);
+const postRepliesModule = (variant: "walk" | "authors") => async (): Promise<ResourceModule> =>
+  (await import("./resources/post-replies.ts")).postRepliesModule(variant);
+
 const STATS_DAILY_OPERATIONS: readonly FanslyWireId[] = [
   "account.stats", "earnings.stats_window", "earnings.monthly", "trackinglinks", "discovery.suggestions",
   "broadcast.stats", "broadcast.stats_deleted", "broadcast.scheduled", "polls", "recapstats",
@@ -387,6 +394,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"], replayKinds: ["notifications"],
     legacy: [stream("notifications")],
+    module: notificationsModule("forward"),
   },
   {
     key: "notifications.backfill", file: "notifications", subject: "page", kind: "goal", class: "planned",
@@ -394,6 +402,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
     legacy: [stream("notifications")],
+    module: notificationsModule("backfill"),
   },
 
   // ── posts (S2-09a) ────────────────────────────────────────────────────────
@@ -403,6 +412,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"], replayKinds: ["posts", "post_tips"],
     legacy: [stream("posts")],
+    module: postsModule("refresh"),
   },
   {
     key: "posts.backfill", file: "posts", subject: "page", kind: "goal", class: "planned",
@@ -410,31 +420,42 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
     legacy: [stream("posts")],
+    module: postsModule("backfill"),
   },
   {
+    // A standing walk over the `post_engagement` queue the creator-posts
+    // projector seeds (design §4.3); it re-checks the queue every 6 h when
+    // nothing is due (the legacy phase rode the 6-hourly posts cadence).
     key: "posts.engagement", file: "posts", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue"],
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 180, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
-    slo: { staleAfterMs: 3 * DAY },
+    standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["posts.by_ids"], subjectQueue: true, queuePlane: "post_engagement",
     legacy: [stream("posts")],
+    module: postsModule("engagement"),
   },
 
   // ── post-replies (S2-09a) ─────────────────────────────────────────────────
   {
+    // A standing walk over the `post_replies` queue (design §4.3): a post is
+    // due never walked, dirty, or `fanslyRepliesRewalkCycleDays` (live, prod
+    // 30 d) after its last walk; the queue is re-checked every 6 h when
+    // nothing is due (the legacy stream's cadence).
     key: "post-replies.walk", file: "post-replies", subject: "page", kind: "goal", class: "planned",
-    triggers: ["projection_queue"], cadence: { everyMs: 30 * DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["projection_queue"], standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "empty_page", walk: "subject-queue", http: true, evidence: true, fence: "none",
     operations: ["post.replies"], replayKinds: ["post_replies"], subjectQueue: true, queuePlane: "post_replies",
     legacy: [stream("post_replies")],
+    module: postRepliesModule("walk"),
   },
   {
-    key: "post-replies.authors", file: "post-replies", subject: "post", kind: "trigger", class: "planned",
+    key: "post-replies.authors", file: "post-replies", subject: "page", kind: "trigger", class: "planned",
     triggers: ["apply:post-replies.walk"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
     legacy: [stream("post_replies")],
+    module: postRepliesModule("authors"),
   },
 
   // ── catalog (S2-09b; owner decision №6 "экономно") ────────────────────────

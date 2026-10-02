@@ -12,9 +12,12 @@
 //
 //   1. the lane's [A20] trim for the kinds that have one (follower and
 //      conversation captures, notification / catalog / reply `accounts[]`);
-//   2. the `post_replies` observation envelope `{walk:{postId, before},
-//      response}` — the post id lives in the request PATH, and an empty reply
-//      page could not otherwise say which post it is about;
+//   2. the observation envelopes that carry request context: `post_replies`
+//      as `{walk:{postId, before}, response}` — the post id lives in the
+//      request PATH, and an empty reply page could not otherwise say which
+//      post it is about — and a `post_tips` answer that escapes its requested
+//      posts or receiver as `{quarantine: "fansly_post_tips_scope_v1",
+//      requestedTargetIds, response}` (posts.ts `inspectFanslyPostTipsScope`);
 //   3. the CDN signing-token strip for the kinds it names (never `dm_messages`
 //      or `purchase_history*`: the AI describer downloads from those URLs);
 //   4. the lone-surrogate replacement json/jsonb need.
@@ -37,6 +40,7 @@ import {
   stripFanslySignedCdnTokens,
 } from "../../services/sync/fansly-cdn-tokens.ts";
 import { FANSLY_STATS_MAPPER_VERSION } from "../../services/sync/fansly-stats.ts";
+import { inspectFanslyPostTipsScope } from "../../services/sync/posts.ts";
 import {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
@@ -75,7 +79,13 @@ export interface FanslyServedResponse {
   contractAccepted?: boolean;
   /** `post_replies` only (required there): the walk the request served. */
   walk?: { postId: string; before: string | null };
+  /** `post_tips` only: the posts asked for and the page's own account (the
+   *  receiver every tip must name). Absent: no scope check. */
+  tipsScope?: { requestedTargetIds: readonly string[]; receiverId: string };
 }
+
+/** The legacy envelope of a `post_tips` answer outside its scope. */
+export const FANSLY_POST_TIPS_SCOPE_QUARANTINE = "fansly_post_tips_scope_v1";
 
 export interface FanslyJournalBody {
   /** The observation payload. */
@@ -147,6 +157,16 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     }
     body = { walk: { postId: served.walk.postId, before: served.walk.before }, response: body };
   }
+  if (spec.kind === "post_tips" && served.tipsScope !== undefined && served.contractAccepted !== false) {
+    const scope = inspectFanslyPostTipsScope(served.response, served.tipsScope);
+    if (!scope.accepted) {
+      body = {
+        quarantine: FANSLY_POST_TIPS_SCOPE_QUARANTINE,
+        requestedTargetIds: [...served.tipsScope.requestedTargetIds],
+        response: body,
+      };
+    }
+  }
   // Legacy journals an absent body as JSON null (so it hashes deterministically).
   body ??= null;
   if (fanslyCdnTokenStripApplies("fansly", spec.kind)) {
@@ -170,14 +190,26 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
  * The Fansly journal of the engine's capture (tx 2): every served response
  * becomes exactly the body the legacy lane journals for it, by its kind. The
  * reply walk's position comes from the request (`post.replies` names the
- * post in its path).
+ * post in its path); a tips answer's scope is checked against the requested
+ * posts and the page's own account.
  */
 export const fanslyCaptureCodec: CaptureCodec = {
-  prepare({ kind, response, contractAccepted, request }) {
-    const params = request.params as { postId?: unknown; before?: unknown };
+  prepare({ kind, response, contractAccepted, request, ownRef }) {
+    const params = request.params as { postId?: unknown; before?: unknown; targetIds?: unknown };
     const walk = request.spec === "post.replies" && typeof params.postId === "string"
       ? { postId: params.postId, before: typeof params.before === "string" ? params.before : null }
       : undefined;
-    return prepareJournalBody({ kind }, { response, contractAccepted, ...(walk === undefined ? {} : { walk }) }).payload;
+    const targetIds = Array.isArray(params.targetIds)
+      ? params.targetIds.filter((id): id is string => typeof id === "string")
+      : null;
+    const tipsScope = request.spec === "posts.tips" && targetIds !== null && typeof ownRef === "string" && ownRef.length > 0
+      ? { requestedTargetIds: targetIds, receiverId: ownRef }
+      : undefined;
+    return prepareJournalBody({ kind }, {
+      response,
+      contractAccepted,
+      ...(walk === undefined ? {} : { walk }),
+      ...(tipsScope === undefined ? {} : { tipsScope }),
+    }).payload;
   },
 };

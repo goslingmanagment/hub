@@ -208,7 +208,15 @@ export class SyncActor {
     const module = await d.registry.module(picked.work.resource);
     let plan: StepPlan;
     try {
-      plan = await module.plan(picked.work, { db: d.db, pageId: d.pageId, shadow, now, page, registry: d.registry });
+      plan = await module.plan(picked.work, {
+        db: d.db,
+        pageId: d.pageId,
+        shadow,
+        now,
+        page,
+        registry: d.registry,
+        ...(d.settings === undefined ? {} : { settings: d.settings }),
+      });
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
       return null;
@@ -294,6 +302,7 @@ export class SyncActor {
           pageId: d.pageId,
           now: d.clock.wallNow(),
           page,
+          ...(d.settings === undefined ? {} : { settings: d.settings }),
         });
       } catch (error) {
         d.metrics.increment("sync_shadow_errors", { resource: admission.work.resource });
