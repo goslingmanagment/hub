@@ -10,6 +10,7 @@ import {
   insertAuditEvent,
   insertObservation,
   listSyncPages,
+  listSyncWsReceiptsInWindow,
   upsertDemand,
   type Database,
   type SyncWorkRow,
@@ -24,6 +25,9 @@ import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/r
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
+import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
+import { WS_ORDER_NODE } from "../apps/runtime/src/sync/fansly/ws/decode.ts";
+import { readOrderFrames } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
 import { changedTables, setModeDirect, tableCounts } from "./helpers/sync-engine-host.ts";
 
 // `pnpm cli sync shadow report` (design §3.12) over a fixture: part A in its
@@ -311,7 +315,7 @@ describe("the shadow report (design §3.12)", () => {
     expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
     expect(window.rules.map((rule) => rule.id)).toEqual([
       "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
-      "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
+      "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
     ]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
@@ -321,6 +325,125 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
+  });
+
+  it("part A: the legacy purchase poll is listed with its volume once every order it read is announced; an order only it found leaves it unexplained (rule A2.demand-replaced)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    // Legacy's scheduled purchase_history run in the window: one request per target.
+    const run = await testDb.pool.query<{ id: string }>(
+      `insert into sync_runs (page_id, stream, source, outcome, started_at, finished_at, stats)
+       values ($1, 'purchase_history', 'scheduled', 'succeeded', $2, $2, '{}'::jsonb) returning id`,
+      [page.pageId, at(30 * MINUTE)],
+    );
+    const runId = Number(run.rows[0]!.id);
+    const legacyRead = async (params: Record<string, unknown>, body: unknown, capturedAt: Date, statusCode: number | null = null) => {
+      await testDb!.pool.query(
+        `insert into sync_http_attempts (page_id, sync_run_id, provider, stream, operation, logical_request_id, attempt_number, state, started_at, response_body_bytes)
+         values ($1, $2, 'fansly', 'purchase_history', 'media_orderhistory', $3, 1, 'success', $4, 65)`,
+        [page.pageId, runId, randomUUID(), new Date(capturedAt.getTime() - 400)],
+      );
+      await testDb!.pool.query(
+        `insert into sync_raw_payloads (page_id, sync_run_id, stream, endpoint, request_params, response_payload, mapper_version,
+                                        payload_kind, status_code, captured_at, retain_until)
+         values ($1, $2, 'purchase_history', 'purchase_history', $3::jsonb, $4::jsonb, 'fansly-phase1-v5', 'mapping_critical', $5, $6,
+                 now() + interval '30 days')`,
+        [page.pageId, runId, JSON.stringify({ limit: 100, before: null, ...params }), JSON.stringify(body), statusCode, capturedAt],
+      );
+    };
+    const page1 = (orders: unknown[]) => ({ aggregationData: { accounts: [] }, accountMediaOrderHistory: orders });
+    const soldAt = at(5 * MINUTE);
+    // PPV media legacy found in a chat before any sale: an empty page.
+    await legacyRead({ accountMediaId: "900000000000000111" }, page1([]), at(30 * MINUTE));
+    // A sale the ledger holds (same content, buyer, second).
+    await legacyRead({ accountMediaId: "900000000000000222" }, page1([
+      { orderId: "910000000000000222", accountId: FAN, accountMediaId: "900000000000000222", createdAt: soldAt.getTime() + 300, type: 1 },
+    ]), at(31 * MINUTE));
+    await testDb.pool.query(
+      `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+                                 gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source,
+                                 correlation_id, correlation_account_id)
+       values ($1, '920000000000000222', '2110', 'message_purchase', 'posted', '2', 0, 0, 0, $2, 'fansly:rest', '900000000000000222', $3)`,
+      [page.pageId, soldAt, FAN],
+    );
+    // A bundle sale the ledger does not hold yet: its socket order frame announced it.
+    const orderFrame = await page.capture(serviceFrame({ type: 7, order: {
+      orderId: "910000000000000333", accountMediaBundleId: "900000000000000333", accountMediaId: "900000000000000334", correlationAccountId: FAN, type: 1,
+    } }, 2), at(25 * MINUTE));
+    await legacyRead({ accountMediaBundleId: "900000000000000333" }, page1([
+      { orderId: "910000000000000333", accountId: FAN, accountMediaBundleId: "900000000000000333", accountMediaId: "900000000000000334", createdAt: at(25 * MINUTE).getTime(), type: 1 },
+    ]), at(32 * MINUTE));
+    // A media the page no longer holds: Fansly refused it (no order).
+    await legacyRead({ accountMediaId: "900000000000000444" }, { error: { status: 422, code: 99, details: "error getting account media", body: null } }, at(33 * MINUTE), 422);
+    // A capture an hour before the window is no part of it.
+    await legacyRead({ accountMediaId: "900000000000000666" }, page1([
+      { orderId: "910000000000000666", accountId: FAN, accountMediaId: "900000000000000666", createdAt: at(-70 * MINUTE).getTime(), type: 1 },
+    ]), at(-60 * MINUTE));
+
+    const report = async () => buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: new Date(start.getTime() + 3_600_000) },
+      journal: null,
+      maxListed: 50,
+    });
+    const announced = await report();
+    expect(announced.window!.legacy.find((entry) => entry.ref === "stream:purchase_history")).toMatchObject({
+      basis: "demand_replaced", legacy: 4, shadow: 0, ratio: null, explained: true,
+      announcements: {
+        captures: 4, targets: 4, targetsWithOrders: 2, orders: 2, ledger: 1, socketOnly: 1,
+        unannounced: [], unannouncedCount: 0, unreadable: [], passes: true,
+      },
+    });
+    const line = announced.summary.find((entry) => entry.startsWith("A2 legacy volume: "))!;
+    expect(line).not.toContain("stream:purchase_history (");
+    expect(line).toContain(
+      "; demand-replaced, compared after the switch (rule A2.demand-replaced): stream:purchase_history 4 (shadow 0; the poll read 4 targets "
+        + "in 4 captures, 2 with orders: 2 orders, every one announced (1 by a PPV ledger row, 1 by a socket order frame alone))",
+    );
+
+    // The order frames are read by the receipts' decoded nodes: a receipt the
+    // decoder settled as another service is never read, an order one is, and
+    // so is one not settled yet (no nodes; decoded and kept only if an order).
+    const orderNodes = await testDb.pool.query<{ id: string }>(
+      `update fansly_ws_decode_receipts set state = 'retained', decoded_at = now(),
+              nodes = case when observation_id = $2
+                then '[{"path": [], "state": "retained", "serviceId": 2, "eventType": 7}]'::jsonb
+                else '[{"path": [], "state": "retained", "serviceId": 5, "eventType": 1}]'::jsonb end
+        where page_id = $1 and observation_id in ($2, (select min(observation_id) from fansly_ws_decode_receipts where page_id = $1))
+        returning observation_id::text as id`,
+      [page.pageId, orderFrame],
+    );
+    expect(orderNodes.rows).toHaveLength(2);
+    const window = { from: at(-60 * MINUTE), to: at(60 * MINUTE), pageIds: [page.pageId] };
+    const all = await listSyncWsReceiptsInWindow(db(), { ...window, limit: 100 });
+    const ordersOnly = await listSyncWsReceiptsInWindow(db(), { ...window, limit: 100, node: WS_ORDER_NODE });
+    expect(ordersOnly.map((row) => row.observationId)).toContain(orderFrame);
+    expect(ordersOnly).toHaveLength(all.length - 1);
+    expect(await readOrderFrames(db(), window)).toEqual([{ pageId: page.pageId, receivedAt: at(25 * MINUTE), orderId: "910000000000000333" }]);
+
+    // An order neither the ledger nor the socket announced: a purchase only the poll found.
+    await legacyRead({ accountMediaId: "900000000000000555" }, page1([
+      { orderId: "910000000000000555", accountId: FAN, accountMediaId: "900000000000000555", createdAt: at(10 * MINUTE).getTime(), type: 1 },
+    ]), at(34 * MINUTE));
+    const unannounced = await report();
+    expect(unannounced.window!.legacy.find((entry) => entry.ref === "stream:purchase_history")).toMatchObject({
+      basis: "demand_replaced", legacy: 5, explained: false,
+      announcements: {
+        orders: 3, ledger: 1, socketOnly: 1, unannouncedCount: 1, passes: false,
+        unannounced: [{ page: "lilly-1", target: "media:900000000000000555", orderId: "910000000000000555" }],
+      },
+    });
+    expect(unannounced.window!.verdict.a2).toBe(false);
+    expect(unannounced.summary.find((entry) => entry.startsWith("A2 legacy volume: "))).toContain(
+      "stream:purchase_history (demand_replaced: legacy 5, shadow 0) — rule A2.demand-replaced: purchases.targets runs on demand only",
+    );
+    expect(unannounced.summary.find((entry) => entry.startsWith("A2 legacy volume: "))).toContain(
+      "1 NOT announced, a purchase only the poll found (lilly-1 media:900000000000000555 order 910000000000000555)",
+    );
   });
 
   it("part A: a stream not yet run on the page is scheduled when its recurring key's work row is on schedule at the window end (rule A1.floor-scheduled)", async (context) => {

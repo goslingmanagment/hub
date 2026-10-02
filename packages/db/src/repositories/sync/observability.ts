@@ -274,17 +274,29 @@ export interface SyncWsWindowReceipt {
   payloadRef: CapturePayloadRef | null;
 }
 
+/** A decoded service envelope a receipt lists (`fansly_ws_decode_receipts.nodes`). */
+export interface SyncWsReceiptNode {
+  serviceId: number;
+  eventType: number;
+}
+
 /**
  * The receipts received in [from, to) of the given pages (all Fansly pages
  * when omitted), in id order, at most `limit` after `afterId`. Paged by the
- * caller through `afterId`.
+ * caller through `afterId`. `node`: only the receipts whose decoded nodes
+ * hold that service envelope (e.g. the PPV orders, service 2 / event 7), and
+ * those the step-1 decoder has not settled yet (no nodes): the caller decodes
+ * every body it gets and keeps what it looks for.
  */
 export async function listSyncWsReceiptsInWindow(
   db: Database,
-  input: { from: Date; to: Date; pageIds?: readonly number[]; afterId?: number; limit: number },
+  input: { from: Date; to: Date; pageIds?: readonly number[]; afterId?: number; limit: number; node?: SyncWsReceiptNode },
 ): Promise<SyncWsWindowReceipt[]> {
   if (!Number.isSafeInteger(input.limit) || input.limit <= 0) throw new Error(`limit must be positive, received ${input.limit}`);
   const pages = input.pageIds === undefined ? sql`true` : sql`r.page_id = any(${sql.param([...input.pageIds])}::bigint[])`;
+  const node = input.node === undefined
+    ? sql`true`
+    : sql`(r.nodes is null or r.nodes @> ${JSON.stringify([{ serviceId: input.node.serviceId, eventType: input.node.eventType }])}::jsonb)`;
   const result = await db.execute<{
     observationId: string;
     pageId: string;
@@ -304,6 +316,7 @@ export async function listSyncWsReceiptsInWindow(
        and r.received_at >= ${input.from}::timestamptz
        and r.received_at < ${input.to}::timestamptz
        and ${pages}
+       and ${node}
      order by r.observation_id
      limit ${input.limit}
   `);
@@ -761,6 +774,91 @@ export async function countLegacyFanslyAttempts(
     streams: streams.rows.map((row) => ({ pageId: Number(row.pageId), stream: row.stream, operation: row.operation, attempts: Number(row.attempts) })),
     senders: senders.rows.map((row) => ({ pageId: Number(row.pageId), source: row.source, attempts: Number(row.attempts) })),
   };
+}
+
+/** One legacy capture (`sync_raw_payloads`) of a stream, with its body for
+ *  reading through the payload seam. */
+export interface LegacyStreamCapture {
+  id: number;
+  pageId: number;
+  syncRunId: number | null;
+  endpoint: string;
+  capturedAt: Date;
+  requestParams: unknown;
+  /** The HTTP status of a refusal the lane journaled; null for a served body. */
+  statusCode: number | null;
+  payload: unknown;
+  payloadRef: CapturePayloadRef | null;
+}
+
+/** The legacy captures of `stream` captured in [from, to) on the given pages,
+ *  in id order (the shadow report's A2: what a legacy poll read). */
+export async function listLegacyStreamCapturesInWindow(
+  db: Database,
+  input: { pageIds: readonly number[]; stream: string; from: Date; to: Date },
+): Promise<LegacyStreamCapture[]> {
+  if (input.pageIds.length === 0) return [];
+  const result = await db.execute<{
+    id: string;
+    pageId: string;
+    syncRunId: string | null;
+    endpoint: string;
+    capturedAt: Date | string;
+    requestParams: unknown;
+    statusCode: number | null;
+    payload: unknown;
+    bucket: string | null;
+    objectId: string | null;
+  }>(sql`
+    select rp.id::text as id, rp.page_id::text as "pageId", rp.sync_run_id::text as "syncRunId", rp.endpoint,
+           rp.captured_at as "capturedAt", rp.request_params as "requestParams", rp.status_code as "statusCode",
+           rp.response_payload as payload,
+           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as bucket, rp.payload_object_id::text as "objectId"
+      from sync_raw_payloads rp
+     where rp.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and rp.stream::text = ${input.stream}
+       and rp.captured_at >= ${input.from}::timestamptz
+       and rp.captured_at < ${input.to}::timestamptz
+     order by rp.id
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    pageId: Number(row.pageId),
+    syncRunId: row.syncRunId === null ? null : Number(row.syncRunId),
+    endpoint: row.endpoint,
+    capturedAt: toRequiredDate(row.capturedAt),
+    requestParams: row.requestParams,
+    statusCode: row.statusCode === null ? null : Number(row.statusCode),
+    payload: row.payload,
+    payloadRef: capturePayloadRefFromColumns(row.bucket, row.objectId),
+  }));
+}
+
+/** Fansly's PPV sale transaction types (single media 2010/2110, bundle
+ *  2016/2116): `correlation_id` is the content sold. */
+export const FANSLY_PPV_SALE_RAW_TYPES = ["2010", "2016", "2110", "2116"] as const;
+
+/** The page's PPV ledger sales of `contentIds` (raw types
+ *  `FANSLY_PPV_SALE_RAW_TYPES`, by `correlation_id`), as the ledger holds them. */
+export async function listPpvLedgerSales(
+  db: Database,
+  input: { pageId: number; contentIds: readonly string[] },
+): Promise<Array<{ contentId: string; buyerRef: string | null; occurredAt: Date; createdAt: Date }>> {
+  if (input.contentIds.length === 0) return [];
+  const result = await db.execute<{ contentId: string; buyerRef: string | null; occurredAt: Date | string; createdAt: Date | string }>(sql`
+    select btrim(t.correlation_id) as "contentId", t.correlation_account_id as "buyerRef",
+           t.occurred_at as "occurredAt", t.created_at as "createdAt"
+      from transactions t
+     where t.platform_account_id = ${input.pageId}
+       and t.raw_type = any(${textArrayParam([...FANSLY_PPV_SALE_RAW_TYPES])})
+       and btrim(t.correlation_id) = any(${textArrayParam([...new Set(input.contentIds)])})
+  `);
+  return result.rows.map((row) => ({
+    contentId: row.contentId,
+    buyerRef: row.buyerRef,
+    occurredAt: toRequiredDate(row.occurredAt),
+    createdAt: toRequiredDate(row.createdAt),
+  }));
 }
 
 /** When the legacy stores first held each of `messageIds` of the page: the

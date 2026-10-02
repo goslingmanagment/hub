@@ -451,15 +451,17 @@ from 10 min before the start: a window begun before the deploy or a page's switc
 judged in runs against their schedule, the reads the hour's socket frames imply after coalescing; keys on a period
 longer than the hour counted at their rate; one-time backlog walks listed apart), the legacy engine's volume per
 stream and sender with the reason it differs (the hour, or 7-day rates for streams slower than the hour; live-only
-senders listed apart), the live-path decisions (a fan message or a new ledger
+senders listed apart; legacy's scheduled purchase poll listed apart once every order it read in the hour is one the
+engine hears of — a PPV ledger row or a socket order frame — since `purchases.targets` runs on demand only and its
+live demand, the transactions apply's new sales, names no target in shadow), the live-path decisions (a fan message or a new ledger
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
 the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
 step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
 `report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.ceiling-demand, A1.floor, A1.floor-scheduled,
-A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only), every report prints the rule
-it applied.
+A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every
+report prints the rule it applied.
 Three of them ask the resource modules read-only questions (`ResourceModule`), each in its own savepoint:
 `estimateRunSteps` sizes a key on a period longer than the hour before its first shadow run, while its row keeps that
 run on schedule (its `shadow()` estimate, A1.rate-assumed; a key that ran before stays unknown until it runs again),
