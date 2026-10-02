@@ -737,6 +737,26 @@ export async function nextOpenWorkDueAt(
   return toDate(result.rows[0]?.dueAt);
 }
 
+/** Which of these subjects have an open (or running) row of `resource` in
+ *  this journal — plain read, no lock. */
+export async function listOpenWorkSubjects(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+): Promise<Set<string>> {
+  const subjects = [...new Set(input.subjects)];
+  if (subjects.length === 0) return new Set();
+  const result = await db.execute<{ subject: string }>(sql`
+    select w.subject
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.state in ('open', 'running')
+       and w.subject = any(${textArrayParam(subjects)})
+  `);
+  return new Set(result.rows.map((row) => row.subject));
+}
+
 /** Lock several work rows in id order (the lock order of §3.7). */
 export async function lockWorkRows(db: Database, ids: readonly number[]): Promise<SyncWorkRow[]> {
   if (ids.length === 0) return [];

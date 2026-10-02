@@ -56,7 +56,7 @@ import type {
   StepPlan,
 } from "../../engine/resource.ts";
 import { advanceShadowWalk, offsetWalkPages, type ShadowWalkProgress } from "../lib/offset-walk.ts";
-import { accountCountersFresh, accountCountersReadAt, readFanslyPageFacts } from "../lib/page-facts.ts";
+import { accountCountersFresh, accountCountersReadAt, readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import { ACCOUNT_ME_REQUEST, applyAccountMeToPage } from "./account.ts";
 import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 
@@ -88,8 +88,6 @@ import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 
 export type FollowersVariant = "head" | "reconcile";
 
-/** A shadow walk of a page without its native id re-checks this often. */
-const IDENTITY_RECHECK_MS = 60 * 60 * 1000;
 /** The demand reason that bypasses the floor (owner CLI / reset). */
 export const OWNER_DEMAND_REASON = "owner";
 
@@ -122,13 +120,6 @@ function waitForAccount(key: string): StepPlan {
   return { kind: "wait", reason: "dependency", until: null, enqueue };
 }
 
-/** The page has no native account id yet: live, `account.poll` writes it
- *  (made due); in shadow nothing will, so the walk only re-checks hourly. */
-function waitForIdentity(key: string, shadow: boolean, now: Date): StepPlan {
-  return shadow
-    ? { kind: "wait", reason: "dependency", until: new Date(now.getTime() + IDENTITY_RECHECK_MS) }
-    : waitForAccount(key);
-}
 
 /** What one followers page writes, before its rows are filtered by a walk. */
 interface HydratedPage {
@@ -298,7 +289,7 @@ export const followersHeadModule: ResourceModule = {
     const cursor = parseFollowersHeadCursor(work.cursor);
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
     if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-    if (facts.externalId === null) return waitForIdentity(HEAD_KEY, ctx.shadow, ctx.now);
+    if (facts.externalId === null) return waitForPageIdentity(HEAD_KEY, ctx.shadow, ctx.now);
     // A new walk's count is the one `account.poll` wrote; it must be fresh.
     if (cursor.walk === null &&
       !accountCountersFresh(await accountCountersReadAt(ctx.db, { facts, shadow: ctx.shadow }), ctx.now)) {
@@ -772,7 +763,7 @@ export const followersReconcileModule: ResourceModule = {
     if (phase.kind !== "page") return { kind: "request", request: ACCOUNT_ME_REQUEST };
     const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
     if (facts === null) return { kind: "quarantine", reason: "page_missing" };
-    if (facts.externalId === null) return waitForIdentity(RECONCILE_KEY, ctx.shadow, ctx.now);
+    if (facts.externalId === null) return waitForPageIdentity(RECONCILE_KEY, ctx.shadow, ctx.now);
     return { kind: "request", request: followersRequest(facts.externalId, phase.offset) };
   },
 

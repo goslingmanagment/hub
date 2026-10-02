@@ -46,6 +46,12 @@ or a plan that waits on `dependency` and makes the other work due. Fan profiles 
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
 to 100 of them not looked up through the page within the day.
 
+A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
+`upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
+membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
+pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary`). A list head newer than what the message
+reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
+
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).

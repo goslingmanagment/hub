@@ -111,6 +111,22 @@ describe("the Fansly registry table", () => {
     expect(fanslyReplayOwner("subscribers")?.key).toBe("subscribers.poll");
     expect(fanslyReplayOwner("followers")?.key).toBe("followers.head");
     expect(fanslyReplayOwner("account_lookup")?.key).toBe("fan-profiles.lookup");
+    expect(fanslyReplayOwner("dm_conversations")?.key).toBe("dm-conversations.head");
+    expect(fanslyReplayOwner("group_detail")?.key).toBe("dm-conversations.find");
+  });
+
+  it("the conversation list's follow-ups are triggers of the entries they create (design §5.3)", () => {
+    // A list read asks for a chat's messages (urgent from find and ws-down,
+    // planned from head, full and detail), a group detail, a probe.
+    expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining(["apply:dm-conversations.find", "apply:dm-conversations.ws-down"]));
+    expect(byKey("dm-messages.catchup").triggers).toEqual(expect.arrayContaining([
+      "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
+    ]));
+    expect(byKey("dm-conversations.detail").triggers).toEqual(["apply:dm-conversations.*"]);
+    expect(byKey("fan-profiles.probe").triggers).toEqual(expect.arrayContaining(["apply:dm-conversations.*"]));
+    for (const key of ["dm-conversations.head", "dm-conversations.full"]) expect(byKey(key).kind, key).toBe("poll");
+    expect(byKey("dm-conversations.full").period?.everyMs).toBe(86_400_000);
+    expect(byKey("dm-conversations.head").period?.everyMs).toBe(30 * 60_000);
   });
 
   it("I12: a history walk only on a request", () => {
@@ -153,9 +169,9 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a ships account, subscribers, followers and fan-profiles; every other entry waits on its dependency", async () => {
+  it("S2-07a and S2-08a ship account, subscribers, followers, fan-profiles and dm-conversations; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
-    expect([...new Set(implemented)].sort()).toEqual(["account", "fan-profiles", "followers", "subscribers"]);
+    expect([...new Set(implemented)].sort()).toEqual(["account", "dm-conversations", "fan-profiles", "followers", "subscribers"]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
     for (const spec of FANSLY_RESOURCE_SPECS) {
@@ -168,9 +184,9 @@ describe("the Fansly registry table", () => {
     expect(metrics.get("sync_not_implemented")).toBe(FANSLY_RESOURCE_SPECS.filter((spec) => spec.module === undefined).length);
   });
 
-  it("the implemented entries replay and import what design §5.1, §5.11–§5.13 say", async () => {
+  it("the implemented entries replay and import what design §5.1, §5.3, §5.11–§5.13 say", async () => {
     const registry = createFanslyRegistry();
-    for (const key of ["account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup"]) {
+    for (const key of ["account.poll", "subscribers.poll", "followers.head", "fan-profiles.lookup", "dm-conversations.head", "dm-conversations.find"]) {
       expect(typeof (await registry.module(key)).replay, key).toBe("function");
     }
     for (const key of ["followers.head", "followers.reconcile"]) {

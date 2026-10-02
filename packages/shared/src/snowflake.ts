@@ -15,13 +15,20 @@ export function fanslySnowflakeToDate(id: string | bigint): Date {
   return new Date(timestampMs);
 }
 
-/** Orders two follow ids by their snowflake value, so an older follow sorts
- *  lower; null when either id is not a plain decimal and no order is known. */
-export function compareFanslyFollowIds(a: string, b: string): -1 | 0 | 1 | null {
+/** Orders two Fansly snowflake ids (messages, chats, follows …) by value, so
+ *  the older id sorts lower; null when either id is not a plain decimal and no
+ *  order is known. */
+export function compareFanslySnowflakeIds(a: string, b: string): -1 | 0 | 1 | null {
   if (!DECIMAL_ID.test(a) || !DECIMAL_ID.test(b)) {
     return null;
   }
   const left = BigInt(a);
   const right = BigInt(b);
   return left === right ? 0 : left < right ? -1 : 1;
+}
+
+/** Orders two follow ids by their snowflake value, so an older follow sorts
+ *  lower; null when either id is not a plain decimal and no order is known. */
+export function compareFanslyFollowIds(a: string, b: string): -1 | 0 | 1 | null {
+  return compareFanslySnowflakeIds(a, b);
 }
