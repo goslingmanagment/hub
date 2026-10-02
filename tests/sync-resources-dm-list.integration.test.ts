@@ -15,7 +15,14 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { Wake } from "../apps/runtime/src/sync/engine/ports.ts";
-import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
+import {
+  createEngineRegistry,
+  pollsFor,
+  type EngineRegistry,
+  type EngineResourceSpec,
+  type RequestPlan,
+  type ResourceModule,
+} from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   resetIntegrationDatabase,
@@ -192,8 +199,12 @@ async function seedThreads(pageId: number, threads: readonly SeedThread[]): Prom
 
 /** A registry of every Fansly entry whose standing polls are parked far
  *  ahead, so only the work a test makes due runs. */
-async function quietRegistry(pageId: number, shadow: boolean): Promise<EngineRegistry> {
-  const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
+async function quietRegistry(
+  pageId: number,
+  shadow: boolean,
+  specs: readonly EngineResourceSpec[] = FANSLY_RESOURCE_SPECS,
+): Promise<EngineRegistry> {
+  const registry = createEngineRegistry(specs);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
@@ -616,6 +627,68 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
     expect(second.hits).toEqual(["group.detail"]);
     expect((await workRow(pageId, "dm-conversations.find"))!.close_reason).toBe("found_by_detail");
     expect(await subjectsOf(pageId, "dm-messages.head")).toEqual([groupOf(8)]);
+  });
+
+  it("holds only list work: dm-messages.head and transactions.head still go out while the list waits (design §5.3, §3.8)", async (context) => {
+    if (!testDb) return context.skip();
+    // The two entries have no modules yet (S2-08b, the money rows): stand-ins
+    // send one request on each entry's own route. What is pinned is the
+    // engine's side — the pick, the hold, the admission — for these keys.
+    const standIn = (request: (work: { subject: string }) => RequestPlan): ResourceModule => ({
+      plan: async (work) => ({ kind: "request", request: request(work) }),
+      apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+      shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+    });
+    const standIns: Record<string, ResourceModule> = {
+      "dm-messages.head": standIn((work) => ({ spec: "messages.page", params: { groupId: work.subject, before: null } })),
+      "transactions.head": standIn(() => ({ spec: "transactions.page", params: { limit: 10, offset: 0 } })),
+    };
+    const specs = FANSLY_RESOURCE_SPECS.map((spec) => {
+      const module = standIns[spec.key];
+      return module === undefined ? spec : { ...spec, module: async () => module };
+    });
+    const pageId = await seedPage("live");
+    const registry = await quietRegistry(pageId, false, specs);
+
+    // The list read takes a 429.
+    await makeDue(pageId, false, "dm-conversations.head");
+    const first = await drive(pageId, "live", registry, (req) => {
+      if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "dm-conversations.head"))?.waiting_reason === "resource_hold");
+    expect(first.hits).toEqual(["messaging.groups"]);
+
+    // While the list is held its walk is due, and a message and a money event arrive.
+    await testDb.pool.query(
+      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{dm-conversations,until}',
+              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
+      [pageId],
+    );
+    await testDb.pool.query(
+      `update sync_work set due_at = clock_timestamp() - interval '1 second'
+        where page_id = $1 and shadow = false and resource = 'dm-conversations.head' and state = 'open'`,
+      [pageId],
+    );
+    await makeDue(pageId, false, "dm-messages.head", groupOf(3));
+    await makeDue(pageId, false, "transactions.head");
+    const second = await drive(pageId, "live", registry, (req) => {
+      if (req.spec === "messages.page") return okResponse({ messages: [] });
+      if (req.spec === "transactions.page") return okResponse({ total: 0, data: [] });
+      throw new Error(`unexpected ${req.spec}`);
+    }, async () => (await workRow(pageId, "dm-messages.head"))?.state === "done" &&
+      (await workRow(pageId, "transactions.head"))?.state === "done");
+
+    // Both went out; the list did not.
+    expect([...second.hits].sort()).toEqual(["messages.page", "transactions.page"]);
+    const page = await testDb.pool.query<{ hold_kind: string | null; hold: { kind: string } }>(
+      "select hold_kind, resource_holds -> 'dm-conversations' as hold from sync_pages where page_id = $1",
+      [pageId],
+    );
+    expect(page.rows[0]!.hold_kind).toBeNull();
+    expect(page.rows[0]!.hold).toMatchObject({ kind: "rate_limit_list" });
+    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: "resource_hold" });
+    expect(await countRows(testDb.pool,
+      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.head'", [pageId])).toBe(1);
   });
 
   it("keeps the idle actor asleep while the list is held: a held row is never due to it", async (context) => {

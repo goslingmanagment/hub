@@ -280,6 +280,23 @@ describe("resolveConversationListItem", () => {
     expect(item.scalarDrift).toBe(true);
   });
 
+  it("stores the tier and unread ids as legacy does: served as is, null only when absent", () => {
+    // Legacy writes `conversation.<field> ?? null` (services/sync/fansly-dm-conversations.ts)
+    // and its writer stores it unchanged, so an empty string stays an empty string.
+    for (const served of ["", "88", null, undefined]) {
+      const fields = served === undefined ? {} : { subscriptionTierId: served, lastUnreadMessageId: served };
+      const { subscriptionTierId: _tier, lastUnreadMessageId: _unread, ...rest } = row();
+      const item = resolveConversationListItem(input({
+        item: { ...rest, ...fields },
+        existing: state({ subscriptionTierId: "77", lastUnreadMessageId: "66" }),
+      }), NOW);
+      expect(item.list, String(served)).toEqual(expect.objectContaining({
+        subscriptionTierId: served ?? null,
+        lastUnreadMessageId: served ?? null,
+      }));
+    }
+  });
+
   it("the page ends a head walk only when every chat on it is unchanged", () => {
     expect(listPageUnchanged([{ unchanged: true }, { unchanged: true }])).toBe(true);
     expect(listPageUnchanged([{ unchanged: true }, { unchanged: false }])).toBe(false);

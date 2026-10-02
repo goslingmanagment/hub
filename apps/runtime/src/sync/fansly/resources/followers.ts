@@ -120,7 +120,6 @@ function waitForAccount(key: string): StepPlan {
   return { kind: "wait", reason: "dependency", until: null, enqueue };
 }
 
-
 /** What one followers page writes, before its rows are filtered by a walk. */
 interface HydratedPage {
   followers: FanslyFollower[];
