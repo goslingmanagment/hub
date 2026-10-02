@@ -28,6 +28,7 @@ const INCIDENT_KIND_LABELS = {
   scheduler_silent: "Scheduler Silent",
   ops_sampler_silent: "Ops Sampler Silent",
   sync_silent: "Fansly Sync Silent",
+  fansly_sync_engine: "Fansly Sync Engine",
   ofapi_chargebacks_reconcile_failed: "OFAPI Chargebacks Reconcile",
   ofapi_link_stats_reconcile_failed: "OFAPI Link Stats Reconcile",
   ai_provider_billing: "AI Provider Billing",

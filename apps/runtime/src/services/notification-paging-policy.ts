@@ -97,6 +97,12 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   // the fleet blocked the latch flickers while chunks keep starting. A real
   // stall outlasts the hold and pages as sustained.
   sync_silent: sustained(10 * MINUTE_MS, 10 * MINUTE_MS, null),
+  // The Fansly Sync Engine (design §9.6): every alert pages at once — its
+  // conditions already carry their own delays (a 429 is never transient for
+  // the pace rule; a socket counts after 5 min down, urgent work after 2 min,
+  // a silent process after 2 min) and alert 1 resolves only after 10 clean
+  // minutes. Shadow pages never open one (D14).
+  fansly_sync_engine: immediate(),
   golden_signal_lag: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_burn_rate: sustained(30 * MINUTE_MS, HOUR_MS),
   ofapi_webhook_silence: sustained(10 * MINUTE_MS, 30 * MINUTE_MS),

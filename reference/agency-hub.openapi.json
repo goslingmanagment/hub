@@ -4632,7 +4632,8 @@
                 "ai_provider_failed",
                 "capture_payload_parity",
                 "ofapi_binding_conflict",
-                "sync_silent"
+                "sync_silent",
+                "fansly_sync_engine"
               ]
             },
             "in": "query",
@@ -4721,7 +4722,8 @@
                               "ai_provider_failed",
                               "capture_payload_parity",
                               "ofapi_binding_conflict",
-                              "sync_silent"
+                              "sync_silent",
+                              "fansly_sync_engine"
                             ]
                           },
                           "pageLabel": {
