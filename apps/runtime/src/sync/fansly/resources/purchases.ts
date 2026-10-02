@@ -1,12 +1,23 @@
 import { sql } from "drizzle-orm";
 
-import { latestClosedWorkForKey, type Database, type SyncWorkRow } from "@agency_hub_core/db";
+import {
+  latestClosedWorkForKey,
+  listFanslyDmRawPayloadsAfterId,
+  listFanslyMessagePurchaseTargetsAfterId,
+  listFanslyPurchaseHistoryCapturedContentIds,
+  type Database,
+  type SyncWorkRow,
+} from "@agency_hub_core/db";
 import { FANSLY_ORDER_HISTORY_PAGE_LIMIT } from "@agency_hub_core/fansly";
 
+import type { AppContext } from "../../../bootstrap.ts";
+import { createCapturePayloadRowResolver, isCapturePayloadUnavailable } from "../../../services/payload-reader.ts";
 import {
   classifyFanslyPurchaseHistoryCapture,
+  extractFanslyPurchaseHistoryTargets,
   extractFanslyPurchaseHistoryTargetsFromTransactions,
   parseFanslyPurchaseHistoryCursorState,
+  type FanslyPurchaseHistoryPendingTarget,
   type FanslyPurchaseHistoryTarget,
 } from "../../../services/sync/fansly-purchase-history.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
@@ -40,6 +51,13 @@ import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.t
 // an order the previous walk saw ([D7]; legacy never re-walked a captured
 // target).
 //
+// A walk serves the demand its head page could see. Demand that arrives after
+// the head was read (a new order of the same target, from the ledger or a WS
+// frame) is newer than every page below it, so it never rides on the walk's
+// later pages: the walk re-reads its head before it closes, and a row that
+// newer demand keeps open (I11) starts again at the head. Either way the
+// re-read stops on the head this walk saw.
+//
 // The apply writes no business table: the canonicalizer turns the journaled
 // page into `message.ppv_unlocked` and `media.order_observed` (→
 // `media_orders`). 404/410/422 are the target's final answer (closed with the
@@ -57,6 +75,14 @@ import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.t
 export const PURCHASES_TARGETS_KEY = "purchases.targets";
 /** Orders the previous walk of a target saw first: a re-read stops on one. */
 const KNOWN_ORDER_IDS_KEPT = 20;
+/** The legacy lane's discovery backlog the import reads at most (one-time, in
+ *  the switch transaction). Ledger rows are a cheap keyset read; journaled
+ *  `/message` pages are bodies read through the payload seam. */
+const IMPORT_LEDGER_ROWS_MAX = 20_000;
+const IMPORT_DM_PAGES_MAX = 5_000;
+const IMPORT_BATCH = 500;
+/** Examples kept in the import notes per list. */
+const IMPORT_NOTE_EXAMPLES = 10;
 
 export interface PurchaseTarget {
   kind: "media" | "bundle";
@@ -144,7 +170,16 @@ interface TargetCursor {
   headOrderIds: string[];
   /** The previous walk's head orders: a re-read stops on a page holding one. */
   knownOrderIds: string[] | null;
+  /** The demand revision this walk's head covers: the revision its head page
+   *  was admitted at (a walk imported mid-history: its first page's). */
+  headRevision: number | null;
   shadow: ShadowWalkProgress | null;
+}
+
+/** A walk from the head that stops on a page holding one of `knownOrderIds`
+ *  (null: the last closed walk's head, looked up on the first page). */
+function headWalk(knownOrderIds: string[] | null): TargetCursor {
+  return { before: null, pages: 0, orders: 0, headOrderIds: [], knownOrderIds, headRevision: null, shadow: null };
 }
 
 function parseTargetCursor(value: unknown): TargetCursor {
@@ -156,12 +191,14 @@ function parseTargetCursor(value: unknown): TargetCursor {
   const shadow = recordOf(record.shadow);
   const steps = shadow.steps;
   const done = shadow.done;
+  const headRevision = record.headRevision;
   return {
     before: typeof record.before === "string" && record.before.length > 0 ? record.before : null,
     pages: count("pages"),
     orders: count("orders"),
     headOrderIds: stringsOf(record.headOrderIds),
     knownOrderIds: Array.isArray(record.knownOrderIds) ? stringsOf(record.knownOrderIds) : null,
+    headRevision: typeof headRevision === "number" && Number.isSafeInteger(headRevision) && headRevision >= 0 ? headRevision : null,
     shadow: typeof steps === "number" && typeof done === "number" ? { steps, done } : null,
   };
 }
@@ -226,6 +263,9 @@ export const purchasesTargetsModule: ResourceModule = {
       throw new ApplyQuarantine(`purchase_history_${classified.outcome}`, { target: purchaseTargetSubject(target) });
     }
     const orderIds = orderIdsOf(input.response);
+    // The demand this step serves, and the demand this walk's head covers.
+    const served = input.attempt.demandRevision ?? input.work.demandRevision;
+    const headRevision = requestBefore === null ? served : (cursor.headRevision ?? served);
     // The previous walk's head (first page of this walk only).
     let knownOrderIds = cursor.knownOrderIds;
     if (knownOrderIds === null) {
@@ -240,20 +280,35 @@ export const purchasesTargetsModule: ResourceModule = {
       orders: cursor.orders + orderIds.length,
       headOrderIds: cursor.pages === 0 ? orderIds.slice(0, KNOWN_ORDER_IDS_KEPT) : cursor.headOrderIds,
       knownOrderIds,
+      headRevision,
       shadow: null,
     };
     const known = new Set(knownOrderIds);
     const caughtUp = orderIds.some((id) => known.has(id));
     if (classified.outcome === "terminal_empty" || caughtUp) {
+      const headOrderIds = next.headOrderIds.length > 0 ? next.headOrderIds : knownOrderIds.slice(0, KNOWN_ORDER_IDS_KEPT);
+      // What follows this walk starts at the head and stops on this walk's
+      // head — also when newer demand keeps the row open past the close: the
+      // stop position points into older history the walk has just read.
+      const following = headWalk(headOrderIds);
+      if (served > headRevision) {
+        // Demand arrived after the head page was read: an order newer than
+        // every page this walk holds. Re-read the head before closing.
+        return {
+          work: { satisfiesRevision: false, nextDueAt: input.now, cursor: following },
+          followups: [],
+          counters: { orders: orderIds.length, head_reread: 1 },
+        };
+      }
       const proof = {
         stop: caughtUp ? "known_order" : "empty_page",
         pages: next.pages,
         orders: next.orders,
-        headOrderIds: next.headOrderIds.length > 0 ? next.headOrderIds : knownOrderIds.slice(0, KNOWN_ORDER_IDS_KEPT),
+        headOrderIds,
         observationId: input.observation.id,
       };
       return {
-        work: { satisfiesRevision: true, close: "done", closeReason: proof.stop, cursor: next, proof },
+        work: { satisfiesRevision: true, close: "done", closeReason: proof.stop, cursor: following, proof },
         followups: [],
         counters: { orders: orderIds.length },
       };
@@ -283,20 +338,192 @@ export const purchasesTargetsModule: ResourceModule = {
   },
 
   async importLegacy(tx, page): Promise<LegacyImport> {
-    // The legacy lane's pending targets continue where it stopped; captured
-    // targets need nothing (a new order re-reads its head, [D7]).
-    const legacy = await tx.execute<{ state: unknown }>(sql`
-      select state from page_sync_cursors where page_id = ${page.pageId} and stream = 'purchase_history'
-    `);
-    const state = parseFanslyPurchaseHistoryCursorState(legacy.rows[0]?.state ?? null);
-    const cursors = (state?.pendingTargets ?? []).map((pending) => ({
-      resource: PURCHASES_TARGETS_KEY,
-      subject: purchaseTargetSubject(fromLegacyTarget(pending)),
-      cursor: { before: pending.before, pages: 0, orders: 0, headOrderIds: [], knownOrderIds: [], shadow: null } satisfies TargetCursor,
-    }));
-    return { cursors, notes: { pendingTargets: cursors.length, legacyState: state === null ? "none" : "v5" } };
+    return importLegacyTargets(tx, page.pageId);
   },
 };
+
+// ── import (step-3 switch, design §5.9 Import, §11.1 C.2) ───────────────────
+
+/** The payload seam's context for the one-time import: a body the catalog
+ *  cannot serve is counted in the import notes, the seam's own warning has no
+ *  sink here. */
+function importSeam(tx: Database): Pick<AppContext, "db" | "logger"> {
+  return { db: tx, logger: { warn: () => undefined } as unknown as AppContext["logger"] };
+}
+
+/** The ledger rows past the legacy transaction cursor (raw types
+ *  2010/2110/2016/2116), as targets. */
+async function ledgerBacklog(tx: Database, pageId: number, afterId: number) {
+  const rows: Array<{ rawType: string; correlationId: string }> = [];
+  let cursor = afterId;
+  let truncated = false;
+  for (;;) {
+    const batch = await listFanslyMessagePurchaseTargetsAfterId(tx, { pageId, afterId: cursor, limit: IMPORT_BATCH });
+    rows.push(...batch);
+    if (batch.length > 0) cursor = batch.at(-1)!.id;
+    if (batch.length < IMPORT_BATCH) break;
+    if (rows.length >= IMPORT_LEDGER_ROWS_MAX) {
+      truncated = true;
+      break;
+    }
+  }
+  return { ...purchaseTargetsOfTransactions(rows), rows: rows.length, throughId: cursor, truncated };
+}
+
+/** The journaled `/message` pages past the legacy raw cursor, as targets (the
+ *  lane's own extractor; the first page that names a content id decides its
+ *  kind, as the lane's batches did). */
+async function dmBacklog(tx: Database, pageId: number, afterId: number) {
+  const seam = importSeam(tx);
+  const kinds = new Map<string, PurchaseTarget["kind"]>();
+  const disagreements = new Set<string>();
+  const unavailable: number[] = [];
+  let pages = 0;
+  let cursor = afterId;
+  let truncated = false;
+  for (;;) {
+    const batch = (await listFanslyDmRawPayloadsAfterId(tx, { pageId, afterId: cursor, limit: IMPORT_BATCH }))
+      .map((row) => ({ id: row.id, payload: row.responsePayload, payloadRef: row.payloadRef }));
+    const resolve = createCapturePayloadRowResolver(seam, "raw_payload", batch);
+    const payloads: unknown[] = [];
+    for (const row of batch) {
+      try {
+        payloads.push((await resolve(row)).payload);
+      } catch (error) {
+        if (!isCapturePayloadUnavailable(error)) throw error;
+        unavailable.push(row.id);
+      }
+    }
+    for (const target of extractFanslyPurchaseHistoryTargets(payloads).map(fromLegacyTarget)) {
+      const kind = kinds.get(target.id);
+      if (kind === undefined) kinds.set(target.id, target.kind);
+      else if (kind !== target.kind) disagreements.add(target.id);
+    }
+    pages += batch.length;
+    if (batch.length > 0) cursor = batch.at(-1)!.id;
+    if (batch.length < IMPORT_BATCH) break;
+    if (pages >= IMPORT_DM_PAGES_MAX) {
+      truncated = true;
+      break;
+    }
+  }
+  return { kinds, disagreements, unavailable, pages, throughId: cursor, truncated };
+}
+
+/** The legacy lane's pending target, continued where it stopped. */
+function continuation(pending: FanslyPurchaseHistoryPendingTarget): TargetCursor {
+  return { ...headWalk([]), before: pending.before };
+}
+
+/**
+ * The legacy `purchase_history` lane, continued by the engine: one target row
+ * per target the lane still owed.
+ *
+ * - its pending targets, from where each stopped (to the empty page: the lane
+ *   kept no head to stop on) — unless a ledger row past its cursor sold the
+ *   same target again: that order is newer than the head the lane read, so the
+ *   target is walked again from its head;
+ * - the targets of the ledger rows past its transaction cursor, as the
+ *   transactions apply derives them from rows new to it ([D7]: a sale of an
+ *   already captured target re-reads it too);
+ * - the targets of the journaled `/message` pages past its raw cursor that the
+ *   lane has not captured (its own discovery rule).
+ *
+ * Without this backlog a sale the lane had journaled but not yet scanned would
+ * never be read: after the switch the engine finds targets only in ledger rows
+ * and pages new to it. The read is bounded; the notes give every count, and a
+ * cut-short source says where it stopped.
+ */
+async function importLegacyTargets(tx: Database, pageId: number): Promise<LegacyImport> {
+  const legacy = await tx.execute<{ state: unknown }>(sql`
+    select state from page_sync_cursors where page_id = ${pageId} and stream = 'purchase_history'
+  `);
+  const rawState = legacy.rows[0]?.state ?? null;
+  const state = parseFanslyPurchaseHistoryCursorState(rawState);
+  // No readable state: the lane would start both sources from the beginning.
+  const transactionCursorId = state?.transactionCursorId ?? 0;
+  const rawPayloadCursorId = state?.rawPayloadCursorId ?? 0;
+  const ledger = await ledgerBacklog(tx, pageId, transactionCursorId);
+  const dm = await dmBacklog(tx, pageId, rawPayloadCursorId);
+  const captured = new Set(await listFanslyPurchaseHistoryCapturedContentIds(tx, pageId));
+
+  const chosen = new Map<string, { target: PurchaseTarget; cursor: TargetCursor }>();
+  const ambiguous = new Set<string>(ledger.conflicts);
+  const disagreements = new Set<string>(dm.disagreements);
+  const sold = new Map(ledger.targets.map((target) => [target.id, target.kind]));
+  let pendingRestarted = 0;
+  let invalid = 0;
+  const choose = (target: PurchaseTarget, cursor: TargetCursor): boolean => {
+    if (parsePurchaseTargetSubject(purchaseTargetSubject(target)) === null) {
+      invalid += 1;
+      return false;
+    }
+    const existing = chosen.get(target.id);
+    if (existing !== undefined) {
+      if (existing.target.kind !== target.kind) disagreements.add(target.id);
+      return false;
+    }
+    chosen.set(target.id, { target, cursor });
+    return true;
+  };
+  for (const pending of state?.pendingTargets ?? []) {
+    const target = fromLegacyTarget(pending);
+    const soldAgain = sold.get(target.id) === target.kind && pending.before !== null;
+    if (choose(target, soldAgain ? headWalk([]) : continuation(pending)) && soldAgain) pendingRestarted += 1;
+  }
+  let ledgerTargets = 0;
+  for (const target of ledger.targets) {
+    if (choose(target, headWalk(null))) ledgerTargets += 1;
+  }
+  let dmTargets = 0;
+  let dmCaptured = 0;
+  for (const [id, kind] of dm.kinds) {
+    if (ambiguous.has(id)) continue;
+    if (!chosen.has(id) && captured.has(id)) {
+      dmCaptured += 1;
+      continue;
+    }
+    if (choose({ kind, id }, headWalk(null))) dmTargets += 1;
+  }
+
+  const cursors = [...chosen.values()]
+    .map(({ target, cursor }) => ({ resource: PURCHASES_TARGETS_KEY, subject: purchaseTargetSubject(target), cursor }))
+    .sort((left, right) => left.subject.localeCompare(right.subject));
+  return {
+    cursors,
+    notes: {
+      legacyState: state !== null ? "v5" : rawState === null ? "none" : "unreadable",
+      targets: cursors.length,
+      pendingTargets: state?.pendingTargets.length ?? 0,
+      pendingRestarted,
+      ledger: {
+        afterId: transactionCursorId,
+        rowsScanned: ledger.rows,
+        throughId: ledger.throughId,
+        truncated: ledger.truncated,
+        targets: ledgerTargets,
+      },
+      dmPages: {
+        afterId: rawPayloadCursorId,
+        pagesScanned: dm.pages,
+        throughId: dm.throughId,
+        truncated: dm.truncated,
+        targets: dmTargets,
+        capturedSkipped: dmCaptured,
+        bodiesUnavailable: dm.unavailable.length,
+        unavailableExamples: dm.unavailable.slice(0, IMPORT_NOTE_EXAMPLES),
+      },
+      // A content id the ledger names as both kinds: left out (choosing the
+      // request parameter would be a guess).
+      ambiguousContentIds: [...ambiguous].sort().slice(0, IMPORT_NOTE_EXAMPLES),
+      ambiguousSkipped: ambiguous.size,
+      // Sources that disagree on a content id's kind: the first source (pending,
+      // then ledger, then the earliest page) is kept.
+      kindDisagreements: [...disagreements].sort().slice(0, IMPORT_NOTE_EXAMPLES),
+      invalidTargets: invalid,
+    },
+  };
+}
 
 /**
  * Replay of a legacy `purchase_history` observation (design §5.9): the
