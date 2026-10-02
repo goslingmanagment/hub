@@ -369,6 +369,11 @@ describe("database migration invariants", () => {
       FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
     ]);
     expect(sync).toContain(`rp.endpoint = '${FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT}'`);
+    // The shadow report's window read (rule A2.demand-replaced) spells the
+    // predicate itself: without it, the stream and time filters alone are a
+    // whole-table scan of the 788 MB heap.
+    const observability = await readFile("packages/db/src/repositories/sync/observability.ts", "utf8");
+    expect(observability).toContain(`and rp.endpoint in (${predicate})`);
 
     // The attempt index predicate is a contract with the streak query: the
     // query spells the same clauses as constants, so it implies it.

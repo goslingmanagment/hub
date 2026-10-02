@@ -728,6 +728,13 @@ export function countFanslyPurchaseHistoryRows(payloadValue: unknown): number | 
   return fanslyPurchaseHistoryRows(payloadValue)?.length ?? null;
 }
 
+/** The order rows of a purchase-history body (objects only); null when the
+ *  body holds no order array (a refusal, a malformed page). */
+export function fanslyPurchaseHistoryOrderRows(payloadValue: unknown): JsonRecord[] | null {
+  const rows = fanslyPurchaseHistoryRows(payloadValue);
+  return rows === null ? null : records(rows);
+}
+
 /**
  * Classifies a captured target entirely from its durable status and raw body.
  * The function deliberately has no checkpoint or provider dependency so a
