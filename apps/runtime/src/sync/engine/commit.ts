@@ -272,18 +272,36 @@ async function fault(d: CommitDeps, point: SyncFaultPoint): Promise<void> {
 }
 
 /** `sync_attempts.request`: the wire id, its parameters (the coverage
- *  evidence, design §2.9 D1) and the request line. Never a header. */
-export function requestJsonOf(request: RequestPlan): { spec: FanslyWireId; params: unknown; path: string; query: Record<string, string> } {
+ *  evidence, design §2.9 D1), the request line and — when the resource keeps
+ *  one — its account of the step (`RequestPlan.step`). Never a header. */
+export function requestJsonOf(request: RequestPlan): {
+  spec: FanslyWireId;
+  params: unknown;
+  path: string;
+  query: Record<string, string>;
+  step?: unknown;
+} {
   const target = buildFanslyWireTarget(request.spec, request.params as never);
   const query: Record<string, string> = {};
   for (const [key, value] of new URLSearchParams(target.search)) query[key] = value;
-  return { spec: request.spec, params: request.params, path: target.pathname, query };
+  return {
+    spec: request.spec,
+    params: request.params,
+    path: target.pathname,
+    query,
+    ...(request.step === undefined ? {} : { step: request.step }),
+  };
 }
 
-function requestOfAttempt(attempt: SyncAttemptRow): RequestPlan {
-  const stored = attempt.request as { spec?: unknown; params?: unknown } | null;
+/** The request an attempt sent, as its plan made it (`step` included). */
+export function requestOfAttempt(attempt: Pick<SyncAttemptRow, "request" | "operation">): RequestPlan {
+  const stored = attempt.request as { spec?: unknown; params?: unknown; step?: unknown } | null;
   const spec = typeof stored?.spec === "string" ? stored.spec : attempt.operation;
-  return { spec: spec as FanslyWireId, params: (stored?.params ?? {}) as never };
+  return {
+    spec: spec as FanslyWireId,
+    params: (stored?.params ?? {}) as never,
+    ...(stored?.step === undefined ? {} : { step: stored.step }),
+  };
 }
 
 function upsertsOf(

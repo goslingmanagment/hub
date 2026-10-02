@@ -93,6 +93,15 @@ export interface EngineResourceSpec {
 export interface RequestPlan<I extends FanslyWireId = FanslyWireId> {
   spec: I;
   params: FanslyWireParams<I>;
+  /**
+   * The resource's own account of the step: where in its walk this request
+   * belongs, as the plan decided it (a media visit's windows, an album walk's
+   * proof header). Never sent; stored with the attempt
+   * (`sync_attempts.request.step`) and handed back with the request to the
+   * apply, the shadow estimate and a journal re-apply, so a decision the
+   * read-only plan took is the one the step folds its answer into.
+   */
+  step?: unknown;
 }
 
 /** A demand for work (a follow-up of an apply, a router signal, an owner

@@ -15,6 +15,7 @@ import {
   findSyncPageByLabel,
   OWNER_PAGE_MODES,
   readSyncPageStatus,
+  requestSyncProbe,
 } from "./inspect.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
@@ -47,6 +48,19 @@ function parseInstant(value: string): Date {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`Expected an ISO timestamp, received "${value}"`);
   return parsed;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new InvalidArgumentError(`Expected a JSON object, received "${value}"`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new InvalidArgumentError(`Expected a JSON object, received "${value}"`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function collect(value: string, previous: string[] = []): string[] {
@@ -189,6 +203,25 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
           resource: options.resource,
           ...(options.subject === undefined ? {} : { subject: options.subject }),
         })));
+      });
+    });
+
+  sync
+    .command("probe")
+    .description("one admitted read of a wire route for a page, journaled under its kind (shadow: simulated)")
+    .requiredOption("--page <label>", "the Fansly page")
+    .requiredOption("--operation <wire id>", "a wire route, e.g. account.me or media.offer_stats")
+    .option("--params <json>", "the route's parameters as a JSON object", parseJsonObject, {})
+    .action(async (options: { page: string; operation: string; params: Record<string, unknown> }) => {
+      await withContext(deps, async ({ db }) => {
+        const queued = await requestSyncProbe(db, createFanslyRegistry(), {
+          pageLabel: options.page,
+          operation: options.operation,
+          params: options.params,
+          requestedBy: cliActor(),
+        });
+        deps.print(`${options.page}: probe ${options.operation} queued as work ${queued.workId}`
+          + `${queued.shadow ? " (shadow: simulated, nothing is sent)" : ""}; result: sync why --page ${options.page} --resource probe.manual --subject ''`);
       });
     });
 

@@ -8,6 +8,7 @@ import {
   setPagePause,
   setRegistryOverride,
   setSyncPageMode,
+  upsertDemand,
   type Database,
   type SetSyncPageModeResult,
   type SyncPageMode,
@@ -17,7 +18,8 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
-import type { EngineRegistry } from "./engine/resource.ts";
+import { demandToUpsert, type EngineRegistry } from "./engine/resource.ts";
+import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import {
   buildPageStatus,
   estimateSlotOpensAt,
@@ -129,7 +131,7 @@ export async function readSyncPageStatus(
 }
 
 export interface WorkWhy {
-  work: { id: number; resource: string; subject: string; class: string; state: string; dueAt: Date; demandRevision: number; appliedRevision: number; attempts: number; lastErrorClass: string | null; closeReason: string | null };
+  work: { id: number; resource: string; subject: string; class: string; state: string; dueAt: Date; demandRevision: number; appliedRevision: number; attempts: number; lastErrorClass: string | null; closeReason: string | null; result: unknown };
   /** Null for closed work: it waits for nothing. */
   waiting: WorkExplanation | null;
 }
@@ -177,6 +179,8 @@ export async function explainSyncWork(
       attempts: work.attemptsCount,
       lastErrorClass: work.lastErrorClass,
       closeReason: work.closeReason,
+      // What a finished step left (a probe's outcome, a walk's receipt).
+      result: work.result,
     },
     waiting: explainWork(statusWork(work), statusPage(page), runtime, now),
   }));
@@ -271,6 +275,44 @@ export async function changeSyncRegistryOverride(
   }
   const page = await findSyncPageByLabel(db, input.pageLabel);
   return setRegistryOverride(db, { pageId: page.pageId, key: input.resource, override: input.override });
+}
+
+/** The registry key of the owner's one-off read. */
+export const PROBE_KEY = "probe.manual";
+
+/**
+ * `sync probe` (design §5.22): queue one admitted read of a wire route for a
+ * page, in the journal the page runs (shadow work on an `off`/`shadow` page —
+ * simulated, nothing is sent — live work on a switched page). The route and
+ * its parameters are checked before anything is written; one probe of a page
+ * is open at a time.
+ */
+export async function requestSyncProbe(
+  db: Database,
+  registry: EngineRegistry,
+  input: { pageLabel: string; operation: string; params: Record<string, unknown>; requestedBy: string },
+): Promise<{ workId: number; shadow: boolean }> {
+  const params: ProbeParams = { operation: input.operation as ProbeParams["operation"], params: input.params, requestedBy: input.requestedBy };
+  const probe = probeRequestOf(params);
+  if ("refused" in probe) throw new SyncOwnerLeverError(`sync probe refused (${probe.refused}): ${input.operation} ${JSON.stringify(input.params)}`);
+  const spec = registry.spec(PROBE_KEY);
+  if (spec === null) throw new SyncOwnerLeverError(`No registry entry ${PROBE_KEY}`);
+  const page = await findSyncPageByLabel(db, input.pageLabel);
+  if (page.mode === "off") {
+    throw new SyncOwnerLeverError(`${input.pageLabel} is off: no actor runs it (sync page mode --to shadow first)`);
+  }
+  const shadow = statusJournalIsShadow(page);
+  const upsert = demandToUpsert(
+    { resource: PROBE_KEY, params, demand: { reason: "owner_probe" } },
+    spec,
+    { pageId: page.pageId, shadow, now: new Date(), page },
+  );
+  if (upsert === null) throw new SyncOwnerLeverError(`${PROBE_KEY} does not run on ${input.pageLabel} (switched off for the page)`);
+  const result = await upsertDemand(db, upsert);
+  if (!result.created) {
+    throw new SyncOwnerLeverError(`${input.pageLabel} already has a probe queued (work ${result.id}); wait for it (sync why --resource ${PROBE_KEY})`);
+  }
+  return { workId: result.id, shadow };
 }
 
 /** `sync ownership confirm-stopped` (rule (e)): owners whose host is not among

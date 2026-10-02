@@ -112,6 +112,14 @@ const postsModule = (variant: "refresh" | "backfill" | "engagement") => async ()
   (await import("./resources/posts.ts")).postsModule(variant);
 const postRepliesModule = (variant: "walk" | "authors") => async (): Promise<ResourceModule> =>
   (await import("./resources/post-replies.ts")).postRepliesModule(variant);
+const catalogModule = (variant: "fixed" | "vault" | "hydrate") => async (): Promise<ResourceModule> =>
+  (await import("./resources/catalog.ts")).catalogModule(variant);
+const mediaStatsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/media-stats.ts")).mediaStatsWalkModule;
+const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Promise<ResourceModule> =>
+  (await import("./resources/stats.ts")).statsModule(variant);
+const probeModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/probe.ts")).probeManualModule;
 
 const STATS_DAILY_OPERATIONS: readonly FanslyWireId[] = [
   "account.stats", "earnings.stats_window", "earnings.monthly", "trackinglinks", "discovery.suggestions",
@@ -469,14 +477,20 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: ["vault.albums", "uservault.albums", "subscriptions.tiers", "subscriptions.giftcodes", "message.automated", "account.walls"],
     replayKinds: ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"],
     legacy: [stream("catalog")],
+    module: catalogModule("fixed"),
   },
   {
-    // Incremental daily, full weekly.
+    // A standing walk over the albums the catalog projection lists: it looks
+    // at them daily (an album whose head or count moved is walked again —
+    // incremental daily) and an album walked a week ago is due again (full
+    // weekly); `catalog.fixed` makes it due as soon as it listed the albums.
     key: "catalog.vault", file: "catalog", subject: "page", kind: "goal", class: "planned",
-    triggers: ["poll"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["poll", "apply:catalog.fixed"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY },
+    standing: { recheckMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "vault_walk", walk: "cursor-walk", http: true, evidence: true, fence: "none", ownerProtected: true,
     operations: ["vault.media"], replayKinds: ["vault_media"],
     legacy: [stream("catalog")],
+    module: catalogModule("vault"),
   },
   {
     key: "catalog.hydrate", file: "catalog", subject: "page", kind: "trigger", class: "planned",
@@ -485,17 +499,23 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: ["account.media_by_ids", "account.bundles_by_ids"],
     replayKinds: ["account_media_batch", "account_media_bundle_batch"],
     legacy: [stream("catalog")],
+    module: catalogModule("hydrate"),
   },
 
   // ── media-stats (S2-09b; owner decision №6) ───────────────────────────────
   {
+    // A standing walk over the `media_stats` queue the media-plane and
+    // engagement projectors seed and dirty (design §4.3); it re-checks the
+    // queue every 6 h when nothing is due (the legacy stream's cadence). The
+    // tiers are the queue's: ≤ 30 d daily, 31–90 d weekly, older monthly (D19).
     key: "media-stats.walk", file: "media-stats", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue", "poll"],
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 90, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
-    slo: { staleAfterMs: 3 * DAY },
+    standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none", ownerProtected: true,
     operations: ["media.offer_stats"], replayKinds: ["media_offer_stats"], subjectQueue: true, queuePlane: "media_stats",
     legacy: [stream("media_stats")],
+    module: mediaStatsModule,
   },
 
   // ── stats (S2-09b) ────────────────────────────────────────────────────────
@@ -509,21 +529,25 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
       "broadcast_stats", "broadcast_stats_deleted", "broadcast_scheduled", "polls", "recapstats",
     ],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("daily"),
   },
   {
-    // Every ≤ 25 h window stays gap-free [A15].
+    // Every ≤ 25 h window stays gap-free [A15]; the next capture is never
+    // planned past the 23 h two windows need to meet.
     key: "stats.hourly", file: "stats", subject: "page", kind: "poll", class: "planned",
     triggers: ["poll"], period: { everyMs: 22 * HOUR }, slo: { staleAfterMs: 66 * HOUR },
     proof: "window_honoured", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.stats"],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("hourly"),
   },
   {
     key: "stats.backfill", file: "stats", subject: "page", kind: "goal", class: "planned",
     triggers: ["owner", "legacy_import"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
-    operations: ["account.stats"],
+    operations: ["account.stats", "earnings.stats_window"],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("backfill"),
   },
 
   // ── live only (step 3) ────────────────────────────────────────────────────
@@ -545,11 +569,14 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── probe (S2-09b) ────────────────────────────────────────────────────────
   {
+    // Any route, one admitted request (`pnpm cli sync probe`): the route is
+    // the work's parameter, so the entry names none.
     key: "probe.manual", file: "probe", subject: "page", kind: "trigger", class: "planned",
     triggers: ["owner"], slo: {},
     proof: "none", walk: "single", http: true, evidence: false, fence: "none",
     operations: [],
     legacy: [sender("endpoint_probe"), sender("replay_probe")],
+    module: probeModule,
   },
 ];
 

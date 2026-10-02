@@ -9,6 +9,7 @@ import {
   FANSLY_LEGACY_UNMAPPED,
   FANSLY_RESOURCE_SPECS,
   fanslyReplayOwner,
+  fanslyResourceSpec,
   type LegacyRef,
   type ResourceSpec,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -153,10 +154,11 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.ws-down").kind).not.toBe("poll");
   });
 
-  it("S2-07a (account, subscribers, followers, fan-profiles), S2-10 (dm-live) and S2-09a (notifications, posts, post-replies) have landed; every other entry waits on its dependency", async () => {
+  it("S2-07a (account, subscribers, followers, fan-profiles), S2-10 (dm-live), S2-09a (notifications, posts, post-replies) and S2-09b (catalog, media-stats, stats, probe) have landed; every other entry waits on its dependency", async () => {
     const implemented = FANSLY_RESOURCE_SPECS.filter((spec) => spec.module !== undefined).map((spec) => spec.file);
     expect([...new Set(implemented)].sort()).toEqual([
-      "account", "dm-live", "fan-profiles", "followers", "notifications", "post-replies", "posts", "subscribers",
+      "account", "catalog", "dm-live", "fan-profiles", "followers", "media-stats", "notifications", "post-replies", "posts",
+      "probe", "stats", "subscribers",
     ]);
     const metrics = new RecordingMetrics();
     const registry = createFanslyRegistry({ metrics });
@@ -197,13 +199,37 @@ describe("the Fansly registry table", () => {
   });
 
   it("the subject-queue walks over projector-fed queues are standing goals with a queue breaker (design §4.3)", async () => {
-    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined);
-    expect(standing.map((spec) => spec.key).sort()).toEqual(["post-replies.walk", "posts.engagement"]);
+    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue === true);
+    expect(standing.map((spec) => spec.key).sort()).toEqual(["media-stats.walk", "post-replies.walk", "posts.engagement"]);
     for (const spec of standing) {
       expect(spec.kind, spec.key).toBe("goal");
-      expect(spec.subjectQueue, spec.key).toBe(true);
       expect(spec.standing!.recheckMs, spec.key).toBe(6 * 3_600_000);
       expect(typeof (await createFanslyRegistry().module(spec.key)).onSubjectOutcome, spec.key).toBe("function");
+    }
+  });
+
+  it("the vault walk stands over the projected album list, re-checked daily (design §5.17, owner decision №6)", () => {
+    const standing = FANSLY_RESOURCE_SPECS.filter((spec) => spec.standing !== undefined && spec.subjectQueue !== true);
+    expect(standing.map((spec) => [spec.key, spec.kind, spec.standing!.recheckMs])).toEqual([["catalog.vault", "goal", 86_400_000]]);
+    expect(fanslyResourceSpec("catalog.vault")!.ownerProtected).toBe(true);
+  });
+
+  it("the content-b entries replay their kinds and import their legacy cursors (design §5.17–§5.19, §5.22)", async () => {
+    const registry = createFanslyRegistry();
+    for (const key of ["catalog.fixed", "catalog.vault", "catalog.hydrate", "media-stats.walk", "stats.daily"]) {
+      expect(typeof (await registry.module(key)).replay, key).toBe("function");
+    }
+    for (const key of ["catalog.fixed", "catalog.vault", "media-stats.walk", "stats.daily", "stats.hourly", "stats.backfill"]) {
+      expect(typeof (await registry.module(key)).importLegacy, key).toBe("function");
+    }
+    for (const kind of ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"]) {
+      expect(fanslyReplayOwner(kind)?.key, kind).toBe("catalog.fixed");
+    }
+    expect(fanslyReplayOwner("vault_media")?.key).toBe("catalog.vault");
+    expect(fanslyReplayOwner("account_media_batch")?.key).toBe("catalog.hydrate");
+    expect(fanslyReplayOwner("media_offer_stats")?.key).toBe("media-stats.walk");
+    for (const kind of ["account_stats", "earnings_stats_snapshot", "discovery_feed", "broadcast_stats_deleted", "recapstats"]) {
+      expect(fanslyReplayOwner(kind)?.key, kind).toBe("stats.daily");
     }
   });
 });

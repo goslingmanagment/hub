@@ -46,6 +46,12 @@ or a plan that waits on `dependency` and makes the other work due. Fan profiles 
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
 to 100 of them not looked up through the page within the day.
 
+A plan is read-only, so a decision it takes that the apply must fold into — a media visit's windows, an album walk's
+proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
+stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
+journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
+one visit of the legacy lane becomes one window per step with the same windows in the same order.
+
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
@@ -188,3 +194,4 @@ holds the resource file (30 min → 2 h → 6 h).
 | A new depth or rule of a history request | `requests/history.ts` (+ the satisfaction rule in `engine/commit.ts`) + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
+| One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |
