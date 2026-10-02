@@ -776,9 +776,9 @@ export async function countLegacyFanslyAttempts(
   };
 }
 
-/** One legacy capture (`sync_raw_payloads`) of a stream, with its body for
- *  reading through the payload seam. */
-export interface LegacyStreamCapture {
+/** One legacy purchase-history capture (`sync_raw_payloads`), with its body
+ *  for reading through the payload seam. */
+export interface LegacyPurchaseHistoryCapture {
   id: number;
   pageId: number;
   syncRunId: number | null;
@@ -791,12 +791,27 @@ export interface LegacyStreamCapture {
   payloadRef: CapturePayloadRef | null;
 }
 
-/** The legacy captures of `stream` captured in [from, to) on the given pages,
- *  in id order (the shadow report's A2: what a legacy poll read). */
-export async function listLegacyStreamCapturesInWindow(
+/**
+ * The legacy `purchase_history` captures captured in [from, to) on the given
+ * pages, in id order (the shadow report's A2: what the legacy poll read).
+ *
+ * `sync_raw_payloads` (788 MB, 2.5M rows on 2026-10-02) has no index on
+ * `stream` or `captured_at`, so the read is bounded twice over:
+ * - the endpoints are spelled as the constants of the partial index
+ *   `sync_raw_payloads_purchase_history_idx` (migration 0223,
+ *   pinned by tests/migration-invariants.test.ts) — the only endpoints the
+ *   purchase-history lane journals — so the planner reads that index, never
+ *   the heap end to end;
+ * - an id floor: a backward scan of the primary key stops at the first row
+ *   captured an hour before `from`. `captured_at` is its insert transaction's
+ *   start and the id is taken by that insert, so every capture of the window
+ *   has a later id unless its insert transaction ran longer than that hour
+ *   (the lane journals each body on its own).
+ */
+export async function listLegacyPurchaseHistoryCapturesInWindow(
   db: Database,
-  input: { pageIds: readonly number[]; stream: string; from: Date; to: Date },
-): Promise<LegacyStreamCapture[]> {
+  input: { pageIds: readonly number[]; from: Date; to: Date },
+): Promise<LegacyPurchaseHistoryCapture[]> {
   if (input.pageIds.length === 0) return [];
   const result = await db.execute<{
     id: string;
@@ -816,7 +831,13 @@ export async function listLegacyStreamCapturesInWindow(
            to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as bucket, rp.payload_object_id::text as "objectId"
       from sync_raw_payloads rp
      where rp.page_id = any(${sql.param([...input.pageIds])}::bigint[])
-       and rp.stream::text = ${input.stream}
+       and rp.endpoint in ('purchase_history', 'purchase_history_contract_probe', 'purchase_history_contract_storm')
+       and rp.stream = 'purchase_history'
+       and rp.id > coalesce((
+         select f.id from sync_raw_payloads f
+          where f.captured_at < ${input.from}::timestamptz - interval '1 hour'
+          order by f.id desc
+          limit 1), 0)
        and rp.captured_at >= ${input.from}::timestamptz
        and rp.captured_at < ${input.to}::timestamptz
      order by rp.id

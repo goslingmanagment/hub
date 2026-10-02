@@ -1,9 +1,9 @@
 import {
-  listLegacyStreamCapturesInWindow,
+  listLegacyPurchaseHistoryCapturesInWindow,
   listPpvLedgerSales,
   type Database,
   type FanslyWsLivePayloadResolver,
-  type LegacyStreamCapture,
+  type LegacyPurchaseHistoryCapture,
   type SyncPageRow,
 } from "@agency_hub_core/db";
 
@@ -222,9 +222,8 @@ export async function checkPurchaseAnnouncements(
 ): Promise<PurchaseAnnouncementCheck> {
   const pageIds = input.pages.map((page) => page.pageId);
   const label = new Map(input.pages.map((page) => [page.pageId, page.pageLabel ?? String(page.pageId)]));
-  const rows: LegacyStreamCapture[] = await listLegacyStreamCapturesInWindow(db, {
+  const rows: LegacyPurchaseHistoryCapture[] = await listLegacyPurchaseHistoryCapturesInWindow(db, {
     pageIds,
-    stream: "purchase_history",
     from: input.window.start,
     to: new Date(input.window.end.getTime() + PURCHASE_CAPTURE_SLACK_MS),
   });

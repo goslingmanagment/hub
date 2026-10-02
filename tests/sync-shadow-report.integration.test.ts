@@ -356,6 +356,15 @@ describe("the shadow report (design §3.12)", () => {
     };
     const page1 = (orders: unknown[]) => ({ aggregationData: { accounts: [] }, accountMediaOrderHistory: orders });
     const soldAt = at(5 * MINUTE);
+    // Journaled in capture order, as the lane does (the read's id floor relies on it).
+    // A capture more than an hour before the window sets the floor; the window reads past it.
+    await legacyRead({ accountMediaId: "900000000000000777" }, page1([
+      { orderId: "910000000000000777", accountId: FAN, accountMediaId: "900000000000000777", createdAt: at(-100 * MINUTE).getTime(), type: 1 },
+    ]), at(-90 * MINUTE));
+    // A capture an hour before the window is no part of it.
+    await legacyRead({ accountMediaId: "900000000000000666" }, page1([
+      { orderId: "910000000000000666", accountId: FAN, accountMediaId: "900000000000000666", createdAt: at(-70 * MINUTE).getTime(), type: 1 },
+    ]), at(-60 * MINUTE));
     // PPV media legacy found in a chat before any sale: an empty page.
     await legacyRead({ accountMediaId: "900000000000000111" }, page1([]), at(30 * MINUTE));
     // A sale the ledger holds (same content, buyer, second).
@@ -378,10 +387,6 @@ describe("the shadow report (design §3.12)", () => {
     ]), at(32 * MINUTE));
     // A media the page no longer holds: Fansly refused it (no order).
     await legacyRead({ accountMediaId: "900000000000000444" }, { error: { status: 422, code: 99, details: "error getting account media", body: null } }, at(33 * MINUTE), 422);
-    // A capture an hour before the window is no part of it.
-    await legacyRead({ accountMediaId: "900000000000000666" }, page1([
-      { orderId: "910000000000000666", accountId: FAN, accountMediaId: "900000000000000666", createdAt: at(-70 * MINUTE).getTime(), type: 1 },
-    ]), at(-60 * MINUTE));
 
     const report = async () => buildShadowReport(ctx(), {
       pages: await listSyncPages(db()),
