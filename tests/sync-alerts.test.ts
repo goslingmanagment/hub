@@ -992,6 +992,11 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     // Due later than its placement + 24 h + 2 min: late.
     expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-03T10:30:00Z") })] }))
       .toBe(`${notYet}fan-earnings.roster: due 2026-10-03T10:30:00.000Z, later than its bound (${bound})`);
+    // A standing walk whose plan found nothing due set its re-check past the
+    // bound without a read: still not on schedule, and the reason is named.
+    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-03T12:34:00Z"), recheckedMs: T("2026-10-02T12:34:00Z") })] }))
+      .toBe(`${notYet}fan-earnings.roster: due 2026-10-03T12:34:00.000Z, later than its bound (${bound}); its last plan `
+        + "(row updated 2026-10-02T12:34:00.000Z) found nothing due and set a re-check without a read");
     // Its first read after the window end came past the bound: late.
     expect(pendingWhy({ "fan-earnings.roster": [row({ firstAdmittedMs: T("2026-10-03T11:00:00Z") })] }))
       .toBe(`${notYet}fan-earnings.roster: its first read admitted 2026-10-03T11:00:00.000Z, after its bound (${bound})`);

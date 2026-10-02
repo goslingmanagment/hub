@@ -705,6 +705,9 @@ export interface ScheduleRow {
   /** Its first attempt's admission; null before one. */
   firstAdmittedMs: number | null;
   quarantined: boolean;
+  /** When a plan last found nothing due and set its re-check without a read
+   *  (`waiting_reason` not_due; the row's `updated_at`); null otherwise. */
+  recheckedMs?: number | null;
 }
 
 /** Whether a key's work on the page is on its schedule at the window end. */
@@ -740,7 +743,12 @@ export function keyOnSchedule(input: { key: string; rows: readonly ScheduleRow[]
     if (row.dueMs + POLL_DUE_SLACK_MS < input.endMs) {
       return { onSchedule: false, fault: `${input.key}: due ${iso(row.dueMs)}, not admitted by the window end` };
     }
-    if (row.dueMs > dueByMs) return { onSchedule: false, fault: `${input.key}: due ${iso(row.dueMs)}, later than its bound (${bound})` };
+    if (row.dueMs > dueByMs) {
+      const rechecked = row.recheckedMs === undefined || row.recheckedMs === null
+        ? ""
+        : `; its last plan (row updated ${iso(row.recheckedMs)}${row.recheckedMs > input.endMs ? ", after the window end" : ""}) found nothing due and set a re-check without a read`;
+      return { onSchedule: false, fault: `${input.key}: due ${iso(row.dueMs)}, later than its bound (${bound})${rechecked}` };
+    }
     what.push(`${input.key} due ${iso(row.dueMs)} (${bound})`);
   }
   return { onSchedule: true, what: what.join(" and ") };
@@ -1591,6 +1599,7 @@ async function legacyVolume(
         dueMs: row.dueAt.getTime(),
         firstAdmittedMs: row.firstAdmittedAt?.getTime() ?? null,
         quarantined: row.state === "quarantined",
+        recheckedMs: row.waitingReason === "not_due" ? row.updatedAt.getTime() : null,
       }]);
     }
     shadowByPage.set(pageId, { ...history, schedule: { endMs, rows } });
