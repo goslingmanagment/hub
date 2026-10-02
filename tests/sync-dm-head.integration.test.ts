@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -19,6 +21,7 @@ import type { SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { dmMessagesModule } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
+import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -33,6 +36,7 @@ import {
   ScriptedLiveTransport,
   seedSyncPage,
   tableCounts,
+  testConfig,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
@@ -202,11 +206,9 @@ async function seedThread(pageId: number, seed: ThreadSeed): Promise<number> {
   return threadId;
 }
 
-/** Every Fansly entry, standing polls parked far ahead; `.history` runs in the
- *  urgent class here (the requests class is empty until S2-11a lands). */
+/** Every Fansly entry, standing polls parked far ahead. */
 async function registryFor(pageId: number, shadow = false): Promise<EngineRegistry> {
-  const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS.map((spec) =>
-    spec.key === "dm-messages.history" ? { ...spec, class: "urgent" as const } : spec));
+  const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
   const page = await getSyncPage(db(), pageId);
   await ensurePollRows(db(), {
     pageId,
@@ -224,7 +226,7 @@ async function demand(pageId: number, resource: string, n: number, messageIds: r
     resource,
     subject: groupOf(n),
     kind: spec.kind,
-    class: resource === "dm-messages.history" ? "urgent" : spec.class,
+    class: spec.class,
     dueAt: new Date(Date.now() - 1_000),
     demand: { messageIds: [...messageIds], txIds: [], reasons: ["test"] },
   });
@@ -731,15 +733,28 @@ describe("dm-messages refusals", () => {
 });
 
 describe("dm-messages.history", () => {
-  it("reads below the chain to the empty page that proves the start of the chat", async (context) => {
+  it("a history request reads the head, then below the chain to the empty page that proves the start of the chat", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, { n: 15, stored: range(31, 40), chain: true });
     const registry = await registryFor(pageId);
-    await demand(pageId, "dm-messages.history", 15, []);
+    await testDb.pool.query("update sync_pages set requests_enabled_at = clock_timestamp() - interval '1 minute' where page_id = $1", [pageId]);
+    const filed = await submitHistoryRequest({ db: db(), rawConfig: testConfig(testDb.connectionString) }, {
+      pageId,
+      requester: { kind: "owner_cli", userId: null },
+      fans: [{ kind: "conversation", conversationRef: groupOf(15) }],
+      depth: { kind: "all" },
+      reason: "test",
+      idempotencyKey: randomUUID(),
+    });
+    expect(filed.items[0]).toMatchObject({ state: "queued", anchorMessageRef: null });
     const { requests } = await runLive(pageId, registry, serve(groupOf(15), range(1, 40)),
       async () => (await workRow(pageId, "dm-messages.history", 15))?.state === "done");
-    expect(requests.map(beforeOf)).toEqual([msg(31), msg(6), msg(1)]);
+    // The fan had no anchor: the head first (§7.1.4), then down from the chain.
+    expect(requests.map(beforeOf)).toEqual([null, msg(31), msg(6), msg(1)]);
+    const result = await getHistoryRequest({ db: db(), rawConfig: testConfig(testDb.connectionString) }, filed.request.ref);
+    expect(result.request).toMatchObject({ state: "done", counts: { total: 1, ready: 1 }, reads: { done: 4 } });
+    expect(result.items[0]).toMatchObject({ state: "ready", satisfiedBy: "empty_page", readsSpent: 4, anchorMessageRef: msg(40), loadedMessages: 40 });
     const proofAttempt = await testDb.pool.query<{ obs: string }>(
       "select observation_id::text as obs from sync_attempts where page_id = $1 and resource = 'dm-messages.history' order by id desc limit 1",
       [pageId],
@@ -750,6 +765,9 @@ describe("dm-messages.history", () => {
       stored_message_count: 40,
     });
     expect((await workRow(pageId, "dm-messages.history", 15))?.close_reason).toBe("history_complete");
+    const attempts = await testDb.pool.query<{ class: string }>(
+      "select class from sync_attempts where page_id = $1 and resource = 'dm-messages.history'", [pageId]);
+    expect(attempts.rows.map((row) => row.class)).toEqual(["requests", "requests", "requests", "requests"]);
   });
 
   it("a short head page is never the start of a chat: only the empty page below it completes (owner decision №3, I10)", async (context) => {
@@ -769,13 +787,22 @@ describe("dm-messages.history", () => {
     });
     expect(await workRow(pageId, "dm-messages.head", 20)).toMatchObject({ close_reason: "confirmed" });
 
-    // A history request reads below the short page; the empty answer proves the start.
-    await demand(pageId, "dm-messages.history", 20, []);
+    // A history request reads the head (its fan has no anchor) and then below
+    // the short page; the empty answer proves the start.
+    await testDb.pool.query("update sync_pages set requests_enabled_at = clock_timestamp() - interval '1 minute' where page_id = $1", [pageId]);
+    await submitHistoryRequest({ db: db(), rawConfig: testConfig(testDb.connectionString) }, {
+      pageId,
+      requester: { kind: "owner_cli", userId: null },
+      fans: [{ kind: "conversation", conversationRef: groupOf(20) }],
+      depth: { kind: "all" },
+      reason: "test",
+      idempotencyKey: randomUUID(),
+    });
     const history = await runLive(pageId, registry, serve(groupOf(20), range(1, 3)),
       async () => (await workRow(pageId, "dm-messages.history", 20))?.state === "done");
-    expect(history.requests.map(beforeOf)).toEqual([msg(1)]);
+    expect(history.requests.map(beforeOf)).toEqual([null, msg(1)]);
     const proofAttempt = await testDb.pool.query<{ obs: string }>(
-      "select observation_id::text as obs from sync_attempts where page_id = $1 and resource = 'dm-messages.history'",
+      "select observation_id::text as obs from sync_attempts where page_id = $1 and resource = 'dm-messages.history' order by id desc limit 1",
       [pageId],
     );
     expect(await thread(threadId)).toMatchObject({

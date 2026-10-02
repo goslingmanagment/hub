@@ -52,6 +52,8 @@ describe("runtime schema guard", () => {
               { name: "sync_pages" },
               { name: "sync_work" },
               { name: "sync_attempts" },
+              { name: "history_requests" },
+              { name: "history_request_items" },
             ],
           };
         }

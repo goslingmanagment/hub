@@ -206,6 +206,7 @@ describe("cursor", () => {
       misses: { "910000000000000091": 1, bad: 2, "910000000000000092": 0 },
       shadow: { steps: 3, done: 1 },
       last: { verdict: "joined" },
+      historyHeadAt: NOW.toISOString(),
     });
     expect(cursor).toEqual({
       segment: {
@@ -216,13 +217,15 @@ describe("cursor", () => {
       misses: { "910000000000000091": 1 },
       shadow: { steps: 3, done: 1 },
       last: { verdict: "joined" },
+      historyHeadAt: NOW,
     });
+    expect(parseDmMessagesCursor({ historyHeadAt: "not a time" }).historyHeadAt).toBeNull();
     // A proven-empty chat's staged walk has no base head.
     expect(parseDmMessagesCursor({ segment: { baseHeadId: null, headId: "9", headAt: NOW.toISOString(), oldestId: "8", count: 2 } }).segment)
       .toMatchObject({ baseHeadId: null, headId: "9", oldestId: "8", count: 2, oldestCreatedAtMs: null });
     expect(parseDmMessagesCursor({ segment: { baseHeadId: "x", headId: "9", headAt: NOW.toISOString(), oldestId: "8", count: 2 } }).segment)
       .toBeNull();
-    expect(parseDmMessagesCursor(null)).toEqual({ segment: null, walkPages: 0, misses: {}, shadow: null, last: null });
+    expect(parseDmMessagesCursor(null)).toEqual({ segment: null, walkPages: 0, misses: {}, shadow: null, last: null, historyHeadAt: null });
   });
 });
 
