@@ -361,6 +361,42 @@ hub history-status --request 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f --wait --poll-
   open while Fansly keeps refusing that chat, so `finished: false` at the end is
   a normal outcome: read the counts.
 
+## What the sync engine is doing (`hub sync-status`, `hub sync-why`)
+
+The Fansly Sync Engine keeps one queue of work per page and can say why any of
+it waits. Two read-only commands show it; both need `read:datasets`:
+
+- `hub sync-status [--page-label]` — per page: the mode (`off`, `shadow`,
+  `handover`, `live`), the pause record (the owner's setting, the smallest gap
+  between sends over the last hour, sends closer than the setting over the last
+  day — the rule says 0), sends in the last hour by class (`urgent`,
+  `requests`, `planned`), the queue by class (`runnable`, and `waitingByReason`
+  counts), page and resource holds, breakers, quarantined work, and the
+  progress of open history requests.
+- `hub sync-why --page-label --resource <key> [--subject <id>]` — the open work
+  rows of one registry key (or the newest closed one of a named subject), each
+  with `waitingReason` / `waitingUntil`, the demand and applied revisions, the
+  breaker and the last attempt. For a resource whose subjects are chats or fans
+  (`dm-messages.head`, `.catchup`, `.history`, `dm-conversations.find`,
+  `.detail`, `dm-live.deletions`, `fan-profiles.probe`) the key also needs
+  `read:messages`.
+
+Until a page is switched to the engine (`off` or `shadow`, every page today)
+both answer from its SHADOW journal: `shadow: true` on every work row, the
+engine planned and paced the work but sent nothing. Read it as the engine's
+rehearsal, never as what Fansly answered. The waiting reasons are the closed
+list above (`not_due`, `pacer`, `class_share`, `page_hold`, `resource_hold`,
+`subject_breaker`, `blocked_by_vendor`, `quarantined`, `paused`, `dependency`,
+`ownership_unconfirmed`, `running`); like history progress they are body
+fields, and the envelope always carries `capture_floor_unknown` because the
+engine's queue is not captured platform data.
+
+```
+hub sync-status --page-label lora-1
+hub sync-why --page-label lora-1 --resource transactions.head
+hub sync-why --page-label lora-1 --resource dm-messages.head --subject 810272281019305984
+```
+
 ## The CLI
 
 ```
@@ -466,6 +502,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub history-status` | One history request: counts, reads, ETA, why it waits, a page of its fans. `--wait` (COMPOSITE) polls until it ends. |
 | `hub history-cancel` | Cancel a history request; loaded messages stay. |
 | `hub history-list` | History requests on your pages, newest first, from every requester. |
+| `hub sync-status` | The Fansly Sync Engine's status of your pages: pause record, sends by class, queue by why it waits, holds. |
+| `hub sync-why` | Why a page's engine work of one resource (and subject) is waiting. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

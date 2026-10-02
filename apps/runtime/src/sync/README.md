@@ -104,6 +104,27 @@ may cancel every requester's requests on its granted pages (design D10); filing 
 `request:hydration`, everything that returns chat refs `read:messages` too (D9). A refused page answers the 409 above;
 the agent docs keep the hydration route as the remedy there.
 
+## Status, "why waiting", sync now, enqueue and wait
+
+The page status (`engine/status.ts`: owner, pause record, sends by class, the queue by waiting reason, holds,
+breakers, request progress) and "why waiting" (one reason from a closed list per work row, plus its revisions,
+breaker and last attempt) are read by `inspect.ts` from the journal the page runs — the shadow journal while the page
+is `off` or `shadow`. Three clients share those functions and one wire (`requests/wire.ts`): the owner CLI
+(`pnpm cli sync page status`, `sync why`), the owner routes (`syncPages`, `syncPageWork`, `syncPageWorkGet`) and the
+agent plane (`agentSyncStatus`, `agentSyncWhy`, `hub sync-status`, `hub sync-why`; `read:datasets`, and
+`read:messages` too for a key whose subjects are chats or fans).
+
+"Sync now" (`syncPageRefresh`, `refreshSyncPage`) makes the page's poll rows due now and wakes its actor; it sends
+nothing itself, and an `off` page (no actor) answers 409 `sync_page_off`.
+
+`requests/urgent.ts` is how the API and the CLIs ask the actor for a read instead of calling Fansly: `enqueueAndWait`
+upserts the work of a registry key with the `api` trigger and waits up to 15–30 s for `applied_revision` to reach the
+revision it raised (woken by `fansly_sync_work_done`, which `settleWork` sends for live rows, and re-reading every
+250 ms), then answers `done`, or `queued` with the work's status link. A page that is not `live` answers `not_live`
+before anything is written, so in step 2 every call does; its step-3 callers (`page verify`, credentials and proxy
+changes, AI describe) fall back to the legacy path on it. A work carrying secret parameters (a candidate identity) is
+created fresh or refused, never merged into another candidate's open row.
+
 ## WebSocket demand
 
 The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is

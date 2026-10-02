@@ -22,7 +22,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
 | `any` | any authenticated principal except an agent key |
 
-## Routes (265)
+## Routes (271)
 
 | Method | Path | Route key | Kind | Roles | Page scope |
 | --- | --- | --- | --- | --- | --- |
@@ -178,12 +178,14 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — |
 | POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page |
 | POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page |
+| GET | `/api/v1/agent/pages/:pageLabel/sync/work` | `agentSyncWhy` | `agentKey` | — | page |
 | POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page |
 | GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — |
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — |
+| GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — |
 | GET | `/api/v1/agent/threads` | `agentThreads` | `agentKey` | — | — |
 | POST | `/api/v1/ai-usage/batch` | `aiUsageBatch` | `apiKey` | — | — |
 | POST | `/api/v1/ai/features/:feature` | `aiFeatureStream` | `apiKey` | — | — |
@@ -282,7 +284,11 @@ body remain handler-checked and are noted per route in the service layer.
 | GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — |
 | POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — |
 | GET | `/api/v1/sync/overview` | `syncOverview` | `session` | — | — |
+| GET | `/api/v1/sync/pages` | `syncPages` | `owner-session` | — | — |
 | POST | `/api/v1/sync/pages/:pageLabel/history-requests` | `syncHistoryRequestCreate` | `owner-session` | — | — |
+| POST | `/api/v1/sync/pages/:pageLabel/refresh` | `syncPageRefresh` | `owner-session` | — | — |
+| GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — |
+| GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — |
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — |
 | GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — |

@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   confirmStoppedSyncOwners: vi.fn(),
   explainSyncWork: vi.fn(),
   findSyncPageByLabel: vi.fn(),
-  readSyncPageStatus: vi.fn(),
+  readSyncPageStatuses: vi.fn(),
   requestSyncProbe: vi.fn(),
   listSyncPages: vi.fn(),
   requestPageSync: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock("../apps/runtime/src/sync/inspect.ts", async (importOriginal) => {
     confirmStoppedSyncOwners: mocks.confirmStoppedSyncOwners,
     explainSyncWork: mocks.explainSyncWork,
     findSyncPageByLabel: mocks.findSyncPageByLabel,
-    readSyncPageStatus: mocks.readSyncPageStatus,
+    readSyncPageStatuses: mocks.readSyncPageStatuses,
     requestSyncProbe: mocks.requestSyncProbe,
   };
 });
@@ -74,7 +74,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     for (const mock of Object.values(mocks)) mock.mockReset();
     mocks.createSyncContext.mockResolvedValue({ db: {}, rawConfig: {}, close: mocks.close });
     mocks.findSyncPageByLabel.mockResolvedValue(PAGE_ROW);
-    mocks.readSyncPageStatus.mockResolvedValue({ page: "lora-1" });
+    mocks.readSyncPageStatuses.mockResolvedValue([{ page: "lora-1" }]);
     mocks.explainSyncWork.mockResolvedValue({ why: "test" });
     mocks.changeSyncPageModeByOwner.mockResolvedValue({ kind: "changed", from: "off", to: "shadow" });
     mocks.changeSyncPagePause.mockResolvedValue({
@@ -154,7 +154,8 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     await run(["sync", "page", "status", "--page", "lora-1"]);
     expect(mocks.findSyncPageByLabel).toHaveBeenCalledWith({}, "lora-1");
     expect(mocks.listSyncPages).not.toHaveBeenCalled();
-    expect(mocks.readSyncPageStatus).toHaveBeenCalledTimes(1);
+    expect(mocks.readSyncPageStatuses).toHaveBeenCalledTimes(1);
+    expect(mocks.readSyncPageStatuses).toHaveBeenCalledWith({}, {}, [PAGE_ROW]);
   });
 
   it("sync why takes its --page", async () => {
