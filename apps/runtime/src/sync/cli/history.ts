@@ -93,7 +93,7 @@ export function parseFanListFile(text: string): HistoryFanInput[] {
   for (const line of text.split(/\r?\n/)) {
     const ref = line.trim();
     if (ref === "" || ref.startsWith("#")) continue;
-    if (/fansly\.com\//i.test(ref)) fans.push({ kind: "chat_url", url: ref });
+    if (ref.toLowerCase().includes("fansly.com/")) fans.push({ kind: "chat_url", url: ref });
     else if (ref.startsWith("conversation:")) fans.push({ kind: "conversation", conversationRef: ref.slice("conversation:".length) });
     else fans.push({ kind: "fan", platformUserId: ref });
   }
