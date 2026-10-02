@@ -291,16 +291,54 @@ export async function executeCaptureFirstInteractiveRead(
     });
   }
 
-  const parserOutcome = interactiveParserOutcome(input.operation, raw.status, parsed);
+  let parserOutcome = interactiveParserOutcome(input.operation, raw.status, parsed);
+  let materializationFailed = false;
+  // The displayed response and AI context must share the same committed
+  // material. Capture is already durable; projection failure cannot spend a
+  // second vendor request here, and the local sweep can replay the raw body.
+  if (parserOutcome === "accepted" && raw.status >= 200 && raw.status < 300
+    && input.operation === "ofapi_gateway_chat_messages" && !input.collectionContext) {
+    try {
+      const materialized = await materializeOfapiCaptureObservation(app, {
+        id: captureEvidence!.observationId,
+        receivedAt: captureEvidence!.receivedAt,
+        accountId: input.pageId,
+        producer: "ofapi-mirror-interactive",
+        payload: {
+          request: { pathname: input.pathname, query: input.query },
+          response: { status: raw.status, headers: raw.headers,
+            body: raw.bodyBytes.toString("base64"), bodyEncoding: "base64" },
+        },
+      });
+      if (materialized.kind !== "materialized") {
+        materializationFailed = true;
+        parserOutcome = materialized.kind === "stamped_noop" && materialized.rejected
+          ? "contract_rejected" : "failed";
+        app.logger.warn({ pageId: input.pageId, observationId: captureEvidence!.observationId,
+          outcome: materialized.kind,
+          ...(materialized.kind === "stamped_noop" ? { reason: materialized.reason } : {}) },
+        "OFAPI message response is captured but not ready for serving");
+      }
+    } catch (error) {
+      materializationFailed = true;
+      parserOutcome = "failed";
+      app.logger.error({ error, pageId: input.pageId, observationId: captureEvidence!.observationId },
+        "OFAPI message materialization failed; captured response remains replayable");
+    }
+  }
   const completed = await completeOfapiInteractiveRequest(app.db, {
     requestId: owner.id,
     attemptId: reservation.attemptId,
-    outcome: parserOutcome === "contract_rejected" ? "failed" : "served",
+    outcome: parserOutcome === "contract_rejected" || materializationFailed ? "failed" : "served",
     parserOutcome,
-    errorCode: parserOutcome === "contract_rejected" ? "invalid_response" : null,
+    errorCode: parserOutcome === "contract_rejected" ? "invalid_response"
+      : materializationFailed ? "message_materialization_failed" : null,
   });
   if (!completed || parserOutcome === "contract_rejected") {
     throw new ServiceUnavailableError("OFAPI returned an invalid response");
+  }
+  if (materializationFailed) {
+    throw new ServiceUnavailableError("OFAPI message context is not ready");
   }
 
   return {

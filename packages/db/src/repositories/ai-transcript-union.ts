@@ -16,7 +16,7 @@
 //      (platform_account_id, platform_message_id) index);
 //   3. tombstone dominance: a ref deleted in EITHER store or in
 //      page_dm_messages is dead everywhere;
-//   4. source preference: the dm (fresh) row wins a ref present in both;
+//   4. REST material clocks win across stores; the dm row wins legacy ties;
 //   5. PPV upgrade from page_dm_messages.purchased_at — is_opened may only
 //      advance to true, never downgrade;
 //   6. deterministic ORDER BY: event time with an EXPLICIT NULLS LAST
@@ -69,7 +69,9 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
              ma.tip_amount_mills,
              ma.media_metadata,
              ma.deleted_at,
-             null::boolean as is_opened,
+             ma.is_opened,
+             ma.material_observed_at,
+             ma.vendor_changed_at,
              ma.content_pending as is_stub,
              0 as source_rank
       from message_archive ma
@@ -89,6 +91,8 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
              d.media_metadata,
              d.deleted_at,
              d.is_opened,
+             d.rest_material_observed_at as material_observed_at,
+             d.rest_platform_changed_at as vendor_changed_at,
              (d.message_created_at is null) as is_stub,
              1 as source_rank
       from dm_message_archive d
@@ -132,11 +136,16 @@ function buildUnionQuery(input: AiTranscriptUnionInput) {
       select distinct on (c.message_ref)
              c.message_ref, c.event_time, c.text_plain, c.sender_role,
              c.is_sent_by_me, c.price_mills, c.is_tip, c.tip_amount_mills,
-             c.media_metadata, c.is_opened
+             c.media_metadata,
+             bool_or(c.is_opened) over (partition by c.message_ref) as is_opened
       from candidates c
       where not c.is_stub
         and not exists (select 1 from tombstoned x where x.message_ref = c.message_ref)
-      order by c.message_ref, c.source_rank desc
+      order by c.message_ref,
+               (c.material_observed_at is not null) desc,
+               c.vendor_changed_at desc nulls last,
+               c.material_observed_at desc nulls last,
+               c.source_rank desc
     ),
     upgraded as (
       select b.message_ref, b.event_time, b.text_plain, b.sender_role,

@@ -36,6 +36,8 @@ docs/runbooks/*
 !docs/runbooks/fansly-post-tips-acceptance.md
 # Operational acceptance for the OFAPI vendor transport and bounded recovery.
 !docs/runbooks/ofapi-posts-transport-recovery.md
+# Local replay and serving invariants for captured OFAPI message material.
+!docs/runbooks/ofapi-message-material-recovery.md
 # Credit receipt, signed correction, and forecast evidence semantics.
 !docs/runbooks/ofapi-credit-reconciliation.md
 # AI media describer: switches, stops, custody exception and read-only checks.

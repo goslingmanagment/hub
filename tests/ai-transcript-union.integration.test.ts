@@ -141,6 +141,22 @@ async function insertHotRow(input: {
 }
 
 describe("AI transcript union read (fastreply-freshness PR3)", () => {
+  it("uses captured REST material ahead of an old webhook copy without losing an unlock", async () => {
+    if (!testDb) throw new Error("test database required");
+    const page = await seedPage();
+    await insertArchiveRow({ pageId: page.id, ref: "102", text: "captured edit" });
+    await insertDmRow({ pageId: page.id, ref: "102", text: "old webhook", isOpened: true });
+    await testDb.pool.query(`update message_archive set material_observed_at = '2026-07-01T10:03Z'
+      where account_id = $1 and message_ref = '102'`, [page.id]);
+    expect(await listAiTranscriptUnionMessages(testDb.db, {
+      pageId: page.id, conversationRef: CONV,
+    })).toMatchObject([{ messageRef: "102", textPlain: "captured edit", isOpened: true }]);
+    await testDb.pool.query(`update dm_message_archive set rest_material_observed_at = '2026-07-01T10:04Z',
+      text_plain = 'newer REST' where platform_account_id = $1 and platform_message_id = '102'`, [page.id]);
+    expect(await listAiTranscriptUnionMessages(testDb.db, {
+      pageId: page.id, conversationRef: CONV,
+    })).toMatchObject([{ messageRef: "102", textPlain: "newer REST", isOpened: true }]);
+  });
   it("unions both stores, prefers the dm row, and excludes stubs", async (context) => {
     if (!testDb) {
       context.skip();

@@ -1,5 +1,6 @@
-// Project strictly-accepted capture-before-parse message pages into the
-// existing full OF material reducer. This is deliberately project-then-stamp:
+// Project validated message facts from either interactive direction (or a
+// strictly accepted history page) through the existing full OF reducer.
+// This is deliberately project-then-stamp:
 // a DB failure leaves the raw observation replayable and never advances the
 // serving material by implication.
 
@@ -14,12 +15,16 @@ import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   capturePayloadResponse,
   parseOfapiJsonBytes,
+  parseOfapiMessageMaterial,
   parseStrictOfapiMessagePage,
 } from "./ofapi-capture-contract.ts";
 import type { ReadthroughReconcileRunResult } from "./ofapi-dm-readthrough.ts";
-import { appendOfapiMessageMaterialPage } from "./ofapi-message-material.ts";
+import { serveOfapiMessageMaterialPage } from "./ofapi-message-material-serving.ts";
 
-export const OFAPI_CAPTURE_MATERIALIZER_VERSION = 2;
+export const OFAPI_CAPTURE_MATERIALIZER_VERSION = 3;
+// v2 stamped valid ascending tails without storing them. Repair those through
+// the explicitly scoped replay, not a deployment-triggered full-history sweep.
+const PENDING_MATERIALIZER_VERSION = 2;
 const SWEEP_PAGE_SIZE = 100;
 const SWEEP_MAX_PAGES = 10;
 const SWEEP_ITEM_BUDGET = 5_000;
@@ -59,7 +64,7 @@ function emptyResult(): ReadthroughReconcileRunResult {
   };
 }
 
-function capturedMessagePage(payload: unknown) {
+export function capturedMessagePage(payload: unknown, certificateRequired = false) {
   const envelope = asRecord(payload);
   const request = asRecord(envelope?.request);
   const query = asRecord(request?.query) ?? {};
@@ -75,7 +80,7 @@ function capturedMessagePage(payload: unknown) {
   if (!decoded.validJson) {
     return { kind: "rejected" as const, reason: "invalid_json" };
   }
-  const page = parseStrictOfapiMessagePage(decoded.body, {
+  const page = certificateRequired ? parseStrictOfapiMessagePage(decoded.body, {
     requiredBoundaryCursor: asString(query.first_id),
     // Background pagination uses an inclusive cursor after page one. The
     // producer records this parse fact in the captured request so every local
@@ -85,7 +90,7 @@ function capturedMessagePage(payload: unknown) {
         request.expectedBoundarySemantics === "exclusive"
       ? request.expectedBoundarySemantics
       : null,
-  });
+  }) : parseOfapiMessageMaterial(decoded.body);
   if (!page.accepted) {
     return { kind: "rejected" as const, reason: page.reason };
   }
@@ -105,8 +110,8 @@ export interface OfapiCaptureObservationForMaterialization {
 }
 
 export type OfapiCaptureObservationMaterializationResult =
-  | { kind: "stamped_noop"; rejected: boolean }
-  | { kind: "materialized"; appended: number; deduped: number; itemCount: number }
+  | { kind: "stamped_noop"; rejected: boolean; reason?: string }
+  | { kind: "materialized"; appended: number; deduped: number; itemCount: number; dropped: number }
   | { kind: "deferred" }
   | { kind: "account_missing" };
 
@@ -119,14 +124,15 @@ export async function materializeOfapiCaptureObservation(
   row: OfapiCaptureObservationForMaterialization,
   input?: { maxItems?: number },
 ): Promise<OfapiCaptureObservationMaterializationResult> {
-  const page = capturedMessagePage(row.payload);
+  const page = capturedMessagePage(row.payload, row.producer === "ofapi-mirror-background");
   if (page.kind !== "accepted") {
     await markObservationParsed(app.db, {
       observationId: row.id,
       receivedAt: row.receivedAt,
       parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
     });
-    return { kind: "stamped_noop", rejected: page.kind === "rejected" };
+    return { kind: "stamped_noop", rejected: page.kind === "rejected",
+      ...(page.kind === "rejected" ? { reason: page.reason } : {}) };
   }
   if (page.items.length > (input?.maxItems ?? SWEEP_ITEM_BUDGET)) {
     return { kind: "deferred" };
@@ -134,7 +140,7 @@ export async function materializeOfapiCaptureObservation(
   if (row.accountId === null) {
     return { kind: "account_missing" };
   }
-  const appended = await appendOfapiMessageMaterialPage(app.db as Database, {
+  const result = await serveOfapiMessageMaterialPage(app.db as Database, {
     accountId: row.accountId,
     observationId: row.id,
     observationReceivedAt: row.receivedAt,
@@ -144,17 +150,13 @@ export async function materializeOfapiCaptureObservation(
       : "capture_interactive",
     items: page.items,
   });
+  if (result.kind === "deferred") return result;
   await markObservationParsed(app.db, {
     observationId: row.id,
     receivedAt: row.receivedAt,
     parseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
   });
-  return {
-    kind: "materialized",
-    appended: appended.appended,
-    deduped: appended.deduped,
-    itemCount: page.items.length,
-  };
+  return result;
 }
 
 export async function runOfapiCaptureMaterialization(
@@ -166,7 +168,7 @@ export async function runOfapiCaptureMaterialization(
 
   for (let pageIndex = 0; pageIndex < SWEEP_MAX_PAGES; pageIndex += 1) {
     const rows = await listObservationsForReplay(app.db as Database, {
-      belowParseVersion: OFAPI_CAPTURE_MATERIALIZER_VERSION,
+      belowParseVersion: PENDING_MATERIALIZER_VERSION,
       source: "ofapi_capture",
       kinds: ["ofapi.chat_messages_page.v1", "ofapi.interactive_response.v1"],
       afterId,
@@ -184,6 +186,7 @@ export async function runOfapiCaptureMaterialization(
           maxItems: budget.itemsLeft,
         });
         if (result.kind === "deferred") {
+          totals.deferred += 1;
           return totals;
         }
         if (result.kind === "account_missing") {
@@ -197,6 +200,7 @@ export async function runOfapiCaptureMaterialization(
         }
         budget.itemsLeft -= result.itemCount;
         totals.upserts += result.appended;
+        totals.drops += result.dropped;
         totals.noops += result.deduped;
         totals.stamped += 1;
       } catch (error) {
