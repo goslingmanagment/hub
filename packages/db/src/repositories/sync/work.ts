@@ -400,17 +400,25 @@ export async function upsertDemands(
 }
 
 /**
- * The registry's polls of a page (§4.2): one open `poll` row per enabled poll
- * key, created with a random phase (`due_at = now + everyMs × phase`, `phase`
- * from the database's `random()` unless given). A key that already has an open
- * row keeps it. Returns how many rows were created.
+ * The registry's standing rows of a page (§4.2, §4.3): one open row per
+ * enabled poll key, and per standing walk (a `goal` over a queue other writers
+ * fill, `kind: 'goal'`), created with a random phase (`due_at = now + everyMs
+ * × phase`, `phase` from the database's `random()` unless given). A key that
+ * already has an open row keeps it. Returns how many rows were created.
  */
 export async function ensurePollRows(
   db: Database,
   input: {
     pageId: number;
     shadow: boolean;
-    polls: ReadonlyArray<{ resource: string; class: SyncEngineWorkClass; everyMs: number; phase?: number }>;
+    polls: ReadonlyArray<{
+      resource: string;
+      class: SyncEngineWorkClass;
+      everyMs: number;
+      phase?: number;
+      /** Default `poll`; a standing walk is a `goal`. */
+      kind?: Extract<SyncWorkKind, "poll" | "goal">;
+    }>;
   },
 ): Promise<number> {
   if (input.polls.length === 0) return 0;
@@ -422,14 +430,16 @@ export async function ensurePollRows(
     if (poll.phase !== undefined && !(poll.phase >= 0 && poll.phase < 1)) {
       throw new Error(`Poll ${poll.resource}: phase must be in [0, 1), received ${poll.phase}`);
     }
-    return { resource: poll.resource, class: poll.class, every_ms: poll.everyMs, phase: poll.phase ?? null };
+    const kind = poll.kind ?? "poll";
+    if (kind !== "poll" && kind !== "goal") throw new Error(`Poll ${poll.resource}: a standing row is a poll or a goal`);
+    return { resource: poll.resource, class: poll.class, every_ms: poll.everyMs, phase: poll.phase ?? null, kind };
   });
   const result = await db.execute(sql`
     insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
-    select ${input.pageId}::bigint, ${input.shadow}::boolean, x.resource, '', 'poll', x.class,
+    select ${input.pageId}::bigint, ${input.shadow}::boolean, x.resource, '', x.kind, x.class,
            clock_timestamp() + (x.every_ms * coalesce(x.phase, random())) * interval '1 millisecond'
       from jsonb_to_recordset(${jsonParam(polls)})
-        as x(resource text, class text, every_ms double precision, phase double precision)
+        as x(resource text, class text, every_ms double precision, phase double precision, kind text)
      order by x.resource
     on conflict (page_id, shadow, resource, subject) where state in ('open', 'running', 'quarantined')
     do nothing
@@ -450,12 +460,36 @@ export interface SyncWorkPickFilter {
   excludeResources?: readonly string[];
   /** Resource files under a live resource hold (`sync_pages.resource_holds`). */
   excludeFiles?: readonly string[];
+  /** Classes the page may not serve now (the owner's requests pause). */
+  excludeClasses?: readonly SyncEngineWorkClass[];
 }
 
-function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWorkClass): SQL {
+/** The open item states of a history request item (0232): the fans whose
+ *  chat a `requests` work still reads for. */
+export const HISTORY_ITEM_OPEN_STATES = ["queued", "loading", "blocked"] as const;
+
+/** A `requests` work is runnable only while an open history item is attached
+ *  to it (I12: no history read without a request). */
+const requestsWorkHasOpenItem = sql`(w.class <> 'requests' or exists (
+  select 1 from history_request_items i
+   where i.work_id = w.id and i.state in ('queued', 'loading', 'blocked')))`;
+
+/** The paused, switched-off and held keys a pick leaves out — and so does
+ *  the actor's idle wait (`nextOpenWorkDueAt`), or a held row would look due
+ *  forever and the actor would lap without sleeping. */
+function exclusionPredicate(filter: Pick<SyncWorkPickFilter, "excludeResources" | "excludeFiles" | "excludeClasses">): SQL {
   for (const file of filter.excludeFiles ?? []) {
     if (!SYNC_RESOURCE_FILE_PATTERN.test(file)) throw new Error(`Not a resource file: ${file}`);
   }
+  for (const workClass of filter.excludeClasses ?? []) {
+    if (!(SYNC_WORK_CLASSES as readonly string[]).includes(workClass)) throw new Error(`Not a work class: ${workClass}`);
+  }
+  return sql`not (w.resource = any(${textArrayParam(filter.excludeResources ?? [])}))
+    and not (split_part(w.resource, '.', 1) = any(${textArrayParam(filter.excludeFiles ?? [])}))
+    and not (w.class = any(${textArrayParam(filter.excludeClasses ?? [])}))`;
+}
+
+function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWorkClass): SQL {
   const now = nowParam(filter.now);
   return sql`w.page_id = ${filter.pageId}
     and w.shadow = ${filter.shadow}
@@ -463,8 +497,7 @@ function runnablePredicate(filter: SyncWorkPickFilter, workClass: SyncEngineWork
     and w.state = 'open'
     and w.due_at <= ${now}
     and (w.breaker_until is null or w.breaker_until <= ${now})
-    and not (w.resource = any(${textArrayParam(filter.excludeResources ?? [])}))
-    and not (split_part(w.resource, '.', 1) = any(${textArrayParam(filter.excludeFiles ?? [])}))`;
+    and ${exclusionPredicate(filter)}`;
 }
 
 /**
@@ -554,6 +587,56 @@ export async function pickPlanned(
     if (found) return { work: normalizeWorkRow(found), level: "round_robin" };
   }
   return null;
+}
+
+export interface RequestsPick {
+  work: SyncWorkRow;
+  /** The request and the fan whose turn this read is (the admission stamps
+   *  both and counts the read on the fan). */
+  requestId: number;
+  itemId: number;
+}
+
+/**
+ * The requests class (plan §4.5, design §3.4): round robin between the page's
+ * open requests (the one served longest ago first, never served first), then
+ * between that request's fans; a fan is runnable while its chat's shared
+ * `dm-messages.history` work is open, due and not broken. A blocked fan keeps
+ * its turn: its chat's work is due only when the breaker lets the daily probe
+ * through. Paused and held keys are excluded in SQL like every pick.
+ */
+export async function pickRequests(db: Database, filter: SyncWorkPickFilter): Promise<RequestsPick | null> {
+  const runnable = runnablePredicate(filter, "requests");
+  const request = await db.execute<{ id: string }>(sql`
+    select r.id::text as id
+      from history_requests r
+     where r.page_id = ${filter.pageId}
+       and r.state = 'open'
+       and exists (
+         select 1
+           from history_request_items i
+           join sync_work w on w.id = i.work_id
+          where i.request_id = r.id
+            and i.state in ('queued', 'loading', 'blocked')
+            and ${runnable})
+     order by r.last_served_at nulls first, r.id
+     limit 1
+  `);
+  const requestId = request.rows[0]?.id;
+  if (requestId === undefined) return null;
+  const item = await db.execute<WorkSqlRow & { itemId: string }>(sql`
+    select i.id::text as "itemId", ${workColumns}
+      from history_request_items i
+      join sync_work w on w.id = i.work_id
+     where i.request_id = ${Number(requestId)}
+       and i.state in ('queued', 'loading', 'blocked')
+       and ${runnable}
+     order by i.last_served_at nulls first, i.ordinal
+     limit 1
+  `);
+  const row = item.rows[0];
+  if (!row) return null;
+  return { work: normalizeWorkRow(row), requestId: Number(requestId), itemId: Number(row.itemId) };
 }
 
 // ── admission, settlement ─────────────────────────────────────────────────────
@@ -721,11 +804,12 @@ export async function getSyncWork(db: Database, workId: number): Promise<SyncWor
   return row ? normalizeWorkRow(row) : null;
 }
 
-/** The earliest due time of the page's open work in this journal (the actor
- *  sleeps until then, at most a second). Null: no open work. */
+/** The earliest due time of the page's open work in this journal that a
+ *  pick with the same exclusions could take (the actor sleeps until then, at
+ *  most a second). Null: no such open work. */
 export async function nextOpenWorkDueAt(
   db: Database,
-  input: { pageId: number; shadow: boolean },
+  input: Pick<SyncWorkPickFilter, "pageId" | "shadow" | "excludeResources" | "excludeFiles" | "excludeClasses">,
 ): Promise<Date | null> {
   const result = await db.execute<{ dueAt: Date | string | null }>(sql`
     select min(greatest(w.due_at, coalesce(w.breaker_until, w.due_at))) as "dueAt"
@@ -733,8 +817,207 @@ export async function nextOpenWorkDueAt(
      where w.page_id = ${input.pageId}
        and w.shadow = ${input.shadow}::boolean
        and w.state = 'open'
+       and ${exclusionPredicate(input)}
+       and ${requestsWorkHasOpenItem}
   `);
   return toDate(result.rows[0]?.dueAt);
+}
+
+/** Which of these subjects have an open (or running) row of `resource` in
+ *  this journal — plain read, no lock. */
+export async function listOpenWorkSubjects(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+): Promise<Set<string>> {
+  const subjects = [...new Set(input.subjects)];
+  if (subjects.length === 0) return new Set();
+  const result = await db.execute<{ subject: string }>(sql`
+    select w.subject
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.state in ('open', 'running')
+       and w.subject = any(${textArrayParam(subjects)})
+  `);
+  return new Set(result.rows.map((row) => row.subject));
+}
+
+/** The open (or running, or quarantined) row of one key in this journal, if
+ *  any — plain read, no lock (`lockWorkRows` takes it before a write). */
+export async function getOpenWorkForKey(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subject: string },
+): Promise<SyncWorkRow | null> {
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns}
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.subject = ${input.subject}
+       and w.state in ('open', 'running', 'quarantined')
+  `);
+  const row = result.rows[0];
+  return row ? normalizeWorkRow(row) : null;
+}
+
+/**
+ * Drop demanded message ids a step resolved (found, or settled not found)
+ * from the row's `demand.messageIds` (design §5.4 step 10). Correct whatever
+ * the revision: an id a read showed is confirmed, even if its signal came
+ * again meanwhile. The revision is unchanged (resolution is not demand).
+ * The caller holds the row (`lockWorkRows`), after its event appends.
+ */
+export async function resolveWorkDemandMessageIds(
+  db: Database,
+  input: { workId: number; generation: bigint; messageIds: readonly string[] },
+): Promise<string[] | null> {
+  const ids = [...new Set(input.messageIds)];
+  if (ids.length === 0) return null;
+  const result = await db.execute<{ messageIds: unknown }>(sql`
+    update sync_work w
+       set demand = jsonb_set(coalesce(w.demand, '{}'::jsonb), '{messageIds}', coalesce((
+             select jsonb_agg(e.v order by e.ord)
+               from jsonb_array_elements(coalesce(w.demand->'messageIds', '[]'::jsonb)) with ordinality as e(v, ord)
+              where not (e.v #>> '{}' = any(${textArrayParam(ids)}))
+           ), '[]'::jsonb)),
+           owner_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where w.id = ${input.workId}
+       and w.state in ('open', 'running')
+    returning w.demand->'messageIds' as "messageIds"
+  `);
+  const row = result.rows[0];
+  if (!row) return null;
+  return Array.isArray(row.messageIds) ? row.messageIds.filter((id): id is string => typeof id === "string") : [];
+}
+
+/**
+ * Close an OPEN row whose goal another step reached (a `dm-messages.head`
+ * that confirmed past a `.catchup` target, design §5.4 step 10). Never a
+ * running row (its step is in flight or its apply deferred) nor a
+ * quarantined one. The caller holds the row (`lockWorkRows`). False: not open.
+ */
+export async function closeOpenWork(
+  db: Database,
+  input: { workId: number; generation: bigint; closeReason: string },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_work
+       set state = 'done',
+           closed_at = clock_timestamp(),
+           close_reason = ${input.closeReason},
+           applied_revision = demand_revision,
+           secret_params = null,
+           waiting_reason = null,
+           waiting_until = null,
+           owner_generation = ${generationParam(input.generation)},
+           updated_at = clock_timestamp()
+     where id = ${input.workId}
+       and state = 'open'
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Close work rows a history request no longer needs (design §7.1.6, §7.1.7):
+ * `done` when every fan riding on the row is satisfied (only an OPEN row — a
+ * running one is closed by its own apply, whose hook sees the same), or
+ * `cancelled` when the requests that asked for it were cancelled (open or
+ * running: a read already in flight still applies, its settle finds the row
+ * closed and leaves it). The caller holds the rows (`lockWorkRows`). Returns
+ * the ids it closed.
+ */
+export async function closeWorkRows(
+  db: Database,
+  input: { workIds: readonly number[]; to: "done" | "cancelled"; closeReason: string },
+): Promise<number[]> {
+  const ids = [...new Set(input.workIds)].sort((a, b) => a - b);
+  if (ids.length === 0) return [];
+  const done = input.to === "done";
+  const result = await db.execute<{ id: string }>(sql`
+    update sync_work
+       set state = ${input.to}::text,
+           closed_at = clock_timestamp(),
+           close_reason = ${input.closeReason},
+           applied_revision = case when ${done} then demand_revision else applied_revision end,
+           secret_params = null,
+           waiting_reason = null,
+           waiting_until = null,
+           updated_at = clock_timestamp()
+     where id = any(${sql.param(ids.map(String))}::bigint[])
+       and (state = 'open' or (state = 'running' and not ${done}))
+    returning id::text as id
+  `);
+  return result.rows.map((row) => Number(row.id)).sort((a, b) => a - b);
+}
+
+/** Work rows by id, unlocked (views, the history hook's walk facts). */
+export async function getSyncWorkRows(db: Database, workIds: readonly number[]): Promise<Map<number, SyncWorkRow>> {
+  const ids = [...new Set(workIds)];
+  if (ids.length === 0) return new Map();
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns} from sync_work w where w.id = any(${sql.param(ids.map(String))}::bigint[])
+  `);
+  return new Map(result.rows.map((row) => [Number(row.id), normalizeWorkRow(row)]));
+}
+
+/** The open (or running, or quarantined) row of each subject of one key, by
+ *  subject — plain read, no lock (`lockWorkRows` takes them). */
+export async function openWorkIdsForSubjects(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+): Promise<Map<string, number>> {
+  const subjects = [...new Set(input.subjects)];
+  if (subjects.length === 0) return new Map();
+  const result = await db.execute<{ subject: string; id: string }>(sql`
+    select w.subject, w.id::text as id
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = ${input.resource}
+       and w.state in ('open', 'running', 'quarantined')
+       and w.subject = any(${textArrayParam(subjects)})
+  `);
+  return new Map(result.rows.map((row) => [row.subject, Number(row.id)]));
+}
+
+/** The newest row (open or closed) of each subject among a resource file's
+ *  keys in the live journal: the subject breaker a new demand would meet. */
+export async function latestWorkForSubjects(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resourceFile: string; subjects: readonly string[] },
+): Promise<Map<string, SyncWorkRow>> {
+  if (!SYNC_RESOURCE_FILE_PATTERN.test(input.resourceFile)) throw new Error(`Not a resource file: ${input.resourceFile}`);
+  const subjects = [...new Set(input.subjects)];
+  if (subjects.length === 0) return new Map();
+  const result = await db.execute<WorkSqlRow>(sql`
+    select distinct on (w.subject) ${workColumns}
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource like ${`${input.resourceFile}.%`}
+       and w.subject = any(${textArrayParam(subjects)})
+     order by w.subject, w.id desc
+  `);
+  return new Map(result.rows.map((row) => [row.subject, normalizeWorkRow(row)]));
+}
+
+/** Whether the page has runnable work of any of these classes now (the ETA's
+ *  "no other class competes"). */
+export async function hasRunnableWork(
+  db: Database,
+  filter: SyncWorkPickFilter & { classes: readonly SyncEngineWorkClass[] },
+): Promise<boolean> {
+  for (const workClass of filter.classes) {
+    const result = await db.execute<{ found: boolean }>(sql`
+      select exists (select 1 from sync_work w where ${runnablePredicate(filter, workClass)} and ${requestsWorkHasOpenItem})
+        as found
+    `);
+    if (result.rows[0]?.found === true) return true;
+  }
+  return false;
 }
 
 /** Lock several work rows in id order (the lock order of §3.7). */

@@ -96,11 +96,17 @@ export interface SyncPageOwnerRecord {
   stopConfirmedBy: string | null;
 }
 
-/** `resource_holds[<file>]`: the §9 resource breaker of one resource file. */
+/** `resource_holds[<file>]`: the §9 resource breaker of one resource file
+ *  (no `kind`), or the conversation list's own 429 hold (`kind:
+ *  'rate_limit_list'`, owner decision 2026-10-02) in the `dm-conversations`
+ *  entry. */
 export interface SyncResourceHold {
   until: string;
   step: number;
   since: string;
+  kind?: "rate_limit_list";
+  /** The newest list 429 (the list ladder's reset clock). */
+  lastRateLimitAt?: string;
 }
 
 type PageSqlRow = {
@@ -863,21 +869,33 @@ export async function setNetworkFailureStreak(
 
 /**
  * The §9 resource breaker of one resource file: `resource_holds[file] =
- * {until, step, since}`; `hold: null` lifts it.
+ * {until, step, since}`, or — with `kind: 'rate_limit_list'` — the list's own
+ * 429 hold, which also keeps the instant of its newest 429; `hold: null` lifts
+ * it. `since` carries over while the entry keeps its kind.
  */
 export async function setResourceHold(
   db: Database,
-  input: { pageId: number; generation?: bigint; file: string; hold: { until: Date; step: number } | null },
+  input: {
+    pageId: number;
+    generation?: bigint;
+    file: string;
+    hold: { until: Date; step: number; kind?: "rate_limit_list"; lastRateLimitAt?: Date } | null;
+  },
 ): Promise<void> {
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.file)) {
     throw new Error(`Not a resource file: ${input.file}`);
   }
+  const kind = input.hold?.kind ?? null;
   const value = input.hold === null
     ? sql`resource_holds - ${input.file}::text`
-    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_build_object(
+    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_strip_nulls(jsonb_build_object(
         'until', to_jsonb(${input.hold.until}::timestamptz),
         'step', ${input.hold.step}::int,
-        'since', coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))))`;
+        'since', case when (resource_holds -> ${input.file}::text ->> 'kind') is not distinct from ${kind}::text
+                      then coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))
+                      else to_jsonb(clock_timestamp()) end,
+        'kind', ${kind}::text,
+        'lastRateLimitAt', to_jsonb(${input.hold.lastRateLimitAt ?? null}::timestamptz))))`;
   const result = await db.execute(sql`
     update sync_pages
        set resource_holds = ${value},
@@ -921,18 +939,54 @@ export async function setPagePause(
   return getSyncPage(db, input.pageId);
 }
 
-/** `registry_overrides[key]` for a page (§4.2): `{everyMs}` or `{enabled:false}`;
- *  null removes the override. Owner-protected keys are the CLI's check. */
+/** One age tier of a tiered walk's override: items up to `maxAgeDays` old
+ *  (null: every older item) are due again `everyMs` after a visit. */
+export interface SyncRegistryTierOverride {
+  maxAgeDays: number | null;
+  everyMs: number;
+}
+
+/**
+ * `sync_pages.registry_overrides[key]` (design §4.2): a poll's period, or the
+ * periods of a goal re-evaluated on a cadence (`everyMs` its incremental
+ * re-check, `fullEveryMs` its full sweep; at least one), a tiered walk's age
+ * tiers, or the key switched off for the page. Which key takes which shape is
+ * the owner CLI's check against the registry.
+ */
+export type SyncRegistryOverride =
+  | { everyMs: number; fullEveryMs?: number }
+  | { fullEveryMs: number }
+  | { tiers: readonly SyncRegistryTierOverride[] }
+  | { enabled: false };
+
+function assertPositiveMs(name: string, value: unknown): void {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer, received ${String(value)}`);
+  }
+}
+
+function assertRegistryOverride(override: SyncRegistryOverride): void {
+  if ("enabled" in override) return;
+  if ("tiers" in override) {
+    if (!Array.isArray(override.tiers) || override.tiers.length === 0) throw new Error("tiers must be a non-empty list");
+    for (const tier of override.tiers) {
+      assertPositiveMs("tiers[].everyMs", tier.everyMs);
+      if (tier.maxAgeDays !== null) assertPositiveMs("tiers[].maxAgeDays", tier.maxAgeDays);
+    }
+    return;
+  }
+  if ("everyMs" in override) assertPositiveMs("everyMs", override.everyMs);
+  if (override.fullEveryMs !== undefined) assertPositiveMs("fullEveryMs", override.fullEveryMs);
+}
+
+/** `registry_overrides[key]` for a page (§4.2); null removes the override.
+ *  Owner-protected keys and the shape a key takes are the CLI's check. */
 export async function setRegistryOverride(
   db: Database,
-  input: { pageId: number; key: string; override: { everyMs: number } | { enabled: false } | null },
+  input: { pageId: number; key: string; override: SyncRegistryOverride | null },
 ): Promise<boolean> {
   if (!SYNC_RESOURCE_KEY_PATTERN.test(input.key)) throw new Error(`Not a resource key: ${input.key}`);
-  if (input.override !== null && "everyMs" in input.override) {
-    if (!Number.isSafeInteger(input.override.everyMs) || input.override.everyMs <= 0) {
-      throw new Error(`everyMs must be a positive integer, received ${input.override.everyMs}`);
-    }
-  }
+  if (input.override !== null) assertRegistryOverride(input.override);
   const value = input.override === null
     ? sql`registry_overrides - ${input.key}::text`
     : sql`jsonb_set(registry_overrides, array[${input.key}::text], ${jsonParam(input.override)})`;

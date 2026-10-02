@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { applyFanslyWsPolicyRepair, diagnoseFanslyWsHints, previewFanslyWsPolicyRepair } from "./services/fansly-ws-policy-repair.ts";
 import { buildFanslyWsRecoveryManifest } from "./services/fansly-ws-recovery-manifest.ts";
 import { applyFanslyWsLive, fanslyWsLivePayloadResolver } from "./services/fansly-ws/live-apply.ts";
+import { routeFanslyWsReceiptDemand } from "./sync/fansly/ws/route-receipt.ts";
 import { pathToFileURL } from "node:url";
 
 import { Command, InvalidArgumentError } from "commander";
@@ -58,6 +59,7 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -2063,7 +2065,7 @@ export function buildProgram() {
             pageId: stored.page.id, afterObservationId: after, limit: 20,
           });
           for (const observationId of pending) {
-            const result = await applyFanslyWsLive(app, observationId, resolvePayload);
+            const result = await applyFanslyWsLive(app, observationId, resolvePayload, routeFanslyWsReceiptDemand);
             const key = result?.status ?? "failed";
             live[key] = (live[key] ?? 0) + 1;
           }
@@ -3302,6 +3304,9 @@ export function buildProgram() {
   // Fansly Sync Engine DM chains (design §8.2, §8.3): `sync chain rebuild |
   // check-end-rule | check-window`.
   registerSyncChainCommands(sync);
+  // Fansly Sync Engine history requests (design §7.6): `sync history request |
+  // status | cancel | list | eta-backtest`.
+  registerSyncHistoryCommands(sync);
 
   queue
     .command("planner-recover")

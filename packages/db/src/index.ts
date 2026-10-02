@@ -158,12 +158,21 @@ export * from "./repositories/fansly-dm-shadow-snapshot.ts";
 export * from "./repositories/fansly-send-guard.ts";
 export * from "./repositories/fansly-send-guard-checks.ts";
 // Fansly Sync Engine core state (0228): pages, the work queue, the attempt
-// journal and its telemetry retention; the DM thread chain (0231).
+// journal and its telemetry retention; the DM thread chain (0231); the
+// conversation list's own writer; the DM message reads; the subject-queue
+// walks; the history requests (0232).
 export * from "./repositories/sync/pages.ts";
 export * from "./repositories/sync/work.ts";
 export * from "./repositories/sync/attempts.ts";
 export * from "./repositories/sync/retention.ts";
 export * from "./repositories/sync/thread-chain.ts";
+export * from "./repositories/sync/conversation-list.ts";
+export * from "./repositories/sync/dm-messages.ts";
+export * from "./repositories/sync/subject-queue.ts";
+export * from "./repositories/sync/history-requests.ts";
+// The WebSocket demand router's reads (design §6).
+export * from "./repositories/sync/ws-router.ts";
+export * from "./repositories/sync/subject-queue.ts";
 export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync-context.ts";

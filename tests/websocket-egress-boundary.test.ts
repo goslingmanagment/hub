@@ -41,6 +41,8 @@ describe.each([runtimeFile, "packages/shared/src/socket-boundary-fixture.ts", ..
         "no-restricted-syntax"],
       ["ws default", 'import Socket from "ws"; new Socket("wss://example.test");',
         "@typescript-eslint/no-restricted-imports"],
+      ["ws subpath", 'import Socket from "ws/wrapper.mjs"; new Socket("wss://example.test");',
+        "@typescript-eslint/no-restricted-imports"],
       ["ws dynamic", 'const { default: Socket } = await import("ws"); new Socket("wss://example.test");',
         "no-restricted-syntax"],
       ["ws subpath dynamic", 'void import("ws/wrapper.mjs");', "no-restricted-syntax"],
@@ -68,6 +70,14 @@ describe.each([runtimeFile, "packages/shared/src/socket-boundary-fixture.ts", ..
 describe("WebSocket boundary preserves the existing architecture walls", () => {
   it("permits the actual approved egress constructor", async () => {
     expect(await lint(readFileSync(resolve(root, egressFile), "utf8"), egressFile)).toEqual([]);
+  });
+
+  it("permits a local folder named ws (the Sync Engine's socket decoder opens no socket)", async () => {
+    expect(await lint(`
+      import { decodeFanslyWsFrame } from "../sync/fansly/ws/decode.ts";
+      import { routeWsItems } from "./ws/router.ts";
+      export const route = { decodeFanslyWsFrame, routeWsItems };
+    `)).toEqual([]);
   });
 
   it("permits callers to use the egress constructor", async () => {

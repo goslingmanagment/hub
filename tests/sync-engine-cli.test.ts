@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   explainSyncWork: vi.fn(),
   findSyncPageByLabel: vi.fn(),
   readSyncPageStatus: vi.fn(),
+  requestSyncProbe: vi.fn(),
   listSyncPages: vi.fn(),
   requestPageSync: vi.fn(),
 }));
@@ -37,6 +38,7 @@ vi.mock("../apps/runtime/src/sync/inspect.ts", async (importOriginal) => {
     explainSyncWork: mocks.explainSyncWork,
     findSyncPageByLabel: mocks.findSyncPageByLabel,
     readSyncPageStatus: mocks.readSyncPageStatus,
+    requestSyncProbe: mocks.requestSyncProbe,
   };
 });
 
@@ -83,6 +85,7 @@ describe("the engine's owner commands through `pnpm cli`", () => {
       pauseNote: null,
     });
     mocks.confirmStoppedSyncOwners.mockResolvedValue([]);
+    mocks.requestSyncProbe.mockResolvedValue({ workId: 9, shadow: true });
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -121,6 +124,32 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     });
   });
 
+  it("sync page override takes the vault walk's periods and the media-stats tiers (owner decision №6)", async () => {
+    await run([
+      "sync", "page", "override", "--page", "lora-1", "--resource", "catalog.vault",
+      "--period-ms", "43200000", "--full-period-ms", "259200000", "--owner-approved",
+    ]);
+    expect(mocks.changeSyncRegistryOverride).toHaveBeenLastCalledWith({}, expect.anything(), {
+      pageLabel: "lora-1",
+      resource: "catalog.vault",
+      override: { everyMs: 43_200_000, fullEveryMs: 259_200_000 },
+      ownerApproved: true,
+    });
+    await run(["sync", "page", "override", "--page", "lora-1", "--resource", "catalog.vault", "--full-period-ms", "259200000", "--owner-approved"]);
+    expect(mocks.changeSyncRegistryOverride.mock.lastCall![2]).toMatchObject({ override: { fullEveryMs: 259_200_000 } });
+    const tiers = [{ maxAgeDays: 14, everyMs: 43_200_000 }, { maxAgeDays: 60, everyMs: 259_200_000 }, { maxAgeDays: null, everyMs: 1_209_600_000 }];
+    await run(["sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", JSON.stringify(tiers), "--owner-approved"]);
+    expect(mocks.changeSyncRegistryOverride.mock.lastCall![2]).toEqual({
+      pageLabel: "lora-1", resource: "media-stats.walk", override: { tiers }, ownerApproved: true,
+    });
+    await expect(run(["sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", "[1]"]))
+      .rejects.toThrow("Expected a JSON list of {maxAgeDays, everyMs}");
+    await expect(run([
+      "sync", "page", "override", "--page", "lora-1", "--resource", "media-stats.walk", "--tiers", JSON.stringify(tiers), "--period-ms", "1000",
+    ])).rejects.toThrow("override takes exactly one of");
+    expect(mocks.changeSyncRegistryOverride).toHaveBeenCalledTimes(3);
+  });
+
   it("sync page status --page reads that page only", async () => {
     await run(["sync", "page", "status", "--page", "lora-1"]);
     expect(mocks.findSyncPageByLabel).toHaveBeenCalledWith({}, "lora-1");
@@ -132,6 +161,19 @@ describe("the engine's owner commands through `pnpm cli`", () => {
     await run(["sync", "why", "--page", "lora-1", "--resource", "dm-messages.head", "--subject", "42"]);
     expect(mocks.findSyncPageByLabel).toHaveBeenCalledWith({}, "lora-1");
     expect(mocks.explainSyncWork).toHaveBeenCalledWith({}, {}, PAGE_ROW, { resource: "dm-messages.head", subject: "42" });
+  });
+
+  it("sync probe takes its --page, the route and its JSON parameters", async () => {
+    await run(["sync", "probe", "--page", "lora-1", "--operation", "media.offer_stats", "--params", '{"mediaOfferId":"1","beforeMs":2,"afterMs":1,"periodMs":86400000}']);
+    expect(mocks.requestSyncProbe).toHaveBeenCalledWith({}, expect.anything(), {
+      pageLabel: "lora-1",
+      operation: "media.offer_stats",
+      params: { mediaOfferId: "1", beforeMs: 2, afterMs: 1, periodMs: 86_400_000 },
+      requestedBy: expect.stringMatching(/^cli@/),
+    });
+    await run(["sync", "probe", "--page", "lora-1", "--operation", "polls"]);
+    expect(mocks.requestSyncProbe).toHaveBeenLastCalledWith({}, expect.anything(), expect.objectContaining({ operation: "polls", params: {} }));
+    await expect(run(["sync", "probe", "--page", "lora-1", "--operation", "polls", "--params", "[1]"])).rejects.toThrow("Expected a JSON object");
   });
 
   it("sync ownership confirm-stopped --page confirms that page only", async () => {

@@ -157,7 +157,10 @@ status, code, and intentional message.
 | Voice | `voice_script_invalid` | 400 | Submitted script fails voice validation. |
 | Voice | `voice_source_invalid` | 400 | Source voice-script generation is missing, ineligible, or not owned by the page. |
 | Voice | `voice_quota_denied` | 429 | Page's daily voice-character budget is exhausted. |
-| Voice | `idempotency_mismatch` | 409 | Voice `clientRequestId` was reused with a different request. |
+| Voice | `idempotency_mismatch` | 409 | Voice `clientRequestId` was reused with a different request. Fansly Sync Engine history requests use the same code for a reused `idempotencyKey` with other fans, depth or reason. |
+| Sync | `history_requests_unavailable_on_page` | 409 | A history request on a page not switched to the Fansly Sync Engine, or before its `requests_enabled_at` (every page in step 2). The page is in the caller's scope; the remedy is the hydration route, and `hub history-request` prints that fallback beside the refusal. Never retried automatically. |
+| Sync | `invalid_history_request` | 400 | A history request the service refuses after the contract accepted it (a fan reference that cannot be stored, a malformed depth from a direct caller). |
+| Sync | `history_request_not_found` | 404 | Owner routes and the owner CLI: no request with that ref. The agent plane answers its one static `not_found` instead, for a missing ref and for a request on a page outside the key's grant alike. |
 | Voice | `artifact_expired` | 410 | Stored voice audio passed its retrieval lifetime. |
 | Voice | `voice_retrieval_disabled` | 403 | Voice artifact retrieval is disabled. |
 | Voice | `voice_artifact_corrupt` | 500 | Stored audio bytes fail their SHA-256 integrity check. |

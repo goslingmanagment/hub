@@ -138,7 +138,7 @@ const VAULT_WALK_PAGES_PER_CHUNK = 20;
  * not a coverage limit: hitting it stops THAT album with an anomaly and leaves
  * the rest of the vault alone.
  */
-const VAULT_ALBUM_MAX_PAGES = 400;
+export const VAULT_ALBUM_MAX_PAGES = 400;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
+export function parseAlbumWalk(value: unknown): VaultAlbumWalkState | null {
   const record = asRecord(value);
   if (record === null) {
     return null;
@@ -271,7 +271,7 @@ export const utcDayKey = fanslyUtcDayKey;
  *  exactly that page. */
 export const rollUtcDay = rollFanslyUtcDay;
 
-function emptyAlbumWalk(): VaultAlbumWalkState {
+export function emptyAlbumWalk(): VaultAlbumWalkState {
   return {
     beforeRef: VAULT_MEDIA_HEAD_CURSOR,
     lastRequestedBefore: null,
@@ -296,7 +296,7 @@ export function vaultMediaRows(payload: unknown): Record<string, unknown>[] {
     : [];
 }
 
-function classifyCatalogResponse(kind: string, payload: unknown) {
+export function classifyCatalogResponse(kind: string, payload: unknown) {
   return classifyFanslyResponse(payload, {
     isValid: (value) => {
       const record = asRecord(value);

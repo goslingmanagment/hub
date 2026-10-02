@@ -21,6 +21,7 @@ import {
   countRecentTerminalDmMessageConversationFailureStreak,
   createFanslyPage,
   createModel,
+  listFanslyPurchaseHistoryCapturedContentIds,
   listFanslyPurchaseHistoryCaptures,
   listFanslyPurchaseHistoryStormVerdicts,
   startSyncRun,
@@ -155,6 +156,9 @@ describe("sync lookup query plans", () => {
       const verdicts = await listFanslyPurchaseHistoryStormVerdicts(testDb.db, pageId);
       expect(verdicts).toHaveLength(count((n) => n % 20000 === 13));
       expect(verdicts.every((verdict) => verdict.kind === "single")).toBe(true);
+      // The engine's one-time import at the step-3 switch: the captured ids.
+      const capturedIds = await listFanslyPurchaseHistoryCapturedContentIds(testDb.db, pageId);
+      expect(capturedIds).toHaveLength(count((n) => n % 250 === 7));
 
       const statements = [
         await captureStatement(() => listFanslyPurchaseHistoryCaptures(testDb!.db, pageId)),
@@ -162,6 +166,7 @@ describe("sync lookup query plans", () => {
           listFanslyPurchaseHistoryCaptures(testDb!.db, pageId, FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT)
         ),
         await captureStatement(() => listFanslyPurchaseHistoryStormVerdicts(testDb!.db, pageId)),
+        await captureStatement(() => listFanslyPurchaseHistoryCapturedContentIds(testDb!.db, pageId)),
       ];
       for (const statement of statements) {
         const plan = await explain(statement);

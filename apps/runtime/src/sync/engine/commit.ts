@@ -17,6 +17,7 @@ import {
   lockOwnedPage,
   markApplied,
   markAttemptQuarantined,
+  markHistoryTurnServed,
   markAttemptSent,
   markDeferred,
   markWorkRunning,
@@ -36,6 +37,7 @@ import {
   upsertDemands,
   type Database,
   type RecoverUnfinishedAttemptsResult,
+  type SettleWorkResult,
   type SyncAttemptRow,
   type SyncPageRow,
   type SyncWorkRow,
@@ -67,7 +69,7 @@ import {
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
-import type { AlertSink, Clock, Metrics, Rng } from "./ports.ts";
+import type { AlertSink, Clock, Metrics, Rng, SettingsSource } from "./ports.ts";
 import {
   demandToUpsert,
   nextPollDueAt,
@@ -163,21 +165,36 @@ export interface CaptureCodec {
     /** The request the answer serves (a walk's position, for kinds whose
      *  journal names it). */
     request: RequestPlan;
+    /** The page's native account id (`pages.external_page_id`): the receiver
+     *  a scoped answer is checked against (absent: no scope check). */
+    ownRef?: string | null;
     module: ResourceModule;
   }): unknown;
+  /**
+   * The answer an apply from the journal works on (tx 3 after a restart, a
+   * transient apply error or a deferral, I8): the journal body with every
+   * envelope `prepare` put around the served answer taken off again, so the
+   * re-parse and the apply see what the in-memory apply saw. Trims and token
+   * strips stay (design §3.11: the apply prefers the in-memory answer for
+   * them). A body that is not this request's answer throws `ApplyQuarantine`.
+   */
+  served(input: { spec: FanslyWireId; kind: string; payload: unknown; request: RequestPlan }): unknown;
 }
 
 /**
  * The engine's journal transform: the resource's own trim, then the signed CDN
  * tokens stripped for the kinds the legacy journal strips them for, then every
  * unpaired UTF-16 surrogate replaced (json/jsonb refuse one). The served object
- * is never mutated.
+ * is never mutated. It adds no envelope, so the journal body is the answer.
  */
 export const defaultCaptureCodec: CaptureCodec = {
   prepare({ kind, response, module }) {
     let body = module.journal === undefined ? response : module.journal(response);
     if (fanslyCdnTokenStripApplies("fansly", kind)) body = stripFanslySignedCdnTokens(body);
     return replaceJournalLoneSurrogates(body).value;
+  },
+  served({ payload }) {
+    return payload;
   },
 };
 
@@ -191,6 +208,14 @@ export type ObservationCanonicalizer = (
 
 /** The history-request hook of tx 3 (`history_*` last in the lock order). */
 export type ThreadChainChangedHook = (tx: Database, input: { pageId: number; threadId: number }) => Promise<void>;
+
+/** Runs in the transaction that closed a work row (done or cancelled), after
+ *  every sync_work write of it: the history requests settle the fans that
+ *  rode on it (`history_*` last in the lock order). */
+export type WorkClosedHook = (
+  tx: Database,
+  input: { pageId: number; workId: number; resource: string; subject: string; closeReason: string | null },
+) => Promise<void>;
 
 export interface CommitDeps {
   db: Database;
@@ -208,7 +233,16 @@ export interface CommitDeps {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  onWorkClosed?: WorkClosedHook;
+  /** The live settings resources read (absent: the registry defaults). */
+  settings?: SettingsSource;
   faults?: SyncFaultHook;
+}
+
+/** The history request and fan whose turn a requests-class read is. */
+export interface RequestTurn {
+  requestId: number;
+  itemId: number;
 }
 
 /** The work a slot picked. */
@@ -217,6 +251,8 @@ export interface PickedWork {
   workClass: WorkClass;
   slot: number;
   nextCyclePos: number;
+  /** Requests class: whose turn it is (the admission stamps it, §3.7.1). */
+  requestTurn?: RequestTurn | null;
 }
 
 export interface AdmissionRecord {
@@ -255,18 +291,36 @@ async function fault(d: CommitDeps, point: SyncFaultPoint): Promise<void> {
 }
 
 /** `sync_attempts.request`: the wire id, its parameters (the coverage
- *  evidence, design §2.9 D1) and the request line. Never a header. */
-export function requestJsonOf(request: RequestPlan): { spec: FanslyWireId; params: unknown; path: string; query: Record<string, string> } {
+ *  evidence, design §2.9 D1), the request line and — when the resource keeps
+ *  one — its account of the step (`RequestPlan.step`). Never a header. */
+export function requestJsonOf(request: RequestPlan): {
+  spec: FanslyWireId;
+  params: unknown;
+  path: string;
+  query: Record<string, string>;
+  step?: unknown;
+} {
   const target = buildFanslyWireTarget(request.spec, request.params as never);
   const query: Record<string, string> = {};
   for (const [key, value] of new URLSearchParams(target.search)) query[key] = value;
-  return { spec: request.spec, params: request.params, path: target.pathname, query };
+  return {
+    spec: request.spec,
+    params: request.params,
+    path: target.pathname,
+    query,
+    ...(request.step === undefined ? {} : { step: request.step }),
+  };
 }
 
-function requestOfAttempt(attempt: SyncAttemptRow): RequestPlan {
-  const stored = attempt.request as { spec?: unknown; params?: unknown } | null;
+/** The request an attempt sent, as its plan made it (`step` included). */
+export function requestOfAttempt(attempt: Pick<SyncAttemptRow, "request" | "operation">): RequestPlan {
+  const stored = attempt.request as { spec?: unknown; params?: unknown; step?: unknown } | null;
   const spec = typeof stored?.spec === "string" ? stored.spec : attempt.operation;
-  return { spec: spec as FanslyWireId, params: (stored?.params ?? {}) as never };
+  return {
+    spec: spec as FanslyWireId,
+    params: (stored?.params ?? {}) as never,
+    ...(stored?.step === undefined ? {} : { step: stored.step }),
+  };
 }
 
 function upsertsOf(
@@ -328,6 +382,19 @@ function settleInputOf(
   };
 }
 
+/** Run the work-closed hook when a settle closed the row. */
+async function afterSettle(
+  tx: Database,
+  d: CommitDeps,
+  work: Pick<SyncWorkRow, "id" | "resource" | "subject">,
+  settled: SettleWorkResult | null,
+  closeReason: string | null,
+): Promise<void> {
+  if (settled === null || d.onWorkClosed === undefined) return;
+  if (settled.state !== "done" && settled.state !== "cancelled") return;
+  await d.onWorkClosed(tx, { pageId: d.pageId, workId: work.id, resource: work.resource, subject: work.subject, closeReason });
+}
+
 // ── tx 1: admission ─────────────────────────────────────────────────────────
 
 /**
@@ -372,6 +439,11 @@ export async function admit(
       request: requestJsonOf(request),
       evidence: spec.evidence,
     });
+    // A requests-class read is the turn of one request and one fan: the round
+    // robin's stamps and the fan's read count (history_* after sync_work).
+    if (d.mode === "live" && picked.requestTurn !== undefined && picked.requestTurn !== null) {
+      await markHistoryTurnServed(tx, picked.requestTurn);
+    }
     // Claims are live-only: a shadow step never touches another table.
     if (d.mode === "live" && module.onAdmit !== undefined) await module.onAdmit(tx, picked.work, request);
     return {
@@ -483,8 +555,8 @@ export async function commitNoHttp(
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     switch (plan.kind) {
-      case "done":
-        await settleWork(tx, settleInputOf(d, work, spec, {
+      case "done": {
+        const settled = await settleWork(tx, settleInputOf(d, work, spec, {
           close: "done",
           closeReason: plan.reason,
           satisfiesRevision: true,
@@ -492,7 +564,9 @@ export async function commitNoHttp(
           ...(plan.proof === undefined ? {} : { proof: plan.proof }),
           ...(plan.result === undefined ? {} : { result: plan.result }),
         }, work.demandRevision, page, now));
+        await afterSettle(tx, d, work, settled, plan.reason);
         return;
+      }
       case "wait": {
         const until = plan.until ?? new Date(now.getTime() + WAIT_RECHECK_MS);
         await settleWork(tx, {
@@ -609,6 +683,7 @@ export async function capture(
           response: read.response,
           contractAccepted: read.kind === "accepted",
           request: admission.request,
+          ownRef: d.ownRef,
           module,
         }),
       }
@@ -687,11 +762,15 @@ export async function capture(
       work: admission.work,
       demandRevision: admission.demandRevision,
       subjectQueue: admission.spec.subjectQueue === true,
+      request: admission.request,
     }, decision, module);
     return { decision, paceGapMs: captured.paceGapMs };
   });
 
   if (committed.decision === null) return { applyNow: false, inMemory: null };
+  if (committed.decision.errorClass === "rate_limit_list") {
+    d.metrics.increment("sync_list_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
+  }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4): this send against the page's previous
   // recorded send of ANY owner; closer than the setting opens alert 1.
@@ -716,6 +795,8 @@ interface OutcomeTarget {
   /** The work's demand revision the attempt served (I11). */
   demandRevision: number;
   subjectQueue: boolean;
+  /** The request the attempt sent (a subject-queue walk's subject). */
+  request: RequestPlan;
 }
 
 async function writeOutcomeDecision(
@@ -737,7 +818,16 @@ async function writeOutcomeDecision(
   }
   const resourceHold = decision.resourceHold;
   if (resourceHold.action === "set") {
-    await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: { until: resourceHold.until, step: resourceHold.step } });
+    await setResourceHold(tx, {
+      ...fenced,
+      file: resourceHold.file,
+      hold: {
+        until: resourceHold.until,
+        step: resourceHold.step,
+        ...(resourceHold.kind === undefined ? {} : { kind: resourceHold.kind }),
+        ...(resourceHold.lastRateLimitAt === undefined ? {} : { lastRateLimitAt: resourceHold.lastRateLimitAt }),
+      },
+    });
   } else if (resourceHold.action === "clear") {
     await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: null });
   }
@@ -748,12 +838,14 @@ async function writeOutcomeDecision(
   if (work === null) return;
   const subjectQueue = target.subjectQueue;
   if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
+    // A breaker reset (an answer after failures) is an `ok`, never a failure.
+    const breakerReset = !decision.subjectBreaker.terminal && decision.subjectBreaker.failureCount === 0;
     await module.onSubjectOutcome(tx, work, {
-      kind: decision.subjectBreaker.terminal ? "terminal" : "failure",
+      kind: decision.subjectBreaker.terminal ? "terminal" : breakerReset ? "ok" : "failure",
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
-    });
+    }, { request: target.request, attemptId: target.attemptId });
   }
   const breaker = !subjectQueue && decision.subjectBreaker !== null
     ? {
@@ -782,8 +874,8 @@ async function writeOutcomeDecision(
     case "quarantine":
       await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: next.reason });
       return;
-    case "close":
-      await settleWork(tx, {
+    case "close": {
+      const settled = await settleWork(tx, {
         workId: work.id,
         generation: d.generation,
         servedRevision: target.demandRevision,
@@ -793,7 +885,9 @@ async function writeOutcomeDecision(
         lastErrorClass: decision.attemptErrorClass,
         ...(breaker === undefined ? {} : { breaker }),
       });
+      await afterSettle(tx, d, work, settled, next.closeReason);
       return;
+    }
   }
 }
 
@@ -882,7 +976,7 @@ export function deferredRetryInMs(answerAgeMs: number): number {
   return DEFERRED_RETRY_CAP_MS;
 }
 
-async function readJournaledResponse(
+async function readJournalBody(
   tx: Database,
   d: CommitDeps,
   attempt: SyncAttemptRow,
@@ -942,12 +1036,25 @@ export async function apply(
       if (inMemory !== null) {
         ({ response, parsed } = inMemory);
       } else {
-        response = await readJournaledResponse(tx, d, attempt);
-        const reparsed = fanslyWireSpec(request.spec).parse(response, request.params as never);
+        // The journal holds the answer inside the envelopes its kind carries
+        // (a reply page's walk, a tips answer's scope quarantine): the codec
+        // takes them off before the same parse the capture ran.
+        const wire = fanslyWireSpec(request.spec);
+        response = (d.capture ?? defaultCaptureCodec).served({
+          spec: request.spec,
+          kind: wire.kind,
+          payload: await readJournalBody(tx, d, attempt),
+          request,
+        });
+        const reparsed = wire.parse(response, request.params as never);
         if (!reparsed.ok) throw new FanslyContractViolationError(reparsed.violation.field, reparsed.violation.detail);
         parsed = reparsed.value;
       }
       await fault(d, "in_apply");
+      // Read once: the module sees the page's overrides, the settle below
+      // the same row (the page row is the actor's; no resource writes it).
+      const page = await getSyncPage(tx, d.pageId);
+      if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
       const result = await module.apply(tx, {
         pageId: d.pageId,
         now: d.clock.wallNow(),
@@ -959,8 +1066,10 @@ export async function apply(
         response,
         observation: { id: attempt.observationId!, receivedAt: attempt.observationReceivedAt! },
         fenced,
+        page,
+        ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
-      if (d.canonicalize !== undefined) {
+      if (d.canonicalize !== undefined && result.canonicalized !== true) {
         await d.canonicalize(tx, {
           pageId: d.pageId,
           ownRef: d.ownRef,
@@ -971,10 +1080,9 @@ export async function apply(
       // sync_work after every event append (lock order): the work row, then
       // the follow-ups in (resource, subject) order.
       const now = d.clock.wallNow();
-      const page = await getSyncPage(tx, d.pageId);
       const settle = settleInputOf(d, work, spec, result.work, attempt.demandRevision ?? work.demandRevision, page, now);
       const breakerSet = work.failureCount !== 0 || work.breakerUntil !== null || work.blockedByVendorAt !== null;
-      await settleWork(tx, {
+      const settled = await settleWork(tx, {
         ...settle,
         lastErrorClass: null,
         ...(breakerSet && spec.subjectQueue !== true
@@ -983,9 +1091,13 @@ export async function apply(
       });
       const upserts = upsertsOf(d, result.followups, page, now);
       if (upserts.length > 0) await upsertDemands(tx, upserts);
+      // history_* last (lock order): the chain hook first (anchors, satisfied
+      // fans, the work closed when none is left), then the fans of a work
+      // that closed for another reason.
       if (result.threadChainChanged !== undefined && d.onThreadChainChanged !== undefined) {
         await d.onThreadChainChanged(tx, { pageId: d.pageId, threadId: result.threadChainChanged.threadId });
       }
+      await afterSettle(tx, d, work, settled, result.work.closeReason ?? null);
       await markApplied(tx, { attemptId });
       return {
         outcome: "applied" as const,
@@ -1088,6 +1200,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         work,
         demandRevision: attempt.demandRevision ?? work?.demandRevision ?? 0,
         subjectQueue,
+        request: requestOfAttempt(attempt),
       }, decision, null);
       return { quarantined: true, alerts: decision.alerts };
     }

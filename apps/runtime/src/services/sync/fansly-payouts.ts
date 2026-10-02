@@ -135,7 +135,7 @@ import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 const STREAM = "payouts" as const;
 
 /** One kind PER ROUTE: two routes, two response shapes. */
-const OBSERVATION_KINDS = {
+export const FANSLY_PAYOUTS_OBSERVATION_KINDS = {
   payoutMethods: "payout_methods",
   payoutRequests: "payout_requests",
 } as const;
@@ -165,7 +165,7 @@ const REQUEST_WALK_PAGES_PER_CHUNK = 5;
  * safety net against a cursor that advances by one row a page, not a coverage
  * limit: hitting it stops the walk with an anomaly. Catch-up pages count too.
  */
-const REQUEST_WALK_MAX_PAGES = 400;
+export const REQUEST_WALK_MAX_PAGES = 400;
 
 
 // ── cursor state ─────────────────────────────────────────────────────────────
@@ -355,17 +355,17 @@ export function payoutRequestRows(payload: unknown): Record<string, unknown>[] {
     : [];
 }
 
-function classifyPayoutResponse(kind: string, payload: unknown) {
+export function classifyPayoutResponse(kind: string, payload: unknown) {
   return classifyFanslyResponse(payload, {
     isValid: (value) => {
       const record = asRecord(value);
-      if (kind === OBSERVATION_KINDS.payoutRequests) {
+      if (kind === FANSLY_PAYOUTS_OBSERVATION_KINDS.payoutRequests) {
         return record !== null && Array.isArray(record.data);
       }
       return Array.isArray(value)
         || (record !== null && Object.values(record).some((member) => Array.isArray(member)));
     },
-    isEmpty: (value) => kind === OBSERVATION_KINDS.payoutRequests
+    isEmpty: (value) => kind === FANSLY_PAYOUTS_OBSERVATION_KINDS.payoutRequests
       ? payoutRequestRows(value).length === 0
       : Array.isArray(value)
       ? value.length === 0
@@ -402,7 +402,7 @@ export function oldestCreatedAtMs(rows: readonly Record<string, unknown>[]): num
 }
 
 /** Every row `id` on a page, in page order. */
-function payoutRefs(rows: readonly Record<string, unknown>[]): string[] {
+export function payoutRefs(rows: readonly Record<string, unknown>[]): string[] {
   return rows.map((row) => asNullableString(row.id)).filter((id): id is string => id !== null);
 }
 
@@ -442,7 +442,7 @@ export function settleWalkStop(
 
 /** The claim a DONE request walk may make. Only an exhausted walk reached the
  *  floor; every other stop is partial and names itself. */
-function settledPayoutRequestsCoverage(stop: FanslyPayoutsWalkStop | null) {
+export function settledPayoutRequestsCoverage(stop: FanslyPayoutsWalkStop | null) {
   return stop === null || stop === "exhausted"
     ? { status: "provider_exhausted", reasonCode: "walk_exhausted" } as const
     : { status: "partial_provider_surface", reasonCode: stop } as const;
@@ -480,7 +480,7 @@ export function payoutHeadGap(input: {
 }
 
 /** Has a catch-up walk reached the rows the previous head already held? */
-function catchUpReached(
+export function catchUpReached(
   catchUp: FanslyPayoutsCatchUp,
   rows: readonly Record<string, unknown>[],
   nextOffset: number,
@@ -650,7 +650,7 @@ export async function fanslyPayoutsChunk(
       limit: PAYOUT_REQUESTS_PAGE_SIZE,
       offset,
     });
-    const persisted = await persist(OBSERVATION_KINDS.payoutRequests, {
+    const persisted = await persist(FANSLY_PAYOUTS_OBSERVATION_KINDS.payoutRequests, {
       before: PAYOUT_REQUESTS_UNBOUNDED,
       after: PAYOUT_REQUESTS_UNBOUNDED,
       limit: PAYOUT_REQUESTS_PAGE_SIZE,
@@ -737,7 +737,7 @@ export async function fanslyPayoutsChunk(
         // than silently kept alive forever.
         await assertOwnedPageSyncLease(app.db);
         const response = await app.adapter.getPayoutMethods(requestContext);
-        const persisted = await persist(OBSERVATION_KINDS.payoutMethods, {}, response.raw);
+        const persisted = await persist(FANSLY_PAYOUTS_OBSERVATION_KINDS.payoutMethods, {}, response.raw);
         state = { ...state, fixedStepIndex: 1 };
         await coverage(
           FANSLY_PAYOUTS_COVERAGE_SCOPES.methods,

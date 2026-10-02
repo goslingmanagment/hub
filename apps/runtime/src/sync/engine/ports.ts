@@ -84,6 +84,20 @@ export function createEffectiveConfigPauseSource(db: Database, rawConfig: AppCon
   };
 }
 
+// ── the live settings resources read ────────────────────────────────────────
+
+/** The live effective config a resource reads at a step (a re-walk cycle, …):
+ *  the same overlay the pause comes from, read fresh on every call. */
+export interface SettingsSource {
+  read(): Promise<AppConfig>;
+}
+
+export function createEffectiveConfigSettingsSource(db: Database, rawConfig: AppConfig): SettingsSource {
+  return {
+    read: () => loadEffectiveConfig(db, rawConfig),
+  };
+}
+
 // ── wake and ownership ──────────────────────────────────────────────────────
 
 export interface Wake {

@@ -81,7 +81,7 @@ async function resolvePages(
  * command (which has its own `--page`) takes the value; `sync status` reads it
  * the same way.
  */
-function pageLabel(options: { page?: string }, command: Command): string | undefined {
+export function pageLabel(options: { page?: string }, command: Command): string | undefined {
   if (options.page !== undefined) return options.page;
   for (let parent = command.parent; parent; parent = parent.parent) {
     const inherited = (parent.opts() as { page?: unknown }).page;

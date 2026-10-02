@@ -1,3 +1,4 @@
+import { fanslyWsLivePayloadResolver } from "../services/fansly-ws/live-apply.ts";
 import {
   publishCaptureCasSettingsAtStartup,
   startRuntimeHeartbeat,
@@ -6,6 +7,8 @@ import { createSyncContext, type SyncContext } from "./context.ts";
 import { SyncEngineHost } from "./engine/host.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
+import { createFanslyShadowWsFeed } from "./fansly/ws/route-receipt.ts";
+import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "./requests/history.ts";
 
 // The `sync` role: the long-running process of the Fansly Sync Engine (plan
 // §8, §12; design §3.6, §9.1). It hosts one actor per Fansly page in `shadow`
@@ -42,6 +45,14 @@ export function createSyncRuntimeHost(context: SyncContext): SyncRuntimeHost {
     logger: context.logger,
     registry: createFanslyRegistry(),
     capture: fanslyCaptureCodec,
+    // Shadow pages: the receipts the legacy receiver captured become shadow
+    // demand, read through the payload seam (design §6.4).
+    shadowFeed: createFanslyShadowWsFeed({ resolvePayload: fanslyWsLivePayloadResolver(context) }),
+    // History requests (design §7.1.6): every history read and every DM read
+    // that moved a chain settles the fans riding on it; a history work that
+    // closes for a reason of its own ends its fans.
+    onThreadChainChanged: onHistoryThreadChainChanged,
+    onWorkClosed: onHistoryWorkClosed,
   });
 }
 

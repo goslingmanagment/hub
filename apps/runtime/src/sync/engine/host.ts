@@ -29,11 +29,13 @@ import {
   type SyncFaultHook,
   type SyncLogger,
   type ThreadChainChangedHook,
+  type WorkClosedHook,
 } from "./commit.ts";
 import { PgOwnershipSession, PgWake } from "./host-ports.ts";
 import { createPacer, type Pacer, type PacerDeps } from "./pacer.ts";
 import {
   createEffectiveConfigPauseSource,
+  createEffectiveConfigSettingsSource,
   cryptoRng,
   noopMetrics,
   systemClock,
@@ -41,6 +43,7 @@ import {
   type Clock,
   type Metrics,
   type PauseSource,
+  type SettingsSource,
   type Rng,
   type Wake,
 } from "./ports.ts";
@@ -105,6 +108,9 @@ export interface SyncHostOptions {
    *  previous owner (rules (c)/(d)). */
   probe?: FanslySendOsProbe;
   pause?: PauseSource;
+  /** The live settings resources read; default: the effective config over
+   *  `rawConfig`, as the pause. */
+  settings?: SettingsSource;
   alerts?: AlertSink;
   metrics?: Metrics;
   /** Default: one PgWake on `fansly_sync_work`. */
@@ -114,6 +120,7 @@ export interface SyncHostOptions {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  onWorkClosed?: WorkClosedHook;
   modeLoopIntervalMs?: number;
   /** TESTS ONLY: run the live loop although `LIVE_LOOP_ENABLED` is false
    *  (tests/sync-live-gate.integration.test.ts). `main.ts` never passes it
@@ -156,6 +163,7 @@ export class SyncEngineHost {
   readonly #probe: FanslySendOsProbe;
   readonly #identity: FanslySendHolderIdentity;
   readonly #pause: PauseSource;
+  readonly #settings: SettingsSource;
   readonly #metrics: Metrics;
   readonly #alerts: AlertSink;
   readonly #wake: Wake & { start?(): Promise<void>; close?(): Promise<void> };
@@ -179,6 +187,7 @@ export class SyncEngineHost {
     this.#probe = options.probe ?? createDefaultFanslySendOsProbe();
     this.#identity = buildFanslySendHolderIdentity(this.#probe, "sync");
     this.#pause = options.pause ?? createEffectiveConfigPauseSource(options.db, options.rawConfig);
+    this.#settings = options.settings ?? createEffectiveConfigSettingsSource(options.db, options.rawConfig);
     this.#metrics = options.metrics ?? noopMetrics;
     this.#alerts = options.alerts ?? createLoggingAlertSink(options.logger);
     this.#wake = options.wake ?? new PgWake({ connectionString: options.connectionString, logger: options.logger });
@@ -444,9 +453,11 @@ export class SyncEngineHost {
       transport,
       ownership: session,
       wake: this.#wake,
+      settings: this.#settings,
       ...(this.#o.capture === undefined ? {} : { capture: this.#o.capture }),
       ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
+      ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
     });

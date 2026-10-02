@@ -6,6 +6,7 @@ import {
   nextOpenWorkDueAt,
   OwnershipLostError,
   pickPlanned,
+  pickRequests,
   pickUrgent,
   SYNC_WORK_PICK_LIMIT,
   type Database,
@@ -30,9 +31,17 @@ import {
   type AdmissionRecord,
   type CommitDeps,
   type PickedWork,
+  type RequestTurn,
   type SyncFaultPoint,
 } from "./commit.ts";
-import { activePageHold, activeResourceHold, isResourceHoldExempt, resourceFileOf, type ResourceHoldEntry } from "./errors.ts";
+import {
+  activePageHold,
+  activeResourceHold,
+  isResourceHoldExempt,
+  LIST_RATE_LIMIT_HELD_KEYS,
+  resourceFileOf,
+  type ResourceHoldEntry,
+} from "./errors.ts";
 import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import type { OwnershipSession, TransportOutcome, Wake } from "./ports.ts";
 import {
@@ -197,9 +206,13 @@ export class SyncActor {
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
     const now = d.clock.wallNow();
-    const picked = await this.#pick(page, now);
+    const exclusions = pickExclusions(page, d.registry, shadow, now);
+    const picked = await this.#pick(page, now, exclusions);
     if (picked === null) {
-      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow });
+      // Idle until the next work this pick could take: a paused, switched-off
+      // or held row is never "due" here, or the actor would lap without
+      // sleeping for as long as it stays so.
+      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...exclusions });
       const untilDue = due === null ? ACTOR_IDLE_WAIT_MS : due.getTime() - now.getTime();
       await d.wake.wait(d.pageId, Math.max(0, Math.min(untilDue, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -208,7 +221,15 @@ export class SyncActor {
     const module = await d.registry.module(picked.work.resource);
     let plan: StepPlan;
     try {
-      plan = await module.plan(picked.work, { db: d.db, pageId: d.pageId, shadow, now, page, registry: d.registry });
+      plan = await module.plan(picked.work, {
+        db: d.db,
+        pageId: d.pageId,
+        shadow,
+        now,
+        page,
+        registry: d.registry,
+        ...(d.settings === undefined ? {} : { settings: d.settings }),
+      });
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
       return null;
@@ -294,6 +315,7 @@ export class SyncActor {
           pageId: d.pageId,
           now: d.clock.wallNow(),
           page,
+          ...(d.settings === undefined ? {} : { settings: d.settings }),
         });
       } catch (error) {
         d.metrics.increment("sync_shadow_errors", { resource: admission.work.resource });
@@ -347,28 +369,33 @@ export class SyncActor {
     return { open: true, page };
   }
 
-  async #pick(page: SyncPageRow, now: Date): Promise<PickedWork | null> {
+  async #pick(page: SyncPageRow, now: Date, exclusions: PickExclusions): Promise<PickedWork | null> {
     const d = this.#d;
     const shadow = d.mode === "shadow";
-    const exclusions = pickExclusions(page, d.registry, shadow, now);
     const eligible = (work: SyncWorkRow): boolean =>
       activeResourceHold(page.resourceHolds as Record<string, ResourceHoldEntry>, work.resource, now) === null;
-    const source: ClassWorkSource<SyncWorkRow> = {
+    const source: ClassWorkSource<{ work: SyncWorkRow; requestTurn: RequestTurn | null }> = {
       async pickInClass(workClass: WorkClass) {
         // Due times are written by the database clock: compare by it too.
         const filter = { pageId: d.pageId, shadow, now: null, ...exclusions };
         switch (workClass) {
           case "urgent": {
             const rows = await pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT });
-            return rows.find(eligible) ?? null;
+            const work = rows.find(eligible);
+            return work === undefined ? null : { work, requestTurn: null };
           }
-          case "requests":
-            // History requests land with their own tables (S2-11a): the class
-            // is empty until then and its slots go to the others.
-            return null;
+          case "requests": {
+            // History requests exist only on live pages (the intake refuses
+            // every other page): a shadow page has no requests class.
+            if (shadow) return null;
+            const picked = await pickRequests(d.db, filter);
+            return picked !== null && eligible(picked.work)
+              ? { work: picked.work, requestTurn: { requestId: picked.requestId, itemId: picked.itemId } }
+              : null;
+          }
           case "planned": {
             const picked = await pickPlanned(d.db, { ...filter, plannedRr: page.plannedRr });
-            return picked !== null && eligible(picked.work) ? picked.work : null;
+            return picked !== null && eligible(picked.work) ? { work: picked.work, requestTurn: null } : null;
           }
         }
       },
@@ -381,7 +408,13 @@ export class SyncActor {
       holdUntil: hold === null ? null : hold.until,
     }, now);
     if (picked === null) return null;
-    return { work: picked.work, workClass: picked.workClass, slot: picked.slot, nextCyclePos: picked.nextCyclePos };
+    return {
+      work: picked.work.work,
+      workClass: picked.workClass,
+      slot: picked.slot,
+      nextCyclePos: picked.nextCyclePos,
+      requestTurn: picked.work.requestTurn,
+    };
   }
 
   async #ensurePolls(): Promise<void> {
@@ -412,13 +445,22 @@ export class SyncActor {
  * keys, keys switched off for the page, live-only keys in shadow, and the
  * files under a live resource hold — except a key a hold never stops
  * (`dm-messages.head`): its file's other known keys are listed one by one.
+ * The conversation list's own 429 hold stops only the keys that can only
+ * read the list (`LIST_RATE_LIMIT_HELD_KEYS`), whatever their file. The
+ * owner's requests pause leaves the whole requests class out.
  */
+export interface PickExclusions {
+  excludeResources: string[];
+  excludeFiles: string[];
+  excludeClasses: WorkClass[];
+}
+
 export function pickExclusions(
-  page: Pick<SyncPageRow, "pausedResources" | "registryOverrides" | "resourceHolds">,
+  page: Pick<SyncPageRow, "pausedResources" | "registryOverrides" | "resourceHolds"> & Partial<Pick<SyncPageRow, "pausedRequests">>,
   registry: EngineRegistry,
   shadow: boolean,
   now: Date,
-): { excludeResources: string[]; excludeFiles: string[] } {
+): PickExclusions {
   const resources = new Set(page.pausedResources);
   for (const spec of registry.specs) {
     if (!runsIn(spec, shadow) || resourceDisabled(page, spec.key)) resources.add(spec.key);
@@ -430,6 +472,12 @@ export function pickExclusions(
   const holds = page.resourceHolds as Record<string, ResourceHoldEntry>;
   for (const [file, entry] of Object.entries(holds)) {
     if (!(new Date(entry.until).getTime() > now.getTime())) continue;
+    if (entry.kind === "rate_limit_list") {
+      for (const spec of registry.specs) {
+        if (LIST_RATE_LIMIT_HELD_KEYS.has(spec.key)) resources.add(spec.key);
+      }
+      continue;
+    }
     const fileKeys = registry.specs.filter((spec) => resourceFileOf(spec.key) === file);
     if (fileKeys.some((spec) => isResourceHoldExempt(spec.key))) {
       for (const spec of fileKeys) {
@@ -439,5 +487,9 @@ export function pickExclusions(
       files.push(file);
     }
   }
-  return { excludeResources: [...resources].sort(), excludeFiles: files.sort() };
+  return {
+    excludeResources: [...resources].sort(),
+    excludeFiles: files.sort(),
+    excludeClasses: page.pausedRequests === true ? ["requests"] : [],
+  };
 }

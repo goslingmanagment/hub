@@ -19,6 +19,14 @@
 // event is NOT a `message_archive` projection input (MESSAGE_EVENT_TYPES does
 // not list it), so the archive stays REST-confirmed only. A deletion is a
 // sticky mark on the overlay row in the same transaction; nothing clears it.
+//
+// The Sync Engine routes a receipt's demand through the optional post-ack
+// hook (`afterAck`, design §6.3, I18): it runs in the apply's outer
+// transaction right after the ack, on every path that acks, so the demand
+// commits exactly when the ack does and is routed exactly once, whichever
+// driver wins the receipt. A path that does not ack (`not_pending`,
+// `erasure_busy`) never runs it. A hook that throws rolls the whole apply
+// back: the receipt stays pending for the next driver.
 
 import { sql, type SQL } from "drizzle-orm";
 import {
@@ -84,6 +92,22 @@ export type FanslyWsLivePayloadResolver = (
   source: FanslyWsLivePayloadSource,
 ) => Promise<unknown>;
 
+/** What the post-ack hook learns about the receipt it was called for. */
+export interface FanslyWsLiveAckedReceipt {
+  pageId: number;
+  observationId: number;
+  receivedAt: Date;
+  /** The page's own Fansly account id the frame was captured under. */
+  ownRef: string | null;
+  /** The raw frame; null when the raw was unreachable (nothing to route). */
+  frame: string | null;
+  liveState: FanslyWsLiveState;
+}
+
+/** Runs in the apply's outer transaction right after the ack (see the module
+ * header). It must not commit, roll back or touch the receipt. */
+export type FanslyWsLiveAfterAck = (tx: Database, receipt: FanslyWsLiveAckedReceipt) => Promise<void>;
+
 /** Lock waits (the account's event counter, an overlay row) end the attempt
  * instead of holding a pool connection; the receipt stays pending. */
 const APPLY_STATEMENT_TIMEOUT = "5s";
@@ -124,7 +148,11 @@ function deterministicDataError(error: unknown): string | null {
  */
 export async function applyFanslyWsLiveReceipt(
   db: Database,
-  input: { observationId: number; resolvePayload?: FanslyWsLivePayloadResolver },
+  input: {
+    observationId: number;
+    resolvePayload?: FanslyWsLivePayloadResolver;
+    afterAck?: FanslyWsLiveAfterAck;
+  },
 ): Promise<FanslyWsLiveApplyResult> {
   return db.transaction(async (tx): Promise<FanslyWsLiveApplyResult> => {
     const database = tx as unknown as Database;
@@ -150,6 +178,12 @@ export async function applyFanslyWsLiveReceipt(
     if (!row) return { status: "not_pending" };
     const pageId = Number(row.page_id);
     const receivedAt = new Date(row.received_at);
+    const acked = async (frame: string | null, liveState: FanslyWsLiveState) => {
+      if (input.afterAck === undefined) return;
+      await input.afterAck(database, {
+        pageId, observationId: input.observationId, receivedAt, ownRef: row.native_account_ref, frame, liveState,
+      });
+    };
     // Same shared fence every DM archive writer takes: an erasure in flight
     // defers this apply (receipt stays pending) instead of racing its delete.
     if (!await tryAcquireDmArchiveWriterFenceLock(database, pageId)) return { status: "erasure_busy" };
@@ -166,6 +200,7 @@ export async function applyFanslyWsLiveReceipt(
     if (frame === null) {
       // Tiered, erased or otherwise unreachable raw: nothing to apply ever.
       await ackReceipt(database, input.observationId, "debt", null);
+      await acked(null, "debt");
       return { status: "debt", ...emptyCounts() };
     }
 
@@ -188,12 +223,13 @@ export async function applyFanslyWsLiveReceipt(
       : a.kind === b.kind ? 0 : a.kind === "delete" ? -1 : 1);
     const nodes = decodeFanslyWsCapture(frame);
 
+    let result: FanslyWsLiveApplyResult;
     try {
       // The frame's writes and its ack run in a savepoint (`tx` is already a
       // transaction), so a refusal that every retry would hit rolls back only
       // them: the receipt, still locked, is then acked as debt below instead
       // of staying pending forever and holding the replay's head.
-      return await tx.transaction((savepoint) => applyOperations(savepoint as unknown as Database, {
+      result = await tx.transaction((savepoint) => applyOperations(savepoint as unknown as Database, {
         observationId: input.observationId, pageId, receivedAt, ownRef: row.native_account_ref,
         decoderVersion: live.decoderVersion, operations, invalid, nodes,
       }));
@@ -202,8 +238,15 @@ export async function applyFanslyWsLiveReceipt(
       if (dataError === null) throw error;
       // No overlay row and no event of this frame survive; the ack does.
       await ackReceipt(database, input.observationId, "debt", nodes);
+      await acked(frame, "debt");
       return { status: "debt", ...emptyCounts(), invalid: invalid + operations.length, dataError };
     }
+    // The savepoint acked the receipt; the hook runs after it, outside the
+    // savepoint, so the demand commits with the ack.
+    if (result.status === "applied" || result.status === "skipped" || result.status === "debt") {
+      await acked(frame, result.status);
+    }
+    return result;
   });
 }
 
@@ -595,6 +638,93 @@ export async function confirmDmLiveMessages(
     `);
     return counts;
   });
+}
+
+export interface DmLiveInTransactionConfirmCounts {
+  /** Unconfirmed overlay rows among the ids. */
+  checked: number;
+  match: number;
+  mismatch: number;
+  notFound: number;
+  /** Mismatches by field (`ws_rest_mismatch{field}`). */
+  mismatchFields: Partial<Record<DmLiveMismatchField, number>>;
+}
+
+/**
+ * The Fansly Sync Engine's confirmation of the overlay rows its DM apply just
+ * read (design §5.4 step 7, §14 F3), inside that apply's transaction: the
+ * same `judgeDmLiveParity` verdict as the passive pass, against the
+ * `page_dm_messages` rows the apply wrote (`confirm_source =
+ * 'page_dm_messages'` until step 4). Only rows still unconfirmed are touched,
+ * under their row lock, so the passive pass (`skip locked`, same rule) and
+ * this writer never both settle a row.
+ *
+ * `messageIds`: ids the read returned. `notFoundMessageIds`: ids the reads
+ * covered without returning them (a deleted message, or one never shown) —
+ * settled `not_found` unless a hot copy exists after all, which is judged
+ * like any other. An id with neither stays for the passive pass.
+ */
+export async function confirmDmLiveMessagesInTransaction(
+  tx: Database,
+  input: { pageId: number; messageIds: readonly string[]; notFoundMessageIds?: readonly string[] },
+): Promise<DmLiveInTransactionConfirmCounts> {
+  const counts: DmLiveInTransactionConfirmCounts = { checked: 0, match: 0, mismatch: 0, notFound: 0, mismatchFields: {} };
+  const notFound = new Set(input.notFoundMessageIds ?? []);
+  const ids = [...new Set([...input.messageIds, ...notFound])].filter((id) => /^[0-9]{1,32}$/.test(id)).sort();
+  if (ids.length === 0) return counts;
+  const rows = await tx.execute<DmLiveParityRow>(sql`
+    select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
+      m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
+      m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
+      hot.id is not null as hot_found, hot.content as hot_content, hot.sender_platform_user_id as hot_sender,
+      hot.created_at as hot_created_at, hot.in_reply_to_message_id as hot_reply, hot.group_id as hot_group,
+      false as arc_found, null::text as arc_text, null::boolean as arc_sent_by_me,
+      null::timestamptz as arc_occurred_at, null::text as arc_reply, null::text as arc_group,
+      null::boolean as arc_content_pending, false as excluded
+    from dm_live_messages m
+    left join lateral (
+      select pm.id, pm.content, pm.sender_platform_user_id, pm.created_at, pm.in_reply_to_message_id,
+        t.platform_conversation_id as group_id
+      from page_dm_messages pm
+      join page_dm_threads t on t.id = pm.conversation_id
+      where pm.platform_account_id = m.page_id and pm.platform_message_id = m.platform_message_id
+      order by pm.id
+      limit 1
+    ) hot on true
+    where m.page_id = ${input.pageId}
+      and m.platform_message_id = any(${sql.param(ids)}::text[])
+      and m.confirmed_at is null
+    order by m.platform_message_id
+    for update of m
+  `);
+  const verdicts: Array<{ message_id: string; outcome: DmLiveConfirmOutcome; source: string | null; fields: string }> = [];
+  for (const row of rows.rows) {
+    counts.checked += 1;
+    // The hot copy decides; without one only a covered id is `not_found`
+    // (the window never elapses here: the passive pass owns the window).
+    const verdict = judgeDmLiveParity(row, Number.POSITIVE_INFINITY);
+    if (verdict.outcome === "match" || verdict.outcome === "mismatch") {
+      counts[verdict.outcome] += 1;
+      for (const field of verdict.fields) counts.mismatchFields[field] = (counts.mismatchFields[field] ?? 0) + 1;
+      verdicts.push({ message_id: row.platform_message_id, outcome: verdict.outcome, source: verdict.source, fields: verdict.fields.join(",") });
+    } else if (notFound.has(row.platform_message_id)) {
+      counts.notFound += 1;
+      verdicts.push({ message_id: row.platform_message_id, outcome: "not_found", source: null, fields: "" });
+    }
+  }
+  if (verdicts.length === 0) return counts;
+  await tx.execute(sql`
+    update dm_live_messages m set
+      confirmed_at = clock_timestamp(),
+      confirm_source = v.source,
+      confirm_outcome = v.outcome,
+      mismatch_fields = case when v.fields = '' then null else string_to_array(v.fields, ',') end,
+      updated_at = clock_timestamp()
+    from jsonb_to_recordset(${JSON.stringify(verdicts)}::jsonb)
+      as v(message_id text, outcome text, source text, fields text)
+    where m.page_id = ${input.pageId} and m.platform_message_id = v.message_id and m.confirmed_at is null
+  `);
+  return counts;
 }
 
 // ---------------------------------------------------------------------------

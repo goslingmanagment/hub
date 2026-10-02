@@ -25,13 +25,13 @@ sync/
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
     actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step and the no-HTTP outcomes
-    shadow.ts                the shadow transport and the shadow demand feed
+    shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts, metrics.ts    plan §10
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     resources/               one file per resource family
-    ws/                      decode, router, the post-ack routing hook
+    ws/                      decode, router, the post-ack routing hook (live) and the shadow WS feed
     lib/                     chain rules, walk helpers
   requests/                  history requests, ETA, enqueue-and-wait
 ```
@@ -46,11 +46,84 @@ or a plan that waits on `dependency` and makes the other work due. Fan profiles 
 (`fan-profiles.lookup`): the asking apply merges the fan ids into the walk row's `params.ids`, and each step reads up
 to 100 of them not looked up through the page within the day.
 
+A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
+`upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
+membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
+pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary`). A list head newer than what the message
+reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
+
+A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
+into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
+writes the page's rows minus any an executed erasure fences, the chain, the legacy coverage columns (engine-owned
+pages only), the overlay confirmation, and — last — the inline canonicalization and the `message_archive` rows of
+the page's message events. When the chat was deleted, unbound or excluded between the plan and the apply, only that
+last part runs, under the same fence, so the minutely sweep never appends the page unfenced. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
+head; a demanded id the vendor's head does not show yet is read again after 15 s and 60 s, then settled `not_found`.
+
+A plan is read-only, so a decision it takes that the apply must fold into — a media visit's windows, an album walk's
+proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
+stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
+journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
+one visit of the legacy lane becomes one window per step with the same windows in the same order. A visit in flight
+across a deploy that changed a visit rule no longer replays: it is abandoned (the next due item starts afresh, the
+item it served backs off on its queue-row ladder), never a failed plan or a quarantined walk.
+
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
 **HTTP** (no transaction open) → **capture** (the raw answer is committed to `observations` before anything parses
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+## History requests
+
+An agent or the owner asks for the history of up to 1 000 fans' chats on one page, to a depth (`all`: proven to the
+first message by an empty page, owner decision №3; `latest N`; the legacy wrapper's boundary). The intake
+(`requests/history.ts`, database only) resolves every fan to a visible chat or refuses it (`not_found`, `excluded`,
+`page_erased`, `duplicate`) without failing the request; a fan already satisfied is `ready` without a read. The fans of
+one chat ride on the chat's ONE `dm-messages.history` work row (class `requests`), so a read serves every request on
+the chat and is counted once, on the fan whose turn it was. The requests class serves round robin between a page's
+open requests, then between a request's fans. The first read of a fan without an anchor is the chat's head (its
+"latest N" counts from there; messages that arrive later come live); then `before = contiguous_oldest_id` down. Every
+history read runs the request hook (`onHistoryThreadChainChanged`): anchors, satisfied fans `ready`, the request
+`done`, the chat's work closed when no fan rides on it. A history work that closes for a reason of its own (the chat
+was deleted or excluded since) ends its fans through `onHistoryWorkClosed`. No history read happens without an open
+fan (I12): the plan closes such a work, and the actor's idle wait does not count it. Requests are accepted only on a
+`live` page whose `requests_enabled_at` has passed — every other page answers 409
+`history_requests_unavailable_on_page`, so in step 2 the class is empty. Intake, cancel, the admission and the apply
+take `sync_work` rows before `history_requests` before `history_request_items`; intake takes the chats its fans
+reference (`page_dm_threads`) before any work row, as the DM apply holds the chat it writes before its works, and the
+hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it)
+(`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
+always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
+
+Three clients share these service functions and nothing else: the agent plane (`agentHistoryRequestCreate|Get|Cancel|
+List` under `/api/v1/agent/`, `modules/agent-read/handlers-history.ts`, the `hub history-*` commands), the owner routes
+(`/api/v1/sync/history-requests…`, `modules/sync-engine/index.ts`, contracts in `routes-sync.ts`) and the owner CLI
+(`pnpm cli sync history …`). The wire shape is one (`requests/wire.ts`) for agents and the owner. An agent key sees and
+may cancel every requester's requests on its granted pages (design D10); filing and cancelling need
+`request:hydration`, everything that returns chat refs `read:messages` too (D9). A refused page answers the 409 above;
+the agent docs keep the hydration route as the remedy there.
+
+## WebSocket demand
+
+The socket is the live signal of a page (plan §7). The legacy receiver (worker) owns the socket until a page is
+switched; it captures each frame (observation + pending receipt) and the step-1 drivers apply the overlay and ack the
+receipt. The engine turns receipts into work in two ways, with one decoder (`fansly/ws/decode.ts`: the step-1 message
+decoder plus new chats, money, subscriptions and payouts) and one routing table (`fansly/ws/router.ts`):
+
+- **Live pages (`handover`/`live`, step 3)**: every driver passes the post-ack hook `routeFanslyWsReceiptDemand`
+  (`fansly/ws/route-receipt.ts`), which upserts the receipt's demand in the transaction that acks it — once per
+  receipt, whichever driver wins it (I18). On `off`/`shadow` pages the hook only reads the page's mode.
+- **Shadow pages**: the actor reads the receipts past `sync_pages.ws_router_cursor` once per lap and routes them into
+  shadow work; it never acks a receipt and never writes the overlay. A router that never ran starts 15 minutes back;
+  receipts older than that are passed over (history, not live demand). The receipts have no `page_id` index, so a
+  lap that finds nothing of the page moves its cursor up to that 15-minute watermark (at most once a minute): a
+  silent page's read covers the horizon, not everything captured since its last receipt.
+
+Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
+on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
+broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; the hot-table and
+archive marks of a live page land with the socket's live ownership (step 3).
 
 ## Ownership
 
@@ -122,7 +195,7 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
-| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
+| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`); or the conversation list answered 429: only the keys that can only read the list wait, 5 s → 10 s → … → 300 s | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
 | `pacer` | runnable; the page's next slot has not opened yet | the pause |
@@ -131,7 +204,8 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 ## Errors
 
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
-transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner.
+transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
+except a 429 on the conversation list, which holds only the list (owner decision 2026-10-02).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -139,7 +213,8 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx, success envelope, contract accepts | `ok` | streak reset, subject breaker reset, expired holds cleared |
 | 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
-| 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
+| any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
 | 401 / 403 | `auth` | page hold until new credentials, alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
@@ -160,10 +235,12 @@ holds the resource file (30 min → 2 h → 6 h).
 | The pause | the owner's console ("Пауза между запросами Fansly"); 0 files |
 | The jitter rule | one line in `engine/pacer.ts` + the invariant tests (`tests/sync-pacer*.test.ts`) |
 | How fresh a resource is | one line in `fansly/registry.ts` |
+| How fresh a resource is on one page, without a deploy | `pnpm cli sync page override --page <label> --resource <key>` with `--period-ms` (a poll), `--period-ms`/`--full-period-ms` (`catalog.vault`) or `--tiers '<json>'` (`media-stats.walk`); owner decision №6 keys need `--owner-approved` |
 | Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
-| The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-errors.test.ts` |
+| The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
 | A new kind of data | the same + schema, repository, migration |
-| A new depth or rule of a history request | `requests/history.ts` (+ the satisfaction rule in `engine/commit.ts`) + the contract |
+| A new depth or rule of a history request | `requests/history-rules.ts` (satisfaction, anchors) + `requests/history.ts` + the contract |
 | A new WebSocket event | `fansly/ws/decode.ts`, `fansly/ws/router.ts` + a test |
 | "Why is chat X still partial?" | `hub sync-why`; the code is one resource file |
+| One read of a route for a page, now | `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'` (shadow: simulated) |

@@ -9,7 +9,6 @@ import type {
   FanslyMessagesPage,
   FanslyMessagingGroupsPage,
   FanslyPostsPage,
-  FanslyPostTip,
   FanslySubscriber,
 } from "../types.ts";
 
@@ -185,7 +184,7 @@ export interface FanslyWireResultById {
   "followers.page": FanslyFollowersPage;
   "notifications.page": unknown;
   "posts.timeline": FanslyPostsPage;
-  "posts.tips": FanslyPostTip[];
+  "posts.tips": unknown;
   "posts.by_ids": FanslyPostsPage;
   "post.replies": unknown;
   "vault.albums": unknown;

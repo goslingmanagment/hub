@@ -18,7 +18,7 @@ import {
 // "How fresh a resource is" is one line here (a period, a coalescing window);
 // a change to an owner-protected frequency (decision №6) needs the owner.
 // An entry whose code has not landed yet has no `module`: its work waits on
-// `dependency` and counts `sync_not_implemented` (S2-07b … S3-04 fill them).
+// `dependency` and counts `sync_not_implemented` (S2-08a … S3-04 fill them).
 
 /** The resource file a key belongs to (`<file>.<variant>`). */
 export type ResourceFile =
@@ -44,18 +44,13 @@ export type WalkKind =
 /** A legacy stream or sender (maps/senders.md §3) an entry takes over. */
 export type LegacyRef = { stream: SyncStream } | { sender: FanslySendSource };
 
-export interface TierSpec { maxAgeDays: number | null; everyMs: number }
+export type { TierSpec } from "../engine/resource.ts";
 
 export interface ResourceSpec extends EngineResourceSpec {
   file: ResourceFile;
   /** What one work row is about. */
   subject: "page" | "thread" | "target" | "fan" | "post" | "media";
   triggers: readonly Trigger[];
-  /** Goals re-evaluated on a cadence (a walk's due subjects, a daily
-   *  incremental / weekly full sweep); polls use `period`. */
-  cadence?: { everyMs: number; fullEveryMs?: number };
-  /** Subject-queue walks by age tier (owner decision №6 for media stats). */
-  tiers?: readonly TierSpec[];
   /** A new walk starts at most this long after the previous one started
    *  (followers reconcile: the owner's daily floor). */
   minIntervalMs?: number;
@@ -92,6 +87,20 @@ const subscribersModule = (variant: "poll" | "history") => async (): Promise<Res
   (await import("./resources/subscribers.ts")).subscribersModule(variant);
 const followersModule = (variant: "head" | "reconcile") => async (): Promise<ResourceModule> =>
   (await import("./resources/followers.ts")).followersModule(variant);
+const dmConversationsModule = (variant: "head" | "full" | "find" | "detail" | "ws-down") => async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-conversations.ts")).dmConversationsModule(variant);
+const transactionsModule = (variant: "head" | "insurance" | "rescan" | "backfill") => async (): Promise<ResourceModule> =>
+  (await import("./resources/transactions.ts")).transactionsModule(variant);
+const topSpendersModule = (variant: "window" | "bootstrap") => async (): Promise<ResourceModule> =>
+  (await import("./resources/top-spenders.ts")).topSpendersModule(variant);
+const fanEarningsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/fan-earnings.ts")).fanEarningsRosterModule;
+const purchasesModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/purchases.ts")).purchasesTargetsModule;
+const payoutsModule = (variant: "daily" | "walk") => async (): Promise<ResourceModule> =>
+  (await import("./resources/payouts.ts")).payoutsModule(variant);
+const dmMessagesModule = (variant: "head" | "catchup" | "history") => async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-messages.ts")).dmMessagesModule(variant);
 const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => async (): Promise<ResourceModule> => {
   const resources = await import("./resources/fan-profiles.ts");
   switch (variant) {
@@ -103,6 +112,23 @@ const fanProfilesModule = (variant: "lookup" | "probe" | "alias-backfill") => as
       return resources.fanProfilesAliasBackfillModule;
   }
 };
+
+const dmLiveDeletionsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/dm-live.ts")).dmLiveDeletionsModule;
+const notificationsModule = (variant: "forward" | "backfill") => async (): Promise<ResourceModule> =>
+  (await import("./resources/notifications.ts")).notificationsModule(variant);
+const postsModule = (variant: "refresh" | "backfill" | "engagement") => async (): Promise<ResourceModule> =>
+  (await import("./resources/posts.ts")).postsModule(variant);
+const postRepliesModule = (variant: "walk" | "authors") => async (): Promise<ResourceModule> =>
+  (await import("./resources/post-replies.ts")).postRepliesModule(variant);
+const catalogModule = (variant: "fixed" | "vault" | "hydrate") => async (): Promise<ResourceModule> =>
+  (await import("./resources/catalog.ts")).catalogModule(variant);
+const mediaStatsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/media-stats.ts")).mediaStatsWalkModule;
+const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Promise<ResourceModule> =>
+  (await import("./resources/stats.ts")).statsModule(variant);
+const probeModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/probe.ts")).probeManualModule;
 
 const STATS_DAILY_OPERATIONS: readonly FanslyWireId[] = [
   "account.stats", "earnings.stats_window", "earnings.monthly", "trackinglinks", "discovery.suggestions",
@@ -148,7 +174,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [sender("ws_connect")],
   },
 
-  // ── dm-live (no HTTP) ─────────────────────────────────────────────────────
+  // ── dm-live (no HTTP; S2-10 routes it, S3-03 writes it) ───────────────────
   {
     key: "dm-live.deletions", file: "dm-live", subject: "thread", kind: "trigger", class: "urgent",
     triggers: ["ws:message_deleted"],
@@ -156,6 +182,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "none", walk: "none", http: false, evidence: false, fence: "dm_archive",
     operations: [],
     legacy: [],
+    module: dmLiveDeletionsModule,
   },
 
   // ── dm-conversations (S2-08a) ─────────────────────────────────────────────
@@ -165,6 +192,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"], replayKinds: ["dm_conversations"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("head"),
   },
   {
     key: "dm-conversations.full", file: "dm-conversations", subject: "page", kind: "poll", class: "planned",
@@ -172,6 +200,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("full"),
   },
   {
     key: "dm-conversations.find", file: "dm-conversations", subject: "thread", kind: "trigger", class: "urgent",
@@ -180,6 +209,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups", "group.detail"], replayKinds: ["group_detail"],
     legacy: [stream("dm_conversations"), sender("ws_hint")],
+    module: dmConversationsModule("find"),
   },
   {
     key: "dm-conversations.detail", file: "dm-conversations", subject: "thread", kind: "trigger", class: "planned",
@@ -187,6 +217,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
     operations: ["group.detail"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("detail"),
   },
   {
     // Polls the list head every 30 s only while the socket is down (> 2 min):
@@ -197,25 +228,31 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "single", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [stream("dm_conversations")],
+    module: dmConversationsModule("ws-down"),
   },
 
   // ── dm-messages (S2-08b) ──────────────────────────────────────────────────
   {
     key: "dm-messages.head", file: "dm-messages", subject: "thread", kind: "trigger", class: "urgent",
-    triggers: ["ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down", "ws_gap"],
+    triggers: [
+      "ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down",
+      "apply:dm-conversations.find", "ws_gap",
+    ],
     coalesce: { quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND } },
     slo: { resultMs: 30 * SECOND },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"], replayKinds: ["dm_messages"],
     legacy: [stream("dm_messages"), sender("ws_hint"), sender("ai_accelerator"), sender("ai_fast_lane")],
+    module: dmMessagesModule("head"),
   },
   {
     key: "dm-messages.catchup", file: "dm-messages", subject: "thread", kind: "trigger", class: "planned",
-    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "legacy_import"],
+    triggers: ["apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail", "legacy_import"],
     coalesce: { quietMs: MINUTE, maxMs: 10 * MINUTE, extendOnSignal: true }, slo: { staleAfterMs: 6 * HOUR },
     proof: "chain_empty_page", walk: "incremental-head", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
     legacy: [stream("dm_messages"), stream("dm_conversations")],
+    module: dmMessagesModule("catchup"),
   },
   {
     // I12: no history walk without a request (owner decision №2).
@@ -224,6 +261,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "chain_empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "dm_archive",
     operations: ["messages.page"],
     legacy: [stream("dm_messages"), sender("targeted_backfill")],
+    module: dmMessagesModule("history"),
   },
 
   // ── transactions (S2-07b) ─────────────────────────────────────────────────
@@ -234,6 +272,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"], replayKinds: ["earnings_transactions"],
     legacy: [stream("transactions")],
+    module: transactionsModule("head"),
   },
   {
     // Owner decision №5: the insurance poll every 5 minutes.
@@ -242,20 +281,23 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
     legacy: [stream("transactions")],
+    module: transactionsModule("insurance"),
   },
   {
     key: "transactions.rescan", file: "transactions", subject: "page", kind: "poll", class: "planned",
-    triggers: ["poll", "ws:transaction"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
+    triggers: ["poll", "ws:transaction", "apply:transactions.head"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
     proof: "offset_stable_total", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
     legacy: [stream("transactions")],
+    module: transactionsModule("rescan"),
   },
   {
     key: "transactions.backfill", file: "transactions", subject: "page", kind: "goal", class: "planned",
-    triggers: ["owner", "new_page"], slo: {},
+    triggers: ["owner", "new_page", "dependency"], slo: {},
     proof: "offset_stable_total", walk: "offset-walk", http: true, evidence: false, fence: "dm_archive",
     operations: ["transactions.page"],
     legacy: [stream("transactions")],
+    module: transactionsModule("backfill"),
   },
 
   // ── top-spenders (S2-07b) ─────────────────────────────────────────────────
@@ -266,6 +308,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["earnings.accounts"], replayKinds: ["earnings_accounts"],
     legacy: [stream("top_spenders")],
+    module: topSpendersModule("window"),
   },
   {
     key: "top-spenders.bootstrap", file: "top-spenders", subject: "page", kind: "goal", class: "planned",
@@ -273,28 +316,35 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "windows", http: true, evidence: false, fence: "none",
     operations: ["earnings.accounts"],
     legacy: [stream("top_spenders")],
+    module: topSpendersModule("bootstrap"),
   },
 
   // ── fan-earnings (S2-07b) ─────────────────────────────────────────────────
   {
+    // The transactions steps (≥ every 5 min) ask for a walk whenever a subject
+    // is due: dirty (projection queue) or past the roster age (poll-like).
     key: "fan-earnings.roster", file: "fan-earnings", subject: "page", kind: "goal", class: "planned",
-    triggers: ["projection_queue", "poll"], cadence: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["projection_queue", "poll", "apply:transactions.*"], cadence: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "receipt", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["earnings.stats_accounts", "earnings.monthly_accounts"],
     replayKinds: ["fan_earnings_stats", "fan_earnings_monthly"],
     terminalStatuses: [400, 404, 410], subjectQueue: true, queuePlane: "fan_earnings_lifetime",
     legacy: [stream("fan_earnings")],
+    module: fanEarningsModule,
   },
 
   // ── purchases (S2-07b) ────────────────────────────────────────────────────
   {
-    key: "purchases.targets", file: "purchases", subject: "page", kind: "goal", class: "planned",
+    // One row per target (`media:<id>` | `bundle:<id>`): the plane CHECK of
+    // subject_refresh_state admits no `purchase_history` plane (S2-07b).
+    key: "purchases.targets", file: "purchases", subject: "target", kind: "goal", class: "planned",
     triggers: ["apply:transactions.*", "apply:dm-messages.*", "ws:order"],
-    cadence: { everyMs: 4 * HOUR }, slo: { staleAfterMs: 12 * HOUR },
-    proof: "empty_page", walk: "subject-queue", http: true, evidence: true, fence: "none",
+    slo: { staleAfterMs: 12 * HOUR },
+    proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["media.order_history"], replayKinds: ["purchase_history"],
-    terminalStatuses: [404, 410, 422], subjectQueue: true, queuePlane: "purchase_history",
+    terminalStatuses: [404, 410, 422],
     legacy: [stream("purchase_history")],
+    module: purchasesModule,
   },
 
   // ── payouts (S2-07b) ──────────────────────────────────────────────────────
@@ -304,6 +354,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
     operations: ["payouts.methods", "payouts.requests"], replayKinds: ["payout_methods", "payout_requests"],
     legacy: [stream("payouts")],
+    module: payoutsModule("daily"),
   },
   {
     key: "payouts.walk", file: "payouts", subject: "page", kind: "goal", class: "planned",
@@ -311,6 +362,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "offset_stable", walk: "offset-walk", http: true, evidence: false, fence: "none",
     operations: ["payouts.requests"],
     legacy: [stream("payouts")],
+    module: payoutsModule("walk"),
   },
 
   // ── subscribers (S2-07a) ──────────────────────────────────────────────────
@@ -387,6 +439,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"], replayKinds: ["notifications"],
     legacy: [stream("notifications")],
+    module: notificationsModule("forward"),
   },
   {
     key: "notifications.backfill", file: "notifications", subject: "page", kind: "goal", class: "planned",
@@ -394,6 +447,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: true, fence: "none",
     operations: ["notifications.page"],
     legacy: [stream("notifications")],
+    module: notificationsModule("backfill"),
   },
 
   // ── posts (S2-09a) ────────────────────────────────────────────────────────
@@ -403,6 +457,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "head_known_item", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"], replayKinds: ["posts", "post_tips"],
     legacy: [stream("posts")],
+    module: postsModule("refresh"),
   },
   {
     key: "posts.backfill", file: "posts", subject: "page", kind: "goal", class: "planned",
@@ -410,31 +465,42 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     proof: "empty_page", walk: "cursor-walk", http: true, evidence: false, fence: "none",
     operations: ["posts.timeline", "posts.tips"],
     legacy: [stream("posts")],
+    module: postsModule("backfill"),
   },
   {
+    // A standing walk over the `post_engagement` queue the creator-posts
+    // projector seeds (design §4.3); it re-checks the queue every 6 h when
+    // nothing is due (the legacy phase rode the 6-hourly posts cadence).
     key: "posts.engagement", file: "posts", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue"],
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 180, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
-    slo: { staleAfterMs: 3 * DAY },
+    standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["posts.by_ids"], subjectQueue: true, queuePlane: "post_engagement",
     legacy: [stream("posts")],
+    module: postsModule("engagement"),
   },
 
   // ── post-replies (S2-09a) ─────────────────────────────────────────────────
   {
+    // A standing walk over the `post_replies` queue (design §4.3): a post is
+    // due never walked, dirty, or `fanslyRepliesRewalkCycleDays` (live, prod
+    // 30 d) after its last walk; the queue is re-checked every 6 h when
+    // nothing is due (the legacy stream's cadence).
     key: "post-replies.walk", file: "post-replies", subject: "page", kind: "goal", class: "planned",
-    triggers: ["projection_queue"], cadence: { everyMs: 30 * DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["projection_queue"], standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "empty_page", walk: "subject-queue", http: true, evidence: true, fence: "none",
     operations: ["post.replies"], replayKinds: ["post_replies"], subjectQueue: true, queuePlane: "post_replies",
     legacy: [stream("post_replies")],
+    module: postRepliesModule("walk"),
   },
   {
-    key: "post-replies.authors", file: "post-replies", subject: "post", kind: "trigger", class: "planned",
+    key: "post-replies.authors", file: "post-replies", subject: "page", kind: "trigger", class: "planned",
     triggers: ["apply:post-replies.walk"], slo: {},
     proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"],
     legacy: [stream("post_replies")],
+    module: postRepliesModule("authors"),
   },
 
   // ── catalog (S2-09b; owner decision №6 "экономно") ────────────────────────
@@ -445,14 +511,21 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: ["vault.albums", "uservault.albums", "subscriptions.tiers", "subscriptions.giftcodes", "message.automated", "account.walls"],
     replayKinds: ["vault_albums", "uservault_albums", "subscription_tiers", "gift_codes", "automated_messages", "account_walls"],
     legacy: [stream("catalog")],
+    module: catalogModule("fixed"),
   },
   {
-    // Incremental daily, full weekly.
+    // A standing walk over the albums the catalog projection lists: it looks
+    // at them daily (an album whose head or count moved is walked again —
+    // incremental daily) and an album walked a week ago is due again (full
+    // weekly; a page's override changes either period, owner decision №6);
+    // `catalog.fixed` makes it due as soon as it listed the albums.
     key: "catalog.vault", file: "catalog", subject: "page", kind: "goal", class: "planned",
-    triggers: ["poll"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY }, slo: { staleAfterMs: 3 * DAY },
+    triggers: ["poll", "apply:catalog.fixed"], cadence: { everyMs: DAY, fullEveryMs: 7 * DAY }, pageOverride: "cadence",
+    standing: { recheckMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "vault_walk", walk: "cursor-walk", http: true, evidence: true, fence: "none", ownerProtected: true,
     operations: ["vault.media"], replayKinds: ["vault_media"],
     legacy: [stream("catalog")],
+    module: catalogModule("vault"),
   },
   {
     key: "catalog.hydrate", file: "catalog", subject: "page", kind: "trigger", class: "planned",
@@ -461,17 +534,25 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: ["account.media_by_ids", "account.bundles_by_ids"],
     replayKinds: ["account_media_batch", "account_media_bundle_batch"],
     legacy: [stream("catalog")],
+    module: catalogModule("hydrate"),
   },
 
   // ── media-stats (S2-09b; owner decision №6) ───────────────────────────────
   {
+    // A standing walk over the `media_stats` queue the media-plane and
+    // engagement projectors seed and dirty (design §4.3); it re-checks the
+    // queue every 6 h when nothing is due (the legacy stream's cadence). The
+    // tiers are the queue's: ≤ 30 d daily, 31–90 d weekly, older monthly (D19);
+    // a page's override replaces them (owner decision №6, `--owner-approved`).
     key: "media-stats.walk", file: "media-stats", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue", "poll"],
     tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 90, everyMs: 7 * DAY }, { maxAgeDays: null, everyMs: 30 * DAY }],
-    slo: { staleAfterMs: 3 * DAY },
+    pageOverride: "tiers",
+    standing: { recheckMs: 6 * HOUR }, slo: { staleAfterMs: 3 * DAY },
     proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none", ownerProtected: true,
     operations: ["media.offer_stats"], replayKinds: ["media_offer_stats"], subjectQueue: true, queuePlane: "media_stats",
     legacy: [stream("media_stats")],
+    module: mediaStatsModule,
   },
 
   // ── stats (S2-09b) ────────────────────────────────────────────────────────
@@ -485,21 +566,25 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
       "broadcast_stats", "broadcast_stats_deleted", "broadcast_scheduled", "polls", "recapstats",
     ],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("daily"),
   },
   {
-    // Every ≤ 25 h window stays gap-free [A15].
+    // Every ≤ 25 h window stays gap-free [A15]; the next capture is never
+    // planned past the 23 h two windows need to meet.
     key: "stats.hourly", file: "stats", subject: "page", kind: "poll", class: "planned",
     triggers: ["poll"], period: { everyMs: 22 * HOUR }, slo: { staleAfterMs: 66 * HOUR },
     proof: "window_honoured", walk: "single", http: true, evidence: false, fence: "none",
     operations: ["account.stats"],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("hourly"),
   },
   {
     key: "stats.backfill", file: "stats", subject: "page", kind: "goal", class: "planned",
     triggers: ["owner", "legacy_import"], slo: {},
     proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
-    operations: ["account.stats"],
+    operations: ["account.stats", "earnings.stats_window"],
     legacy: [stream("stats_snapshot")],
+    module: statsModule("backfill"),
   },
 
   // ── live only (step 3) ────────────────────────────────────────────────────
@@ -511,8 +596,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [sender("media_download")],
   },
   {
+    // Also a frame no chat can be named for (plan §7 p.10 (b), the router).
     key: "repair.ws-gap", file: "repair", subject: "page", kind: "repair", class: "urgent",
-    triggers: ["ws_gap"], slo: { resultMs: MINUTE },
+    triggers: ["ws_gap", "ws:invalid"], slo: { resultMs: MINUTE },
     proof: "none", walk: "composite", http: true, liveOnly: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups"],
     legacy: [],
@@ -520,11 +606,14 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── probe (S2-09b) ────────────────────────────────────────────────────────
   {
+    // Any route, one admitted request (`pnpm cli sync probe`): the route is
+    // the work's parameter, so the entry names none.
     key: "probe.manual", file: "probe", subject: "page", kind: "trigger", class: "planned",
     triggers: ["owner"], slo: {},
     proof: "none", walk: "single", http: true, evidence: false, fence: "none",
     operations: [],
     legacy: [sender("endpoint_probe"), sender("replay_probe")],
+    module: probeModule,
   },
 ];
 

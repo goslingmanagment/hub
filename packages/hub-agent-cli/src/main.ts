@@ -1,13 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 import { KernelApiError, createClient, type KernelClient } from "@kernel/sdk";
 
 import {
   HUB_COMMANDS,
+  HubCompositeResult,
   HubUsageError,
   findHubCommand,
   type HubCommand,
   type HubOptionValues,
+  type HubRunDeps,
 } from "./commands.ts";
 import {
   HUB_CREDENTIALS_PATH,
@@ -73,6 +77,18 @@ export interface HubCliDeps {
   createHubClient?: (options: { baseUrl: string; token: string }) => KernelClient;
   readFile?: (path: string) => string | null;
   fileMode?: (path: string) => number | null;
+  /** The composites' clock (`history-status --wait`); injected by tests. */
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  randomUUID?: () => string;
+}
+
+function readLocalFile(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 function usageDocument(message: string, command?: HubCommand): Record<string, unknown> {
@@ -157,8 +173,12 @@ function boundedMessage(text: string): string {
  * and a bounded message. The message on a validation failure is the SDK's issue
  * list, which names paths and expected types and carries no values.
  */
-function errorDocument(operation: string, error: unknown): Record<string, unknown> {
+function errorDocument(command: HubCommand, error: unknown): Record<string, unknown> {
+  const operation = command.operation;
   if (error instanceof KernelApiError) {
+    // A command may name the next step for a refusal it expects (the history
+    // commands' hydration fallback on a page the engine does not own yet).
+    const hint = command.hint?.(error) ?? null;
     return {
       ok: false,
       operation,
@@ -168,6 +188,7 @@ function errorDocument(operation: string, error: unknown): Record<string, unknow
         status: error.status,
         code: error.code,
         message: boundedMessage(error.message),
+        ...(hint === null ? {} : { hint }),
       },
     };
   }
@@ -288,9 +309,15 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     }));
   const client = createHubClient({ baseUrl, token: credentials.token });
 
+  const runDeps: HubRunDeps = {
+    readFile: deps.readFile ?? readLocalFile,
+    sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+    now: deps.now ?? Date.now,
+    randomUUID: deps.randomUUID ?? randomUUID,
+  };
   let data: unknown;
   try {
-    data = await command.run(client, values);
+    data = await command.run(client, values, runDeps);
   } catch (error) {
     if (error instanceof HubUsageError) {
       return {
@@ -298,7 +325,28 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
         document: usageDocument(error.message, command),
       };
     }
-    return { exitCode: HUB_EXIT_ERROR, document: errorDocument(command.operation, error) };
+    return { exitCode: HUB_EXIT_ERROR, document: errorDocument(command, error) };
+  }
+
+  if (data instanceof HubCompositeResult) {
+    // Several calls, one document. A failed call is reported inside `data`
+    // (metadata only) and turns the whole run into "no complete answer" (4),
+    // without dropping what the other calls returned.
+    const compositeBlockers = blockersOf(data.data);
+    const exitCode = data.failed > 0
+      ? HUB_EXIT_ERROR
+      : failOnPartial && compositeBlockers.length > 0 ? HUB_EXIT_PARTIAL : HUB_EXIT_OK;
+    return {
+      exitCode,
+      document: {
+        ok: data.failed === 0,
+        operation: command.operation,
+        exitCode,
+        composite: data.meta,
+        blockers: compositeBlockers,
+        data: data.data,
+      },
+    };
   }
 
   const blockers = blockersOf(data);

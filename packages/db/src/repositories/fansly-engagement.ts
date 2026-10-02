@@ -489,6 +489,56 @@ export async function ensurePostRepliesWalkRow(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
+/**
+ * A position in a subject-queue walk's own order (Fansly Sync Engine, design
+ * §4.3): the ordering keys of the last subject a walk took, exactly as the
+ * database computed them (timestamps as epoch text, so a microsecond is never
+ * rounded away and a subject is never taken twice). Opaque to callers: a
+ * chunk function hands one out with every candidate and takes one back as
+ * `after`, which returns only the subjects that sort after it. The shadow
+ * engine steps through the due subjects this way without writing the queue.
+ */
+export type SubjectQueueKeyset = string;
+
+type KeysetPart = number | string;
+
+function encodeSubjectQueueKeyset(parts: readonly KeysetPart[]): SubjectQueueKeyset {
+  return JSON.stringify(parts);
+}
+
+/** The parts of a keyset this file handed out, checked against the layout of
+ *  the function it is given back to. */
+function decodeSubjectQueueKeyset(token: SubjectQueueKeyset, layout: readonly ("int" | "numeric" | "text")[]): KeysetPart[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(token);
+  } catch {
+    parsed = null;
+  }
+  const valid = Array.isArray(parsed) && parsed.length === layout.length && parsed.every((part, index) => {
+    switch (layout[index]) {
+      case "int":
+        return typeof part === "number" && Number.isSafeInteger(part);
+      case "numeric":
+        return typeof part === "string" && /^(-?Infinity|-?\d+(\.\d+)?)$/.test(part);
+      default:
+        return typeof part === "string";
+    }
+  });
+  if (!valid) throw new RangeError(`Not a subject-queue keyset of this walk: ${token}`);
+  return parsed as KeysetPart[];
+}
+
+/** `(k1, …, kn) > (a1, …, an)` in a walk's order, as nested comparisons: each
+ *  key with its own direction, the last one (the subject ref) descending. */
+function keysetAfter(keys: readonly { expr: SQL; value: SQL }[], subjectRef: SQL, after: SQL): SQL {
+  let predicate = sql`${subjectRef} < ${after}`;
+  for (const key of [...keys].reverse()) {
+    predicate = sql`(${key.expr} > ${key.value} or (${key.expr} = ${key.value} and ${predicate}))`;
+  }
+  return predicate;
+}
+
 export interface PostRepliesWalkCandidate {
   subjectRef: string;
   knownCount: number | null;
@@ -497,6 +547,8 @@ export interface PostRepliesWalkCandidate {
   consecutiveFailures: number;
   /** 0 never-walked, 1 dirty, 2 round-robin re-walk. */
   priorityBand: number;
+  /** This subject's position in the walk order (pass it back as `after`). */
+  keyset: SubjectQueueKeyset;
 }
 
 /**
@@ -521,10 +573,14 @@ export interface PostRepliesWalkCandidate {
  * exception: success resets `consecutive_failures` to zero, while a failure
  * must wait for its stored `next_due_at` backoff so dead posts cannot keep band
  * zero and starve healthy subjects.
+ *
+ * `after` (optional, the Fansly Sync Engine's shadow walk): only the subjects
+ * that sort after that keyset, in the same order. Without it the statement
+ * selects exactly what it always did.
  */
 export async function listPostRepliesWalkChunk(
   db: Database,
-  input: { pageId: number; limit: number; rewalkBefore: Date; now?: Date },
+  input: { pageId: number; limit: number; rewalkBefore: Date; now?: Date; after?: SubjectQueueKeyset | null },
 ): Promise<PostRepliesWalkCandidate[]> {
   const band = sql`
     case
@@ -533,6 +589,18 @@ export async function listPostRepliesWalkChunk(
       else 2
     end
   `;
+  // The ordering keys as ascending numerics (a NULL where ORDER BY puts it).
+  const publishedKey = sql`coalesce(-extract(epoch from case when s.last_visited_at is null then p.published_at end), 'Infinity'::numeric)`;
+  const visitedKey = sql`coalesce(extract(epoch from s.last_visited_at), '-Infinity'::numeric)`;
+  let afterPredicate = sql``;
+  if (input.after !== undefined && input.after !== null) {
+    const [afterBand, afterPublished, afterVisited, afterRef] = decodeSubjectQueueKeyset(input.after, ["int", "numeric", "numeric", "text"]);
+    afterPredicate = sql`and ${keysetAfter([
+      { expr: band, value: sql`${afterBand}::int` },
+      { expr: publishedKey, value: sql`${afterPublished}::numeric` },
+      { expr: visitedKey, value: sql`${afterVisited}::numeric` },
+    ], sql`s.subject_ref`, sql`${afterRef}::text`)}`;
+  }
   const result = await db.execute<{
     subject_ref: string;
     known_count: number | string | null;
@@ -540,13 +608,17 @@ export async function listPostRepliesWalkChunk(
     last_visited_at: Date | string | null;
     consecutive_failures: number | string;
     priority_band: number | string;
+    published_key: string;
+    visited_key: string;
   }>(sql`
     select s.subject_ref,
            s.known_count,
            s.dirty_reason,
            s.last_visited_at,
            s.consecutive_failures,
-           ${band} as priority_band
+           ${band} as priority_band,
+           ${publishedKey}::text as published_key,
+           ${visitedKey}::text as visited_key
       from subject_refresh_state s
       left join creator_posts p
         on p.account_id = s.page_id
@@ -562,6 +634,7 @@ export async function listPostRepliesWalkChunk(
          or s.dirty_reason is not null
          or s.last_visited_at < ${input.rewalkBefore}
        )
+       ${afterPredicate}
      order by ${band} asc,
               case when s.last_visited_at is null then p.published_at end desc nulls last,
               s.last_visited_at asc nulls first,
@@ -575,6 +648,7 @@ export async function listPostRepliesWalkChunk(
     lastVisitedAt: row.last_visited_at === null ? null : new Date(row.last_visited_at),
     consecutiveFailures: Number(row.consecutive_failures),
     priorityBand: Number(row.priority_band),
+    keyset: encodeSubjectQueueKeyset([Number(row.priority_band), row.published_key, row.visited_key, row.subject_ref]),
   }));
 }
 
@@ -786,6 +860,8 @@ export interface PostEngagementRefreshCandidate {
   tier: PostEngagementTier;
   /** 0 never refreshed, 1 dirty, 2 due by its tier's decay. */
   priorityBand: number;
+  /** This subject's position in the refresh order (pass it back as `after`). */
+  keyset: SubjectQueueKeyset;
 }
 
 /**
@@ -806,10 +882,14 @@ export interface PostEngagementRefreshCandidate {
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
  * twice in this tree.
+ *
+ * `after` (optional, the Fansly Sync Engine's shadow walk): only the posts
+ * that sort after that keyset, in the same order. Without it the statement
+ * selects exactly what it always did.
  */
 export async function listPostEngagementRefreshChunk(
   db: Database,
-  input: { pageId: number; limit: number; now: Date },
+  input: { pageId: number; limit: number; now: Date; after?: SubjectQueueKeyset | null },
 ): Promise<PostEngagementRefreshCandidate[]> {
   const tier = sql`
     case
@@ -841,6 +921,23 @@ export async function listPostEngagementRefreshChunk(
       else 2
     end
   `;
+  const tierRank = sql`case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end`;
+  // The ordering keys as ascending numerics (a NULL where ORDER BY puts it).
+  const visitedKey = sql`coalesce(extract(epoch from s.last_visited_at), '-Infinity'::numeric)`;
+  const publishedKey = sql`coalesce(-extract(epoch from p.published_at), 'Infinity'::numeric)`;
+  let afterPredicate = sql``;
+  if (input.after !== undefined && input.after !== null) {
+    const [afterBand, afterTier, afterVisited, afterPublished, afterRef] = decodeSubjectQueueKeyset(
+      input.after,
+      ["int", "int", "numeric", "numeric", "text"],
+    );
+    afterPredicate = sql`and ${keysetAfter([
+      { expr: band, value: sql`${afterBand}::int` },
+      { expr: tierRank, value: sql`${afterTier}::int` },
+      { expr: visitedKey, value: sql`${afterVisited}::numeric` },
+      { expr: publishedKey, value: sql`${afterPublished}::numeric` },
+    ], sql`s.subject_ref`, sql`${afterRef}::text`)}`;
+  }
   const result = await db.execute<{
     subject_ref: string;
     published_at: Date | string | null;
@@ -849,6 +946,9 @@ export async function listPostEngagementRefreshChunk(
     consecutive_failures: number | string;
     tier: string;
     priority_band: number | string;
+    tier_rank: number | string;
+    visited_key: string;
+    published_key: string;
   }>(sql`
     select s.subject_ref,
            p.published_at,
@@ -856,7 +956,10 @@ export async function listPostEngagementRefreshChunk(
            s.dirty_reason,
            s.consecutive_failures,
            ${tier} as tier,
-           ${band} as priority_band
+           ${band} as priority_band,
+           ${tierRank} as tier_rank,
+           ${visitedKey}::text as visited_key,
+           ${publishedKey}::text as published_key
       from subject_refresh_state s
       join creator_posts p
         on p.account_id = s.page_id
@@ -872,6 +975,7 @@ export async function listPostEngagementRefreshChunk(
          or s.dirty_reason is not null
          or s.last_visited_at < ${dueCutoff}
        )
+       ${afterPredicate}
      order by ${band} asc,
               case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
               s.last_visited_at asc nulls first,
@@ -887,6 +991,13 @@ export async function listPostEngagementRefreshChunk(
     consecutiveFailures: Number(row.consecutive_failures),
     tier: row.tier === "mid" ? "mid" : row.tier === "long_tail" ? "long_tail" : "fresh",
     priorityBand: Number(row.priority_band),
+    keyset: encodeSubjectQueueKeyset([
+      Number(row.priority_band),
+      Number(row.tier_rank),
+      row.visited_key,
+      row.published_key,
+      row.subject_ref,
+    ]),
   }));
 }
 
@@ -1329,6 +1440,34 @@ export interface MediaStatsRefreshCandidate {
    *  journal: outside the dirty rows the TIER orders the chunk, not this, and
    *  within a tier a band-2 item at the edge of its window goes before band 1. */
   priorityBand: number;
+  /** This item's position in the chunk order (pass it back as `after`). */
+  keyset: SubjectQueueKeyset;
+}
+
+/**
+ * The age tiers of the media-stats queue: an item published within
+ * `freshDays` is due `freshEveryMs` after its last visit, within `midDays`
+ * `midEveryMs`, older `oldEveryMs`. The default is the legacy lane's code
+ * values (30 d daily, 180 d weekly, the long-tail cycle); the Fansly Sync
+ * Engine passes the owner's decision №6 (30 d daily, 90 d weekly, monthly).
+ */
+export interface MediaStatsTiers {
+  freshDays: number;
+  midDays: number;
+  freshEveryMs: number;
+  midEveryMs: number;
+  oldEveryMs: number;
+}
+
+/** The legacy lane's tiers at a long-tail cycle (`fanslyMediaStatsLongTailCycleDays`). */
+export function legacyMediaStatsTiers(longTailCycleDays: number): MediaStatsTiers {
+  return {
+    freshDays: MEDIA_STATS_FRESH_DAYS,
+    midDays: MEDIA_STATS_MID_DAYS,
+    freshEveryMs: MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS,
+    midEveryMs: MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS,
+    oldEveryMs: Math.max(1, longTailCycleDays) * DAY_MS,
+  };
 }
 
 /**
@@ -1383,6 +1522,13 @@ export interface MediaStatsRefreshCandidate {
  * Every ordering key is a qualified column or the expression itself: a bare
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
  * twice in this tree.
+ *
+ * Two optional inputs, for the Fansly Sync Engine (design §4.3, §5.18), both
+ * absent on the legacy lane's call, which then selects exactly what it always
+ * did: `tiers` replaces the age tiers and their intervals (`longTailCycleDays`
+ * is then not read), and `after` returns only the items that sort after that
+ * keyset, in the same order — the shadow walk's pass over the due items
+ * without writing the queue.
  */
 export async function listMediaStatsRefreshChunk(
   db: Database,
@@ -1391,9 +1537,17 @@ export async function listMediaStatsRefreshChunk(
     limit: number;
     now: Date;
     longTailCycleDays: number;
+    tiers?: MediaStatsTiers;
+    after?: SubjectQueueKeyset | null;
   },
 ): Promise<MediaStatsRefreshCandidate[]> {
-  const longTailDays = Math.max(1, input.longTailCycleDays);
+  const tiers = input.tiers ?? legacyMediaStatsTiers(input.longTailCycleDays);
+  if (
+    !(tiers.freshDays > 0 && tiers.midDays >= tiers.freshDays)
+    || ![tiers.freshEveryMs, tiers.midEveryMs, tiers.oldEveryMs].every((ms) => Number.isFinite(ms) && ms > 0)
+  ) {
+    throw new RangeError("Media-stats tiers need 0 < freshDays <= midDays and positive intervals");
+  }
   // The age basis, stated once: the platform's date when it served one, and
   // otherwise when we FIRST SAW the item. `first_observed_at` is replayed from
   // the event ledger, so it survives a `creator_media` rebuild — using the
@@ -1402,22 +1556,18 @@ export async function listMediaStatsRefreshChunk(
   const tier = sql`
     case
       when ${publicationAt} is null then 'fresh'
-      when ${publicationAt} >= ${new Date(input.now.getTime() - MEDIA_STATS_FRESH_DAYS * DAY_MS)}
+      when ${publicationAt} >= ${new Date(input.now.getTime() - tiers.freshDays * DAY_MS)}
         then 'fresh'
-      when ${publicationAt} >= ${new Date(input.now.getTime() - MEDIA_STATS_MID_DAYS * DAY_MS)}
+      when ${publicationAt} >= ${new Date(input.now.getTime() - tiers.midDays * DAY_MS)}
         then 'mid'
       else 'long_tail'
     end
   `;
   const dueCutoff = sql`
     case ${tier}
-      when 'fresh' then ${
-    new Date(input.now.getTime() - MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS)
-  }::timestamptz
-      when 'mid' then ${
-    new Date(input.now.getTime() - MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS)
-  }::timestamptz
-      else ${new Date(input.now.getTime() - longTailDays * DAY_MS)}::timestamptz
+      when 'fresh' then ${new Date(input.now.getTime() - tiers.freshEveryMs)}::timestamptz
+      when 'mid' then ${new Date(input.now.getTime() - tiers.midEveryMs)}::timestamptz
+      else ${new Date(input.now.getTime() - tiers.oldEveryMs)}::timestamptz
     end
   `;
   const band = sql`
@@ -1428,6 +1578,32 @@ export async function listMediaStatsRefreshChunk(
     end
   `;
   const windowEdge = mediaStatsWindowEdge(tier, input.now);
+  // The ordering keys as ascending values (a NULL where ORDER BY puts it).
+  const dirtyRank = sql`case when s.dirty_reason is not null then 0 else 1 end`;
+  const tierRank = sql`case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end`;
+  const edgeRank = sql`
+    case
+      when s.last_visited_at < ${windowEdge} then 0
+      when s.last_visited_at is null then 1
+      else 2
+    end
+  `;
+  const visitedKey = sql`coalesce(extract(epoch from s.last_visited_at), '-Infinity'::numeric)`;
+  const publishedKey = sql`coalesce(-extract(epoch from ${publicationAt}), 'Infinity'::numeric)`;
+  let afterPredicate = sql``;
+  if (input.after !== undefined && input.after !== null) {
+    const [afterDirty, afterTier, afterEdge, afterVisited, afterPublished, afterRef] = decodeSubjectQueueKeyset(
+      input.after,
+      ["int", "int", "int", "numeric", "numeric", "text"],
+    );
+    afterPredicate = sql`and ${keysetAfter([
+      { expr: dirtyRank, value: sql`${afterDirty}::int` },
+      { expr: tierRank, value: sql`${afterTier}::int` },
+      { expr: edgeRank, value: sql`${afterEdge}::int` },
+      { expr: visitedKey, value: sql`${afterVisited}::numeric` },
+      { expr: publishedKey, value: sql`${afterPublished}::numeric` },
+    ], sql`s.subject_ref`, sql`${afterRef}::text`)}`;
+  }
   const result = await db.execute<{
     subject_ref: string;
     created_at_platform: Date | string | null;
@@ -1440,6 +1616,11 @@ export async function listMediaStatsRefreshChunk(
     backfill_cursor: Record<string, unknown> | null;
     tier: string;
     priority_band: number | string;
+    dirty_rank: number | string;
+    tier_rank: number | string;
+    edge_rank: number | string;
+    visited_key: string;
+    published_key: string;
   }>(sql`
     select s.subject_ref,
            m.created_at_platform,
@@ -1451,7 +1632,12 @@ export async function listMediaStatsRefreshChunk(
            s.known_count,
            s.backfill_cursor,
            ${tier} as tier,
-           ${band} as priority_band
+           ${band} as priority_band,
+           ${dirtyRank} as dirty_rank,
+           ${tierRank} as tier_rank,
+           ${edgeRank} as edge_rank,
+           ${visitedKey}::text as visited_key,
+           ${publishedKey}::text as published_key
       from subject_refresh_state s
       join creator_media m
         on m.page_id = s.page_id
@@ -1468,6 +1654,7 @@ export async function listMediaStatsRefreshChunk(
          or s.last_visited_at is null
          or s.last_visited_at < ${dueCutoff}
        )
+       ${afterPredicate}
      order by case when s.dirty_reason is not null then 0 else 1 end asc,
               case ${tier} when 'fresh' then 0 when 'mid' then 1 else 2 end asc,
               case
@@ -1498,6 +1685,14 @@ export async function listMediaStatsRefreshChunk(
     knownCount: row.known_count === null ? null : Number(row.known_count),
     backfillCursor: row.backfill_cursor ?? {},
     priorityBand: Number(row.priority_band),
+    keyset: encodeSubjectQueueKeyset([
+      Number(row.dirty_rank),
+      Number(row.tier_rank),
+      Number(row.edge_rank),
+      row.visited_key,
+      row.published_key,
+      row.subject_ref,
+    ]),
     } satisfies MediaStatsRefreshCandidate;
   });
 }

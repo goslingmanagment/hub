@@ -10,7 +10,7 @@ import {
 } from "@agency_hub_core/contracts";
 import type { KernelClient } from "@kernel/sdk";
 
-import { findHubCommand } from "../packages/hub-agent-cli/src/commands.ts";
+import { findHubCommand, HUB_COMMANDS } from "../packages/hub-agent-cli/src/commands.ts";
 import { HUB_EXIT_OK, runHubCli } from "../packages/hub-agent-cli/src/main.ts";
 
 /**
@@ -31,8 +31,17 @@ import { HUB_EXIT_OK, runHubCli } from "../packages/hub-agent-cli/src/main.ts";
  */
 
 const ENV = { HUB_AGENT_KEY: "agency_hub_agent_docs-test" };
-const NO_FILE = () => null;
 const NO_MODE = () => null;
+
+/**
+ * The files the documented `--file` examples name. Anything else (the
+ * credentials file included) does not exist, so the key comes from the env.
+ */
+const DOC_FILES: Record<string, string> = {
+  "fans.txt": "438766025723355136\nhttps://fansly.com/messages/810272281019305984\n# a comment\nconversation:810272281019305985\n",
+  "pages.tsv": "lora-1\t438766025723355136\nlora-2\thttps://fansly.com/messages/810272281019305984\n",
+};
+const docFile = (path: string) => DOC_FILES[path] ?? null;
 
 function docText(relativePath: string): string {
   return readFileSync(fileURLToPath(new URL(`../${relativePath}`, import.meta.url)), "utf8");
@@ -119,14 +128,26 @@ function stubClient(calls: Array<{ method: string; input: unknown }>) {
 async function runDocumentedLine(command: string) {
   const calls: Array<{ method: string; input: unknown }> = [];
   const argv = tokenize(command).slice(1);
+  // A fake clock: a documented `--wait` polls until its maximum, instantly.
+  let clock = 0;
   const result = await runHubCli({
     argv,
     env: ENV,
-    readFile: NO_FILE,
+    readFile: docFile,
     fileMode: NO_MODE,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
     createHubClient: () => stubClient(calls),
   });
   return { argv, calls, result };
+}
+
+/** A COMPOSITE line makes several calls of ONE operation (the header of
+ *  commands.ts); every other documented line makes exactly one. */
+function isComposite(argv: readonly string[]): boolean {
+  return findHubCommand(argv[0] ?? "")?.composite === true || argv.includes("--wait");
 }
 
 /** Validates whatever halves of the request the route declares. */
@@ -169,12 +190,18 @@ describe("the documented hub command lines", () => {
         // Exit 4 here means the CLI refused its own documented flags: an unknown
         // flag, a missing required one, or a value outside a closed enum.
         expect(result.exitCode, JSON.stringify(result.document.error ?? {})).toBe(HUB_EXIT_OK);
-        expect(calls).toHaveLength(1);
+        if (isComposite(argv)) {
+          expect(calls.length).toBeGreaterThanOrEqual(1);
+        } else {
+          expect(calls).toHaveLength(1);
+        }
 
         const hubCommand = findHubCommand(argv[0] ?? "");
         expect(hubCommand, `no such command: ${argv[0]}`).toBeDefined();
-        expect(calls[0]?.method).toBe(hubCommand?.operation);
-        expectRequestMatchesContract(command, hubCommand!.operation, calls[0]?.input);
+        for (const call of calls) {
+          expect(call.method).toBe(hubCommand?.operation);
+          expectRequestMatchesContract(command, hubCommand!.operation, call.input);
+        }
       });
     }
   }
@@ -225,6 +252,25 @@ describe("the skill doc names fields that exist", () => {
     // claimless call always carries `claim_not_declared` and still exits 0.
     expect(text).not.toContain("an answer came back with no known narrowing");
     expect(text).toContain("claim_not_declared");
+  });
+
+  it("documents history requests as per page, with the hydration fallback", () => {
+    // SK17: until a page is switched to the Fansly Sync Engine its history
+    // requests answer 409, and the doc must send an agent to hydration there.
+    const text = docText(SKILL_DOC);
+    expect(text).toContain("history_requests_unavailable_on_page");
+    expect(text).toContain("only on a\npage switched to the Fansly Sync Engine");
+    expect(text).toContain("use the hydration route above");
+    for (const command of ["history-request", "history-request-batch", "history-status", "history-cancel", "history-list"]) {
+      expect(text, command).toContain(`hub ${command}`);
+    }
+  });
+
+  it("documents every hub command", () => {
+    const text = docText(SKILL_DOC);
+    for (const command of HUB_COMMANDS) {
+      expect(text, command.name).toContain(`\`hub ${command.name}\``);
+    }
   });
 
   it("describes hydration requests as existing, not as a 404", () => {

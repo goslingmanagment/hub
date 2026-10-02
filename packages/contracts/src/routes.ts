@@ -32,6 +32,9 @@ import { agentExportPolicyEnum, agentRouteSchemas } from "./routes-agent.ts";
 // the read plane: issuing a credential carries no evidence envelope, and folding
 // it into agentRouteSchemas would have meant loosening that module's pins.
 import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
+// The Fansly Sync Engine's owner routes (history requests). Owner-session, no
+// agent envelope, so a sibling module for the same reason as the keys above.
+import { syncRouteSchemas } from "./routes-sync.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -5560,8 +5563,6 @@ const baseRouteSchemas = {
   ...ofapiMediaRouteSchemas,
   ...ofapiMediaImageRouteSchemas,
   ...ofapiCollectionRouteSchemas,
-  ...agentRouteSchemas,
-  ...agentKeyAdminRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],
@@ -8209,11 +8210,22 @@ const baseRouteSchemas = {
   },
 } as const;
 
-// Keep the owner action union behind a named group in declarations. Flattening
-// all 81 commands into the complete registry exceeds TypeScript's declaration
+// Keep the owner action union, the Agent Read Plane (with its key administration)
+// and the Sync Engine's owner routes behind named groups in declarations.
+// Flattening them into one registry exceeds TypeScript's declaration
 // serialization limit (TS7056) when the SDK is compiled for external clients.
-export type RouteSchemas = typeof baseRouteSchemas & typeof ofapiActionRouteSchemas;
-export const routeSchemas: RouteSchemas = { ...baseRouteSchemas, ...ofapiActionRouteSchemas };
+export type RouteSchemas = typeof baseRouteSchemas
+  & typeof ofapiActionRouteSchemas
+  & typeof agentRouteSchemas
+  & typeof agentKeyAdminRouteSchemas
+  & typeof syncRouteSchemas;
+export const routeSchemas: RouteSchemas = {
+  ...baseRouteSchemas,
+  ...ofapiActionRouteSchemas,
+  ...agentRouteSchemas,
+  ...agentKeyAdminRouteSchemas,
+  ...syncRouteSchemas,
+};
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
