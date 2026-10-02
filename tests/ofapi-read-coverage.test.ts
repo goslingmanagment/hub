@@ -287,6 +287,37 @@ describe("closed OFAPI read coverage catalog", () => {
       JSON.stringify(normalizeOfapiRead(def("me"), privateBody)),
     ).not.toContain("secret");
   });
+  it("keeps an OnlyFans payout request whole and never walks its response marker", () => {
+    // The documented example (List Payout Requests, checked 2026-10-02).
+    const body = {
+      data: {
+        list: [{
+          invoiceId: "123",
+          createdAt: "2025-01-01T01:01:01+00:00",
+          amount: 123,
+          currency: "USD",
+          state: "new",
+          rejectReason: null,
+        }],
+        marker: 123,
+      },
+    };
+    expect(normalizeOfapiRead(def("payout_requests"), body)).toEqual([
+      expect.objectContaining({
+        nativeId: "123",
+        occurredAt: "2025-01-01T01:01:01+00:00",
+        attributes: expect.objectContaining({
+          amount: { unit: "mills", value: "123000" },
+          currency: "USD",
+          state: "new",
+          rejectReason: null,
+        }),
+      }),
+    ]);
+    // `marker` is not a documented request cursor: one call per run.
+    expect(ofapiReadCoverage(def("payout_requests"), body, "/acct_test/payouts/payout-requests",
+      { limit: "50", offset: "0" })).toMatchObject({ nextQuery: null });
+  });
   it("bounds default plans and requires explicit IDs for details", () => {
     const job = {
       category: "balances",
@@ -299,9 +330,15 @@ describe("closed OFAPI read coverage catalog", () => {
     const plan = planOfapiReadCollection(job, "acct_test");
     expect(plan.map((row) => row.operation)).toEqual([
       "ofapi_read_payout_balances",
+      "ofapi_read_payout_requests",
       "ofapi_read_statistics_overview",
       "ofapi_read_subscriber_statistics",
     ]);
+    // Payout requests: the newest page only, never a date window.
+    expect(plan[1]).toMatchObject({
+      pathname: "/acct_test/payouts/payout-requests",
+      query: { limit: "50", offset: "0" },
+    });
     expect(
       planOfapiReadCollection(
         {
@@ -328,7 +365,7 @@ describe("closed OFAPI read coverage catalog", () => {
         "acct_test",
       ),
     ).toThrow();
-    expect(plan[1]?.query).toEqual({
+    expect(plan[2]?.query).toEqual({
       start_date: job.target.from,
       end_date: job.target.to,
     });

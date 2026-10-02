@@ -27,6 +27,7 @@ describe("agent read dataset vocabulary", () => {
   it("names exactly the available datasets, in declaration order", () => {
     expect([...AGENT_DATASET_NAMES]).toEqual([
       "ofapi_financial_snapshots",
+      "ofapi_payout_requests",
       "fan_memberships",
       "dm_threads",
       "subscriptions",
@@ -211,6 +212,7 @@ describe("agent read dataset vocabulary", () => {
     const money = AGENT_DATASET_NAMES.filter((name) => AGENT_DATASETS[name].moneyBearing);
     expect([...money]).toEqual([
       "ofapi_financial_snapshots",
+      "ofapi_payout_requests",
       "fan_memberships",
       "subscriptions",
       "transactions",

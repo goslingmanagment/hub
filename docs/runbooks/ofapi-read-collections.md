@@ -16,10 +16,16 @@ The closed catalog supports the selected GET operations from the 294-operation a
 | profile_notifications | `["me"]`, then `["notification_counts"]`, then `["fans_expired"]` | me, expired fans, notifications, counts |
 | posts_comments | `["posts"]`, then explicit `["post:123","post_comments:123","post_stats:123"]` | posts and labels |
 | content_history | `["stories"]`; optional explicit story/highlight IDs or engagement ranges | active stories, archive, highlights, mass queue |
-| balances | `["payout_balances"]`, then separate `["statistics_overview"]` and `["subscriber_statistics"]` with paired dates | one general overview, subscriber statistics and payout balance snapshot |
+| balances | `["payout_balances"]`, then separate `["statistics_overview"]` and `["subscriber_statistics"]` with paired dates | payout balance snapshot, the newest page of payout requests (limit 50), one general overview and subscriber statistics; needs `maxCallsPerRun` ≥ 4 |
 | visitors | selection `["total"]` with UTC-midnight from/to and sufficient explicit calls | previous UTC day via the S8 visitor handler; users/guests are separate optional types |
 
 Selections name a catalog `id`, with `:numeric-id` only for a detail operation; user-list details also allow documented named IDs such as `friends`, `tagged` and `rebill_off`. Searching requires the catalog's query term. An explicit selector may include an allowlisted query, for example `giphy_search?q=hello`. No selector becomes an arbitrary path. Empty selection picks only the listed defaults. Detail fanout never occurs implicitly. For a continuation approval, create a new bounded job using the captured next-query evidence, for example `["following_expired?offset=50&limit=50"]`. The new selector is validated against the same strict query catalog; it never rewrites the previous job's caps or cursor.
+
+## OnlyFans payout requests
+
+The scheduled `balances` run reads the newest page of `payouts/payout-requests` (offset 0, limit 50). OnlyFans keeps the whole history and documents only limit/offset; the response `marker` is never used as a request cursor, so a scheduled run makes exactly one call for it. Older requests are a bounded one-off `balances` job with explicit selectors, for example `payout_requests?offset=50`, then `?offset=100`. A policy created before this change with `maxCallsPerRun: 3` ends every run at `scheduled_run_exhausted:job_limit` before its fourth step (subscriber statistics): raise it to 4 in Settings → Сбор for each OnlyFans page.
+
+Agents read the result as the OnlyFans-only dataset `ofapi_payout_requests` (`read:datasets` + `read:money`, claim field `ofapiPayoutRequest`): one row per invoice (`payoutRef`), the latest observation wins, with `amountMills`, `currency`, `state`, `rejectReason`, `requestedAt`, `lastObservedAt` and `observationRef`. The window and the capture floor run on `requestedAt`, so the floor is the oldest request Hub holds. `amount` is taken as US dollars like the balance snapshot (`payoutAvailable` 247.46 → 247460 mills); confirm it against the OnlyFans payout page on the first real capture.
 
 ## Data and recovery
 
