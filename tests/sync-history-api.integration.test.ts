@@ -7,6 +7,8 @@ import {
   agentHistoryRequestGetResponseSchema,
 } from "@agency_hub_core/contracts";
 import {
+  createFanslyPage,
+  createModel,
   insertAgentKey,
   setConfigOverride,
   upsertFans,
@@ -25,7 +27,7 @@ import {
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { seedSyncPage } from "./helpers/sync-engine-host.ts";
+import { seedSyncPage, setModeDirect } from "./helpers/sync-engine-host.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
@@ -231,6 +233,55 @@ describe("history requests: the per-page gate (step 2)", () => {
     expect(owner.statusCode).toBe(409);
     expect(owner.json().error).toBe("history_requests_unavailable_on_page");
     expect(Number((await testDb!.pool.query("select count(*) from history_requests")).rows[0].count)).toBe(0);
+  });
+
+  it("every page that is not live with requests open answers the same 409, agent and owner alike", async () => {
+    // The gate is the page's state, not the mode alone: a live page answers
+    // 409 until its requests_enabled_at has passed, and a Fansly page the
+    // engine has no row for (never seeded) is as closed as an `off` one.
+    const handles = { db: db(), pool: testDb!.pool };
+    const closed: Array<{ label: string; pageId: number }> = [];
+    for (const mode of ["off", "handover"] as const) {
+      closed.push(await seedSyncPage(handles, { label: `gate-${mode}`, mode }));
+    }
+    const notOpened = await seedSyncPage(handles, { label: "gate-live-not-opened", mode: "live", guard: "fansly_sync_engine" });
+    closed.push(notOpened);
+    const opensLater = await seedSyncPage(handles, { label: "gate-live-later", mode: "live", guard: "fansly_sync_engine" });
+    await testDb!.pool.query(
+      `update sync_pages set requests_enabled_at = clock_timestamp() + interval '1 hour',
+              legacy_imported_at = clock_timestamp() where page_id = $1`,
+      [opensLater.pageId],
+    );
+    closed.push(opensLater);
+    // Once live and opened, then rolled back: the old opening does not carry over.
+    const rolledBack = await seedSyncPage(handles, { label: "gate-rolled-back", mode: "live", guard: "fansly_sync_engine" });
+    await openRequests(rolledBack.pageId);
+    await setModeDirect(testDb!.pool, rolledBack.pageId, "shadow");
+    closed.push(rolledBack);
+    const model = await createModel(db(), { slug: "model-gate-no-row", name: "gate-no-row" });
+    const noRow = await createFanslyPage(db(), { modelId: model!.id, label: "gate-no-row" });
+    closed.push({ label: "gate-no-row", pageId: noRow!.id });
+    expect(Number((await testDb!.pool.query("select count(*) from sync_pages where page_id = $1", [noRow!.id])).rows[0].count))
+      .toBe(0);
+
+    const ownerId = Number((await testDb!.pool.query("select id from users where username = 'owner'")).rows[0].id);
+    const GATE = `${AGENT_KEY_TOKEN_PREFIX}history-gate-token`;
+    await insertKey(GATE, "history-gate", ["read:messages", "request:hydration"], closed.map((page) => page.pageId), ownerId);
+
+    for (const page of closed) {
+      const agent = await agentPost(`/api/v1/agent/pages/${page.label}/history-requests`, createBody(MIXED_FANS), GATE);
+      expect(agent.statusCode, page.label).toBe(409);
+      expect(agent.json(), page.label).toMatchObject({ error: "history_requests_unavailable_on_page", statusCode: 409 });
+
+      const owner = await ownerPost(`/api/v1/sync/pages/${page.label}/history-requests`, createBody(MIXED_FANS));
+      expect(owner.statusCode, page.label).toBe(409);
+      expect(owner.json().error, page.label).toBe("history_requests_unavailable_on_page");
+    }
+    expect(Number((await testDb!.pool.query("select count(*) from history_requests")).rows[0].count)).toBe(0);
+
+    // The same body on the one live, opened page is filed.
+    const open = await agentPost("/api/v1/agent/pages/lora-1/history-requests", createBody(MIXED_FANS));
+    expect(open.statusCode).toBe(200);
   });
 
   it("a page outside the grant is the static 404, and a missing capability a 403", async () => {

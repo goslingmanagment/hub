@@ -13,7 +13,7 @@ import {
   HUB_HISTORY_FALLBACK_HINT,
   hubChunkIdempotencyKey,
   parseHubBatchFile,
-  parseHubFanList,
+  parseHubRequestFile,
 } from "../packages/hub-agent-cli/src/commands.ts";
 import { HUB_EXIT_ERROR, HUB_EXIT_OK, HUB_EXIT_PARTIAL, runHubCli } from "../packages/hub-agent-cli/src/main.ts";
 
@@ -108,7 +108,7 @@ describe("hub history-request", () => {
     expect(agentHistoryRequestCreateBodySchema.safeParse(body).success).toBe(true);
   });
 
-  it("refuses a missing or double depth, no fans, too many fans, a bad key and an unreadable file", async () => {
+  it("refuses a missing or double depth, no fans, no page, a bad key and an unreadable file", async () => {
     const base = ["history-request", "--page-label", "lora-1", "--reason", "r"];
     const usage = async (argv: string[], files?: Record<string, string>) => {
       const { result, calls } = await run(argv, files === undefined ? {} : { files });
@@ -123,8 +123,120 @@ describe("hub history-request", () => {
     expect(await usage([...base, "--all"])).toContain("name at least one fan");
     expect(await usage([...base, "--all", "--fan", "1", "--idempotency-key", "nope"])).toContain("uuid");
     expect(await usage([...base, "--all", "--file", "missing.txt"])).toContain("cannot be read");
-    const many = Array.from({ length: 1001 }, (_, index) => `5100000000000${String(index).padStart(5, "0")}`).join("\n");
-    expect(await usage([...base, "--all", "--file", "many.txt"], { "many.txt": many })).toContain("history-request-batch");
+    // A fan with no page: neither --page-label nor a pageLabel<TAB> on its line.
+    const noPage = ["history-request", "--reason", "r", "--all"];
+    expect(await usage([...noPage, "--fan", "1"])).toContain("--page-label is required");
+    expect(await usage([...noPage, "--file", "mixed.txt"], { "mixed.txt": "lora-1\t1\n2\n" }))
+      .toContain("--page-label is required");
+    expect(await usage([...base, "--all", "--file", "bad.txt"], { "bad.txt": "\t1\n" })).toContain("line 1");
+  });
+
+  const fansOf = (count: number, offset = 0) =>
+    Array.from({ length: count }, (_, index) => `5100000000000${String(offset + index).padStart(5, "0")}`);
+  const pageOf = (call: Call) => (call.input as { params: { pageLabel: string } }).params.pageLabel;
+
+  it("splits more than 1000 fans of a page itself: one request per 1000, keys derived from the given key", async () => {
+    // Plan §4.1: the CLI divides a big list into requests; nobody has to.
+    const respond: Responder = (call, index) => ({
+      disposition: "created",
+      request: { ref: `ref-${index}` },
+      conclusion: { blockers: ["claim_not_declared"] },
+    });
+    const argv = [
+      "history-request", "--page-label", "lora-1", "--fan", fansOf(1)[0]!, "--file", "big.txt",
+      "--latest", "100", "--reason", "q3", "--idempotency-key", REF, "--claim-field", "textPlain",
+    ];
+    const files = { "big.txt": fansOf(2500).join("\n") };
+    const { result, calls } = await run(argv, { files, respond });
+    expect(result.exitCode).toBe(HUB_EXIT_OK);
+    expect(calls.map((call) => call.method)).toEqual(Array(3).fill("agentHistoryRequestCreate"));
+    expect(calls.map(pageOf)).toEqual(["lora-1", "lora-1", "lora-1"]);
+    // The fan named by flag and again in the file is sent once.
+    expect(calls.map((call) => (bodyOf(call).fans as unknown[]).length)).toEqual([1000, 1000, 500]);
+    const sent = calls.flatMap((call) => bodyOf(call).fans as Array<{ platformUserId: string }>);
+    expect(sent.map((fan) => fan.platformUserId)).toEqual(fansOf(2500));
+    for (const call of calls) {
+      expect(agentHistoryRequestCreateBodySchema.safeParse(bodyOf(call)).success).toBe(true);
+      expect(bodyOf(call)).toMatchObject({
+        depth: { kind: "latest", count: 100 },
+        reason: "q3",
+        claim: { fields: ["textPlain"], targets: "all_in_scope" },
+      });
+    }
+    const keys = calls.map((call) => bodyOf(call).idempotencyKey);
+    expect(keys).toEqual([0, 1, 2].map((chunk) => hubChunkIdempotencyKey(REF, "lora-1", chunk)));
+    expect(result.document).toMatchObject({
+      ok: true,
+      composite: { calls: 3, failed: 0, pages: 1 },
+      blockers: [],
+    });
+    const requests = (result.document.data as { requests: Array<Record<string, unknown>> }).requests;
+    expect(requests.map((entry) => [entry.chunk, entry.fans, entry.ok])).toEqual([[0, 1000, true], [1, 1000, true], [2, 500, true]]);
+
+    // The same key re-files the same requests, never second copies.
+    const again = await run(argv, { files, respond });
+    expect(again.calls.map((call) => bodyOf(call).idempotencyKey)).toEqual(keys);
+  });
+
+  it("splits a list of several pages itself: one request per page, the flags' page first", async () => {
+    const list = [
+      "# whales across pages",
+      "lora-2\t510000000000000002",
+      "510000000000000003",
+      "lora-3\thttps://fansly.com/messages/810272281019305984",
+      "lora-2\tconversation:810272281019305985",
+      "lora-1\t510000000000000001",
+    ].join("\n");
+    const { result, calls } = await run(
+      ["history-request", "--page-label", "lora-1", "--fan", "510000000000000001", "--file", "pages.txt",
+        "--all", "--reason", "q3"],
+      { files: { "pages.txt": list }, uuids: [REF, "0c6f5e1a-2b3d-4e5f-8a9b-1c2d3e4f5a6b", "1d7e6f2b-3c4e-4f6a-9b0c-2d3e4f5a6b7c"] },
+    );
+    expect(result.exitCode).toBe(HUB_EXIT_OK);
+    expect(calls.map(pageOf)).toEqual(["lora-1", "lora-2", "lora-3"]);
+    expect(calls.map((call) => bodyOf(call).fans)).toEqual([
+      [{ kind: "fan", platformUserId: "510000000000000001" }, { kind: "fan", platformUserId: "510000000000000003" }],
+      [{ kind: "fan", platformUserId: "510000000000000002" }, { kind: "conversation", conversationRef: "810272281019305985" }],
+      [{ kind: "chat_url", url: "https://fansly.com/messages/810272281019305984" }],
+    ]);
+    // Without --idempotency-key every request gets a fresh key.
+    expect(calls.map((call) => bodyOf(call).idempotencyKey))
+      .toEqual([REF, "0c6f5e1a-2b3d-4e5f-8a9b-1c2d3e4f5a6b", "1d7e6f2b-3c4e-4f6a-9b0c-2d3e4f5a6b7c"]);
+    expect(result.document.composite).toEqual({ calls: 3, failed: 0, pages: 3 });
+
+    // Every line naming its own page needs no --page-label; one page and
+    // at most 1000 fans stays ONE call with the operation's own document.
+    const single = await run(
+      ["history-request", "--file", "one.txt", "--all", "--reason", "q3", "--idempotency-key", REF],
+      { files: { "one.txt": "lora-2\t510000000000000002\nlora-2\t510000000000000004\n" } },
+    );
+    expect(single.result.exitCode).toBe(HUB_EXIT_OK);
+    expect(single.calls).toHaveLength(1);
+    expect(pageOf(single.calls[0]!)).toBe("lora-2");
+    expect(bodyOf(single.calls[0]).idempotencyKey).toBe(REF);
+    expect(single.result.document).not.toHaveProperty("composite");
+  });
+
+  it("files the other pages past a refused one, lists every result with the fallback, and exits 4", async () => {
+    const respond: Responder = (call) => pageOf(call) === "lora-2"
+      ? new KernelApiError("not open", "conflict", 409, "history_requests_unavailable_on_page", { secret: "body" })
+      : { disposition: "created", request: { ref: "r1" } };
+    const { result, calls } = await run(
+      ["history-request", "--page-label", "lora-1", "--fan", "1", "--file", "pages.txt", "--all", "--reason", "q3"],
+      { files: { "pages.txt": "lora-2\t2\nlora-3\t3\n" }, respond },
+    );
+    expect(calls.map(pageOf)).toEqual(["lora-1", "lora-2", "lora-3"]);
+    expect(result.exitCode).toBe(HUB_EXIT_ERROR);
+    expect(result.document.ok).toBe(false);
+    const requests = (result.document.data as { requests: Array<Record<string, unknown>> }).requests;
+    expect(requests[1]).toMatchObject({
+      pageLabel: "lora-2",
+      ok: false,
+      error: { status: 409, code: "history_requests_unavailable_on_page", hint: HUB_HISTORY_FALLBACK_HINT },
+    });
+    expect(JSON.stringify(requests[1])).not.toContain("secret");
+    expect(requests.filter((entry) => entry.ok === true).map((entry) => entry.pageLabel)).toEqual(["lora-1", "lora-3"]);
+    expect(result.document.composite).toEqual({ calls: 3, failed: 1, pages: 3 });
   });
 
   it("prints the hydration fallback beside a 409 on a page the engine does not own", async () => {
@@ -317,12 +429,14 @@ describe("hub history-cancel and history-list", () => {
 });
 
 describe("fan lists", () => {
-  it("reads chat links, conversation refs and account ids", () => {
-    expect(parseHubFanList(" 1 \nconversation:22\nfansly.com/messages/33\n#x\n")).toEqual([
-      { kind: "fan", platformUserId: "1" },
-      { kind: "conversation", conversationRef: "22" },
-      { kind: "chat_url", url: "fansly.com/messages/33" },
+  it("reads chat links, conversation refs and account ids, each of --page-label or of its own page", () => {
+    expect(parseHubRequestFile(" 1 \nconversation:22\nfansly.com/messages/33\n#x\nlora-2\t44\n\n")).toEqual([
+      { pageLabel: null, fan: { kind: "fan", platformUserId: "1" } },
+      { pageLabel: null, fan: { kind: "conversation", conversationRef: "22" } },
+      { pageLabel: null, fan: { kind: "chat_url", url: "fansly.com/messages/33" } },
+      { pageLabel: "lora-2", fan: { kind: "fan", platformUserId: "44" } },
     ]);
+    expect(() => parseHubRequestFile("1\nlora-2\t\n")).toThrow(/line 2/);
   });
 
   it("derives a valid uuid per chunk", () => {

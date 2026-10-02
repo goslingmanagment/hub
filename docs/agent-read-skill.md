@@ -327,9 +327,18 @@ hub history-cancel --request 7f9d3c2e-1b4a-4c8e-9f20-3a5b6c7d8e9f --reason "supe
 ```
 
 `--file` holds one fan per line: an account id, a chat link, or
-`conversation:<ref>`; blank lines and `#` comments are skipped, and a fan named
-twice is sent once. A create answers with the first 200 fans; page the rest with
+`conversation:<ref>`, of the `--page-label` page; a line `pageLabel<TAB>fan`
+names its own page instead (then `--page-label` is needed only for fans without
+one). Blank lines and `#` comments are skipped, and a fan named twice on a page
+is sent once. A create answers with the first 200 fans; page the rest with
 `hub history-status --cursor` (the create's `delivery.nextCursor` works as is).
+
+You never split a list yourself: when the fans span several pages or one page
+has more than 1000 of them, `hub history-request` files one request per page and
+per 1000 fans, and its document turns COMPOSITE (`composite.calls`, one result
+per request in `data.requests`, exactly as `history-request-batch` prints them
+below; with `--idempotency-key` every request derives its own key from it). One
+page and at most 1000 fans is one call with the operation's own document.
 
 Two commands are COMPOSITE: several calls of one operation, one document.
 
@@ -452,7 +461,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub coverage` | The capture axis on its own: what was ever captured for a scope and window. |
 | `hub observations` | Capture journal ENVELOPES (kind, source, timing, sizes). Never payload bodies. |
 | `hub dataset` | A typed query over one registered dataset for one page. |
-| `hub history-request` | File a history request: up to 1000 fans of one page and a depth. Pages on the Fansly Sync Engine only; elsewhere 409 with the hydration fallback. |
+| `hub history-request` | File a history request: fans of one page and a depth; more than 1000 fans or several pages are split into one request per page and 1000 fans. Pages on the Fansly Sync Engine only; elsewhere 409 with the hydration fallback. |
 | `hub history-request-batch` | COMPOSITE: history requests from a `pageLabel<TAB>fan` list, one per page and 1000 fans. |
 | `hub history-status` | One history request: counts, reads, ETA, why it waits, a page of its fans. `--wait` (COMPOSITE) polls until it ends. |
 | `hub history-cancel` | Cancel a history request; loaded messages stay. |

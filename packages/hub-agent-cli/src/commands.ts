@@ -29,11 +29,14 @@ import { KernelApiError, type KernelClient } from "@kernel/sdk";
  * evidence envelope, and the envelope is the whole point. Composite rituals
  * (`investigate`, `customs-scan`) are a later slice, built ON these, never instead.
  *
- * THE COMPOSITES THAT EXIST are marked `composite: true` and say COMPOSITE in
- * their summary: `history-request-batch` (one create per page and 1000 fans)
- * and `history-status --wait` (polls one request until it ends). Each makes
- * several calls of ONE documented operation and nothing else, so the evidence
- * envelope of every call is still the operation's own.
+ * THE COMPOSITES THAT EXIST: `history-request-batch` (one create per page and
+ * 1000 fans) is marked `composite: true` and says COMPOSITE in its summary;
+ * `history-request` turns composite on its own when its fans span several
+ * pages or more than 1000 (plan §4.1: the CLI splits a big or multi-page list
+ * into per-page requests itself), and `history-status --wait` polls one request
+ * until it ends. Each makes several calls of ONE documented operation and
+ * nothing else, so the evidence envelope of every call is still the
+ * operation's own.
  *
  * WHAT IS NOT HERE, and why it never will be: operation 9b (observation payloads)
  * and #13 (hydration decisions) are OWNER-SESSION. An agent key cannot call them
@@ -393,14 +396,6 @@ export function parseHubFanRef(raw: string): AgentHistoryFanRef {
   return { kind: "fan", platformUserId: ref };
 }
 
-/** One fan per line; blank lines and `#` comments are skipped. */
-export function parseHubFanList(text: string): AgentHistoryFanRef[] {
-  return text.split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"))
-    .map(parseHubFanRef);
-}
-
 function fanKey(fan: AgentHistoryFanRef): string {
   const ref = fan.kind === "fan" ? fan.platformUserId : fan.kind === "conversation" ? fan.conversationRef : fan.url;
   return `${fan.kind}\u0000${ref.trim()}`;
@@ -493,6 +488,78 @@ export function parseHubBatchFile(text: string): Map<string, AgentHistoryFanRef[
     byPage.set(pageLabel, fans);
   });
   return byPage;
+}
+
+/**
+ * `history-request`'s list file: a fan per line (of `--page-label`), or
+ * `pageLabel<TAB>fan` for a fan of its own page; both may mix in one file.
+ * Blank lines and `#` comments are skipped. `pageLabel` is null on a line that
+ * names no page.
+ */
+export function parseHubRequestFile(text: string): Array<{ pageLabel: string | null; fan: AgentHistoryFanRef }> {
+  const entries: Array<{ pageLabel: string | null; fan: AgentHistoryFanRef }> = [];
+  text.split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#")) return;
+    const tab = rawLine.indexOf("\t");
+    if (tab < 0) {
+      entries.push({ pageLabel: null, fan: parseHubFanRef(line) });
+      return;
+    }
+    const pageLabel = rawLine.slice(0, tab).trim();
+    const ref = rawLine.slice(tab + 1).trim();
+    if (pageLabel === "" || ref === "") {
+      throw new HubUsageError(`--file line ${index + 1}: expected a fan or pageLabel<TAB>fan`);
+    }
+    entries.push({ pageLabel, fan: parseHubFanRef(ref) });
+  });
+  return entries;
+}
+
+/**
+ * Several history requests, one per page and per {@link HUB_HISTORY_MAX_FANS}
+ * fans (plan §4.1: the CLI splits a big or multi-page list itself). A refused
+ * request is listed with its metadata and never stops the rest; with a base
+ * idempotency key every chunk derives its own, so a re-run files nothing twice.
+ */
+async function fileHistoryRequests(
+  client: KernelClient,
+  deps: HubRunDeps,
+  byPage: ReadonlyMap<string, readonly AgentHistoryFanRef[]>,
+  input: { depth: AgentHistoryDepth; reason: string; baseKey: string | undefined; extra: Record<string, unknown> },
+): Promise<HubCompositeResult> {
+  const requests: Array<Record<string, unknown>> = [];
+  let failed = 0;
+  for (const [pageLabel, fans] of byPage) {
+    for (let chunk = 0; chunk * HUB_HISTORY_MAX_FANS < fans.length; chunk += 1) {
+      const part = fans.slice(chunk * HUB_HISTORY_MAX_FANS, (chunk + 1) * HUB_HISTORY_MAX_FANS);
+      const key = input.baseKey === undefined
+        ? deps.randomUUID()
+        : hubChunkIdempotencyKey(input.baseKey, pageLabel, chunk);
+      try {
+        const response = await client.agentHistoryRequestCreate({
+          params: { pageLabel },
+          body: { fans: part, depth: input.depth, reason: input.reason, idempotencyKey: key, ...input.extra },
+        });
+        requests.push({
+          pageLabel,
+          chunk,
+          fans: part.length,
+          ok: true,
+          disposition: response.disposition,
+          request: response.request,
+        });
+      } catch (error) {
+        failed += 1;
+        requests.push({ pageLabel, chunk, fans: part.length, ok: false, error: compositeError(error) });
+      }
+    }
+  }
+  return new HubCompositeResult({ requests }, failed, {
+    calls: requests.length,
+    failed,
+    pages: byPage.size,
+  });
 }
 
 const HISTORY_DEPTH_OPTIONS: Record<string, HubOption> = {
@@ -840,48 +907,69 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     name: "history-request",
     operation: "agentHistoryRequestCreate",
     summary:
-      "File a history request: up to 1000 fans of ONE page and a depth. Works on pages switched to the Fansly"
-      + " Sync Engine; elsewhere the hub answers 409 and the document carries the hydration fallback.",
+      "File a history request: fans of one page and a depth. More than 1000 fans, or a --file whose"
+      + " pageLabel<TAB>fan lines name several pages, are split here into one request per page and per 1000 fans"
+      + " (then COMPOSITE: several calls, one result per request). Works on pages switched to the Fansly Sync"
+      + " Engine; elsewhere the hub answers 409 and the document carries the hydration fallback.",
     options: {
-      "page-label": { kind: "string", describe: "The page whose chats to read (required)" },
+      "page-label": {
+        kind: "string",
+        describe: "The page whose chats to read (required unless every --file line names its own page)",
+      },
       fan: { kind: "list", describe: "A fan's Fansly account id (repeatable)" },
       conversation: { kind: "list", describe: "A chat's conversation ref (repeatable)" },
       "chat-url": { kind: "list", describe: "A chat link https://fansly.com/messages/<id> (repeatable)" },
       file: {
         kind: "string",
-        describe: "A file with one fan per line: account id, chat link, or conversation:<ref>",
+        describe: "A file with one fan per line: account id, chat link, or conversation:<ref>;"
+          + " a line pageLabel<TAB>fan names its own page",
       },
       ...HISTORY_FILING_OPTIONS,
       ...CLAIM_OPTION,
     },
     hint: historyHint,
     run: (client, values, deps) => {
+      const pageLabel = readString(values, "page-label");
       const path = readString(values, "file");
-      const fans = uniqueFans([
-        ...(readList(values, "fan") ?? []).map((platformUserId): AgentHistoryFanRef => ({ kind: "fan", platformUserId })),
-        ...(readList(values, "conversation") ?? [])
-          .map((conversationRef): AgentHistoryFanRef => ({ kind: "conversation", conversationRef })),
-        ...(readList(values, "chat-url") ?? []).map((url): AgentHistoryFanRef => ({ kind: "chat_url", url })),
-        ...(path === undefined ? [] : parseHubFanList(readTextFile(deps, path))),
-      ]);
-      if (fans.length === 0) {
+      const pageOf = (): string => {
+        if (pageLabel === undefined || pageLabel === "") {
+          throw new HubUsageError(
+            "--page-label is required for --fan, --conversation, --chat-url and --file lines without pageLabel<TAB>",
+          );
+        }
+        return pageLabel;
+      };
+      // Pages in first-seen order: the flags' page first, then the file's.
+      const byPage = new Map<string, AgentHistoryFanRef[]>();
+      const add = (label: string, fan: AgentHistoryFanRef) => {
+        const fans = byPage.get(label) ?? [];
+        fans.push(fan);
+        byPage.set(label, fans);
+      };
+      for (const platformUserId of readList(values, "fan") ?? []) add(pageOf(), { kind: "fan", platformUserId });
+      for (const conversationRef of readList(values, "conversation") ?? []) {
+        add(pageOf(), { kind: "conversation", conversationRef });
+      }
+      for (const url of readList(values, "chat-url") ?? []) add(pageOf(), { kind: "chat_url", url });
+      for (const entry of path === undefined ? [] : parseHubRequestFile(readTextFile(deps, path))) {
+        add(entry.pageLabel ?? pageOf(), entry.fan);
+      }
+      for (const [label, fans] of byPage) byPage.set(label, uniqueFans(fans));
+      if (byPage.size === 0) {
         throw new HubUsageError("name at least one fan: --fan, --conversation, --chat-url or --file");
       }
-      if (fans.length > HUB_HISTORY_MAX_FANS) {
-        throw new HubUsageError(
-          `at most ${HUB_HISTORY_MAX_FANS} fans per request (got ${fans.length}); use history-request-batch`,
-        );
+      const depth = historyDepth(values);
+      const reason = requireString(values, "reason");
+      const key = readIdempotencyKey(values);
+      const [only, ...others] = byPage;
+      if (only !== undefined && others.length === 0 && only[1].length <= HUB_HISTORY_MAX_FANS) {
+        // One page, at most 1000 fans: one call, the operation's own document.
+        return client.agentHistoryRequestCreate({
+          params: { pageLabel: only[0] },
+          body: { fans: only[1], depth, reason, idempotencyKey: key ?? deps.randomUUID(), ...claimBody(values) },
+        });
       }
-      return client.agentHistoryRequestCreate({
-        params: { pageLabel: requireString(values, "page-label") },
-        body: {
-          fans,
-          depth: historyDepth(values),
-          reason: requireString(values, "reason"),
-          idempotencyKey: readIdempotencyKey(values) ?? deps.randomUUID(),
-          ...claimBody(values),
-        },
-      });
+      return fileHistoryRequests(client, deps, byPage, { depth, reason, baseKey: key, extra: claimBody(values) });
     },
   },
   {
@@ -901,39 +989,12 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       if (byPage.size === 0) {
         throw new HubUsageError("--file names no fan");
       }
-      const depth = historyDepth(values);
-      const reason = requireString(values, "reason");
-      const baseKey = readIdempotencyKey(values);
-      const requests: Array<Record<string, unknown>> = [];
-      let failed = 0;
-      for (const [pageLabel, pageFans] of byPage) {
-        const fans = uniqueFans(pageFans);
-        for (let chunk = 0; chunk * HUB_HISTORY_MAX_FANS < fans.length; chunk += 1) {
-          const part = fans.slice(chunk * HUB_HISTORY_MAX_FANS, (chunk + 1) * HUB_HISTORY_MAX_FANS);
-          const key = baseKey === undefined ? deps.randomUUID() : hubChunkIdempotencyKey(baseKey, pageLabel, chunk);
-          try {
-            const response = await client.agentHistoryRequestCreate({
-              params: { pageLabel },
-              body: { fans: part, depth, reason, idempotencyKey: key },
-            });
-            requests.push({
-              pageLabel,
-              chunk,
-              fans: part.length,
-              ok: true,
-              disposition: response.disposition,
-              request: response.request,
-            });
-          } catch (error) {
-            failed += 1;
-            requests.push({ pageLabel, chunk, fans: part.length, ok: false, error: compositeError(error) });
-          }
-        }
-      }
-      return new HubCompositeResult({ requests }, failed, {
-        calls: requests.length,
-        failed,
-        pages: byPage.size,
+      for (const [label, fans] of byPage) byPage.set(label, uniqueFans(fans));
+      return fileHistoryRequests(client, deps, byPage, {
+        depth: historyDepth(values),
+        reason: requireString(values, "reason"),
+        baseKey: readIdempotencyKey(values),
+        extra: {},
       });
     },
   },
