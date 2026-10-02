@@ -13,13 +13,7 @@ import {
   upsertFanslyTransactionWithEarningsDirty,
   withOwnedPageSyncTransaction,
 } from "@agency_hub_core/db";
-import {
-  FANSLY_MAPPER_VERSION,
-  isKnownFanslyTransactionType,
-  mapFanslyTransactionState,
-  mapFanslyTransactionType,
-} from "@agency_hub_core/fansly";
-import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/shared";
+import { FANSLY_MAPPER_VERSION, isKnownFanslyTransactionType } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { SyncChunkBudget, SyncChunkYieldReason } from "./chunk-budget.ts";
@@ -28,6 +22,11 @@ import {
   FanslyTransactionsItemContractError,
 } from "./errors.ts";
 import { lookupHydratedFans, upsertHydratedFansForPage } from "./fan-hydration.ts";
+import {
+  findTransactionPageOverlap,
+  inWindowItemsAfterOlder,
+  mapFanslyTransactionItem,
+} from "./money-rules.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
@@ -285,22 +284,6 @@ function progressCursorTimestamp(state: FanslyTransactionProgressState) {
   return new Date(state.cursorTimestamp);
 }
 
-function resolveFanslyCommissionRate(
-  destinationTax: number | null,
-  fallbackCommissionRate: number,
-) {
-  if (
-    destinationTax !== null &&
-    Number.isInteger(destinationTax) &&
-    destinationTax >= 0 &&
-    destinationTax <= 10_000
-  ) {
-    return { commissionRate: destinationTax / 10_000, fellBack: false };
-  }
-
-  return { commissionRate: fallbackCommissionRate, fellBack: true };
-}
-
 function minDate(a: Date | null, b: Date | null) {
   if (!a) {
     return b;
@@ -323,37 +306,6 @@ function maxDate(a: Date | null, b: Date | null) {
 
 function transactionIdsForPage(items: FanslyTransactionItem[]) {
   return items.map((item) => item.transactionId);
-}
-
-function findPageOverlap(
-  previousTransactionIds: string[] | undefined,
-  items: FanslyTransactionItem[],
-) {
-  if (!previousTransactionIds || previousTransactionIds.length === 0) {
-    return [];
-  }
-
-  const previous = new Set(previousTransactionIds);
-  return items
-    .map((item) => item.transactionId)
-    .filter((transactionId) => previous.has(transactionId));
-}
-
-// The early stop trusts the listing's newest-first order. A row inside the
-// window listed after an older one breaks that premise: later pages could
-// hold in-window rows the stop never reads.
-function inWindowItemsAfterOlder(items: FanslyTransactionItem[], after: Date) {
-  const bound = after.getTime();
-  let seenOlder = false;
-  const late: FanslyTransactionItem[] = [];
-  for (const item of items) {
-    if (item.createdAt < bound) {
-      seenOlder = true;
-    } else if (seenOlder) {
-      late.push(item);
-    }
-  }
-  return late;
 }
 
 async function flushFanslyDirtyRange(
@@ -482,18 +434,8 @@ async function persistFanslyTransactionsPage(
       const fanId = item.correlationAccountId
         ? (fanMap.get(item.correlationAccountId) ?? null)
         : null;
-      const sourceAmountMills = millsFromInteger(item.amount);
-      const destinationAmountMills = millsFromInteger(item.destinationAmount);
-      const creatorNetAmountMills = destinationAmountMills;
-      const { commissionRate, fellBack } = resolveFanslyCommissionRate(
-        item.destinationTax,
-        input.commissionRate,
-      );
-      const grossFromNet = sourceAmountMills === destinationAmountMills;
-      const grossAmountMills = grossFromNet
-        ? calculateGrossMillsFromNet(creatorNetAmountMills, commissionRate)
-        : sourceAmountMills;
-      if (grossFromNet && fellBack) {
+      const { row, commissionFellBack } = mapFanslyTransactionItem(item, input.commissionRate);
+      if (commissionFellBack) {
         commissionFallbacks.set(item.transactionId, item.destinationTax);
       }
 
@@ -502,27 +444,7 @@ async function persistFanslyTransactionsPage(
         platformAccountId: input.platformAccountId,
         source: "fansly:rest",
         fanId,
-        transactionId: item.transactionId,
-        walletId: item.walletId,
-        accountId: item.accountId,
-        correlationId: item.correlationId,
-        correlationAccountId: item.correlationAccountId,
-        rawType: item.type,
-        canonicalType: mapFanslyTransactionType(item.type),
-        transactionState: mapFanslyTransactionState(item.status),
-        destination: item.destination,
-        rawStatus: item.status,
-        grossAmountMills,
-        sourceDestinationAmountMills: destinationAmountMills,
-        creatorNetAmountMills,
-        rawDestinationTax: item.destinationTax,
-        newBalanceMills: item.newBalance64 !== null && item.newBalance64 !== undefined
-          ? millsFromInteger(item.newBalance64)
-          : null,
-        senderId: item.senderId,
-        receiverId: item.receiverId,
-        occurredAt: new Date(item.createdAt),
-        sourceUpdatedAt: item.updatedAt ? new Date(item.updatedAt) : null,
+        ...row,
       });
     }
 
@@ -920,7 +842,7 @@ async function syncTransactionsIncremental(
         );
       }
 
-      const overlappingTransactionIds = findPageOverlap(state.lastPageTransactionIds, page.items);
+      const overlappingTransactionIds = findTransactionPageOverlap(state.lastPageTransactionIds, page.items);
       if (overlappingTransactionIds.length > 0) {
         await input.telemetry.addAnomaly({
           code: "incremental_offset_overlap",
@@ -1470,7 +1392,7 @@ async function syncTransactionsBackfill(
         throw new Error("Fansly transaction backfill returned an empty first page despite a non-zero total");
       }
 
-      const overlappingIds = findPageOverlap(state.lastPageTransactionIds, page.items);
+      const overlappingIds = findTransactionPageOverlap(state.lastPageTransactionIds, page.items);
       if (overlappingIds.length > 0) {
         await input.telemetry.addAnomaly({
           code: "backfill_offset_overlap",

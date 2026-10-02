@@ -13,6 +13,14 @@ import {
   uniqueFollowerIds,
 } from "./audience-rules.ts";
 import { readFollowersReconcileCompletion } from "./followers-reconcile-completion.ts";
+import {
+  buildTopSpendersBootstrapState,
+  buildUtcMonthKey,
+  computeCompletedTopSpenderMonths,
+  partitionTopSpenderItems,
+  splitTopSpendersWindow,
+  TOP_SPENDERS_STEADY_STATE_WINDOW_MS,
+} from "./money-rules.ts";
 import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
 import { FOLLOWERS_RECONCILE_FLOOR_DEFERRAL, followersReconcileFloor } from "./followers-reconcile-floor.ts";
 import {
@@ -231,7 +239,6 @@ const PURCHASE_HISTORY_RAW_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_SCAN_BATCHES_PER_CHUNK = 4;
 const PURCHASE_HISTORY_TRANSACTION_BATCH_SIZE = 500;
 const PURCHASE_HISTORY_MAX_TRANSACTION_SCAN_BATCHES_PER_CHUNK = 4;
-const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function purchaseHistoryCaptureBlockError(
   capture: FanslyPurchaseHistoryCaptureClassification,
@@ -270,8 +277,6 @@ function purchaseHistoryCaptureBlockError(
       "Fansly purchase-history response omitted both supported order arrays; captured response requires local parser repair",
   });
 }
-const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
-const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
 
 function shouldSkipOnlyFansDmPolling(
   app: AppContext,
@@ -481,94 +486,6 @@ async function recordFollowerMappingBlockedAnomaly(
   });
 }
 
-function buildUtcMonthKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function nextUtcMonthBoundary(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1));
-}
-
-function buildTopSpendersBootstrapWindows(
-  accountCreatedAt: Date,
-  now: Date,
-) {
-  const windows: TopSpendersCursorWindow[] = [];
-  let cursor = new Date(accountCreatedAt);
-
-  while (cursor.getTime() < now.getTime()) {
-    const boundary = nextUtcMonthBoundary(cursor);
-    const endedAt = new Date(Math.min(boundary.getTime(), now.getTime()));
-    windows.push({
-      kind: "month",
-      monthKey: buildUtcMonthKey(cursor),
-      startedAt: cursor.toISOString(),
-      endedAt: endedAt.toISOString(),
-    });
-    cursor = endedAt;
-  }
-
-  return windows;
-}
-
-function splitTopSpendersWindow(window: TopSpendersCursorWindow) {
-  const nextWindowMs = window.kind === "month"
-    ? TOP_SPENDERS_WINDOW_WEEK_MS
-    : window.kind === "week"
-      ? TOP_SPENDERS_WINDOW_DAY_MS
-      : null;
-  const nextKind = window.kind === "month"
-    ? "week"
-    : window.kind === "week"
-      ? "day"
-      : null;
-  if (nextWindowMs === null || nextKind === null) {
-    return null;
-  }
-
-  const windows: TopSpendersCursorWindow[] = [];
-  let cursor = new Date(window.startedAt);
-  const endedAt = new Date(window.endedAt);
-
-  while (cursor.getTime() < endedAt.getTime()) {
-    const next = new Date(Math.min(cursor.getTime() + nextWindowMs, endedAt.getTime()));
-    windows.push({
-      kind: nextKind,
-      monthKey: window.monthKey,
-      startedAt: cursor.toISOString(),
-      endedAt: next.toISOString(),
-    });
-    cursor = next;
-  }
-
-  return windows;
-}
-
-function computeCompletedTopSpenderMonths(
-  totalMonths: number,
-  pendingWindows: TopSpendersCursorWindow[],
-) {
-  const remainingMonths = new Set(pendingWindows.map((window) => window.monthKey)).size;
-  return Math.max(0, totalMonths - remainingMonths);
-}
-
-function buildTopSpendersBootstrapState(
-  accountCreatedAt: Date,
-  now: Date,
-): TopSpendersCursorState {
-  const pendingWindows = buildTopSpendersBootstrapWindows(accountCreatedAt, now);
-  return {
-    version: 1,
-    mode: "bootstrap",
-    accountCreatedAt: accountCreatedAt.toISOString(),
-    totalMonths: new Set(pendingWindows.map((window) => window.monthKey)).size,
-    completedMonths: 0,
-    pendingWindows,
-    lastWindowStartedAt: null,
-    lastWindowEndedAt: null,
-  };
-}
-
 async function resolveFanslyTopSpendersAccountCreatedAt(
   app: AppContext,
   input: ExecutorRequestContext,
@@ -584,35 +501,6 @@ async function resolveFanslyTopSpendersAccountCreatedAt(
 
   const refreshed = await refreshPageMetadata(app, input.pageContext, undefined, input.telemetry);
   return new Date(refreshed.parsed.account.createdAt);
-}
-
-function normalizeTopSpenderIdentityValue(value: string | null | undefined) {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function resolveTopSpenderSourceIdentity(input: {
-  accountId?: string | null;
-  correlationAccountId?: string | null;
-}) {
-  const correlationAccountId = normalizeTopSpenderIdentityValue(input.correlationAccountId);
-  if (correlationAccountId) {
-    return {
-      sourceIdentityKey: `fan:${correlationAccountId}`,
-      correlationAccountId,
-      accountId: normalizeTopSpenderIdentityValue(input.accountId),
-    };
-  }
-
-  const accountId = normalizeTopSpenderIdentityValue(input.accountId);
-  if (accountId) {
-    return {
-      sourceIdentityKey: `account:${accountId}`,
-      correlationAccountId: null,
-      accountId,
-    };
-  }
-
-  return null;
 }
 
 async function upsertTopSpendersWindow(
@@ -636,38 +524,11 @@ async function upsertTopSpendersWindow(
     return 0;
   }
 
-  const validItems: Array<{
-    totalGross: number;
-    totalNet: number;
-    sourceIdentityKey: string;
-    accountId: string | null;
-    correlationAccountId: string | null;
-  }> = [];
-  const skippedIdentityExamples: Array<{
-    accountId: string | null;
-    correlationAccountId: string | null;
-  }> = [];
-
-  for (const item of input.items) {
-    const identity = resolveTopSpenderSourceIdentity(item);
-    if (!identity) {
-      if (skippedIdentityExamples.length < 5) {
-        skippedIdentityExamples.push({
-          accountId: normalizeTopSpenderIdentityValue(item.accountId),
-          correlationAccountId: normalizeTopSpenderIdentityValue(item.correlationAccountId),
-        });
-      }
-      continue;
-    }
-
-    validItems.push({
-      totalGross: item.totalGross,
-      totalNet: item.totalNet,
-      sourceIdentityKey: identity.sourceIdentityKey,
-      accountId: identity.accountId,
-      correlationAccountId: identity.correlationAccountId,
-    });
-  }
+  const {
+    valid: validItems,
+    skippedCount,
+    skippedExamples: skippedIdentityExamples,
+  } = partitionTopSpenderItems(input.items);
 
   if (skippedIdentityExamples.length > 0) {
     await input.telemetry.addAnomaly({
@@ -675,7 +536,7 @@ async function upsertTopSpendersWindow(
       severity: "warn",
       message: "Skipped top spender rows missing both correlationAccountId and accountId",
       details: {
-        skippedCount: input.items.length - validItems.length,
+        skippedCount,
         examples: skippedIdentityExamples,
       },
     });

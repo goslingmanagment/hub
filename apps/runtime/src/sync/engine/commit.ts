@@ -687,6 +687,7 @@ export async function capture(
       work: admission.work,
       demandRevision: admission.demandRevision,
       subjectQueue: admission.spec.subjectQueue === true,
+      request: admission.request,
     }, decision, module);
     return { decision, paceGapMs: captured.paceGapMs };
   });
@@ -716,6 +717,8 @@ interface OutcomeTarget {
   /** The work's demand revision the attempt served (I11). */
   demandRevision: number;
   subjectQueue: boolean;
+  /** The request the attempt sent (a subject-queue walk's subject). */
+  request: RequestPlan;
 }
 
 async function writeOutcomeDecision(
@@ -753,7 +756,7 @@ async function writeOutcomeDecision(
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
-    });
+    }, { request: target.request, attemptId: target.attemptId });
   }
   const breaker = !subjectQueue && decision.subjectBreaker !== null
     ? {
@@ -1088,6 +1091,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         work,
         demandRevision: attempt.demandRevision ?? work?.demandRevision ?? 0,
         subjectQueue,
+        request: requestOfAttempt(attempt),
       }, decision, null);
       return { quarantined: true, alerts: decision.alerts };
     }

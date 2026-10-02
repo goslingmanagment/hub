@@ -240,11 +240,14 @@ export interface ResourceModule<C = unknown> {
   /** One-time, at the step-3 switch of the page: the legacy state this key's
    *  live work starts from. */
   importLegacy?(tx: Database, page: { pageId: number }): Promise<LegacyImport>;
-  /** A subject-queue walk's subject outcome (the breaker lives on the queue row). */
+  /** A subject-queue walk's subject outcome (the breaker lives on the queue
+   *  row). `step.request` names the subject the failed request was about: the
+   *  walk row's own subject is the page's. */
   onSubjectOutcome?(
     tx: Database,
     work: SyncWorkRow,
     outcome: { kind: "failure" | "terminal" | "ok"; failureCount: number; breakerUntil: Date | null; blockedByVendorAt: Date | null },
+    step: { request: RequestPlan; attemptId: number },
   ): Promise<void>;
 }
 
