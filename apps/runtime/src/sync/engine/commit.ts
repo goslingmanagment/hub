@@ -1005,7 +1005,7 @@ export async function apply(
         fenced,
         ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
-      if (d.canonicalize !== undefined) {
+      if (d.canonicalize !== undefined && result.canonicalized !== true) {
         await d.canonicalize(tx, {
           pageId: d.pageId,
           ownRef: d.ownRef,

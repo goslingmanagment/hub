@@ -640,6 +640,93 @@ export async function confirmDmLiveMessages(
   });
 }
 
+export interface DmLiveInTransactionConfirmCounts {
+  /** Unconfirmed overlay rows among the ids. */
+  checked: number;
+  match: number;
+  mismatch: number;
+  notFound: number;
+  /** Mismatches by field (`ws_rest_mismatch{field}`). */
+  mismatchFields: Partial<Record<DmLiveMismatchField, number>>;
+}
+
+/**
+ * The Fansly Sync Engine's confirmation of the overlay rows its DM apply just
+ * read (design §5.4 step 7, §14 F3), inside that apply's transaction: the
+ * same `judgeDmLiveParity` verdict as the passive pass, against the
+ * `page_dm_messages` rows the apply wrote (`confirm_source =
+ * 'page_dm_messages'` until step 4). Only rows still unconfirmed are touched,
+ * under their row lock, so the passive pass (`skip locked`, same rule) and
+ * this writer never both settle a row.
+ *
+ * `messageIds`: ids the read returned. `notFoundMessageIds`: ids the reads
+ * covered without returning them (a deleted message, or one never shown) —
+ * settled `not_found` unless a hot copy exists after all, which is judged
+ * like any other. An id with neither stays for the passive pass.
+ */
+export async function confirmDmLiveMessagesInTransaction(
+  tx: Database,
+  input: { pageId: number; messageIds: readonly string[]; notFoundMessageIds?: readonly string[] },
+): Promise<DmLiveInTransactionConfirmCounts> {
+  const counts: DmLiveInTransactionConfirmCounts = { checked: 0, match: 0, mismatch: 0, notFound: 0, mismatchFields: {} };
+  const notFound = new Set(input.notFoundMessageIds ?? []);
+  const ids = [...new Set([...input.messageIds, ...notFound])].filter((id) => /^[0-9]{1,32}$/.test(id)).sort();
+  if (ids.length === 0) return counts;
+  const rows = await tx.execute<DmLiveParityRow>(sql`
+    select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
+      m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
+      m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
+      hot.id is not null as hot_found, hot.content as hot_content, hot.sender_platform_user_id as hot_sender,
+      hot.created_at as hot_created_at, hot.in_reply_to_message_id as hot_reply, hot.group_id as hot_group,
+      false as arc_found, null::text as arc_text, null::boolean as arc_sent_by_me,
+      null::timestamptz as arc_occurred_at, null::text as arc_reply, null::text as arc_group,
+      null::boolean as arc_content_pending, false as excluded
+    from dm_live_messages m
+    left join lateral (
+      select pm.id, pm.content, pm.sender_platform_user_id, pm.created_at, pm.in_reply_to_message_id,
+        t.platform_conversation_id as group_id
+      from page_dm_messages pm
+      join page_dm_threads t on t.id = pm.conversation_id
+      where pm.platform_account_id = m.page_id and pm.platform_message_id = m.platform_message_id
+      order by pm.id
+      limit 1
+    ) hot on true
+    where m.page_id = ${input.pageId}
+      and m.platform_message_id = any(${sql.param(ids)}::text[])
+      and m.confirmed_at is null
+    order by m.platform_message_id
+    for update of m
+  `);
+  const verdicts: Array<{ message_id: string; outcome: DmLiveConfirmOutcome; source: string | null; fields: string }> = [];
+  for (const row of rows.rows) {
+    counts.checked += 1;
+    // The hot copy decides; without one only a covered id is `not_found`
+    // (the window never elapses here: the passive pass owns the window).
+    const verdict = judgeDmLiveParity(row, Number.POSITIVE_INFINITY);
+    if (verdict.outcome === "match" || verdict.outcome === "mismatch") {
+      counts[verdict.outcome] += 1;
+      for (const field of verdict.fields) counts.mismatchFields[field] = (counts.mismatchFields[field] ?? 0) + 1;
+      verdicts.push({ message_id: row.platform_message_id, outcome: verdict.outcome, source: verdict.source, fields: verdict.fields.join(",") });
+    } else if (notFound.has(row.platform_message_id)) {
+      counts.notFound += 1;
+      verdicts.push({ message_id: row.platform_message_id, outcome: "not_found", source: null, fields: "" });
+    }
+  }
+  if (verdicts.length === 0) return counts;
+  await tx.execute(sql`
+    update dm_live_messages m set
+      confirmed_at = clock_timestamp(),
+      confirm_source = v.source,
+      confirm_outcome = v.outcome,
+      mismatch_fields = case when v.fields = '' then null else string_to_array(v.fields, ',') end,
+      updated_at = clock_timestamp()
+    from jsonb_to_recordset(${JSON.stringify(verdicts)}::jsonb)
+      as v(message_id text, outcome text, source text, fields text)
+    where m.page_id = ${input.pageId} and m.platform_message_id = v.message_id and m.confirmed_at is null
+  `);
+  return counts;
+}
+
 // ---------------------------------------------------------------------------
 // Golden-signal gauges (services/golden-signals.ts samples them minutely).
 
