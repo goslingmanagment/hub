@@ -671,7 +671,9 @@ export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: Resou
 }
 
 /** A failed `local` step: the transaction rolled back; the work retries, or
- *  is quarantined when the same write would fail every time. */
+ *  is quarantined when the same write would fail every time. A quarantine
+ *  records why (`result.quarantine.detail`, as an apply's does); there is no
+ *  attempt to name. */
 async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown): Promise<ApplyErrorKind> {
   const kind = error instanceof LocalStepRefusedError ? "other" : classifyApplyError(error);
   const name = errorName(error);
@@ -680,7 +682,13 @@ async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     if (kind === "deterministic") {
-      quarantined = await quarantineWork(tx, { workId: work.id, generation: d.generation, errorClass: `local:${name}` });
+      quarantined = await quarantineWork(tx, {
+        workId: work.id,
+        generation: d.generation,
+        errorClass: `local:${name}`,
+        detail: applyErrorDetail(error),
+        attemptId: null,
+      });
       return;
     }
     const retryInMs = kind === "other"

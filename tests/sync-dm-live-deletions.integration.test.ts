@@ -11,6 +11,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { applyFanslyWsLive } from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
+import { ApplyQuarantine } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { DM_LIVE_DELETIONS_OVERFLOW_BATCH } from "../apps/runtime/src/sync/fansly/resources/dm-live.ts";
@@ -393,5 +394,45 @@ describe("dm-live.deletions on a live page", () => {
     await runActorUntil(made, async () => (await row())?.last_error_class === "local:LocalStepRefusedError", 10_000, "the refusal");
     expect(wrote).toEqual([]);
     expect(await row()).toMatchObject({ state: "open", waiting_reason: "dependency" });
+  }, 30_000);
+
+  it("a local step whose write is refused for good is quarantined, and the quarantine records why, as an apply's does", async (context) => {
+    if (!testDb) return context.skip();
+    const { page } = await seedLivePage("live", "ws-local-quarantine");
+    const module: ResourceModule = {
+      plan: async () => ({ kind: "local", reason: "test" }),
+      applyLocal: async () => {
+        throw new ApplyQuarantine("row_refused", { messageId: "910000000000100009" });
+      },
+      apply: async () => {
+        throw new Error("no request");
+      },
+      shadow: async () => {
+        throw new Error("no request");
+      },
+    };
+    await upsertDemand(db(), { pageId: page.pageId, shadow: false, resource: "local.test", kind: "trigger", class: "urgent" });
+    const transport = new ScriptedLiveTransport();
+    const made = await makeTestActor({
+      db: db(), pageId: page.pageId, mode: "live", transport, ownRef: OWN,
+      registry: createEngineRegistry([testSpec("local.test", module, { http: false })]),
+    });
+    const row = async () => (await testDb!.pool.query<{
+      state: string; last_error_class: string | null; quarantine: Record<string, unknown> | null;
+    }>(
+      `select state, last_error_class, result->'quarantine' as quarantine from sync_work
+        where page_id = $1 and not shadow and resource = 'local.test'`, [page.pageId],
+    )).rows[0] ?? null;
+    await runActorUntil(made, async () => (await row())?.state === "quarantined", 10_000, "the quarantine");
+    expect(await row()).toMatchObject({
+      state: "quarantined",
+      last_error_class: "local:quarantine:row_refused",
+      quarantine: {
+        reason: "local:quarantine:row_refused",
+        detail: { messageId: "910000000000100009", refusal: "row_refused" },
+        attemptId: null,
+      },
+    });
+    expect(transport.hits).toEqual([]);
   }, 30_000);
 });
