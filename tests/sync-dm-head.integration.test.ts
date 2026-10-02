@@ -703,6 +703,99 @@ describe("dm-messages without a request", () => {
   });
 });
 
+describe("dm-messages.head for a chat without a thread row (D5, step 3 import I.3b)", () => {
+  /** The list head without the chat, its group detail, its messages. */
+  function respondFor(groupId: string, detailMembers: readonly string[], ks: readonly number[]): Responder {
+    const messages = serve(groupId, ks);
+    return (req) => {
+      if (req.spec === "messaging.groups") return okResponse({ data: [], aggregationData: { accounts: [], groups: [] } });
+      if (req.spec === "group.detail") {
+        return okResponse({
+          id: groupId,
+          type: 1,
+          groupFlags: 0,
+          createdBy: detailMembers[0] ?? OWN,
+          users: [OWN, ...detailMembers].map((userId) => ({ groupId, userId, type: 0, permissionFlags: 0 })),
+          lastMessage: wireMessage(groupId, Math.max(...ks)),
+        });
+      }
+      return messages(req);
+    };
+  }
+
+  async function findRows(pageId: number, n: number) {
+    const result = await testDb!.pool.query<{ state: string; close_reason: string | null; demand: { reasons: string[] } }>(
+      "select state, close_reason, demand from sync_work where page_id = $1 and resource = 'dm-conversations.find' and subject = $2 order by id",
+      [pageId, groupOf(n)],
+    );
+    return result.rows;
+  }
+
+  it("a carried fan message legacy never made a thread for: one find creates the thread, then the same head reads it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    // The fan wrote before the engine took the page (a carried confirmation):
+    // the find's own list follow-up would not read it (history by request).
+    await testDb.pool.query("update sync_pages set legacy_imported_at = clock_timestamp() - interval '1 hour' where page_id = $1", [pageId]);
+    const registry = await registryFor(pageId);
+    await liveOverlay(pageId, 30, 3);
+    await demand(pageId, "dm-messages.head", 30, [msg(3)]);
+    const { requests } = await runLive(pageId, registry, respondFor(groupOf(30), [FAN], [1, 3]),
+      async () => (await workRow(pageId, "dm-messages.head", 30))?.state === "done");
+
+    expect(requests.map((req) => req.spec)).toEqual(["messaging.groups", "group.detail", "messages.page"]);
+    expect(await findRows(pageId, 30)).toEqual([
+      { state: "done", close_reason: "found_by_detail", demand: expect.objectContaining({ reasons: ["dependency:dm-messages.head"] }) },
+    ]);
+    const heads = await scalar("select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-messages.head'", [pageId]);
+    expect(heads).toBe(1);
+    expect(await workRow(pageId, "dm-messages.head", 30)).toMatchObject({ state: "done", close_reason: "confirmed" });
+    const created = await testDb.pool.query<{ id: string; fan_id: string | null; partner: string }>(
+      "select id::text, fan_id::text, partner_platform_user_id as partner from page_dm_threads where platform_conversation_id = $1",
+      [groupOf(30)],
+    );
+    expect(created.rows[0]).toMatchObject({ partner: FAN, fan_id: expect.any(String) });
+    expect(await storedIds(Number(created.rows[0]!.id))).toEqual([msg(1), msg(3)]);
+    const overlay = await testDb.pool.query("select confirm_outcome from dm_live_messages where platform_message_id = $1", [msg(3)]);
+    expect(overlay.rows[0]).toEqual({ confirm_outcome: "match" });
+  });
+
+  it("a find that creates no direct chat closes the head thread_missing; the chat is asked for once and never read", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const registry = await registryFor(pageId);
+    await liveOverlay(pageId, 31, 3);
+    await demand(pageId, "dm-messages.head", 31, [msg(3)]);
+    const { requests } = await runLive(pageId, registry, respondFor(groupOf(31), [], [3]),
+      async () => (await workRow(pageId, "dm-messages.head", 31))?.state === "done");
+
+    expect(requests.map((req) => req.spec)).toEqual(["messaging.groups", "group.detail"]);
+    expect(await findRows(pageId, 31)).toEqual([expect.objectContaining({ state: "done", close_reason: "not_a_chat" })]);
+    expect(await workRow(pageId, "dm-messages.head", 31)).toMatchObject({ state: "done", close_reason: "thread_missing" });
+    expect(await scalar("select count(*)::int as n from page_dm_threads where platform_account_id = $1", [pageId])).toBe(0);
+  });
+
+  it("without the socket's evidence of a chat (no overlay row, or the page's own mass-message container) closes at once", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const registry = await registryFor(pageId);
+    await demand(pageId, "dm-messages.head", 32, [msg(3)]);
+    await liveOverlay(pageId, 33, 4);
+    await testDb.pool.query("update dm_live_messages set message_type = 3 where platform_message_id = $1", [msg(4)]);
+    await demand(pageId, "dm-messages.head", 33, [msg(4)]);
+    const { requests } = await runLive(pageId, registry, () => {
+      throw new Error("no request expected");
+    }, async () => {
+      const rows = await Promise.all([workRow(pageId, "dm-messages.head", 32), workRow(pageId, "dm-messages.head", 33)]);
+      return rows.every((row) => row?.state === "done");
+    });
+    expect(requests).toHaveLength(0);
+    expect((await workRow(pageId, "dm-messages.head", 32))?.close_reason).toBe("thread_missing");
+    expect((await workRow(pageId, "dm-messages.head", 33))?.close_reason).toBe("thread_missing");
+    expect(await scalar("select count(*)::int as n from sync_work where page_id = $1 and resource = 'dm-conversations.find'", [pageId])).toBe(0);
+  });
+});
+
 describe("dm-messages refusals", () => {
   it("quarantines a page that breaks the contract and writes nothing of it", async (context) => {
     if (!testDb) return context.skip();
