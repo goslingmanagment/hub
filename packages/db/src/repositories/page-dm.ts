@@ -837,10 +837,13 @@ export interface PageDmMessageWindowSummary {
   lastModelMessageAt: Date | null;
 }
 
-async function getPageDmMessageWindowSummary(
+/** The stored window of a thread recomputed from its live rows (the legacy
+ *  finalize's summary; `sync chain check-window` compares the engine's
+ *  incremental bookkeeping with it). */
+export async function getPageDmMessageWindowSummary(
   db: Database,
   conversationId: number,
-) {
+): Promise<PageDmMessageWindowSummary> {
   const result = await db.execute<{
     storedMessageCount: number;
     newestStoredMessageId: string | null;

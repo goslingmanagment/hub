@@ -79,7 +79,15 @@ function chunk(fixture: Awaited<ReturnType<typeof seed>>, duringLookup: () => Pr
 describe("Fansly DM partner exclusion", () => {
   it("preserves the newer head, body, stored cursors and metadata committed during lookup", async () => {
     const fixture = await seed();
-    let latest = fixture.thread;
+    // The conversation read model, as the reader under test returns it: the
+    // thread's chain columns (0231) are not part of it, the upsert's raw
+    // returning row carries them.
+    const readConversation = async (conversationId: number) => {
+      const row = await getPageDmConversationById(testDb.db, conversationId);
+      if (!row) throw new Error("Expected the conversation");
+      return row;
+    };
+    let latest = await readConversation(fixture.thread.id);
     const messageAt = new Date("2026-09-14T12:00:00Z");
     const task = chunk(fixture, async () => {
       const updated = await upsertPageDmConversation(testDb.db, {
@@ -90,7 +98,7 @@ describe("Fansly DM partner exclusion", () => {
         lastSeenGeneration: 9, metadata: { newer: { revision: 2 }, retained: "value" },
       });
       if (!updated) throw new Error("Expected the concurrent update");
-      latest = updated;
+      latest = await readConversation(updated.id);
       await upsertPageDmMessages(testDb.db, [{
         conversationId: fixture.thread.id, platformAccountId: fixture.page.id, platformMessageId: "new-head",
         senderPlatformUserId: "fan-group", senderRole: "fan", createdAt: messageAt,

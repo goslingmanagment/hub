@@ -572,8 +572,12 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       });
 
       // Observed, not assumed: the projection is parked on a lock while the
-      // REST transaction is still open, and it has not finished.
-      await waitForRowLockWait(testDb!.pool, ["%page_dm_threads%"], { blocked: projection });
+      // REST transaction is still open, and it has not finished. No text
+      // filter: the locking select lists every page_dm_threads column, so
+      // since 0231 its table name sits past track_activity_query_size; the
+      // REST transaction, idle on its gate, is the only other backend here,
+      // so any lock waiter in this database is the projection.
+      await waitForRowLockWait(testDb!.pool, [], { blocked: projection });
       expect(await hasSettled(projection)).toBe(false);
 
       releaseRest();
