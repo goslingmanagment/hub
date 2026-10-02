@@ -369,3 +369,28 @@ export async function nextFanslyWsHintBudgetAt(db: Database, input: {
   // A zero cap never reopens; look again after a full window.
   return new Date((admittedAt === undefined ? input.now.getTime() : new Date(admittedAt).getTime()) + 86_400_000);
 }
+
+/**
+ * The groups of a page that legacy's socket-hint path (B1) holds deferred as
+ * `membership_pending` after it journaled their group detail: chats it has no
+ * thread for and leaves for the list to bind. Read-only (the shadow report's
+ * replay, design §3.12 B5).
+ */
+export async function listLegacyWsHintMembershipPending(
+  db: Database,
+  input: { pageId: number; groupRefs: readonly string[] },
+): Promise<string[]> {
+  const refs = [...new Set(input.groupRefs)];
+  if (refs.length === 0) return [];
+  const result = await db.execute<{ groupRef: string }>(sql`
+    select s.subject_ref as "groupRef"
+      from subject_refresh_state s
+     where s.page_id = ${input.pageId}
+       and s.plane = ${FANSLY_WS_DM_PLANE}
+       and s.subject_ref = any(${sql.param(refs)}::text[])
+       and s.last_refresh_outcome = 'membership_pending'
+       and s.backfill_cursor->>'groupDetailCaptured' = 'true'
+     order by s.subject_ref
+  `);
+  return result.rows.map((row) => row.groupRef);
+}

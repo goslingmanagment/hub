@@ -28,6 +28,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 import type { ArchiveTargetTable } from "./message-archive.ts";
 
 export interface FanslyWsDeletionScope {
@@ -74,6 +75,29 @@ function deletionsCte(scope: FanslyWsDeletionScope): SQL {
         ${filedFilter}
       group by r.page_id, r.group_ref, r.message_ref
     )`;
+}
+
+/** Which of these messages of one group carry an exact deletion receipt
+ *  (the fact `deletionsCte` reads, through the partial index
+ *  fansly_ws_hint_exact_delete). Read-only: the shadow report's replay judges
+ *  rows a journal-only read served moments before Fansly deleted them. */
+export async function listFanslyWsExactDeletedMessageRefs(
+  db: Database,
+  input: { pageId: number; groupRef: string; messageRefs: readonly string[] },
+): Promise<string[]> {
+  const refs = [...new Set(input.messageRefs)];
+  if (refs.length === 0) return [];
+  const result = await db.execute<{ messageRef: string }>(sql`
+    select distinct r.message_ref as "messageRef"
+      from fansly_ws_hint_receipts r
+     where r.page_id = ${input.pageId}
+       and r.group_ref = ${input.groupRef}
+       and r.message_ref = any(${sql.param(refs)}::text[])
+       and r.outcome = 'mutation_debt'
+       and r.generation is not null
+     order by 1
+  `);
+  return result.rows.map((row) => row.messageRef);
 }
 
 /** Hot rows still live for an exact deletion. Joined through the
@@ -161,7 +185,10 @@ export async function markFanslyWsHotDeletion(
  * mark can therefore revert the refresh; the reconcile re-derives these
  * windows on its next pass. Only threads holding a row an in-scope exact
  * receipt marked are considered, so an in-flight REST walk (which only adds
- * rows and recomputes the window itself) is not touched.
+ * rows and recomputes the window itself) is not touched. A thread of a page
+ * the Fansly Sync Engine owns (`handover`/`live`) is never listed: there the
+ * window is the engine's (`syncLegacyThreadSummaryAfterDeletion`, step-3
+ * design §3.1 item 12, I9).
  */
 export async function listFanslyWsDeletionWindowDrift(
   db: Database,
@@ -181,14 +208,17 @@ export async function listFanslyWsDeletionWindowDrift(
     select t.id::text as id
     from threads x
     join page_dm_threads t on t.id = x.id
-    where exists (
-        select 1 from page_dm_messages n
-        where n.conversation_id = t.id and n.deleted_at is not null
-          and n.platform_message_id in (t.newest_stored_message_id, t.oldest_stored_message_id)
-      )
-      or t.stored_message_count > (
-        select count(*) from page_dm_messages l
-        where l.conversation_id = t.id and l.deleted_at is null
+    where ${legacyOwnsFanslyPageSql(sql.raw("t.platform_account_id"))}
+      and (
+        exists (
+          select 1 from page_dm_messages n
+          where n.conversation_id = t.id and n.deleted_at is not null
+            and n.platform_message_id in (t.newest_stored_message_id, t.oldest_stored_message_id)
+        )
+        or t.stored_message_count > (
+          select count(*) from page_dm_messages l
+          where l.conversation_id = t.id and l.deleted_at is null
+        )
       )
     order by t.id
   `);

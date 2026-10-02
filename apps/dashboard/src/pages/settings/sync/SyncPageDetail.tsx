@@ -7,6 +7,7 @@ import { formatRelativeTime } from "@/lib/format";
 import { SyncBlockBadge } from "./SyncBlockRow.js";
 import { SyncBlockActions } from "./SyncBlockActions.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
+import { SyncEngineCard } from "./SyncEngineCard.js";
 import {
   getBlockOrder,
   getBlockLabel,
@@ -24,6 +25,7 @@ import {
   getSubstreamTone,
   getWsHintGenerationNotice,
   isDependencyWait,
+  isEngineBlock,
   formatSubstreamStateLabel,
 } from "./syncBlockDisplay.js";
 
@@ -66,7 +68,8 @@ function BlockDetailCard({
     ? "Waiting for prerequisite syncs"
     : statusSummary ?? (block.state === "failed" ? `${label} needs attention` : "Sync is delayed");
   const queueWaiting = block.statusReason?.code === "queue_waiting";
-  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed";
+  const engineAttention = isEngineBlock(block) && block.needsAttention;
+  const hasStatusNotice = dependencyWait || block.state === "failed" || block.state === "delayed" || engineAttention;
   const hasSubstreams = block.substreams.length > 1;
   const dependencyDetail = getDependencyWaitDetail(block);
   const progressCaption = formatBlockProgressCaption(block);
@@ -401,6 +404,7 @@ export function SyncPageDetail({
 
   const page = data.page;
   const blockKeys = getBlockOrder();
+  const engine = blockKeys.some((key) => isEngineBlock(page.blocks[key]));
 
   return (
     <div>
@@ -412,6 +416,7 @@ export function SyncPageDetail({
         {page.diagnosis && (
           <SyncDiagnosisNotice diagnosis={page.diagnosis} />
         )}
+        {engine && <SyncEngineCard pageLabel={pageLabel} />}
         {blockKeys.map((key) => (
           <BlockDetailCard
             key={key}

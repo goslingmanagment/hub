@@ -11,6 +11,7 @@ import type {
 } from "../schema.ts";
 import { insertAgentReadAudit, type InsertAgentReadAuditInput } from "./agent-read-audit.ts";
 import { witnessFor, type PlaneReadWitness } from "./agent-read-witness.ts";
+import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 
 /**
  * The hydration request store (Agent Read Plane, slice C).
@@ -213,6 +214,19 @@ const REQUEST_FROM = sql`
   join pages p on p.id = r.page_id
   join agent_keys k on k.id = r.agent_key_id
 `;
+
+/**
+ * `execution_lane` of a request the Fansly Sync Engine serves (step-3 design
+ * §3.5 item 10: the hydration wrapper of a live page files a history request
+ * and points the legacy row at it). Such a row is `dispatching` for as long as
+ * its history request runs, and only the wrapper reads its state; the legacy
+ * expiry, reconcile and stuck sweeps never touch it (the column has no CHECK,
+ * 0117).
+ */
+export const FANSLY_SYNC_ENGINE_HYDRATION_LANE = "fansly_sync_engine";
+
+/** The legacy sweeps' filter: rows the engine serves are not theirs. */
+const LEGACY_SWEEPABLE = sql`r.execution_lane is distinct from ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}`;
 
 async function appendEvent(
   db: Database,
@@ -708,6 +722,9 @@ export async function listAutoApprovableAgentHydrationRequests(
         and (r.expires_at is null or r.expires_at > ${now})
         and r.target_kind = 'thread_backfill_before'
         and p.platform = 'fansly'
+        -- A page the Fansly Sync Engine owns: its open rows are converted by
+        -- the switch (step-3 design §3.5 phase H), never approved here.
+        and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
         and k.revoked_at is null
         and k.expires_at > ${now}
         and 'request:hydration' = any(k.capabilities)
@@ -800,7 +817,7 @@ export async function sumAutoApprovedCallsSince(
 
 /**
  * Approved requests the executor may dispatch: in date, admissible, not
- * expired, oldest decision first.
+ * expired, on a page the legacy engine owns, oldest decision first.
  *
  * `excludeIds` is the executor's scan cursor: the rows it already walked this
  * cycle. It pages PAST the approvals that wait (busy page, parked, refused
@@ -818,6 +835,9 @@ export async function listDispatchableAgentHydrationRequests(
     where r.state = 'approved'
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
+      -- A page the Fansly Sync Engine owns: its legacy streams are fenced, and
+      -- the switch converts its open rows (step-3 design §3.5 phase H).
+      and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
       and r.id <> all(${sql.param([...(input.excludeIds ?? [])])}::bigint[])
     order by r.decided_at asc, r.id asc
     limit ${input.limit}
@@ -1096,7 +1116,9 @@ export async function settleAgentHydrationRequest(
 
 /**
  * The stuck-`executing` sweeper's candidates: dispatched, past their deadline,
- * still not settled. A crashed worker leaves exactly this shape.
+ * still not settled. A crashed worker leaves exactly this shape. Rows the
+ * Fansly Sync Engine serves (FANSLY_SYNC_ENGINE_HYDRATION_LANE) are not
+ * candidates: their work is a history request, not a legacy run.
  */
 export async function listStuckAgentHydrationDispatches(
   db: Database,
@@ -1108,6 +1130,7 @@ export async function listStuckAgentHydrationDispatches(
     where r.state = 'dispatching'
       and r.dispatch_deadline_at is not null
       and r.dispatch_deadline_at <= ${now}
+      and ${LEGACY_SWEEPABLE}
     order by r.dispatch_deadline_at asc
     limit ${input.limit}
   `);
@@ -1115,7 +1138,8 @@ export async function listStuckAgentHydrationDispatches(
 }
 
 /** Everything currently in flight, deadline or not — the reconciliation input
- *  for lanes whose executor cannot report back on its own (OnlyFans). */
+ *  for lanes whose executor cannot report back on its own (OnlyFans). Rows the
+ *  Fansly Sync Engine serves are not in flight on any legacy lane. */
 export async function listDispatchingAgentHydrationRequests(
   db: Database,
   input: { limit: number },
@@ -1123,13 +1147,15 @@ export async function listDispatchingAgentHydrationRequests(
   const result = await db.execute<Record<string, unknown>>(sql`
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     where r.state = 'dispatching'
+      and ${LEGACY_SWEEPABLE}
     order by r.dispatched_at asc
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);
 }
 
-/** Undecided or approved-but-never-dispatched requests whose expiry has passed. */
+/** Undecided or approved-but-never-dispatched requests whose expiry has passed
+ *  (never a row the Fansly Sync Engine serves). */
 export async function listExpirableAgentHydrationRequests(
   db: Database,
   input: { limit: number; now?: Date },
@@ -1140,6 +1166,7 @@ export async function listExpirableAgentHydrationRequests(
     where r.state in ('requested', 'approved')
       and r.expires_at is not null
       and r.expires_at <= ${now}
+      and ${LEGACY_SWEEPABLE}
     order by r.expires_at asc
     limit ${input.limit}
   `);

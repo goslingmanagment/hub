@@ -57686,6 +57686,7 @@
         "tags": [
           "admin"
         ],
+        "description": "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live); nothing was sent and nothing was stored.",
         "requestBody": {
           "required": true,
           "content": {
@@ -57968,6 +57969,38 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -57978,6 +58011,7 @@
         "tags": [
           "admin"
         ],
+        "description": "409 `fansly_page_on_sync_engine`: the page is on the Fansly Sync Engine (handover or live), which verifies its session itself; nothing was sent.",
         "parameters": [
           {
             "schema": {
@@ -58134,6 +58168,38 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -58658,6 +58724,35 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "handover",
+                            "live"
+                          ]
+                        },
+                        "resources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "affected": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "resources",
+                        "affected"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -58919,6 +59014,35 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "handover",
+                            "live"
+                          ]
+                        },
+                        "resources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "affected": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "resources",
+                        "affected"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -59029,6 +59153,38 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -59212,6 +59368,35 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "handover",
+                            "live"
+                          ]
+                        },
+                        "resources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "affected": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "resources",
+                        "affected"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -59473,6 +59658,35 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "engine": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": [
+                            "handover",
+                            "live"
+                          ]
+                        },
+                        "resources": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "affected": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "mode",
+                        "resources",
+                        "affected"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -59583,6 +59797,38 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -60560,6 +60806,38 @@
               }
             }
           },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
           "503": {
             "description": "Default Response",
             "content": {
@@ -61413,6 +61691,38 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {
@@ -116159,6 +116469,102 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "engine": {
+                            "type": "object",
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "handover",
+                                  "live"
+                                ]
+                              },
+                              "ownerHeartbeatAgeSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "hold": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "until": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "until"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "urgentOldestAgeSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "wsConnected": {
+                                "type": "boolean"
+                              },
+                              "wsDownSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "quarantined": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "openAlerts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "mode",
+                              "ownerHeartbeatAgeSeconds",
+                              "hold",
+                              "urgentOldestAgeSeconds",
+                              "wsConnected",
+                              "wsDownSeconds",
+                              "quarantined",
+                              "openAlerts"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -116476,6 +116882,102 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "engine": {
+                            "type": "object",
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "handover",
+                                  "live"
+                                ]
+                              },
+                              "ownerHeartbeatAgeSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "hold": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string"
+                                      },
+                                      "until": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "until"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "urgentOldestAgeSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "wsConnected": {
+                                "type": "boolean"
+                              },
+                              "wsDownSeconds": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "quarantined": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "openAlerts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "mode",
+                              "ownerHeartbeatAgeSeconds",
+                              "hold",
+                              "urgentOldestAgeSeconds",
+                              "wsConnected",
+                              "wsDownSeconds",
+                              "quarantined",
+                              "openAlerts"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -137685,7 +138187,15 @@
                                     "delayed",
                                     "failed",
                                     "paused",
-                                    "not_available"
+                                    "not_available",
+                                    "engine"
+                                  ]
+                                },
+                                "engineMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "handover",
+                                    "live"
                                   ]
                                 },
                                 "succeededAt": {
@@ -138034,7 +138544,8 @@
                                           "retrying",
                                           "delayed",
                                           "failed",
-                                          "paused"
+                                          "paused",
+                                          "engine"
                                         ]
                                       },
                                       "succeededAt": {
@@ -138257,7 +138768,15 @@
                                     "delayed",
                                     "failed",
                                     "paused",
-                                    "not_available"
+                                    "not_available",
+                                    "engine"
+                                  ]
+                                },
+                                "engineMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "handover",
+                                    "live"
                                   ]
                                 },
                                 "succeededAt": {
@@ -138606,7 +139125,8 @@
                                           "retrying",
                                           "delayed",
                                           "failed",
-                                          "paused"
+                                          "paused",
+                                          "engine"
                                         ]
                                       },
                                       "succeededAt": {
@@ -138829,7 +139349,15 @@
                                     "delayed",
                                     "failed",
                                     "paused",
-                                    "not_available"
+                                    "not_available",
+                                    "engine"
+                                  ]
+                                },
+                                "engineMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "handover",
+                                    "live"
                                   ]
                                 },
                                 "succeededAt": {
@@ -139178,7 +139706,8 @@
                                           "retrying",
                                           "delayed",
                                           "failed",
-                                          "paused"
+                                          "paused",
+                                          "engine"
                                         ]
                                       },
                                       "succeededAt": {
@@ -139401,7 +139930,15 @@
                                     "delayed",
                                     "failed",
                                     "paused",
-                                    "not_available"
+                                    "not_available",
+                                    "engine"
+                                  ]
+                                },
+                                "engineMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "handover",
+                                    "live"
                                   ]
                                 },
                                 "succeededAt": {
@@ -139750,7 +140287,8 @@
                                           "retrying",
                                           "delayed",
                                           "failed",
-                                          "paused"
+                                          "paused",
+                                          "engine"
                                         ]
                                       },
                                       "succeededAt": {
@@ -139973,7 +140511,15 @@
                                     "delayed",
                                     "failed",
                                     "paused",
-                                    "not_available"
+                                    "not_available",
+                                    "engine"
+                                  ]
+                                },
+                                "engineMode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "handover",
+                                    "live"
                                   ]
                                 },
                                 "succeededAt": {
@@ -140322,7 +140868,8 @@
                                           "retrying",
                                           "delayed",
                                           "failed",
-                                          "paused"
+                                          "paused",
+                                          "engine"
                                         ]
                                       },
                                       "succeededAt": {
@@ -140827,7 +141374,15 @@
                             "delayed",
                             "failed",
                             "paused",
-                            "not_available"
+                            "not_available",
+                            "engine"
+                          ]
+                        },
+                        "engineMode": {
+                          "type": "string",
+                          "enum": [
+                            "handover",
+                            "live"
                           ]
                         },
                         "succeededAt": {
@@ -141176,7 +141731,8 @@
                                   "retrying",
                                   "delayed",
                                   "failed",
-                                  "paused"
+                                  "paused",
+                                  "engine"
                                 ]
                               },
                               "succeededAt": {
@@ -145075,7 +145631,15 @@
                                       "delayed",
                                       "failed",
                                       "paused",
-                                      "not_available"
+                                      "not_available",
+                                      "engine"
+                                    ]
+                                  },
+                                  "engineMode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "handover",
+                                      "live"
                                     ]
                                   },
                                   "succeededAt": {
@@ -145424,7 +145988,8 @@
                                             "retrying",
                                             "delayed",
                                             "failed",
-                                            "paused"
+                                            "paused",
+                                            "engine"
                                           ]
                                         },
                                         "succeededAt": {
@@ -145647,7 +146212,15 @@
                                       "delayed",
                                       "failed",
                                       "paused",
-                                      "not_available"
+                                      "not_available",
+                                      "engine"
+                                    ]
+                                  },
+                                  "engineMode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "handover",
+                                      "live"
                                     ]
                                   },
                                   "succeededAt": {
@@ -145996,7 +146569,8 @@
                                             "retrying",
                                             "delayed",
                                             "failed",
-                                            "paused"
+                                            "paused",
+                                            "engine"
                                           ]
                                         },
                                         "succeededAt": {
@@ -146219,7 +146793,15 @@
                                       "delayed",
                                       "failed",
                                       "paused",
-                                      "not_available"
+                                      "not_available",
+                                      "engine"
+                                    ]
+                                  },
+                                  "engineMode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "handover",
+                                      "live"
                                     ]
                                   },
                                   "succeededAt": {
@@ -146568,7 +147150,8 @@
                                             "retrying",
                                             "delayed",
                                             "failed",
-                                            "paused"
+                                            "paused",
+                                            "engine"
                                           ]
                                         },
                                         "succeededAt": {
@@ -146791,7 +147374,15 @@
                                       "delayed",
                                       "failed",
                                       "paused",
-                                      "not_available"
+                                      "not_available",
+                                      "engine"
+                                    ]
+                                  },
+                                  "engineMode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "handover",
+                                      "live"
                                     ]
                                   },
                                   "succeededAt": {
@@ -147140,7 +147731,8 @@
                                             "retrying",
                                             "delayed",
                                             "failed",
-                                            "paused"
+                                            "paused",
+                                            "engine"
                                           ]
                                         },
                                         "succeededAt": {
@@ -147363,7 +147955,15 @@
                                       "delayed",
                                       "failed",
                                       "paused",
-                                      "not_available"
+                                      "not_available",
+                                      "engine"
+                                    ]
+                                  },
+                                  "engineMode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "handover",
+                                      "live"
                                     ]
                                   },
                                   "succeededAt": {
@@ -147712,7 +148312,8 @@
                                             "retrying",
                                             "delayed",
                                             "failed",
-                                            "paused"
+                                            "paused",
+                                            "engine"
                                           ]
                                         },
                                         "succeededAt": {

@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   acquireFanslyWsOwnership, beginFanslyWsConnection, captureFanslyWsFrame,
-  findPageByLabel, finishFanslyWsConnection, guardFanslyWsConnection,
-  replayFanslyWsDecode, isFanslyWsGenerationBlocked, type Database,
+  findPageByLabel, finishFanslyWsConnection, guardFanslyWsConnection, isFanslyPageEngineOwned,
+  listEngineOwnedFanslyPages, replayFanslyWsDecode, isFanslyWsGenerationBlocked, type Database,
 } from "@agency_hub_core/db";
 import type { FanslySendLease } from "@agency_hub_core/fansly";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { readFanslyPageGeneration, readProbeGeneration, readProbeSnapshot } from "../egress/fansly-probe-context.ts";
 import { openFanslyReceiverSocket } from "../egress/fansly-receiver-socket.ts";
-import { FanslyPageSendClosedError, fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
+import {
+  FanslyPageSendClosedError, fanslyPageSendGuard, isFanslyPageOwnedBySyncEngineError,
+} from "../fansly-send-guard/index.ts";
 import {
   FANSLY_WS_CONNECTION_TIMING, receiveFanslyConnection, type FanslyWsConnectionTiming, type FanslyWsStopReason,
 } from "./connection.ts";
@@ -61,7 +63,14 @@ export function fanslyWsPages(config: Pick<AppContext["config"], "fanslyWsCaptur
 }
 
 /** Worker-local supervisor. The only cross-process authority is each page's
- * dedicated PostgreSQL session. Live config is read at most every ten seconds. */
+ * dedicated PostgreSQL session. Live config is read at most every ten seconds.
+ *
+ * A page the Fansly Sync Engine owns (`handover`/`live`, step-3 design §3.1
+ * item 5) is never desired: its socket belongs to the `sync` process. Leaving
+ * the desired set stops the page gracefully (`disabled`): the receiver drains
+ * the frames it already received, the applier gets its drain, the connection
+ * row closes with `gap_since` for the next owner and the session lock
+ * (58213, page) is released. */
 export function startFanslyWsWorker(app: AppContext, options: {
   onCaptured?: FanslyWsCapturedListener;
   timing?: FanslyWsWorkerTiming;
@@ -82,6 +91,8 @@ export function startFanslyWsWorker(app: AppContext, options: {
       if (stopped) return;
       configReadAt = Date.now();
       const desired = fanslyWsPages(config);
+      for (const engineOwned of await listEngineOwnedFanslyPages(app.db)) desired.delete(engineOwned.label);
+      if (stopped) return;
       for (const [label, page] of pages) if (!desired.has(label)) page.controller.abort("disabled");
       for (const label of desired) {
         if (pages.has(label)) continue;
@@ -123,6 +134,7 @@ async function runPage(
     let intakeStoppedAt: Date | undefined;
     let applier: ReturnType<typeof createFanslyWsLiveApplier> | undefined;
     let lease: FanslySendLease | null = null;
+    /** Look again after the page pause, off the reconnect ladder. */
     let sendGuardClosed = false;
     let reason: FanslyWsStopReason = "guard_unavailable";
     // Guard/status and capture share the lock-owning session without nested
@@ -139,6 +151,10 @@ async function runPage(
       owner = await acquireFanslyWsOwnership(app.config.databaseUrl, stored.page.id,
         () => controller.abort("ownership_lost"));
       if (!owner) { await pause(signal, timing.pagePauseMs); continue; }
+      // The page moved to the Fansly Sync Engine between the supervisor's
+      // poll and this acquisition: give the lock back at once; the next poll
+      // no longer desires the page.
+      if ((await isFanslyPageEngineOwned(owner.db, stored.page.id)).owned) return;
       context = await readProbeSnapshot(owner.db, app.config, label);
       if (context.pageId !== stored.page.id || !context.expectedAccountId) throw new Error("fansly_ws_identity_changed");
       if (context.generation !== previousGeneration) { failures = 0; previousGeneration = context.generation; }
@@ -206,7 +222,13 @@ async function runPage(
         }),
       });
     } catch (error) {
-      if (error instanceof FanslyPageSendClosedError) {
+      if (isFanslyPageOwnedBySyncEngineError(error)) {
+        // The switch gave the page's send guard to the Fansly Sync Engine
+        // (0229) before the supervisor dropped the page: nothing was sent and
+        // nothing is wrong. Look again after the page pause, off the
+        // reconnect ladder; the next poll stops the page.
+        sendGuardClosed = true;
+      } else if (error instanceof FanslyPageSendClosedError) {
         // The page's send guard is closed (a holder overran its lease; the
         // guard alert says what to do). Not a connection failure: look again
         // after the page pause, off the reconnect ladder.

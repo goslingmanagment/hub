@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
+import type * as SyncEngineGuardModule from "../apps/runtime/src/services/sync-engine-guard.ts";
 import type * as SyncServiceModule from "../apps/runtime/src/services/sync.ts";
 import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-boss";
 
@@ -118,6 +119,16 @@ vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
 
 vi.mock("../apps/runtime/src/services/fansly-page-alias-backfill.ts", () => ({
   backfillFanslyPageAliases: cliMocks.backfillFanslyPageAliases,
+}));
+
+// The step-3 legacy fences (S3-01) read `sync_pages`; these parsing tests run
+// without a database, on pages the legacy engine owns. The fences themselves
+// are tested in tests/sync-legacy-fence.integration.test.ts.
+vi.mock("../apps/runtime/src/services/sync-engine-guard.ts", async (importOriginal) => ({
+  ...await importOriginal<typeof SyncEngineGuardModule>(),
+  assertLegacyOwnsFanslyPage: async () => undefined,
+  assertLegacyOwnsFanslyPageId: async () => undefined,
+  assertLegacyOwnsFanslyPageLabels: async () => undefined,
 }));
 
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
@@ -304,6 +315,7 @@ describe("CLI parsing", () => {
         aliasesSet: 3,
         aliasesCleared: 1,
       }],
+      skippedEngineOwnedPages: [],
     });
     cliMocks.waitForRequestedSyncRequests.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
@@ -910,6 +922,23 @@ describe("CLI parsing", () => {
     );
     expect(logSpy).toHaveBeenCalledWith("pages=1");
     expect(logSpy).toHaveBeenCalledWith("aliases_cleared=1");
+  });
+
+  it("names the pages an unrestricted alias backfill left to the Fansly Sync Engine", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    cliMocks.backfillFanslyPageAliases.mockResolvedValueOnce({
+      totalPages: 0, totalMembershipsScanned: 0, totalUniqueFanIds: 0, totalAccountsReturned: 0,
+      totalFallbackMisses: 0, totalReconciledAccounts: 0, totalNotesSeen: 0, totalNotesUpserted: 0,
+      totalNotesDeactivated: 0, totalAliasesSet: 0, totalAliasesCleared: 0, pages: [],
+      skippedEngineOwnedPages: ["lilly-1"],
+    });
+
+    await buildProgram().parseAsync(["fansly-page-alias-backfill"], { from: "user" });
+
+    expect(logSpy).toHaveBeenCalledWith(
+      "skipped_engine_pages=lilly-1 (on the Fansly Sync Engine: "
+        + "`pnpm cli sync work enqueue --page <label> --resource fan-profiles.alias-backfill`)",
+    );
   });
 
   it("queues a fresh sync.planner recovery job", async () => {

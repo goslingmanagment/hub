@@ -41,6 +41,7 @@ import {
 } from "./capture-payloads.ts";
 import { egressKeySql } from "./egress.ts";
 import { PageSyncLeaseLostError, getPageSyncExecutionContext } from "./sync-context.ts";
+import { legacyOwnsFanslyPageSql } from "./sync/pages.ts";
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
   PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
@@ -1791,7 +1792,12 @@ export async function hasRecentTerminalProxyFailure(
  * `last_scheduled_slot`), which is how a planner that stopped claiming shows.
  *
  * The run lookup is bounded to `since` so it stays on `sync_runs_started_idx`;
- * `latestStartedAt` is null when nothing started inside it. */
+ * `latestStartedAt` is null when nothing started inside it.
+ *
+ * Pages the Fansly Sync Engine owns (`handover`/`live`) are out of both
+ * halves: their legacy streams are fenced, so a due stream of theirs is no
+ * sign of a wedged executor, and a run of theirs (one that started just before
+ * the switch) is no sign of a live one. */
 export async function getFanslySyncLiveness(
   db: Database,
   input: { since: Date; dueBefore: Date },
@@ -1801,6 +1807,7 @@ export async function getFanslySyncLiveness(
       from ${syncRuns} r
       join ${pages} p on p.id = r.page_id and p.platform = 'fansly'
      where r.started_at > ${input.since}
+       and ${legacyOwnsFanslyPageSql(sql.raw("r.page_id"))}
   `);
   const streams = await db.execute<{
     outstanding: boolean;
@@ -1819,6 +1826,7 @@ export async function getFanslySyncLiveness(
      where st.status <> 'paused'
        and st.blocker_kind is null
        and (st.retry_at is null or st.retry_at <= ${input.dueBefore})
+       and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
   `);
   const hasDueStream = streams.rows.some((row) => {
     if (row.outstanding) {

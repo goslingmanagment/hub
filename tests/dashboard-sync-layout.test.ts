@@ -632,6 +632,7 @@ describe("dashboard sync layout", () => {
       showResume: true,
       showReset: true,
       resumeLabel: "Resume top spenders",
+      resetLabel: "Reset",
     });
 
     expect(getSyncBlockActionPresentation({

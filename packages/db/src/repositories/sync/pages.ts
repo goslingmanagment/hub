@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import type { FanslySendGuardOwnerEngine, FanslySendHolderIdentity } from "../fansly-send-guard.ts";
@@ -493,6 +493,72 @@ export async function setSyncPageMode(
   });
 }
 
+// ── legacy fences (step 3) ────────────────────────────────────────────────────
+//
+// Step-3 design §3.1 (S3-01): while the Fansly Sync Engine owns a page —
+// `handover` (the switch fences the legacy engine before the engine's first
+// send) or `live` — no legacy component even tries to send for it. The legacy
+// schedulers carry `legacyOwnsFanslyPageSql` next to their other gates and the
+// legacy processes ask `isFanslyPageEngineOwned` /
+// `listEngineOwnedFanslyPages`; the step-1 guard row (`owner_engine`, 0229)
+// stays the catch-all at the wire. `off` and `shadow` fence nothing (J8). A
+// page without a `sync_pages` row (OnlyFans, a Fansly page onboarded after the
+// host last listed its pages) is legacy-owned by construction. Every check is
+// evaluated per query, so leaving to `off` restores the legacy engine with no
+// other action.
+
+/** The modes in which the Fansly Sync Engine owns a page. */
+export const ENGINE_OWNED_SYNC_PAGE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
+export type EngineOwnedSyncPageMode = (typeof ENGINE_OWNED_SYNC_PAGE_MODES)[number];
+
+function isEngineOwnedMode(mode: SyncPageMode | null): mode is EngineOwnedSyncPageMode {
+  return mode !== null && (ENGINE_OWNED_SYNC_PAGE_MODES as readonly string[]).includes(mode);
+}
+
+/** True while the Fansly Sync Engine owns the page (handover or live).
+ *  `pageIdColumn` is a qualified column or a bound value; the subquery's own
+ *  alias cannot shadow a caller's. */
+export function engineOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
+  return sql`exists (
+    select 1 from sync_pages engine_owned_page
+     where engine_owned_page.page_id = ${pageIdColumn}
+       and engine_owned_page.mode in ('handover', 'live')
+  )`;
+}
+
+/** True unless the Fansly Sync Engine owns the page: the gate of every legacy
+ *  scheduler query (OnlyFans pages and pages without a row pass). */
+export function legacyOwnsFanslyPageSql(pageIdColumn: SQL): SQL {
+  return sql`not ${engineOwnsFanslyPageSql(pageIdColumn)}`;
+}
+
+/** The pages the engine owns now, for the legacy processes' page lists. */
+export async function listEngineOwnedFanslyPages(
+  db: Database,
+): Promise<Array<{ pageId: number; label: string; mode: EngineOwnedSyncPageMode }>> {
+  const result = await db.execute<{ pageId: string | number; label: string; mode: EngineOwnedSyncPageMode }>(sql`
+    select sp.page_id as "pageId", p.label, sp.mode
+      from sync_pages sp
+      join pages p on p.id = sp.page_id
+     where sp.mode in ('handover', 'live')
+     order by sp.page_id
+  `);
+  return result.rows.map((row) => ({ pageId: Number(row.pageId), label: row.label, mode: row.mode }));
+}
+
+/** Whether the engine owns this page now, and the page's mode (null without a
+ *  `sync_pages` row). */
+export async function isFanslyPageEngineOwned(
+  db: Database,
+  pageId: number,
+): Promise<{ owned: boolean; mode: SyncPageMode | null }> {
+  const result = await db.execute<{ mode: SyncPageMode }>(sql`
+    select mode from sync_pages where page_id = ${pageId}
+  `);
+  const mode = result.rows[0]?.mode ?? null;
+  return { owned: isEngineOwnedMode(mode), mode };
+}
+
 // ── ownership ─────────────────────────────────────────────────────────────────
 
 export interface LockedSyncPage {
@@ -930,6 +996,37 @@ export async function setPagePause(
        set paused_all = coalesce(${input.all ?? null}::boolean, paused_all),
            paused_requests = coalesce(${input.requests ?? null}::boolean, paused_requests),
            paused_resources = coalesce(${resources === null ? null : sql.param(resources)}::text[], paused_resources),
+           pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+  `);
+  if ((result.rowCount ?? 0) === 0) return null;
+  await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
+  return getSyncPage(db, input.pageId);
+}
+
+/**
+ * Add keys to (`add`) and take keys out of (`remove`) a page's paused set in
+ * one statement — the set's other keys are kept whatever another lever wrote
+ * meanwhile (`setPagePause({resources})` REPLACES the set). A key in both
+ * lists ends paused. Null: no row for the page.
+ */
+export async function adjustPausedResources(
+  db: Database,
+  input: { pageId: number; add?: readonly string[]; remove?: readonly string[]; note?: string | null },
+): Promise<SyncPageRow | null> {
+  const add = [...new Set(input.add ?? [])].sort();
+  const remove = [...new Set(input.remove ?? [])].sort();
+  for (const resource of [...add, ...remove]) {
+    if (!SYNC_RESOURCE_KEY_PATTERN.test(resource)) throw new Error(`Not a resource key: ${resource}`);
+  }
+  const result = await db.execute(sql`
+    update sync_pages
+       set paused_resources = array(
+             select distinct k
+               from unnest(paused_resources || ${textArrayParam(add)}) as k
+              where not (k = any(${textArrayParam(remove)})) or k = any(${textArrayParam(add)})
+              order by k),
            pause_note = case when ${input.note !== undefined} then ${input.note ?? null}::text else pause_note end,
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}

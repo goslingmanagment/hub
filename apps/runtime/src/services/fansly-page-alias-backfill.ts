@@ -1,8 +1,9 @@
-import { listFanslyFanPageIdentityBackfillTargets } from "@agency_hub_core/db";
+import { listEngineOwnedFanslyPages, listFanslyFanPageIdentityBackfillTargets } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 import { resolvePageContext } from "./page-context.ts";
+import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
 import { upsertHydratedFansForPageDetailed } from "./sync/fan-hydration.ts";
 
 export interface FanslyPageAliasBackfillPageSummary {
@@ -28,6 +29,9 @@ export async function backfillFanslyPageAliases(
   },
 ) {
   const requestedPageLabels = Array.from(new Set((input?.pageLabels ?? []).filter(Boolean)));
+  // Step-3 design §3.1 item 11: a page named here that the Fansly Sync Engine
+  // owns is refused before any page is resolved or sends.
+  await assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels, SYNC_ENGINE_HINTS.aliasBackfill);
   const pageContexts = requestedPageLabels.length > 0
     ? await Promise.all(requestedPageLabels.map((pageLabel) => resolvePageContext(app, pageLabel)))
     : [];
@@ -50,12 +54,22 @@ export async function backfillFanslyPageAliases(
     groupedTargets.set(target.platformAccountId, current);
   }
 
+  // An unrestricted run leaves the pages the Fansly Sync Engine owns to the
+  // engine (their fan profiles are its `fan-profiles.alias-backfill`) and
+  // names them; it never resolves their context.
+  const engineOwned = new Set((await listEngineOwnedFanslyPages(app.db)).map((page) => page.pageId));
+  const skippedEngineOwnedPages: string[] = [];
   const contexts = pageContexts.length > 0
     ? pageContexts
     : await Promise.all(
       Array.from(groupedTargets.values())
         .map((pageTargets) => pageTargets[0])
         .filter((page): page is NonNullable<typeof page> => Boolean(page))
+        .filter((page) => {
+          if (!engineOwned.has(page.platformAccountId)) return true;
+          skippedEngineOwnedPages.push(page.pageLabel);
+          return false;
+        })
         .map((page) => resolvePageContext(app, page.pageLabel)),
     );
 
@@ -129,5 +143,6 @@ export async function backfillFanslyPageAliases(
     totalAliasesSet: pages.reduce((sum, page) => sum + page.aliasesSet, 0),
     totalAliasesCleared: pages.reduce((sum, page) => sum + page.aliasesCleared, 0),
     pages,
+    skippedEngineOwnedPages,
   };
 }
