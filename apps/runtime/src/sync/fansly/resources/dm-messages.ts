@@ -97,7 +97,9 @@ import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } f
 // the overlay confirmation → the inline canonicalization and the archive feed
 // by dedup keys → the work rows (demand ids resolved, a covered `.catchup`
 // closed). Excluded and unbound threads are never read (decision №8 has its
-// own probe).
+// own probe); a page whose thread was deleted, unbound or excluded since the
+// plan only canonicalizes its observation under the same fence (stamped, so
+// the unfenced minutely sweep never appends it) and closes the work.
 
 export type DmMessagesVariant = "head" | "catchup" | "history";
 
@@ -558,17 +560,6 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   const facts = await readFanslyPageFacts(tx, input.pageId);
   if (facts === null) throw new ApplyQuarantine("page_missing");
   if (facts.externalId === null) throw new ApplyQuarantine("page_account_unknown");
-  const thread = await readThread(tx, input.pageId, groupId);
-  const skip = threadSkip(thread);
-  if (skip !== null || thread === null) {
-    // Erased, unbound or excluded since the plan: nothing of the page is
-    // written, the work is over.
-    return {
-      work: { satisfiesRevision: true, close: "done", closeReason: skip ?? "thread_missing" },
-      followups: [],
-      counters: { [`skipped_${skip ?? "thread_missing"}`]: 1 },
-    };
-  }
   const page = input.parsed as FanslyMessagesPage;
   const messages = page.messages;
   // The wire contract checks the container only (per-message drift is the
@@ -577,6 +568,18 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
   if (notObject !== -1) throw new FanslyContractViolationError(`messages[${notObject}]`, "not an object");
   const foreign = messages.filter((message) => typeof message.groupId === "string" && message.groupId !== groupId).length;
   if (foreign > 0) throw new ApplyQuarantine("dm_messages_foreign_group", { groupId, foreign });
+  const thread = await readThread(tx, input.pageId, groupId);
+  const skip = threadSkip(thread);
+  if (skip !== null || thread === null) {
+    return applySkippedThread(tx, input, {
+      key,
+      groupId,
+      skip: skip ?? "thread_missing",
+      partnerId: thread?.state.partnerPlatformUserId ?? null,
+      ownRef: facts.externalId,
+      messages,
+    });
+  }
 
   // 1. The page contract and the fold — pure, before anything is written.
   const chainPage = chainPageOf(messages, before, input);
@@ -739,6 +742,50 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
     counters,
     canonicalized: true,
     ...(chainMoved ? { threadChainChanged: { threadId: thread.state.id } } : {}),
+  };
+}
+
+/**
+ * The thread was deleted, unbound or excluded between the plan and this
+ * apply: nothing of the page reaches the hot table, the chain or the
+ * overlay, and the work is over. The observation is still settled here, under
+ * the same per-message erasure fence (§5.4 step 1): its unfenced events are
+ * appended and archived and the row is stamped. Left unstamped, the minutely
+ * sweep would append every event of it with no fence, and an erasure (which
+ * deletes the fan's threads) is one reason the thread is gone.
+ */
+async function applySkippedThread(tx: Database, input: ApplyInput, skipped: {
+  key: string;
+  groupId: string;
+  skip: ThreadSkip;
+  partnerId: string | null;
+  ownRef: string;
+  messages: readonly FanslyMessage[];
+}): Promise<ApplyResult> {
+  const counters: Record<string, number> = { [`skipped_${skipped.skip}`]: 1 };
+  const fence = await checkFence(tx, {
+    pageId: input.pageId,
+    groupId: skipped.groupId,
+    partnerId: skipped.partnerId,
+    messages: skipped.messages,
+    receivedAt: input.observation.receivedAt,
+  });
+  bump(counters, "messages_fenced", fence.fencedIds.size);
+  await canonicalizeAndFeedArchive(tx, {
+    pageId: input.pageId,
+    ownRef: skipped.ownRef,
+    key: skipped.key,
+    observation: input.observation,
+    response: input.response,
+    fence,
+    now: input.now,
+    counters,
+  });
+  return {
+    work: { satisfiesRevision: true, close: "done", closeReason: skipped.skip },
+    followups: [],
+    counters,
+    canonicalized: true,
   };
 }
 

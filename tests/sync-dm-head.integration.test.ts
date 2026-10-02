@@ -47,7 +47,9 @@ import {
 // the staged walk meets the chain, which moves only then; the archive is fed
 // even when the minutely driver appended the events first; history is read
 // to the empty page that proves its start; nothing fenced, excluded or
-// refused by the contract is written.
+// refused by the contract is written; a chat erased or excluded between the
+// capture and the apply still has its observation canonicalized under the
+// fence and stamped (never left to the unfenced sweep).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -572,6 +574,78 @@ describe("dm-messages.head", () => {
     expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(2);
     // The read itself is a chain fact: the chat's head is confirmed.
     expect((await thread(threadId)).head_confirmed_id).toBe(msg(4));
+  });
+
+  it("settles the observation under the fence when an erasure deletes the chat between the capture and the apply", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId, { n: 18, stored: range(1, 3), chain: true });
+    const registry = await registryFor(pageId);
+    const user = await testDb.pool.query<{ id: string }>(
+      "insert into users (username, password_hash, role) values ('owner-erasure', 'x', 'owner') returning id::text as id",
+    );
+    await demand(pageId, "dm-messages.head", 18, [msg(5)]);
+    await runLive(pageId, registry, serve(groupOf(18), range(1, 5)),
+      async () => (await workRow(pageId, "dm-messages.head", 18))?.state === "done",
+      {
+        // The capture (tx 2) takes no fence: the erasure's tombstone and its
+        // thread delete land after it, before the apply. (A real fan erasure
+        // also deletes the chat's work and attempts, by subject; this is the
+        // apply that still runs when the attempt outlives the thread.)
+        faults: async (point) => {
+          if (point !== "after_capture") return;
+          await testDb!.pool.query(
+            "insert into erasure_log (scope_type, scope_ref, initiated_by, dry_run, plan) values ('fan', $1, $2, false, $3::jsonb)",
+            [`fan:fansly:${FAN}`, Number(user.rows[0]!.id), JSON.stringify({ resolvedFanGroupIds: [groupOf(18)] })],
+          );
+          await testDb!.pool.query("delete from page_dm_threads where id = $1", [threadId]);
+        },
+      });
+    expect(await workRow(pageId, "dm-messages.head", 18)).toMatchObject({ state: "done", close_reason: "thread_missing" });
+    const attempt = await testDb.pool.query<{ apply_state: string; observation_id: string }>(
+      "select apply_state, observation_id::text from sync_attempts where page_id = $1 and resource = 'dm-messages.head'",
+      [pageId],
+    );
+    expect(attempt.rows).toEqual([{ apply_state: "applied", observation_id: expect.any(String) }]);
+    // Stamped by the apply, every message fenced: the sweep has nothing left
+    // to append, and nothing of the erased chat reaches the ledger or the archive.
+    expect(await scalar("select parse_version as n from observations where id = $1", [attempt.rows[0]!.observation_id]))
+      .toBe(familyForObservation({ source: "pull", kind: "dm_messages" })!.version);
+    expect(await scalar("select count(*)::int as n from domain_events where account_id = $1", [pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(0);
+    expect(await scalar("select count(*)::int as n from page_dm_messages where platform_account_id = $1", [pageId])).toBe(0);
+  });
+
+  it("a chat excluded between the capture and the apply writes no rows, yet its events are appended and the observation stamped", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId, { n: 19, stored: range(1, 3), chain: true });
+    const registry = await registryFor(pageId);
+    await demand(pageId, "dm-messages.head", 19, [msg(5)]);
+    await runLive(pageId, registry, serve(groupOf(19), range(1, 5)),
+      async () => (await workRow(pageId, "dm-messages.head", 19))?.state === "done",
+      {
+        faults: async (point) => {
+          if (point !== "after_capture") return;
+          await testDb!.pool.query("update page_dm_threads set metadata = $2::jsonb where id = $1", [
+            threadId, JSON.stringify({ [FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY]: "partner_missing_from_aggregation_accounts" }),
+          ]);
+        },
+      });
+    expect(await workRow(pageId, "dm-messages.head", 19)).toMatchObject({ state: "done", close_reason: "excluded" });
+    expect(await storedIds(threadId)).toEqual(range(1, 3).map(msg));
+    expect((await thread(threadId)).head_confirmed_id).toBe(msg(3));
+    const observation = await testDb.pool.query<{ parse_version: number | null }>(
+      "select o.parse_version from observations o join sync_attempts a on a.observation_id = o.id where a.page_id = $1",
+      [pageId],
+    );
+    expect(observation.rows).toEqual([{ parse_version: familyForObservation({ source: "pull", kind: "dm_messages" })!.version }]);
+    // The captured facts are the ledger's (nothing fences them): the same
+    // events the sweep would have appended, archived in the same commit.
+    expect(await scalar(
+      "select count(*)::int as n from domain_events where account_id = $1 and type in ('message.received', 'message.sent')", [pageId],
+    )).toBe(5);
+    expect(await scalar("select count(*)::int as n from message_archive where account_id = $1", [pageId])).toBe(5);
   });
 
   it("asks for a purchase walk only for order sidecars the media plane has not recorded", async (context) => {

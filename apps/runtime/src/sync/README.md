@@ -56,7 +56,8 @@ A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` pa
 into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
 writes the page's rows minus any an executed erasure fences, the chain, the legacy coverage columns (engine-owned
 pages only), the overlay confirmation, and — last — the inline canonicalization and the `message_archive` rows of
-the page's message events. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
+the page's message events. When the chat was deleted, unbound or excluded between the plan and the apply, only that
+last part runs, under the same fence, so the minutely sweep never appends the page unfenced. A `.head` walk reads down (`before`) while its staged head page has not met the confirmed
 head; a demanded id the vendor's head does not show yet is read again after 15 s and 60 s, then settled `not_found`.
 
 One step of a page is four short transactions: **admit** (the attempt is journaled and counted before the send) →
