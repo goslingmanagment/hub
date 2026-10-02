@@ -12,21 +12,28 @@
 //
 //   1. the lane's [A20] trim for the kinds that have one (follower and
 //      conversation captures, notification / catalog / reply `accounts[]`);
-//   2. the `post_replies` observation envelope `{walk:{postId, before},
-//      response}` — the post id lives in the request PATH, and an empty reply
-//      page could not otherwise say which post it is about;
+//   2. the observation envelopes that carry request context: `post_replies`
+//      as `{walk:{postId, before}, response}` — the post id lives in the
+//      request PATH, and an empty reply page could not otherwise say which
+//      post it is about — and a `post_tips` answer that escapes its requested
+//      posts or receiver as `{quarantine: "fansly_post_tips_scope_v1",
+//      requestedTargetIds, response}` (posts.ts `inspectFanslyPostTipsScope`);
 //   3. the CDN signing-token strip for the kinds it names (never `dm_messages`
 //      or `purchase_history*`: the AI describer downloads from those URLs);
 //   4. the lone-surrogate replacement json/jsonb need.
 //
 // The served object is never mutated (each step copies on write), so the apply
 // keeps using it — follower presence needs the untrimmed body (design §5.12).
+// An apply from the journal (after a restart, a transient apply error or a
+// deferral, I8) has only the body: the envelopes of step 2 come off again
+// (`servedFromJournalBody`) before the re-parse, so it sees the served answer.
 
 import { createHash } from "node:crypto";
 
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 
-import type { CaptureCodec } from "../engine/commit.ts";
+import { ApplyQuarantine, type CaptureCodec } from "../engine/commit.ts";
+import type { RequestPlan } from "../engine/resource.ts";
 
 import { FANSLY_CATALOG_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-catalog.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-payouts.ts";
@@ -37,6 +44,7 @@ import {
   stripFanslySignedCdnTokens,
 } from "../../services/sync/fansly-cdn-tokens.ts";
 import { FANSLY_STATS_MAPPER_VERSION } from "../../services/sync/fansly-stats.ts";
+import { inspectFanslyPostTipsScope } from "../../services/sync/posts.ts";
 import {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
@@ -75,7 +83,13 @@ export interface FanslyServedResponse {
   contractAccepted?: boolean;
   /** `post_replies` only (required there): the walk the request served. */
   walk?: { postId: string; before: string | null };
+  /** `post_tips` only: the posts asked for and the page's own account (the
+   *  receiver every tip must name). Absent: no scope check. */
+  tipsScope?: { requestedTargetIds: readonly string[]; receiverId: string };
 }
+
+/** The legacy envelope of a `post_tips` answer outside its scope. */
+export const FANSLY_POST_TIPS_SCOPE_QUARANTINE = "fansly_post_tips_scope_v1";
 
 export interface FanslyJournalBody {
   /** The observation payload. */
@@ -147,6 +161,16 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
     }
     body = { walk: { postId: served.walk.postId, before: served.walk.before }, response: body };
   }
+  if (spec.kind === "post_tips" && served.tipsScope !== undefined && served.contractAccepted !== false) {
+    const scope = inspectFanslyPostTipsScope(served.response, served.tipsScope);
+    if (!scope.accepted) {
+      body = {
+        quarantine: FANSLY_POST_TIPS_SCOPE_QUARANTINE,
+        requestedTargetIds: [...served.tipsScope.requestedTargetIds],
+        response: body,
+      };
+    }
+  }
   // Legacy journals an absent body as JSON null (so it hashes deterministically).
   body ??= null;
   if (fanslyCdnTokenStripApplies("fansly", spec.kind)) {
@@ -166,18 +190,79 @@ export function prepareJournalBody(spec: FanslyJournalSpec, served: FanslyServed
   };
 }
 
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/** The reply walk a `post.replies` request serves (its post is in the path). */
+function repliesWalkOf(request: RequestPlan): { postId: string; before: string | null } | undefined {
+  const params = request.params as { postId?: unknown; before?: unknown };
+  return request.spec === "post.replies" && typeof params.postId === "string"
+    ? { postId: params.postId, before: typeof params.before === "string" ? params.before : null }
+    : undefined;
+}
+
+/**
+ * The served answer inside a journal body (the inverse of the envelopes
+ * `prepareJournalBody` adds; trims and token strips are not undone): a
+ * `post_replies` body's `response`, whose walk must be the one `walk` names
+ * (`null`: the body is not that walk's answer), and a scope-quarantined
+ * `post_tips` body's `response` (that envelope only ever wraps an array).
+ * Every other body is the answer itself.
+ */
+export function servedFromJournalBody(
+  kind: string,
+  payload: unknown,
+  walk?: { postId: string; before: string | null },
+): { served: unknown } | null {
+  const body = recordOf(payload);
+  if (kind === "post_replies") {
+    const journaled = recordOf(body?.walk);
+    // An absent answer stays absent (JSON drops an undefined `response`).
+    if (body === null || journaled === null) return null;
+    if (walk !== undefined && (journaled.postId !== walk.postId || (journaled.before ?? null) !== walk.before)) return null;
+    return { served: body.response };
+  }
+  if (kind === "post_tips" && body?.quarantine === FANSLY_POST_TIPS_SCOPE_QUARANTINE && Array.isArray(body.response)) {
+    return { served: body.response };
+  }
+  return { served: payload };
+}
+
 /**
  * The Fansly journal of the engine's capture (tx 2): every served response
  * becomes exactly the body the legacy lane journals for it, by its kind. The
  * reply walk's position comes from the request (`post.replies` names the
- * post in its path).
+ * post in its path); a tips answer's scope is checked against the requested
+ * posts and the page's own account. An apply from the journal gets the answer
+ * back out of those envelopes (`served`).
  */
 export const fanslyCaptureCodec: CaptureCodec = {
-  prepare({ kind, response, contractAccepted, request }) {
-    const params = request.params as { postId?: unknown; before?: unknown };
-    const walk = request.spec === "post.replies" && typeof params.postId === "string"
-      ? { postId: params.postId, before: typeof params.before === "string" ? params.before : null }
+  prepare({ kind, response, contractAccepted, request, ownRef }) {
+    const params = request.params as { targetIds?: unknown };
+    const walk = repliesWalkOf(request);
+    const targetIds = Array.isArray(params.targetIds)
+      ? params.targetIds.filter((id): id is string => typeof id === "string")
+      : null;
+    const tipsScope = request.spec === "posts.tips" && targetIds !== null && typeof ownRef === "string" && ownRef.length > 0
+      ? { requestedTargetIds: targetIds, receiverId: ownRef }
       : undefined;
-    return prepareJournalBody({ kind }, { response, contractAccepted, ...(walk === undefined ? {} : { walk }) }).payload;
+    return prepareJournalBody({ kind }, {
+      response,
+      contractAccepted,
+      ...(walk === undefined ? {} : { walk }),
+      ...(tipsScope === undefined ? {} : { tipsScope }),
+    }).payload;
+  },
+  served({ kind, payload, request }) {
+    const walk = repliesWalkOf(request);
+    const answer = servedFromJournalBody(kind, payload, walk);
+    if (answer === null) {
+      throw new ApplyQuarantine("journal_body_not_the_request_answer", {
+        kind,
+        ...(walk === undefined ? {} : { postId: walk.postId, before: walk.before }),
+      });
+    }
+    return answer.served;
   },
 };

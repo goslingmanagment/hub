@@ -67,7 +67,7 @@ import {
   type ResourceHoldEntry,
 } from "./errors.ts";
 import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
-import type { AlertSink, Clock, Metrics, Rng } from "./ports.ts";
+import type { AlertSink, Clock, Metrics, Rng, SettingsSource } from "./ports.ts";
 import {
   demandToUpsert,
   nextPollDueAt,
@@ -163,21 +163,36 @@ export interface CaptureCodec {
     /** The request the answer serves (a walk's position, for kinds whose
      *  journal names it). */
     request: RequestPlan;
+    /** The page's native account id (`pages.external_page_id`): the receiver
+     *  a scoped answer is checked against (absent: no scope check). */
+    ownRef?: string | null;
     module: ResourceModule;
   }): unknown;
+  /**
+   * The answer an apply from the journal works on (tx 3 after a restart, a
+   * transient apply error or a deferral, I8): the journal body with every
+   * envelope `prepare` put around the served answer taken off again, so the
+   * re-parse and the apply see what the in-memory apply saw. Trims and token
+   * strips stay (design §3.11: the apply prefers the in-memory answer for
+   * them). A body that is not this request's answer throws `ApplyQuarantine`.
+   */
+  served(input: { spec: FanslyWireId; kind: string; payload: unknown; request: RequestPlan }): unknown;
 }
 
 /**
  * The engine's journal transform: the resource's own trim, then the signed CDN
  * tokens stripped for the kinds the legacy journal strips them for, then every
  * unpaired UTF-16 surrogate replaced (json/jsonb refuse one). The served object
- * is never mutated.
+ * is never mutated. It adds no envelope, so the journal body is the answer.
  */
 export const defaultCaptureCodec: CaptureCodec = {
   prepare({ kind, response, module }) {
     let body = module.journal === undefined ? response : module.journal(response);
     if (fanslyCdnTokenStripApplies("fansly", kind)) body = stripFanslySignedCdnTokens(body);
     return replaceJournalLoneSurrogates(body).value;
+  },
+  served({ payload }) {
+    return payload;
   },
 };
 
@@ -208,6 +223,8 @@ export interface CommitDeps {
   capture?: CaptureCodec;
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
+  /** The live settings resources read (absent: the registry defaults). */
+  settings?: SettingsSource;
   faults?: SyncFaultHook;
 }
 
@@ -609,6 +626,7 @@ export async function capture(
           response: read.response,
           contractAccepted: read.kind === "accepted",
           request: admission.request,
+          ownRef: d.ownRef,
           module,
         }),
       }
@@ -751,8 +769,10 @@ async function writeOutcomeDecision(
   if (work === null) return;
   const subjectQueue = target.subjectQueue;
   if (subjectQueue && decision.subjectBreaker !== null && module?.onSubjectOutcome !== undefined) {
+    // A breaker reset (an answer after failures) is an `ok`, never a failure.
+    const breakerReset = !decision.subjectBreaker.terminal && decision.subjectBreaker.failureCount === 0;
     await module.onSubjectOutcome(tx, work, {
-      kind: decision.subjectBreaker.terminal ? "terminal" : "failure",
+      kind: decision.subjectBreaker.terminal ? "terminal" : breakerReset ? "ok" : "failure",
       failureCount: decision.subjectBreaker.failureCount,
       breakerUntil: decision.subjectBreaker.breakerUntil,
       blockedByVendorAt: decision.subjectBreaker.blockedByVendorAt,
@@ -885,7 +905,7 @@ export function deferredRetryInMs(answerAgeMs: number): number {
   return DEFERRED_RETRY_CAP_MS;
 }
 
-async function readJournaledResponse(
+async function readJournalBody(
   tx: Database,
   d: CommitDeps,
   attempt: SyncAttemptRow,
@@ -945,8 +965,17 @@ export async function apply(
       if (inMemory !== null) {
         ({ response, parsed } = inMemory);
       } else {
-        response = await readJournaledResponse(tx, d, attempt);
-        const reparsed = fanslyWireSpec(request.spec).parse(response, request.params as never);
+        // The journal holds the answer inside the envelopes its kind carries
+        // (a reply page's walk, a tips answer's scope quarantine): the codec
+        // takes them off before the same parse the capture ran.
+        const wire = fanslyWireSpec(request.spec);
+        response = (d.capture ?? defaultCaptureCodec).served({
+          spec: request.spec,
+          kind: wire.kind,
+          payload: await readJournalBody(tx, d, attempt),
+          request,
+        });
+        const reparsed = wire.parse(response, request.params as never);
         if (!reparsed.ok) throw new FanslyContractViolationError(reparsed.violation.field, reparsed.violation.detail);
         parsed = reparsed.value;
       }
@@ -962,6 +991,7 @@ export async function apply(
         response,
         observation: { id: attempt.observationId!, receivedAt: attempt.observationReceivedAt! },
         fenced,
+        ...(d.settings === undefined ? {} : { settings: d.settings }),
       });
       if (d.canonicalize !== undefined) {
         await d.canonicalize(tx, {
