@@ -978,3 +978,68 @@ describe("capture-admission refusals of scheduled runs", () => {
     expect(await getOfapiCollectionJob(app.db, nextId!)).toMatchObject({ state: "paused" });
   });
 });
+
+describe("OnlyFans payout requests dataset", () => {
+  it("captures payout requests and serves one latest row per invoice to read:money keys", async () => {
+    const collect = async (list: unknown[]) => {
+      const created = await createOfapiCollectionJob(app.db, {
+        pageId, category: "balances", expectedRevision: 0, maxCalls: 1, maxCredits: 10,
+        maxBytes: 100000, from: null, to: null, selection: ["payout_requests"],
+      }, actor);
+      const fetch = vi.fn(async (_url: unknown) => response({ list, marker: 2 }));
+      vi.stubGlobal("fetch", fetch);
+      expect(await runOfapiCollectionJob(app, created.id)).toEqual({ state: "completed" });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(fetch.mock.calls[0]?.[0])).toContain("/payouts/payout-requests?limit=50&offset=0");
+    };
+    await collect([
+      { invoiceId: "9001", createdAt: "2026-09-20T10:00:00+00:00", amount: 247.46, currency: "USD", state: "new", rejectReason: null },
+      { invoiceId: "9000", createdAt: "2026-09-13T10:00:00+00:00", amount: 300, currency: "USD", state: "done", rejectReason: null },
+    ]);
+    // The same invoice, observed later in its final state.
+    await collect([
+      { invoiceId: "9001", createdAt: "2026-09-20T10:00:00+00:00", amount: 247.46, currency: "USD", state: "done", rejectReason: null },
+    ]);
+
+    await setConfigOverride(app.db, { key: "agentReadPlaneMode", value: "full", userId: actor, groupId: randomUUID() });
+    const makeKey = async (name: string, capabilities: string[]) => {
+      const token = `${AGENT_KEY_TOKEN_PREFIX}${name}-synthetic-token`;
+      await insertAgentKey(app.db, {
+        name, keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(token),
+        capabilities, pageIds: [pageId], dailyRequestBudget: 100, dailyRowBudget: 10000,
+        expiresAt: new Date(Date.now() + 86400000), createdBy: actor,
+      });
+      return token;
+    };
+    const money = await makeKey("payouts-money", ["read:datasets", "read:money"]);
+    const noMoney = await makeKey("payouts-no-money", ["read:datasets"]);
+    const server = await buildApiServer(app);
+    try {
+      const query = (token: string) => server.inject({
+        method: "POST",
+        url: "/api/v1/agent/pages/read-page/datasets/ofapi_payout_requests/query",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { from: "2026-09-01T00:00:00Z", to: "2026-10-01T00:00:00Z", limit: 20 },
+      });
+      expect((await query(noMoney)).statusCode).toBe(403);
+      const result = await query(money);
+      expect(result.statusCode, result.body).toBe(200);
+      const body = JSON.parse(result.body) as {
+        items: Array<{ fields: Record<string, unknown> }>;
+        capture: { planes: Array<{ plane: string; state: string; captureFloor?: { at: string | null } }> };
+      };
+      expect(body.items.map((item) => item.fields)).toEqual([
+        expect.objectContaining({ platform: "onlyfans", payoutRef: "9001", amountMills: 247460, currency: "USD",
+          state: "done", rejectReason: null, requestedAt: "2026-09-20T10:00:00.000Z" }),
+        expect.objectContaining({ payoutRef: "9000", amountMills: 300000, state: "done",
+          requestedAt: "2026-09-13T10:00:00.000Z" }),
+      ]);
+      expect(body.capture.planes).toContainEqual(expect.objectContaining({
+        plane: "ofapi_read_snapshots", state: "read",
+        captureFloor: expect.objectContaining({ at: "2026-09-13T10:00:00.000Z" }),
+      }));
+    } finally {
+      await server.close();
+    }
+  });
+});

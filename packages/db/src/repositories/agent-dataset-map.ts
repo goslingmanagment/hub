@@ -1039,6 +1039,34 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     fields:{platform:"f_platform",source:"f_source",operation:"f_operation",metricPath:"f_metric_path",unit:"f_unit",rawValue:"f_raw_value",valueMills:"f_value_mills",windowFrom:"f_window_from",windowTo:"f_window_to",granularity:"f_granularity",observedAt:"f_observed_at",coverageState:"f_coverage_state",coverageReason:"f_coverage_reason",observationRef:"f_observation_ref"},
     windowColumn:"k_occurred_at",readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
   },
+  ofapi_payout_requests: {
+    // One row per invoice; the newest observation wins because a request's
+    // state moves (new -> done/rejected) while its id stays. The window and the
+    // floor run on requestedAt, so the floor is the oldest request Hub holds.
+    source: `select distinct on (s.page_id, i.value->>'nativeId')
+      s.page_id k_page_id,'onlyfans'::text k_platform,
+      concat(s.page_id,':',i.value->>'nativeId') k_key,
+      case when i.value->>'occurredAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}'
+        then (i.value->>'occurredAt')::timestamptz end k_occurred_at,
+      null::text k_fan,
+      'onlyfans'::text f_platform,
+      i.value->>'nativeId' f_payout_ref,
+      case when i.value#>>'{attributes,amount,unit}'='mills'
+        then (i.value#>>'{attributes,amount,value}')::bigint end f_amount_mills,
+      i.value#>>'{attributes,currency}' f_currency,
+      i.value#>>'{attributes,state}' f_state,
+      i.value#>>'{attributes,rejectReason}' f_reject_reason,
+      case when i.value->>'occurredAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}'
+        then (i.value->>'occurredAt')::timestamptz end f_requested_at,
+      s.observed_at f_last_observed_at,
+      s.observation_id::text f_observation_ref
+      from ofapi_read_snapshots s
+      cross join lateral jsonb_array_elements(s.items) i(value)
+      where s.operation='ofapi_read_payout_requests' and coalesce(i.value->>'nativeId','')<>''
+      order by s.page_id, i.value->>'nativeId', s.observed_at desc, s.id desc`,
+    fields:{platform:"f_platform",payoutRef:"f_payout_ref",amountMills:"f_amount_mills",currency:"f_currency",state:"f_state",rejectReason:"f_reject_reason",requestedAt:"f_requested_at",lastObservedAt:"f_last_observed_at",observationRef:"f_observation_ref"},
+    windowColumn:"k_occurred_at",readPlanes:["ofapi_read_snapshots"],captureFloorPlane:"ofapi_read_snapshots",
+  },
   fan_memberships: {
     source: FAN_MEMBERSHIPS,
     fields: {

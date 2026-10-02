@@ -372,6 +372,9 @@ read(
   {},
   { defaultCollect: true, granularity: "snapshot" },
 );
+// Scheduled with balances: one newest page per run (offset 0, the planner's
+// limit 50). OnlyFans keeps the full history, so older pages are a bounded
+// one-off job (`payout_requests?offset=50`), never a scheduled walk.
 read(
   "payout_requests",
   "payouts/payout-requests",
@@ -379,6 +382,7 @@ read(
   "list",
   "offset",
   page,
+  { defaultCollect: true },
 );
 read(
   "payout_earnings",
