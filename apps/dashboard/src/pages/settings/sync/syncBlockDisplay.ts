@@ -66,6 +66,19 @@ const BLOCK_STATE_TONES: Record<SyncBlockState, BlockTone> = {
     dot: "bg-text-muted/50",
     text: "text-text-muted",
   },
+  engine: {
+    badge: "border-accent/30 bg-accent/10 text-accent",
+    dot: "bg-accent",
+    text: "text-text-secondary",
+  },
+};
+
+/** An engine block (or stream) with quarantined or vendor-blocked work, or a
+ *  refused credential. */
+const ENGINE_ATTENTION_TONE: BlockTone = {
+  badge: "border-warning/30 bg-warning/10 text-warning-dark",
+  dot: "bg-warning-dark",
+  text: "text-warning-dark",
 };
 
 const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
@@ -79,6 +92,7 @@ const BLOCK_STATE_LABELS: Record<SyncBlockState, string> = {
   failed: "Failed",
   paused: "Paused",
   not_available: "N/A",
+  engine: "Sync Engine",
 };
 
 const BLOCK_LABELS: Record<SyncBlockKey, string> = {
@@ -153,12 +167,67 @@ function getDisplayBlockState(blockOrState: SyncBlockStatus | SyncBlockState): S
   return isHealthyQueueWaitingBlock(blockOrState) ? "up_to_date" : blockOrState.state;
 }
 
+function isEngineAttention(blockOrState: SyncBlockStatus | SyncBlockState): boolean {
+  return typeof blockOrState !== "string" && blockOrState.state === "engine" && blockOrState.needsAttention;
+}
+
 export function getBlockTone(blockOrState: SyncBlockStatus | SyncBlockState): BlockTone {
+  if (isEngineAttention(blockOrState)) return ENGINE_ATTENTION_TONE;
   return BLOCK_STATE_TONES[getDisplayBlockState(blockOrState)];
 }
 
 export function getBlockStateLabel(blockOrState: SyncBlockStatus | SyncBlockState): string {
+  if (isEngineAttention(blockOrState)) return "Attention";
   return BLOCK_STATE_LABELS[getDisplayBlockState(blockOrState)];
+}
+
+/** The page is the Fansly Sync Engine's: its blocks speak for the engine. */
+export function isEngineBlock(block: SyncBlockStatus): boolean {
+  return block.state === "engine";
+}
+
+/** A block's registry keys and those of them the owner paused (engine blocks
+ *  only; from the block's metrics). */
+export function getEngineBlockKeys(block: SyncBlockStatus): { keys: string[]; paused: string[]; pausedAll: boolean } {
+  const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+  return {
+    keys: strings(block.metrics.engineKeys),
+    paused: strings(block.metrics.pausedResources),
+    pausedAll: block.metrics.pausedAll === true,
+  };
+}
+
+/** "Почему ждёт" (plan §10) of an engine stream, in the words of the tab. */
+const ENGINE_REASON_LABELS: Record<string, string> = {
+  not_due: "Not due",
+  pacer: "Queued",
+  class_share: "Queued",
+  page_hold: "Page held",
+  resource_hold: "Resource held",
+  subject_breaker: "Backing off",
+  blocked_by_vendor: "Refused by Fansly",
+  quarantined: "Quarantined",
+  paused: "Paused",
+  dependency: "Waiting for other work",
+  ownership_unconfirmed: "No owner",
+  running: "Reading",
+  engine_quarantined: "Quarantined",
+  engine_blocked_by_vendor: "Refused by Fansly",
+  credentials_invalid: "New credentials needed",
+};
+
+function formatEngineBlockSummary(block: SyncBlockStatus): string {
+  if (block.needsAttention) {
+    const code = getReasonCode(block);
+    const label = (code !== null ? ENGINE_REASON_LABELS[code] : undefined) ?? "Needs attention";
+    return `Fansly Sync Engine · ${label.toLowerCase()}`;
+  }
+  if (block.engineMode === "handover") {
+    return "Switching to the Fansly Sync Engine";
+  }
+  return block.succeededAt
+    ? `Fansly Sync Engine · updated ${formatRelativeTime(block.succeededAt)}`
+    : "Fansly Sync Engine · nothing applied yet";
 }
 
 export function getBlockLabel(block: SyncBlockKey): string {
@@ -398,6 +467,7 @@ export function shouldShowBlockProgressBar(block: SyncBlockStatus): boolean {
 
 export function formatBlockSummary(block: SyncBlockStatus): string {
   if (block.state === "not_available") return "Not available";
+  if (block.state === "engine") return formatEngineBlockSummary(block);
 
   if (block.block === "connection") {
     if (block.connectionStatus === "connected") {
@@ -585,6 +655,9 @@ const BLOCK_METRIC_KEYS: Partial<Record<SyncBlockKey, readonly string[]>> = {
 };
 
 export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
+  if (substream.state === "engine") {
+    return substream.needsAttention ? ENGINE_ATTENTION_TONE : BLOCK_STATE_TONES.engine;
+  }
   if (isHealthyQueueWaitingSubstream(substream)) {
     return BLOCK_STATE_TONES.up_to_date;
   }
@@ -605,6 +678,10 @@ export function getSubstreamTone(substream: SyncBlockSubstream): BlockTone {
 
 export function formatSubstreamStateLabel(substream: SyncBlockSubstream): string {
   const code = getReasonCode(substream);
+
+  if (substream.state === "engine") {
+    return (code !== null ? ENGINE_REASON_LABELS[code] : undefined) ?? "Sync Engine";
+  }
 
   if (substream.state === "delayed") {
     if (code === "unmet_dependency") {

@@ -164,6 +164,7 @@ status, code, and intentional message.
 | Sync | `sync_page_not_found` | 404 | Owner routes of the Fansly Sync Engine (`/api/v1/sync/pages/:pageLabel/…`): no engine page with that label. The agent plane answers its one static `not_found` instead. |
 | Sync | `sync_work_not_found` | 404 | Owner route `GET /api/v1/sync/pages/:pageLabel/work/:workId`: no work row with that id on that page. |
 | Sync | `sync_page_off` | 409 | "Sync now" (`POST /api/v1/sync/pages/:pageLabel/refresh`) on a page whose engine mode is `off`: no actor runs it, so there is nothing to make due. Move the page to `shadow` first. |
+| Sync | `fansly_page_switching` | 409 | A legacy owner lever that would make a page read (`/admin/sync/trigger`, the block trigger and reset, the follower-reconcile reset) asked of a page the Fansly Sync Engine is taking over (`sync_pages.mode = 'handover'`): neither engine reads it until the switch completes. Retry once the page is `live`. |
 | Voice | `artifact_expired` | 410 | Stored voice audio passed its retrieval lifetime. |
 | Voice | `voice_retrieval_disabled` | 403 | Voice artifact retrieval is disabled. |
 | Voice | `voice_artifact_corrupt` | 500 | Stored audio bytes fail their SHA-256 integrity check. |

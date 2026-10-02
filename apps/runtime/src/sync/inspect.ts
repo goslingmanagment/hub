@@ -5,14 +5,18 @@ import {
   getSyncAttemptSummaries,
   getSyncWork,
   getWorkForStatus,
+  insertAuditEvent,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
   listSyncPages,
+  readSyncPageWsStatus,
+  requeueQuarantinedWork,
   setPagePause,
   setRegistryOverride,
   setSyncPageMode,
   upsertDemand,
   type Database,
+  type RequeuedSyncWork,
   type SetSyncPageModeResult,
   type SyncAttemptSummary,
   type SyncEngineWorkClass,
@@ -26,7 +30,9 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { loadEffectiveConfig } from "../services/effective-config.ts";
+import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
+import { FANSLY_RESOURCE_SPECS, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
 import {
@@ -142,6 +148,8 @@ export async function readSyncPageStatus(
   const gaps = hourSends.map((send) => send.gapMs).filter((gap): gap is number => gap !== null);
   // History requests exist only on live pages (the intake refuses others).
   const requests = shadow ? [] : await pageRequestProgress({ db, rawConfig }, page.pageId);
+  // The socket is the engine's to report once it owns the page.
+  const ws = shadow ? null : await readSyncPageWsStatus(db, { pageId: page.pageId, decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS });
   const status = buildPageStatus({
     pageLabel: page.pageLabel,
     page: { ...statusPage(page), holdSince: page.holdSince, lastSendAt: page.lastSendAt },
@@ -157,6 +165,14 @@ export async function readSyncPageStatus(
       violationsLastDay: daySends.filter((send) => send.gapMs !== null && send.gapMs < send.settingMs).length,
     },
     requests,
+    ws: ws === null
+      ? null
+      : {
+        connected: ws.connected,
+        since: ws.since?.toISOString() ?? null,
+        gapSince: ws.gapSince?.toISOString() ?? null,
+        decodeDebt: ws.decodeDebt,
+      },
   });
   return shadow
     ? { ...status, shadow: { attemptsLastHour: lastHour.urgent + lastHour.requests + lastHour.planned, demandVsEstimate: null } }
@@ -419,6 +435,135 @@ export async function changeSyncRegistryOverride(
   if (problem !== null) throw new SyncOwnerLeverError(`${input.resource}: ${problem}`);
   const page = await findSyncPageByLabel(db, input.pageLabel);
   return setRegistryOverride(db, { pageId: page.pageId, key: input.resource, override: input.override });
+}
+
+/** The owner's requeue of quarantined work in the audit log. */
+export const SYNC_WORK_REQUEUE_AUDIT_EVENT = "admin.sync_work_requeue";
+/** The owner's own demand for a registry key in the audit log. */
+export const SYNC_WORK_ENQUEUE_AUDIT_EVENT = "admin.sync_work_enqueue";
+
+/**
+ * `sync work requeue` (design step 3 §3.2 item 5): take quarantined work of a
+ * page out of quarantine — the given rows, or every quarantined row of the
+ * journal the page runs (of one key with `resources`). A live row whose last
+ * attempt holds a captured answer re-applies it from the journal (no request,
+ * plan §9); the rest open due now. The requeue and its audit row commit
+ * together; the actor wakes at commit.
+ */
+export async function requeueSyncWork(
+  db: Database,
+  input: {
+    pageLabel: string;
+    workIds?: readonly number[];
+    resources?: readonly string[];
+    actor: string;
+    note?: string | null;
+  },
+): Promise<RequeuedSyncWork[]> {
+  if ((input.workIds === undefined || input.workIds.length === 0) && input.resources === undefined) {
+    throw new SyncOwnerLeverError("say what to requeue: --work <id> or --quarantined [--resource <key>]");
+  }
+  const page = await findSyncPageByLabel(db, input.pageLabel);
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const requeued = await requeueQuarantinedWork(txDb, {
+      pageId: page.pageId,
+      ...(input.workIds === undefined || input.workIds.length === 0
+        ? { shadow: statusJournalIsShadow(page) }
+        : { workIds: input.workIds }),
+      ...(input.resources === undefined || input.resources.length === 0 ? {} : { resources: input.resources }),
+    });
+    await insertAuditEvent(txDb, {
+      platformAccountId: page.pageId,
+      source: "cli",
+      eventType: SYNC_WORK_REQUEUE_AUDIT_EVENT,
+      metadata: {
+        actor: input.actor,
+        pageLabel: input.pageLabel,
+        asked: { workIds: input.workIds ?? null, resources: input.resources ?? null },
+        requeued: requeued.map((row) => ({ id: row.id, resource: row.resource, reapplyAttemptId: row.reapplyAttemptId })),
+        ...(input.note === undefined || input.note === null ? {} : { note: input.note }),
+      },
+    });
+    return requeued;
+  });
+}
+
+/** The registry keys `sync work enqueue` takes: every key the owner may
+ *  start (`owner` trigger) except those with a lever of their own — the
+ *  probe (`sync probe`) and the credential checks (the account routes). */
+const OWNER_ENQUEUE_EXCLUDED_KEYS: ReadonlySet<string> = new Set(["probe.manual", "account.verify", "account.identity"]);
+
+export function ownerEnqueueKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURCE_SPECS): string[] {
+  return specs
+    .filter((spec) => spec.triggers.includes("owner") && !OWNER_ENQUEUE_EXCLUDED_KEYS.has(spec.key))
+    .map((spec) => spec.key)
+    .sort();
+}
+
+/**
+ * `sync work enqueue` (design step 3 §3.2 item 5): the owner's own demand for
+ * one registry key of a live page (a backfill, a fresh follower walk, an
+ * alias backfill) — the owner levers of the legacy streams that had one.
+ * Demand reason `owner` (the follower walk's daily floor yields to it);
+ * audited with the demand in one transaction. Only a `live` page: a shadow
+ * page's work is simulated, a page in `handover` is being switched.
+ */
+export async function enqueueOwnerSyncWork(
+  db: Database,
+  registry: EngineRegistry,
+  input: {
+    pageLabel: string;
+    resource: string;
+    subject?: string;
+    params?: Record<string, unknown>;
+    actor: string;
+    note?: string | null;
+  },
+): Promise<{ workId: number; demandRevision: number; created: boolean }> {
+  const allowed = ownerEnqueueKeys();
+  if (!allowed.includes(input.resource)) {
+    throw new SyncOwnerLeverError(`sync work enqueue takes one of ${allowed.join(", ")} (asked: ${input.resource})`);
+  }
+  const spec = registry.spec(input.resource);
+  if (spec === null) throw new SyncOwnerLeverError(`No registry entry ${input.resource}`);
+  const page = await findSyncPageByLabel(db, input.pageLabel);
+  if (page.mode !== "live") {
+    throw new SyncOwnerLeverError(
+      `${input.pageLabel} is ${page.mode}: owner work is enqueued only on a live page (the engine sends nothing on it otherwise)`,
+    );
+  }
+  const upsert = demandToUpsert(
+    {
+      resource: input.resource,
+      ...(input.subject === undefined ? {} : { subject: input.subject }),
+      ...(input.params === undefined ? {} : { params: input.params }),
+      demand: { reason: "owner" },
+    },
+    spec,
+    { pageId: page.pageId, shadow: false, now: new Date(), page },
+  );
+  if (upsert === null) throw new SyncOwnerLeverError(`${input.resource} is switched off on ${input.pageLabel} (sync page override)`);
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const result = await upsertDemand(txDb, upsert);
+    await insertAuditEvent(txDb, {
+      platformAccountId: page.pageId,
+      source: "cli",
+      eventType: SYNC_WORK_ENQUEUE_AUDIT_EVENT,
+      metadata: {
+        actor: input.actor,
+        pageLabel: input.pageLabel,
+        resource: input.resource,
+        subject: input.subject ?? "",
+        params: input.params ?? null,
+        workId: result.id,
+        created: result.created,
+        ...(input.note === undefined || input.note === null ? {} : { note: input.note }),
+      },
+    });
+    return { workId: result.id, demandRevision: result.demandRevision, created: result.created };
+  });
 }
 
 /** The registry key of the owner's one-off read. */

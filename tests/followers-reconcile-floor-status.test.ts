@@ -24,7 +24,8 @@ const dbMocks = vi.hoisted(() => ({
 
 vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
-  return { ...actual, ...dbMocks };
+  // No page is the Fansly Sync Engine's here (its blocks: tests/sync-engine-health).
+  return { ...actual, ...dbMocks, listSyncPages: async () => [] };
 });
 
 import { getPublicSyncHealth } from "../apps/runtime/src/services/health.ts";

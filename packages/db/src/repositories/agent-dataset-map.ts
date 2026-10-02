@@ -28,6 +28,7 @@
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
 import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+import { fanslyEngineLegacyStreamValuesSql } from "./sync/legacy-streams.ts";
 
 import {
   FANSLY_MEDIA_STAT_TYPES,
@@ -530,6 +531,16 @@ const TIP_GOALS = `
   where ranked.goal_rank = 1
 `;
 
+// A page the Fansly Sync Engine owns (`handover`/`live`, design step 3 §3.2
+// item 6) has frozen legacy rows: its streams are reported from the engine's
+// live journal instead, each registry key counted under the legacy stream(s)
+// it takes over (`FANSLY_ENGINE_LEGACY_STREAMS`). Per stream: `failed` while a
+// key's work is quarantined or blocked by the vendor, `paused` when the page
+// or every key of the stream is paused, `running` while a read is in flight,
+// else `ok`; the cursor and success instants are the newest applied attempt,
+// the failure instant the newest failed one (a subject's final 404 is an
+// answer, not a failure), the streak the largest open subject breaker.
+const FANSLY_ENGINE_LEGACY_STREAM_VALUES = fanslyEngineLegacyStreamValuesSql();
 const SYNC_STREAMS = `
   select ss.page_id       as k_page_id,
          p.platform::text as k_platform,
@@ -545,6 +556,59 @@ const SYNC_STREAMS = `
   from page_sync_states ss
   join pages p on p.id = ss.page_id
   left join page_sync_cursors c on c.page_id = ss.page_id and c.stream = ss.stream
+  where not exists (
+    select 1 from sync_pages esp
+     where esp.page_id = ss.page_id and esp.mode in ('handover', 'live'))
+  union all
+  select sp.page_id       as k_page_id,
+         p.platform::text as k_platform,
+         sp.page_id::text || ':' || s.stream as k_key,
+         greatest(wk.updated_at, att.applied_at, att.failed_at) as k_occurred_at,
+         null::text       as k_fan,
+         s.stream         as f_stream,
+         case
+           when coalesce(wk.failed, false) then 'failed'
+           when sp.paused_all or s.keys <@ sp.paused_resources then 'paused'
+           when coalesce(wk.running, false) then 'running'
+           else 'ok'
+         end              as f_sync_status,
+         att.applied_at   as f_cursor_at,
+         att.applied_at   as f_succeeded_at,
+         att.failed_at    as f_failed_at,
+         coalesce(wk.failures, 0)::int as f_consecutive_failures
+  from sync_pages sp
+  join pages p on p.id = sp.page_id
+  cross join (
+    select m.stream, array_agg(m.resource order by m.resource) as keys
+      from (${FANSLY_ENGINE_LEGACY_STREAM_VALUES}) as m(resource, stream)
+     group by m.stream
+  ) s
+  left join (
+    select w.page_id, m.stream,
+           bool_or(w.state = 'running') as running,
+           bool_or(w.state = 'quarantined'
+                   or (w.state in ('open', 'running') and w.blocked_by_vendor_at is not null)) as failed,
+           max(w.failure_count) filter (where w.state in ('open', 'running', 'quarantined')) as failures,
+           max(w.updated_at) as updated_at
+      from sync_work w
+      join (${FANSLY_ENGINE_LEGACY_STREAM_VALUES}) as m(resource, stream) on m.resource = w.resource
+     where not w.shadow
+     group by w.page_id, m.stream
+  ) wk on wk.page_id = sp.page_id and wk.stream = s.stream
+  left join (
+    select a.page_id, m.stream,
+           max(a.applied_at) as applied_at,
+           max(coalesce(a.completed_at, a.admitted_at)) filter (
+             where a.apply_state = 'quarantined'
+                or (a.error_class is not null and a.error_class not in ('subject_terminal', 'not_sent'))
+           ) as failed_at
+      from sync_attempts a
+      join (${FANSLY_ENGINE_LEGACY_STREAM_VALUES}) as m(resource, stream) on m.resource = a.resource
+     where not a.shadow
+     group by a.page_id, m.stream
+  ) att on att.page_id = sp.page_id and att.stream = s.stream
+  where sp.mode in ('handover', 'live')
+    and (wk.page_id is not null or att.page_id is not null)
 `;
 
 // ── endpoints-cover (WP-S1) sources ─────────────────────────────────────────

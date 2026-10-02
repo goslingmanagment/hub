@@ -386,6 +386,24 @@ export const healthResponseSchema = z.object({
   }),
 });
 
+/** `/health/sync`'s block of a page the Fansly Sync Engine owns: its legacy
+ *  streams are not judged; the page is unhealthy on a stale owner (> 90 s),
+ *  a refused credential (an `auth`/`identity_mismatch` hold) or a handover
+ *  older than 10 minutes. */
+export const syncHealthEngineSchema = z.object({
+  mode: z.enum(["handover", "live"]),
+  ownerHeartbeatAgeSeconds: z.number().int().nonnegative().nullable(),
+  /** `until` is an ISO instant or "infinity" (a hold only new credentials lift). */
+  hold: z.object({ kind: z.string(), until: z.string() }).nullable(),
+  urgentOldestAgeSeconds: z.number().int().nonnegative().nullable(),
+  wsConnected: z.boolean(),
+  /** 0 while connected; null when the page never had a socket. */
+  wsDownSeconds: z.number().int().nonnegative().nullable(),
+  quarantined: z.number().int().nonnegative(),
+  /** The page's open engine alert latches (`page_stopped`, `live_degraded`, …). */
+  openAlerts: z.array(z.string()),
+});
+
 export const syncHealthPageSchema = z.object({
   pageId: intId,
   pageLabel: z.string(),
@@ -403,6 +421,7 @@ export const syncHealthPageSchema = z.object({
   pendingStreams: z.number().int(),
   lastErrorSummary: z.string().nullable(),
   issues: z.array(z.string()),
+  engine: syncHealthEngineSchema.optional(),
 });
 
 export const syncHealthResponseSchema = z.object({
@@ -2628,7 +2647,13 @@ const syncBlockStateEnum = z.enum([
   "failed",
   "paused",
   "not_available",
+  // The page is the Fansly Sync Engine's (`handover`/`live`): its legacy
+  // streams are frozen and the block describes the engine's live work.
+  "engine",
 ]);
+
+/** The engine mode of a page the Fansly Sync Engine owns. */
+const syncEngineOwnedModeEnum = z.enum(["handover", "live"]);
 
 const simpleConnectionStatusEnum = z.enum(["connected", "not_connected", "error"]);
 
@@ -2679,6 +2704,8 @@ export const syncBlockSubstreamSchema = z.object({
 export const syncBlockStatusSchema = z.object({
   block: syncBlockKeyEnum,
   state: syncBlockStateEnum,
+  /** Present exactly when `state` is `engine`. */
+  engineMode: syncEngineOwnedModeEnum.optional(),
   succeededAt: isoTimestamp.nullable(),
   progress: syncBlockProgressSchema.nullable(),
   progressStream: z.string().nullable(),
@@ -2779,6 +2806,15 @@ export const adminSyncBlockResponseSchema = z.object({
   pageLabel: z.string(),
   block: syncBlockKeyEnum,
   requests: z.array(adminSyncBlockRequestSchema).optional(),
+  /** A page the Fansly Sync Engine owns: what the engine lever did — the
+   *  resource files whose polls became due (trigger), the registry keys
+   *  paused or resumed, or whose quarantined work was requeued (reset), and
+   *  how many polls, keys or rows moved. */
+  engine: z.object({
+    mode: syncEngineOwnedModeEnum,
+    resources: z.array(z.string()),
+    affected: z.number().int().nonnegative(),
+  }).optional(),
 });
 
 export const adminFollowersReconcileResetBodySchema = z.object({
@@ -7631,6 +7667,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      409: errorResponseSchema,
     },
   },
   adminSyncBlockTrigger: {
@@ -7644,6 +7682,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      409: errorResponseSchema,
       503: errorResponseSchema,
     },
   },
@@ -7684,6 +7724,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      409: errorResponseSchema,
       503: errorResponseSchema,
     },
   },
@@ -7698,6 +7740,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      409: errorResponseSchema,
       503: errorResponseSchema,
     },
   },

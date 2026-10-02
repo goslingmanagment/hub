@@ -11,11 +11,15 @@ import {
   changeSyncPagePause,
   changeSyncRegistryOverride,
   confirmStoppedSyncOwners,
+  enqueueOwnerSyncWork,
   explainSyncWork,
   findSyncPageByLabel,
+  listSyncPageWork,
   OWNER_PAGE_MODES,
+  ownerEnqueueKeys,
   readSyncPageStatuses,
   requestSyncProbe,
+  requeueSyncWork,
 } from "./inspect.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
@@ -84,6 +88,31 @@ function parseTiers(value: string): SyncRegistryTierOverride[] {
 
 function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
+}
+
+function parseWorkId(value: string, previous: number[] = []): number[] {
+  const parsed = Number(value);
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new InvalidArgumentError(`Expected a work id (a positive integer), received "${value}"`);
+  }
+  return [...previous, parsed];
+}
+
+function parseLimit(value: string): number {
+  const parsed = Number(value);
+  if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(parsed) || parsed > 1_000) {
+    throw new InvalidArgumentError(`Expected a limit between 1 and 1000, received "${value}"`);
+  }
+  return parsed;
+}
+
+const WORK_STATES = ["open", "running", "quarantined", "done", "cancelled", "superseded"] as const;
+
+function parseWorkState(value: string): (typeof WORK_STATES)[number] {
+  if (!(WORK_STATES as readonly string[]).includes(value)) {
+    throw new InvalidArgumentError(`Expected one of ${WORK_STATES.join(", ")}, received "${value}"`);
+  }
+  return value as (typeof WORK_STATES)[number];
 }
 
 function cliActor(): string {
@@ -255,6 +284,86 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         });
         deps.print(`${options.page}: probe ${options.operation} queued as work ${queued.workId}`
           + `${queued.shadow ? " (shadow: simulated, nothing is sent)" : ""}; result: sync why --page ${options.page} --resource probe.manual --subject ''`);
+      });
+    });
+
+  const work = sync.command("work").description("Fansly Sync Engine: a page's work rows, the quarantine lever and owner work");
+
+  work
+    .command("list")
+    .description("a page's work rows in the journal it runs, newest first, each with why it waits and what a quarantine recorded (JSON)")
+    .requiredOption("--page <label>", "the Fansly page")
+    .option("--state <state>", `one of ${WORK_STATES.join(", ")}`, parseWorkState)
+    .option("--resource <key>", "a registry key")
+    .option("--limit <n>", "at most this many rows (default 50)", parseLimit, 50)
+    .action(async (options: { page: string; state?: (typeof WORK_STATES)[number]; resource?: string; limit: number }) => {
+      await withContext(deps, async ({ db, rawConfig }) => {
+        const row = await findSyncPageByLabel(db, options.page);
+        deps.print(json(await listSyncPageWork(db, rawConfig, row, {
+          ...(options.state === undefined ? {} : { state: options.state }),
+          ...(options.resource === undefined ? {} : { resource: options.resource }),
+          limit: options.limit,
+          offset: 0,
+        })));
+      });
+    });
+
+  work
+    .command("requeue")
+    .description(
+      "take quarantined work out of quarantine: a captured answer re-applies from the journal (no request), "
+      + "other rows run again; --work <id> (repeatable) or --quarantined [--resource <key>]",
+    )
+    .requiredOption("--page <label>", "the Fansly page")
+    .option("--work <id>", "a quarantined work row (repeatable)", parseWorkId, [])
+    .option("--quarantined", "every quarantined row of the page's journal", false)
+    .option("--resource <key>", "with --quarantined: only this registry key (repeatable)", collect, [])
+    .option("--note <text>", "why (stored with the audit row)")
+    .action(async (options: { page: string; work: number[]; quarantined: boolean; resource: string[]; note?: string }) => {
+      if ((options.work.length > 0) === options.quarantined) {
+        throw new Error("requeue takes exactly one of --work <id> or --quarantined");
+      }
+      if (options.resource.length > 0 && !options.quarantined) throw new Error("--resource goes with --quarantined");
+      await withContext(deps, async ({ db }) => {
+        const requeued = await requeueSyncWork(db, {
+          pageLabel: options.page,
+          ...(options.work.length > 0 ? { workIds: options.work } : { resources: options.resource }),
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+        });
+        deps.print(json({
+          page: options.page,
+          requeued: requeued.map((row) => ({
+            work: row.id,
+            resource: row.resource,
+            subject: row.subject,
+            via: row.reapplyAttemptId === null ? "run_again" : `reapply_attempt_${row.reapplyAttemptId}`,
+          })),
+        }));
+      });
+    });
+
+  work
+    .command("enqueue")
+    .description(`the owner's own demand for a registry key of a live page (one of ${ownerEnqueueKeys().join(", ")})`)
+    .requiredOption("--page <label>", "the Fansly page (live)")
+    .requiredOption("--resource <key>", "the registry key")
+    .option("--subject <subject>", "a chat, fan, media … id (default: the page)")
+    .option("--params <json>", "the work's parameters as a JSON object", parseJsonObject)
+    .option("--note <text>", "why (stored with the audit row)")
+    .action(async (options: { page: string; resource: string; subject?: string; params?: Record<string, unknown>; note?: string }) => {
+      await withContext(deps, async ({ db }) => {
+        const queued = await enqueueOwnerSyncWork(db, createFanslyRegistry(), {
+          pageLabel: options.page,
+          resource: options.resource,
+          ...(options.subject === undefined ? {} : { subject: options.subject }),
+          ...(options.params === undefined ? {} : { params: options.params }),
+          actor: cliActor(),
+          ...(options.note === undefined ? {} : { note: options.note }),
+        });
+        deps.print(`${options.page}: ${options.resource} ${queued.created ? "queued as work" : "merged into open work"} ${queued.workId}`
+          + `; follow it: sync why --page ${options.page} --resource ${options.resource}`
+          + `${options.subject === undefined ? "" : ` --subject ${options.subject}`}`);
       });
     });
 

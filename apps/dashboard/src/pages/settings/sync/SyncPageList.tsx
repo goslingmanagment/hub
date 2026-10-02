@@ -7,12 +7,14 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { SyncBlockRow } from "./SyncBlockRow.js";
 import { SyncDiagnosisNotice } from "./SyncDiagnosisNotice.js";
+import { SyncEngineNotice } from "./SyncEngineCard.js";
 import {
   formatBlockSummary,
   getBlockLabel,
   getBlockOrder,
   getReasonSummary,
   isDependencyWait,
+  isEngineBlock,
   needsVisualAttention,
 } from "./syncBlockDisplay.js";
 
@@ -82,6 +84,7 @@ function PageCard({
   onSelect: () => void;
 }) {
   const blockKeys = getBlockOrder();
+  const engine = blockKeys.some((key) => isEngineBlock(page.blocks[key]));
 
   return (
     <div className="rounded-xl border border-border bg-card px-5 py-4">
@@ -111,6 +114,9 @@ function PageCard({
           <SyncBlockRow key={key} block={page.blocks[key]} />
         ))}
       </div>
+
+      {/* The Fansly Sync Engine serves the page */}
+      {engine && <SyncEngineNotice pageLabel={page.pageLabel} />}
 
       {/* Error bar */}
       <PageErrorBar page={page} />

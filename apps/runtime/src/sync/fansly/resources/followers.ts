@@ -560,6 +560,20 @@ function finishedCursor(cursor: FollowersReconcileCursor, walk: ReconcileWalk, r
   };
 }
 
+/**
+ * The cursor a quarantined walk leaves once the owner's blast-radius override
+ * (design step 3 §3.2 item 4) retired its unseen follows: the walk finished,
+ * its start the owner floor's anchor, the override's receipt as the last
+ * outcome. Null when the cursor holds no walk.
+ */
+export function followersReconcileCursorAfterOverride(
+  cursorValue: unknown,
+  receipt: Record<string, unknown>,
+): FollowersReconcileCursor | null {
+  const cursor = parseFollowersReconcileCursor(cursorValue);
+  return cursor.walk === null ? null : finishedCursor(cursor, cursor.walk, receipt);
+}
+
 async function applyReconcileStart(
   tx: Database,
   input: ApplyInput,

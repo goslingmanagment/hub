@@ -1,6 +1,11 @@
 import {
   countConversationSyncFailuresByAccount,
   countUnresolvedProjectionDebtByAccount,
+  listNotificationIncidents,
+  listSyncPages,
+  oldestDueLiveUrgentWork,
+  readSyncLivePathFacts,
+  type SyncPageRow,
 } from "@agency_hub_core/db";
 
 import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
@@ -10,6 +15,8 @@ import { listConnectionStatuses } from "./connections.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { PUBLIC_RUNTIME_CAPABILITIES } from "./public-capabilities.ts";
 import { getSyncStatusSnapshot, type SyncDomainBlockStatus } from "./sync-status.ts";
+import { readSyncPageStatuses } from "../sync/inspect.ts";
+import { SYNC_DECODE_DEBT_WINDOW_MS, SYNC_UNCONFIRMED_MESSAGE_MS } from "../sync/engine/alerts.ts";
 
 type ServiceHealthStatus = "ok" | "degraded";
 type SystemCheckStatus = "ok" | "error";
@@ -117,6 +124,79 @@ function retryWedgedStreamNames(block: SyncDomainBlockStatus) {
   return [...names];
 }
 
+/** An engine page whose owner has not beaten for longer than this is
+ *  unhealthy (alert 1's ownership bound is 2 min; health answers sooner). */
+export const ENGINE_OWNER_HEARTBEAT_STALE_SECONDS = 90;
+/** A page still in `handover` after this long is unhealthy (alert 1's
+ *  `handover_stuck`). */
+export const ENGINE_HANDOVER_STUCK_SECONDS = 10 * 60;
+
+/** `/health/sync`'s view of a page the Fansly Sync Engine owns (design step 3
+ *  §3.2 item 1, E14): its legacy blocks are frozen, so they are not judged. */
+export interface EngineSyncHealth {
+  mode: "handover" | "live";
+  ownerHeartbeatAgeSeconds: number | null;
+  hold: { kind: string; until: string } | null;
+  urgentOldestAgeSeconds: number | null;
+  wsConnected: boolean;
+  wsDownSeconds: number | null;
+  quarantined: number;
+  openAlerts: string[];
+}
+
+function secondsBetween(from: Date | null, to: Date): number | null {
+  return from === null ? null : Math.max(0, Math.floor((to.getTime() - from.getTime()) / 1000));
+}
+
+/** The engine block of each engine-owned page and its issues: a stale owner
+ *  (> 90 s), a refused credential (auth/identity hold in force), a handover
+ *  older than 10 minutes. */
+async function readEngineSyncHealth(
+  app: AppContext,
+  pages: ReadonlyArray<SyncPageRow & { mode: "handover" | "live" }>,
+): Promise<Map<number, { engine: EngineSyncHealth; issues: string[] }>> {
+  const result = new Map<number, { engine: EngineSyncHealth; issues: string[] }>();
+  if (pages.length === 0) return result;
+  const statuses = await readSyncPageStatuses(app.db, app.config, pages);
+  const incidents = (await listNotificationIncidents(app.db, { status: "open" }))
+    .filter((incident) => incident.kind === "fansly_sync_engine");
+  for (const [index, page] of pages.entries()) {
+    const status = statuses[index]!;
+    const now = page.dbNow;
+    const live = await readSyncLivePathFacts(app.db, {
+      pageId: page.pageId,
+      decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS,
+      unconfirmedAfterMs: SYNC_UNCONFIRMED_MESSAGE_MS,
+    });
+    const urgentDueAt = await oldestDueLiveUrgentWork(app.db, { pageId: page.pageId });
+    const prefix = `fansly_sync_engine:${page.pageId}:`;
+    const engine: EngineSyncHealth = {
+      mode: page.mode,
+      ownerHeartbeatAgeSeconds: secondsBetween(page.owner.heartbeatAt, now),
+      hold: status.holds.page === null ? null : { kind: status.holds.page.kind, until: status.holds.page.until },
+      urgentOldestAgeSeconds: secondsBetween(urgentDueAt, now),
+      wsConnected: live.socket.up,
+      wsDownSeconds: live.socket.up ? 0 : secondsBetween(live.socket.lastAliveAt, now),
+      quarantined: status.quarantined,
+      openAlerts: incidents
+        .filter((incident) => incident.platformAccountId === page.pageId && incident.incidentKey.startsWith(prefix))
+        .map((incident) => incident.incidentKey.slice(prefix.length))
+        .sort(),
+    };
+    const issues: string[] = [];
+    if (engine.ownerHeartbeatAgeSeconds === null || engine.ownerHeartbeatAgeSeconds > ENGINE_OWNER_HEARTBEAT_STALE_SECONDS) {
+      issues.push("engine:owner_stale");
+    }
+    if (engine.hold?.kind === "auth") issues.push("engine:auth_hold");
+    if (engine.hold?.kind === "identity_mismatch") issues.push("engine:identity_mismatch_hold");
+    if (page.mode === "handover" && (secondsBetween(page.modeChangedAt, now) ?? 0) > ENGINE_HANDOVER_STUCK_SECONDS) {
+      issues.push("engine:handover_stuck");
+    }
+    result.set(page.pageId, { engine, issues });
+  }
+  return result;
+}
+
 function recentCountersFromSnapshot(snapshot: Awaited<ReturnType<typeof getSyncStatusSnapshot>>) {
   return snapshot.recentCounters ?? {
     failedRuns: 0,
@@ -192,7 +272,7 @@ export async function getPublicSyncHealth(
   const now = input?.now ?? new Date();
   // One effective-config snapshot for both live health thresholds read below, so the
   // reported `running` values match exactly what this check consumes (no field skew).
-  const [connections, snapshot, effective, projectionDebtCounts, coverageDebtCounts] = await Promise.all([
+  const [connections, snapshot, effective, projectionDebtCounts, coverageDebtCounts, syncPages] = await Promise.all([
     listConnectionStatuses(app, {
       pageIds: input?.pageIds,
     }),
@@ -217,7 +297,15 @@ export async function getPublicSyncHealth(
       app.db,
       input?.pageIds ? { platformAccountIds: input.pageIds } : undefined,
     ),
+    // Pages the Fansly Sync Engine owns are judged by the engine, not by
+    // their frozen legacy streams (design step 3 §3.2 item 1).
+    listSyncPages(app.db, { modes: ["handover", "live"] }),
   ]);
+  const scopedPageIds = input?.pageIds ? new Set(input.pageIds) : null;
+  const engineHealth = await readEngineSyncHealth(app, syncPages.filter(
+    (page): page is SyncPageRow & { mode: "handover" | "live" } =>
+      (page.mode === "handover" || page.mode === "live") && (scopedPageIds === null || scopedPageIds.has(page.pageId)),
+  ));
 
   const connectionsById = new Map(connections.map((connection) => [connection.id, connection]));
   const snapshotPagesById = new Map(snapshot.pages.map((page) => [page.pageId, page]));
@@ -241,6 +329,30 @@ export async function getPublicSyncHealth(
     const page = snapshotPagesById.get(pageId);
     const connection = connectionsById.get(pageId);
     const platform = page?.platform ?? connection?.platform ?? "fansly";
+    const engineSync = engineHealth.get(pageId);
+    if (engineSync !== undefined) {
+      const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
+      const followerAge = ageMinutes(connection?.lastFollowerSyncAt ?? null, now);
+      return {
+        pageId,
+        pageLabel: page?.pageLabel ?? connection?.label ?? "unknown",
+        platform,
+        modelSlug: page?.modelSlug ?? connection?.modelSlug ?? "unknown",
+        modelName: page?.modelName ?? connection?.modelName ?? "unknown",
+        status: (engineSync.issues.length > 0 ? "degraded" : "ok") as ServiceHealthStatus,
+        connectionStatus: connection?.connectionStatus ?? "unverified",
+        lastLightSyncAt: connection?.lastLightSyncAt ?? null,
+        lightAgeMinutes: lightAge,
+        lastFollowerSyncAt: connection?.lastFollowerSyncAt ?? null,
+        followerAgeMinutes: followerAge,
+        failedStreams: 0,
+        stalledStreams: 0,
+        pendingStreams: 0,
+        lastErrorSummary: engineSync.issues[0] ?? null,
+        issues: engineSync.issues,
+        engine: engineSync.engine,
+      };
+    }
     const blocks = page ? Object.values(page.blocks).filter((block) => block.state !== "not_available") : [];
     const healthBlocks = blocks.filter((block) => !isDeepBackfillOnlyDelay(block));
     const connectionBlock = page?.blocks.connection;

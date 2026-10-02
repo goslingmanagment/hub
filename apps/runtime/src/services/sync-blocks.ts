@@ -31,6 +31,14 @@ import {
   type SyncStatusPage,
 } from "./sync-status.ts";
 import { sendSyncPageWakeup } from "./sync-queue.ts";
+import {
+  engineOwnedSyncPage,
+  pauseEngineStreams,
+  requeueEngineStreams,
+  resetEngineFollowersReconcile,
+  triggerEngineStreams,
+  type EngineLeverOutcome,
+} from "./sync-engine-levers.ts";
 
 export type SyncBlockKey = SyncDomainBlockKey;
 export type SyncBlockState = SyncDomainBlockState;
@@ -97,6 +105,8 @@ export type SyncDiagnosis = {
 export type SyncBlockStatus = {
   block: SyncBlockKey;
   state: SyncBlockState;
+  /** The page's engine mode, exactly when `state` is `engine`. */
+  engineMode?: "handover" | "live";
   succeededAt: string | null;
   progress: SyncBlockProgress | null;
   progressStream: string | null;
@@ -177,6 +187,7 @@ function toBlockStatus(block: SyncDomainBlockStatus): SyncBlockStatus {
   return {
     block: block.block,
     state: block.state,
+    ...(block.engineMode === undefined ? {} : { engineMode: block.engineMode }),
     succeededAt: block.succeededAt,
     progress: block.progress
       ? {
@@ -304,6 +315,23 @@ async function getPageOrThrow(app: AppContext, pageLabel: string) {
   return stored;
 }
 
+/** A block lever's answer on an engine page: what the engine lever did. */
+function engineBlockResponse<A extends "trigger" | "pause" | "resume" | "reset">(
+  action: A,
+  pageLabel: string,
+  block: SyncBlockKey,
+  outcome: EngineLeverOutcome,
+) {
+  return {
+    accepted: true as const,
+    action,
+    pageLabel,
+    block,
+    requests: [] as Array<{ stream: SyncStream; requestedSeq: number }>,
+    engine: { mode: outcome.mode, resources: outcome.resources, affected: outcome.affected },
+  };
+}
+
 async function enqueueBlockWakeup(
   boss: Pick<PgBoss, "send">,
   input: {
@@ -417,6 +445,10 @@ export async function triggerSyncBlock(
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
+  const engine = await engineOwnedSyncPage(app.db, stored.page.id);
+  if (engine !== null) {
+    return engineBlockResponse("trigger", stored.page.label, input.block, await triggerEngineStreams(app.db, engine, tasks));
+  }
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -466,6 +498,10 @@ export async function pauseSyncBlock(
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
   }
+  const engine = await engineOwnedSyncPage(app.db, stored.page.id);
+  if (engine !== null) {
+    return engineBlockResponse("pause", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "pause"));
+  }
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -502,6 +538,10 @@ export async function resumeSyncBlock(
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
     throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
+  }
+  const engine = await engineOwnedSyncPage(app.db, stored.page.id);
+  if (engine !== null) {
+    return engineBlockResponse("resume", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "resume"));
   }
 
   await ensurePageSyncStates(app.db, {
@@ -564,6 +604,19 @@ export async function resetSyncBlock(
     now?: Date;
   },
 ) {
+  const stored = await getPageOrThrow(app, input.pageLabel);
+  // An engine page: its legacy state is frozen and never rewritten (J5); the
+  // block's quarantined engine work is requeued instead — nothing is deleted,
+  // so the destruction door below does not apply.
+  const engine = await engineOwnedSyncPage(app.db, stored.page.id);
+  if (engine !== null) {
+    const tasks = blockTasksForPlatform(stored.page.platform, input.block);
+    if (tasks.length === 0) {
+      throw new BadRequestError(`Sync domain "${input.block}" is not available on ${stored.page.platform}`);
+    }
+    return engineBlockResponse("reset", stored.page.label, input.block, await requeueEngineStreams(app.db, engine, tasks));
+  }
+
   // Stage 2 destruction-door guard: the messages_history reset would
   // hard-delete every stored DM for the page (resetPageDmSyncState) with no
   // archive to recover from. Disabled until the message archive exists
@@ -575,7 +628,6 @@ export async function resetSyncBlock(
   }
 
   const now = input.now ?? new Date();
-  const stored = await getPageOrThrow(app, input.pageLabel);
   const dependencyInput = pageSyncDependencyInput(app);
   const tasks = blockTasksForPlatform(stored.page.platform, input.block);
   if (tasks.length === 0) {
@@ -648,6 +700,17 @@ export async function resetFollowersReconcileStream(
   const stored = await getPageOrThrow(app, input.pageLabel);
   if (stored.page.platform !== "fansly") {
     throw new BadRequestError("Follower reconcile is available only on Fansly pages");
+  }
+  const engine = await engineOwnedSyncPage(app.db, stored.page.id);
+  if (engine !== null) {
+    const reset = await resetEngineFollowersReconcile(app.db, engine);
+    return {
+      accepted: true as const,
+      action: "reset" as const,
+      pageLabel: stored.page.label,
+      stream: "followers_reconcile" as const,
+      requests: [{ stream: "followers_reconcile" as const, requestedSeq: reset.demandRevision }],
+    };
   }
   const dependencyInput = pageSyncDependencyInput(app);
   const streams: SyncStream[] = ["followers_reconcile"];

@@ -1004,7 +1004,8 @@ export function buildProgram() {
   const sync = program.command("sync");
   sync.enablePositionalOptions();
   // Fansly Sync Engine (design §7.6): sync page mode|pause|resume|override|status,
-  // sync why, sync ownership status|confirm-stopped.
+  // sync why, sync probe, sync work list|requeue|enqueue (step 3 §3.2),
+  // sync ownership status|confirm-stopped.
   registerSyncEngineCommands(sync);
   const queue = program.command("queue");
   const telegram = program.command("telegram");

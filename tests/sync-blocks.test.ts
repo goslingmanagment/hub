@@ -28,6 +28,9 @@ vi.mock("@agency_hub_core/db", async () => {
   return {
     ...actual,
     ...dbMocks,
+    // Every page here is the legacy engine's (the engine levers:
+    // tests/sync-engine-levers.integration.test.ts).
+    isFanslyPageEngineOwned: async () => ({ owned: false, mode: null }),
   };
 });
 
@@ -657,6 +660,10 @@ describe("sync blocks service", () => {
     const db = {
       transaction: vi.fn(async (callback: (tx: object) => Promise<unknown>) => callback({})),
     };
+    dbMocks.findPageByLabel.mockResolvedValue({
+      page: { id: 7, label: "lana", platform: "fansly" },
+      proxy: null,
+    });
 
     await expect(resetSyncBlock({ db } as never, {
       send: vi.fn(),
