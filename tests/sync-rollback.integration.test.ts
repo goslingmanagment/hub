@@ -5,16 +5,26 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   confirmSyncOwnersStopped,
+  findAgentHydrationRequestById,
   getSyncPage,
+  hasDispatchingAgentHydrationRequestOnPage,
+  insertAgentKey,
+  listAgentHydrationEvents,
   listCombinedFanslySendsForPaceAudit,
+  markAgentHydrationEngineManaged,
+  setPagePause,
   type Database,
 } from "@agency_hub_core/db";
 
+import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { getHistoryRequest, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
+import { historyIntakeOfLegacyHydration } from "../apps/runtime/src/sync/requests/legacy-hydration.ts";
+import { checkSwitchPreconditions } from "../apps/runtime/src/sync/switch/preconditions.ts";
 import { runSyncRollback } from "../apps/runtime/src/sync/switch/rollback.ts";
 import { runSyncSwitch } from "../apps/runtime/src/sync/switch/switch.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
   ensureHarnessSettingTable,
@@ -45,9 +55,12 @@ import {
 // ≥ 1.2 × S after the engine's last one, and — under an engine 429 hold — not
 // before the hold's end + 1.2 × S; without the owner's release or a stop
 // confirmation nothing moves (exit 3); an auth hold refuses (exit 5) unless
-// the owner says so; a rollback killed after any step and run again ends in
-// the same place; the legacy rows are byte-identical to before the switch;
-// open history requests wait `paused`.
+// the owner says so — on a live page before anything moves, so the owner can
+// renew the credentials through the engine, and a hold that came in while the
+// actor stopped puts a page the rollback took from live back to live; a
+// rollback killed after any step and run again ends in the same place; the
+// legacy rows are byte-identical to before the switch; open history requests
+// wait `paused`.
 
 const S = 300;
 
@@ -170,6 +183,41 @@ async function legacySnapshot(pageId: number): Promise<string> {
   return JSON.stringify(parts, (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value));
 }
 
+async function holdAuth(pageId: number, generation: "verified" | string): Promise<void> {
+  await testDb!.pool.query(
+    `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
+            hold_detail = jsonb_build_object('status', 401, 'credentialsGeneration',
+              case when $2::text = 'verified' then credentials_generation else $2::text end)
+      where page_id = $1`,
+    [pageId, generation],
+  );
+}
+
+/** Runs the rollback until its line of `step` (printed after the step's
+ *  audit row), then kills it there. */
+async function rollbackKilledAfter(r: Rig, step: string): Promise<void> {
+  let killed = false;
+  await rollback(r, {
+    overrides: {
+      print: (line) => {
+        r.lines.push(line);
+        if (!killed && line.startsWith(`${step} `)) {
+          killed = true;
+          throw new Error(`killed after ${step}`);
+        }
+      },
+    },
+  }).catch((error: unknown) => {
+    if (!(error instanceof Error) || !error.message.startsWith("killed")) throw error;
+  });
+  expect(killed).toBe(true);
+}
+
+async function released(pageId: number): Promise<boolean> {
+  const owner = (await getSyncPage(db(), pageId))!.owner;
+  return owner.releasedAt !== null && owner.releaseGeneration === owner.generation;
+}
+
 describe("sync rollback", () => {
   it("gives a live page back gracefully: the first legacy request ≥ 1.2 × S after the engine's last, legacy rows untouched, history requests paused", async (context) => {
     if (!testDb) return context.skip();
@@ -283,24 +331,151 @@ describe("sync rollback", () => {
     expect(first.rows[0]!.captured_at.getTime() - holdUntil.getTime()).toBeGreaterThanOrEqual(1.2 * S);
   }, 120_000);
 
-  it("refuses under an auth hold (exit 5, nothing sent) and proceeds with --with-auth-hold", async (context) => {
+  it("refuses under an auth hold while the page is live (exit 5, nothing moves); the owner's renewal through the engine lifts it", async (context) => {
     if (!testDb) return context.skip();
     const r = await livePage("rollback-d", 24);
     const { page } = r;
-    await testDb.pool.query(
-      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp(),
-              hold_detail = jsonb_build_object('status', 401, 'credentialsGeneration', credentials_generation)
-        where page_id = $1`,
-      [page.pageId],
-    );
+    await holdAuth(page.pageId, "verified");
     const refused = await rollback(r);
     expect(refused).toMatchObject({ exitCode: 5, step: "auth_hold" });
+    // Nothing moved: still live with the engine's guard, no rollback row.
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("live");
     expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(await steps(page.pageId)).toEqual([]);
+    expect(r.lines.some((line) => line.includes("renew the credentials through the engine"))).toBe(true);
+
+    // The renewal's identity check runs under the hold (the page is live) and
+    // the trusted digest lifts it: the rollback then proceeds without a flag.
+    const app = createTestAppContext(testDb, { fanslySendGuardSettingMs: S });
+    const renewed = await updatePageCredentials(app, page.pageLabel, {
+      platform: "fansly",
+      session: { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" },
+    });
+    expect(renewed).toMatchObject({ updated: true, verified: true });
+    expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
+    expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
+    expect(await steps(page.pageId)).toEqual(["start", "1_handover", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
+  }, 120_000);
+
+  it("an auth hold that came in while the live actor stopped: the page goes back to live (exit 5); --with-auth-hold proceeds", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-f", 26);
+    const { page } = r;
+    await rollbackKilledAfter(r, "1");
+    await until(async () => released(page.pageId), 15_000, "the live actor's release");
+    await holdAuth(page.pageId, "verified");
+
+    const refused = await rollback(r);
+    expect(refused).toMatchObject({ exitCode: 5, step: "auth_hold" });
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("live");
+    expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(await steps(page.pageId)).toEqual(["start", "1_handover", "2_released", "auth_hold"]);
+    // The engine owns the page again (under the hold it sends nothing but a
+    // candidate identity check).
+    await until(async () => r.host.state(page.pageId).kind === "running", 15_000, "the live owner again");
+    const arrivals = r.server.arrivals.length;
+
+    expect(await rollback(r, { withAuthHold: true })).toMatchObject({ exitCode: 0, step: "done" });
+    expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
+    expect(r.server.arrivals.length).toBe(arrivals);
+    expect((await steps(page.pageId)).slice(4)).toEqual(["1_handover", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
+  }, 120_000);
+
+  it("a page in handover before the rollback stays there under an auth hold (exit 5); --with-auth-hold proceeds", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-g", 27);
+    const { page } = r;
+    await testDb.pool.query(
+      "update sync_pages set mode = 'handover', mode_changed_at = clock_timestamp(), mode_changed_by = 'test' where page_id = $1",
+      [page.pageId],
+    );
+    await until(async () => released(page.pageId), 15_000, "the live actor's release");
+    await holdAuth(page.pageId, "verified");
+
+    const refused = await rollback(r);
+    expect(refused).toMatchObject({ exitCode: 5, step: "auth_hold" });
     expect((await getSyncPage(db(), page.pageId))!.mode).toBe("handover");
+    expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(r.lines.some((line) => line.includes("--with-auth-hold"))).toBe(true);
     const arrivals = r.server.arrivals.length;
     expect(await rollback(r, { withAuthHold: true })).toMatchObject({ exitCode: 0, step: "done" });
     expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
     expect(r.server.arrivals.length).toBe(arrivals);
+  }, 120_000);
+
+  it("an auth hold of credentials older than the verified ones does not refuse (the engine's own rule)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-h", 28);
+    const { page } = r;
+    await rollbackKilledAfter(r, "1");
+    await until(async () => released(page.pageId), 15_000, "the live actor's release");
+    // The row still names the failed digest; the engine verified another since.
+    await holdAuth(page.pageId, "e".repeat(64));
+    expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
+    expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
+  }, 120_000);
+
+  it("settles the wrapper's hydration rows: an ended one to the state it mirrors, a waiting one expired; nothing legacy counts them after", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-w", 29);
+    const { page } = r;
+    const chat = r.chats.add({ count: 60, ageMs: 7_200_000 });
+    await seedChatThread(handles(), page.pageId, chat, { stored: chat.messages.slice(40) });
+    // Requests open but paused by the owner: the chat's history read waits.
+    await testDb.pool.query("update sync_pages set requests_enabled_at = clock_timestamp() - interval '1 second' where page_id = $1", [page.pageId]);
+    await setPagePause(db(), { pageId: page.pageId, requests: true, note: "test" });
+    const key = await insertAgentKey(testDb.db, {
+      name: "wrapper", keyPrefix: "agency_hub_agent_wrapr", keyDigest: "e".repeat(64),
+      capabilities: ["read:messages", "request:hydration"], pageIds: [page.pageId],
+      dailyRequestBudget: 5000, dailyRowBudget: 500_000, expiresAt: new Date(Date.now() + 86_400_000), createdBy: null,
+    });
+    /** A hydration row the wrapper filed (as `handleAgentHydrationRequestCreate` does on a live page). */
+    const wrapped = async (conversationRef: string): Promise<number> => {
+      const inserted = await testDb!.pool.query<{ id: string }>(
+        `insert into agent_hydration_requests (request_ref, agent_key_id, page_id, conversation_ref, state, target_before_message_ref,
+                reason_sha256, reason_length, idempotency_key, request_fingerprint, coverage_fingerprint, admissible, expires_at)
+         values (gen_random_uuid(), $1, $2, $3, 'requested', $4, $5, 10, gen_random_uuid(), $5, $5, true, now() + interval '1 day')
+         returning id::text as id`,
+        [key.id, page.pageId, conversationRef, chat.messages[0]!.id, "a".repeat(64)],
+      );
+      const row = (await findAgentHydrationRequestById(db(), Number(inserted.rows[0]!.id)))!;
+      const filed = await submitHistoryRequest({ db: db(), rawConfig: r.config },
+        historyIntakeOfLegacyHydration(row, { kind: "legacy_hydration_wrapper", legacyRequestId: row.id }, "wrapped"));
+      const marked = await markAgentHydrationEngineManaged(db(), { id: row.id, expectedVersion: row.rowVersion, historyRequestRef: filed.request.ref });
+      expect(marked.outcome).toBe("applied");
+      return row.id;
+    };
+    const waiting = await wrapped(chat.groupId);
+    // A chat the page does not know: refused at once, its request is over.
+    const ended = await wrapped("777000000000000009");
+    // In flight on the engine: the legacy lane's page slot and the switch's
+    // hydration check ignore both.
+    expect(await hasDispatchingAgentHydrationRequestOnPage(db(), page.pageId)).toBe(false);
+    const inFlight = await checkSwitchPreconditions(ctx(r), { page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json" });
+    expect(inFlight.checks.find((entry) => entry.name === "hydration_settled")).toMatchObject({ ok: true });
+
+    expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
+    const waitingRow = (await findAgentHydrationRequestById(db(), waiting))!;
+    expect(waitingRow.state).toBe("expired");
+    expect((await listAgentHydrationEvents(db(), waiting)).at(-1)).toMatchObject({ toState: "expired", detail: { cause: "rolled_back" } });
+    // Its history request still waits (paused), under the ref the row keeps.
+    const view = await getHistoryRequest({ db: db(), rawConfig: r.config }, waitingRow.executionRef!);
+    expect(view.request.state).toBe("open");
+    expect(view.request.waitingReason).toBe("paused");
+    const endedRow = (await findAgentHydrationRequestById(db(), ended))!;
+    expect(endedRow).toMatchObject({ state: "failed", lastError: "vendor_unavailable" });
+    expect((await listAgentHydrationEvents(db(), ended)).at(-1)).toMatchObject({ detail: { cause: "history_request_ended" } });
+    const audit = await testDb.pool.query<{ metadata: { hydrationSettled: number; hydrationExpired: number } }>(
+      "select metadata from audit_events where event_type = 'admin.sync_rollback' and platform_account_id = $1 and metadata ->> 'step' = '4_work_closed'",
+      [page.pageId],
+    );
+    expect(audit.rows[0]!.metadata).toMatchObject({ hydrationSettled: 1, hydrationExpired: 1 });
+
+    // The legacy lane owns the page's hydration again, and a later switch has
+    // nothing to wait for.
+    expect(await hasDispatchingAgentHydrationRequestOnPage(db(), page.pageId)).toBe(false);
+    const verdict = await checkSwitchPreconditions(ctx(r), { page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json" });
+    expect(verdict.checks.find((entry) => entry.name === "hydration_settled")).toMatchObject({ ok: true });
   }, 120_000);
 
   it("a rollback killed after each step and run again ends in the same place", async (context) => {

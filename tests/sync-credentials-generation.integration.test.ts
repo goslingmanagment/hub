@@ -202,6 +202,40 @@ describe("the credentials generation of a live page", () => {
     expect(identity.rows).toEqual([{ state: "done", close_reason: "identity_matches", secret_params: null }]);
   }, 60_000);
 
+  it("a takeover verify refused with 401, then the owner's new credentials: the read queued before it goes out", async (context) => {
+    if (!testDb) return context.skip();
+    // Only the owner's new session is accepted; the stored one gets 401.
+    const r = await rig([(request) => (request.url.pathname === "/api/v1/account/me" && request.headers.authorization !== "fresh-token"
+      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false }) }
+      : null)]);
+    await testDb.pool.query("update sync_pages set credentials_generation = null where page_id = $1", [r.page.pageId]);
+    const refused = await storedGeneration(r.page);
+    // The urgent read is picked first and refused by the transport (nothing
+    // verified yet); the verify it raises meets the 401.
+    await urgent(r.page.pageId, "u1");
+    await startHost(r, 36);
+    await until(async () => (await getSyncPage(db(), r.page.pageId))!.holdKind === "auth", 15_000, "the auth hold of the takeover verify");
+    const held = (await getSyncPage(db(), r.page.pageId))!;
+    expect(held.holdDetail.credentialsGeneration).toBe(refused);
+    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
+
+    const result = await updatePageCredentials(appContext(), r.page.pageLabel, {
+      platform: "fansly",
+      session: { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" },
+    });
+    expect(result).toMatchObject({ updated: true, verified: true });
+    // The trusted digest is the new one, never the refused one: the actor
+    // leaves its checks-only mode and the queued read goes out.
+    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the queued read after the renewal");
+    const page = (await getSyncPage(db(), r.page.pageId))!;
+    expect(page.credentialsGeneration).toBe(await storedGeneration(r.page));
+    expect(page.credentialsGeneration).not.toBe(refused);
+    const work = await testDb.pool.query<{ state: string }>(
+      "select state from sync_work where page_id = $1 and resource = $2 and subject = 'u1'", [r.page.pageId, HARNESS_KEY.urgent],
+    );
+    expect(work.rows.map((row) => row.state)).not.toContain("open");
+  }, 60_000);
+
   it("a refused candidate closes its check and holds nothing; the stored session stays", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig([(request) => (request.url.pathname === "/api/v1/account/me" && request.headers.authorization === "bad-token"

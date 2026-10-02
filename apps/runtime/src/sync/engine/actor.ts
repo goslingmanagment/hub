@@ -150,9 +150,14 @@ export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
   /** The stored credentials digest the transport refused because the engine
-   *  has not verified it (G1/G2): while set, the actor picks only the
-   *  identity checks; cleared once the page's verified digest is it. */
-  #unverified: string | null = null;
+   *  has not verified it, with the digest verified at that moment (G1/G2):
+   *  while set, the actor picks only the identity checks. Cleared once the
+   *  verified digest moved — to the refused one (its verify passed) or to any
+   *  other (the owner's identity-checked credentials were stored over it).
+   *  The transport compares the stored digest with the verified one on every
+   *  request: if they still differ, its next refusal sets this again and
+   *  raises the verify of the digest stored then. */
+  #unverified: { stored: string; verified: string | null } | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -227,7 +232,7 @@ export class SyncActor {
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
     const now = d.clock.wallNow();
-    if (this.#unverified !== null && page.credentialsGeneration === this.#unverified) this.#unverified = null;
+    if (this.#unverified !== null && credentialsVerifiedSince(this.#unverified, page.credentialsGeneration)) this.#unverified = null;
     const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly: this.#unverified !== null });
     const picked = gate.exemptIdentity && activePageHold(page, now) !== null
       ? await this.#pickExemptIdentity(page)
@@ -434,7 +439,7 @@ export class SyncActor {
     const failed = typeof heldUnder === "string" ? heldUnder : page.credentialsGeneration;
     if (stored === null || failed === null || stored === failed) return false;
     const lifted = await liftHoldForChangedCredentials(d, { holdKind, failedGeneration: failed, storedGeneration: stored });
-    if (lifted) this.#unverified = stored;
+    if (lifted) this.#unverified = { stored, verified: page.credentialsGeneration };
     return lifted;
   }
 
@@ -444,8 +449,8 @@ export class SyncActor {
    *  lap error, never a spin. */
   async #credentialsUnverified(error: CredentialsGenerationChangedError, stop: AbortSignal): Promise<void> {
     const d = this.#d;
-    const first = this.#unverified !== error.storedGeneration;
-    this.#unverified = error.storedGeneration;
+    const first = this.#unverified?.stored !== error.storedGeneration;
+    this.#unverified = { stored: error.storedGeneration, verified: error.verifiedGeneration };
     if (first) {
       d.metrics.increment("sync_credentials_unverified", { pageId: d.pageId });
       d.logger.info({ pageId: d.pageId, verified: error.verifiedGeneration !== null },
@@ -541,6 +546,20 @@ export class SyncActor {
   async #sleep(ms: number, signal: AbortSignal): Promise<void> {
     await this.#d.clock.sleep(ms, signal).catch(() => undefined);
   }
+}
+
+/**
+ * Whether the checks-only mode of unverified credentials (G2) is over: the
+ * page's verified digest moved since the transport refused the stored one —
+ * to that digest (its verify passed) or to another (the owner's
+ * identity-checked credentials were stored and trusted, which lifts an auth
+ * hold of the refused digest too). Never on a null verified digest.
+ */
+export function credentialsVerifiedSince(
+  unverified: { stored: string; verified: string | null },
+  verifiedNow: string | null,
+): boolean {
+  return verifiedNow !== null && (verifiedNow === unverified.stored || verifiedNow !== unverified.verified);
 }
 
 /**

@@ -220,7 +220,9 @@ const REQUEST_FROM = sql`
  * §3.5 item 10: the hydration wrapper of a live page files a history request
  * and points the legacy row at it). Such a row is `dispatching` for as long as
  * its history request runs, and only the wrapper reads its state; the legacy
- * expiry, reconcile and stuck sweeps never touch it (the column has no CHECK,
+ * expiry, reconcile and stuck sweeps never touch it, and the legacy lane's
+ * page slot, the auto-approval's one-run-per-page rule and the switch's
+ * `hydration_settled` precondition never count it (the column has no CHECK,
  * 0117).
  */
 export const FANSLY_SYNC_ENGINE_HYDRATION_LANE = "fansly_sync_engine";
@@ -739,6 +741,8 @@ export async function listAutoApprovableAgentHydrationRequests(
           select 1 from agent_hydration_requests live
           where live.page_id = r.page_id
             and live.state in ('approved', 'dispatching')
+            -- A row the engine served (a history request) is no legacy run.
+            and live.execution_lane is distinct from ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
         )
         and not exists (
           select 1 from agent_hydration_requests today
@@ -995,7 +999,8 @@ export async function rearmAgentHydrationRequest(
  * Whether the page already has a hydration run in flight. The Fansly lane runs
  * one targeted job per page at a time; its dispatcher reads this before it
  * claims, so a second approval for the page waits instead of being claimed
- * into a send the queue must refuse.
+ * into a send the queue must refuse. A row the Fansly Sync Engine served is
+ * no legacy run (its work is a history request): it never takes the slot.
  */
 export async function hasDispatchingAgentHydrationRequestOnPage(
   db: Database,
@@ -1003,8 +1008,9 @@ export async function hasDispatchingAgentHydrationRequestOnPage(
 ): Promise<boolean> {
   const result = await db.execute<{ dispatching: boolean }>(sql`
     select exists (
-      select 1 from agent_hydration_requests
-      where page_id = ${pageId} and state = 'dispatching'
+      select 1 from agent_hydration_requests r
+      where r.page_id = ${pageId} and r.state = 'dispatching'
+        and ${LEGACY_SWEEPABLE}
     ) as dispatching
   `);
   return result.rows[0]?.dispatching === true;
@@ -1250,9 +1256,11 @@ export async function listOpenLegacyHydrationRequestsForPage(
  * hydration wrapper of a live page, design step 3 §3.5 item 10): the row
  * points at the history request it was filed as (`execution_lane =
  * 'fansly_sync_engine'`, `execution_ref` = its ref) and stays `dispatching`
- * while that request runs — its read mirrors the request's item, and the
- * legacy sweeps never touch it. No owner decision: history requests need none
- * (plan §4). CAS'd on the observed version.
+ * while that request runs — its read mirrors the request's item, the legacy
+ * sweeps and page slots never count it — and is settled to the mirrored
+ * terminal state once the request is over (or `expired` by a rollback). No
+ * owner decision: history requests need none (plan §4). CAS'd on the observed
+ * version.
  */
 export async function markAgentHydrationEngineManaged(
   db: Database,
@@ -1289,6 +1297,35 @@ export async function markAgentHydrationEngineManaged(
     });
     return { outcome: "applied" as const, request: await findAgentHydrationRequestById(tx, input.id) };
   });
+}
+
+/**
+ * The rows the Fansly Sync Engine serves that are still `dispatching` (the
+ * wrapper's rows, step-3 design §3.5 item 10), oldest dispatch first.
+ * `pageId` narrows to one page (the rollback); `endedOnly` to the rows whose
+ * history request is over (`done`/`cancelled`): the worker's settle pass,
+ * which must never be crowded out by requests still running.
+ */
+export async function listEngineManagedAgentHydrationDispatches(
+  db: Database,
+  input: { limit: number; pageId?: number; endedOnly?: boolean },
+): Promise<AgentHydrationRequestRecord[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
+    where r.state = 'dispatching'
+      and r.execution_lane = ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
+      and r.execution_ref is not null
+      ${input.pageId === undefined ? sql`` : sql`and r.page_id = ${input.pageId}`}
+      ${input.endedOnly === true
+        ? sql`and exists (
+            select 1 from history_requests h
+             where h.request_ref::text = r.execution_ref
+               and h.state in ('done', 'cancelled'))`
+        : sql``}
+    order by r.dispatched_at asc nulls first, r.id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map(mapRequest);
 }
 
 export interface AgentHydrationEventRecord {

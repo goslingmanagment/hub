@@ -524,8 +524,9 @@ export async function confirmFanslySendGuardTerminated(
 //     the latest instant the engine could have sent — or later, to the end of
 //     an engine 429/network/list hold in force (G20) — and `next_u = 0.2`, so
 //     the first legacy capture waits ≥ 1.2 × S after it (and never inside the
-//     hold). An auth/identity hold is not carried: the flip refuses unless the
-//     owner allows it.
+//     hold). An auth/identity hold in force (by the engine's rule: one of
+//     credentials older than the verified ones is lifted) is not carried: the
+//     flip refuses unless the owner allows it.
 
 /** The guard row's owner on the engine's side (0229). */
 const FANSLY_SEND_GUARD_ENGINE_OWNER = "fansly_sync_engine" satisfies FanslySendGuardOwnerEngine;
@@ -602,6 +603,20 @@ export type HandFanslySendGuardBackToLegacyResult =
   /** The legacy engine owns the row already. */
   | { kind: "already"; lastCompletedAt: Date };
 
+/**
+ * An engine auth/identity hold in force on `sync_pages sp`, by the engine's
+ * own rule (`activePageHold`): not expired, and not keyed on credentials older
+ * than the ones the engine verified since (the owner's identity-checked
+ * renewal lifts it before any answer clears the row).
+ */
+const ENGINE_AUTH_HOLD_IN_FORCE = sql`coalesce(
+  sp.hold_kind in ('auth', 'identity_mismatch')
+  and sp.hold_until > clock_timestamp()
+  and not (jsonb_typeof(sp.hold_detail -> 'credentialsGeneration') = 'string'
+           and sp.credentials_generation is not null
+           and sp.hold_detail ->> 'credentialsGeneration' <> sp.credentials_generation),
+  false)`;
+
 /** Engine → legacy (rollback step 3): the flip, or why not. */
 export async function handFanslySendGuardBackToLegacy(
   db: Database,
@@ -632,10 +647,7 @@ export async function handFanslySendGuardBackToLegacy(
        and sp.mode = 'handover'
        and ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
             or sp.owner_stop_confirmed_at > sp.owner_acquired_at)
-       and (${allowAuthHold}::boolean
-            or sp.hold_kind is null
-            or sp.hold_kind not in ('auth', 'identity_mismatch')
-            or sp.hold_until <= clock_timestamp())
+       and (${allowAuthHold}::boolean or not ${ENGINE_AUTH_HOLD_IN_FORCE})
     returning g.last_completed_at as "lastCompletedAt"
   `);
   const row = flipped.rows[0];
@@ -652,8 +664,7 @@ export async function handFanslySendGuardBackToLegacy(
            sp.mode,
            ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
              or coalesce(sp.owner_stop_confirmed_at > sp.owner_acquired_at, false)) as released,
-           case when sp.hold_kind in ('auth', 'identity_mismatch') and sp.hold_until > clock_timestamp()
-                then sp.hold_kind end as "authHold"
+           case when ${ENGINE_AUTH_HOLD_IN_FORCE} then sp.hold_kind end as "authHold"
       from fansly_page_send_guards g
       left join sync_pages sp on sp.page_id = g.page_id
      where g.page_id = ${input.pageId}

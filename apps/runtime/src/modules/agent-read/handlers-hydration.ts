@@ -298,14 +298,15 @@ async function wrapHydrationOnEngine(
 }
 
 /** A wrapper row as the agent reads it: the state of its history request's
- *  fan, in the legacy vocabulary (S2 §7.5). */
+ *  fan, in the legacy vocabulary (S2 §7.5). A settled row reads its own
+ *  terminal state (`settleEngineManagedHydration`). */
 async function mirroredWireRequest(
   appContext: AppContext,
   db: Database,
   record: AgentHydrationRequestRecord,
 ): Promise<AgentHydrationRequest> {
   const wire = toWireHydrationRequest(record);
-  if (!isEngineManagedHydration(record)) return wire;
+  if (!isEngineManagedHydration(record) || record.state !== "dispatching") return wire;
   let document;
   try {
     document = await getHistoryRequest({ db, rawConfig: appContext.config }, record.executionRef!, { limit: 1 });

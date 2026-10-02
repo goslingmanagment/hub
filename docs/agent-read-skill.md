@@ -241,7 +241,9 @@ EMPTY page, the chat's whole history is stored; `partially_completed` — read t
 your boundary, not proven complete; `failed` with `lastError: quarantined` —
 Fansly keeps refusing that chat, do not refile; `failed` with `lastError:
 vendor_unavailable` — the chat could not be read (not found, excluded);
-`expired` — the history request was cancelled. Nobody decides it: an owner
+`expired` — the history request was cancelled, or the page went back to the
+legacy engine before it was served (refile there if you still need it). Nobody
+decides it: an owner
 decision on such a request answers 409 `engine_managed`. Before the page's
 requests open (the first switched page waits an hour) the request stays
 `requested` and is converted when they open.

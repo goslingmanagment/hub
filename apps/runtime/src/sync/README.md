@@ -291,9 +291,13 @@ stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
-engine with its floor past the engine's last send and the end of an engine 429/list/network hold (an auth hold
-refuses, exit 5), live work cancelled but the history works (their requests pause, `rolled_back`), `off` and
-`requestPageSync(all, recovery)`. The legacy engine continues from its own marks: nothing of step 3 writes its state
+engine with its floor past the engine's last send and the end of an engine 429/list/network hold, live work
+cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
+state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
+auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
+live, where the owner's credentials renewal runs its identity check under the hold and lifts it; a hold that came in
+while the actor stopped puts a page the rollback took from live back to live; a page in `handover` before the
+rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
 (J5). Runbook: step-3 design §6.
 
 ## Invariants

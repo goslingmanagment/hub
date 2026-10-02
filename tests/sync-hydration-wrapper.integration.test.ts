@@ -7,14 +7,17 @@ import {
   createModel,
   ensureSyncPage,
   findAgentHydrationRequestByRef,
+  hasDispatchingAgentHydrationRequestOnPage,
   insertAgentKey,
   listAgentHydrationEvents,
+  listAutoApprovableAgentHydrationRequests,
   setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { runAgentHydrationCycle } from "../apps/runtime/src/services/agent-hydration.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { historyKeyOfLegacyHydration } from "../apps/runtime/src/sync/requests/legacy-hydration.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -26,8 +29,11 @@ import { setModeDirect } from "./helpers/sync-engine-host.ts";
 // page's history requests are open the hub files a one-fan history request
 // for it (requester `legacy_hydration_wrapper`, depth `before_boundary`,
 // idempotent by the legacy ref) and the legacy row reads as that request's
-// fan, in the legacy vocabulary. Before the requests open the row stays
-// `requested`; a page being switched answers 409; nobody decides a wrapper.
+// fan, in the legacy vocabulary, until the hydration cycle settles it to that
+// state once the request is over. Before the requests open the row stays
+// `requested`; a page being switched answers 409; nobody decides a wrapper;
+// no legacy page-wide check (the lane's page slot, the auto-approval's one
+// run per page) counts a wrapper row.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -136,6 +142,11 @@ async function historyOf(ref: string) {
   )).rows[0]!;
 }
 
+/** The hydration cycle's pg-boss: nothing queued (no legacy run here). */
+function idleBoss() {
+  return { send: vi.fn(async () => "job-1"), findJobs: vi.fn(async () => []) } as unknown as Parameters<typeof runAgentHydrationCycle>[1];
+}
+
 describe("the hydration wrapper", () => {
   it("files a one-fan history request on a live page with open requests and reads its fan as the legacy state", async () => {
     await live({ requestsOpen: true });
@@ -192,6 +203,52 @@ describe("the hydration wrapper", () => {
     expect(decision.statusCode).toBe(409);
     expect(decision.json()).toMatchObject({ error: "engine_managed" });
     expect(threadId).toBeGreaterThan(0);
+  });
+
+  it("the hydration cycle settles a wrapper row once its history request is over; a running one stays dispatching", async () => {
+    await live({ requestsOpen: true });
+    const ended = (await file()).json().request as { requestRef: string };
+    const endedRow = (await findAgentHydrationRequestByRef(testDb!.db, ended.requestRef)).request!;
+    const history = await historyOf(endedRow.executionRef!);
+    await testDb!.pool.query(
+      "update history_request_items set state = 'ready', satisfied_by = 'empty_page', satisfied_at = now() where request_id = $1", [history.id],
+    );
+    await testDb!.pool.query("update history_requests set state = 'done', done_at = now() where id = $1", [history.id]);
+    // A second request of the chat, its history request still running.
+    const running = await file();
+    expect(running.statusCode, running.body).toBe(200);
+    const runningRef = (running.json().request as { requestRef: string }).requestRef;
+    const runningHistory = await historyOf((await findAgentHydrationRequestByRef(testDb!.db, runningRef)).request!.executionRef!);
+    expect(runningHistory.id).not.toBe(history.id);
+    const runningState = await testDb!.pool.query<{ state: string }>("select state from history_requests where id = $1", [runningHistory.id]);
+    expect(runningState.rows[0]!.state).toBe("open");
+
+    const cycle = await runAgentHydrationCycle(appContext, idleBoss());
+    expect(cycle.engineSettled).toBe(1);
+    const settled = (await findAgentHydrationRequestByRef(testDb!.db, ended.requestRef)).request!;
+    expect(settled).toMatchObject({ state: "completed", lastError: "none", executionRef: endedRow.executionRef });
+    const events = await listAgentHydrationEvents(testDb!.db, settled.id);
+    expect(events.at(-1)).toMatchObject({ kind: "settled", fromState: "dispatching", toState: "completed", detail: { cause: "history_request_ended" } });
+    // The settled row reads its own state; the running one still mirrors its fan.
+    expect((await poll(ended.requestRef)).json().request).toMatchObject({ state: "completed" });
+    expect((await findAgentHydrationRequestByRef(testDb!.db, runningRef)).request!.state).toBe("dispatching");
+    expect((await poll(runningRef)).json().request).toMatchObject({ state: "dispatching" });
+    expect((await runAgentHydrationCycle(appContext, idleBoss())).engineSettled).toBe(0);
+  });
+
+  it("no legacy page-wide check counts a row the engine serves (the lane's page slot, the auto-approval)", async () => {
+    await live({ requestsOpen: true });
+    const wrapped = (await file()).json().request as { requestRef: string; state: string };
+    expect(wrapped.state).toBe("dispatching");
+    // The page is the legacy engine's again (a rollback) with the wrapper row
+    // still in flight on its history request; a new hydration request is a
+    // legacy one.
+    await setModeDirect(testDb!.pool, pageId, "off");
+    const legacy = (await file()).json().request as { requestRef: string; state: string };
+    expect(legacy.state).toBe("requested");
+    expect(await hasDispatchingAgentHydrationRequestOnPage(testDb!.db, pageId)).toBe(false);
+    const candidates = await listAutoApprovableAgentHydrationRequests(testDb!.db, { limit: 10, utcDayStart: new Date(Date.now() - DAY_MS) });
+    expect(candidates.map((row) => row.requestRef)).toEqual([legacy.requestRef]);
   });
 
   it("leaves the row requested while the page's requests are not open yet", async () => {

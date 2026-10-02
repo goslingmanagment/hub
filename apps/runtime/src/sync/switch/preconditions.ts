@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import {
+  FANSLY_SYNC_ENGINE_HYDRATION_LANE,
   getFanslySendGuard,
   getLatestCompletedChainRebuild,
   getNotificationIncidentByKey,
@@ -168,6 +169,9 @@ export async function checkSwitchPreconditions(
   const hydration = await db.execute<{ n: number }>(sql`
     select count(*)::int as n from agent_hydration_requests r join pages p on p.id = r.page_id
      where r.page_id = ${page.pageId} and p.platform = 'fansly' and r.state in ('approved', 'dispatching')
+       -- A row the engine served earlier (a history request, kept across a
+       -- rollback) runs into no fence: not a legacy run to wait for.
+       and r.execution_lane is distinct from ${FANSLY_SYNC_ENGINE_HYDRATION_LANE}
   `);
   const settling = Number(hydration.rows[0]?.n ?? 0);
   checks.push(check("hydration_settled", settling === 0, settling === 0

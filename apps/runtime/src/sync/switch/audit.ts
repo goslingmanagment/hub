@@ -96,6 +96,21 @@ export async function readSwitchStartedAt(db: Database, pageId: number): Promise
   return value === undefined ? null : value instanceof Date ? value : new Date(value);
 }
 
+/** The mode the page's newest rollback run started from (its `start` row's
+ *  `from`), or null. */
+export async function readRollbackStartedFrom(db: Database, pageId: number): Promise<string | null> {
+  const result = await db.execute<{ from: string | null }>(sql`
+    select a.metadata ->> 'from' as "from"
+      from audit_events a
+     where a.platform_account_id = ${pageId}
+       and a.event_type = ${SYNC_ROLLBACK_AUDIT_EVENT}
+       and a.metadata ->> 'step' = 'start'
+     order by a.id desc
+     limit 1
+  `);
+  return result.rows[0]?.from ?? null;
+}
+
 /** Whether any page was ever switched live before (the first switched page
  *  opens its history requests one hour after the switch, the others at once). */
 export async function anyPageWasLive(db: Database, input: { exceptPageId: number }): Promise<boolean> {
