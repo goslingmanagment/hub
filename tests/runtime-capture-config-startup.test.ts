@@ -59,6 +59,15 @@ vi.mock("../apps/runtime/src/sync/engine/host.ts", () => ({
     this.stop = vi.fn(async () => undefined);
   }),
 }));
+// So does the alert evaluator, which starts with it.
+vi.mock("../apps/runtime/src/sync/engine/alerts.ts", () => ({
+  createIncidentAlertSink: vi.fn(() => ({ open: vi.fn(async () => undefined), resolve: vi.fn(async () => undefined) })),
+  SyncAlertEvaluator: vi.fn(function SyncAlertEvaluator(this: { start: () => void; runOnce: () => Promise<null>; stop: () => Promise<void> }) {
+    this.start = vi.fn();
+    this.runOnce = vi.fn(async () => null);
+    this.stop = vi.fn(async () => undefined);
+  }),
+}));
 vi.mock("../apps/runtime/src/worker-services.ts", () => ({ startWorkerServices: h.startWorkerServices }));
 vi.mock("../apps/runtime/src/api/server.ts", () => ({ buildApiServer: h.buildApiServer }));
 vi.mock("../apps/runtime/src/services/ops-watchdog.ts", () => ({ startOpsWatchdog: h.startOpsWatchdog }));

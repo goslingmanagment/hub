@@ -22,6 +22,7 @@ import {
 } from "../../services/fansly-send-guard/os-probe.ts";
 import { createPageTransport } from "../fansly/transport.ts";
 import { SyncActor, type ActorExit, type ShadowFeed } from "./actor.ts";
+import { SYNC_OWNERSHIP_UNCONFIRMED_MS } from "./alerts.ts";
 import {
   errorName,
   type CaptureCodec,
@@ -77,8 +78,9 @@ export const MODE_LOOP_INTERVAL_MS = 2_000;
 export const OWNER_HEARTBEAT_INTERVAL_MS = 10_000;
 /** A page whose previous owner is not confirmed stopped is retried this often. */
 export const UNCONFIRMED_RETRY_MS = 5_000;
-/** … and alerts (alert 1, `ownership`) after this long, except in `handover`. */
-export const OWNERSHIP_ALERT_AFTER_MS = 120_000;
+/** … and alerts (alert 1, `ownership`) after this long, except in `handover`
+ *  (the evaluator's bound, `engine/alerts.ts`). */
+export const OWNERSHIP_ALERT_AFTER_MS = SYNC_OWNERSHIP_UNCONFIRMED_MS;
 /** A lost lock session is reopened after 1 s, doubling up to 30 s. */
 export const SESSION_RECONNECT_MIN_MS = 1_000;
 export const SESSION_RECONNECT_MAX_MS = 30_000;
@@ -575,9 +577,9 @@ async function settleWithin(promise: Promise<unknown>, ms: number): Promise<bool
 }
 
 /**
- * The alert sink of step 2: alerts of the engine are logged and counted. A
- * shadow page's alerts are metrics only (D14); the paging incident kind and
- * its producers arrive with S2-13 (`engine/alerts.ts`).
+ * The host's default alert sink (tests, tools): alerts are logged only. The
+ * `sync` process passes the incident sink (`engine/alerts.ts`); a shadow
+ * page's alerts are metrics only either way (D14).
  */
 export function createLoggingAlertSink(logger: SyncLogger): AlertSink {
   return {

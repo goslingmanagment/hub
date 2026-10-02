@@ -143,6 +143,9 @@ export interface SyncAlertInput extends SyncAlertKey {
   /** A shadow page's alert is a metric, never a page (design §3.12, D14). */
   shadow: boolean;
   context?: Readonly<Record<string, unknown>>;
+  /** When the condition happened (a pace violation's send); default: now. An
+   *  occurrence older than the latch's last resolution reopens nothing. */
+  occurredAt?: Date;
 }
 
 export interface AlertSink {

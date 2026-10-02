@@ -32,6 +32,7 @@ export type NotificationIncidentKind =
   | "scheduler_silent"
   | "ops_sampler_silent"
   | "sync_silent"
+  | "fansly_sync_engine"
   | "ofapi_chargebacks_reconcile_failed"
   | "ofapi_link_stats_reconcile_failed"
   | "ai_provider_billing"

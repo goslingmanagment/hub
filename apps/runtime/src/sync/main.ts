@@ -4,6 +4,7 @@ import {
   startRuntimeHeartbeat,
 } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, type SyncContext } from "./context.ts";
+import { createIncidentAlertSink, SyncAlertEvaluator } from "./engine/alerts.ts";
 import { SyncEngineHost } from "./engine/host.ts";
 import { fanslyCaptureCodec } from "./fansly/capture.ts";
 import { createFanslyRegistry } from "./fansly/registry.ts";
@@ -28,11 +29,12 @@ export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;
  *  45 s stop grace. */
 const SYNC_CLOSE_TIMEOUT_MS = 5_000;
 
-/** The part of the engine host the runtime drives. */
-export interface SyncRuntimeHost {
+/** The part of the engine host (and of its alert evaluator) the runtime drives. */
+export interface SyncRuntimeTask {
   start(): Promise<void>;
   stop(): Promise<void>;
 }
+export type SyncRuntimeHost = SyncRuntimeTask;
 
 /** The production host: the Fansly registry over this process's context.
  *  Nothing here may loosen a pace or live gate (pinned by a grep test). */
@@ -44,6 +46,9 @@ export function createSyncRuntimeHost(context: SyncContext): SyncRuntimeHost {
     rawConfig: context.rawConfig,
     logger: context.logger,
     registry: createFanslyRegistry(),
+    // Alerts 1–4 (design §9.6): a live page's alert opens its latch at once;
+    // a shadow page's is logged only (D14). The evaluator resolves.
+    alerts: createIncidentAlertSink({ db: context.db, logger: context.logger }),
     capture: fanslyCaptureCodec,
     // Shadow pages: the receipts the legacy receiver captured become shadow
     // demand, read through the payload seam (design §6.4).
@@ -54,6 +59,24 @@ export function createSyncRuntimeHost(context: SyncContext): SyncRuntimeHost {
     onThreadChainChanged: onHistoryThreadChainChanged,
     onWorkClosed: onHistoryWorkClosed,
   });
+}
+
+/** The production alert evaluator: alerts 1–4 of every handover/live page
+ *  from the database every 30 s, and the pace backstop. */
+export function createSyncAlertEvaluator(context: SyncContext): SyncRuntimeTask {
+  const evaluator = new SyncAlertEvaluator({
+    db: context.db,
+    logger: context.logger,
+    registry: createFanslyRegistry(),
+    resolvePayload: fanslyWsLivePayloadResolver(context),
+  });
+  return {
+    async start() {
+      evaluator.start();
+      void evaluator.runOnce();
+    },
+    stop: () => evaluator.stop(),
+  };
 }
 
 export interface SyncRuntime {
@@ -73,6 +96,9 @@ export interface StartSyncRuntimeOptions {
   /** The engine host; default `createSyncRuntimeHost(context)`, null runs the
    *  heartbeat only. */
   host?: SyncRuntimeHost | null;
+  /** The alert evaluator; default `createSyncAlertEvaluator(context)` with the
+   *  default host, none otherwise. */
+  alerts?: SyncRuntimeTask | null;
 }
 
 export async function startSyncRuntime(
@@ -92,9 +118,14 @@ export async function startSyncRuntime(
     intervalMs: options.heartbeatIntervalMs ?? SYNC_HEARTBEAT_INTERVAL_MS,
   });
   const host = options.host === undefined ? createSyncRuntimeHost(context) : options.host;
+  const alerts = options.alerts !== undefined
+    ? options.alerts
+    : options.host === undefined ? createSyncAlertEvaluator(context) : null;
   try {
     await host?.start();
+    await alerts?.start();
   } catch (error) {
+    await alerts?.stop().catch(() => undefined);
     await host?.stop().catch(() => undefined);
     clearInterval(keepAlive);
     await heartbeat.stop();
@@ -108,6 +139,7 @@ export async function startSyncRuntime(
       stopping ??= (async () => {
         // The pages first: the request in flight finishes and every page is
         // released while the process still heartbeats.
+        await alerts?.stop();
         await host?.stop();
         clearInterval(keepAlive);
         await heartbeat.stop();

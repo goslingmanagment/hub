@@ -4,7 +4,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
 import type { SyncPageMode } from "./pages.ts";
-import { textArrayParam } from "./values.ts";
+import { textArrayParam, toDate } from "./values.ts";
 
 // Fansly Sync Engine: the reads of the WebSocket demand router (design §6).
 // The router turns a captured socket frame into work; these are the facts it
@@ -40,6 +40,11 @@ export interface WsRouteThread {
   excluded: boolean;
   /** The newest message REST confirmed in the thread's chain (0231). */
   headConfirmedId: string | null;
+  /** Capture time of the page that showed `headConfirmedId` as the head:
+   *  before it, the chain did not yet confirm that message. */
+  headConfirmedAt: Date | null;
+  /** When the row was written: before it, the router did not know the chat. */
+  firstSeenAt: Date;
 }
 
 /** The page's threads among `groupIds` (unknown groups are absent). */
@@ -55,12 +60,16 @@ export async function loadWsRouteThreads(
     bound: boolean;
     excluded: boolean;
     headConfirmedId: string | null;
+    headConfirmedAt: Date | string | null;
+    firstSeenAt: Date | string;
   }>(sql`
     select t.id::text as id,
            t.platform_conversation_id as "groupId",
            t.fan_id is not null as bound,
            coalesce(t.metadata ->> ${FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY}::text, '') <> '' as excluded,
-           t.head_confirmed_id as "headConfirmedId"
+           t.head_confirmed_id as "headConfirmedId",
+           t.head_confirmed_at as "headConfirmedAt",
+           t.first_seen_at as "firstSeenAt"
       from page_dm_threads t
      where t.platform_account_id = ${input.pageId}
        and t.platform_conversation_id = any(${textArrayParam([...new Set(input.groupIds)])})
@@ -72,6 +81,8 @@ export async function loadWsRouteThreads(
       bound: row.bound === true,
       excluded: row.excluded === true,
       headConfirmedId: row.headConfirmedId,
+      headConfirmedAt: toDate(row.headConfirmedAt),
+      firstSeenAt: toDate(row.firstSeenAt)!,
     });
   }
   return threads;

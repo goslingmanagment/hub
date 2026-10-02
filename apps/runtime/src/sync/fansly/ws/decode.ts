@@ -1,5 +1,6 @@
 import {
   decodeFanslyWsLiveFrame,
+  FANSLY_WS_CAPTURE_KIND,
   FANSLY_WS_LIVE_DECODER_VERSION,
   FANSLY_WS_LIVE_FIELD,
   FANSLY_WS_MAX_FRAME_BYTES,
@@ -257,6 +258,13 @@ export function decodeFanslyWsFrame(frame: string, ownRef: string | null): WsFra
     }
   }
   return decoded;
+}
+
+/** The frame of a captured socket receipt's body, or null when the body is
+ *  not a socket frame. */
+export function socketFrameOf(payload: unknown): string | null {
+  const envelope = wsObject(payload);
+  return envelope?.codec === FANSLY_WS_CAPTURE_KIND && typeof envelope.frame === "string" ? envelope.frame : null;
 }
 
 /** Items that are business news (not `other`): the denominator of the decode

@@ -60,6 +60,7 @@ import {
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
+import { registerSyncReportCommands } from "./sync/cli/report.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./services/notification-incidents.ts";
 import { resolveHarvestManifest } from "./services/harvest-manifest.ts";
 import {
@@ -3307,6 +3308,9 @@ export function buildProgram() {
   // Fansly Sync Engine history requests (design §7.6): `sync history request |
   // status | cancel | list | eta-backtest`.
   registerSyncHistoryCommands(sync);
+  // Fansly Sync Engine observability (design §3.12, §9.6): `sync shadow report`,
+  // `sync alerts status | ack`.
+  registerSyncReportCommands(sync);
 
   queue
     .command("planner-recover")

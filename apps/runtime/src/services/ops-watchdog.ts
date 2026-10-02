@@ -6,12 +6,14 @@
 // wedged-but-alive process. The watchdog runs from the API process — the one
 // long-lived process independent of scheduler/worker — and pages when either
 // signal goes silent. E-2 adds a third leg: Fansly sync chunks that stop
-// starting while work is due.
+// starting while work is due. The Fansly Sync Engine adds a fourth (alert 5,
+// design §9.6): a page is in the engine and no `sync` process beats.
 
 import {
   getFanslySyncLiveness,
   getLatestOpsMetricSampleAt,
   hasFreshInstanceHeartbeat,
+  hasSyncPageInEngine,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -21,7 +23,9 @@ import {
 } from "./notification-delivery-outbox.ts";
 import {
   notifyOfapiGlobalIncident,
+  notifySyncEngineIncident,
   resolveOfapiGlobalIncident,
+  resolveSyncEngineIncident,
 } from "./notification-incidents.ts";
 import {
   runNotificationPagingSweepExclusive,
@@ -42,6 +46,9 @@ export const OPS_WATCHDOG_BOOT_GRACE_MS = 5 * 60_000;
  * Fansly chunk starts over 21 days (the host power-off of 2026-09-23 aside)
  * was 5 min 10 s; deploy gaps stay under 6 min. */
 export const OPS_WATCHDOG_SYNC_SILENCE_MS = 15 * 60_000;
+/** Alert 5 (design §9.6): the `sync` process beats every 30 s; none for this
+ *  long while a page is in the engine pages the owner. */
+export const OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS = 2 * 60_000;
 /** Bounds the chunk-start lookup; anything older reads as "over an hour". */
 export const OPS_WATCHDOG_SYNC_LOOKBACK_MS = 60 * 60_000;
 /** The api-side delivery fallback drains a few rows on a short clock: it runs
@@ -60,6 +67,9 @@ export interface OpsWatchdogCheckResult {
   /** No Fansly chunk started for OPS_WATCHDOG_SYNC_SILENCE_MS while a stream
    * has been due for as long. */
   syncStalled: boolean;
+  /** A Fansly page is in the engine and no `sync` process beat within
+   *  OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS (alert 5). */
+  syncEngineSilent: boolean;
 }
 
 type DeadmanKind = "scheduler_silent" | "ops_sampler_silent" | "sync_silent";
@@ -144,7 +154,24 @@ export async function runOpsWatchdogCheck(
     },
   });
 
-  return { bootGrace, schedulerFresh, samplerFresh, syncStalled };
+  // Alert 5: with every page `off` the process is allowed to be absent.
+  const syncEngineSilent = await hasSyncPageInEngine(app.db)
+    && !await hasFreshInstanceHeartbeat(app.db, { role: "sync", ttlMs: OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS });
+  if (!syncEngineSilent) {
+    await resolveSyncEngineIncident(app, { subKey: "process", pageId: null, pageLabel: null, recoveredAt: now });
+  } else if (!bootGrace) {
+    await notifySyncEngineIncident(app, {
+      subKey: "process",
+      pageId: null,
+      pageLabel: null,
+      detail: "heartbeat_silent",
+      errorSummary: `No sync process heartbeat within ${Math.round(OPS_WATCHDOG_SYNC_ENGINE_SILENCE_MS / 60_000)} min `
+        + "while a Fansly page is in the engine (shadow/handover/live) — `docker compose ps sync`",
+      occurredAt: now,
+    });
+  }
+
+  return { bootGrace, schedulerFresh, samplerFresh, syncStalled, syncEngineSilent };
 }
 
 /**

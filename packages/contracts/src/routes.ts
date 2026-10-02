@@ -3005,6 +3005,7 @@ const notificationIncidentKindEnum = z.enum([
   "capture_payload_parity",
   "ofapi_binding_conflict",
   "sync_silent",
+  "fansly_sync_engine",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const notificationDeliveryOutboxStateEnum = z.enum([
