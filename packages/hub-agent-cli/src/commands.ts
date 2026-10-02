@@ -368,6 +368,7 @@ const HISTORY_UNAVAILABLE_CODE = "history_requests_unavailable_on_page";
 /** At most this many fans per request (the contract's own ceiling). */
 export const HUB_HISTORY_MAX_FANS = 1000;
 const HISTORY_MIN_POLL_SECONDS = 15;
+const MS_PER_SECOND = 1000;
 
 /**
  * The fallback a 409 `history_requests_unavailable_on_page` points at. History
@@ -982,14 +983,14 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         const state: unknown = (data as { request?: { state?: unknown } }).request?.state;
         const finished = state === "done" || state === "cancelled";
         const waitedMs = deps.now() - started;
-        if (finished || waitedMs + pollSeconds * 1000 > maxWaitSeconds * 1000) {
+        if (finished || waitedMs + pollSeconds * MS_PER_SECOND > maxWaitSeconds * MS_PER_SECOND) {
           return new HubCompositeResult(data, 0, {
             calls: polls,
             finished,
-            waitedSeconds: Math.round(waitedMs / 1000),
+            waitedSeconds: Math.trunc(waitedMs / MS_PER_SECOND),
           });
         }
-        await deps.sleep(pollSeconds * 1000);
+        await deps.sleep(pollSeconds * MS_PER_SECOND);
       }
     },
   },
