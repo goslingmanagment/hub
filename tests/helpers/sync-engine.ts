@@ -1,0 +1,1066 @@
+import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { connect, type AddressInfo, type Socket } from "node:net";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import type { Pool } from "pg";
+
+import {
+  capturePayloadRefFromColumns,
+  createFanslyPage,
+  createModel,
+  ensureFanslyPageSendGuard,
+  ensureSyncPage,
+  storeFanslySession,
+  storeProxyConfig,
+  upsertFans,
+  upsertPageDmMessages,
+  writeThreadChain,
+  type Database,
+  type SyncPageMode,
+  type ThreadChainState,
+} from "@agency_hub_core/db";
+import {
+  composeFanslySendCheck,
+  createOneShotSendCheck,
+  findFanslySendRefusal,
+  sendFanslyWireRequest,
+  type FanslyWireId,
+  type FanslyWireOutcome,
+  type FanslyWireRequest,
+} from "@agency_hub_core/fansly";
+import { encryptJson, loadConfig, type AppConfig } from "@agency_hub_core/shared";
+
+import { resolveEgress, type AppEgressContext } from "../../apps/runtime/src/services/egress/resolver.ts";
+import { resolveCapturePayloadRow } from "../../apps/runtime/src/services/payload-reader.ts";
+import type { SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
+import { createPacer, REQUEST_TIMEOUT_MS, type Pacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
+import type { Clock, PauseSource, Rng, SendHooks, TransportOutcome } from "../../apps/runtime/src/sync/engine/ports.ts";
+import {
+  createEngineRegistry,
+  type EngineRegistry,
+  type EngineResourceSpec,
+  type ReplayVerdict,
+  type RequestPlan,
+  type ResourceModule,
+} from "../../apps/runtime/src/sync/engine/resource.ts";
+import type { PageTransport } from "../../apps/runtime/src/sync/engine/shadow.ts";
+import { fanslyCaptureCodec } from "../../apps/runtime/src/sync/fansly/capture.ts";
+import { fanslyReplayOwner, fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
+import { createPageTransport } from "../../apps/runtime/src/sync/fansly/transport.ts";
+import { onHistoryThreadChainChanged, onHistoryWorkClosed } from "../../apps/runtime/src/sync/requests/history.ts";
+import { seededRandom } from "./sync-fakes.ts";
+import { quietLogger, setModeDirect, testSpec } from "./sync-engine-host.ts";
+
+export { FakeClock, SeededRng, seededRandom } from "./sync-fakes.ts";
+
+// The physical-request harness of the Fansly Sync Engine (design §10): the
+// pieces every engine test that needs Fansly on the other side shares.
+//
+// - FakeFanslyServer: a local origin (REST, CDN hops, the WebSocket Upgrade)
+//   that records every request the moment it ARRIVES, on this process's
+//   monotonic clock, before it answers.
+// - CountingConnectProxy: the page proxy — an HTTP CONNECT proxy with a
+//   tunnel delay the test sets, counting tunnels and the bytes it forwards.
+// - seedHarnessPage: a Fansly page with its encrypted session, its proxy and
+//   its engine row, so the production page transport (`createPageTransport`,
+//   the page egress of `resolveEgress`) runs unchanged against the fakes.
+// - FakeChats: synthetic Fansly chats served the way `/message` serves them.
+// - The harness transport and registry: the page's REST requests through the
+//   production transport; the CDN hops and the WebSocket Upgrade — whose
+//   production resources arrive with S3-03/S3-04 — through the same page
+//   egress and the same send-check composition (`composeFanslySendCheck`),
+//   issued by test-only resources.
+// - The journal replay driver, the actor runner and the child process.
+//
+// The fake origin speaks plain HTTP behind the CONNECT proxy, as the step-1
+// network helpers do: the tunnel (and with it the "long connect before the
+// headers") is the proxy's, and the send check runs at undici's
+// `onRequestStart` after it either way; TLS would only need a trust root a
+// test worker cannot add after it started.
+
+// ── the fake origin ─────────────────────────────────────────────────────────
+
+export interface FakeArrival {
+  /** 1-based, in arrival order. */
+  seq: number;
+  /** `performance.now()` when the request head was parsed (this process). */
+  mono: number;
+  wallMs: number;
+  method: string;
+  /** Path and query, as the request line carried them. */
+  path: string;
+  upgrade: boolean;
+  /** The status the origin answered with (set once answered). */
+  status: number | null;
+}
+
+export interface FakeRequest {
+  method: string;
+  url: URL;
+  headers: IncomingHttpHeaders;
+}
+
+export interface FakeAnswer {
+  status: number;
+  headers?: Record<string, string>;
+  body?: string | Buffer;
+  /** Close the connection after the answer: the next request needs a new tunnel. */
+  close?: boolean;
+  /** Hold the answer back this long (a slow origin). */
+  delayMs?: number;
+}
+
+/** An origin route: an answer, or null for "not mine". */
+export type FakeRoute = (request: FakeRequest) => FakeAnswer | null;
+
+/** The Fansly envelope of a successful answer. */
+export function fanslyJson(response: unknown): FakeAnswer {
+  return { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response }) };
+}
+
+/** Where the harness WebSocket Upgrade goes (the live socket is `/?v=3` on wsv3). */
+export const HARNESS_WS_PATH = "/ws";
+/** CDN hops: `/cdn/<name>` answers 302 to `/cdn/final/<name>`, which answers the bytes. */
+export const HARNESS_CDN_PREFIX = "/cdn/";
+
+export class FakeFanslyServer {
+  readonly arrivals: FakeArrival[] = [];
+  /** The share of answers that close their connection (new tunnels). */
+  closeShare = 0;
+  /** Every answer is held back this long (on top of a route's own delay). */
+  answerDelayMs = 0;
+  readonly #server: Server;
+  readonly #sockets = new Set<Socket>();
+  #routes: FakeRoute[] = [];
+  #origin = "";
+
+  private constructor() {
+    this.#server = createServer((request, response) => this.#onRequest(request, response));
+    this.#server.on("connection", (socket) => this.#track(socket));
+    this.#server.on("upgrade", (request: IncomingMessage, socket: Socket) => this.#onUpgrade(request, socket));
+  }
+
+  static async start(): Promise<FakeFanslyServer> {
+    const server = new FakeFanslyServer();
+    await new Promise<void>((resolve) => server.#server.listen(0, "127.0.0.1", () => resolve()));
+    server.#origin = `http://127.0.0.1:${(server.#server.address() as AddressInfo).port}`;
+    return server;
+  }
+
+  /** `http://127.0.0.1:<port>` */
+  get origin(): string {
+    return this.#origin;
+  }
+
+  /** The page's `fanslyBaseUrl`. */
+  get apiBaseUrl(): string {
+    return `${this.#origin}/api/v1`;
+  }
+
+  /** Add a route; earlier routes win. */
+  route(route: FakeRoute): this {
+    this.#routes.push(route);
+    return this;
+  }
+
+  /** Arrivals whose path starts with `prefix` (the API prefix included). */
+  arrivalsAt(prefix: string): FakeArrival[] {
+    return this.arrivals.filter((arrival) => arrival.path.startsWith(prefix));
+  }
+
+  async close(): Promise<void> {
+    for (const socket of this.#sockets) socket.destroy();
+    await new Promise<void>((resolve) => this.#server.close(() => resolve()));
+  }
+
+  #track(socket: Socket): void {
+    this.#sockets.add(socket);
+    socket.on("error", () => socket.destroy());
+    socket.once("close", () => this.#sockets.delete(socket));
+  }
+
+  #arrive(request: IncomingMessage, upgrade: boolean): FakeArrival {
+    const arrival: FakeArrival = {
+      seq: this.arrivals.length + 1,
+      mono: performance.now(),
+      wallMs: Date.now(),
+      method: request.method ?? "GET",
+      path: request.url ?? "/",
+      upgrade,
+      status: null,
+    };
+    this.arrivals.push(arrival);
+    return arrival;
+  }
+
+  #answer(request: IncomingMessage): FakeAnswer {
+    const fake: FakeRequest = { method: request.method ?? "GET", url: new URL(request.url ?? "/", this.#origin), headers: request.headers };
+    for (const route of this.#routes) {
+      const answer = route(fake);
+      if (answer !== null) return answer;
+    }
+    const cdn = cdnAnswer(fake.url.pathname);
+    if (cdn !== null) return cdn;
+    return { status: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false, error: { code: 404 } }) };
+  }
+
+  #onRequest(request: IncomingMessage, response: ServerResponse): void {
+    const arrival = this.#arrive(request, false);
+    const answer = this.#answer(request);
+    const close = answer.close === true || (this.closeShare > 0 && Math.random() < this.closeShare);
+    const send = () => {
+      arrival.status = answer.status;
+      response.writeHead(answer.status, { ...(answer.headers ?? {}), ...(close ? { connection: "close" } : {}) });
+      response.end(answer.body ?? "");
+    };
+    const delayMs = this.answerDelayMs + (answer.delayMs ?? 0);
+    if (delayMs > 0) setTimeout(send, delayMs);
+    else send();
+  }
+
+  #onUpgrade(request: IncomingMessage, socket: Socket): void {
+    this.#track(socket);
+    const arrival = this.#arrive(request, true);
+    const path = new URL(request.url ?? "/", this.#origin).pathname;
+    const key = request.headers["sec-websocket-key"];
+    if (path !== HARNESS_WS_PATH || typeof key !== "string") {
+      arrival.status = 400;
+      socket.end("HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n");
+      return;
+    }
+    arrival.status = 101;
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n"
+      + `sec-websocket-accept: ${accept}\r\n\r\n`);
+    // The frames of an open socket are not requests: the harness hangs up.
+    socket.end();
+  }
+}
+
+function cdnAnswer(pathname: string): FakeAnswer | null {
+  if (!pathname.startsWith(HARNESS_CDN_PREFIX)) return null;
+  const rest = pathname.slice(HARNESS_CDN_PREFIX.length);
+  if (rest.startsWith("final/")) {
+    return { status: 200, headers: { "content-type": "image/jpeg" }, body: Buffer.from(`jpeg:${rest.slice("final/".length)}`) };
+  }
+  return { status: 302, headers: { location: `${HARNESS_CDN_PREFIX}final/${rest}` } };
+}
+
+// ── the page proxy ──────────────────────────────────────────────────────────
+
+export class CountingConnectProxy {
+  /** Tunnels opened (CONNECT requests accepted). */
+  tunnels = 0;
+  /** Request bytes forwarded to the origin over every tunnel. */
+  bytesToOrigin = 0;
+  /** Request bytes forwarded per tunnel, in tunnel order. */
+  readonly bytesPerTunnel: number[] = [];
+  /** How long tunnel `index` (0-based) takes to come up. */
+  tunnelDelayMs: (index: number) => number = () => 0;
+  readonly #server: Server;
+  readonly #sockets = new Set<Socket>();
+  #url = "";
+
+  private constructor() {
+    this.#server = createServer();
+    this.#server.on("connection", (socket) => this.#track(socket));
+    this.#server.on("connect", (request: IncomingMessage, client: Socket, head: Buffer) => this.#onConnect(request, client, head));
+  }
+
+  static async start(): Promise<CountingConnectProxy> {
+    const proxy = new CountingConnectProxy();
+    await new Promise<void>((resolve) => proxy.#server.listen(0, "127.0.0.1", () => resolve()));
+    proxy.#url = `http://127.0.0.1:${(proxy.#server.address() as AddressInfo).port}`;
+    return proxy;
+  }
+
+  get url(): string {
+    return this.#url;
+  }
+
+  async close(): Promise<void> {
+    for (const socket of this.#sockets) socket.destroy();
+    await new Promise<void>((resolve) => this.#server.close(() => resolve()));
+  }
+
+  #track(socket: Socket): void {
+    this.#sockets.add(socket);
+    socket.on("error", () => socket.destroy());
+    socket.once("close", () => this.#sockets.delete(socket));
+  }
+
+  #onConnect(request: IncomingMessage, client: Socket, head: Buffer): void {
+    const index = this.tunnels;
+    this.tunnels += 1;
+    this.bytesPerTunnel.push(0);
+    const [host, port] = (request.url ?? "").split(":");
+    setTimeout(() => {
+      if (client.destroyed) return;
+      const upstream = connect(Number(port), host ?? "127.0.0.1", () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        const forward = (chunk: Buffer) => {
+          this.bytesToOrigin += chunk.length;
+          this.bytesPerTunnel[index] = (this.bytesPerTunnel[index] ?? 0) + chunk.length;
+          upstream.write(chunk);
+        };
+        if (head.length > 0) forward(head);
+        client.on("data", forward);
+        client.once("end", () => upstream.end());
+        upstream.pipe(client);
+      });
+      this.#track(upstream);
+      upstream.once("close", () => client.destroy());
+      client.once("close", () => upstream.destroy());
+    }, Math.max(0, this.tunnelDelayMs(index)));
+  }
+}
+
+// ── the page ────────────────────────────────────────────────────────────────
+
+/** The encryption key of `harnessConfig` (and of `testConfig` in sync-engine-host). */
+export const HARNESS_ENCRYPTION_KEY = Buffer.alloc(32, 7);
+/** The page's own Fansly account id (`pages.external_page_id`). */
+export const HARNESS_OWN_REF = "300000000000000001";
+
+/** A config whose Fansly base URL is the fake origin's. */
+export function harnessConfig(connectionString: string, fanslyBaseUrl = "https://fansly.invalid/api/v1"): AppConfig {
+  return loadConfig({
+    DATABASE_URL: connectionString,
+    APP_ENCRYPTION_KEY: HARNESS_ENCRYPTION_KEY.toString("base64"),
+    LOG_LEVEL: "silent",
+    FANSLY_BASE_URL: fanslyBaseUrl,
+  }, { loadDotEnv: false });
+}
+
+export interface HarnessHandles {
+  db: Database;
+  pool: Pool;
+}
+
+export interface HarnessPage {
+  pageId: number;
+  pageLabel: string;
+}
+
+/**
+ * A Fansly page as the switch would leave it: encrypted session, the page
+ * proxy (`proxyUrl`, or none), its engine row in `mode`, the step-1 guard row
+ * handed to the engine for a live page, the legacy import stamped, history
+ * requests open.
+ */
+export async function seedHarnessPage(
+  handles: HarnessHandles,
+  options: { mode: SyncPageMode; proxyUrl?: string | null; label?: string; ownRef?: string },
+): Promise<HarnessPage> {
+  const pageLabel = options.label ?? "harness-page";
+  const model = await createModel(handles.db, { slug: `model-${pageLabel}`, name: pageLabel });
+  const page = await createFanslyPage(handles.db, { modelId: model!.id, label: pageLabel });
+  const pageId = page!.id;
+  const session = { authorization: "token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
+  await storeFanslySession(handles.db, pageId, JSON.stringify(encryptJson(session, HARNESS_ENCRYPTION_KEY, 1)), 1);
+  if (options.proxyUrl !== undefined && options.proxyUrl !== null) {
+    await storeProxyConfig(handles.db, pageId, { url: options.proxyUrl, encryptedAuth: null, keyVersion: null });
+  }
+  await handles.pool.query("update pages set external_page_id = $2 where id = $1", [pageId, options.ownRef ?? HARNESS_OWN_REF]);
+  await ensureSyncPage(handles.db, { pageId });
+  await setModeDirect(handles.pool, pageId, options.mode);
+  await handles.pool.query(
+    `update sync_pages set mode_changed_at = clock_timestamp() - interval '1 day',
+            legacy_imported_at = case when mode = 'live' then clock_timestamp() - interval '1 hour' end,
+            requests_enabled_at = case when mode = 'live' then clock_timestamp() - interval '1 hour' end
+      where page_id = $1`,
+    [pageId],
+  );
+  if (options.mode === "live") {
+    await ensureFanslyPageSendGuard(handles.db, pageId);
+    await handles.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
+  }
+  return { pageId, pageLabel };
+}
+
+// ── synthetic chats ─────────────────────────────────────────────────────────
+
+/** Fansly's snowflake epoch (`packages/shared/src/snowflake.ts`). */
+export const FANSLY_EPOCH_MS = 1561494359900;
+
+export function snowflakeAt(ms: number, seq = 0): string {
+  return ((BigInt(Math.floor(ms) - FANSLY_EPOCH_MS) << 22n) | BigInt(seq)).toString();
+}
+
+export interface FakeChatMessage {
+  id: string;
+  createdAtMs: number;
+  senderId: string;
+}
+
+export interface FakeChat {
+  groupId: string;
+  fanRef: string;
+  /** Oldest first. */
+  messages: FakeChatMessage[];
+}
+
+/**
+ * Fansly chats as `/message` serves them: newest first, `limit` a page, ids
+ * strictly below `before`, the empty page below the first message. Message
+ * k of a chat is sent k × `spacingMs` (default 1 s) after its start,
+ * alternately by the fan and the page; ids are unique across chats (the
+ * chat's index is the snowflake sequence).
+ */
+export class FakeChats {
+  readonly #chats = new Map<string, FakeChat & { index: number; startMs: number; spacingMs: number }>();
+  readonly #ownRef: string;
+
+  constructor(ownRef = HARNESS_OWN_REF) {
+    this.#ownRef = ownRef;
+  }
+
+  /** A chat of `count` messages that started `ageMs` ago. */
+  add(input: { count: number; ageMs: number; fanRef?: string; spacingMs?: number }): FakeChat {
+    const index = this.#chats.size;
+    if (index >= 4096) throw new Error("FakeChats holds at most 4096 chats");
+    const startMs = Date.now() - input.ageMs;
+    const chat = {
+      groupId: snowflakeAt(startMs - 1_000, index),
+      fanRef: input.fanRef ?? snowflakeAt(startMs - 2_000, index),
+      messages: [] as FakeChatMessage[],
+      index,
+      startMs,
+      spacingMs: input.spacingMs ?? 1_000,
+    };
+    this.#chats.set(chat.groupId, chat);
+    this.append(chat.groupId, input.count);
+    return chat;
+  }
+
+  /** `count` new messages at the end of the chat: on the chat's own clock
+   *  (never in the future), or one millisecond apart from `atMs`. */
+  append(
+    groupId: string,
+    count: number,
+    sender: "fan" | "page" | "alternate" = "alternate",
+    atMs: number | null = null,
+  ): FakeChatMessage[] {
+    const chat = this.#chat(groupId);
+    const added: FakeChatMessage[] = [];
+    for (let n = 0; n < count; n += 1) {
+      const k = chat.messages.length;
+      const createdAtMs = atMs !== null ? atMs + n : Math.min(chat.startMs + k * chat.spacingMs, Date.now() - 1_000 + n);
+      const fromFan = sender === "fan" || (sender === "alternate" && k % 2 === 1);
+      const message = { id: snowflakeAt(createdAtMs, chat.index), createdAtMs, senderId: fromFan ? chat.fanRef : this.#ownRef };
+      if (chat.messages.length > 0 && BigInt(message.id) <= BigInt(chat.messages.at(-1)!.id)) {
+        throw new Error(`chat ${groupId} would get a non-increasing message id`);
+      }
+      chat.messages.push(message);
+      added.push(message);
+    }
+    return added;
+  }
+
+  get(groupId: string): FakeChat {
+    return this.#chat(groupId);
+  }
+
+  all(): FakeChat[] {
+    return [...this.#chats.values()];
+  }
+
+  /** The Fansly wire shape of one message. */
+  wire(groupId: string, message: FakeChatMessage): Record<string, unknown> {
+    return {
+      id: message.id,
+      type: 1,
+      dataVersion: 1,
+      content: `message ${message.id}`,
+      groupId,
+      senderId: message.senderId,
+      correlationId: null,
+      inReplyTo: null,
+      inReplyToRoot: null,
+      createdAt: Math.floor(message.createdAtMs / 1000),
+      attachments: [],
+      embeds: [],
+      interactions: [],
+      likes: [],
+      totalTipAmount: 0,
+    };
+  }
+
+  /** One `/message` page. */
+  page(groupId: string, before: string | null, limit: number): Array<Record<string, unknown>> {
+    const chat = this.#chat(groupId);
+    let end = chat.messages.length;
+    if (before !== null) {
+      const bound = BigInt(before);
+      let lo = 0;
+      let hi = chat.messages.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (BigInt(chat.messages[mid]!.id) < bound) lo = mid + 1;
+        else hi = mid;
+      }
+      end = lo;
+    }
+    const out: Array<Record<string, unknown>> = [];
+    for (let i = end - 1; i >= 0 && out.length < limit; i -= 1) out.push(this.wire(groupId, chat.messages[i]!));
+    return out;
+  }
+
+  /** The answer to a `/message` request URL, or null for another route. */
+  answer(url: URL): { messages: Array<Record<string, unknown>> } | null {
+    if (!url.pathname.endsWith("/message")) return null;
+    const groupId = url.searchParams.get("groupId");
+    if (groupId === null || !this.#chats.has(groupId)) return { messages: [] };
+    return { messages: this.page(groupId, url.searchParams.get("before"), Number(url.searchParams.get("limit") ?? "25")) };
+  }
+
+  /** The origin route of `/api/v1/message`. */
+  route(): FakeRoute {
+    return (request) => {
+      const answer = this.answer(request.url);
+      return answer === null ? null : fanslyJson(answer);
+    };
+  }
+
+  /** A scripted transport's answer (no network). */
+  respond(req: FanslyWireRequest): FanslyWireOutcome {
+    const answer = this.answer(new URL(req.url));
+    if (answer === null) throw new Error(`FakeChats: unexpected request ${req.url}`);
+    const bodyText = JSON.stringify({ success: true, response: answer });
+    return { kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+  }
+
+  #chat(groupId: string) {
+    const chat = this.#chats.get(groupId);
+    if (chat === undefined) throw new Error(`FakeChats: no chat ${groupId}`);
+    return chat;
+  }
+}
+
+/**
+ * The page's thread of a fake chat, as legacy and the journal rebuild left it:
+ * the fan bound (unless `bound: false`), `stored` (the chat's messages the hub
+ * holds, a legacy window), and with `chain` the contiguous chain the rebuild
+ * proved over them. Returns the thread id.
+ */
+export async function seedChatThread(
+  handles: HarnessHandles,
+  pageId: number,
+  chat: FakeChat,
+  options: { stored?: readonly FakeChatMessage[]; chain?: boolean; bound?: boolean; ownRef?: string } = {},
+): Promise<number> {
+  const ownRef = options.ownRef ?? HARNESS_OWN_REF;
+  const stored = [...(options.stored ?? [])].sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+  const fanId = options.bound === false
+    ? null
+    : (await upsertFans(handles.db, [{ platform: "fansly" as const, platformUserId: chat.fanRef }]))[0]!.id;
+  const newest = stored.at(-1) ?? null;
+  const oldest = stored[0] ?? null;
+  const inserted = await handles.pool.query<{ id: string }>(
+    `insert into page_dm_threads (platform_account_id, platform_conversation_id, fan_id, partner_platform_user_id,
+            partner_username, conversation_flags, unread_count, last_message_id, last_message_at, last_message_sender_id,
+            last_message_sender_role, newest_stored_message_id, oldest_stored_message_id, stored_message_count,
+            message_coverage_status, is_visible, metadata, history_state)
+     values ($1, $2, $3, $4, 'fan', 0, 0, $5, $6, $4, 'fan', $5, $7, $8, 'partial_window', true, '{}'::jsonb,
+             case when $8 > 0 then 'unverified' else 'none' end)
+     returning id::text as id`,
+    [
+      pageId, chat.groupId, fanId, chat.fanRef,
+      newest?.id ?? null, newest === null ? null : new Date(newest.createdAtMs), oldest?.id ?? null, stored.length,
+    ],
+  );
+  const threadId = Number(inserted.rows[0]!.id);
+  for (let at = 0; at < stored.length; at += 1_000) {
+    await upsertPageDmMessages(handles.db, stored.slice(at, at + 1_000).map((message) => ({
+      conversationId: threadId,
+      platformAccountId: pageId,
+      platformMessageId: message.id,
+      senderPlatformUserId: message.senderId,
+      senderRole: message.senderId === ownRef ? "model" as const : "fan" as const,
+      createdAt: new Date(Math.floor(message.createdAtMs / 1000) * 1000),
+      content: `message ${message.id}`,
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    })));
+  }
+  if (options.chain === true && newest !== null && oldest !== null) {
+    const chain: ThreadChainState = {
+      epoch: 0,
+      state: "partial",
+      headId: newest.id,
+      headAt: new Date(Date.now() - 3_600_000),
+      oldestId: oldest.id,
+      oldestCreatedAtMs: oldest.createdAtMs,
+      count: stored.length,
+      upwardCount: 0,
+      proof: null,
+      proofWitness: null,
+      provenAt: null,
+    };
+    await handles.db.transaction(async (tx) => {
+      await writeThreadChain(tx as unknown as Database, threadId, { chain, source: "journal_rebuild" });
+    });
+  }
+  return threadId;
+}
+
+// ── the harness transport ───────────────────────────────────────────────────
+
+/** `RequestPlan.params.harness`: the kinds the harness sends itself. */
+export type HarnessSendKind = "cdn" | "ws";
+
+function harnessKindOf(params: unknown): { kind: HarnessSendKind; path: string } | null {
+  if (typeof params !== "object" || params === null) return null;
+  const { harness, path } = params as { harness?: unknown; path?: unknown };
+  if (harness === "ws") return { kind: "ws", path: HARNESS_WS_PATH };
+  if (harness === "cdn" && typeof path === "string" && path.startsWith(HARNESS_CDN_PREFIX)) return { kind: "cdn", path };
+  return null;
+}
+
+type PageDispatcher = NonNullable<AppEgressContext["dispatcher"]>;
+
+/**
+ * The page's transport for the harness: REST through the production page
+ * transport (`fansly/transport.ts`: page egress, stored session, the wire
+ * layer's single-request send); a CDN hop and the WebSocket Upgrade through
+ * the same page egress with the admission's check composed per request
+ * (one-shot), exactly where the step-3 resources will put it. A CDN hop is
+ * reported to the engine as a Fansly-style envelope (`{redirect}` or
+ * `{bytes}`), so the harness resource can walk the hops as the steps of one
+ * work (design §5.20); the origin's own answers stay in its arrival log.
+ */
+export async function createHarnessTransport(
+  ctx: { db: Database; config: AppConfig },
+  page: HarnessPage,
+): Promise<PageTransport> {
+  const rest = await createPageTransport(ctx, page);
+  const egress = await resolveEgress(ctx, { kind: "page", pageId: page.pageId });
+  const dispatcher = egress.dispatcher;
+  if (dispatcher === null) {
+    await rest.close();
+    await egress.close();
+    throw new Error(`harness page ${page.pageLabel} has no page egress`);
+  }
+  const origin = new URL(ctx.config.fanslyBaseUrl).origin;
+  return {
+    async prepare(request: RequestPlan): Promise<FanslyWireRequest> {
+      const own = harnessKindOf(request.params);
+      if (own === null) return rest.prepare(request);
+      return { spec: request.spec, url: `${origin}${own.path}`, headers: {}, timeoutMs: REQUEST_TIMEOUT_MS };
+    },
+    async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
+      const path = new URL(req.url).pathname;
+      if (path === HARNESS_WS_PATH) return sendUpgrade(dispatcher, req, hooks, signal);
+      if (path.startsWith(HARNESS_CDN_PREFIX)) return sendCdnHop(dispatcher, req, hooks, signal);
+      return rest.send(req, hooks, signal);
+    },
+    async close() {
+      await rest.close();
+      await egress.close().catch(() => undefined);
+    },
+  };
+}
+
+async function sendCdnHop(
+  dispatcher: PageDispatcher,
+  req: FanslyWireRequest,
+  hooks: SendHooks,
+  signal: AbortSignal,
+): Promise<TransportOutcome> {
+  const outcome = await sendFanslyWireRequest(dispatcher, { ...req, headers: { accept: "image/*" } }, hooks, signal);
+  if (outcome.kind !== "response") return outcome;
+  const location = outcome.status >= 300 && outcome.status < 400 ? outcome.headers.location ?? null : null;
+  const response = location !== null
+    ? { status: outcome.status, redirect: location }
+    : { status: outcome.status, bytes: outcome.bodyBytes, contentType: outcome.headers["content-type"] ?? null };
+  const bodyText = JSON.stringify({ success: outcome.status === 200 || location !== null, response });
+  return { ...outcome, status: 200, bodyText };
+}
+
+/** One HTTP Upgrade (the WebSocket handshake): the request completes at 101;
+ *  the socket is closed at once (its frames are not requests). */
+async function sendUpgrade(
+  dispatcher: PageDispatcher,
+  req: FanslyWireRequest,
+  hooks: SendHooks,
+  signal: AbortSignal,
+): Promise<TransportOutcome> {
+  const gate = createOneShotSendCheck(hooks.check);
+  const timeout = AbortSignal.timeout(req.timeoutMs);
+  const target = new URL(req.url);
+  try {
+    // The dispatcher needs the origin; undici's `UpgradeOptions` type omits it.
+    const options = {
+      origin: target.origin,
+      path: `${target.pathname}${target.search}`,
+      method: "GET",
+      protocol: "websocket",
+      headers: { "sec-websocket-key": randomBytes(16).toString("base64"), "sec-websocket-version": "13" },
+      signal: AbortSignal.any([signal, timeout]),
+    } as Parameters<PageDispatcher["upgrade"]>[0];
+    const upgraded = await composeFanslySendCheck(dispatcher, gate.check).upgrade(options);
+    upgraded.socket.destroy();
+    return {
+      kind: "response",
+      status: 101,
+      headers: {},
+      bodyText: "",
+      bodyBytes: 0,
+      sendMark: gate.sent ? "request_start" : "completion_fallback",
+    };
+  } catch (error) {
+    const refusal = findFanslySendRefusal(error) ?? gate.refusal;
+    if (!gate.sent && refusal !== null) return { kind: "aborted_before_send", refusal: refusal.reason };
+    const message = error instanceof Error ? error.message : String(error);
+    return timeout.aborted ? { kind: "timeout", sent: gate.sent, message } : { kind: "transport_error", sent: gate.sent, message };
+  }
+}
+
+// ── the harness registry ────────────────────────────────────────────────────
+
+/** Test-only keys, one per physical request kind of a page (design §10). */
+export const HARNESS_KEY = {
+  /** A standing planned poll (`/polls`). */
+  poll: "harness.poll",
+  /** Urgent triggers (`/trackinglinks`). */
+  urgent: "harness.urgent",
+  /** The identity check's `/account/me` (`account.identity` arrives with S3-05). */
+  identity: "harness.identity",
+  /** A CDN download, one admission per hop (`media-download.fetch`, S3-04). */
+  cdn: "harness.cdn",
+  /** The WebSocket Upgrade (`ws.connect`, S3-03). */
+  ws: "harness.ws",
+  /** A REST route the origin answers 302 (`/recapstats`). */
+  redirect: "harness.redirect",
+  /** A REST route the origin answers 421 (`/message/broadcast/scheduled`). */
+  misdirected: "harness.misdirected",
+} as const;
+
+export const HARNESS_POLL_EVERY_MS = 400;
+
+function oneRequest(spec: FanslyWireId, extra: Record<string, unknown> = {}): ResourceModule {
+  return {
+    plan: async () => ({ kind: "request", request: { spec, params: extra as never } }),
+    apply: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+    shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+  };
+}
+
+/** A download walks its hops as the steps of one work: the cursor holds the next hop. */
+const cdnModule: ResourceModule = {
+  plan: async (work) => {
+    const cursor = work.cursor as { next?: string } | null;
+    const params = work.params as { path?: string };
+    return { kind: "request", request: { spec: "polls", params: { harness: "cdn", path: cursor?.next ?? params.path } as never } };
+  },
+  apply: async (_tx, input) => {
+    const hop = input.response as { redirect?: string };
+    return hop.redirect === undefined
+      ? { work: { satisfiesRevision: true, close: "done" }, followups: [] }
+      : { work: { satisfiesRevision: false, cursor: { next: hop.redirect } }, followups: [] };
+  },
+  shadow: async () => ({ work: { satisfiesRevision: true, close: "done" }, followups: [] }),
+};
+
+/**
+ * The registry of the transport tests: every physical request kind of a
+ * page as a test-only key (each its own resource file, so one kind's breaker
+ * never holds another), plus the production `dm-messages.*` entries for the
+ * history reads of the requests class.
+ */
+export function harnessRegistry(): EngineRegistry {
+  const pollModule: ResourceModule = {
+    plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
+    apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+    shadow: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
+  };
+  const specs: EngineResourceSpec[] = [
+    testSpec(HARNESS_KEY.poll, pollModule, { kind: "poll", class: "planned", period: { everyMs: HARNESS_POLL_EVERY_MS } }),
+    testSpec(HARNESS_KEY.urgent, oneRequest("trackinglinks")),
+    testSpec(HARNESS_KEY.identity, oneRequest("account.me")),
+    testSpec(HARNESS_KEY.cdn, cdnModule, { class: "planned" }),
+    testSpec(HARNESS_KEY.ws, oneRequest("polls", { harness: "ws" }), { terminalStatuses: [101] }),
+    testSpec(HARNESS_KEY.redirect, oneRequest("recapstats"), { terminalStatuses: [302] }),
+    testSpec(HARNESS_KEY.misdirected, oneRequest("broadcast.scheduled"), { terminalStatuses: [421] }),
+    ...["dm-messages.head", "dm-messages.catchup", "dm-messages.history"].map((key) => fanslyResourceSpec(key)!),
+  ];
+  return createEngineRegistry(specs);
+}
+
+/** The origin routes the harness registry's REST keys need. */
+export function harnessRoutes(chats: FakeChats): FakeRoute[] {
+  const api = (suffix: string) => (request: FakeRequest) => request.url.pathname === `/api/v1${suffix}`;
+  const when = (match: (request: FakeRequest) => boolean, answer: FakeAnswer): FakeRoute =>
+    (request) => (match(request) ? answer : null);
+  return [
+    chats.route(),
+    when(api("/polls"), fanslyJson([])),
+    when(api("/trackinglinks"), fanslyJson([])),
+    when(api("/account/me"), fanslyJson({
+      account: { id: HARNESS_OWN_REF, username: "harness", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 },
+    })),
+    when(api("/recapstats"), { status: 302, headers: { location: "/api/v1/recapstats/elsewhere" } }),
+    when(api("/message/broadcast/scheduled"), { status: 421, body: "misdirected" }),
+  ];
+}
+
+// ── the host of the transport tests ─────────────────────────────────────────
+
+/** The owner's setting as a test table every process reads per admission. */
+export async function ensureHarnessSettingTable(pool: Pool, settingMs: number): Promise<void> {
+  await pool.query(`
+    create table if not exists sync_test_setting (id int primary key default 1 check (id = 1), ms int not null);
+    insert into sync_test_setting (id, ms) values (1, ${Math.trunc(settingMs)})
+      on conflict (id) do update set ms = excluded.ms;
+  `);
+}
+
+export async function setHarnessSetting(pool: Pool, settingMs: number): Promise<void> {
+  await pool.query("update sync_test_setting set ms = $1 where id = 1", [Math.trunc(settingMs)]);
+}
+
+/** S read fresh per admission, as `loadEffectiveConfig` reads the live key. */
+export function harnessPauseSource(pool: Pool): PauseSource {
+  return {
+    async readSettingMs() {
+      const result = await pool.query<{ ms: number }>("select ms from sync_test_setting where id = 1");
+      const ms = result.rows[0]?.ms;
+      if (ms === undefined) throw new Error("sync_test_setting is empty");
+      return Number(ms);
+    },
+  };
+}
+
+/**
+ * Jitter in [0.1, 0.2): the arrival log is taken at the origin, after the
+ * proxy, so it carries a few milliseconds of loopback scheduling the pacer
+ * cannot see; a 10 % floor keeps "no two arrivals closer than S" a statement
+ * about the pacer rather than about the scheduler. The pacer's own gap is
+ * checked exactly against its journal (`gap_prev_ms ≥ pause_ms`).
+ */
+export function harnessRng(seed: number): Rng {
+  const random = seededRandom(seed);
+  return { next: () => 0.5 + random() / 2 };
+}
+
+/** A clock whose sleeps return `earlyMs` early (timers that fire early). */
+export function earlyWakingClock(base: Clock, earlyMs: number): Clock {
+  return {
+    monoNow: () => base.monoNow(),
+    wallNow: () => base.wallNow(),
+    sleep: (ms, signal) => base.sleep(Math.max(0, ms - earlyMs), signal),
+  };
+}
+
+export interface TakeoverRecord {
+  /** `performance.now()` when the pacer got its floor. */
+  mono: number;
+  floorDelayMs: number;
+}
+
+/**
+ * The options of a live host over the harness: the production host, ownership
+ * session and takeover floor (`paceFloorFromDb`), journal codec and history
+ * hooks (as `main.ts` wires them), the harness transport and registry, S from
+ * `sync_test_setting`, the test-only 1 ms setting floor. `takeovers` records
+ * every pacer's takeover instant.
+ */
+export function harnessHostOptions(input: {
+  db: Database;
+  pool: Pool;
+  connectionString: string;
+  config: AppConfig;
+  rng: Rng;
+  clock?: Clock;
+  takeovers?: TakeoverRecord[];
+  registry?: EngineRegistry;
+  probe?: SyncHostOptions["probe"];
+}): SyncHostOptions {
+  return {
+    db: input.db,
+    connectionString: input.connectionString,
+    config: input.config,
+    rawConfig: input.config,
+    logger: quietLogger,
+    registry: input.registry ?? harnessRegistry(),
+    capture: fanslyCaptureCodec,
+    onThreadChainChanged: onHistoryThreadChainChanged,
+    onWorkClosed: onHistoryWorkClosed,
+    rng: input.rng,
+    ...(input.clock === undefined ? {} : { clock: input.clock }),
+    ...(input.probe === undefined ? {} : { probe: input.probe }),
+    pause: harnessPauseSource(input.pool),
+    liveLoopEnabled: true,
+    pacerFactory: (deps): Pacer => {
+      const pacer = createPacer({ ...deps, minSettingMs: 1 });
+      const takeovers = input.takeovers;
+      if (takeovers !== undefined) {
+        const init = pacer.initTakeover.bind(pacer);
+        pacer.initTakeover = (floorDelayMs: number) => {
+          init(floorDelayMs);
+          takeovers.push({ mono: performance.now(), floorDelayMs });
+        };
+      }
+      return pacer;
+    },
+    liveTransportFactory: async (page) => createHarnessTransport(
+      { db: input.db, config: input.config },
+      { pageId: page.pageId, pageLabel: page.pageLabel ?? `page-${page.pageId}` },
+    ),
+    modeLoopIntervalMs: 200,
+  };
+}
+
+// ── the journal replay ("повтор ресурсов на журнале") ───────────────────────
+
+export interface ReplayTally {
+  resource: string;
+  kind: string;
+  total: number;
+  matched: number;
+  mismatches: Array<{ observationId: number; reason: string }>;
+  notReplayable: Array<{ observationId: number; reason: string }>;
+}
+
+/**
+ * Every journaled observation of the page whose kind a registry entry
+ * replays, oldest first, through its body seam (inline or pointer-only in the
+ * content-addressed catalog) and that entry's `replay()` (design §3.12 B5).
+ * Read-only. One tally per resource and kind.
+ */
+export async function replayPageJournal(
+  handles: HarnessHandles,
+  input: { pageId: number; registry: EngineRegistry; kinds?: readonly string[] },
+): Promise<ReplayTally[]> {
+  const { db } = handles;
+  const rows = await handles.pool.query<{ id: string; receivedAt: Date; kind: string; payload: unknown; bucket: string | null; objectId: string | null }>(
+    `select o.id::text as id, o.received_at as "receivedAt", o.kind, o.payload,
+            to_char(o.payload_bucket_month, 'YYYY-MM-DD') as bucket, o.payload_object_id::text as "objectId"
+       from observations o
+      where o.account_id = $1 and o.platform = 'fansly' and o.source = 'pull'
+      order by o.received_at, o.id`,
+    [input.pageId],
+  );
+  const tallies = new Map<string, ReplayTally>();
+  for (const row of rows.rows) {
+    if (input.kinds !== undefined && !input.kinds.includes(row.kind)) continue;
+    const owner = fanslyReplayOwner(row.kind);
+    if (owner === null) continue;
+    const key = `${owner.key}\u0000${row.kind}`;
+    let tally = tallies.get(key);
+    if (tally === undefined) {
+      tally = { resource: owner.key, kind: row.kind, total: 0, matched: 0, mismatches: [], notReplayable: [] };
+      tallies.set(key, tally);
+    }
+    const observationId = Number(row.id);
+    const resolved = await resolveCapturePayloadRow({ db, logger: quietLogger as never }, "observation", observationId, {
+      payload: row.payload,
+      payloadRef: capturePayloadRefFromColumns(row.bucket, row.objectId),
+    });
+    const module = await input.registry.module(owner.key);
+    const verdict: ReplayVerdict = module.replay === undefined
+      ? { kind: "not_replayable", reason: "no_replay" }
+      : await module.replay(
+        { id: observationId, receivedAt: new Date(row.receivedAt), kind: row.kind, pageId: input.pageId, payload: resolved.payload },
+        { db, pageId: input.pageId },
+      );
+    tally.total += 1;
+    if (verdict.kind === "match") tally.matched += 1;
+    else if (verdict.kind === "mismatch") tally.mismatches.push({ observationId, reason: verdict.reason });
+    else tally.notReplayable.push({ observationId, reason: verdict.reason });
+  }
+  return [...tallies.values()].sort((a, b) => a.resource.localeCompare(b.resource) || a.kind.localeCompare(b.kind));
+}
+
+// ── running ─────────────────────────────────────────────────────────────────
+
+/** Poll `probe` every `pollMs` until it returns true, or fail after `timeoutMs`. */
+export async function until(probe: () => Promise<boolean>, timeoutMs: number, what: string, pollMs = 25): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await probe()) return;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await sleep(pollMs);
+  }
+}
+
+/** Run an actor until `done` holds (or `timeoutMs`), then stop it gracefully. */
+export async function runActorUntil(
+  made: { actor: { run(signals: { stop: AbortSignal; abort: AbortSignal }): Promise<unknown> }; stop: AbortController; abort: AbortController },
+  done: () => Promise<boolean>,
+  timeoutMs: number,
+  what: string,
+  pollMs = 25,
+): Promise<void> {
+  const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+  try {
+    await Promise.race([
+      until(done, timeoutMs, what, pollMs),
+      run.then(() => {
+        throw new Error(`the actor ended before ${what}`);
+      }),
+    ]);
+  } finally {
+    made.stop.abort();
+    await run;
+  }
+}
+
+/** Run an actor for `ms`, then stop it gracefully. */
+export async function runActorFor(
+  made: { actor: { run(signals: { stop: AbortSignal; abort: AbortSignal }): Promise<unknown> }; stop: AbortController; abort: AbortController },
+  ms: number,
+): Promise<void> {
+  const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
+  await sleep(ms);
+  made.stop.abort();
+  await run;
+}
+
+export interface SyncChild {
+  pid: number;
+  /** Resolves once the child printed "ready <pid>". */
+  ready: Promise<void>;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  stderr(): string;
+  kill(signal: NodeJS.Signals): void;
+}
+
+/**
+ * `tests/helpers/sync-engine-child.ts <mode>` as a real process (kill -9,
+ * SIGSTOP/SIGCONT, two processes on one page), with `env` added.
+ */
+export function spawnSyncChild(mode: string, env: Record<string, string>): SyncChild {
+  const child = spawn(process.execPath, ["--import", "tsx/esm", "tests/helpers/sync-engine-child.ts", mode], {
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.on("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const ready = new Promise<void>((resolve, reject) => {
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+      if (/^ready \d+/m.test(stdout)) resolve();
+    });
+    void exited.then((exit) => reject(new Error(`sync child exited before ready: ${JSON.stringify(exit)}\n${stderr}`)));
+  });
+  ready.catch(() => undefined);
+  return {
+    pid: child.pid ?? -1,
+    ready,
+    exited,
+    stderr: () => stderr,
+    kill: (signal) => {
+      child.kill(signal);
+    },
+  };
+}

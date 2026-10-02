@@ -4,6 +4,7 @@ import { createDefaultFanslySendOsProbe } from "../../apps/runtime/src/services/
 import { SyncEngineHost } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import { fixedShadowLatency } from "../../apps/runtime/src/sync/engine/shadow.ts";
+import { harnessConfig, harnessHostOptions, harnessRng } from "./sync-engine.ts";
 import {
   childShadowRegistry,
   CRASH_READ_KEY,
@@ -22,6 +23,11 @@ import {
 //               stops it gracefully (exit 0). SYNC_TEST_HOSTNAME overrides the
 //               OS probe's hostname (two "containers" on one machine).
 //   live-crash  one live actor on PAGE_ID that SIGKILLs itself at FAULT_POINT.
+//   harness-live a live SyncEngineHost over the physical-request harness
+//               (tests/helpers/sync-engine.ts): the harness registry and
+//               transport against FANSLY_BASE_URL through the page proxy,
+//               S from sync_test_setting, jitter seeded by RNG_SEED. The
+//               test kills it.
 // Prints "ready <pid>" once running.
 
 async function runHost(): Promise<void> {
@@ -76,11 +82,31 @@ async function runLiveCrash(): Promise<void> {
   await pool.end();
 }
 
+async function runHarnessLive(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL!;
+  const pool = createPool(connectionString);
+  const db = createDb(pool) as unknown as Database;
+  const base = createDefaultFanslySendOsProbe();
+  const hostName = process.env.SYNC_TEST_HOSTNAME;
+  const host = new SyncEngineHost(harnessHostOptions({
+    db,
+    pool,
+    connectionString,
+    config: harnessConfig(connectionString, process.env.FANSLY_BASE_URL!),
+    rng: harnessRng(Number(process.env.RNG_SEED ?? "1")),
+    ...(hostName === undefined ? {} : { probe: { ...base, hostname: () => hostName } }),
+  }));
+  await host.start();
+  console.log(`ready ${process.pid}`);
+}
+
 const mode = process.argv[2];
 if (mode === "host") {
   await runHost();
 } else if (mode === "live-crash") {
   await runLiveCrash();
+} else if (mode === "harness-live") {
+  await runHarnessLive();
 } else if (mode !== undefined) {
   console.error(`unknown mode ${mode}`);
   process.exit(2);
