@@ -14,6 +14,7 @@ import {
   type LegacyRef,
   type ResourceSpec,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { isQueueWalk, QUEUE_WALK_DRIVERS, ratePeriodMs, runGroupingOf } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 
 // The Fansly registry (design §4.4, §4.5): every legacy stream of a Fansly
@@ -292,6 +293,38 @@ describe("the Fansly registry table", () => {
     for (const spec of overridable) {
       expect(spec.ownerProtected, spec.key).toBe(true);
       expect(spec.pageOverride === "cadence" ? spec.cadence : spec.tiers, spec.key).toBeDefined();
+    }
+  });
+
+  it("a cadence is a schedule the engine keeps: only on a subject-queue walk or a standing walk", () => {
+    for (const spec of FANSLY_RESOURCE_SPECS.filter((entry) => entry.cadence !== undefined && entry.liveOnly !== true)) {
+      expect(spec.subjectQueue === true || spec.standing !== undefined, spec.key).toBe(true);
+    }
+  });
+
+  it("the shadow report can judge every key it counts at a rate or by a schedule (rules A1.rate-assumed, A1.floor-queue, A1.floor-idle)", async () => {
+    const registry = createFanslyRegistry();
+    const page = { registryOverrides: {} };
+    // Every key on a period longer than the report's hour: a single request,
+    // or a module that estimates its run.
+    const rated = FANSLY_RESOURCE_SPECS.filter((spec) => spec.liveOnly !== true && ratePeriodMs(spec, page, 3_600_000) !== null);
+    expect(rated.map((spec) => spec.key).sort()).toEqual([
+      "catalog.fixed", "dm-conversations.full", "followers.reconcile", "payouts.daily", "posts.refresh", "stats.daily", "stats.hourly",
+      "top-spenders.window",
+    ]);
+    for (const spec of rated) {
+      const module = await registry.module(spec.key);
+      expect(runGroupingOf(spec) === "single" || typeof module.estimateRunSteps === "function", spec.key).toBe(true);
+    }
+    // Every standing walk re-runs its look; every queue walk reads its queue
+    // and is asked for by a poll.
+    for (const spec of FANSLY_RESOURCE_SPECS.filter((entry) => entry.standing !== undefined)) {
+      expect(typeof (await registry.module(spec.key)).dueAtLook, spec.key).toBe("function");
+    }
+    for (const spec of FANSLY_RESOURCE_SPECS.filter(isQueueWalk)) {
+      expect(typeof (await registry.module(spec.key)).queueNextDueAt, spec.key).toBe("function");
+      expect(QUEUE_WALK_DRIVERS[spec.key]?.length, spec.key).toBeGreaterThan(0);
+      for (const driver of QUEUE_WALK_DRIVERS[spec.key]!) expect(byKey(driver).kind, driver).toBe("poll");
     }
   });
 

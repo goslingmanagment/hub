@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FANSLY_WS_LIVE_DECODER_VERSION, FANSLY_WS_MAX_FRAME_BYTES } from "@agency_hub_core/shared";
 
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { parsePurchaseTargetSubject, purchaseTargetFollowups } from "../apps/runtime/src/sync/fansly/resources/purchases.ts";
 import { decodeFanslyWsFrame, WS_ROUTE_DECODER_VERSION, type WsItem } from "../apps/runtime/src/sync/fansly/ws/decode.ts";
 import {
   FAST_CONFIRM_DEADLINE_MS,
@@ -221,10 +222,26 @@ describe("routeWsItems (design §6.2)", () => {
         resource: "payouts.daily", dueAt: new Date(NOW), demand: { reason: "ws:transaction:payout" },
       }]);
     }
-    expect(route(serviceFrame({ type: 7, order: { orderId: "730000000000000001", accountMediaId: "740000000000000001", accountMediaBundleId: "750000000000000001" } }, 2))).toEqual([
-      { resource: "purchases.targets", ids: ["media:740000000000000001", "bundle:750000000000000001"], demand: { reason: "ws:order" } },
+    // A PPV order: one walk row per target, named as the transactions and DM
+    // applies name it (`purchaseTargetFollowups`) — a row without its target
+    // subject could only be quarantined.
+    const order = route(serviceFrame({ type: 7, order: { orderId: "730000000000000001", accountMediaId: "740000000000000001", accountMediaBundleId: "750000000000000001" } }, 2));
+    expect(order).toEqual([
+      { resource: "purchases.targets", subject: "bundle:750000000000000001", params: { target: { kind: "bundle", id: "750000000000000001" } }, demand: { reason: "ws:order" } },
+      { resource: "purchases.targets", subject: "media:740000000000000001", params: { target: { kind: "media", id: "740000000000000001" } }, demand: { reason: "ws:order" } },
       { resource: "transactions.head", demand: { reason: "ws:order" } },
     ]);
+    expect(order.filter((signal) => signal.resource === "purchases.targets")).toEqual(mergeDemandSignals(purchaseTargetFollowups([
+      { kind: "media", id: "740000000000000001" }, { kind: "bundle", id: "750000000000000001" },
+    ], "ws:order")));
+    for (const signal of order.filter((entry) => entry.resource === "purchases.targets")) {
+      expect(parsePurchaseTargetSubject(signal.subject!), signal.subject).not.toBeNull();
+    }
+    // Two frames of one target: one signal.
+    expect(routeWsItems([
+      ...items(serviceFrame({ type: 7, order: { orderId: "730000000000000001", accountMediaId: "740000000000000001" } }, 2)),
+      ...items(serviceFrame({ type: 7, order: { orderId: "730000000000000002", accountMediaId: "740000000000000001" } }, 2)),
+    ], context()).filter((signal) => signal.resource === "purchases.targets").map((signal) => signal.subject)).toEqual(["media:740000000000000001"]);
     expect(route(serviceFrame({ type: 2, wallet: { id: "720000000000000001" } }, 6))).toEqual([
       { resource: "transactions.head", demand: { reason: "ws:wallet" } },
     ]);

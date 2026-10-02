@@ -35,17 +35,25 @@ import {
   legacyComparisonBasis,
   legacyCounterparts,
   legacyVolumeRow,
+  isQueueWalk,
+  LOOK_CLOCK_TOLERANCE_MS,
   POLL_RUN_GAP_MS,
   pollScheduleFault,
+  QUEUE_WALK_DRIVERS,
+  queueOnSchedule,
   rateCount,
+  recurrenceMs,
   runGroupingOf,
   runsOf,
   SHADOW_SETTLE_MS,
   SHADOW_WINDOW_RULES,
   shadowWindowCoverage,
   simulateCoalescedReads,
+  standingWalkOnSchedule,
   type CounterpartCheck,
+  type AssumedRun,
   type KeyRun,
+  type QueueFact,
   type RunAttempt,
   type ScheduleRow,
 } from "../apps/runtime/src/sync/report/shadow-window.ts";
@@ -505,7 +513,7 @@ function periodic(firstMs: number, everyMs: number, untilMs: number): KeyRun[] {
 
 const shadowPage = (label: string, registryOverrides: Record<string, unknown> = {}) =>
   ({ pageId: 5, pageLabel: label, mode: "shadow" as const, registryOverrides });
-const NO_GAPS: CounterpartCheck = { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] };
+const NO_GAPS: CounterpartCheck = { lacking: [], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [] };
 
 /**
  * lilly-2 in 2026-10-02 11:50–12:50: 20 poll requests, its daily follower
@@ -547,7 +555,8 @@ function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRu
 describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
   it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle", "A1.poll-schedule",
+      "A2.rate", "A2.legacy-regime", "A2.live-only",
     ]);
     expect(SHADOW_WINDOW_RULES.find((rule) => rule.id === "A1.ceiling")!.text).toContain("at most 100 an hour");
     for (const ref of Object.keys(LEGACY_REGIME_SINCE)) {
@@ -664,7 +673,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const demand = demandOfPage(shadowPage("lilly-2"), {
       window: WINDOW, observed, reads: undefined,
       facts: { runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:23Z") },
-      counterparts: { lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [{ ref: "sender:ws_connect", why: "live_only" }] },
+      counterparts: { lacking: [], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [{ ref: "sender:ws_connect", why: "live_only" }] },
     });
     expect(demand.steadyStateRaw).toBe(206);
     // 20 + 186/24 + 152/24 + 2/6 + 11/24 + 1/22 + 6/24 + 2/24 + 1/6
@@ -710,7 +719,7 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     expect(missed.floor).toMatchObject({ below: true, holds: false, outside: ["dm-messages.head"] });
     expect(missed.passes).toBe(false);
     // Below the floor with a legacy stream the shadow never matched.
-    const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }], pending: [], scheduled: [], onDemand: [], notInShadow: [] } });
+    const lacking = judge(lilly2(), { counterparts: { lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [] } });
     expect(lacking.floor).toMatchObject({ below: true, holds: false });
     expect(lacking.passes).toBe(false);
   });
@@ -909,6 +918,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
       lacking: [{ ref: "stream:post_replies", why: "legacy 3 on its A2 basis, the shadow none in 6.5 h of shadow history on the page" }],
       pending: [],
       scheduled: [],
+      idle: [],
       onDemand: [],
       notInShadow: [{ ref: "sender:media_download", why: "live_only" }, { ref: "sender:targeted_backfill", why: "history_requests" }],
     });
@@ -927,7 +937,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     const legacy = new Map([["stream:fan_earnings", 29]]);
     const check = (attempts: Map<string, number>, historyMs: number | null) =>
       legacyCounterparts({ page: shadowPage("lilly-1"), legacy, specsByRef, shadow: { attempts, historyMs } });
-    expect(check(new Map([["fan-earnings.roster", 2]]), 4.5 * HOUR)).toEqual({ lacking: [], pending: [], scheduled: [], onDemand: [], notInShadow: [] });
+    expect(check(new Map([["fan-earnings.roster", 2]]), 4.5 * HOUR)).toEqual({ lacking: [], pending: [], scheduled: [], idle: [], onDemand: [], notInShadow: [] });
     // lilly-1 4.5 h into shadow, its daily roster walk not yet due: not yet judgeable.
     expect(check(new Map(), 4.5 * HOUR)).toEqual({
       lacking: [],
@@ -936,6 +946,7 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
         why: "not yet judgeable: legacy 29 on its A2 basis, the shadow none in 4.5 h of shadow history on the page; its keys' first run is due within 24.03 h of the shadow's start",
       }],
       scheduled: [],
+      idle: [],
       onDemand: [],
       notInShadow: [],
     });
@@ -969,12 +980,13 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
   });
 
   it("rule A1.floor-scheduled: a stream whose recurring keys' rows are on schedule at the window end is scheduled; a missing, overdue or late row leaves it not yet judgeable", () => {
-    // lilly-1 in 11:50–12:50, 2.67 h into shadow: 29 legacy fan_earnings
-    // requests, its daily roster walk not run yet on the page.
-    const specsByRef = new Map(["stream:fan_earnings", "stream:stats_snapshot"].map((ref) => [ref, specsOf(ref)] as const));
+    // lilly-1 in 11:50–12:50, 2.67 h into shadow: 72 legacy reconcile
+    // requests, its daily follower reconcile not run yet on the page (its row
+    // a key with a row-kept schedule; a queue walk is rule A1.floor-queue's).
+    const specsByRef = new Map(["stream:followers_reconcile", "stream:stats_snapshot"].map((ref) => [ref, specsOf(ref)] as const));
     const placed = T("2026-10-02T10:09:40Z");
     const row = (extra: Partial<ScheduleRow> = {}): ScheduleRow => ({ createdMs: placed, dueMs: T("2026-10-03T09:40:00Z"), firstAdmittedMs: null, quarantined: false, ...extra });
-    const check = (rows: Record<string, ScheduleRow[]>, legacy = new Map([["stream:fan_earnings", 29]])) => legacyCounterparts({
+    const check = (rows: Record<string, ScheduleRow[]>, legacy = new Map([["stream:followers_reconcile", 72]])) => legacyCounterparts({
       page: shadowPage("lilly-1"),
       legacy,
       specsByRef,
@@ -982,66 +994,463 @@ describe("shadow report A2 bases (design §3.12, rules A2.*)", () => {
     });
     const bound = "placed 2026-10-02T10:09:40.000Z + 24 h + 2 min = 2026-10-03T10:11:40.000Z";
     // Due tomorrow 09:40, within its placement + 24 h + 2 min: scheduled.
-    expect(check({ "fan-earnings.roster": [row()] })).toEqual({
+    expect(check({ "followers.reconcile": [row()] })).toEqual({
       lacking: [],
       pending: [],
       scheduled: [{
-        ref: "stream:fan_earnings",
-        why: `legacy 29 on its A2 basis, the shadow none yet in 2.67 h of shadow history on the page; on its schedule: fan-earnings.roster due 2026-10-03T09:40:00.000Z (${bound})`,
+        ref: "stream:followers_reconcile",
+        why: `legacy 72 on its A2 basis, the shadow none yet in 2.67 h of shadow history on the page; on its schedule: followers.reconcile due 2026-10-03T09:40:00.000Z (${bound})`,
       }],
+      idle: [],
       onDemand: [],
       notInShadow: [],
     });
     // Due a minute before the window end, waiting for its slot: still on schedule.
-    expect(check({ "fan-earnings.roster": [row({ dueMs: WINDOW.endMs - MINUTE })] }).scheduled).toHaveLength(1);
+    expect(check({ "followers.reconcile": [row({ dueMs: WINDOW.endMs - MINUTE })] }).scheduled).toHaveLength(1);
     // Its first read came after the window end, by its bound: on schedule.
-    expect(check({ "fan-earnings.roster": [row({ dueMs: T("2026-10-04T09:40:00Z"), firstAdmittedMs: T("2026-10-02T13:40:00Z") })] }).scheduled).toHaveLength(1);
+    expect(check({ "followers.reconcile": [row({ dueMs: T("2026-10-04T09:40:00Z"), firstAdmittedMs: T("2026-10-02T13:40:00Z") })] }).scheduled).toHaveLength(1);
     const pendingWhy = (rows: Record<string, ScheduleRow[]>, legacy?: Map<string, number>) => {
       const result = check(rows, legacy);
       expect(result.scheduled).toEqual([]);
       expect(result.pending).toHaveLength(1);
       return result.pending[0]!.why;
     };
-    const notYet = "not yet judgeable: legacy 29 on its A2 basis, the shadow none in 2.67 h of shadow history on the page; its keys' first run is due within 24.03 h of the shadow's start; not on its schedule (rule A1.floor-scheduled): ";
+    const notYet = "not yet judgeable: legacy 72 on its A2 basis, the shadow none in 2.67 h of shadow history on the page; its keys' first run is due within 24.03 h of the shadow's start; not on its schedule (rule A1.floor-scheduled): ";
     // No row of the key: the engine holds no read of it.
-    expect(pendingWhy({})).toBe(`${notYet}fan-earnings.roster: no shadow work row on the page at the window end`);
+    expect(pendingWhy({})).toBe(`${notYet}followers.reconcile: no shadow work row on the page at the window end`);
     // Due in the window and not admitted by its end: overdue.
-    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))
-      .toBe(`${notYet}fan-earnings.roster: due 2026-10-02T12:30:00.000Z, not admitted by the window end`);
+    expect(pendingWhy({ "followers.reconcile": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))
+      .toBe(`${notYet}followers.reconcile: due 2026-10-02T12:30:00.000Z, not admitted by the window end`);
     // Due later than its placement + 24 h + 2 min: late.
-    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-03T10:30:00Z") })] }))
-      .toBe(`${notYet}fan-earnings.roster: due 2026-10-03T10:30:00.000Z, later than its bound (${bound})`);
-    // A standing walk whose plan found nothing due set its re-check past the
-    // bound without a read: still not on schedule, and the reason is named.
-    expect(pendingWhy({ "fan-earnings.roster": [row({ dueMs: T("2026-10-03T12:34:00Z"), recheckedMs: T("2026-10-02T12:34:00Z") })] }))
-      .toBe(`${notYet}fan-earnings.roster: due 2026-10-03T12:34:00.000Z, later than its bound (${bound}); its last plan `
+    expect(pendingWhy({ "followers.reconcile": [row({ dueMs: T("2026-10-03T10:30:00Z") })] }))
+      .toBe(`${notYet}followers.reconcile: due 2026-10-03T10:30:00.000Z, later than its bound (${bound})`);
+    // A walk whose plan found nothing due (the owner's daily floor) set its
+    // re-check past the bound without a read: still not on schedule, and the
+    // reason is named.
+    expect(pendingWhy({ "followers.reconcile": [row({ dueMs: T("2026-10-03T12:34:00Z"), recheckedMs: T("2026-10-02T12:34:00Z") })] }))
+      .toBe(`${notYet}followers.reconcile: due 2026-10-03T12:34:00.000Z, later than its bound (${bound}); its last plan `
         + "(row updated 2026-10-02T12:34:00.000Z) found nothing due and set a re-check without a read");
     // Its first read after the window end came past the bound: late.
-    expect(pendingWhy({ "fan-earnings.roster": [row({ firstAdmittedMs: T("2026-10-03T11:00:00Z") })] }))
-      .toBe(`${notYet}fan-earnings.roster: its first read admitted 2026-10-03T11:00:00.000Z, after its bound (${bound})`);
-    expect(pendingWhy({ "fan-earnings.roster": [row({ quarantined: true })] })).toBe(`${notYet}fan-earnings.roster: its row is quarantined`);
+    expect(pendingWhy({ "followers.reconcile": [row({ firstAdmittedMs: T("2026-10-03T11:00:00Z") })] }))
+      .toBe(`${notYet}followers.reconcile: its first read admitted 2026-10-03T11:00:00.000Z, after its bound (${bound})`);
+    expect(pendingWhy({ "followers.reconcile": [row({ quarantined: true })] })).toBe(`${notYet}followers.reconcile: its row is quarantined`);
     // Every recurring key of the stream needs its row: stats.daily's alone does not schedule the 22-hourly stats.hourly.
     expect(pendingWhy({ "stats.daily": [row()] }, new Map([["stream:stats_snapshot", 11]])))
       .toMatch(/^not yet judgeable: .*; not on its schedule \(rule A1\.floor-scheduled\): stats\.hourly: no shadow work row on the page at the window end$/);
     // Past the shortest recurrence the schedule no longer helps: it lacks one.
     expect(legacyCounterparts({
       page: shadowPage("lilly-1"),
-      legacy: new Map([["stream:fan_earnings", 29]]),
+      legacy: new Map([["stream:followers_reconcile", 72]]),
       specsByRef,
-      shadow: { attempts: new Map(), historyMs: 25 * HOUR, schedule: { endMs: WINDOW.endMs, rows: new Map([["fan-earnings.roster", [row()]]]) } },
-    })).toMatchObject({ lacking: [{ ref: "stream:fan_earnings" }], pending: [], scheduled: [] });
+      shadow: { attempts: new Map(), historyMs: 25 * HOUR, schedule: { endMs: WINDOW.endMs, rows: new Map([["followers.reconcile", [row()]]]) } },
+    })).toMatchObject({ lacking: [{ ref: "stream:followers_reconcile" }], pending: [], scheduled: [] });
     // The floor's exception: scheduled holds, a missing or overdue row fails.
     const fixture = lilly2();
     const judge = (counterparts: CounterpartCheck) => demandOfPage(shadowPage("lilly-1"), {
       window: WINDOW, observed: fixture.observed, reads: undefined,
       facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: null }, counterparts,
     });
-    expect(judge(check({ "fan-earnings.roster": [row()] }))).toMatchObject({ floor: { below: true, holds: true }, passes: true });
+    expect(judge(check({ "followers.reconcile": [row()] }))).toMatchObject({ floor: { below: true, holds: true }, passes: true });
     expect(judge(check({}))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
-    expect(judge(check({ "fan-earnings.roster": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
+    expect(judge(check({ "followers.reconcile": [row({ dueMs: T("2026-10-02T12:30:00Z") })] }))).toMatchObject({ floor: { below: true, holds: false }, passes: false });
   });
 
   it("the shadow's timeline estimate is the page size legacy measured (15 posts a page)", () => {
     expect(TIMELINE_PAGE_ESTIMATE).toBe(15);
+  });
+});
+
+// ── the coverage gaps of the first production reports (2026-10-02): rules
+// A1.floor-queue, A1.floor-idle and A1.rate-assumed on the production rows ──
+
+describe("shadow report: queue walks, idle standing walks and assumed run sizes (rules A1.floor-queue, A1.floor-idle, A1.rate-assumed)", () => {
+  const spec = (key: string) => FANSLY_RESOURCE_SPECS.find((entry) => entry.key === key)!;
+  const specsOf = (ref: string) => FANSLY_RESOURCE_SPECS.filter((entry) => entry.legacy.some((legacy) =>
+    ("stream" in legacy ? `stream:${legacy.stream}` : `sender:${legacy.sender}`) === ref));
+  /** The integrator's window, 2026-10-02 13:30–14:30. */
+  const END = T("2026-10-02T14:30:00Z");
+  /** lilly-1's first shadow admission. */
+  const LILLY1_FIRST_SHADOW = T("2026-10-02T10:09:35Z");
+
+  it("a cadence is a schedule only for a subject-queue walk: the lookup is demand-only, the roster's shadow pass daily", () => {
+    const page = shadowPage("lilly-1");
+    expect(recurrenceMs(spec("fan-profiles.lookup"), page)).toBeNull();
+    expect(spec("fan-profiles.lookup").cadence).toBeUndefined();
+    expect(recurrenceMs(spec("fan-earnings.roster"), page)).toBe(24 * HOUR);
+    expect(recurrenceMs(spec("followers.reconcile"), page)).toBe(24 * HOUR);
+    expect(FANSLY_RESOURCE_SPECS.filter(isQueueWalk).map((entry) => entry.key)).toEqual(["fan-earnings.roster"]);
+    expect(Object.keys(QUEUE_WALK_DRIVERS)).toEqual(["fan-earnings.roster"]);
+    expect(LOOK_CLOCK_TOLERANCE_MS).toBe(MINUTE);
+  });
+
+  it("lilly-1 13:30–14:30: the reconcile waits on the owner's floor (scheduled), the roster's queue holds nothing due before 10-05 22:45 (idle); the floor's exception holds", () => {
+    const specsByRef = new Map(["stream:followers_reconcile", "stream:fan_earnings"].map((ref) => [ref, specsOf(ref)] as const));
+    const reconcile: ScheduleRow = {
+      createdMs: T("2026-10-02T10:57:54.752Z"),
+      dueMs: T("2026-10-03T08:16:37.783Z"),
+      firstAdmittedMs: null,
+      quarantined: false,
+      recheckedMs: T("2026-10-02T10:57:54.800Z"),
+    };
+    // 99 spenders × 2 windows, read 09-29 10:45 … 09-30 10:45, no mark: the
+    // first comes due 156 h after the oldest read.
+    const roster: QueueFact = { nextDueMs: T("2026-10-05T22:45:08.767Z"), askedWithinMs: 1.1 * 5 * MINUTE + 2 * MINUTE };
+    const check = (historyMs: number) => legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy: new Map([["stream:followers_reconcile", 72], ["stream:fan_earnings", 29]]),
+      specsByRef,
+      shadow: {
+        attempts: new Map(),
+        historyMs,
+        schedule: { endMs: END, rows: new Map([["followers.reconcile", [reconcile]]]), queues: new Map([["fan-earnings.roster", roster]]) },
+      },
+    });
+    const now = check(END - LILLY1_FIRST_SHADOW);
+    expect(now).toEqual({
+      lacking: [],
+      pending: [],
+      scheduled: [{
+        ref: "stream:followers_reconcile",
+        why: "legacy 72 on its A2 basis, the shadow none yet in 4.34 h of shadow history on the page; on its schedule: followers.reconcile "
+          + "due 2026-10-03T08:16:37.783Z (placed 2026-10-02T10:57:54.752Z + 24 h + 2 min = 2026-10-03T10:59:54.752Z)",
+      }],
+      idle: [{
+        ref: "stream:fan_earnings",
+        why: "legacy 29 on its A2 basis, the shadow none in 4.34 h of shadow history on the page; nothing due: "
+          + "fan-earnings.roster: queue idle, its next subject due 2026-10-05T22:45:08.767Z",
+      }],
+      onDemand: [],
+      notInShadow: [],
+    });
+    const fixture = lilly2();
+    const judge = (counterparts: CounterpartCheck) => demandOfPage(shadowPage("lilly-1"), {
+      window: WINDOW, observed: fixture.observed, reads: undefined,
+      facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: null }, counterparts,
+    });
+    expect(judge(now)).toMatchObject({ floor: { below: true, holds: true }, passes: true });
+    // A day on, the roster's queue still holds nothing due: idle, never lacking.
+    const later = check(25 * HOUR);
+    expect(later.idle.map((entry) => entry.ref)).toEqual(["stream:fan_earnings"]);
+    expect(later.lacking.map((entry) => entry.ref)).toEqual(["stream:followers_reconcile"]);
+  });
+
+  it("rule A1.floor-queue: a subject due and no walk row is not yet judgeable, and lacking once the driver has had 1.1 × 5 min + 2 min", () => {
+    const specsByRef = new Map([["stream:fan_earnings", specsOf("stream:fan_earnings")]]);
+    const asked = 1.1 * 5 * MINUTE + 2 * MINUTE;
+    const check = (nextDueMs: number | null, rows: ScheduleRow[] = [], historyMs = 4 * HOUR) => legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy: new Map([["stream:fan_earnings", 29]]),
+      specsByRef,
+      shadow: {
+        attempts: new Map(),
+        historyMs,
+        schedule: {
+          endMs: END,
+          rows: new Map(rows.length === 0 ? [] : [["fan-earnings.roster", rows]]),
+          queues: new Map([["fan-earnings.roster", { nextDueMs, askedWithinMs: asked }]]),
+        },
+      },
+    });
+    expect(queueOnSchedule({ key: "fan-earnings.roster", queue: { nextDueMs: null, askedWithinMs: asked }, endMs: END }))
+      .toEqual({ onSchedule: true, idle: true, what: "fan-earnings.roster: queue idle, no subject comes due without a new write" });
+    expect(check(null).idle).toHaveLength(1);
+    // Due a minute before the window end: within the admission slack.
+    expect(check(END - MINUTE).idle).toHaveLength(1);
+    // Due 5 min before the end: the insurance poll may not have stepped yet.
+    expect(check(END - 5 * MINUTE).pending).toEqual([{
+      ref: "stream:fan_earnings",
+      why: "not yet judgeable: legacy 29 on its A2 basis, the shadow none in 4 h of shadow history on the page; its keys' first run is due "
+        + "within 24.03 h of the shadow's start; not on its schedule (rule A1.floor-queue): fan-earnings.roster: a subject due "
+        + "2026-10-02T14:25:00.000Z, no walk row yet (its walk row is asked within 7.5 min of a due subject)",
+    }]);
+    // Due 10 min before the end and still no row: a missed due subject, at any history length.
+    for (const historyMs of [HOUR, 4 * HOUR]) {
+      expect(check(END - 10 * MINUTE, [], historyMs).lacking).toEqual([{
+        ref: "stream:fan_earnings",
+        why: `legacy 29 on its A2 basis, the shadow none in ${historyMs / HOUR} h of shadow history on the page; not on its schedule `
+          + "(rule A1.floor-queue): fan-earnings.roster: a subject due 2026-10-02T14:20:00.000Z and no walk row by the window end "
+          + "(its walk row is asked within 7.5 min of a due subject)",
+      }]);
+    }
+    // An open row is judged by its schedule at any history length: the walk
+    // asked a minute ago, waiting for its slot.
+    const asking: ScheduleRow = { createdMs: END - MINUTE, dueMs: END - MINUTE, firstAdmittedMs: null, quarantined: false };
+    expect(check(END - 2 * MINUTE, [asking], 30 * HOUR).scheduled).toHaveLength(1);
+    // Without its queue read (no module check), the row rule stands as before.
+    const unread = legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy: new Map([["stream:fan_earnings", 29]]),
+      specsByRef,
+      shadow: { attempts: new Map(), historyMs: 4 * HOUR, schedule: { endMs: END, rows: new Map() } },
+    });
+    expect(unread.pending[0]!.why).toMatch(/\(rule A1\.floor-scheduled\): fan-earnings\.roster: no shadow work row on the page at the window end$/);
+    // A roster row legacy read after the window end: the queue as it stood
+    // then is not known — not yet judgeable at any history length, never idle.
+    const changed = "1 roster subject row changed after 2026-10-02T14:30:00.000Z (the newest 2026-10-02T14:40:00.000Z): the queue as it stood then is not known";
+    const unknown: QueueFact = { nextDueMs: null, askedWithinMs: asked, unjudgeable: changed };
+    expect(queueOnSchedule({ key: "fan-earnings.roster", queue: unknown, endMs: END })).toEqual({
+      onSchedule: false,
+      missed: false,
+      fault: `fan-earnings.roster: ${changed} — its queue at the window end is not judgeable; report a window that ends after it`,
+    });
+    const moved = legacyCounterparts({
+      page: shadowPage("lilly-1"),
+      legacy: new Map([["stream:fan_earnings", 29]]),
+      specsByRef,
+      shadow: { attempts: new Map(), historyMs: 30 * HOUR, schedule: { endMs: END, rows: new Map(), queues: new Map([["fan-earnings.roster", unknown]]) } },
+    });
+    expect(moved).toMatchObject({ idle: [], lacking: [], pending: [{ ref: "stream:fan_earnings" }] });
+    expect(moved.pending[0]!.why).toContain(`(rule A1.floor-queue): fan-earnings.roster: ${changed}`);
+  });
+
+  it("rule A1.floor-idle: the four standing walks of 2026-10-02 looked on time and found nothing due — idle at any history length", () => {
+    // Its pick re-run at the look finds nothing; 5 years on it takes all 400 queued.
+    const looked = (placed: string, look: string, due: string, extra: Partial<ScheduleRow> = {}): ScheduleRow => ({
+      createdMs: T(placed),
+      dueMs: T(due),
+      firstAdmittedMs: null,
+      quarantined: false,
+      recheckedMs: T(look),
+      dueAtLook: { count: 0, examples: [], queued: 400 },
+      dueLater: { count: 400, examples: [], queued: 400 },
+      ...extra,
+    });
+    const walk = (key: string, rows: ScheduleRow[], recheckMs: number) => standingWalkOnSchedule({ key, rows, recurrenceMs: recheckMs, endMs: END });
+    // ari-1 media-stats.walk: placed 10:05:23, looked 12:34:23, next look 18:34:23.
+    expect(walk("media-stats.walk", [looked("2026-10-02T10:05:23Z", "2026-10-02T12:34:23Z", "2026-10-02T18:34:23Z")], 6 * HOUR)).toEqual({
+      onSchedule: true,
+      idle: true,
+      what: "media-stats.walk looked 2026-10-02T12:34:23.000Z, nothing due (its pick re-run there: none due and untouched since; "
+        + "5 years on it takes 400 of the 400 queued); next look 2026-10-02T18:34:23.000Z (by the look + 6 h + 2 min)",
+    });
+    // ari-1 catalog.vault: its look at 14:30:44 came after the window end, within its placement + 24 h + 2 min.
+    expect(walk("catalog.vault", [looked("2026-10-02T10:05:23Z", "2026-10-02T14:30:44Z", "2026-10-03T14:30:44Z")], 24 * HOUR))
+      .toMatchObject({ onSchedule: true, idle: true, what: expect.stringContaining("looked 2026-10-02T14:30:44.000Z (after the window end), nothing due") });
+    // lilly-1 posts.engagement and lora-1 post-replies.walk.
+    expect(walk("posts.engagement", [looked("2026-10-02T10:05:03Z", "2026-10-02T10:47:18Z", "2026-10-02T16:47:18Z")], 6 * HOUR)).toMatchObject({ onSchedule: true, idle: true });
+    expect(walk("post-replies.walk", [looked("2026-10-02T10:05:31Z", "2026-10-02T12:01:14Z", "2026-10-02T18:01:14Z")], 6 * HOUR)).toMatchObject({ onSchedule: true, idle: true });
+
+    // A look after the window end, the walk still on its re-check: idle.
+    expect(walk("media-stats.walk", [looked("2026-10-01T10:05:23Z", "2026-10-02T16:31:00Z", "2026-10-02T22:31:00Z")], 6 * HOUR))
+      .toMatchObject({ onSchedule: true, idle: true });
+    // Off schedule: a look more than a re-check after the window end (the
+    // state at the end is not known), a next look past the look + re-check, a
+    // look whose next one was due and not taken by the window end.
+    expect(walk("media-stats.walk", [looked("2026-10-01T10:05:23Z", "2026-10-02T20:33:00Z", "2026-10-03T02:33:00Z")], 6 * HOUR)).toEqual({
+      onSchedule: false,
+      missed: false,
+      fault: "media-stats.walk: looked 2026-10-02T20:33:00.000Z (after the window end), later than the window end + 6 h + 2 min = "
+        + "2026-10-02T20:32:00.000Z: its state at the window end is not known — report a window that ends nearer to it",
+    });
+    expect(walk("media-stats.walk", [looked("2026-10-02T10:05:23Z", "2026-10-02T12:34:23Z", "2026-10-02T18:40:00Z")], 6 * HOUR)).toEqual({
+      onSchedule: false,
+      missed: false,
+      fault: "media-stats.walk: looked 2026-10-02T12:34:23.000Z, its next look due 2026-10-02T18:40:00.000Z, later than the look + 6 h + 2 min = 2026-10-02T18:36:23.000Z",
+    });
+    expect(walk("media-stats.walk", [looked("2026-10-02T01:00:00Z", "2026-10-02T07:30:00Z", "2026-10-02T13:30:00Z")], 6 * HOUR))
+      .toMatchObject({ onSchedule: false, missed: false, fault: "media-stats.walk: looked 2026-10-02T07:30:00.000Z, its next look due 2026-10-02T13:30:00.000Z and not taken by the window end" });
+    // The pick re-run at the look finds due work untouched since: a missed look.
+    expect(walk("media-stats.walk", [looked("2026-10-02T10:05:23Z", "2026-10-02T12:34:23Z", "2026-10-02T18:34:23Z", { dueAtLook: { count: 3, examples: ["m1", "m2", "m3"], queued: 400 } })], 6 * HOUR))
+      .toEqual({
+        onSchedule: false,
+        missed: true,
+        fault: "media-stats.walk: looked 2026-10-02T12:34:23.000Z and found nothing due, yet its own pick re-run there finds 3 due and untouched since (m1, m2, m3)",
+      });
+    // Its due rule's probe: the same pick 5 years on takes none of the 400
+    // queued subjects — a rule that never reads, a missed look at once.
+    const lookArgs = ["2026-10-02T10:05:23Z", "2026-10-02T12:34:23Z", "2026-10-02T18:34:23Z"] as const;
+    expect(walk("media-stats.walk", [looked(...lookArgs, { dueLater: { count: 0, examples: [], queued: 400 } })], 6 * HOUR)).toEqual({
+      onSchedule: false,
+      missed: true,
+      fault: "media-stats.walk: looked 2026-10-02T12:34:23.000Z and found nothing due, and its own pick takes none of the 400 subjects "
+        + "on its queue even 5 years after the look: its due rule never reads",
+    });
+    // An empty queue: idle, nothing to read.
+    expect(walk("media-stats.walk", [looked(...lookArgs, {
+      dueAtLook: { count: 0, examples: [], queued: 0 }, dueLater: { count: 0, examples: [], queued: 0 },
+    })], 6 * HOUR)).toMatchObject({ onSchedule: true, idle: true, what: expect.stringContaining("(its pick re-run there: none due and untouched since; its queue holds no subject)") });
+    // Unverified: no look check, no probe, a probe that did not pick, a failed one.
+    const { dueAtLook: _unchecked, ...unverified } = looked(...lookArgs);
+    expect(walk("media-stats.walk", [unverified], 6 * HOUR))
+      .toMatchObject({ onSchedule: false, missed: false, fault: expect.stringContaining("no look check verifies it") });
+    const { dueLater: _unprobed, ...unprobed } = looked(...lookArgs);
+    expect(walk("media-stats.walk", [unprobed], 6 * HOUR))
+      .toMatchObject({ onSchedule: false, missed: false, fault: expect.stringContaining("no probe of its due rule verifies it") });
+    expect(walk("media-stats.walk", [looked(...lookArgs, { dueLater: { count: 0, examples: [], queued: null } })], 6 * HOUR))
+      .toMatchObject({ onSchedule: false, missed: false, fault: expect.stringContaining("no probe of its due rule verifies it") });
+    expect(walk("media-stats.walk", [looked(...lookArgs, { dueLater: { error: "canceling statement due to statement timeout" } })], 6 * HOUR)).toEqual({
+      onSchedule: false,
+      missed: false,
+      fault: "media-stats.walk: looked 2026-10-02T12:34:23.000Z; its due rule's probe failed: canceling statement due to statement timeout",
+    });
+    // A row that never looked is a first run on its placement's schedule.
+    expect(walk("post-replies.walk", [{ createdMs: T("2026-10-02T10:05:27Z"), dueMs: T("2026-10-02T15:47:05Z"), firstAdmittedMs: null, quarantined: false }], 6 * HOUR))
+      .toMatchObject({ onSchedule: true, idle: false });
+
+    // The stream on ari-1: idle at 4.4 h and at 25 h of history; a missed
+    // look lacks at once; a stale look lacks past the re-check.
+    const specsByRef = new Map([["stream:media_stats", specsOf("stream:media_stats")]]);
+    const counterparts = (rows: ScheduleRow[], historyMs: number) => legacyCounterparts({
+      page: shadowPage("ari-1"),
+      legacy: new Map([["stream:media_stats", 265]]),
+      specsByRef,
+      shadow: { attempts: new Map(), historyMs, schedule: { endMs: END, rows: new Map([["media-stats.walk", rows]]) } },
+    });
+    const ari1 = looked("2026-10-02T10:05:23Z", "2026-10-02T12:34:23Z", "2026-10-02T18:34:23Z");
+    expect(counterparts([ari1], END - T("2026-10-02T10:05:24Z"))).toMatchObject({ idle: [{ ref: "stream:media_stats" }], lacking: [], pending: [] });
+    expect(counterparts([ari1], 25 * HOUR).idle[0]!.why).toBe("legacy 265 on its A2 basis, the shadow none in 25 h of shadow history on the page; nothing due: "
+      + "media-stats.walk looked 2026-10-02T12:34:23.000Z, nothing due (its pick re-run there: none due and untouched since; 5 years on it takes "
+      + "400 of the 400 queued); next look 2026-10-02T18:34:23.000Z (by the look + 6 h + 2 min)");
+    expect(counterparts([{ ...ari1, dueAtLook: { count: 1, examples: ["m1"], queued: 400 } }], 2 * HOUR).lacking).toHaveLength(1);
+    expect(counterparts([{ ...ari1, dueLater: { count: 0, examples: [], queued: 400 } }], 2 * HOUR).lacking[0]!.why)
+      .toMatch(/\(rule A1\.floor-idle\): media-stats\.walk: .* takes none of the 400 subjects on its queue even 5 years after the look: its due rule never reads$/);
+    const stale = looked("2026-10-01T01:00:00Z", "2026-10-02T07:30:00Z", "2026-10-02T13:30:00Z");
+    expect(counterparts([stale], 4 * HOUR).pending).toHaveLength(1);
+    expect(counterparts([stale], 25 * HOUR).lacking[0]!.why).toMatch(/\(rule A1\.floor-idle\): media-stats\.walk: looked 2026-10-02T07:30:00\.000Z, its next look due 2026-10-02T13:30:00\.000Z and not taken by the window end$/);
+  });
+
+  it("rule A1.rate-assumed: lilly-1 14:00–15:00 with no daily key run yet is 23.34 an hour, the ceiling ok on assumed sizes", () => {
+    const window = { startMs: T("2026-10-02T14:00:00Z"), endMs: T("2026-10-02T15:00:00Z") };
+    const observed = new Map(Object.entries({
+      "account.poll": 1, "dm-conversations.head": 2, "notifications.forward": 2, "subscribers.poll": 1, "transactions.insurance": 12,
+      "transactions.rescan": 1, "media-stats.walk": 430, "catalog.vault": 14,
+    }).map(([key, attempts]) => [key, { class: "planned", attempts }] as const));
+    // lilly-1's rows of these keys on production: placed at its shadow start
+    // (the reconcile at its first head decision), none run by 15:00 — the
+    // posts and top-spenders polls first read at 15:04 and 15:05, by their bound.
+    const placed = "2026-10-02T10:05:03.566Z";
+    const row = (due: string, firstAdmitted: string | null = null, createdAt = placed): ScheduleRow => ({
+      createdMs: T(createdAt), dueMs: T(due), firstAdmittedMs: firstAdmitted === null ? null : T(firstAdmitted), quarantined: false,
+    });
+    const lilly1Rows: Record<string, [number, ScheduleRow]> = {
+      "dm-conversations.full": [36, row("2026-10-03T04:22:24.637Z")],
+      "followers.reconcile": [36, row("2026-10-03T08:16:37.783Z", null, "2026-10-02T10:57:54.752Z")],
+      "posts.refresh": [2, row("2026-10-02T20:46:59.716Z", "2026-10-02T15:04:32.655Z")],
+      "stats.daily": [11, row("2026-10-02T17:00:25.190Z")],
+      "catalog.fixed": [6, row("2026-10-03T02:41:25.679Z")],
+      "payouts.daily": [2, row("2026-10-02T17:00:32.709Z")],
+      "top-spenders.window": [1, row("2026-10-02T20:47:29.450Z", "2026-10-02T15:05:40.652Z")],
+      "stats.hourly": [1, row("2026-10-02T20:25:48.556Z")],
+    };
+    const assumedRuns = new Map(Object.entries(lilly1Rows).map(([key, [steps, scheduleRow]]) => [key, {
+      steps, rows: [scheduleRow], closedRunMs: null, runsFromMs: window.startMs - 28 * HOUR,
+    } satisfies AssumedRun] as const));
+    const judge = (assumed?: ReadonlyMap<string, AssumedRun>) => demandOfPage(shadowPage("lilly-1"), {
+      window, observed, reads: undefined,
+      facts: { runs: new Map(), placements: new Map(), firstShadowMs: null, ...(assumed === undefined ? {} : { assumed }) },
+      counterparts: NO_GAPS,
+    });
+    // 19 + 36/24 + 36/24 + 2/6 + 11/24 + 6/24 + 2/24 + 1/6 + 1/22
+    const assumed = judge(assumedRuns);
+    expect(assumed).toMatchObject({ steadyState: 23.34, steadyStateRaw: 19, unknownRunSize: [], ceiling: "ok", ceilingBasis: "assumed" });
+    expect(assumed.assumedRunSize).toHaveLength(8);
+    expect(assumed.assumedRunSize).toContainEqual({ resource: "dm-conversations.full", steps: 36, periodMs: 24 * HOUR });
+    expect(assumed.resources.find((row) => row.resource === "followers.reconcile")).toMatchObject({
+      rate: { sizedBy: "assumed", runSize: 36, counted: 1.5 },
+      reason: "a walk at most every 24 h: no finished walk yet, counted at its assumed 36 steps per 24 h (rule A1.rate-assumed)",
+    });
+    expect(assumed.resources.find((row) => row.resource === "stats.daily")!.reason).toContain("no finished run yet: counted at its assumed 11 per 24 h (rule A1.rate-assumed)");
+    // Without an estimate the ceiling stays unknown on what the window saw.
+    expect(judge()).toMatchObject({ steadyState: 19, ceiling: "unknown", ceilingBasis: "measured", assumedRunSize: [] });
+    expect(judge().unknownRunSize).toHaveLength(8);
+  });
+
+  /** A daily key placed at the shadow's start, its first run not due yet. */
+  const firstRunDue = (steps: number, extra: Partial<AssumedRun> = {}): AssumedRun => ({
+    steps,
+    rows: [{ createdMs: T("2026-10-02T10:05:25Z"), dueMs: T("2026-10-03T08:34:08Z"), firstAdmittedMs: null, quarantined: false }],
+    closedRunMs: null,
+    runsFromMs: WINDOW.startMs - 28 * HOUR,
+    ...extra,
+  });
+
+  it("rule A1.rate-assumed in a key's count: the assumption until its first finished run, a first run past it counts its excess", () => {
+    const day = 24 * HOUR;
+    // No run, assumed 80 per 24 h.
+    expect(rateCount({ periodMs: day, window: WINDOW, runs: [], kind: "poll", assumed: firstRunDue(80) }))
+      .toMatchObject({ runSize: 80, runAt: null, sizedBy: "assumed", extra: 0, beyond: 0, notAssumed: null });
+    expect(rateCount({ periodMs: day, window: WINDOW, runs: [], kind: "poll", assumed: firstRunDue(80) }).counted).toBeCloseTo(80 / 24, 6);
+    // Its first run, 90 steps still going in the window: + 10 beyond.
+    const going = rateCount({
+      periodMs: day,
+      window: WINDOW,
+      runs: runsOf(steps(T("2026-10-02T12:46:00Z"), 90, 2_000), "poll"),
+      kind: "poll",
+      assumed: firstRunDue(80, {
+        rows: [{ createdMs: T("2026-10-02T10:05:25Z"), dueMs: T("2026-10-02T12:49:58Z"), firstAdmittedMs: T("2026-10-02T12:46:00Z"), quarantined: false }],
+      }),
+    });
+    expect(going).toMatchObject({ runSize: 80, sizedBy: "assumed", beyond: 10 });
+    // A finished 44-step run: the measurement wins.
+    const finished = rateCount({ periodMs: day, window: WINDOW, runs: runsOf(steps(T("2026-10-02T09:00:00Z"), 44, 2_000), "poll"), kind: "poll", assumed: firstRunDue(80) });
+    expect(finished).toMatchObject({ runSize: 44, sizedBy: "run", notAssumed: null });
+    expect(finished.counted).toBeCloseTo(44 / 24, 6);
+    // No run and no estimate: unknown.
+    expect(rateCount({ periodMs: day, window: WINDOW, runs: [], kind: "poll" })).toMatchObject({ runSize: null, counted: null, sizedBy: null, notAssumed: null });
+    // lilly-2's hour before its daily list sweep ran: unknown without an
+    // estimate, 35.17 an hour on its 146 assumed pages.
+    const fixture = lilly2({ withoutRun: "dm-conversations.full" });
+    const judge = (assumed?: ReadonlyMap<string, AssumedRun>) => demandOfPage(shadowPage("lilly-2"), {
+      window: WINDOW, observed: fixture.observed, reads: undefined,
+      facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z"), ...(assumed === undefined ? {} : { assumed }) },
+      counterparts: NO_GAPS,
+    });
+    expect(judge()).toMatchObject({ unknownRunSize: ["dm-conversations.full"], ceiling: "unknown", passes: false });
+    expect(judge(new Map([["dm-conversations.full", firstRunDue(146)]]))).toMatchObject({
+      steadyState: 35.17, unknownRunSize: [], ceiling: "ok", ceilingBasis: "assumed", passes: true,
+    });
+  });
+
+  it("rule A1.rate-assumed holds only before a key's first finished run, while its row keeps that run on schedule: a stopped reconcile stays unknown", () => {
+    const day = 24 * HOUR;
+    const end = WINDOW.endMs;
+    const reconcile = (assumed: AssumedRun, runs: readonly KeyRun[] = []) =>
+      rateCount({ periodMs: day, window: WINDOW, runs, kind: "interval", assumed, key: "followers.reconcile" });
+    // The reviewer's case: its only 85-step walk closed 40 h before the window
+    // end (before the runs the report reads), the next row placed and on
+    // schedule — the key ran: no assumption, unknown.
+    const ranBefore = reconcile(firstRunDue(85, { closedRunMs: end - 40 * HOUR }));
+    expect(ranBefore).toMatchObject({ runSize: null, counted: null, sizedBy: null });
+    expect(ranBefore.notAssumed).toBe(`followers.reconcile: a run of it closed ${new Date(end - 40 * HOUR).toISOString()} — a key that ran is sized by its runs`);
+    // The same walk among the runs read, outside its 27.4-h look-back.
+    const walkStart = end - 40 * HOUR - 3 * MINUTE;
+    const oldWalk = runsOf(steps(walkStart, 85, 2_000, { workId: 4773, workClosedMs: end - 40 * HOUR }), "walk");
+    expect(reconcile(firstRunDue(85), oldWalk)).toMatchObject({
+      sizedBy: null,
+      notAssumed: `followers.reconcile: its run of ${new Date(walkStart).toISOString()} finished before the window end — a key that ran is sized by its runs`,
+    });
+    // Never ran, but its row is quarantined: unknown.
+    const quarantined = firstRunDue(85, { rows: [{ createdMs: T("2026-10-02T10:57:54Z"), dueMs: T("2026-10-03T08:16:37Z"), firstAdmittedMs: null, quarantined: true }] });
+    expect(reconcile(quarantined)).toMatchObject({ sizedBy: null, counted: null, notAssumed: "followers.reconcile: its row is quarantined" });
+    // Never ran, no row at the window end; a row due and not admitted by the end.
+    expect(reconcile(firstRunDue(85, { rows: [] })).notAssumed).toBe("followers.reconcile: no shadow work row on the page at the window end");
+    const overdue = firstRunDue(85, { rows: [{ createdMs: T("2026-10-02T10:57:54Z"), dueMs: T("2026-10-02T12:00:00Z"), firstAdmittedMs: null, quarantined: false }] });
+    expect(reconcile(overdue).notAssumed).toBe("followers.reconcile: due 2026-10-02T12:00:00.000Z, not admitted by the window end");
+    // Its first walk admitted and then left due (stuck mid-walk).
+    const stuck = firstRunDue(85, { rows: [{ createdMs: T("2026-10-02T10:57:54Z"), dueMs: T("2026-10-02T12:10:00Z"), firstAdmittedMs: T("2026-10-02T12:00:00Z"), quarantined: false }] });
+    expect(reconcile(stuck, runsOf(steps(T("2026-10-02T12:00:00Z"), 10, 2_000, { workId: 5840 }), "walk")).notAssumed)
+      .toBe("followers.reconcile: its first run, admitted 2026-10-02T12:00:00.000Z, was due again 2026-10-02T12:10:00.000Z and not taken by the window end");
+    // A row whose first attempt precedes the runs the report reads.
+    const old = firstRunDue(85, { rows: [{ createdMs: T("2026-09-29T10:00:00Z"), dueMs: T("2026-10-02T13:00:00Z"), firstAdmittedMs: T("2026-09-29T10:05:00Z"), quarantined: false }] });
+    expect(reconcile(old).notAssumed).toBe(
+      `followers.reconcile: its row's first run began 2026-09-29T10:05:00.000Z, before the runs the report reads (from ${new Date(WINDOW.startMs - 28 * HOUR).toISOString()})`,
+    );
+    // lilly-1's reconcile of 2026-10-02 (placed 10:57:54, due 10-03 08:16:37,
+    // by its placement + 24 h + 2 min): assumed.
+    const lilly1 = firstRunDue(36, { rows: [{ createdMs: T("2026-10-02T10:57:54.752Z"), dueMs: T("2026-10-03T08:16:37.783Z"), firstAdmittedMs: null, quarantined: false }] });
+    expect(reconcile(lilly1)).toMatchObject({ runSize: 36, sizedBy: "assumed", notAssumed: null });
+
+    // On the page: the ceiling is unknown and says why, A1 fails.
+    const fixture = lilly2({ withoutRun: "followers.reconcile" });
+    const page = demandOfPage(shadowPage("lilly-2"), {
+      window: WINDOW, observed: fixture.observed, reads: undefined,
+      facts: { runs: fixture.runs, placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z"), assumed: new Map([["followers.reconcile", quarantined]]) },
+      counterparts: NO_GAPS,
+    });
+    expect(page).toMatchObject({ unknownRunSize: ["followers.reconcile"], ceiling: "unknown", assumedRunSize: [], passes: false });
+    expect(page.resources.find((entry) => entry.resource === "followers.reconcile")!.reason).toBe(
+      "a walk at most every 24 h: no finished walk to size it yet and not counted at its estimate, followers.reconcile: its row is quarantined "
+        + "(rule A1.rate-assumed)",
+    );
   });
 });

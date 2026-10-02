@@ -341,7 +341,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   // ── fan-earnings (S2-07b) ─────────────────────────────────────────────────
   {
     // The transactions steps (≥ every 5 min) ask for a walk whenever a subject
-    // is due: dirty (projection queue) or past the roster age (poll-like).
+    // is due: dirty (projection queue) or past the roster age (poll-like). No
+    // standing row: between walks the queue alone says when the next is due
+    // (the shadow walks its due roster at most once a `cadence`).
     key: "fan-earnings.roster", file: "fan-earnings", subject: "page", kind: "goal", class: "planned",
     triggers: ["projection_queue", "poll", "apply:transactions.*"], cadence: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
     proof: "receipt", walk: "subject-queue", http: true, evidence: false, fence: "none",
@@ -425,9 +427,13 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
 
   // ── fan-profiles (S2-07a) ─────────────────────────────────────────────────
   {
+    // Demand only: the applies name the fans whose profile was not read
+    // through the page within a day (the 24 h reuse per fan is
+    // `FANSLY_ACCOUNT_LOOKUP_REUSE_MS`, read by `partitionLookupIds`; no
+    // cadence of its own).
     key: "fan-profiles.lookup", file: "fan-profiles", subject: "page", kind: "goal", class: "planned",
     triggers: ["apply:subscribers.*", "apply:followers.*", "apply:transactions.*", "dependency"],
-    cadence: { everyMs: DAY }, slo: {},
+    slo: {},
     proof: "snapshot", walk: "subject-queue", http: true, evidence: false, fence: "none",
     operations: ["accounts.by_ids"], replayKinds: ["account_lookup"],
     legacy: [stream("subscribers"), stream("followers"), stream("followers_reconcile")],

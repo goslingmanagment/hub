@@ -389,6 +389,55 @@ describe("catalog.vault", () => {
     expect(await coverage(pageId, "catalog_vault_media", "A1")).toMatchObject({ status: "provider_exhausted", reason_code: "album_empty" });
   });
 
+  it("a look that finds nothing to walk waits while the album events are not projected yet, then walks the album that moved", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // A1 walked today at its head M0 (one item), proved and current.
+    await seedAlbum(pageId, "A1", 1, "M0");
+    const registry = await quietRegistry(pageId, false);
+    const today = new Date().toISOString().slice(0, 10);
+    await makeDue(pageId, false, "catalog.vault");
+    await setCursor(pageId, "catalog.vault", {
+      afterAlbumRef: "A1",
+      vaultWalk: {
+        A1: {
+          ...emptyAlbumWalk(),
+          done: true,
+          completedAtLastItemRef: "M0",
+          completedOnUtcDay: today,
+          lastCompleteWalkAt: `${today}T00:00:01.000Z`,
+          proof: { walkRef: "w", startedAt: `${today}T00:00:00.000Z`, expectedCount: 1, headRef: "M0", seenMediaRefs: ["M0"], observationRefs: [1], valid: true },
+        },
+      },
+    });
+    // The fixed sweep journaled a listing in which A1 moved: its event sits
+    // above the projection's watermark, the album row still shows M0.
+    await ensureDomainEventPartitions(db());
+    await appendProjectionOnlyDomainEvents(db(), pageId, [{
+      type: "vault.album_observed", schemaVersion: 1, occurredAt: new Date(), observationId: 1, dedupKey: "test:album:A1:M1", data: { albumRef: "A1" },
+    }], { occurredAt: new Date(), observationId: 1, dedupKey: "test:checkpoint:A1:M1" });
+    const answer = (req: FanslyWireRequest) => okResponse(query(req, "before") === "0"
+      ? { albumMedia: [{ id: "AM1", albumId: "A1", mediaId: "M1" }, { id: "AM0", albumId: "A1", mediaId: "M0" }], media: [] }
+      : { albumMedia: [], media: [] });
+    const waited = await drive(pageId, "live", registry, answer, async () => (await workRow(pageId, "catalog.vault"))?.waiting_reason === "dependency");
+    // Not a day's rest on the previous list: a re-check within the minute.
+    expect(waited.hits).toEqual([]);
+    expect((await workRow(pageId, "catalog.vault"))!.due_at.getTime() - Date.now()).toBeLessThan(2 * 60_000);
+
+    // Projected: the album row moved to its new head; the walk takes it.
+    await testDb.pool.query(
+      `insert into projection_seq_watermarks (projection, account_id, high_seq) values ('fansly_catalog', $1, 1000)
+       on conflict (projection, account_id) do update set high_seq = excluded.high_seq`,
+      [pageId],
+    );
+    await testDb.pool.query("update creator_vault_albums set last_item_ref = 'M1', item_count = 2 where page_id = $1 and album_ref = 'A1'", [pageId]);
+    await makeDue(pageId, false, "catalog.vault");
+    const walked = await drive(pageId, "live", registry, answer,
+      async () => (await workRow(pageId, "catalog.vault"))?.waiting_reason === "not_due" && (await attempts(pageId, "catalog.vault")) === 2);
+    expect(walked.hits).toEqual(["vault.media", "vault.media"]);
+    expect((await workRow(pageId, "catalog.vault"))!.cursor).toMatchObject({ vaultWalk: { A1: { done: true, completedAtLastItemRef: "M1" } } });
+  });
+
   it("the page's full-sweep override (owner decision №6) re-walks an album the registry's weekly sweep leaves, without a deploy", async (context) => {
     if (!testDb) return context.skip();
     const { pageId, label } = await seedPage("live");
@@ -567,6 +616,61 @@ describe("media-stats.walk", () => {
       [pageId],
     );
     expect(steps.rows).toEqual([{ subject: ITEM_FRESH, outcomes: 0 }, { subject: ITEM_FRESH, outcomes: 1 }, { subject: ITEM_MID, outcomes: 0 }]);
+  });
+
+  it("today's top 50 jump the queue once a UTC day, marked before the pick — also on a day nothing else is due", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // A 60-day item read two days ago: not due again for five days by its tier.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2, backfillCursor: BACKFILL_DONE });
+    // The page's latest top-media window names it.
+    await testDb.pool.query(
+      `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
+                                    content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
+      [pageId, ITEM_MID, "e".repeat(64)],
+    );
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    await setCursor(pageId, "media-stats.walk", { topMarkedDay: new Date(Date.now() - DAY_MS).toISOString().slice(0, 10) });
+    const { hits, requests } = await drive(pageId, "live", registry, mediaAnswer(),
+      async () => (await workRow(pageId, "media-stats.walk"))?.waiting_reason === "not_due");
+    // Marked (a local step, no request), then picked as dirty and read.
+    expect(hits).toEqual(["media.offer_stats"]);
+    expect(requests.map((req) => query(req, "mediaOfferId"))).toEqual([ITEM_MID]);
+    expect(await mediaRow(pageId, ITEM_MID)).toMatchObject({ dirty_reason: null });
+    expect((await workRow(pageId, "media-stats.walk"))!.cursor.topMarkedDay).toBe(new Date().toISOString().slice(0, 10));
+    // The same UTC day: no second mark, nothing due, no read.
+    await makeDue(pageId, false, "media-stats.walk");
+    const again = await drive(pageId, "live", registry, mediaAnswer(),
+      async () => (await workRow(pageId, "media-stats.walk"))?.waiting_reason === "not_due" && (await attempts(pageId, "media-stats.walk", "true")) === 1);
+    expect(again.hits).toEqual([]);
+  });
+
+  it("the daily top-50 mark is a local step: nothing admitted or sent, an item read within the day left to its tier", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // A 60-day item read two hours ago: not due by its weekly tier, and the
+    // mark leaves an item visited within the day alone.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2 / 24, backfillCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
+                                    content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
+      [pageId, ITEM_MID, "e".repeat(64)],
+    );
+    const before = await mediaRow(pageId, ITEM_MID);
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    await setCursor(pageId, "media-stats.walk", { topMarkedDay: new Date(Date.now() - DAY_MS).toISOString().slice(0, 10) });
+    const today = new Date().toISOString().slice(0, 10);
+    const { hits } = await drive(pageId, "live", registry, mediaAnswer(), async () => {
+      const row = await workRow(pageId, "media-stats.walk");
+      return row?.cursor.topMarkedDay === today && row.waiting_reason === "not_due";
+    });
+    expect(hits).toEqual([]);
+    expect(await attempts(pageId, "media-stats.walk", "true")).toBe(0);
+    expect(await mediaRow(pageId, ITEM_MID)).toEqual(before);
   });
 
   it("a failing item breaks only its queue row and the walk moves on", async (context) => {

@@ -296,6 +296,35 @@ function foldBroadcast(walk: BroadcastState, response: unknown, counters: Record
   return { walk: { ...next.walk, stop: next.stop ?? walk.stop }, stepDone: next.stepDone };
 }
 
+/** A shadow sweep's steps at most (a guard on the estimate's loop). */
+const DAILY_SWEEP_STEPS_MAX = 100;
+
+/**
+ * One shadow step of the daily sweep at `index` (no answers): the discovery
+ * read counts its sweep's pages, the earnings window one read, a broadcast
+ * list not at its floor a sweep's three pages. Pure: `shadow()` and the
+ * report's assumed run size (rule A1.rate-assumed) step the same way.
+ */
+function shadowDailyStep(input: StatsDailyCursor, index: number, now: Date): { cursor: StatsDailyCursor; sweepDone: boolean } {
+  let cursor = input;
+  if (index === 5 && cursor.discoveryPage + 1 < DISCOVERY_PAGES_PER_SWEEP) {
+    return { cursor: { ...cursor, discoveryPage: cursor.discoveryPage + 1 }, sweepDone: false };
+  }
+  if (index === 5) cursor = { ...cursor, discoveryPage: 0 };
+  if (index === 6 || index === 7) {
+    const live = index === 6;
+    const walk = live ? cursor.broadcasts.live : cursor.broadcasts.deleted;
+    if (!walk.floorReached) {
+      const pagesInSweep = walk.pagesInSweep + 1;
+      const done = pagesInSweep >= 3;
+      const nextWalk = { ...walk, pagesInSweep: done ? 0 : pagesInSweep };
+      cursor = { ...cursor, broadcasts: live ? { ...cursor.broadcasts, live: nextWalk } : { ...cursor.broadcasts, deleted: nextWalk } };
+      if (!done) return { cursor, sweepDone: false };
+    }
+  }
+  return advanceDaily({ ...cursor, stepIndex: index }, now);
+}
+
 const dailyModule: ResourceModule = {
   async plan(work, ctx): Promise<StepPlan> {
     let cursor = parseStatsDailyCursor(work.cursor);
@@ -390,29 +419,31 @@ const dailyModule: ResourceModule = {
   },
 
   async shadow(work, request, ctx): Promise<ShadowResult> {
-    let cursor = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
-    const index = dailyStepOf(request)?.index ?? cursor.stepIndex;
-    // No answers: the earnings window counts as one read, a broadcast list not
-    // at its floor as a sweep's three pages.
-    if (index === 5 && cursor.discoveryPage + 1 < DISCOVERY_PAGES_PER_SWEEP) {
-      return { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: { ...cursor, discoveryPage: cursor.discoveryPage + 1 } }, followups: [] };
-    }
-    if (index === 5) cursor = { ...cursor, discoveryPage: 0 };
-    if (index === 6 || index === 7) {
-      const live = index === 6;
-      const walk = live ? cursor.broadcasts.live : cursor.broadcasts.deleted;
-      if (!walk.floorReached) {
-        const pagesInSweep = walk.pagesInSweep + 1;
-        const done = pagesInSweep >= 3;
-        const nextWalk = { ...walk, pagesInSweep: done ? 0 : pagesInSweep };
-        cursor = { ...cursor, broadcasts: live ? { ...cursor.broadcasts, live: nextWalk } : { ...cursor.broadcasts, deleted: nextWalk } };
-        if (!done) return { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor }, followups: [] };
-      }
-    }
-    const next = advanceDaily({ ...cursor, stepIndex: index }, ctx.now);
+    const cursor = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
+    const next = shadowDailyStep(cursor, dailyStepOf(request)?.index ?? cursor.stepIndex, ctx.now);
     return next.sweepDone
       ? { work: { satisfiesRevision: true, close: "done", closeReason: "shadow", cursor: next.cursor }, followups: [] }
       : { work: { satisfiesRevision: false, nextDueAt: ctx.now, cursor: next.cursor }, followups: [] };
+  },
+
+  async estimateRunSteps(work, ctx): Promise<number> {
+    // A whole sweep from its head, the broadcast walks where the row (or the
+    // legacy lane it is seeded from) holds them, stepped as `shadow()` steps.
+    const seeded = await seededDailyCursor(ctx.db, ctx.pageId, parseStatsDailyCursor(work.cursor));
+    const reset = (walk: BroadcastState): BroadcastState => ({ ...walk, pagesInSweep: 0 });
+    let cursor: StatsDailyCursor = {
+      ...seeded,
+      stepIndex: 0,
+      earningsWalk: null,
+      discoveryPage: 0,
+      broadcasts: { live: reset(seeded.broadcasts.live), deleted: reset(seeded.broadcasts.deleted) },
+    };
+    for (let steps = 1; steps <= DAILY_SWEEP_STEPS_MAX; steps += 1) {
+      const next = shadowDailyStep(cursor, cursor.stepIndex, ctx.now);
+      if (next.sweepDone) return steps;
+      cursor = next.cursor;
+    }
+    return DAILY_SWEEP_STEPS_MAX;
   },
 
   replay: replayByCanonicalDrafts,

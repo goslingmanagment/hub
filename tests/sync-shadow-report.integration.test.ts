@@ -2,12 +2,26 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createDb, createPool, insertAuditEvent, insertObservation, listSyncPages, type Database } from "@agency_hub_core/db";
+import {
+  createDb,
+  createPool,
+  getSyncPage,
+  getSyncWork,
+  insertAuditEvent,
+  insertObservation,
+  listSyncPages,
+  upsertDemand,
+  type Database,
+  type SyncWorkRow,
+} from "@agency_hub_core/db";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { buildSyncReportCommandGroup } from "../apps/runtime/src/sync/cli/report.ts";
-import type { EngineRegistry, ReplayContext, ReplayObservation, ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
+import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { changedTables, setModeDirect, tableCounts } from "./helpers/sync-engine-host.ts";
@@ -68,11 +82,42 @@ async function shadowAttempt(
   );
 }
 
+/** One legacy request of a stream on the page (its own run). */
+async function legacyRequest(pageId: number, stream: string, operation: string, at: Date): Promise<void> {
+  const run = await testDb!.pool.query<{ id: string }>(
+    `insert into sync_runs (page_id, stream, source, outcome, started_at, finished_at, stats)
+     values ($1, $2, 'scheduled', 'succeeded', $3, $3, '{}'::jsonb) returning id`,
+    [pageId, stream, at],
+  );
+  await testDb!.pool.query(
+    `insert into sync_http_attempts (page_id, sync_run_id, provider, stream, operation, logical_request_id, attempt_number, state, started_at, response_body_bytes)
+     values ($1, $2, 'fansly', $3, $4, 'request', 1, 'success', $5, 100)`,
+    [pageId, Number(run.rows[0]!.id), stream, operation, at],
+  );
+}
+
+/** The rows the engine keeps for the keys counted at their rate (a poll or
+ *  walk recurring less often than the hour), placed at `placedAt`, each first
+ *  run due 10 min before its period is over: on schedule (rule A1.rate-assumed). */
+async function placeRateRows(pageId: number, placedAt: Date): Promise<void> {
+  for (const spec of FANSLY_RESOURCE_SPECS) {
+    const periodMs = ratePeriodMs(spec, { registryOverrides: {} }, 3_600_000)?.periodMs ?? null;
+    if (periodMs === null || !runsIn(spec, true)) continue;
+    await testDb!.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, updated_at, due_at)
+       values ($1, true, $2, '', $3, $4, $5, $5, $5::timestamptz + make_interval(secs => $6))`,
+      [pageId, spec.key, spec.kind, spec.class, placedAt, (periodMs - 10 * MINUTE) / 1_000],
+    );
+  }
+}
+
 /** The live hour of the fixture: [start, start + 1 h), one hour ago. */
 async function seedWindow(page: WsCapturePage, start: Date): Promise<void> {
   const at = (ms: number) => new Date(start.getTime() + ms);
-  // The page ran in shadow before the window (its settling).
+  // The page ran in shadow before the window (its settling); the engine
+  // placed its rows then.
   await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-30 * MINUTE) });
+  await placeRateRows(page.pageId, at(-30 * MINUTE));
   // Notification polls every 30 min: one before the window, two in it.
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(-20 * MINUTE) });
   await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(10 * MINUTE) });
@@ -207,9 +252,16 @@ describe("the shadow report (design §3.12)", () => {
     // urgent 3 + notifications 2 + stats.daily 11 + the reconcile 24 observed;
     // at their rates 3 + 2 + 11/24 + 24/24.
     expect(demand.steadyStateRaw).toBe(40);
-    expect(demand.steadyState).toBe(6.46);
-    // The longer polls that never ran leave the ceiling unknown.
-    expect(demand.unknownRunSize).toEqual(["catalog.fixed", "dm-conversations.full", "payouts.daily", "posts.refresh", "stats.hourly", "top-spenders.window"]);
+    // + the single-request polls that never ran at one request a period
+    // (rule A1.rate-assumed): 1/22 + 1/6.
+    expect(demand.steadyState).toBe(6.67);
+    expect(demand.assumedRunSize).toEqual([
+      { resource: "stats.hourly", steps: 1, periodMs: 22 * 3_600_000 },
+      { resource: "top-spenders.window", steps: 1, periodMs: 6 * 3_600_000 },
+    ]);
+    // The longer multi-step polls that never ran, without an estimate (the
+    // stub registry's modules give none), leave the ceiling unknown.
+    expect(demand.unknownRunSize).toEqual(["catalog.fixed", "dm-conversations.full", "payouts.daily", "posts.refresh"]);
     expect(demand).toMatchObject({ ceiling: "unknown", inBand: false, passes: false });
     expect(demand.floor).toMatchObject({
       below: true,
@@ -257,11 +309,14 @@ describe("the shadow report (design §3.12)", () => {
 
     expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 43, violations: 0 }] });
     expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
-    expect(window.rules.map((rule) => rule.id)).toEqual(["A1.rate", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only"]);
+    expect(window.rules.map((rule) => rule.id)).toEqual([
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle", "A1.poll-schedule",
+      "A2.rate", "A2.legacy-regime", "A2.live-only",
+    ]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
     expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor: Below 40 an hour a page passes only when /));
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /^A1 lilly-1: steady 6\.46 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run yet of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; OFF SCHEDULE or RUNAWAY \(rules A1\.poll-schedule, A1\.rate\): .* — FAIL$/,
+      /^A1 lilly-1: steady 6\.67 per hour \(observed 40; at their rate: followers\.reconcile 24\/24 h, stats\.daily 11\/24 h\); ceiling 100: UNKNOWN — no finished run to size it and no assumed size of catalog\.fixed, .*; below 40: the floor's exception FAILS \(rule A1\.floor; outside: .*dm-conversations\.head.*; OFF SCHEDULE or RUNAWAY \(rules A1\.poll-schedule, A1\.rate\): .* — FAIL$/,
     ));
     expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
@@ -341,6 +396,288 @@ describe("the shadow report (design §3.12)", () => {
     expect(read.window!.demand[0]!.floor.counterparts).toMatchObject({ pending: [], scheduled: [{ ref: "stream:fan_earnings" }] });
     expect(read.window!.demand[0]!.floor.counterparts.scheduled[0]!.why)
       .toContain(`fan-earnings.roster first read admitted ${new Date(end.getTime() + 5 * MINUTE).toISOString()}, by its bound`);
+  });
+
+  it("part A: a queue walk whose queue holds nothing due is idle; a due subject makes the next transactions step ask for the walk (rule A1.floor-queue)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    await seedWindow(page, start);
+    await legacyRequest(page.pageId, "fan_earnings", "earnings.fan", new Date(start.getTime() - 2 * 3_600_000));
+    // Two spenders, both windows read 3 days ago, no mark: due again 156 h
+    // after the read.
+    const readAt = new Date(Date.now() - 3 * 24 * 3_600_000);
+    const spenders = ["200000000000000101", "200000000000000102"];
+    for (const fanRef of spenders) {
+      const fan = await testDb.pool.query<{ id: string }>(
+        "insert into fans (platform, platform_user_id, first_seen_at) values ('fansly', $1, now()) returning id",
+        [fanRef],
+      );
+      await testDb.pool.query(
+        "insert into page_fans (fan_id, platform_account_id, total_creator_net_mills) values ($1, $2, 5000)",
+        [Number(fan.rows[0]!.id), page.pageId],
+      );
+      for (const plane of ["fan_earnings_lifetime", "fan_earnings_monthly"]) {
+        await testDb.pool.query(
+          `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, created_at, updated_at)
+           values ($1, $2, $3, $4, $4, $4)`,
+          [page.pageId, plane, fanRef, readAt],
+        );
+      }
+    }
+    const insurance = await createFanslyRegistry().module("transactions.insurance");
+    const step = async () => (await insurance.shadow({ cursor: null } as unknown as SyncWorkRow, { spec: "transactions.page", params: {} } as never, {
+      db: db(), pageId: page.pageId, now: new Date(), page: (await getSyncPage(db(), page.pageId))!,
+    })).followups;
+    // A transactions step asks for no walk: nothing is due.
+    expect(await step()).toEqual([]);
+    const report = await buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
+    });
+    const counterparts = report.window!.demand[0]!.floor.counterparts;
+    expect(counterparts.pending).toEqual([]);
+    expect(counterparts.lacking).toEqual([]);
+    expect(counterparts.idle).toEqual([{
+      ref: "stream:fan_earnings",
+      why: `legacy 1 on its A2 basis, the shadow none in 1.5 h of shadow history on the page; nothing due: fan-earnings.roster: queue idle, its next subject due ${
+        new Date(readAt.getTime() + 156 * 3_600_000).toISOString()}`,
+    }]);
+    expect(report.summary).toContainEqual(expect.stringMatching(
+      /; idle, nothing due on the page — looked on time, which subjects a due rule takes not verified while legacy reads first \(rules A1\.floor-queue, A1\.floor-idle\): stream:fan_earnings \(/,
+    ));
+    expect(report.summary).toContainEqual(expect.stringMatching(/^Rule A1\.floor-queue: /));
+    // The real registry sizes every rate key before its first run: the
+    // ceiling is known, on assumed sizes (rule A1.rate-assumed).
+    expect(report.window!.demand[0]).toMatchObject({ unknownRunSize: [], ceiling: "ok", ceilingBasis: "assumed" });
+    expect(report.summary).toContainEqual(expect.stringMatching(
+      /ceiling 100 ok \(on assumed sizes, no finished run yet: catalog\.fixed 6\/24 h, dm-conversations\.full 1\/24 h, .*stats\.daily 15\/24 h.*; rule A1\.rate-assumed\)/,
+    ));
+    // A mark makes one subject due: the next step asks for the walk. Due a
+    // second ago: the database's now() carries microseconds (and its own
+    // clock), the step's `new Date()` whole milliseconds — a mark at now()
+    // can read as not due yet when both fall in the same millisecond.
+    await testDb.pool.query(
+      "update subject_refresh_state set next_due_at = now() - interval '1 second', updated_at = now() where page_id = $1 and plane = 'fan_earnings_lifetime' and subject_ref = $2",
+      [page.pageId, spenders[0]],
+    );
+    expect((await step()).map((signal) => signal.resource)).toEqual(["fan-earnings.roster"]);
+    const queue = await fanEarningsRosterNextDueAt(db(), { pageId: page.pageId, at: new Date(Date.now() + MINUTE), shadow: true });
+    expect("nextDueAt" in queue && queue.nextDueAt !== null && queue.nextDueAt.getTime() <= Date.now()).toBe(true);
+  });
+
+  it("part A: a queue walk's queue is judged as it stood at the window end — a subject legacy read after it leaves the stream not yet judgeable, never idle (rule A1.floor-queue)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    await seedWindow(page, start);
+    await legacyRequest(page.pageId, "fan_earnings", "earnings.fan", new Date(start.getTime() - 2 * 3_600_000));
+    // One spender, both windows last read 156 h + 30 min before the window
+    // end: due 30 min before it, and no walk row asked for.
+    const fanRef = "200000000000000201";
+    const fan = await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, first_seen_at) values ('fansly', $1, now()) returning id",
+      [fanRef],
+    );
+    await testDb.pool.query(
+      "insert into page_fans (fan_id, platform_account_id, total_creator_net_mills) values ($1, $2, 5000)",
+      [Number(fan.rows[0]!.id), page.pageId],
+    );
+    const readAt = new Date(end.getTime() - 30 * MINUTE - 156 * 3_600_000);
+    for (const plane of ["fan_earnings_lifetime", "fan_earnings_monthly"]) {
+      await testDb.pool.query(
+        `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, created_at, updated_at)
+         values ($1, $2, $3, $4, $4, $4)`,
+        [page.pageId, plane, fanRef, readAt],
+      );
+    }
+    const counterparts = async () => (await buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
+    })).window!.demand[0]!.floor.counterparts;
+    // Untouched since: the subject was due 30 min before the end, the driver
+    // had 7.5 min to ask for the walk — no counterpart.
+    const missed = await counterparts();
+    expect(missed).toMatchObject({ idle: [], pending: [] });
+    expect(missed.lacking[0]!.why).toContain(
+      `(rule A1.floor-queue): fan-earnings.roster: a subject due ${new Date(end.getTime() - 30 * MINUTE).toISOString()} and no walk row by the window end`,
+    );
+    // Legacy read it 10 min after the window end: as it stands now it is due
+    // in 156 h, but the queue at the window end is not known — not idle.
+    const legacyRead = new Date(end.getTime() + 10 * MINUTE);
+    await testDb.pool.query(
+      "update subject_refresh_state set last_visited_at = $2, updated_at = $2 where page_id = $1 and plane = 'fan_earnings_lifetime'",
+      [page.pageId, legacyRead],
+    );
+    const moved = await counterparts();
+    expect(moved).toMatchObject({ idle: [], lacking: [] });
+    expect(moved.pending).toEqual([{
+      ref: "stream:fan_earnings",
+      why: expect.stringContaining(
+        `(rule A1.floor-queue): fan-earnings.roster: 1 roster subject row changed after ${end.toISOString()} (the newest ${legacyRead.toISOString()}): `
+          + "the queue as it stood then is not known — its queue at the window end is not judgeable; report a window that ends after it",
+      ),
+    }]);
+  });
+
+  it("rule A1.rate-assumed: a key that ran before is not counted at its estimate — a reconcile whose walk closed 40 h before the window end stays unknown", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    await seedWindow(page, start);
+    const report = async () => (await buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
+    }));
+    // Never run, its row on schedule: assumed.
+    const fresh = await report();
+    expect(fresh.window!.demand[0]).toMatchObject({ unknownRunSize: [], ceiling: "ok", ceilingBasis: "assumed" });
+    expect(fresh.window!.demand[0]!.assumedRunSize.map((entry) => entry.resource)).toContain("followers.reconcile");
+    // A row closed without an attempt is no run.
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, state, closed_at, close_reason)
+       values ($1, true, 'followers.reconcile', '', 'goal', 'planned', $2, 'cancelled', $2, 'test')`,
+      [page.pageId, new Date(end.getTime() - 50 * 3_600_000)],
+    );
+    expect((await report()).window!.demand[0]!.unknownRunSize).toEqual([]);
+    // Its one 3-step walk, closed 40 h before the window end: the key ran.
+    const closedAt = new Date(end.getTime() - 40 * 3_600_000);
+    const walk = await testDb.pool.query<{ id: string }>(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, state, closed_at, close_reason)
+       values ($1, true, 'followers.reconcile', '', 'goal', 'planned', $2, 'done', $2, 'shadow') returning id`,
+      [page.pageId, closedAt],
+    );
+    for (let i = 0; i < 3; i += 1) {
+      await shadowAttempt(page.pageId, { resource: "followers.reconcile", workClass: "planned", at: new Date(closedAt.getTime() - (3 - i) * 4_000), workId: Number(walk.rows[0]!.id) });
+    }
+    const ran = await report();
+    const demand = ran.window!.demand[0]!;
+    expect(demand).toMatchObject({ unknownRunSize: ["followers.reconcile"], ceiling: "unknown", passes: false });
+    expect(demand.resources.find((entry) => entry.resource === "followers.reconcile")!.reason).toBe(
+      `a walk at most every 24 h: no finished walk to size it yet and not counted at its estimate, followers.reconcile: a run of it closed ${
+        closedAt.toISOString()} — a key that ran is sized by its runs (rule A1.rate-assumed)`,
+    );
+    expect(ran.summary).toContainEqual(expect.stringMatching(/ceiling 100: UNKNOWN — no finished run to size it and no assumed size of followers\.reconcile \(rules A1\.rate, A1\.rate-assumed\)/));
+  });
+
+  it("part A: a standing walk that looked and found nothing due is idle; its pick re-run at the look naming a due subject untouched since lacks a counterpart (rule A1.floor-idle)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const end = new Date(start.getTime() + 3_600_000);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    await seedWindow(page, start);
+    await legacyRequest(page.pageId, "post_replies", "post.replies", at(10 * MINUTE));
+    // The replies walk, placed at the shadow's start, looked 20 min into the
+    // window and found nothing due: its next look 6 h on.
+    const look = at(20 * MINUTE);
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, created_at, updated_at, due_at, waiting_reason)
+       values ($1, true, 'post-replies.walk', '', 'goal', 'planned', $2, $3, $3::timestamptz + interval '6 hours', 'not_due')`,
+      [page.pageId, at(-30 * MINUTE), look],
+    );
+    // A post walked yesterday: not due again for days.
+    const queued = async (subjectRef: string, lastVisitedAt: Date | null, updatedAt: Date) => testDb!.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, created_at, updated_at)
+       values ($1, 'post_replies', $2, $3, $4, $4)
+       on conflict (page_id, plane, subject_ref) do update set last_visited_at = excluded.last_visited_at, updated_at = excluded.updated_at`,
+      [page.pageId, subjectRef, lastVisitedAt, updatedAt],
+    );
+    await queued("950000000000000001", at(-24 * 60 * MINUTE), at(-24 * 60 * MINUTE));
+    const report = async () => (await buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
+    })).window!.demand[0]!.floor.counterparts;
+    const idle = await report();
+    expect(idle).toMatchObject({ lacking: [], pending: [], idle: [{ ref: "stream:post_replies" }] });
+    // 5 years on, its own pick takes the one queued post (its due rule reads).
+    expect(idle.idle[0]!.why).toBe(`legacy 1 on its A2 basis, the shadow none in 1.5 h of shadow history on the page; nothing due: post-replies.walk looked ${
+      look.toISOString()}, nothing due (its pick re-run there: none due and untouched since; 5 years on it takes 1 of the 1 queued); next look ${
+      new Date(look.getTime() + 6 * 3_600_000).toISOString()} (by the look + 6 h + 2 min)`);
+    // A post queued before the look, never walked and untouched since: the
+    // look missed due work — no counterpart, at once.
+    await queued("950000000000000002", null, at(10 * MINUTE));
+    const missed = await report();
+    expect(missed).toMatchObject({ idle: [], pending: [] });
+    expect(missed.lacking).toEqual([{
+      ref: "stream:post_replies",
+      why: `legacy 1 on its A2 basis, the shadow none in 1.5 h of shadow history on the page; not on its schedule (rule A1.floor-idle): post-replies.walk: looked ${
+        look.toISOString()} and found nothing due, yet its own pick re-run there finds 1 due and untouched since (950000000000000002)`,
+    }]);
+    // Legacy walked it after the look: it stands as it does now, not as the look saw it.
+    await queued("950000000000000002", new Date(), new Date());
+    expect(await report()).toMatchObject({ lacking: [], idle: [{ ref: "stream:post_replies" }] });
+
+    // The report's own calls of the module's check: a pick that takes none of
+    // the queued posts even 5 years on is a due rule that never reads — no
+    // counterpart, at once.
+    const real = createFanslyRegistry();
+    const withCheck = (dueAtLook: NonNullable<ResourceModule["dueAtLook"]>): Pick<EngineRegistry, "module"> => ({
+      module: async (key) => key === "post-replies.walk" ? { ...(await real.module(key)), dueAtLook } : real.module(key),
+    });
+    const reportWith = async (registry: Pick<EngineRegistry, "module">) => (await buildShadowReport(ctx(), {
+      pages: await listSyncPages(db()), registry, window: { start, end }, journal: null, maxListed: 50,
+    })).window!.demand[0]!.floor.counterparts;
+    const never = await reportWith(withCheck(async () => ({ count: 0, examples: [], queued: 2 })));
+    expect(never).toMatchObject({ idle: [], pending: [] });
+    expect(never.lacking[0]!.why).toMatch(/\(rule A1\.floor-idle\): post-replies\.walk: looked .* takes none of the 2 subjects on its queue even 5 years after the look: its due rule never reads$/);
+    // A check whose statement fails costs only its own verdict (its savepoint
+    // rolls back; the report's read-only transaction goes on).
+    const failing = await reportWith(withCheck(async (_work, checkCtx) => {
+      await checkCtx.db.execute("select * from no_such_table");
+      return { count: 0, examples: [], queued: 0 };
+    }));
+    expect(failing).toMatchObject({ lacking: [], idle: [] });
+    expect(failing.pending[0]!.why).toMatch(/\(rule A1\.floor-idle\): post-replies\.walk: looked .*; its look check failed: .*no_such_table/);
+  });
+
+  it("rule A1.rate-assumed: each module's estimate is the steps its shadow run takes, over the page's own facts", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    // 1 bound thread + 120 more visible chats; 250 followers; 20 posts of the
+    // last 14 days.
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, platform_conversation_id)
+       select $1, (310000000000000000 + g)::text from generate_series(1, 120) g`,
+      [page.pageId],
+    );
+    await testDb.pool.query("update pages set follower_count = 250 where id = $1", [page.pageId]);
+    await testDb.pool.query(
+      `insert into creator_posts (account_id, platform, platform_post_id, text_plain, published_at, first_observed_at, last_observed_at,
+                                  content_hash, attachment_count, source_event_id, source_observation_id, source_account_seq)
+       select $1, 'fansly', (960000000000000000 + g)::text, 'a post', now() - make_interval(hours => g), now(), now(),
+              repeat('d', 64), 0, 9000 + g, 9000 + g, 100 + g
+         from generate_series(1, 20) g`,
+      [page.pageId],
+    );
+    const registry = createFanslyRegistry();
+    const syncPage = (await getSyncPage(db(), page.pageId))!;
+    const runSteps = async (key: string) => {
+      const spec = fanslyResourceSpec(key)!;
+      const module = await registry.module(key);
+      const created = await upsertDemand(db(), { pageId: page.pageId, shadow: true, resource: key, kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
+      let work = (await getSyncWork(db(), created.id))!;
+      const estimate = await module.estimateRunSteps!({ cursor: work.cursor }, { db: db(), pageId: page.pageId, now: new Date(), page: syncPage });
+      for (let steps = 1; steps <= 500; steps += 1) {
+        const now = new Date();
+        const plan = await module.plan(work, { db: db(), pageId: page.pageId, shadow: true, now, page: syncPage, registry });
+        if (plan.kind !== "request") throw new Error(`${key}: step ${steps} planned ${JSON.stringify(plan)}`);
+        const result = await module.shadow(work, plan.request, { db: db(), pageId: page.pageId, now, page: syncPage });
+        if (result.work.close !== undefined) return { estimate, steps };
+        work = { ...work, cursor: result.work.cursor ?? work.cursor };
+      }
+      throw new Error(`${key}: no close in 500 steps`);
+    };
+    // 121 visible chats at 100 a page, the list stating no total.
+    expect(await runSteps("dm-conversations.full")).toEqual({ estimate: 2, steps: 2 });
+    // 250 followers at 100 a page + the start and verify reads.
+    expect(await runSteps("followers.reconcile")).toEqual({ estimate: 5, steps: 5 });
+    // 20 posts of the look-back at 15 a page + the closing page, each followed by its tips read.
+    expect(await runSteps("posts.refresh")).toEqual({ estimate: 6, steps: 6 });
+    // 10 reads, the discovery list's second page, both broadcast lists not at
+    // their floor (no legacy walk to start from): 3 pages each.
+    expect(await runSteps("stats.daily")).toEqual({ estimate: 15, steps: 15 });
+    expect(await runSteps("catalog.fixed")).toEqual({ estimate: 6, steps: 6 });
+    expect(await runSteps("payouts.daily")).toEqual({ estimate: 2, steps: 2 });
   });
 
   it("part B: replays newest first since a date and at least N per kind; a failing or writing replay costs only its verdict", async (context) => {

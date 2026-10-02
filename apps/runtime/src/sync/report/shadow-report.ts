@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Database, FanslyWsLivePayloadResolver, SyncPageRow } from "@agency_hub_core/db";
 
 import type { SyncContext } from "../context.ts";
+import type { SettingsSource } from "../engine/ports.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { ScanGovernor, type ScanPacing } from "../fansly/lib/chain-rebuild.ts";
 import {
@@ -49,6 +50,9 @@ export interface ShadowReportInput {
   } | null;
   maxListed: number;
   resolvePayload?: FanslyWsLivePayloadResolver;
+  /** The live settings part A's module checks read (rule A1.floor-idle: the
+   *  replies' re-walk cycle); absent: the registry defaults. */
+  settings?: SettingsSource;
 }
 
 export interface ShadowReportVerdict {
@@ -89,7 +93,9 @@ async function windowPart(db: Database, input: ShadowReportInput, window: { star
       window,
       pages: input.pages,
       maxListed: input.maxListed,
+      registry: input.registry,
       ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
+      ...(input.settings === undefined ? {} : { settings: input.settings }),
     });
   });
 }
@@ -185,21 +191,25 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
 function demandLine(page: PageDemand): string {
   const perHour = page.band.max / STEADY_STATE_BAND_PER_HOUR.max;
   const rated = page.resources
-    .filter((row) => row.rate !== null && row.rate.counted !== null && row.rate.runSize !== null && row.rate.runSize > 0)
+    .filter((row) => row.rate !== null && row.rate.counted !== null && row.rate.runSize !== null && row.rate.runSize > 0
+      && row.rate.sizedBy === "run")
     .map((row) => `${row.resource} ${row.rate!.runSize}/${row.rate!.periodMs / 3_600_000} h`
       + `${row.rate!.extra + row.rate!.beyond > 0 ? ` + ${row.rate!.extra + row.rate!.beyond}` : ""}`);
+  const assumed = page.assumedRunSize.map((entry) => `${entry.resource} ${entry.steps}/${entry.periodMs / 3_600_000} h`);
   const parts = [
     `steady ${page.steadyState} per ${perHour === 1 ? "hour" : `${perHour} h`} (observed ${page.steadyStateRaw}`
       + `${rated.length === 0 ? "" : `; at their rate: ${rated.join(", ")}`})`,
     page.ceiling === "unknown"
-      ? `ceiling ${page.band.max}: UNKNOWN — no finished run yet of ${page.unknownRunSize.join(", ")} (rule A1.rate)`
-      : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"}`,
+      ? `ceiling ${page.band.max}: UNKNOWN — no finished run to size it and no assumed size of ${page.unknownRunSize.join(", ")} (rules A1.rate, A1.rate-assumed)`
+      : `ceiling ${page.band.max} ${page.ceiling === "ok" ? "ok" : "OVER"}`
+        + `${assumed.length === 0 ? "" : ` (on assumed sizes, no finished run yet: ${assumed.join(", ")}; rule A1.rate-assumed)`}`,
   ];
   if (!page.floor.below) {
     parts.push(page.inBand ? `band ${page.band.min}–${page.band.max}` : `above the band ${page.band.min}–${page.band.max}`);
   } else {
     const { counterparts } = page.floor;
     const listed = `${counterparts.scheduled.length === 0 ? "" : `; scheduled, first run not yet due (rule A1.floor-scheduled): ${counterparts.scheduled.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
+      + `${counterparts.idle.length === 0 ? "" : `; idle, nothing due on the page — looked on time, which subjects a due rule takes not verified while legacy reads first (rules A1.floor-queue, A1.floor-idle): ${counterparts.idle.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`
       + `${counterparts.onDemand.length === 0 ? "" : `; on demand, none due on the page: ${counterparts.onDemand.map((entry) => entry.ref).join(", ")}`}`
       + `${counterparts.notInShadow.length === 0 ? "" : `; not in shadow by design: ${counterparts.notInShadow.map((entry) => `${entry.ref} (${entry.why})`).join(", ")}`}`;
     parts.push(page.floor.holds === true

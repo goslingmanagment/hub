@@ -153,7 +153,8 @@ describe("the post-ack routing hook (I18)", () => {
       // The fan's two messages (one frame) and the chatter's reply; the own broadcast none.
       { resource: "dm-messages.head", subject: GROUP, shadow: false, class: "urgent", state: "open", revision: 2, messageIds: [fan.id, media.id, reply.id].sort(), txIds: [] },
       { resource: "payouts.daily", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
-      { resource: "purchases.targets", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
+      // The PPV order's target, one walk row of its own (never a subject-less row).
+      { resource: "purchases.targets", subject: "media:970000000000000001", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
       { resource: "subscribers.poll", subject: "", shadow: false, class: "planned", state: "open", revision: 1, messageIds: [], txIds: [] },
       { resource: "transactions.head", subject: "", shadow: false, class: "urgent", state: "open", revision: 3, messageIds: [], txIds: ["930000000000000001"] },
       // Only the settlement of a row the ledger holds as pending.
@@ -164,7 +165,37 @@ describe("the post-ack routing hook (I18)", () => {
     // event, the result within 10 s.
     expect(head.due_in_ms).toBeLessThanOrEqual(6_100);
     expect(head.deadline_in_ms).toBeLessThanOrEqual(10_100);
-    expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ ids: ["media:970000000000000001"] });
+    expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ target: { kind: "media", id: "970000000000000001" } });
+  });
+
+  it("PPV orders: one walk row per target across receipts; a subject-less quarantined row of an older build takes none", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await livePage("live");
+    // What the router wrote before it named the target (its ids in the params,
+    // no subject), quarantined as `purchase_target_unknown`: it holds the key
+    // (page, live, purchases.targets, '') and must absorb no new order.
+    await testDb.pool.query(
+      `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, waiting_reason, params, last_error_class)
+       values ($1, false, 'purchases.targets', '', 'goal', 'planned', 'quarantined', 'quarantined', $2::jsonb, 'quarantine:purchase_target_unknown')`,
+      [page.pageId, JSON.stringify({ ids: ["media:970000000000000009"] })],
+    );
+    // Two orders of one media (two receipts, two ack transactions), then an
+    // order naming another media and a bundle.
+    const frames = [
+      serviceFrame({ type: 7, order: { orderId: "960000000000000001", accountMediaId: "970000000000000001" } }, 2),
+      serviceFrame({ type: 7, order: { orderId: "960000000000000002", accountMediaId: "970000000000000001" } }, 2),
+      serviceFrame({ type: 7, order: { orderId: "960000000000000003", accountMediaId: "970000000000000002", accountMediaBundleId: "990000000000000001" } }, 2),
+    ];
+    for (const frame of frames) expect(await applyFanslyWsLive(app(), await page.capture(frame))).not.toBeNull();
+    const targets = (await work(page.pageId))
+      .filter((row) => row.resource === "purchases.targets")
+      .map((row) => ({ subject: row.subject, state: row.state, revision: Number(row.demand_revision), params: row.params }));
+    expect(targets).toEqual([
+      { subject: "", state: "quarantined", revision: 1, params: { ids: ["media:970000000000000009"] } },
+      { subject: "bundle:990000000000000001", state: "open", revision: 1, params: { target: { kind: "bundle", id: "990000000000000001" } } },
+      { subject: "media:970000000000000001", state: "open", revision: 2, params: { target: { kind: "media", id: "970000000000000001" } } },
+      { subject: "media:970000000000000002", state: "open", revision: 1, params: { target: { kind: "media", id: "970000000000000002" } } },
+    ]);
   });
 
   it("a handover page is routed too; its work waits for the actor", async (context) => {

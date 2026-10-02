@@ -8,6 +8,7 @@ import { listSyncPages } from "@agency_hub_core/db";
 import { fanslyWsLivePayloadResolver } from "../../services/fansly-ws/live-apply.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
 import { acknowledgeSyncPaceViolations, readSyncAlertStatus } from "../engine/alerts.ts";
+import { createEffectiveConfigSettingsSource } from "../engine/ports.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
 import { buildShadowReport } from "../report/shadow-report.ts";
@@ -21,7 +22,9 @@ import { pageLabel, parseDurationMs } from "./chain.ts";
 // takes it as `--shadow-report <path>`).
 
 export interface SyncReportCliDeps {
-  openContext(): Promise<Pick<SyncContext, "db" | "logger" | "close">>;
+  /** The process's context; with its env config the report's module checks
+   *  read the live settings (else the registry defaults). */
+  openContext(): Promise<Pick<SyncContext, "db" | "logger" | "close"> & Partial<Pick<SyncContext, "rawConfig">>>;
   print(line: string): void;
   writeFile(path: string, text: string): Promise<void>;
   now(): Date;
@@ -77,7 +80,10 @@ function cliActor(): string {
   return `cli@${hostname()} pid ${process.pid}`;
 }
 
-async function withContext<T>(deps: SyncReportCliDeps, body: (ctx: Pick<SyncContext, "db" | "logger">) => Promise<T>): Promise<T> {
+async function withContext<T>(
+  deps: SyncReportCliDeps,
+  body: (ctx: Pick<SyncContext, "db" | "logger"> & Partial<Pick<SyncContext, "rawConfig">>) => Promise<T>,
+): Promise<T> {
   const ctx = await deps.openContext();
   try {
     return await body(ctx);
@@ -169,6 +175,7 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
             : null,
           maxListed: options.maxListed,
           resolvePayload: fanslyWsLivePayloadResolver(ctx),
+          ...(ctx.rawConfig === undefined ? {} : { settings: createEffectiveConfigSettingsSource(ctx.db, ctx.rawConfig) }),
         });
         const text = json(report);
         if (options.out !== undefined) await deps.writeFile(options.out, `${text}\n`);
