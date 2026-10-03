@@ -128,6 +128,7 @@ function hostOptions(probe: FanslySendOsProbe, overrides: Partial<SyncHostOption
     probe,
     pause: { readSettingMs: async () => SETTING_MS },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+    routeTimeScale: 0,
     shadowLatency: () => fixedShadowLatency(50),
     modeLoopIntervalMs: 200,
     ...overrides,

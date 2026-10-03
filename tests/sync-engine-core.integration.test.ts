@@ -12,7 +12,6 @@ import {
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
-  endpointSpacingRemainingMs,
   ensurePollRows,
   ensureSyncPage,
   getSyncAttempt,
@@ -39,6 +38,7 @@ import {
   pickPlanned,
   pickUrgent,
   quarantineWork,
+  readRouteJournal,
   recordApplyFailure,
   recoverUnfinishedAttempts,
   setNetworkFailureStreak,
@@ -50,8 +50,9 @@ import {
   settleAttemptWithoutCapture,
   settleWork,
   supersedeShadowWork,
-  SYNC_ENDPOINT_SPACING_LOOKBACK_MS,
   SYNC_PACE_AUDIT_LOOKBACK_MS,
+  SYNC_ROUTE_JOURNAL_SLACK_MS,
+  SYNC_SEND_WINDOW_MS,
   upsertDemand,
   upsertDemands,
   writeSafeRelease,
@@ -1210,49 +1211,109 @@ describe("the capture's reads of the journal (under the page row lock)", () => {
     expect(await lastRateLimitAt(db(), { pageId, withinMs })).toBeNull();
   }, 120_000);
 
-  it("reads an endpoint group's spacing (owner decision №20) inside its look-back, however long the journal is", async (context) => {
+  it("reads the route clocks' sends inside their look-back, from both journals, however long they are", async (context) => {
     if (!testDb) return context.skip();
-    const pageId = await seedPage("endpoint-spacing");
+    const pageId = await seedPage("route-journal");
     const generation = await own(pageId);
-    const spacing = { pageId, shadow: false, operations: ["media.offer_stats"], spacingMs: 5_000 };
+    const withinMs = 40_000;
     const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                      admitted_at, sent_at, completed_at, send_mark, operation, request, outcome, http_status`;
-    // 30 days of answers (one every 2 min), every fifth one a media-stats read,
-    // all older than the look-back.
+    const logColumns = `page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
+                        captured_at, sent_at, completed_at, outcome, lease_until`;
+    // 30 days of answers in both journals (one every 2 min), all older than
+    // the look-back.
     await query(
       `insert into sync_attempts (${columns})
-       select $1, false, case when n % 5 = 0 then 'media-stats.walk' else 'posts.refresh' end, 'subject-' || n, 'planned',
-              $2, 2000, 0.1, 2200, t, t, t + interval '1 second', 'request_start',
-              case when n % 5 = 0 then 'media.offer_stats' else 'posts.page' end, '{}'::jsonb, 'response', 200
+       select $1, false, 'media-stats.walk', 'subject-' || n, 'planned', $2, 2000, 0.1, 2200, t, t, t + interval '1 second',
+              'request_start', 'media.offer_stats', '{}'::jsonb, 'response', 200
          from generate_series(1, 21600) n, lateral (select clock_timestamp() - n * interval '2 minutes') s(t)
         where t < clock_timestamp() - interval '1 hour'`,
       [pageId, generation.toString()],
     );
+    await query(
+      `insert into fansly_send_log (${logColumns})
+       select $1, gen_random_uuid(), 'sync_stream', 'messages', 'w', 1, 'worker', gen_random_uuid(),
+              t, t, t + interval '1 second', 'response', t + interval '20 seconds'
+         from generate_series(1, 21600) n, lateral (select clock_timestamp() - n * interval '2 minutes') s(t)
+        where t < clock_timestamp() - interval '1 hour'`,
+      [pageId],
+    );
     await query("analyze sync_attempts");
+    await query("analyze fansly_send_log");
 
-    const idle = await captureStatement(() => endpointSpacingRemainingMs(db(), spacing));
-    expect(idle.result).toBe(0);
+    const live = { pageId, shadow: false, withinMs, legacy: true };
+    const idle = await captureStatement(() => readRouteJournal(db(), live));
+    expect(idle.result).toEqual([]);
     expect(await heapVisits(idle, "sync_attempts")).toBeLessThan(50);
+    expect(await heapVisits(idle, "fansly_send_log")).toBeLessThan(50);
 
-    // A media-stats answer completed a second ago: the next one waits ≈ 4 s;
-    // another route's answer, a shadow one, or one past the look-back does not count.
-    const insertRecent = async (shadow: boolean, operation: string, agoMs: number): Promise<void> => {
+    const attempt = async (input: { shadow?: boolean; operation: string; admittedAgoMs: number; sentAgoMs: number | null; outcome: string }) => {
       await query(
         `insert into sync_attempts (${columns})
-         select $1, $2::boolean, 'media-stats.walk', '', 'planned', $3, 2000, 0.1, 2200, t, t, t, 'request_start',
-                $4, '{}'::jsonb, 'response', 200
-           from (select clock_timestamp() - $5::double precision * interval '1 millisecond') s(t)`,
-        [pageId, shadow, generation.toString(), operation, agoMs],
+         select $1, $2::boolean, 'x.y', '', 'planned', $3, 2000, 0.1, 2200, a, s, null, null, $4, '{}'::jsonb, $5, null
+           from (select clock_timestamp() - $6::double precision * interval '1 millisecond' as a,
+                        case when $7::double precision is null then null
+                             else clock_timestamp() - $7::double precision * interval '1 millisecond' end as s) t`,
+        [pageId, input.shadow ?? false, generation.toString(), input.operation, input.outcome, input.admittedAgoMs, input.sentAgoMs],
       );
     };
-    await insertRecent(true, "media.offer_stats", 500);
-    await insertRecent(false, "posts.page", 500);
-    await insertRecent(false, "media.offer_stats", SYNC_ENDPOINT_SPACING_LOOKBACK_MS + 60_000);
-    expect(await endpointSpacingRemainingMs(db(), spacing)).toBe(0);
-    await insertRecent(false, "media.offer_stats", 1_000);
-    const spaced = await captureStatement(() => endpointSpacingRemainingMs(db(), spacing));
-    expect(spaced.result).toBeGreaterThan(3_000);
-    expect(spaced.result).toBeLessThanOrEqual(4_000);
-    expect(await heapVisits(spaced, "sync_attempts")).toBeLessThan(50);
+    const logged = async (input: { operation: string; capturedAgoMs: number; sentAgoMs: number | null; outcome: string | null; leaseMs?: number }) => {
+      await query(
+        `insert into fansly_send_log (${logColumns})
+         select $1, gen_random_uuid(), 'sync_stream', $2, 'w', 1, 'worker', gen_random_uuid(), c, s,
+                case when $4::text is null then null else c + interval '1 second' end, $4,
+                c + $6::double precision * interval '1 millisecond'
+           from (select clock_timestamp() - $3::double precision * interval '1 millisecond' as c,
+                        case when $5::double precision is null then null
+                             else clock_timestamp() - $5::double precision * interval '1 millisecond' end as s) t`,
+        [pageId, input.operation, input.capturedAgoMs, input.outcome, input.sentAgoMs, input.leaseMs ?? 20_000],
+      );
+    };
+    // The engine: a sent media read, an older one, a refusal and a failure
+    // before any byte (nothing sent), and an attempt a dead owner left
+    // unknown (counted at admission + the send window).
+    await attempt({ operation: "media.offer_stats", admittedAgoMs: 1_500, sentAgoMs: 1_000, outcome: "response" });
+    await attempt({ operation: "media.offer_stats", admittedAgoMs: 9_000, sentAgoMs: 8_000, outcome: "response" });
+    await attempt({ operation: "messages.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "aborted_before_send" });
+    await attempt({ operation: "transactions.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "transport_error" });
+    await attempt({ operation: "messaging.groups", admittedAgoMs: 2_000, sentAgoMs: null, outcome: "unknown" });
+    // A shadow attempt: the other journal.
+    await attempt({ shadow: true, operation: "polls", admittedAgoMs: 700, sentAgoMs: 600, outcome: "shadow" });
+    // Legacy: a send, a capture whose holder never completed (its lease end),
+    // a completion without a send mark, a capture released unsent.
+    await logged({ operation: "messages", capturedAgoMs: 3_200, sentAgoMs: 3_000, outcome: "response" });
+    await logged({ operation: "followers", capturedAgoMs: 1_000, sentAgoMs: null, outcome: null, leaseMs: 20_000 });
+    await logged({ operation: "account_me", capturedAgoMs: 4_000, sentAgoMs: null, outcome: "transport_error" });
+    await logged({ operation: "messaging_groups", capturedAgoMs: 500, sentAgoMs: null, outcome: "aborted_before_send" });
+
+    const nowMs = Date.now();
+    const read = await captureStatement(() => readRouteJournal(db(), live));
+    const byKey = new Map(read.result.map((send) => [`${send.journal}:${send.operation}`, nowMs - send.lastAt.getTime()]));
+    expect([...byKey.keys()].sort()).toEqual([
+      "engine:media.offer_stats", "engine:messaging.groups",
+      "legacy:account_me", "legacy:followers", "legacy:messages",
+    ]);
+    const near = (key: string, agoMs: number) => {
+      expect(Math.abs(byKey.get(key)! - agoMs), key).toBeLessThan(1_000);
+    };
+    near("engine:media.offer_stats", 1_000);
+    near("engine:messaging.groups", 2_000 - SYNC_SEND_WINDOW_MS);
+    near("legacy:messages", 3_000);
+    near("legacy:followers", 1_000 - 20_000);
+    near("legacy:account_me", 3_000);
+    expect(await heapVisits(read, "sync_attempts")).toBeLessThan(50);
+    expect(await heapVisits(read, "fansly_send_log")).toBeLessThan(50);
+
+    // The shadow journal alone, never the send log; a live read without the
+    // legacy journal has only the engine's.
+    expect((await readRouteJournal(db(), { pageId, shadow: true, withinMs, legacy: true })).map((send) => `${send.journal}:${send.operation}`))
+      .toEqual(["engine:polls"]);
+    expect((await readRouteJournal(db(), { ...live, legacy: false })).every((send) => send.journal === "engine")).toBe(true);
+    // Past the look-back and its slack: forgotten.
+    await query("update sync_attempts set admitted_at = admitted_at - $2::double precision * interval '1 millisecond' where page_id = $1 and admitted_at > clock_timestamp() - interval '1 minute'",
+      [pageId, withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS]);
+    await query("update fansly_send_log set captured_at = captured_at - $2::double precision * interval '1 millisecond' where page_id = $1 and captured_at > clock_timestamp() - interval '1 minute'",
+      [pageId, withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS]);
+    expect(await readRouteJournal(db(), live)).toEqual([]);
   }, 120_000);
 });
