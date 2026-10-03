@@ -177,6 +177,17 @@ describe("sync status: why a work row waits", () => {
       expect(reason(work({ http: true }), held, closed)).toBe("page_hold");
     }
     expect(reason(deletion({ state: "quarantined" }), page({ holdKind: "network", holdUntil: at(30_000) }))).toBe("quarantined");
+    // Nor on the route admission: a route state this build cannot read, or
+    // closed routes, delay the requests only.
+    const routesClosed: RuntimeSnapshot = {
+      slotOpensAt: null,
+      routes: { stateError: "route_state_version:9", keyOpensAt: () => ({ at: at(30_000), routes: ["messaging.groups"] }) },
+    };
+    expect(reason(deletion(), page(), routesClosed)).toBe("class_share");
+    expect(reason(work({ http: true }), page(), routesClosed)).toBe("page_hold");
+    const budgetClosed: RuntimeSnapshot = { ...routesClosed, routes: { ...routesClosed.routes!, stateError: null } };
+    expect(reason(deletion(), page(), budgetClosed)).toBe("class_share");
+    expect(reason(work({ http: true }), page(), budgetClosed)).toBe("pacer");
   });
 
   it("closed work waits for nothing", () => {

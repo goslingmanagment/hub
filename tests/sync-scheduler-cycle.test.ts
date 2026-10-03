@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CYCLE,
   classBlocked,
+  isPickWait,
   pick,
   WORK_CLASSES,
   type ClassWorkSource,
@@ -43,7 +44,7 @@ async function run(source: ClassWorkSource<Work>, n: number, state: SchedulerPag
   const served: WorkClass[] = [];
   for (let i = 0; i < n; i += 1) {
     const picked = await pick(source, state, NOW);
-    if (picked === null) break;
+    if (picked === null || isPickWait(picked)) break;
     expect(picked.slot).toBeGreaterThanOrEqual(0);
     expect(picked.slot).toBeLessThan(CYCLE.length);
     served.push(picked.workClass);
@@ -168,6 +169,66 @@ describe("sync scheduler: empty and blocked classes", () => {
     for (const cyclePos of [-1, 10, 2.5, Number.NaN]) {
       await expect(pick(source, page({ cyclePos }), NOW)).rejects.toThrow(RangeError);
     }
+  });
+});
+
+describe("sync scheduler: the short look-ahead (step 3b ruling 1)", () => {
+  const at = (ms: number) => new Date(NOW.getTime() + ms);
+
+  /** Each class's candidates open at the given offsets (ms from NOW; 0 =
+   *  admissible now). Records every question with its instant. */
+  class TimedClasses implements ClassWorkSource<Work> {
+    readonly asked: Array<[WorkClass, number]> = [];
+    constructor(readonly opens: Partial<Record<WorkClass, number[]>>) {}
+    async pickInClass(workClass: WorkClass, now: Date, admissibleAt?: Date): Promise<Work | null> {
+      const instant = (admissibleAt ?? now).getTime() - NOW.getTime();
+      this.asked.push([workClass, instant]);
+      const open = (this.opens[workClass] ?? []).filter((offset) => offset <= instant);
+      return open.length === 0 ? null : { workClass, seq: open[0]! };
+    }
+  }
+
+  it("the class whose turn it is waits for a candidate that opens within the look-ahead; nothing else is served", async () => {
+    // Requests' turn (position 1): its `/message` opens in 1.2 s, a planned
+    // read is admissible now — the slot waits for the request.
+    const source = new TimedClasses({ requests: [1_200], planned: [0] });
+    const state = page({ cyclePos: 1 });
+    const picked = await pick(source, state, NOW, [at(500), at(1_200)]);
+    expect(picked).toEqual({ waitUntil: at(1_200), workClass: "requests", slot: 1 });
+    // Asked about now, at the last instant (something by then?), then from
+    // the first instant on until one finds it; planned never.
+    expect(source.asked).toEqual([["requests", 0], ["requests", 1_200], ["requests", 500]]);
+    expect(state.cyclePos).toBe(1);
+  });
+
+  it("a candidate that opens later than the look-ahead holds nothing: the next class with work now is served", async () => {
+    // The look-ahead's instants stop at 1.2 × S: an opening past that is not among them.
+    const source = new TimedClasses({ requests: [4_000], planned: [0] });
+    const picked = await pick(source, page({ cyclePos: 1 }), NOW, [at(2_000)]);
+    expect(picked).toMatchObject({ workClass: "planned", slot: 9, nextCyclePos: 0 });
+  });
+
+  it("work admissible now is taken at once; an empty class looks ahead before the walk moves on", async () => {
+    const now = new TimedClasses({ urgent: [0], requests: [100] });
+    expect(await pick(now, page({ cyclePos: 0 }), NOW, [at(100)])).toMatchObject({ workClass: "urgent", slot: 0 });
+    expect(now.asked).toEqual([["urgent", 0]]);
+    // Urgent's turn, urgent empty: requests (next in the walk) waits for its candidate.
+    const empty = new TimedClasses({ requests: [100], planned: [0] });
+    expect(await pick(empty, page({ cyclePos: 0 }), NOW, [at(100)])).toEqual({ waitUntil: at(100), workClass: "requests", slot: 1 });
+    expect(empty.asked).toEqual([["urgent", 0], ["urgent", 100], ["requests", 0], ["requests", 100]]);
+    // A class with nothing by the last instant is asked once ahead, not at each.
+    const later = new TimedClasses({ planned: [0] });
+    expect(await pick(later, page({ cyclePos: 1 }), NOW, [at(100), at(200), at(300)])).toMatchObject({ workClass: "planned" });
+    expect(later.asked).toEqual([["requests", 0], ["requests", 300], ["urgent", 0], ["urgent", 300], ["planned", 0]]);
+  });
+
+  it("a blocked class never looks ahead; instants not after now are ignored", async () => {
+    const source = new TimedClasses({ requests: [100], planned: [0] });
+    expect(await pick(source, page({ cyclePos: 1, pausedRequests: true }), NOW, [at(100)])).toMatchObject({ workClass: "planned" });
+    expect(source.asked.some(([workClass]) => workClass === "requests")).toBe(false);
+    const past = new TimedClasses({ requests: [0] });
+    expect(await pick(past, page({ cyclePos: 1 }), NOW, [at(-100), at(0)])).toMatchObject({ workClass: "requests" });
+    expect(past.asked).toEqual([["requests", 0]]);
   });
 });
 

@@ -3,10 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { upsertDemand, type Database } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
-import { MEDIA_STATS_SPACING_MS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { statsBody } from "./helpers/fansly-media-stats-fixtures.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
@@ -20,13 +20,14 @@ import {
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
-// Owner decision №20 (2026-10-02; lilly-1's 429 at 21:12:04 UTC after its
-// media-stats walk read `/it/moie/statsnew` at the page pace): the media
-// statistics are read like the conversation list (№14), through the real
-// actor and commits against a real database. Pinned: two requests on the
-// media-stats route of one page are never admitted closer than 5 s — a demand
-// that pulls the walk forward and a restarted actor included — while other
-// work keeps the page pace in between; a 429 there holds only the media-stats
+// Owner decisions №20 and D2 (2026-10-02; lilly-1's 429 at 21:12:04 UTC after
+// its media-stats walk read `/it/moie/statsnew` at the page pace): the media
+// statistics are read at their route's budget (5/min, `fansly/routes.ts`),
+// through the real actor and commits against a real database, the budgets at
+// a tenth of their production intervals. Pinned: two requests on the
+// media-stats route of one page are never sent closer than its interval — a
+// demand that pulls the walk forward and a restarted actor included — while
+// other work keeps going in between; a 429 there holds only the media-stats
 // walk (`Retry-After`, else the list's ladder), never the page, and the chat
 // and money reads still go out; a shadow page paces its simulated walk the
 // same way, so the shadow report counts what the live walk will send.
@@ -51,6 +52,10 @@ function db(): Database {
 
 const OWN_ID = "300000000000000001";
 const DAY_MS = 86_400_000;
+/** The route budgets at a tenth of production: media 12 s → 1.2 s. */
+const ROUTE_SCALE = 0.1;
+const MEDIA_INTERVAL_MS = Math.ceil(intervalMsOf(routeBudget("media.offer_stats").currentPerMin) * ROUTE_SCALE);
+const POLLS_INTERVAL_MS = Math.ceil(intervalMsOf(routeBudget("polls").currentPerMin) * ROUTE_SCALE);
 const WALK = "media-stats.walk";
 const BACKFILL_DONE = {
   version: 1, nextBeforeMs: 0, emptyStreak: 2, done: true, floorAt: null, stopReason: "created_at_floor", floorBasis: "created_at",
@@ -122,10 +127,10 @@ function busy(): ResourceModule {
 function registry(options: { busy?: boolean } = {}): EngineRegistry {
   return createEngineRegistry([
     fanslyResourceSpec(WALK)!,
-    testSpec("dm-messages.head", oneRead(), { fence: "dm_archive" }),
+    testSpec("dm-messages.head", oneRead(), { fence: "dm_archive", operations: ["polls"] }),
     testSpec("transactions.head", options.busy === true ? busy() : oneRead(), options.busy === true
-      ? { kind: "goal", fence: "dm_archive" }
-      : { fence: "dm_archive" }),
+      ? { kind: "goal", fence: "dm_archive", operations: ["polls"] }
+      : { fence: "dm_archive", operations: ["polls"] }),
   ]);
 }
 
@@ -200,9 +205,10 @@ async function runLive(
   alerts = new RecordingAlerts(),
   metrics = new RecordingMetrics(),
   timeoutMs = 40_000,
+  routeTimeScale = 0,
 ): Promise<void> {
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts, metrics,
+    db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, capture: fanslyCaptureCodec, alerts, metrics, routeTimeScale,
   });
   const running = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
@@ -213,22 +219,16 @@ async function runLive(
   }
 }
 
-/** Every pair of consecutive media-stats attempts is ≥ the spacing apart:
- *  the next admission after the previous one's last instant (database
- *  clock), and the sends (the engine's clock). */
-function expectSpaced(media: readonly Attempt[]): void {
-  for (let i = 1; i < media.length; i += 1) {
-    const previous = media[i - 1]!;
-    const previousLast = Math.max(previous.admitted_at.getTime(), previous.completed_at?.getTime() ?? 0);
-    expect(media[i]!.admitted_at.getTime() - previousLast, `admission ${i}`).toBeGreaterThanOrEqual(MEDIA_STATS_SPACING_MS);
-    if (media[i]!.sent_at !== null && previous.sent_at !== null) {
-      expect(media[i]!.sent_at!.getTime() - previous.sent_at.getTime(), `send ${i}`).toBeGreaterThanOrEqual(MEDIA_STATS_SPACING_MS);
-    }
+/** Every pair of consecutive sends is at least `intervalMs` apart (the route
+ *  clock counts from the actual send). */
+function expectSpaced(attempts: readonly Attempt[], intervalMs: number): void {
+  for (let i = 1; i < attempts.length; i += 1) {
+    expect(attempts[i]!.sent_at!.getTime() - attempts[i - 1]!.sent_at!.getTime(), `send ${i}`).toBeGreaterThanOrEqual(intervalMs);
   }
 }
 
-describe("media-stats spacing (owner decision №20)", () => {
-  it("admits two media-stats steps ≥ 5 s apart through demand bumps and a restarted actor, other work at the page pace between", async (context) => {
+describe("media stats at their route's budget (owner decisions №20, D2)", () => {
+  it("sends two media-stats steps a route interval apart through demand bumps and a restarted actor, other work between", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");
     for (const n of [1, 2, 3, 4]) await seedItem(pageId, itemOf(n));
@@ -243,32 +243,32 @@ describe("media-stats spacing (owner decision №20)", () => {
       if (req.spec === "media.offer_stats") await demand(pageId, WALK);
     };
     const metrics = new RecordingMetrics();
-    await runLive(pageId, reg, transport, async () => (await visited(pageId)) >= 2, new RecordingAlerts(), metrics);
-    // The process restarts between two steps: the new actor reads the spacing
-    // from the journal, not from memory.
+    await runLive(pageId, reg, transport, async () => (await visited(pageId)) >= 2, new RecordingAlerts(), metrics, 40_000, ROUTE_SCALE);
+    // The process restarts between two steps: the new actor reads the route
+    // clock from the journal, not from memory.
     const restarted = new ScriptedLiveTransport();
     restarted.respond = transport.respond;
     restarted.onHit = transport.onHit;
     await demand(pageId, WALK);
-    await runLive(pageId, reg, restarted, async () => (await visited(pageId)) >= 4, new RecordingAlerts(), metrics);
+    await runLive(pageId, reg, restarted, async () => (await visited(pageId)) >= 4, new RecordingAlerts(), metrics, 40_000, ROUTE_SCALE);
 
     const all = await attemptsOf(pageId);
     const media = all.filter((attempt) => attempt.operation === "media.offer_stats");
     expect(media).toHaveLength(4);
     expect(media.every((attempt) => attempt.http_status === 200)).toBe(true);
-    expectSpaced(media);
-    // Other work went out between every two media-stats steps, at the page
-    // pace (the test pause is 30 ms): never a 5 s stall of the page.
+    expectSpaced(media, MEDIA_INTERVAL_MS);
+    // The busy `/polls` reader kept its own route's pace, in between every two
+    // media-stats steps: the page never stalled for the media route.
+    const others = all.filter((attempt) => attempt.operation === "polls");
+    expectSpaced(others, POLLS_INTERVAL_MS);
     for (let i = 1; i < media.length; i += 1) {
       const between = all.filter((attempt) => attempt.id > media[i - 1]!.id && attempt.id < media[i]!.id);
-      expect(between.length, `other reads between media steps ${i - 1} and ${i}`).toBeGreaterThanOrEqual(5);
+      expect(between.length, `other reads between media steps ${i - 1} and ${i}`).toBeGreaterThanOrEqual(1);
       expect(between.every((attempt) => attempt.resource === "transactions.head"), `between ${i}`).toBe(true);
     }
-    const firstRun = transport.hits.filter((hit) => hit.spec === "polls");
-    const gaps = firstRun.slice(1).map((hit, i) => hit.mono - firstRun[i]!.mono);
-    expect(Math.max(...gaps)).toBeLessThan(MEDIA_STATS_SPACING_MS / 2);
-    // The demand bumps met the spacing: the walk was put off, nothing sent.
-    expect(metrics.get("sync_endpoint_spaced")).toBeGreaterThan(0);
+    // A closed route takes no slot: every key was left out of the pick while
+    // its route was closed, never planned and put off.
+    expect(metrics.get("sync_route_deferred")).toBe(0);
   }, 90_000);
 });
 
@@ -330,24 +330,23 @@ describe("a 429 on the media statistics (owner decision №20)", () => {
       expect(order.slice(first + 1, second).filter((spec) => spec === "polls").length).toBe(2);
       const between = all.filter((attempt) => attempt.id > media[0]!.id && attempt.id < media[1]!.id).map((attempt) => attempt.resource).sort();
       expect(between).toEqual(["dm-messages.head", "transactions.head"]);
-      // The next media request waited for the hold (and the spacing).
+      // The next media request waited for the hold.
       expect(media[1]!.admitted_at.getTime() - media[0]!.completed_at!.getTime()).toBeGreaterThanOrEqual(Math.min(holdMs, heldSeen!.until!.getTime() - media[0]!.completed_at!.getTime()) - 50);
-      expectSpaced(media);
       // A single 429 of the walk pages nobody (only the ladder's top does).
       expect(alerts.opened.filter((alert) => alert.subKey === "page_stopped")).toEqual([]);
     }, 60_000);
   }
 });
 
-describe("shadow paces the media-stats walk the same way (owner decision №20)", () => {
-  it("simulated media-stats steps are admitted ≥ 5 s apart; the walk visits every item and rests", async (context) => {
+describe("shadow paces the media-stats walk the same way (owner decisions №20, D2)", () => {
+  it("simulated media-stats steps are sent a route interval apart on the shadow journal; the walk visits every item and rests", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("shadow");
     for (const n of [1, 2, 3]) await seedItem(pageId, itemOf(n));
     const reg = registry({ busy: true });
     await demand(pageId, WALK, true);
     await demand(pageId, "transactions.head", true);
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: reg, ownRef: OWN_ID });
+    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "shadow", registry: reg, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE });
     const running = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       await waitFor(async () => ((await walkRow(pageId, true))?.waiting_reason === "not_due" ? true : null), 40_000, "the shadow walk to rest");
@@ -361,9 +360,10 @@ describe("shadow paces the media-stats walk the same way (owner decision №20)"
     // One shadow step per item (each a one-window refresh): the demand the
     // shadow report counts is the live walk's.
     expect(media).toHaveLength(3);
-    expectSpaced(media);
+    expectSpaced(media, MEDIA_INTERVAL_MS);
+    expectSpaced(all.filter((attempt) => attempt.operation === "polls"), POLLS_INTERVAL_MS);
     for (let i = 1; i < media.length; i += 1) {
-      expect(all.filter((attempt) => attempt.id > media[i - 1]!.id && attempt.id < media[i]!.id).length).toBeGreaterThanOrEqual(5);
+      expect(all.filter((attempt) => attempt.id > media[i - 1]!.id && attempt.id < media[i]!.id).length).toBeGreaterThanOrEqual(1);
     }
   }, 60_000);
 });

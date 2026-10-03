@@ -93,6 +93,7 @@ describe("lost NOTIFY", () => {
       wake,
       pause: { readSettingMs: async () => 50 },
       pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+      routeTimeScale: 0,
       shadowLatency: () => fixedShadowLatency(0),
       modeLoopIntervalMs: 200,
     });

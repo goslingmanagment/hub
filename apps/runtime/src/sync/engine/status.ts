@@ -15,9 +15,10 @@ import { WORK_CLASSES, type WorkClass } from "./scheduler.ts";
 // agent CLI and `pnpm cli sync status` show. Durable reasons (written on the
 // work row when they arise) are `running`, `quarantined`, `blocked_by_vendor`,
 // `subject_breaker`, `dependency` and `not_due` — and `pacer` for a request
-// an endpoint group's spacing put off (owner decision №20); the dynamic ones (pauses,
-// holds, ownership, pacer, class share) are computed here, so serving a slot
-// never writes a row just to say why the others wait.
+// its route's budget put off (step 3b, `engine/route-policy.ts`); the dynamic
+// ones (pauses, holds, ownership, route budgets, pacer, class share) are
+// computed here, so serving a slot never writes a row just to say why the
+// others wait.
 
 export const WAITING_REASONS = [
   "not_due",
@@ -86,6 +87,18 @@ export interface RuntimeSnapshot {
   /** When the page's next slot opens by the pacer; null = open now, or not
    *  known (no actor in this process: use `estimateSlotOpensAt`). */
   slotOpensAt: Date | null;
+  /** The page's route admission as its clocks stand (absent: not read). */
+  routes?: RouteAdmissionView;
+}
+
+/** The route admission of a page, for "why waiting" (`engine/route-policy.ts`). */
+export interface RouteAdmissionView {
+  /** The page's route state is one this build cannot read: it admits
+   *  nothing (the diagnostic); null: it reads. */
+  stateError: string | null;
+  /** When a key's routes next admit a send (its own and its family's budget,
+   *  a route hold), with the routes still closed; null: open now. */
+  keyOpensAt(resource: string): { at: Date; routes: string[] } | null;
 }
 
 export interface WorkExplanation {
@@ -109,9 +122,9 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
  * blocked_by_vendor → subject_breaker → resource_hold → dependency → not_due →
  * pacer → class_share. A key without requests (`http: false`) never waits on
- * the page hold or the pacer (ruling 9): due, it waits for its turn among the
- * steps before the gate (`class_share`). Null for closed work (done,
- * cancelled, superseded): it waits for nothing.
+ * the page hold, the route admission or the pacer (ruling 9): due, it waits
+ * for its turn among the steps before the gate (`class_share`). Null for
+ * closed work (done, cancelled, superseded): it waits for nothing.
  */
 export function explainWork(
   work: StatusWork,
@@ -143,6 +156,10 @@ export function explainWork(
   if (hold !== null && sends) {
     return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
   }
+  if (sends && runtime.routes !== undefined && runtime.routes.stateError !== null) {
+    // A route state this build cannot read closes the page's admission.
+    return { reason: "page_hold", until: null, detail: { routeState: runtime.routes.stateError } };
+  }
   if (work.state === "quarantined") return { reason: "quarantined", until: null, detail: {} };
   if (work.blockedByVendorAt !== null) {
     return {
@@ -165,9 +182,16 @@ export function explainWork(
   if (work.waitingReason === "dependency" && after(work.dueAt)) {
     return { reason: "dependency", until: work.waitingUntil ?? work.dueAt, detail: {} };
   }
-  // An endpoint group's spacing (owner decision №20): due again when it ends.
-  if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { spacing: true } };
+  // Its planned route's budget or hold put the request off: due again when
+  // the route opens.
+  if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { routeBudget: true } };
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
+  // Every route of the key is closed by its budget (or a route hold): the
+  // pick leaves it out until one opens.
+  const routes = sends ? runtime.routes?.keyOpensAt(work.resource) ?? null : null;
+  if (routes !== null && after(routes.at)) {
+    return { reason: "pacer", until: routes.at, detail: { routeBudget: true, routes: routes.routes } };
+  }
   if (sends && after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
 }
@@ -241,6 +265,33 @@ export interface WsStatusView {
   decodeDebt: number;
 }
 
+/** One route or family of a page in its status: its budget, its effective
+ *  rate, its newest send and when it next admits one. */
+export interface RouteBudgetStatusView {
+  /** A canonical route (`fansly/routes.ts`) or a family (`family:<name>`). */
+  name: string;
+  family: string | null;
+  ceilingPerMin: number;
+  currentPerMin: number;
+  /** The page's own rate on the route (a slowdown after a 429 only lowers it). */
+  effectivePerMin: number;
+  intervalMs: number;
+  lastSendAt: string | null;
+  holdUntil: string | null;
+  /** Null: open now. */
+  opensAt: string | null;
+}
+
+export interface RouteStatusView {
+  /** The budget table's hash (`ROUTE_POLICY_HASH`). */
+  policyHash: string;
+  /** A route state this build cannot read: the page admits nothing. */
+  stateError: string | null;
+  /** The routes the page sent on within the longest interval, or holds state
+   *  for, and the families. */
+  routes: RouteBudgetStatusView[];
+}
+
 export interface ShadowStatusView {
   attemptsLastHour: number;
   /** Shadow attempts of the hour over the computed expectation (§3.12 A1). */
@@ -266,6 +317,8 @@ export interface PageStatus {
   requests: RequestProgressView[];
   ws: WsStatusView | null;
   shadow: ShadowStatusView | null;
+  /** The route budgets (owner CLI; not on the agent wire). */
+  routes: RouteStatusView | null;
 }
 
 export interface PageStatusInput {
@@ -285,6 +338,7 @@ export interface PageStatusInput {
   requests?: readonly RequestProgressView[];
   ws?: WsStatusView | null;
   shadow?: ShadowStatusView | null;
+  routes?: RouteStatusView | null;
 }
 
 /** Assemble the page status from the page row, its open work and the
@@ -344,5 +398,6 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
     requests: [...(input.requests ?? [])],
     ws: input.ws ?? null,
     shadow: input.shadow ?? null,
+    routes: input.routes ?? null,
   };
 }

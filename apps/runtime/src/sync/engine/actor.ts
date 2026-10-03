@@ -1,5 +1,4 @@
 import {
-  endpointSpacingRemainingMs,
   ensurePollRows,
   getSyncPage,
   LiveGateClosedError,
@@ -11,6 +10,7 @@ import {
   pickPlanned,
   pickRequests,
   pickUrgent,
+  readRouteJournal,
   SYNC_WORK_PICK_LIMIT,
   type Database,
   type SyncPageMode,
@@ -25,7 +25,7 @@ import {
   capture,
   commitNoHttp,
   deferAfterPlanError,
-  deferForEndpointSpacing,
+  deferForRoute,
   drainDueApplies,
   enqueueOwnDemand,
   errorName,
@@ -41,18 +41,18 @@ import {
   type RequestTurn,
   type SyncFaultPoint,
 } from "./commit.ts";
+import { routeOfWireId } from "../fansly/routes.ts";
 import {
   activePageHold,
   activeResourceHold,
   CREDENTIALS_CHECK_KEYS,
   endpointRateGroupOfKind,
-  endpointRateGroupOfRoute,
   isEndpointRateLimitKind,
   isResourceHoldExempt,
   resourceFileOf,
   type ResourceHoldEntry,
 } from "./errors.ts";
-import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
+import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import {
   CredentialsGenerationChangedError,
   UnsendableRequestError,
@@ -73,7 +73,15 @@ import {
   type ShadowResult,
   type StepPlan,
 } from "./resource.ts";
-import { CYCLE, pick, type ClassWorkSource, type WorkClass } from "./scheduler.ts";
+import {
+  lookaheadInstants,
+  parseRouteState,
+  routeExclusions,
+  routeJournalLookbackMs,
+  RouteClocks,
+  type RouteState,
+} from "./route-policy.ts";
+import { CYCLE, isPickWait, pick, type ClassWorkSource, type PickWait, type WorkClass } from "./scheduler.ts";
 import type { PageTransport } from "./shadow.ts";
 
 // One page's actor (plan §3, §8; design §3.5): recover → loop (plan → admit →
@@ -107,6 +115,9 @@ export const COMMIT_ATTEMPTS = 3;
 export const FAILURE_BACKOFF_MS = 1_000;
 /** A live page whose gates are closed re-checks this often (I17). */
 export const LIVE_GATE_RECHECK_MS = 5_000;
+/** A page whose route state this build cannot read re-reads it this often
+ *  (its admission stays closed meanwhile). */
+export const ROUTE_STATE_RECHECK_MS = 5_000;
 /** Due works planned before the HTTP gate per lap (ruling 9): a burst beyond
  *  it goes on next lap, so a step that leaves its work due at once (an
  *  overflowed deletion batch) never keeps the page from its requests. */
@@ -125,6 +136,9 @@ export interface ActorDeps extends CommitDeps {
   /** The live page's socket owner (`ws.connect` plans by its state); absent
    *  in shadow and where no socket owner runs. */
   socket?: LivePageSocketRef;
+  /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
+   *  host passes it through from its own test option, `main.ts` never. */
+  routeTimeScale?: number;
 }
 
 export type ActorExit =
@@ -171,6 +185,8 @@ export class SyncActor {
    *  request: if they still differ, its next refusal sets this again and
    *  raises the verify of the digest stored then. */
   #unverified: { stored: string; verified: string | null } | null = null;
+  /** The route state diagnostic last logged (null: the state reads). */
+  #routeStateProblem: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -248,21 +264,35 @@ export class SyncActor {
     }
     if (signals.stop.aborted) return { kind: "stopped" };
     // The work is chosen at the slot: re-read the page (cycle pointer, pauses,
-    // holds) now, not before the wait.
+    // holds, route state) and the route clocks now, not before the wait.
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
+    const routeState = this.#routeState(page);
+    if (routeState === null) {
+      await this.#sleep(ROUTE_STATE_RECHECK_MS, signals.stop);
+      return null;
+    }
     const now = d.clock.wallNow();
+    const clocks = await this.#routeClocks(routeState);
     if (this.#unverified !== null && credentialsVerifiedSince(this.#unverified, page.credentialsGeneration)) this.#unverified = null;
     const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly: this.#unverified !== null });
     const held = activePageHold(page, now);
     const picked = gate.exemptIdentity && held !== null && held.timed === null
       ? await this.#pickExemptIdentity(page)
-      : await this.#pick(page, now, exclusions);
+      : await this.#pick(page, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
+    if (picked !== null && isPickWait(picked)) {
+      // The short look-ahead: the slot waits for the class whose turn it is
+      // (nothing is reserved; a wake picks again).
+      d.metrics.increment("sync_route_lookahead_waits", { workClass: picked.workClass, shadow });
+      await d.wake.wait(d.pageId, Math.max(0, picked.waitUntil.getTime() - now.getTime()), signals.stop);
+      return null;
+    }
     if (picked === null) {
-      // Idle until the next work this pick could take: a paused, switched-off
-      // or held row is never "due" here, or the actor would lap without
-      // sleeping for as long as it stays so.
-      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...exclusions });
+      // Idle until the next work this pick could take: a paused, switched-off,
+      // held or route-closed row is never "due" here, or the actor would lap
+      // without sleeping for as long as it stays so.
+      const idleExclusions = withRouteExclusions(exclusions, d.registry, clocks, now);
+      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...idleExclusions });
       const untilDue = due === null ? ACTOR_IDLE_WAIT_MS : due.getTime() - now.getTime();
       await d.wake.wait(d.pageId, Math.max(0, Math.min(untilDue, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -288,14 +318,15 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, plan);
       return null;
     }
-    // Owner decision №20: an endpoint group with a quota of its own (the
-    // media statistics) takes at most one request per its spacing on this
-    // page, on top of the pause S — whatever key, demand or restart asks.
-    // Nothing is admitted; the slot stays open for other work.
-    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now);
-    if (spacedUntil !== null) {
-      d.metrics.increment("sync_endpoint_spaced", { resource: picked.work.resource, shadow });
-      await deferForEndpointSpacing(d, picked.work, spacedUntil);
+    // The planned request's own route, for every key (a walk over several
+    // routes, a probe, the CDN, the Upgrade): a route its budget or hold
+    // keeps closed admits nothing — the work is due again when it opens and
+    // the slot stays open for other work.
+    const route = routeOfWireId(plan.request.spec);
+    if (!clocks.admits(route, d.clock.wallNow())) {
+      const until = clocks.notBefore(route)!;
+      d.metrics.increment("sync_route_deferred", { resource: picked.work.resource, route, shadow });
+      await deferForRoute(d, picked.work, until);
       return null;
     }
 
@@ -430,21 +461,36 @@ export class SyncActor {
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
   }
 
-  /** When the page may next admit a request on `route`'s endpoint group, if
-   *  that is later than now; null: now (or the route has no spacing). Read
-   *  from the attempt journal by the database clock, so a demand bump, a
-   *  restarted walk or a restarted process never shortens it. */
-  async #endpointSpacedUntil(route: string, now: Date): Promise<Date | null> {
+  /** The page's route state, or null while this build cannot read it: the
+   *  page admits nothing then (a metric, and one log line per diagnostic). */
+  #routeState(page: SyncPageRow): RouteState | null {
+    const read = parseRouteState(page.routeState);
+    if (read.ok) {
+      this.#routeStateProblem = null;
+      return read.state;
+    }
     const d = this.#d;
-    const group = endpointRateGroupOfRoute(route);
-    if (group === null || group.spacingMs === null) return null;
-    const remainingMs = await endpointSpacingRemainingMs(d.db, {
+    d.metrics.increment("sync_route_state_unreadable", { pageId: d.pageId });
+    if (this.#routeStateProblem !== read.diagnostic) {
+      this.#routeStateProblem = read.diagnostic;
+      d.logger.error({ pageId: d.pageId, diagnostic: read.diagnostic },
+        "Fansly sync actor: the page's route state is not one this build reads; nothing is admitted until it is");
+    }
+    return null;
+  }
+
+  /** The route clocks at this slot, from the journal the page runs (and the
+   *  legacy send log on a live page): never from memory. */
+  async #routeClocks(state: RouteState): Promise<RouteClocks> {
+    const d = this.#d;
+    const options = d.routeTimeScale === undefined ? {} : { timeScale: d.routeTimeScale };
+    const sends = await readRouteJournal(d.db, {
       pageId: d.pageId,
       shadow: d.mode === "shadow",
-      operations: [...group.routes],
-      spacingMs: group.spacingMs,
+      withinMs: routeJournalLookbackMs(state, options),
+      legacy: d.mode === "live",
     });
-    return remainingMs > 0 ? new Date(now.getTime() + remainingMs) : null;
+    return new RouteClocks({ sends, state, ...options });
   }
 
   /** Why this actor may not step the page at all (null: it may): another
@@ -530,15 +576,33 @@ export class SyncActor {
     return { work, workClass: "urgent", slot, nextCyclePos: (slot + 1) % CYCLE.length, requestTurn: null };
   }
 
-  async #pick(page: SyncPageRow, now: Date, exclusions: PickExclusions): Promise<PickedWork | null> {
+  async #pick(
+    page: SyncPageRow,
+    now: Date,
+    exclusions: PickExclusions,
+    clocks: RouteClocks,
+    lookaheadUntilMs: number,
+  ): Promise<PickedWork | PickWait | null> {
     const d = this.#d;
     const shadow = d.mode === "shadow";
     const eligible = (work: SyncWorkRow): boolean =>
       activeResourceHold(page.resourceHolds as Record<string, ResourceHoldEntry>, work.resource, now) === null;
+    // The keys whose routes are all closed at an instant stay out of the pick
+    // at that instant (by key, in SQL: a closed key never hides open work
+    // behind the candidate limit).
+    const byInstant = new Map<number, PickExclusions>();
+    const exclusionsAt = (at: Date): PickExclusions => {
+      let found = byInstant.get(at.getTime());
+      if (found === undefined) {
+        found = withRouteExclusions(exclusions, d.registry, clocks, at);
+        byInstant.set(at.getTime(), found);
+      }
+      return found;
+    };
     const source: ClassWorkSource<{ work: SyncWorkRow; requestTurn: RequestTurn | null }> = {
-      async pickInClass(workClass: WorkClass) {
+      async pickInClass(workClass: WorkClass, _now: Date, admissibleAt?: Date) {
         // Due times are written by the database clock: compare by it too.
-        const filter = { pageId: d.pageId, shadow, now: null, ...exclusions };
+        const filter = { pageId: d.pageId, shadow, now: null, ...exclusionsAt(admissibleAt ?? now) };
         switch (workClass) {
           case "urgent": {
             const rows = await pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT });
@@ -567,8 +631,8 @@ export class SyncActor {
       pausedAll: page.pausedAll,
       pausedRequests: page.pausedRequests,
       holdUntil: hold === null ? null : hold.until,
-    }, now);
-    if (picked === null) return null;
+    }, now, lookaheadInstants(d.registry.specs, clocks, now, new Date(lookaheadUntilMs)));
+    if (picked === null || isPickWait(picked)) return picked;
     return {
       work: picked.work.work,
       workClass: picked.workClass,
@@ -728,4 +792,17 @@ export function pickExclusions(
     excludeFiles: files.sort(),
     excludeClasses: page.pausedRequests === true || options.checksOnly === true ? ["requests"] : [],
   };
+}
+
+/** `exclusions` plus the keys none of whose routes admits a send at `at`
+ *  (`routeExclusions`). */
+export function withRouteExclusions(
+  exclusions: PickExclusions,
+  registry: Pick<EngineRegistry, "specs">,
+  clocks: RouteClocks,
+  at: Date,
+): PickExclusions {
+  const closed = routeExclusions(registry.specs, clocks, at);
+  if (closed.length === 0) return exclusions;
+  return { ...exclusions, excludeResources: [...new Set([...exclusions.excludeResources, ...closed])].sort() };
 }

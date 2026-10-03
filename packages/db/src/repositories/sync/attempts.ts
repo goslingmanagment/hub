@@ -868,38 +868,75 @@ export async function markAttemptQuarantined(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** How far back `endpointSpacingRemainingMs` looks for the previous
- *  request: its spacing plus the longest admission → completion span. */
-export const SYNC_ENDPOINT_SPACING_LOOKBACK_MS = 10 * 60_000;
+/** Which journal a send of a page's route clocks comes from: the engine's
+ *  attempts (`sync_attempts`) or the step-1 guard's send log of the legacy
+ *  engine (`fansly_send_log`). */
+export type SyncRouteJournal = "engine" | "legacy";
+
+/** The newest send of one operation of a page in one journal. */
+export interface SyncRouteSend {
+  journal: SyncRouteJournal;
+  /** A wire id (`engine`) or the legacy adapter's operation (`legacy`). */
+  operation: string;
+  /** The actual send instant; for a send whose instant was never recorded
+   *  (an attempt left `unknown`, a guard capture whose holder died), its
+   *  upper bound — an unknown outcome counts as sent at the latest it could
+   *  have been (step 3b ruling 4). */
+  lastAt: Date;
+}
+
+/** How far before the asked look-back the journals are scanned by admission
+ *  (capture) instant: far longer than admission → recorded send (send window
+ *  + request timeout for a completion-instant mark, a guard lease) plus any
+ *  app/database clock skew. */
+export const SYNC_ROUTE_JOURNAL_SLACK_MS = SYNC_FLOOR_LOOKBACK_MS;
 
 /**
- * How long until the page may admit its next request on these wire routes
- * (an endpoint group's spacing, owner decision №20): its newest attempt there
- * — by the latest instant it has, admission, send or completion — plus
- * `spacingMs`, less the database clock now; ≤ 0 (or none within the
- * look-back) means now. Shadow and live attempts are each other's strangers
- * (`shadow`). The look-back keeps it a short range scan of
- * `sync_attempts_page_admitted`.
+ * The route clocks' journal read (step 3b ruling 4, plan PR 1-1): per
+ * journal and operation, the newest send of the page whose admission (or
+ * guard capture) lies within `withinMs` + `SYNC_ROUTE_JOURNAL_SLACK_MS` — a
+ * short range scan of `sync_attempts_page_admitted` (and
+ * `fansly_send_log_page_captured_idx`), however long the journal is.
+ *
+ * - Engine attempts of the page's journal (`shadow`: the shadow one): the
+ *   actual send (`sent_at`); without one, an attempt that may still have
+ *   gone out (`admitted`, `sent`, `unknown`, a recovered `shadow`) counts at
+ *   its admission + the send window, the latest its send check could pass. A
+ *   refusal before sending and a failure that never reached
+ *   `onRequestStart` (no `sent_at`) sent nothing.
+ * - With `legacy` (a page the engine owns live), the step-1 send log too:
+ *   what the legacy engine sent before the switch (or after a rollback)
+ *   counts against the same routes. A send never marked counts at its
+ *   completion, else its lease end; a capture released unsent does not.
  */
-export async function endpointSpacingRemainingMs(
+export async function readRouteJournal(
   db: Database,
-  input: { pageId: number; shadow: boolean; operations: readonly string[]; spacingMs: number },
-): Promise<number> {
-  if (input.operations.length === 0) return 0;
-  const lookbackMs = Math.max(0, input.spacingMs) + SYNC_ENDPOINT_SPACING_LOOKBACK_MS;
-  const result = await db.execute<{ remainingMs: number | string | null }>(sql`
-    select (extract(epoch from (
-             max(greatest(a.admitted_at, a.sent_at, a.completed_at))
-             + ${Math.max(0, input.spacingMs)}::double precision * interval '1 millisecond'
-             - clock_timestamp())) * 1000)::double precision as "remainingMs"
+  input: { pageId: number; shadow: boolean; withinMs: number; legacy: boolean },
+): Promise<SyncRouteSend[]> {
+  const scanMs = Math.max(0, input.withinMs) + SYNC_ROUTE_JOURNAL_SLACK_MS;
+  const legacy = input.legacy && !input.shadow;
+  const result = await db.execute<{ journal: SyncRouteJournal; operation: string; lastAt: Date | string }>(sql`
+    select 'engine'::text as journal, a.operation,
+           max(coalesce(a.sent_at,
+             a.admitted_at + ${SYNC_SEND_WINDOW_MS}::double precision * interval '1 millisecond')) as "lastAt"
       from sync_attempts a
      where a.page_id = ${input.pageId}
-       and a.admitted_at > statement_timestamp() - ${lookbackMs}::double precision * interval '1 millisecond'
-       and a.shadow = ${input.shadow}
-       and a.operation in (${sql.join(input.operations.map((operation) => sql`${operation}`), sql`, `)})
+       and a.admitted_at > statement_timestamp() - ${scanMs}::double precision * interval '1 millisecond'
+       and a.shadow = ${input.shadow}::boolean
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow'))
+     group by a.operation
+    union all
+    select 'legacy'::text, l.operation,
+           max(coalesce(l.sent_at, l.completed_at, l.lease_until,
+             l.captured_at + ${SYNC_SEND_WINDOW_MS}::double precision * interval '1 millisecond'))
+      from fansly_send_log l
+     where ${legacy}::boolean
+       and l.page_id = ${input.pageId}
+       and l.captured_at > statement_timestamp() - ${scanMs}::double precision * interval '1 millisecond'
+       and (l.sent_at is not null or l.outcome is distinct from 'aborted_before_send')
+     group by l.operation
   `);
-  const remaining = Number(result.rows[0]?.remainingMs ?? 0);
-  return Number.isFinite(remaining) ? Math.max(0, Math.ceil(remaining)) : 0;
+  return result.rows.map((row) => ({ journal: row.journal, operation: row.operation, lastAt: toRequiredDate(row.lastAt) }));
 }
 
 /**

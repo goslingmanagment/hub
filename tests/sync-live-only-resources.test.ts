@@ -15,12 +15,7 @@ import {
 import type { SyncWorkRow } from "@agency_hub_core/db";
 
 import type { PlanContext } from "../apps/runtime/src/sync/engine/resource.ts";
-import {
-  parseRepairCursor,
-  REPAIR_LIST_SPACING_MS,
-  repairNextListAt,
-  repairWsGapModule,
-} from "../apps/runtime/src/sync/fansly/resources/repair.ts";
+import { parseRepairCursor } from "../apps/runtime/src/sync/fansly/resources/repair.ts";
 import { wsConnectModule, wsConnectOutcome, wsConnectPlan } from "../apps/runtime/src/sync/fansly/resources/ws-connect.ts";
 
 // The live-only resources of step 3 (design S3-04), their pure halves: what
@@ -165,37 +160,10 @@ describe("repair.ws-gap's cursor", () => {
   it("reads a pass under way and nothing else", () => {
     const pass = { since: "2026-10-02T11:00:00.000Z", targets: ["c1"], startedRevision: 3 };
     expect(parseRepairCursor({ phase: "list", pass, offset: 100, pageCount: 1, spawned: [{ resource: "dm-messages.head", subject: "g" }], waitStartedAt: null }))
-      .toEqual({ phase: "list", pass, offset: 100, pageCount: 1, spawned: [{ resource: "dm-messages.head", subject: "g" }], waitStartedAt: null, nextListAt: null });
-    expect(parseRepairCursor({ phase: "list", pass, offset: 100, pageCount: 1, spawned: [], waitStartedAt: null, nextListAt: "2026-10-02T12:00:05.000Z" }))
-      .toMatchObject({ phase: "list", offset: 100, nextListAt: "2026-10-02T12:00:05.000Z" });
+      .toEqual({ phase: "list", pass, offset: 100, pageCount: 1, spawned: [{ resource: "dm-messages.head", subject: "g" }], waitStartedAt: null });
     expect(parseRepairCursor({})).toBeNull();
-    expect(parseRepairCursor({ nextListAt: "2026-10-02T12:00:05.000Z" })).toBeNull();
     expect(parseRepairCursor({ phase: "stamp", pass, offset: 0 })).toBeNull();
     expect(parseRepairCursor({ phase: "wait", pass: { ...pass, since: "never" }, offset: 0 })).toBeNull();
-  });
-
-  it("keeps the list spacing from a pass under way and from the reset of a restarted one", () => {
-    expect(repairNextListAt({ phase: "list", nextListAt: "2026-10-02T12:00:05.000Z" })).toEqual(new Date("2026-10-02T12:00:05.000Z"));
-    expect(repairNextListAt({ nextListAt: "2026-10-02T12:00:05.000Z" })).toEqual(new Date("2026-10-02T12:00:05.000Z"));
-    expect(repairNextListAt({})).toBeNull();
-    expect(repairNextListAt({ nextListAt: "soon" })).toBeNull();
-  });
-});
-
-describe("repair.ws-gap's plan (owner decision №14)", () => {
-  const pass = { since: "2026-10-02T11:00:00.000Z", targets: ["c1"], startedRevision: 3 };
-  const nextListAt = new Date(NOW.getTime() + 2_000);
-  // No database: a list page that is not due yet is answered before any read.
-  const ctx = { db: null, pageId: 1, shadow: false, now: NOW } as unknown as PlanContext;
-  const work = (cursor: unknown) => ({ cursor, firstDemandAt: NOW, demandRevision: 4 }) as unknown as SyncWorkRow;
-
-  it("never reads a list page sooner than the spacing after the previous one, whatever pulled the row forward", async () => {
-    const listing = { phase: "list", pass, offset: 100, pageCount: 1, spawned: [], waitStartedAt: null, nextListAt: nextListAt.toISOString() };
-    expect(await repairWsGapModule.plan(work(listing), ctx)).toEqual({ kind: "wait", reason: "not_due", until: nextListAt });
-    // A restarted pass's first page keeps the spacing from the last pass's last.
-    expect(await repairWsGapModule.plan(work({ nextListAt: nextListAt.toISOString() }), ctx))
-      .toEqual({ kind: "wait", reason: "not_due", until: nextListAt });
-    expect(nextListAt.getTime() - NOW.getTime()).toBeLessThan(REPAIR_LIST_SPACING_MS);
   });
 });
 

@@ -73,6 +73,11 @@ export interface EngineResourceSpec {
   /** False only for entries applied from the socket (no request). Such an
    *  entry's every step runs before the HTTP gate (`beforeGateKeys`). */
   http: boolean;
+  /** Every wire route its steps may send: the route admission leaves the key
+   *  out of a pick while all of them are closed (`engine/route-policy.ts`).
+   *  Absent or empty (a probe whose route is the owner's, a write without a
+   *  request): only the planned request's route is checked. */
+  operations?: readonly FanslyWireId[];
   /** Its plan may settle a step without a request — a closure, a wait — and
    *  decides so read-only and cheaply: the actor plans its due work before
    *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
