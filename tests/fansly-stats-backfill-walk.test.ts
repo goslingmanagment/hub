@@ -6,15 +6,21 @@ import {
   probeStatsMonth,
 } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import {
-  advanceBroadcastWalk,
   backfillContinuationAt,
+  hourlyCaptureDue,
+  isEmptyStatsMonth,
+  rollUtcDay,
+  servedEarningsWindow,
+  utcDayKey,
+  windowsAreContiguous,
+} from "../apps/runtime/src/services/sync/fansly-stats.ts";
+import {
+  advanceBroadcastWalk,
   broadcastMessageRows,
   classifyStatsMonth,
   classifyStatsWindow,
   emptyFanslyStatsCursorState,
-  hourlyCaptureDue,
   hourlyCaptureGap,
-  isEmptyStatsMonth,
   monthFromIndex,
   monthIndexOf,
   monthLabel,
@@ -22,13 +28,9 @@ import {
   monthWasHonoured,
   narrowedSpanDays,
   parseFanslyStatsCursorState,
-  rollUtcDay,
-  servedEarningsWindow,
   trustedAccountCreatedAt,
-  utcDayKey,
-  windowsAreContiguous,
   windowWasHonoured,
-} from "../apps/runtime/src/services/sync/fansly-stats.ts";
+} from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
 
 // WP-F1 — the pure halves of the backfill walk, without a database.
 //

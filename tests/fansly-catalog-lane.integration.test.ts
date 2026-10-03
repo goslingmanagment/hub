@@ -8,10 +8,8 @@ import {
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import {
-  fanslyCatalogChunk,
-  parseFanslyCatalogCursorState,
-} from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { fanslyCatalogChunk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { parseFanslyCatalogCursorState } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

@@ -1,7 +1,7 @@
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
+import { classifyFanslyResponse } from "../../sync/fansly/lib/lane.ts";
 import { FanslyPurchaseHistoryContractError } from "./errors.ts";
-import { classifyFanslyResponse } from "./fansly-lane.ts";
 
 type JsonRecord = Record<string, unknown>;
 

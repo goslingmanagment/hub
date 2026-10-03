@@ -9,13 +9,15 @@ import { FANSLY_NOTIFICATION_DECLARED_TYPE_CSV } from "@agency_hub_core/shared";
 import {
   backfillAttemptCeiling,
   backfillContinuationAt,
-  classifyNotificationResponse,
-  compareNotificationRefs,
   FORWARD_HEAD_RESERVED_ATTEMPTS,
   forwardPollDue,
   nextForwardPollAt,
-  typesForFilterMode,
 } from "../apps/runtime/src/services/sync/fansly-notifications.ts";
+import {
+  classifyNotificationResponse,
+  compareNotificationRefs,
+  typesForFilterMode,
+} from "../apps/runtime/src/sync/fansly/lib/notifications-rules.ts";
 import { envelope, NOW, ref, row } from "./helpers/fansly-notifications-fixtures.ts";
 
 describe("WP-F2 walk helpers", () => {

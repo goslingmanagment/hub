@@ -34,6 +34,15 @@ function syncSource(file: string) {
   );
 }
 
+/** The response classifiers both Fansly engines share live in the Sync
+ *  Engine's lib; the legacy lanes import them from there. */
+function engineLibSource(file: string) {
+  return readFileSync(
+    join(ROOT, "apps/runtime/src/sync/fansly/lib", file),
+    "utf8",
+  );
+}
+
 describe("Fansly lane scaffold ratchet", () => {
   it("keeps budget, journal, checkpoint, coverage and continuation machinery shared", () => {
     for (const file of LANE_FILES) {
@@ -54,18 +63,19 @@ describe("Fansly lane scaffold ratchet", () => {
   });
 
   it("keeps every response family on the shared three-way classifier", () => {
-    expect(syncSource("fansly-stats.ts")).toContain("classifyFanslyResponse");
-    expect(syncSource("fansly-media-stats.ts")).toContain("classifyStatsWindow");
+    expect(engineLibSource("stats-rules.ts")).toContain("classifyFanslyResponse");
+    expect(engineLibSource("media-stats-rules.ts")).toContain("classifyStatsWindow");
     for (const file of [
-      "fansly-notifications.ts",
-      "fansly-catalog.ts",
-      "fansly-post-replies.ts",
-      "fansly-payouts.ts",
-      "fansly-purchase-history.ts",
+      "notifications-rules.ts",
+      "catalog-rules.ts",
+      "post-replies-rules.ts",
+      "payouts-rules.ts",
     ]) {
-      expect(syncSource(file), `${file} must use the shared response classifier`)
+      expect(engineLibSource(file), `${file} must use the shared response classifier`)
         .toContain("classifyFanslyResponse");
     }
+    expect(syncSource("fansly-purchase-history.ts"), "fansly-purchase-history.ts must use the shared response classifier")
+      .toContain("classifyFanslyResponse");
   });
 
   it("keeps purchase-history journal and checkpoint work on the same scaffold", () => {

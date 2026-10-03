@@ -17,7 +17,7 @@
 //      request PATH, and an empty reply page could not otherwise say which
 //      post it is about — and a `post_tips` answer that escapes its requested
 //      posts or receiver as `{quarantine: "fansly_post_tips_scope_v1",
-//      requestedTargetIds, response}` (posts.ts `inspectFanslyPostTipsScope`);
+//      requestedTargetIds, response}` (lib/posts-rules.ts `inspectFanslyPostTipsScope`);
 //   3. the CDN signing-token strip for the kinds it names (never `dm_messages`
 //      or `purchase_history*`: the AI describer downloads from those URLs);
 //   4. the lone-surrogate replacement json/jsonb need.
@@ -43,8 +43,8 @@ import {
   fanslyCdnTokenStripApplies,
   stripFanslySignedCdnTokens,
 } from "../../services/sync/fansly-cdn-tokens.ts";
-import { FANSLY_STATS_MAPPER_VERSION } from "../../services/sync/fansly-stats.ts";
-import { inspectFanslyPostTipsScope } from "../../services/sync/posts.ts";
+import { FANSLY_STATS_MAPPER_VERSION } from "./lib/stats-rules.ts";
+import { inspectFanslyPostTipsScope } from "./lib/posts-rules.ts";
 import {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
