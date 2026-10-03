@@ -204,8 +204,9 @@ describe("block levers on an engine page", () => {
     // The page in handover is neither read by the engine nor by legacy.
     expect(await dueNow(pages.handover, "subscribers.poll")).toBe(false);
     expect(await countRows(testDb!.pool, "select count(*)::int as n from page_sync_states where page_id = $1", [pages.handover])).toBe(0);
-    // The legacy page is triggered the legacy way.
-    expect(await countRows(testDb!.pool, "select count(*)::int as n from page_sync_states where page_id = $1", [pages.legacy])).toBeGreaterThan(0);
+    // A Fansly page off the engine is not triggered the legacy way either:
+    // since step 4 (S4-10) the legacy executor serves no Fansly page.
+    expect(await countRows(testDb!.pool, "select count(*)::int as n from page_sync_states where page_id = $1", [pages.legacy])).toBe(0);
     const audit = await testDb!.pool.query<{ metadata: { pagesQueued: number; engine?: Array<{ pageLabel: string }> } }>(
       "select metadata from audit_events where event_type = 'admin.sync_trigger_all' order by id desc limit 1",
     );
