@@ -63,6 +63,10 @@ export const CATEGORY_COPY_RU: Record<string, CategoryCopy> = {
     label: "Картинки в десктопе",
     why: "Превью и фото в треде, галерее и волте ChatGoose Desktop; бесплатные ссылки работают и без включения",
   },
+  account_settings: {
+    label: "Приветственное сообщение",
+    why: "Снимок автоприветствия новым подписчикам (включено ли, текст, медиа, цена) для панели «Новые»; раз в сутки — 1 кредит",
+  },
 };
 
 export const CONSUMER_LABELS_RU: Record<string, string> = {
