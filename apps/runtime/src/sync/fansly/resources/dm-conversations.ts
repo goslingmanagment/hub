@@ -10,9 +10,11 @@ import {
   listPageDmThreadListStates,
   listPageDmThreadListStatesByRecency,
   maxPageDmThreadGeneration,
+  readDmFindSharedRead,
   readFanslyAccountProbe,
   upsertPageDmConversationListFields,
   type Database,
+  type DmFindSharedRead,
   type PageDmThreadListState,
   type SyncPageRow,
 } from "@agency_hub_core/db";
@@ -38,6 +40,7 @@ import type {
   ApplyInput,
   ApplyResult,
   DemandSignal,
+  LocalApplyInput,
   ReplayContext,
   ReplayObservation,
   ReplayVerdict,
@@ -47,6 +50,8 @@ import type {
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
+import { parseRouteState } from "../../engine/route-policy.ts";
+import type { FanslyRoute } from "../routes.ts";
 import {
   listHeadInstant,
   listHeadNeedsRead,
@@ -77,10 +82,16 @@ import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/rep
 //   page, or two non-final pages of nothing but repeats (a provider ignoring
 //   the offset), restart the walk under a new generation after 60 s, at most
 //   twice; past that it closes withheld.
-// - find (urgent, a socket event in an unknown chat): the list head; if the
-//   chat is not on it, its group detail, which creates the thread (D5). While
-//   a list 429 holds the list (owner decision 2026-10-02, `rate_limit_list`:
-//   only the keys that can only read the list wait), straight to the detail.
+// - find (urgent, a socket event in an unknown chat): the list head, shared
+//   by a burst (step 3b ruling 1): the first read of the list head admitted
+//   since the find's first demand and applied — whichever list key made it —
+//   answers every find. A chat a read wrote since the demand is found with no
+//   request, before the HTTP gate (a `local` step that makes sure the chat's
+//   urgent message read is asked); a chat such a head read did not show goes
+//   to its group detail, which creates the thread (D5), as does every chat
+//   while a 429 holds the list (owner decision 2026-10-02, `rate_limit_list`,
+//   or a hold of the list route); with neither, the find reads the list head
+//   itself.
 // - detail (planned, from a list apply): the group detail of a chat whose
 //   partner the list could not name; a 5xx breaks only this chat (§9).
 // - ws-down (urgent, live only, step 3): the list head every 30 s while the
@@ -92,7 +103,8 @@ import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/rep
 // coverage verdict or the chain columns (I9), never an unbinding. A listed
 // head newer than what the message reads reached asks for a read:
 // `dm-messages.catchup` (planned) from head/full/detail, `dm-messages.head`
-// (urgent) from ws-down and for find's own chat.
+// (urgent) from ws-down, find and repair, and for any chat a `.find` is open
+// for, whichever read lists it (the read answers that find).
 
 export type DmConversationsVariant = "head" | "full" | "find" | "detail" | "ws-down";
 
@@ -104,6 +116,18 @@ const WS_DOWN_KEY = "dm-conversations.ws-down";
 const MESSAGES_HEAD_KEY = "dm-messages.head";
 const MESSAGES_CATCHUP_KEY = "dm-messages.catchup";
 const PROBE_KEY = "fan-profiles.probe";
+const REPAIR_KEY = "repair.ws-gap";
+
+/** The conversation list's route. */
+const LIST_ROUTE = "messaging.groups" satisfies FanslyRoute;
+
+/**
+ * The keys that read the conversation list and write every page they read
+ * through the list's writer (`applyListPage`): an applied read of the list
+ * head by any of them is a `.find`'s shared read (step 3b). Every key of the
+ * list route — pinned by tests/sync-registry-coverage.test.ts.
+ */
+export const DM_LIST_READ_KEYS: readonly string[] = [HEAD_KEY, FULL_KEY, FIND_KEY, WS_DOWN_KEY, REPAIR_KEY];
 
 const LIMIT = FANSLY_MESSAGING_GROUPS_PAGE_LIMIT;
 
@@ -178,7 +202,7 @@ async function pageAccountIdOrQuarantine(db: Database, pageId: number): Promise<
 async function planWithIdentity(
   key: string,
   ctx: { db: Database; pageId: number; shadow: boolean; now: Date },
-  request: () => StepPlan,
+  request: () => StepPlan | Promise<StepPlan>,
 ): Promise<StepPlan> {
   const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
   if (facts === null) return { kind: "quarantine", reason: "page_missing" };
@@ -221,20 +245,28 @@ interface FollowupThread {
  * The work a list read asks for (design §5.3): a message read for each chat
  * whose list head is newer than what the reads reached (`dm-messages.catchup`
  * planned — skipped while the chat has an open `dm-messages.head` — or
- * `dm-messages.head` urgent), the group detail of a chat without a partner,
- * the probe of an unresolvable partner.
+ * `dm-messages.head` urgent; urgent too for a chat a `.find` is open for, as
+ * this read answers that find), the group detail of a chat without a
+ * partner, the probe of an unresolvable partner.
  */
 async function threadFollowups(
   db: Database,
   input: { pageId: number; shadow: boolean; key: string; engineStartAt: Date | null; threads: readonly FollowupThread[] },
 ): Promise<{ followups: DemandSignal[]; counters: Record<string, number> }> {
   const needRead = input.threads.filter((thread) => listHeadNeedsRead(thread.state, input.engineStartAt));
-  const plannedSubjects = needRead.filter((thread) => thread.followupClass === "planned").map((thread) => thread.state.groupId);
+  const openFinds = await listOpenWorkSubjects(db, {
+    pageId: input.pageId,
+    shadow: input.shadow,
+    resource: FIND_KEY,
+    subjects: needRead.filter((thread) => thread.followupClass === "planned").map((thread) => thread.state.groupId),
+  });
+  const classOf = (thread: FollowupThread): FollowupClass =>
+    thread.followupClass === "planned" && openFinds.has(thread.state.groupId) ? "urgent" : thread.followupClass;
   const openHeads = await listOpenWorkSubjects(db, {
     pageId: input.pageId,
     shadow: input.shadow,
     resource: MESSAGES_HEAD_KEY,
-    subjects: plannedSubjects,
+    subjects: needRead.filter((thread) => classOf(thread) === "planned").map((thread) => thread.state.groupId),
   });
   const followups: DemandSignal[] = [];
   const counters: Record<string, number> = {};
@@ -243,16 +275,18 @@ async function threadFollowups(
   };
   for (const thread of needRead) {
     const groupId = thread.state.groupId;
-    if (thread.followupClass === "planned" && openHeads.has(groupId)) {
+    const followupClass = classOf(thread);
+    if (followupClass === "planned" && openHeads.has(groupId)) {
       bump("catchup_skipped_open_head");
       continue;
     }
+    if (followupClass !== thread.followupClass) bump("followup_urgent_open_find");
     followups.push({
-      resource: thread.followupClass === "urgent" ? MESSAGES_HEAD_KEY : MESSAGES_CATCHUP_KEY,
+      resource: followupClass === "urgent" ? MESSAGES_HEAD_KEY : MESSAGES_CATCHUP_KEY,
       subject: groupId,
       demand: { messageIds: [thread.state.listHeadId!], reason: `list_head:${input.key}` },
     });
-    bump(thread.followupClass === "urgent" ? "followup_messages_head" : "followup_messages_catchup");
+    bump(followupClass === "urgent" ? "followup_messages_head" : "followup_messages_catchup");
   }
   for (const thread of input.threads) {
     if (thread.requestGroupDetail) {
@@ -978,18 +1012,112 @@ function parseFindCursor(value: unknown): DmListFindCursor {
   return { step: recordOf(value).step === "detail" ? "detail" : "list" };
 }
 
+/** The list cannot be read now: a 429 holds it — the list's own hold (owner
+ *  decision 2026-10-02, `rate_limit_list`) or a hold of its route in the
+ *  page's route state. */
+function listHeld(page: SyncPageRow, now: Date): boolean {
+  if (listRateLimitHold(page.resourceHolds as Record<string, ResourceHoldEntry>, now) !== null) return true;
+  const read = parseRouteState(page.routeState);
+  const until = read.ok ? read.state.routes[LIST_ROUTE]?.holdUntil ?? null : null;
+  return until !== null && Date.parse(until) > now.getTime();
+}
+
+/** The receipt of a find another key's read answered: that read (null: the
+ *  chat was written by a read that was no list head read since the demand),
+ *  so the shadow report counts the chat read with it. */
+function sharedReadResult(groupId: string, read: DmFindSharedRead["headRead"]): Record<string, unknown> {
+  return {
+    groupId,
+    step: "list",
+    sharedRead: read === null ? null : { attemptId: read.attemptId, resource: read.resource, subject: read.subject },
+  };
+}
+
+/** What the page's reads since this find's first demand tell it. */
+function findSharedRead(db: Database, input: { workId: number; pageId: number; shadow: boolean; groupId: string }): Promise<DmFindSharedRead> {
+  return readDmFindSharedRead(db, {
+    workId: input.workId,
+    pageId: input.pageId,
+    shadow: input.shadow,
+    platformConversationId: input.groupId,
+    listOperation: LIST_ROUTE,
+    listKeys: DM_LIST_READ_KEYS,
+  });
+}
+
+/** The reason a find closes on another read (`found_by_shared_read`). */
+const FOUND_BY_SHARED_READ = "found_by_shared_read";
+
 const findModule: ResourceModule = {
+  // Planned before the HTTP gate too (`planBeforeGate`): a find the shared
+  // read answered closes there, with no slot.
   async plan(work, ctx): Promise<StepPlan> {
     const groupId = work.subject;
     if (groupId.length === 0) return { kind: "quarantine", reason: "find_without_chat" };
     const cursor = parseFindCursor(work.cursor);
-    // While a list 429 holds the list (owner decision 2026-10-02), the chat is
-    // found through its group detail alone.
-    const listHeld = listRateLimitHold(ctx.page.resourceHolds as Record<string, ResourceHoldEntry>, ctx.now) !== null;
-    return planWithIdentity(FIND_KEY, ctx, () => ({
-      kind: "request",
-      request: !ctx.shadow && (cursor.step === "detail" || listHeld) ? detailRequest(groupId) : listRequest(0),
-    }));
+    return planWithIdentity(FIND_KEY, ctx, async (): Promise<StepPlan> => {
+      const shared = await findSharedRead(ctx.db, { workId: work.id, pageId: ctx.pageId, shadow: ctx.shadow, groupId });
+      if (ctx.shadow) {
+        // The live burst, modelled: a list head read since the demand answers
+        // the find with no request (its estimate asked the reads of the chats
+        // the database knows); else the find reads the list itself.
+        return shared.headRead === null
+          ? { kind: "request", request: listRequest(0) }
+          : { kind: "done", reason: "shared_head_read", result: sharedReadResult(groupId, shared.headRead) };
+      }
+      // A read since the demand wrote the chat: found, nothing to send — the
+      // local step makes sure its urgent message read is asked.
+      if (shared.found) return { kind: "local", reason: FOUND_BY_SHARED_READ };
+      // Not on a head read since the demand, or the list is held: the chat is
+      // found through its group detail alone.
+      if (cursor.step === "detail" || shared.headRead !== null || listHeld(ctx.page, ctx.now)) {
+        return { kind: "request", request: detailRequest(groupId) };
+      }
+      return { kind: "request", request: listRequest(0) };
+    });
+  },
+
+  /**
+   * Live: a find a read since its demand answered closes, and its chat's
+   * urgent message read is asked unless one is open — the read that wrote the
+   * chat asked it when it saw this find open, but a find whose demand
+   * committed while that read's apply ran was not there to be seen. Only
+   * while the list head is newer than what the message reads reached (a read
+   * since may have confirmed it).
+   */
+  async applyLocal(tx, input: LocalApplyInput): Promise<ApplyResult> {
+    const groupId = input.work.subject;
+    const shared = await findSharedRead(tx, { workId: input.work.id, pageId: input.pageId, shadow: false, groupId });
+    // The thread is gone since the plan (an erasure ran before this step took
+    // the fence): the find plans again.
+    if (!shared.found) return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
+    const [state] = await listPageDmThreadListStates(tx, { platformAccountId: input.pageId, platformConversationIds: [groupId] });
+    const openHead = await listOpenWorkSubjects(tx, { pageId: input.pageId, shadow: false, resource: MESSAGES_HEAD_KEY, subjects: [groupId] });
+    const page = await getSyncPage(tx, input.pageId);
+    const listHeadId = state?.lastMessageId ?? null;
+    const needsRead = state !== undefined && !openHead.has(groupId) && listHeadNeedsRead({
+      groupId,
+      fanId: state.fanId,
+      metadata: state.metadata,
+      headConfirmedId: state.headConfirmedId,
+      newestStoredMessageId: state.newestStoredMessageId,
+      listHeadId,
+      listHeadAt: listHeadInstant(listHeadId, state.lastMessageAt),
+    }, engineStartAt(page));
+    const followups: DemandSignal[] = needsRead
+      ? [{ resource: MESSAGES_HEAD_KEY, subject: groupId, demand: { messageIds: [listHeadId!], reason: `list_head:${FIND_KEY}` } }]
+      : [];
+    return {
+      work: {
+        satisfiesRevision: true,
+        close: "done",
+        closeReason: FOUND_BY_SHARED_READ,
+        cursor: { step: "list" } satisfies DmListFindCursor,
+        result: sharedReadResult(groupId, shared.headRead),
+      },
+      followups,
+      counters: needsRead ? { find_shared_read: 1, followup_messages_head: 1 } : { find_shared_read: 1 },
+    };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
@@ -1035,10 +1163,16 @@ const findModule: ResourceModule = {
   },
 
   async shadow(work, _request, ctx): Promise<ShadowResult> {
-    // One list read (design §5.3); the chat's own read if the database
-    // already knows it (legacy listed it meanwhile).
+    // One list read (design §5.3), shared like the live one: the urgent read
+    // of each chat a find is open for — its own and those it answers
+    // (`shared_head_read`) — if the database already knows the chat (legacy
+    // listed it meanwhile).
     const groupId = work.subject;
-    const states = await listPageDmThreadListStates(ctx.db, { platformAccountId: ctx.pageId, platformConversationIds: [groupId] });
+    const open = await listOpenWorkSubjects(ctx.db, { pageId: ctx.pageId, shadow: true, resource: FIND_KEY });
+    const states = await listPageDmThreadListStates(ctx.db, {
+      platformAccountId: ctx.pageId,
+      platformConversationIds: [...new Set([groupId, ...open])],
+    });
     const estimate = await shadowFollowups(ctx.db, { pageId: ctx.pageId, key: FIND_KEY, page: ctx.page, now: ctx.now, states, classOf: () => "urgent" });
     return {
       work: { satisfiesRevision: true, close: "done", closeReason: "shadow" },

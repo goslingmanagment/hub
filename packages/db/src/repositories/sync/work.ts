@@ -1347,14 +1347,14 @@ export async function nextOpenWorkDueAt(
   return toDate(result.rows[0]?.dueAt);
 }
 
-/** Which of these subjects have an open (or running) row of `resource` in
- *  this journal — plain read, no lock. */
+/** Which of these subjects (absent: any) have an open (or running) row of
+ *  `resource` in this journal — plain read, no lock. */
 export async function listOpenWorkSubjects(
   db: Database,
-  input: { pageId: number; shadow: boolean; resource: string; subjects: readonly string[] },
+  input: { pageId: number; shadow: boolean; resource: string; subjects?: readonly string[] },
 ): Promise<Set<string>> {
-  const subjects = [...new Set(input.subjects)];
-  if (subjects.length === 0) return new Set();
+  const subjects = input.subjects === undefined ? null : [...new Set(input.subjects)];
+  if (subjects !== null && subjects.length === 0) return new Set();
   const result = await db.execute<{ subject: string }>(sql`
     select w.subject
       from sync_work w
@@ -1362,7 +1362,7 @@ export async function listOpenWorkSubjects(
        and w.shadow = ${input.shadow}::boolean
        and w.resource = ${input.resource}
        and w.state in ('open', 'running')
-       and w.subject = any(${textArrayParam(subjects)})
+       ${subjects === null ? sql`` : sql`and w.subject = any(${textArrayParam(subjects)})`}
   `);
   return new Set(result.rows.map((row) => row.subject));
 }

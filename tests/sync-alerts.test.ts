@@ -571,7 +571,7 @@ function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRu
 describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
   it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.shared-read", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
       "A1.poll-schedule",
       "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
     ]);
@@ -808,6 +808,38 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const unexplained = judge({ "dm-messages.head": { class: "urgent", attempts: 101 } }, null);
     expect(head(unexplained)).toMatchObject({ expected: null, verdict: "not_modelled" });
     expect(unexplained).toMatchObject({ ceilingSteadyState: 101, socketDemand: { reads: 0 }, ceiling: "over", passes: false });
+  });
+
+  it("rule A1.shared-read: finds another key's list read served count beside the attempts against their frames, never in the steady state", () => {
+    // A quiet page (below the band: every row must be at its expectation)
+    // with only the new chats' finds switched on.
+    const page = shadowPage("ari-1", Object.fromEntries(FANSLY_RESOURCE_SPECS
+      .filter((entry) => entry.key !== "dm-conversations.find")
+      .map((entry) => [entry.key, { enabled: false }])));
+    const judge = (attempts: number, served: number | null) => demandOfPage(page, {
+      window: WINDOW,
+      observed: new Map([["dm-conversations.find", { class: "urgent", attempts }]]),
+      ...(served === null ? {} : { served: new Map([["dm-conversations.find", served]]) }),
+      reads: new Map([["dm-conversations.find", { reads: 6, dueLagsMs: [] }]]),
+      facts: { runs: new Map(), placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z") },
+      counterparts: NO_GAPS,
+    });
+    const find = (demand: ReturnType<typeof judge>) => demand.resources.find((row) => row.resource === "dm-conversations.find")!;
+    // Six new chats at once: one list read, five finds closed on it.
+    const shared = judge(1, 5);
+    expect(find(shared)).toMatchObject({
+      observed: 1, expected: 6, ratio: 1, verdict: "ok",
+      reason: "socket reads 6; 5 served by another key's read (rule A1.shared-read)",
+    });
+    expect(shared).toMatchObject({
+      steadyState: 1,
+      socketDemand: { reads: 1, resources: [{ resource: "dm-conversations.find", observed: 1, expected: 6, demand: 1, overExpectation: 0 }] },
+      floor: { below: true, holds: true, outside: [] },
+      passes: true,
+    });
+    // By its attempts alone the row would read a sixth of its expectation.
+    expect(find(judge(1, null))).toMatchObject({ observed: 1, expected: 6, verdict: "outside" });
+    expect(judge(1, null)).toMatchObject({ floor: { below: true, holds: false }, passes: false });
   });
 
   it("a single-request poll's run is its one request; every other poll's run is its consecutive steps", () => {

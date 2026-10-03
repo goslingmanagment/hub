@@ -715,6 +715,42 @@ export async function listSyncAdmissions(
   }));
 }
 
+/**
+ * The rows of `resources` another key's read answered — a `.find` closed on
+ * the shared list-head read (step 3b), its `result.sharedRead.attemptId` —
+ * at that read's admission in [from, to) (admission order): the read was
+ * theirs, so what they were to read is read with it.
+ */
+export async function listSharedReadAdmissions(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; resources: readonly string[]; from: Date; to: Date },
+): Promise<Array<{ pageId: number; resource: string; subject: string; admittedAt: Date }>> {
+  if (input.pageIds.length === 0 || input.resources.length === 0) return [];
+  const result = await db.execute<{ pageId: string; resource: string; subject: string; admittedAt: Date | string }>(sql`
+    select w.page_id::text as "pageId", w.resource, w.subject, a.admitted_at as "admittedAt"
+      from sync_work w
+      join sync_attempts a
+        on a.id = case when (w.result #>> '{sharedRead,attemptId}') ~ '^[0-9]{1,18}$'
+                       then (w.result #>> '{sharedRead,attemptId}')::bigint end
+       and a.page_id = w.page_id
+       and a.shadow = w.shadow
+     where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = any(${textArrayParam(input.resources)})
+       and w.state = 'done'
+       and w.closed_at >= ${input.from}::timestamptz
+       and a.admitted_at >= ${input.from}::timestamptz
+       and a.admitted_at < ${input.to}::timestamptz
+     order by a.admitted_at, w.id
+  `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    admittedAt: toRequiredDate(row.admittedAt),
+  }));
+}
+
 /** Each page's first shadow admission in [from, to) (pages without one are
  *  absent): when its shadow actor began to run within the range. */
 export async function readFirstShadowAdmissions(

@@ -4,7 +4,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 
 import type { Database } from "../../client.ts";
 import type { DmSenderRole } from "../page-dm.ts";
-import { jsonParam, textArrayParam, timestampParam, toDate } from "./values.ts";
+import { jsonParam, textArrayParam, timestampParam, toDate, toRequiredDate } from "./values.ts";
 
 // The Fansly Sync Engine's conversation list (plan §6.2 "Список чатов пишет
 // только свои поля", design §5.3): the thread state its resource reads and
@@ -287,4 +287,80 @@ export async function upsertPageDmConversationListFields(
     metadata: row.metadata ?? {},
     inserted: row.inserted,
   };
+}
+
+/** What a page's reads of the conversation list since one `.find`'s first
+ *  demand tell it about its chat (step 3b, the shared list-head read). */
+export interface DmFindSharedRead {
+  /** The chat's thread was written by the list's writer (a list page or a
+   *  group detail applied: `last_seen_at`) since the find's first demand — a
+   *  read served the chat. Always false on a shadow page, which writes no
+   *  thread. */
+  found: boolean;
+  /** The first read of the list head (offset 0) by one of the list's keys
+   *  admitted since the find's first demand whose answer was applied (on a
+   *  shadow page: whose estimate settled); null while there is none. An
+   *  admission without its applied answer proves nothing. */
+  headRead: { attemptId: number; resource: string; subject: string; admittedAt: Date } | null;
+}
+
+/**
+ * The shared list-head read of one `dm-conversations.find` row (`workId`):
+ * by the database clock, from the attempt journal and the thread row — a read
+ * admitted before the find's first demand may have been served before the
+ * chat existed, so only the later ones count as its head read.
+ */
+export async function readDmFindSharedRead(
+  db: Database,
+  input: {
+    workId: number;
+    pageId: number;
+    shadow: boolean;
+    platformConversationId: string;
+    /** The list's operation (`messaging.groups`). */
+    listOperation: string;
+    /** The keys whose list reads write the threads they serve. */
+    listKeys: readonly string[];
+  },
+): Promise<DmFindSharedRead> {
+  const result = await db.execute<{
+    found: boolean;
+    attemptId: string | null;
+    resource: string | null;
+    subject: string | null;
+    admittedAt: Date | string | null;
+  }>(sql`
+    with demand as (
+      select w.first_demand_at from sync_work w where w.id = ${input.workId}
+    )
+    select exists (
+             select 1
+               from page_dm_threads t
+              where not ${input.shadow}::boolean
+                and t.platform_account_id = ${input.pageId}
+                and t.platform_conversation_id = ${input.platformConversationId}
+                and t.last_seen_at >= d.first_demand_at
+           ) as found,
+           r.id::text as "attemptId", r.resource, r.subject, r.admitted_at as "admittedAt"
+      from demand d
+      left join lateral (
+        select a.id, a.resource, a.subject, a.admitted_at
+          from sync_attempts a
+         where a.page_id = ${input.pageId}
+           and a.shadow = ${input.shadow}::boolean
+           and a.admitted_at >= d.first_demand_at
+           and a.operation = ${input.listOperation}
+           and a.resource = any(${textArrayParam(input.listKeys)})
+           and a.request -> 'params' ->> 'offset' = '0'
+           and case when a.shadow then a.outcome = 'shadow' else a.apply_state = 'applied' end
+         order by a.admitted_at, a.id
+         limit 1
+      ) r on true
+  `);
+  const row = result.rows[0];
+  if (row === undefined) return { found: false, headRead: null };
+  const read = row.attemptId === null || row.resource === null || row.admittedAt === null
+    ? null
+    : { attemptId: Number(row.attemptId), resource: row.resource, subject: row.subject ?? "", admittedAt: toRequiredDate(row.admittedAt) };
+  return { found: row.found === true, headRead: read };
 }

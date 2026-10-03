@@ -62,6 +62,18 @@ pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary` af
 `syncLegacyThreadSummaryAfterDeletion` after a socket deletion). A list head newer than what the message
 reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
 
+A socket event in a chat the page does not know raises `dm-conversations.find` (urgent, 12 s). A burst of new chats
+shares one read of the list head (step 3b ruling 1, plan PR 1-3): the first read of offset 0 by any key of the list
+route (`DM_LIST_READ_KEYS`: the head and full walks, `.find`, `.ws-down`, `repair.ws-gap`) admitted since a find's
+first demand and applied answers it — a read admitted earlier may have been served before the chat existed. A chat
+a read wrote since the demand is found with no request, before the HTTP gate: a `local` step closes the find
+`found_by_shared_read` and asks the chat's urgent `dm-messages.head` unless one is open (a list or detail apply asks
+it already for every chat a `.find` is open for, never a planned catch-up). A chat such a head read did not show
+goes to its group detail, which creates the thread (D5), as does every chat while a 429 holds the list; with
+neither, the find reads the list head itself. A shadow page writes no thread, so its find closes `shared_head_read`
+on the first such read its shadow journal settled, and the shadow report counts the chat read at that read's
+admission.
+
 A message read (`dm-messages.head`, `.catchup`, `.history`) is one `/message` page per step. Its apply folds the page
 into the chain before it writes anything (an anomaly the design sends to review quarantines the step whole), then
 writes the page's rows minus any an executed erasure fences, the chain, the legacy coverage columns (engine-owned
@@ -511,9 +523,9 @@ the hour is too quiet), the pacer's self-check; part B over the past journal —
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
 step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
-`report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.ceiling-demand, A1.floor, A1.floor-scheduled,
-A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every
-report prints the rule it applied.
+`report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.ceiling-demand, A1.shared-read, A1.floor,
+A1.floor-scheduled, A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only,
+A2.demand-replaced), every report prints the rule it applied.
 Three of them ask the resource modules read-only questions (`ResourceModule`), each in its own savepoint:
 `estimateRunSteps` sizes a key on a period longer than the hour before its first shadow run, while its row keeps that
 run on schedule (its `shadow()` estimate, A1.rate-assumed; a key that ran before stays unknown until it runs again),
