@@ -50,8 +50,8 @@ import { lookupFollowups, partitionLookupIds } from "./fan-profiles.ts";
 // `subscribers.poll` and `subscribers.history` (plan §5, design §5.11): the
 // offset walk of `GET /subscribers?offset&limit=100&status=…`, one page per
 // step, journaled as `subscribers` verbatim. The apply is the legacy chunk's
-// page transaction (executor-handlers.ts `fanslySubscribersChunk`) with its
-// cursor in the work row and its throws turned into outcomes:
+// page transaction (the legacy subscribers handler, deleted at step 4) with
+// its cursor in the work row and its throws turned into outcomes:
 //
 // - restart  — the total moved, the walk came back short of its total, or
 //              rows were served twice: a fresh generation from offset 0 after

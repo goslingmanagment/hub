@@ -77,8 +77,6 @@ describe("config registry", () => {
   const LIVE_KEYS = [
     // Decision 349: the public invite/reset link kill switch.
     "accountLinksEnabled",
-    "fanslyFollowersSettlementReuseEnabled",
-    "fanslyFollowersSettlementReusePageAllowlist",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
     "fanslyWsHintsEnabled",

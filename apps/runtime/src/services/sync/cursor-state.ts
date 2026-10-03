@@ -37,10 +37,10 @@ type FollowersCursorState = {
   sourceFollowerCount: number;
 };
 
-type FollowersReconcileCursorState = {
+type FollowersReconcileProgressState = {
   revision: number;
   generation: number;
-  fullSweepStartedAt: string;
+  fullSweepStartedAt: string | null;
   offset: number;
   observedCount: number;
   pageCount: number;
@@ -48,13 +48,6 @@ type FollowersReconcileCursorState = {
   snapshotRestartCount: number;
   restartReason: "snapshot_mismatch" | null;
   verificationPending: boolean;
-};
-
-type FollowersReconcileProgressState = Omit<
-  FollowersReconcileCursorState,
-  "fullSweepStartedAt"
-> & {
-  fullSweepStartedAt: string | null;
 };
 
 /**
@@ -337,24 +330,6 @@ export function parseFollowersReconcileProgressState(
   };
 }
 
-/** Execution must never resume a legacy sweep that predates the retirement
- * time fence. Read-only progress consumers may still display its counters via
- * parseFollowersReconcileProgressState without fabricating a start time. */
-export function parseFollowersReconcileCursorState(
-  value: unknown,
-  revision: number | null | undefined,
-): FollowersReconcileCursorState | null {
-  const state = parseFollowersReconcileProgressState(value, revision);
-  if (!state?.fullSweepStartedAt) {
-    return null;
-  }
-
-  return {
-    ...state,
-    fullSweepStartedAt: state.fullSweepStartedAt,
-  };
-}
-
 /**
  * The status readers' view of a legacy Fansly dm_conversations sweep cursor
  * (the sweep itself is gone since step 4, S4-14; its last cursors stay as
@@ -617,7 +592,6 @@ export type {
   DmConversationProviderTotalMode,
   DmMessagesCursorState,
   FollowersCursorState,
-  FollowersReconcileCursorState,
   FollowersReconcileProgressState,
   OfapiDmConversationCursorState,
   SubscribersCursorState,

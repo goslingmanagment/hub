@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  parseFollowersReconcileCursorState,
-  parseFollowersReconcileProgressState,
-} from "../apps/runtime/src/services/sync/cursor-state.ts";
+import { parseFollowersReconcileProgressState } from "../apps/runtime/src/services/sync/cursor-state.ts";
 
 const LEGACY_STATE = {
   revision: 4,
@@ -18,21 +15,19 @@ const LEGACY_STATE = {
 };
 
 describe("followers reconcile cursor state", () => {
-  it("shows legacy progress without allowing the unsafe sweep to resume", () => {
+  it("shows legacy progress without fabricating a sweep start", () => {
     expect(parseFollowersReconcileProgressState(LEGACY_STATE, 4)).toEqual({
       ...LEGACY_STATE,
       fullSweepStartedAt: null,
     });
-    expect(parseFollowersReconcileCursorState(LEGACY_STATE, 4)).toBeNull();
   });
 
-  it("parses a fenced cursor for both execution and progress", () => {
+  it("shows a fenced cursor's progress with its sweep start", () => {
     const state = {
       ...LEGACY_STATE,
       fullSweepStartedAt: "2026-08-24T20:00:00.000Z",
     };
 
     expect(parseFollowersReconcileProgressState(state, 4)).toEqual(state);
-    expect(parseFollowersReconcileCursorState(state, 4)).toEqual(state);
   });
 });

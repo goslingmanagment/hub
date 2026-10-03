@@ -67,7 +67,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "fan_earnings_stats", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.stats_accounts)" },
   { kind: "fan_earnings_monthly", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.monthly_accounts)" },
   { kind: "fans_active", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "followers", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  { kind: "followers", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "group_detail", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "post_tips", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "posts", source: "pull", writer: "services/sync/executor-handlers.ts" },
@@ -79,7 +79,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // step 4 (S4-16); their journaled rows stay and stay claimed.
   { kind: "purchase_history_contract_probe", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
   { kind: "purchase_history_contract_storm", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
-  { kind: "subscribers", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  { kind: "subscribers", source: "pull", writer: "sync/fansly/capture.ts" },
   // ── WP-F1: the `stats_snapshot` lane (services/sync/fansly-stats.ts) ──────
   // Every one is claimed by the `fansly-stats` family. `media_offer_stats` was
   // registered here by F1 with the PARSER but no writer, so the kind would be

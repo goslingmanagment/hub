@@ -194,8 +194,9 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
+    // Retired at step 4 (S4-17): nothing reads them, so no override applies.
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(false);
+    expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(false);
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
@@ -254,6 +255,7 @@ describe("LIVE_CONFIG_KEYS", () => {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
     // Step 4 S4-16 retired ten keys with the legacy Fansly money lanes.
-    expect(LIVE_CONFIG_KEYS.size).toBe(74);
+    // Step 4 S4-17 retired two keys with the legacy followers reconcile's settlement reuse.
+    expect(LIVE_CONFIG_KEYS.size).toBe(72);
   });
 });

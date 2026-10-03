@@ -31,7 +31,7 @@ import {
   type SyncStatusPage,
 } from "./sync-status.ts";
 import { sendSyncPageWakeup } from "./sync-queue.ts";
-import { assertLegacyExecutorServes } from "./sync-control.ts";
+import { assertLegacyExecutorServes, LegacySyncRetiredError } from "./sync-control.ts";
 import {
   engineOwnedSyncPage,
   pauseEngineStreams,
@@ -695,69 +695,30 @@ export async function resetSyncBlock(
   };
 }
 
-/** Unblock only the follower membership walk. Unlike the dashboard's audience
- * reset, this keeps the incremental followers/subscribers checkpoints and the
- * reconcile cursor itself; the new request revision makes the next handler
- * seed a fresh generation from offset zero. */
+/** Unblock only the follower membership walk on the page the Fansly Sync
+ * Engine owns (`resetEngineFollowersReconcile`): the walk's row is cancelled
+ * and a fresh owner demand starts a new generation from offset zero. Unlike
+ * the dashboard's audience reset, the incremental followers/subscribers
+ * cursors stay. Any other Fansly page is refused (409 `legacy_sync_retired`):
+ * the legacy followers_reconcile handler is gone since step 4 (S4-17). */
 export async function resetFollowersReconcileStream(
   app: AppContext,
-  boss: Pick<PgBoss, "send">,
-  input: { pageLabel: string; now?: Date },
+  input: { pageLabel: string },
 ) {
-  const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   if (stored.page.platform !== "fansly") {
     throw new BadRequestError("Follower reconcile is available only on Fansly pages");
   }
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
-  if (engine !== null) {
-    const reset = await resetEngineFollowersReconcile(app.db, engine);
-    return {
-      accepted: true as const,
-      action: "reset" as const,
-      pageLabel: stored.page.label,
-      stream: "followers_reconcile" as const,
-      requests: [{ stream: "followers_reconcile" as const, requestedSeq: reset.demandRevision }],
-    };
+  if (engine === null) {
+    throw new LegacySyncRetiredError({ pageLabel: stored.page.label, platform: stored.page.platform });
   }
-  assertLegacyExecutorServes(stored.page);
-  const dependencyInput = pageSyncDependencyInput(app);
-  const streams: SyncStream[] = ["followers_reconcile"];
-  await ensurePageSyncStates(app.db, {
-    pageId: stored.page.id,
-    now,
-    ...dependencyInput,
-  });
-  const requests = await app.db.transaction(async (tx) => {
-    const dbTx = tx as typeof app.db;
-    await resetPageSync(dbTx, {
-      pageId: stored.page.id,
-      streams,
-      now,
-    });
-    return requestPageSyncRows(dbTx, {
-      pageId: stored.page.id,
-      streams,
-      source: "reset",
-      now,
-      ...dependencyInput,
-    });
-  });
-  await enqueueBlockWakeup(boss, {
-    platformAccountId: stored.page.id,
-    platform: stored.page.platform,
-    egressKey: resolveStoredProxyEgressKey(stored.proxy),
-    tasks: streams,
-    reason: "reset",
-  });
+  const reset = await resetEngineFollowersReconcile(app.db, engine);
   return {
     accepted: true as const,
     action: "reset" as const,
     pageLabel: stored.page.label,
     stream: "followers_reconcile" as const,
-    requests: requests.map((request) => ({
-      stream: request.stream,
-      requestedSeq: request.requestedSeq,
-    })),
+    requests: [{ stream: "followers_reconcile" as const, requestedSeq: reset.demandRevision }],
   };
 }

@@ -1,21 +1,26 @@
-import { vi } from "vitest";
 import {
-  findPageById,
-  listPageSyncStates,
+  countPageFollowsByGeneration,
+  readPageFollowReconcileActivity,
   startSyncRun,
-  upsertCheckpointProgress,
   upsertFans,
   upsertPageFollow,
 } from "@agency_hub_core/db";
-import { executeFollowersReconcileChunk } from "../../apps/runtime/src/services/sync/executor-handlers.ts";
-import { SyncChunkBudget } from "../../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncRunTelemetry } from "../../apps/runtime/src/services/sync/observability.ts";
 import type { StartedTestDatabase } from "./db.ts";
 import { followersDiagnosticFixture } from "./followers-diagnostic-fixture.ts";
 
 export const MEMBERSHIP_START = new Date("2026-09-01T12:00:00.000Z");
+const GENERATION = 10;
 
-export async function followersMembershipFixture(db: StartedTestDatabase, sourceCount = 2) {
+export type MembershipOutcome = "complete" | "restart" | "non_destructive_complete" | "blast_radius_blocked";
+
+/** One page's follows across every membership protection of a generation-10
+ *  sweep that began at MEMBERSHIP_START, and a followers_reconcile run whose
+ *  membership receipt (fansly_followers_diagnostic_timeline, 0185) is written
+ *  as the legacy reconcile walk wrote it at its terminal verification. The
+ *  walk is deleted (step 4, S4-17); the reader stays for the receipts
+ *  production holds. */
+export async function followersMembershipFixture(db: StartedTestDatabase) {
   const { app, page } = await followersDiagnosticFixture(db);
   const rows = [
     { id: "current", generation: 10, touched: false, active: true },
@@ -42,46 +47,52 @@ export async function followersMembershipFixture(db: StartedTestDatabase, source
       new Date(MEMBERSHIP_START.getTime() - (row.touched ? 0 : 1)), page.id, row.id,
     ]);
   }
-  app.adapter.getAccountMe = vi.fn(async () => ({
-    parsed: { account: {
-      id: "account-1", username: "fixture", displayName: "Fixture",
-      createdAt: 1_770_000_000_000, followCount: sourceCount, subscriberCount: 0,
-      earningsWallet: null, walls: [], subscriptionTiers: [],
-    } },
-    raw: {},
-  }));
-  const state = (await listPageSyncStates(db.db, { pageId: page.id }))
-    .find(row => row.stream === "followers_reconcile");
-  const stored = await findPageById(db.db, page.id);
   const run = await startSyncRun(db.db, {
     platformAccountId: page.id, stream: "followers_reconcile", trigger: "manual",
   });
-  if (!state || !stored || !run) throw new Error("membership run seed failed");
-  await upsertCheckpointProgress(db.db, {
-    platformAccountId: page.id, stream: "followers_reconcile",
-    state: {
-      revision: state.requestSeq, generation: 10, fullSweepStartedAt: MEMBERSHIP_START.toISOString(),
-      offset: 0, observedCount: 2, pageCount: 1, sourceFollowerCount: sourceCount,
-      snapshotRestartCount: sourceCount === 2 ? 0 : 2, verificationPending: true,
-      restartReason: sourceCount === 2 ? null : "snapshot_mismatch",
-    },
-  });
+  if (!run) throw new Error("membership run seed failed");
   const telemetry = new SyncRunTelemetry(app, {
     runId: run.id, platformAccountId: page.id, pageLabel: page.label,
     provider: "fansly", stream: "followers_reconcile", trigger: "manual", egressKey: "direct",
   });
-  const execute = async () => {
-    const result = await executeFollowersReconcileChunk(app, {
-      pageContext: {
-        platform: "fansly", page: { ...stored.page, platformAccountId: "account-1" },
-        session: { authorization: "test-token" }, proxy: null, egressKey: "direct",
-      },
-      streamState: { ...state, platform: "fansly", proxyUrl: null, egressKey: "direct" },
-      syncRunId: run.id, telemetry, budget: new SyncChunkBudget(1),
+  /** The walk's membership receipt over the seeded rows, then its run's end.
+   *  Only a complete walk retired follows; its count is the guarded UPDATE's
+   *  own result (the candidates unless a test says otherwise). */
+  const recordMembershipAndFinishTelemetry = async (input: {
+    outcome: MembershipOutcome;
+    sourceFollowerCount?: number;
+    deactivatedCount?: number;
+    receipt?: boolean;
+  }) => {
+    const activity = await readPageFollowReconcileActivity(db.db, {
+      platformAccountId: page.id, generation: GENERATION, fullSweepStartedAt: MEMBERSHIP_START,
     });
-    // Exercise the handler and reader; executor lease/CAS completion has separate tests.
-    await telemetry.finish(result.satisfied ? "success" : "partial");
-    return result;
+    if (input.receipt !== false) {
+      await telemetry.addNote("Fansly followers membership verification", {
+        followersMembership: {
+          schemaVersion: 1,
+          outcome: input.outcome,
+          generation: GENERATION,
+          fullSweepStartedAt: MEMBERSHIP_START.toISOString(),
+          sourceFollowerCount: input.sourceFollowerCount ?? 2,
+          generationObservedCount: Number(await countPageFollowsByGeneration(db.db, {
+            platformAccountId: page.id, generation: GENERATION,
+          })),
+          activeFollowerCount: activity.activeFollowerCount,
+          activeInGenerationCount: activity.activeInGenerationCount,
+          activeOutsideGenerationCount: activity.activeOutsideGenerationCount,
+          deactivationCandidateCount: activity.deactivationCandidateCount,
+          generationGraceOnlyCount: activity.generationGraceOnlyCount,
+          touchedSinceStartOnlyCount: activity.touchedSinceStartOnlyCount,
+          generationGraceAndTouchCount: activity.generationGraceAndTouchCount,
+          futureGenerationCount: activity.futureGenerationCount,
+          deactivatedCount: input.outcome === "complete"
+            ? input.deactivatedCount ?? activity.deactivationCandidateCount
+            : null,
+        },
+      });
+    }
+    await telemetry.finish(input.outcome === "restart" ? "partial" : "success");
   };
-  return { app, page, run, execute };
+  return { app, page, run, recordMembershipAndFinishTelemetry };
 }

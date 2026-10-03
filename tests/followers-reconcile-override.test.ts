@@ -4,9 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
 
+// The override serves only a page the Fansly Sync Engine owns (the legacy
+// followers_reconcile walk is deleted since step 4, S4-17). The end-to-end
+// flow over a real quarantined walk: tests/sync-engine-levers.integration.
+
 const dbMocks = vi.hoisted(() => ({
+  closeQuarantinedWork: vi.fn(),
+  countActiveLiveWorkByResource: vi.fn(),
   deactivatePageFollowsByGeneration: vi.fn(),
+  getOpenWorkForKey: vi.fn(),
+  getSyncPage: vi.fn(),
   listPageFollowDeactivationCandidates: vi.fn(),
+  listSyncPages: vi.fn(),
   readPageFollowReconcileActivity: vi.fn(),
   rebuildFollowerRollups: vi.fn(),
   refreshFanPageFollowerState: vi.fn(),
@@ -18,9 +27,7 @@ const authMocks = vi.hoisted(() => ({
 
 vi.mock("@agency_hub_core/db", async () => {
   const actual = await vi.importActual<typeof DbModule>("@agency_hub_core/db");
-  // The page is the legacy engine's (the engine branch:
-  // tests/sync-engine-levers.integration.test.ts).
-  return { ...actual, ...dbMocks, listSyncPages: async () => [] };
+  return { ...actual, ...dbMocks };
 });
 
 vi.mock("../apps/runtime/src/services/auth.ts", () => authMocks);
@@ -33,8 +40,10 @@ import {
   followersReconcileCandidateSha256,
 } from "../apps/runtime/src/sync/fansly/lib/followers-reconcile-safety.ts";
 
+const WORK_ID = 1438;
 const BLOCKED_AT = "2026-08-30T00:10:00.000Z";
 const SWEEP_STARTED_AT = "2026-08-29T22:00:00.000Z";
+const PAGE_ROW = { id: "7", label: "lora-1", platform: "fansly", followerCount: 7_491 };
 
 function candidates(count = 51) {
   return Array.from({ length: count }, (_, index) => ({
@@ -43,99 +52,72 @@ function candidates(count = 51) {
   }));
 }
 
-type TestAudienceRow = {
-  stream: string;
-  status: "blocked" | "paused";
-  requestSeq: number;
-  appliedSeq: number;
-  blockerKind: string | null;
-  blockerCode: string | null;
-  blockedAt: Date | null;
-  leasedSeq: number | null;
-  leaseOwner: string | null;
-  leaseToken: string | null;
-  leaseHeartbeatAt: Date | null;
-  leaseExpiresAt: Date | null;
-};
-
-function audienceRows(input?: {
-  status?: "blocked" | "paused";
-  withLease?: boolean;
-}) {
-  const status = input?.status ?? "paused";
-  const base = (stream: string): TestAudienceRow => ({
-    stream,
-    status,
-    requestSeq: stream === "followers_reconcile" ? 1438 : 100,
-    appliedSeq: stream === "followers_reconcile" ? 844 : 100,
-    blockerKind: stream === "followers_reconcile" ? "provider_bad_data" : null,
-    blockerCode: stream === "followers_reconcile"
-      ? "followers_reconcile_deactivation_blast_radius"
-      : null,
-    blockedAt: stream === "followers_reconcile" ? new Date(BLOCKED_AT) : null,
-    leasedSeq: null,
-    leaseOwner: null,
-    leaseToken: null,
-    leaseHeartbeatAt: null,
-    leaseExpiresAt: null,
-  });
-  const rows = [
-    base("followers"),
-    base("followers_reconcile"),
-    base("subscribers"),
-  ];
-  if (input?.withLease) {
-    rows[0] = {
-      ...rows[0]!,
-      leasedSeq: 100,
-      leaseOwner: "worker-1",
-      leaseToken: "lease-1",
-      leaseHeartbeatAt: new Date(BLOCKED_AT),
-      leaseExpiresAt: new Date("2026-08-30T00:20:00.000Z"),
-    };
-  }
-  return rows;
+function syncPage(input: { paused?: boolean } = {}) {
+  return { pageId: 7, pageLabel: "lora-1", mode: "live", pausedAll: input.paused ?? true, pausedResources: [] };
 }
 
-function cursorRow(overrides: Record<string, unknown> = {}) {
+/** The quarantined `followers.reconcile` row the engine apply left behind. */
+function quarantinedWalk() {
   return {
-    state: {
-      revision: 1438,
+    id: WORK_ID,
+    state: "quarantined",
+    result: { quarantine: {
+      reason: "apply:quarantine:followers_reconcile_deactivation_blast_radius",
+      detail: { refusal: "followers_reconcile_deactivation_blast_radius", generation: 688, fullSweepStartedAt: SWEEP_STARTED_AT },
+      attemptId: 91,
+      at: BLOCKED_AT,
+    } },
+    cursor: {
       generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      verificationPending: true,
-      ...overrides,
+      walk: {
+        generation: 688, fullSweepStartedAt: SWEEP_STARTED_AT, offset: 7_500, observedCount: 7_440,
+        pageCount: 75, sourceFollowerCount: 7_491, verificationPending: true,
+      },
     },
   };
 }
 
-function createApp(input?: {
-  status?: "blocked" | "paused";
-  withLease?: boolean;
-  cursorOverrides?: Record<string, unknown>;
-}) {
-  const execute = vi.fn()
-    .mockResolvedValueOnce({
-      rows: [{ id: "7", label: "lora-1", platform: "fansly", followerCount: 7_491 }],
-    })
-    .mockResolvedValueOnce({ rows: audienceRows(input) })
-    .mockResolvedValueOnce({ rows: [cursorRow(input?.cursorOverrides)] });
+function createApp(input: { paused?: boolean } = {}) {
+  dbMocks.listSyncPages.mockResolvedValue([syncPage(input)]);
+  dbMocks.getSyncPage.mockResolvedValue(syncPage(input));
+  dbMocks.getOpenWorkForKey.mockResolvedValue(quarantinedWalk());
+  const execute = vi.fn().mockResolvedValue({ rows: [PAGE_ROW] });
   const tx = { execute };
   const transaction = vi.fn(async (
     callback: (database: typeof tx) => Promise<unknown>,
     _options?: unknown,
   ) => callback(tx));
   return {
-    app: { db: { transaction } } as never,
+    app: { db: { transaction, execute } } as never,
     tx,
     transaction,
   };
 }
 
+function stubCandidates(fixtureCandidates: ReturnType<typeof candidates>) {
+  dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
+  dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
+    firstSeenDuringSweepOutsideGeneration: 0,
+    activeFollowerCount: 1_000,
+    deactivationCandidateCount: fixtureCandidates.length,
+  });
+}
+
+const echo = (candidateSha256: string) => ({
+  pageLabel: "lora-1",
+  blockedRequestSeq: WORK_ID,
+  blockedAt: BLOCKED_AT,
+  generation: 688,
+  fullSweepStartedAt: SWEEP_STARTED_AT,
+  candidateSha256,
+});
+
 beforeEach(() => {
   for (const mock of [...Object.values(dbMocks), ...Object.values(authMocks)]) {
     mock.mockReset();
   }
+  dbMocks.countActiveLiveWorkByResource.mockResolvedValue([]);
+  dbMocks.closeQuarantinedWork.mockResolvedValue(true);
   dbMocks.rebuildFollowerRollups.mockResolvedValue(undefined);
   dbMocks.refreshFanPageFollowerState.mockResolvedValue(undefined);
   authMocks.recordAudit.mockResolvedValue(undefined);
@@ -153,15 +135,38 @@ describe("followers reconcile blast-radius override", () => {
     expect(source).not.toMatch(/update\s+(page_sync_states|page_sync_cursors|pages)\b/i);
   });
 
-  it("previews an exact hash-bound candidate set without exposing row ids", async () => {
+  it("refuses a Fansly page the engine does not own before it opens a transaction (409 legacy_sync_retired)", async () => {
+    const { app, transaction } = createApp();
+    dbMocks.listSyncPages.mockResolvedValue([]);
+    const refused = { statusCode: 409, code: "legacy_sync_retired", name: "LegacySyncRetiredError" };
+
+    await expect(previewFollowersReconcileBlastRadiusOverride(app, { pageLabel: "lora-1" }))
+      .rejects.toMatchObject(refused);
+    await expect(applyFollowersReconcileBlastRadiusOverride(app, echo("0".repeat(64)), { source: "api", actorUserId: 1 }))
+      .rejects.toMatchObject(refused);
+
+    expect(transaction).not.toHaveBeenCalled();
+    expect(dbMocks.getOpenWorkForKey).not.toHaveBeenCalled();
+    expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+  });
+
+  it("keeps 404 for an unknown page and 400 for a page on another platform", async () => {
+    const { app } = createApp();
+    dbMocks.listSyncPages.mockResolvedValue([]);
+    const execute = (app as unknown as { db: { execute: ReturnType<typeof vi.fn> } }).db.execute;
+
+    execute.mockResolvedValueOnce({ rows: [] });
+    await expect(previewFollowersReconcileBlastRadiusOverride(app, { pageLabel: "lora-1" }))
+      .rejects.toMatchObject({ statusCode: 404 });
+    execute.mockResolvedValueOnce({ rows: [{ ...PAGE_ROW, platform: "onlyfans" }] });
+    await expect(previewFollowersReconcileBlastRadiusOverride(app, { pageLabel: "lora-1" }))
+      .rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("previews the quarantined walk's exact hash-bound candidate set without exposing row ids", async () => {
     const fixtureCandidates = candidates();
-    const { app, transaction } = createApp({ status: "blocked" });
-    dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
-    dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
-      firstSeenDuringSweepOutsideGeneration: 0,
-      activeFollowerCount: 1_000,
-      deactivationCandidateCount: fixtureCandidates.length,
-    });
+    const { app, transaction } = createApp({ paused: false });
+    stubCandidates(fixtureCandidates);
 
     const result = await previewFollowersReconcileBlastRadiusOverride(app, {
       pageLabel: "lora-1",
@@ -170,7 +175,7 @@ describe("followers reconcile blast-radius override", () => {
     expect(result).toEqual(expect.objectContaining({
       action: "preview",
       pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
+      blockedRequestSeq: WORK_ID,
       blockedAt: BLOCKED_AT,
       generation: 688,
       fullSweepStartedAt: SWEEP_STARTED_AT,
@@ -189,30 +194,23 @@ describe("followers reconcile blast-radius override", () => {
     }));
     expect(result).not.toHaveProperty("candidateIds");
     expect(transaction).toHaveBeenCalledWith(expect.any(Function));
+    expect(dbMocks.listPageFollowDeactivationCandidates).toHaveBeenCalledWith(
+      expect.anything(),
+      { platformAccountId: 7, generation: 688, fullSweepStartedAt: new Date(SWEEP_STARTED_AT) },
+      { lock: false },
+    );
   });
 
-  it("applies only the echoed set in one serializable transaction and audits there", async () => {
+  it("applies only the echoed set in one serializable transaction, closes the walk and audits there", async () => {
     const fixtureCandidates = candidates();
     const candidateSha256 = followersReconcileCandidateSha256(fixtureCandidates);
     const { app, tx, transaction } = createApp();
-    dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
-    dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
-      firstSeenDuringSweepOutsideGeneration: 0,
-      activeFollowerCount: 1_000,
-      deactivationCandidateCount: fixtureCandidates.length,
-    });
+    stubCandidates(fixtureCandidates);
     dbMocks.deactivatePageFollowsByGeneration.mockResolvedValue(
       fixtureCandidates.map((candidate) => candidate.id),
     );
 
-    const result = await applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256,
-    }, {
+    const result = await applyFollowersReconcileBlastRadiusOverride(app, echo(candidateSha256), {
       source: "api",
       actorUserId: 1,
     });
@@ -237,11 +235,18 @@ describe("followers reconcile blast-radius override", () => {
     });
     expect(dbMocks.refreshFanPageFollowerState).toHaveBeenCalledWith(tx, 7);
     expect(dbMocks.rebuildFollowerRollups).toHaveBeenCalledWith(tx, 7, 7_491);
+    expect(dbMocks.closeQuarantinedWork).toHaveBeenCalledWith(tx, expect.objectContaining({
+      workId: WORK_ID,
+      to: "done",
+      closeReason: "blast_radius_override_applied",
+      cursor: expect.objectContaining({ walk: null, lastFullSweepStartedAt: SWEEP_STARTED_AT }),
+    }));
     expect(authMocks.recordAudit).toHaveBeenCalledWith({ db: tx }, expect.objectContaining({
       eventType: "admin.followers_reconcile_blast_radius_override_applied",
       actorUserId: 1,
       platformAccountId: 7,
       metadata: expect.objectContaining({
+        engine: { mode: "live", workId: WORK_ID, resource: "followers.reconcile" },
         candidateSha256,
         candidateCount: 51,
         deactivatedCount: 51,
@@ -256,38 +261,24 @@ describe("followers reconcile blast-radius override", () => {
   });
 
   it("rejects a stale candidate hash before any mutation", async () => {
-    const fixtureCandidates = candidates();
     const { app } = createApp();
-    dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
-    dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
-      firstSeenDuringSweepOutsideGeneration: 0,
-      activeFollowerCount: 1_000,
-      deactivationCandidateCount: fixtureCandidates.length,
-    });
+    stubCandidates(candidates());
 
-    await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256: "0".repeat(64),
-    }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(applyFollowersReconcileBlastRadiusOverride(app, echo("0".repeat(64)), {
+      source: "api", actorUserId: 1,
+    })).rejects.toMatchObject({ statusCode: 409 });
 
     expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
+    expect(dbMocks.closeQuarantinedWork).not.toHaveBeenCalled();
     expect(authMocks.recordAudit).not.toHaveBeenCalled();
   });
 
-  it("rejects a changed blocker/cursor binding before reading candidates", async () => {
+  it("rejects a changed walk binding before reading candidates", async () => {
     const { app } = createApp();
 
     await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1437,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256: "0".repeat(64),
+      ...echo("0".repeat(64)),
+      blockedRequestSeq: WORK_ID - 1,
     }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
 
     expect(dbMocks.listPageFollowDeactivationCandidates).not.toHaveBeenCalled();
@@ -297,47 +288,34 @@ describe("followers reconcile blast-radius override", () => {
   it("rolls back when the guarded helper does not update the exact approved ids", async () => {
     const fixtureCandidates = candidates();
     const { app } = createApp();
-    dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
-    dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
-      firstSeenDuringSweepOutsideGeneration: 0,
-      activeFollowerCount: 1_000,
-      deactivationCandidateCount: fixtureCandidates.length,
-    });
+    stubCandidates(fixtureCandidates);
     dbMocks.deactivatePageFollowsByGeneration.mockResolvedValue([
       ...fixtureCandidates.slice(0, -1).map((candidate) => candidate.id),
       9_999,
     ]);
 
-    await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256: followersReconcileCandidateSha256(fixtureCandidates),
-    }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(applyFollowersReconcileBlastRadiusOverride(app, echo(
+      followersReconcileCandidateSha256(fixtureCandidates),
+    ), { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
 
     expect(dbMocks.refreshFanPageFollowerState).not.toHaveBeenCalled();
     expect(dbMocks.rebuildFollowerRollups).not.toHaveBeenCalled();
+    expect(dbMocks.closeQuarantinedWork).not.toHaveBeenCalled();
     expect(authMocks.recordAudit).not.toHaveBeenCalled();
   });
 
-  it("rejects apply unless every audience stream is paused and lease-free", async () => {
-    const fixtureCandidates = candidates();
-    for (const input of [
-      { status: "blocked" as const },
-      { status: "paused" as const, withLease: true },
-    ]) {
-      const { app } = createApp(input);
-      await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-        pageLabel: "lora-1",
-        blockedRequestSeq: 1438,
-        blockedAt: BLOCKED_AT,
-        generation: 688,
-        fullSweepStartedAt: SWEEP_STARTED_AT,
-        candidateSha256: followersReconcileCandidateSha256(fixtureCandidates),
-      }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
-    }
+  it("rejects apply unless the whole audience is paused and no audience read is in flight", async () => {
+    const candidateSha256 = followersReconcileCandidateSha256(candidates());
+    const notPaused = createApp({ paused: false });
+    await expect(applyFollowersReconcileBlastRadiusOverride(notPaused.app, echo(candidateSha256), {
+      source: "api", actorUserId: 1,
+    })).rejects.toMatchObject({ statusCode: 409 });
+
+    const reading = createApp();
+    dbMocks.countActiveLiveWorkByResource.mockResolvedValue([{ resource: "followers.head", running: 1 }]);
+    await expect(applyFollowersReconcileBlastRadiusOverride(reading.app, echo(candidateSha256), {
+      source: "api", actorUserId: 1,
+    })).rejects.toMatchObject({ statusCode: 409 });
 
     expect(dbMocks.listPageFollowDeactivationCandidates).not.toHaveBeenCalled();
     expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
@@ -346,38 +324,23 @@ describe("followers reconcile blast-radius override", () => {
   it("rejects an override once the exact set is within the normal ceiling", async () => {
     const fixtureCandidates = candidates(50);
     const { app } = createApp();
-    dbMocks.listPageFollowDeactivationCandidates.mockResolvedValue(fixtureCandidates);
-    dbMocks.readPageFollowReconcileActivity.mockResolvedValue({
-      firstSeenDuringSweepOutsideGeneration: 0,
-      activeFollowerCount: 1_000,
-      deactivationCandidateCount: fixtureCandidates.length,
-    });
+    stubCandidates(fixtureCandidates);
 
-    await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256: followersReconcileCandidateSha256(fixtureCandidates),
-    }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(applyFollowersReconcileBlastRadiusOverride(app, echo(
+      followersReconcileCandidateSha256(fixtureCandidates),
+    ), { source: "api", actorUserId: 1 })).rejects.toMatchObject({ statusCode: 409 });
 
     expect(dbMocks.deactivatePageFollowsByGeneration).not.toHaveBeenCalled();
     expect(authMocks.recordAudit).not.toHaveBeenCalled();
   });
 
-  it("maps a serializable conflict to a fresh-preview response", async () => {
-    const transaction = vi.fn().mockRejectedValue({ code: "40001" });
-    const app = { db: { transaction } } as never;
+  it.each(["40001", "40P01"])("maps a %s refusal to a fresh-preview response", async (code) => {
+    const { app, transaction } = createApp();
+    transaction.mockRejectedValue({ code });
 
-    await expect(applyFollowersReconcileBlastRadiusOverride(app, {
-      pageLabel: "lora-1",
-      blockedRequestSeq: 1438,
-      blockedAt: BLOCKED_AT,
-      generation: 688,
-      fullSweepStartedAt: SWEEP_STARTED_AT,
-      candidateSha256: "0".repeat(64),
-    }, { source: "api", actorUserId: 1 })).rejects.toMatchObject({
+    await expect(applyFollowersReconcileBlastRadiusOverride(app, echo("0".repeat(64)), {
+      source: "api", actorUserId: 1,
+    })).rejects.toMatchObject({
       statusCode: 409,
       message: "Follower reconcile changed concurrently; preview again",
     });

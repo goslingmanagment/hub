@@ -492,7 +492,10 @@ export interface AppConfig {
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
   /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRosterMaxAgeHours?: number;
+  /** @deprecated Ignored since step 4: the legacy followers reconcile that read
+   *  it is deleted. Parsed so an env that sets it boots; removed in step 4. */
   fanslyFollowersSettlementReuseEnabled?: boolean;
+  /** @deprecated Ignored, like {@link AppConfig.fanslyFollowersSettlementReuseEnabled}. */
   fanslyFollowersSettlementReusePageAllowlist?: string;
   fanslyDmBoundedEnabled?: boolean;
   fanslyDmBoundedPageAllowlist?: string;

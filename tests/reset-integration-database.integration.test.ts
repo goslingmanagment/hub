@@ -40,7 +40,7 @@ describe("resetIntegrationDatabase", () => {
 
   const seed = async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
-    expect((await fixture.runHandlerAndFinishTelemetry()).satisfied).toBe(true);
+    expect((await fixture.recordWalkAndFinishTelemetry()).requested).toBe(true);
     await db.pool.query("select nextval('ofapi_webhook_events_fanout_seq')");
     const seeded = await snapshot();
     // Not vacuous: the fixture reaches an FK chain (models <- pages <- …) and

@@ -120,7 +120,6 @@ import {
   processSyncPageExecuteJob,
   startSyncPageExecutor,
 } from "../apps/runtime/src/services/sync/executor.ts";
-import { FollowersReconcileConsistencyError } from "../apps/runtime/src/services/sync/errors.ts";
 
 describe("sync executor", () => {
   const taskLease = {
@@ -1907,53 +1906,6 @@ describe("sync executor", () => {
         expect.stringContaining("provider hold"),
       );
     });
-  });
-
-  it("blocks an unsafe follower reconcile snapshot without retrying", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FollowersReconcileConsistencyError({
-      code: "followers_reconcile_inconsistent_snapshot",
-      message: "Follower reconcile generation is incomplete",
-    }));
-
-    await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      blockerKind: "provider_bad_data",
-      blockerCode: "followers_reconcile_inconsistent_snapshot",
-    }));
-    expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(app, expect.objectContaining({
-      forceOpen: true,
-    }));
-  });
-
-  it("retries one follower snapshot that moved during a live paginated scan", async () => {
-    const app = {
-      db: {},
-      logger: { warn: vi.fn(), error: vi.fn() },
-    } as never;
-
-    dbMocks.acquirePageSyncLease.mockResolvedValueOnce(taskLease);
-    handlerMocks.executeStreamChunk.mockRejectedValue(new FollowersReconcileConsistencyError({
-      code: "followers_reconcile_snapshot_drift",
-      message: "Follower count moved during the scan",
-      retryable: true,
-    }));
-
-    await executeNextSyncPageChunk(app, 55);
-
-    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
-      pageId: 55,
-      stream: "followers",
-      retryKind: "followers_reconcile_snapshot_drift",
-    }));
-    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
   });
 
   it("keeps long-running chunks alive with a worker heartbeat", async () => {

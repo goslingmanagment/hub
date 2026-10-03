@@ -12,8 +12,9 @@ import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 // The fan-hydration writers of the Sync Engine's resources (fan-profiles,
 // dm-conversations, subscribers, followers, transactions): a page's Fansly
 // fans, their page links, the account-lookup stamp and the creator's notes on
-// each fan. The legacy lookup (lookupHydratedFans) and the alias backfill
-// import them from here until step 4 deletes them.
+// each fan. The legacy transactions and DM walks (with their account lookup
+// and partner probe) and the alias backfill import them from here until
+// step 4 deletes them.
 
 /**
  * Owner decision 2026-09-30: a fan's Fansly profile (username, display name,

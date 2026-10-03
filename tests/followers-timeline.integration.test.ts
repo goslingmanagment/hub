@@ -6,6 +6,9 @@ const FROM = new Date(Date.now() - 3_600_000).toISOString();
 const TO = new Date(Date.now() + 3_600_000).toISOString();
 const TOO_LONG_END = new Date(Date.parse(FROM) + 8 * 86_400_000 + 1).toISOString();
 
+// The runs and receipts of the deleted legacy followers walks stay readable
+// through fansly_followers_diagnostic_timeline (0183, 0185); the fixture writes
+// them as the walk did.
 describe("C1 restricted followers run timeline", () => {
   let db: Awaited<ReturnType<typeof startTestDatabase>>;
   beforeAll(async () => {
@@ -32,10 +35,10 @@ describe("C1 restricted followers run timeline", () => {
     values ($1, 'followers_reconcile', $2, $2, 'anomaly', $3, $4, now()) returning id`,
   [pageId, seq, outcome, stats])).rows[0].id;
 
-  it("exposes the real handler's decision, counts and locked queue receipt without private material", async () => {
+  it("exposes a walk's decision, counts and locked queue receipt without private material", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
     await db.pool.query("update page_sync_states set applied_seq = request_seq where page_id = $1", [fixture.page.id]);
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     const result = await read();
     expect(result.records).toEqual([expect.objectContaining({
       run_id: fixture.run.id, page_label: fixture.page.label, stream: "followers",
@@ -51,7 +54,7 @@ describe("C1 restricted followers run timeline", () => {
 
   it("keeps a request coalesced into outstanding work identifiable but outside known receipts", async () => {
     const fixture = await followersDiagnosticFixture(db, "count");
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     expect((await read()).records).toEqual([expect.objectContaining({
       run_id: fixture.run.id, decision_valid: true, queue_valid: false,
       sections: expect.objectContaining({
@@ -98,7 +101,7 @@ describe("C1 restricted followers run timeline", () => {
 
   it("retains missing, duplicate and late evidence without making it valid", async () => {
     const fixture = await followersDiagnosticFixture(db);
-    await fixture.runHandlerAndFinishTelemetry();
+    await fixture.recordWalkAndFinishTelemetry();
     await fixture.telemetry.addNote("duplicate", { followersReconcile: { schemaVersion: 1 } });
     expect((await read()).records[0]).toMatchObject({ decision_receipt_count: 2, decision_valid: false });
     await db.pool.query("update sync_run_events set emitted_at = $1", [TO]);
