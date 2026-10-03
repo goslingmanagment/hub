@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Database } from "@agency_hub_core/db";
-import { FanslySendRefusedError } from "@agency_hub_core/fansly";
+import { fanslyWireSpec, FanslySendRefusedError, safeFanslyAnswerHeaders } from "@agency_hub_core/fansly";
 
+import { bindFanslyUpgradeLease } from "../apps/runtime/src/services/egress/fansly-send-lease.ts";
 import { FANSLY_WS_CONNECTION_TIMING } from "../apps/runtime/src/services/fansly-ws/connection.ts";
+import { classifyWireOutcome } from "../apps/runtime/src/sync/engine/errors.ts";
 import { SHUTDOWN_ABORT_BUDGET_MS, SHUTDOWN_ACTOR_BUDGET_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { REQUEST_TIMEOUT_MS } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { noopMetrics, systemClock, type SendHooks } from "../apps/runtime/src/sync/engine/ports.ts";
@@ -25,7 +27,8 @@ import { quietLogger, testConfig } from "./helpers/sync-engine-host.ts";
 // The pure parts of the engine's page socket (step-3 design §3.3): the
 // reconnect ladder moved from the step-1 receiver, the engine lease that lets
 // the step-1 socket code dispatch the Upgrade under the pacer's one-shot
-// check, the transport outcome of a settled Upgrade, the stop budgets against
+// check, the transport outcome of a settled Upgrade — whose status and safe
+// headers reach the classifier (step 3b ruling 10) — the stop budgets against
 // the container's grace, and a source that refuses a handshake it cannot own.
 
 const read = (file: string) => readFileSync(path.resolve(file), "utf8");
@@ -119,22 +122,136 @@ describe("the engine's Upgrade lease (G12, E15)", () => {
     const lease = createEngineUpgradeLease(hooks(() => null), { pageId: 1 });
     await lease.complete({ outcome: "response", httpStatus: 101 });
     await lease.complete({ outcome: "transport_error", httpStatus: null });
-    expect(await lease.settled).toEqual({ outcome: "response", httpStatus: 101 });
+    expect(await lease.settled).toEqual({ outcome: "response", httpStatus: 101, headers: {} });
   });
 
   it("maps a settled Upgrade to the transport outcome of design §3.3", () => {
     const sent = { sent: true, refusal: null };
     const unsent = { sent: false, refusal: null };
-    expect(upgradeOutcome(sent, { outcome: "response", httpStatus: 101 })).toEqual({
+    expect(upgradeOutcome(sent, { outcome: "response", httpStatus: 101, headers: {} })).toEqual({
       kind: "response", status: 101, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "request_start",
     });
-    expect(upgradeOutcome(sent, { outcome: "response", httpStatus: 429 })).toMatchObject({ kind: "response", status: 429 });
-    expect(upgradeOutcome(sent, { outcome: "timeout", httpStatus: null })).toMatchObject({ kind: "timeout", sent: true });
-    expect(upgradeOutcome(unsent, { outcome: "transport_error", httpStatus: null })).toMatchObject({ kind: "transport_error", sent: false });
+    expect(upgradeOutcome(sent, { outcome: "response", httpStatus: 429, headers: { "retry-after": "600" } }))
+      .toMatchObject({ kind: "response", status: 429, headers: { "retry-after": "600" } });
+    expect(upgradeOutcome(sent, { outcome: "timeout", httpStatus: null, headers: {} })).toMatchObject({ kind: "timeout", sent: true });
+    expect(upgradeOutcome(unsent, { outcome: "transport_error", httpStatus: null, headers: {} }))
+      .toMatchObject({ kind: "transport_error", sent: false });
     // The attempt ended before its dispatch reached the check: nothing was
     // sent, and it is no refusal of the pacer.
-    expect(upgradeOutcome(unsent, { outcome: "aborted_before_send", httpStatus: null }))
+    expect(upgradeOutcome(unsent, { outcome: "aborted_before_send", httpStatus: null, headers: {} }))
       .toMatchObject({ kind: "transport_error", sent: false });
+  });
+});
+
+type FakeHandler = Record<string, ((...args: never[]) => unknown) | undefined>;
+type FakeDispatch = (options: unknown, handler: FakeHandler) => boolean;
+interface FakeDispatcher {
+  dispatch: FakeDispatch;
+  compose(...interceptors: Array<(next: FakeDispatch) => FakeDispatch>): FakeDispatcher;
+}
+
+/** A composable dispatcher stand-in whose base hands the innermost handler to
+ *  the test, which plays the origin: `onRequestStart`, then the answer. */
+function originDispatcher() {
+  const handlers: FakeHandler[] = [];
+  const chain = (dispatch: FakeDispatch): FakeDispatcher => ({
+    dispatch,
+    compose: (...interceptors) => chain(interceptors.reduce((next, interceptor) => interceptor(next), dispatch)),
+  });
+  const dispatcher = chain((_options, handler) => {
+    handlers.push(handler);
+    return true;
+  });
+  return { dispatcher, handlers };
+}
+
+const NOW = new Date("2026-10-03T12:00:00.000Z");
+
+/** One Upgrade on the engine lease bound as the receiver socket binds it
+ *  (`bindFanslyUpgradeLease`): sent, then answered by `answer`; its settled
+ *  outcome as the classifier reads it for `ws.upgrade`. */
+async function answeredUpgrade(answer: (handler: FakeHandler, controller: { abort: () => void }) => void) {
+  const lease = createEngineUpgradeLease(hooks(() => null), { pageId: 4 });
+  const origin = originDispatcher();
+  const upstream = { onRequestStart: vi.fn(), onRequestUpgrade: vi.fn(), onResponseStart: vi.fn(), onResponseError: vi.fn() };
+  (bindFanslyUpgradeLease(lease, origin.dispatcher as never) as unknown as FakeDispatcher).dispatch({}, upstream);
+  const handler = origin.handlers[0]!;
+  const controller = { abort: vi.fn() };
+  handler.onRequestStart!(controller as never, {} as never);
+  expect(lease.sent).toBe(true);
+  answer(handler, controller);
+  const settled = await lease.settled;
+  const outcome = upgradeOutcome(lease, settled);
+  if (outcome.kind === "shadow") throw new Error("an Upgrade is never a shadow outcome");
+  const classified = classifyWireOutcome(outcome, fanslyWireSpec("ws.upgrade"), {}, { now: NOW });
+  return { settled, classified, upstream, controller };
+}
+
+describe("the Upgrade's answer reaches the classifier (step 3b ruling 10)", () => {
+  it("keeps of an answer only its safe headers: Retry-After by lower-case name, a repeat joined as a REST answer's", () => {
+    expect(safeFanslyAnswerHeaders({
+      "Retry-After": "600",
+      "set-cookie": ["f-s-c=secret; Path=/", "f-s-d=secret"],
+      "sec-websocket-accept": "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+      date: NOW.toUTCString(),
+      "x-absent": undefined,
+    })).toEqual({ "retry-after": "600" });
+    expect(safeFanslyAnswerHeaders({ "retry-after": ["600", "600"] })).toEqual({ "retry-after": "600, 600" });
+    expect(safeFanslyAnswerHeaders(null)).toEqual({});
+    expect(safeFanslyAnswerHeaders(undefined)).toEqual({});
+  });
+
+  it("a 429 with Retry-After: 600 settles with that header alone and is the provider's pace for 600 s; the socket code still sees the whole answer", async () => {
+    const answer = { "retry-after": "600", "set-cookie": "f-s-c=secret; Path=/", "content-length": "0" };
+    const { settled, classified, upstream, controller } = await answeredUpgrade((handler, at) => {
+      handler.onResponseStart!(at as never, 429 as never, answer as never, "Too Many Requests" as never);
+    });
+    expect(settled).toEqual({ outcome: "response", httpStatus: 429, headers: { "retry-after": "600" } });
+    expect(classified).toMatchObject({ errorClass: "rate_limit", httpStatus: 429, retryAfterMs: 600_000 });
+    expect(upstream.onResponseStart).toHaveBeenCalledExactlyOnceWith(controller, 429, answer, "Too Many Requests");
+  });
+
+  it("an HTTP-date Retry-After is read against the clock", async () => {
+    const until = new Date(NOW.getTime() + 900_000).toUTCString();
+    const { classified } = await answeredUpgrade((handler, at) => {
+      handler.onResponseStart!(at as never, 429 as never, { "retry-after": until } as never, "Too Many Requests" as never);
+    });
+    expect(classified).toMatchObject({ errorClass: "rate_limit", retryAfterMs: 900_000 });
+  });
+
+  it("a 503 naming its Retry-After is the provider's pause; without one it failed the handshake (the socket's ladder)", async () => {
+    const paused = await answeredUpgrade((handler, at) => {
+      handler.onResponseStart!(at as never, 503 as never, { "retry-after": "120" } as never, "Service Unavailable" as never);
+    });
+    expect(paused.classified).toMatchObject({ errorClass: "rate_limit", httpStatus: 503, retryAfterMs: 120_000 });
+    const failed = await answeredUpgrade((handler, at) => {
+      handler.onResponseStart!(at as never, 503 as never, {} as never, "Service Unavailable" as never);
+    });
+    expect(failed.classified).toMatchObject({ errorClass: "subject_failure", httpStatus: 503, retryAfterMs: null });
+    // A 429 without the header still holds (on the default ladder).
+    const bare = await answeredUpgrade((handler, at) => {
+      handler.onResponseStart!(at as never, 429 as never, {} as never, "Too Many Requests" as never);
+    });
+    expect(bare.classified).toMatchObject({ errorClass: "rate_limit", retryAfterMs: null });
+  });
+
+  it("the 101 and a transport error settle as before: the accepted Upgrade, the network", async () => {
+    const upgraded = await answeredUpgrade((handler, at) => {
+      handler.onRequestUpgrade!(at as never, 101 as never, { "sec-websocket-accept": "x", "set-cookie": "f-s-c=secret" } as never, {} as never);
+    });
+    expect(upgraded.settled).toEqual({ outcome: "response", httpStatus: 101, headers: {} });
+    expect(upgraded.classified.errorClass).toBe("ok");
+    const broken = await answeredUpgrade((handler, at) => {
+      handler.onResponseError!(at as never, new Error("socket hang up") as never);
+    });
+    expect(broken.settled).toEqual({ outcome: "transport_error", httpStatus: null, headers: {} });
+    expect(broken.classified.errorClass).toBe("network");
+  });
+
+  it("the engine lease settles with the safe headers only, whoever completes it", async () => {
+    const lease = createEngineUpgradeLease(hooks(() => null), { pageId: 4 });
+    await lease.complete({ outcome: "response", httpStatus: 429, headers: { "retry-after": "60", "set-cookie": "f-s-c=secret" } });
+    expect(await lease.settled).toEqual({ outcome: "response", httpStatus: 429, headers: { "retry-after": "60" } });
   });
 });
 
