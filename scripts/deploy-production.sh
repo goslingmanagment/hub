@@ -600,7 +600,8 @@ for file in \
   scripts/deploy-production.sh \
   scripts/deploy-metadata.sh \
   scripts/deploy-infrastructure.mjs \
-  scripts/verify-desktop-lifecycle-v2-evidence.mjs
+  scripts/verify-desktop-lifecycle-v2-evidence.mjs \
+  scripts/verify-client-sdk-retention.mjs
 do
   if [[ -e "${ROOT_DIR}/${file}" ]]; then
     REMOTE_RELEASE_FILES+=("$file")

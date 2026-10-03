@@ -240,4 +240,41 @@ describe("deploy gate: a candidate keeps every registered client SDK", () => {
     expect(result.stderr).toContain(message);
     expect(readFileSync(commandLog, "utf8")).toBe("");
   });
+
+  it("deploy-production.sh keeps every --drop-client-sdk it is given and goes on to the deploy", () => {
+    // The real script parses its flags and runs its local preflight; the first
+    // SSH call (the remote deploy lock) records what the parse kept for the
+    // gate, then fails, so nothing else runs. TMPDIR keeps the local lock and
+    // the run's temp directory inside the fixture.
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DEPLOY_")));
+    // A plain string: a template literal would take the array expansion for its own.
+    const recordDrops = 'printf \'drop %s\\n\' "${DROP_CLIENT_SDKS[@]}" >> "$TEST_COMMAND_LOG"';
+    const result = spawnSync("bash", ["-c", String.raw`
+      ssh() {
+        local arg target="" call=other
+        for arg in "$@"; do
+          [[ "$arg" == "root@localhost" ]] && target="$arg"
+          [[ "$arg" == *"/opt/agency-hub/.deploy.lock"* ]] && call=remote-lock
+        done
+        printf 'ssh %s %s\n' "$target" "$call" >> "$TEST_COMMAND_LOG"
+        ${recordDrops}
+        return 99
+      }
+      export -f ssh
+      script="$1"; shift
+      bash "$script" "$@"
+    `, "fixture", deployPath, "--drop-client-sdk", retiredHash, "root@localhost", "--drop-client-sdk", retiredBuild], {
+      encoding: "utf8",
+      timeout: 30_000,
+      env: { ...inherited, TEST_COMMAND_LOG: commandLog, TMPDIR: fixtureRoot },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("--drop-client-sdk takes");
+    expect(result.stderr).toContain("error: Remote deploy lock exists");
+    expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+      "ssh root@localhost remote-lock",
+      `drop ${retiredHash}`,
+      `drop ${retiredBuild}`,
+    ]);
+  });
 });
