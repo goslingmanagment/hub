@@ -79,6 +79,8 @@ import {
   ensureSyncQueues,
   reconcileQueueRetention,
 } from "../services/sync-queue.ts";
+import { clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
+import { clientTokenRouteRefusal } from "../services/client-token-profile.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -394,6 +396,20 @@ export async function buildApiServer(appContext: AppContext) {
       pageLabelParam,
     });
     request.authPolicy = { routeKey: entry.key, verdict };
+
+    // chat-extension H-3: a narrow client token reaches only its profile's
+    // routes, in BOTH enforcement modes (client-token-profile.ts). Recorded as
+    // the verdict too, so log mode reports no divergence for it.
+    if (clientTokenAllowlistApplies(entry.auth)) {
+      const refusal = clientTokenRouteRefusal(entry.key, await resolvePrincipal(request));
+      if (refusal) {
+        request.authPolicy = {
+          routeKey: entry.key,
+          verdict: { allow: false, statusCode: 403, reason: "client_profile_route_not_allowed" },
+        };
+        throw refusal;
+      }
+    }
 
     // Decision 370: the Stage 22 must_change_password route allowlist is gone
     // with the flag. Nothing reads the column any more; `mustChangePassword` on

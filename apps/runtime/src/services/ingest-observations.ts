@@ -19,7 +19,10 @@ import type {
   IngestObservationsBody,
   IngestObservationsResponse,
 } from "../../../../packages/contracts/src/routes.ts";
+import type { ClientTokenProfile } from "@agency_hub_core/contracts";
+
 import type { AppContext } from "../bootstrap.ts";
+import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
 
 // Canonicalizer-backed desktop kinds (Stage 11 §2). Everything else journals
 // as desktop.unknown:<kind>.
@@ -110,6 +113,12 @@ export async function ingestClientObservations(
     clientVersion: string;
     /** Server-derived from the authenticated device-token row, never a header. */
     authorizedHarvestMachineId: string | null;
+    /**
+     * chat-extension H-3: the narrow token's profile, from the token row. Set,
+     * it admits only the profile's kinds and decides the producer; the header
+     * then names only the version, and the harvest lane is out of reach.
+     */
+    clientProfile?: ClientTokenProfile | null;
     events: IngestObservationsBody["events"];
   },
 ): Promise<IngestObservationsResponse> {
@@ -117,10 +126,22 @@ export async function ingestClientObservations(
   const observedAts = input.events.map((event, index) =>
     parseObservedAt(event.observedAt, index));
 
+  const clientProfile = input.clientProfile ?? null;
+  if (clientProfile !== null) {
+    const kinds = clientTokenIngestKinds(clientProfile);
+    for (const [index, event] of input.events.entries()) {
+      if (!kinds.includes(event.kind)) {
+        throw new InvalidIngestEventError(index, `kind "${event.kind}" is not accepted from this client`);
+      }
+    }
+  }
+
   const pageScope = input.allowedPageIds === null ? null : new Set(input.allowedPageIds);
   const inScope = (pageId: number) => pageScope === null || pageScope.has(pageId);
 
-  const producer = ingestProducerForClientVersion(input.clientVersion);
+  const producer = clientProfile !== null
+    ? clientTokenIngestProducer(clientProfile, input.clientVersion)
+    : ingestProducerForClientVersion(input.clientVersion);
   const harvestProducer = isHarvestProducer(producer);
   if (harvestProducer && !input.authorizedHarvestMachineId) {
     throw new Error("Harvest producer reached ingest without a server-authorized machine");
