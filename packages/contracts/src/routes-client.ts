@@ -61,8 +61,15 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "archive-feed-v1", "spenders-stats-v1", "awaiting-reply-v1", "audience-new-v1",
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1",
 ] as const;
+/**
+ * Append-only. `client_outdated` (the caller's `x-client-version` is below the
+ * owner's minimum, or unreadable) is answered by the server-side check of
+ * client routes and AI calls (H-2b/H-3), never by the bootstrap; it is listed
+ * from the first vendored SDK on so a client never meets it as unknown.
+ */
 export const CLIENT_FEATURE_UNAVAILABLE_REASONS = [
   "disabled", "flag_off", "platform_unsupported", "binding_missing", "hub_not_ready", "not_granted",
+  "client_outdated",
 ] as const;
 /** The platforms and roles this hub knows today (`pages[].platform`, `identity.role`). */
 export const CLIENT_KNOWN_PLATFORMS = platforms;
