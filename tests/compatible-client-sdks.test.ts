@@ -17,7 +17,8 @@ import { loadFrozenSdk } from "./helpers/client-sdk-compat.ts";
 
 // H-1b: /api/v1/health lists the client SDK contract hashes this hub serves
 // (its own first, then the frozen SDKs of its registry, each hash once), and
-// startup prints the same set for the deploy gate.
+// startup prints the same hashes plus every row's bundle digest for the
+// deploy gate.
 
 const repoRoot = join(import.meta.dirname, "..");
 const exec = promisify(execFile);
@@ -33,13 +34,23 @@ function healthApp(probe: () => Promise<unknown>) {
 describe("compatible client SDKs", () => {
   it("puts the own hash first, then each registered hash once, sorted", () => {
     // Rows are keyed by bundle: two builds may share a contract hash.
-    const rows = [{ contractHash: hash("c") }, { contractHash: hash("b") }, { contractHash: hash("c") }];
+    const rows = [
+      { contractHash: hash("c"), bundleSha256: hash("9") },
+      { contractHash: hash("b"), bundleSha256: hash("7") },
+      { contractHash: hash("c"), bundleSha256: hash("8") },
+    ];
     expect(registeredClientSdkContractHashes(rows)).toEqual([hash("b"), hash("c")]);
     expect(listCompatibleClientSdks(hash("d"), rows)).toEqual([hash("d"), hash("b"), hash("c")]);
     // A client vendored from this very hub: its hash is listed once, first.
     expect(listCompatibleClientSdks(hash("c"), rows)).toEqual([hash("c"), hash("b")]);
     expect(listCompatibleClientSdks(hash("a"), [])).toEqual([hash("a")]);
-    expect(describeCompatibleClientSdks(hash("c"), rows)).toEqual({ own: hash("c"), registered: [hash("b"), hash("c")] });
+    // The startup line keeps own inside `registered` and every build in `bundles`.
+    expect(describeCompatibleClientSdks(hash("c"), rows)).toEqual({
+      own: hash("c"),
+      registered: [hash("b"), hash("c")],
+      bundles: [hash("7"), hash("8"), hash("9")],
+    });
+    expect(describeCompatibleClientSdks(hash("a"), [])).toEqual({ own: hash("a"), registered: [], bundles: [] });
   });
 
   it("lists this hub and every registry row within the health schema's bound", () => {
@@ -51,7 +62,16 @@ describe("compatible client SDKs", () => {
     expect(list).toContain("b95b765c12f50905cb8f98c2d9644cf5adc4234299cd6516f0cd649b39235aab");
     // Past 64 hashes health would fail its own response schema: retire rows first.
     expect(healthResponseSchema.shape.compatibleClientSdks.safeParse(list).success).toBe(true);
-    expect(describeCompatibleClientSdks()).toEqual({ own: KERNEL_CONTRACT_HASH, registered: list.slice(1).sort() });
+    // The registry may hold this hub's own hash (an SDK vendored from the
+    // current main, registered without a contract change): health lists it
+    // once, first, while the startup line still counts it as registered.
+    const registered = [...new Set(CLIENT_SDK_REGISTRY.map((row) => row.contractHash))].sort();
+    expect(list.slice(1)).toEqual(registered.filter((h) => h !== KERNEL_CONTRACT_HASH));
+    expect(describeCompatibleClientSdks()).toEqual({
+      own: KERNEL_CONTRACT_HASH,
+      registered,
+      bundles: CLIENT_SDK_REGISTRY.map((row) => row.bundleSha256).sort(),
+    });
   });
 
   it("sends the list in both health bodies; every frozen SDK still reads them", async () => {
@@ -83,7 +103,7 @@ describe("compatible client SDKs", () => {
     }
   });
 
-  it("prints {own, registered} as one stdout line from startup", async () => {
+  it("prints {own, registered, bundles} as one stdout line from startup", async () => {
     const { stdout } = await exec(process.execPath, ["--import", "tsx/esm", "apps/runtime/src/startup.ts", "print-compatible-client-sdks"], {
       cwd: repoRoot,
       env: { ...process.env, DATABASE_URL: "invalid-must-not-be-used", AGENCY_HUB_ROLE: "api" },
