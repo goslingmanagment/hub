@@ -98,9 +98,11 @@ compatibility negotiation ("this client understands the matching frame or field"
 authorization.
 
 - Server: parsed once per request by `parseAiStreamCapabilities` — one string of at most 256
-  characters, split on commas, trimmed, case-sensitive, unknown tokens dropped. A longer or repeated
-  header counts as empty. The header is not declared in the route schema, so a malformed value is
-  ignored instead of failing with 400.
+  characters, split on commas, trimmed, case-sensitive, unknown tokens dropped. A longer value, or an
+  array value, counts as empty. A header repeated on the wire is not an array: Node joins its lines
+  into one `, `-separated string, which is parsed as usual (the union of the lines) within the same
+  256-character cap. The header is not declared in the route schema, so a malformed value is ignored
+  instead of failing with 400.
 - Today only `debug-input-v1` changes the stream: the `debug_input_v1` frame, still behind the
   `chatMuseAiPromptDebugEchoEnabled` kill-switch. The other tokens are reserved for the frames and
   fields that will read them; until then they change nothing.

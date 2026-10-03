@@ -12,7 +12,9 @@ function isAiStreamCapability(token: string): token is AiStreamCapability {
 // The header is deliberately NOT declared in the route schema: a malformed or
 // oversized value is ignored here (empty set), never a 400 from Fastify.
 // Parsing: a single string of at most 256 chars, split on commas, trimmed,
-// case-sensitive, known tokens only; a repeated header (array) yields nothing.
+// case-sensitive, known tokens only; an array value yields nothing. A header
+// repeated on the wire is NOT an array: Node joins its lines into one
+// ", "-separated string, which parses as the union within the same cap.
 export function parseAiStreamCapabilities(
   header: string | string[] | undefined,
 ): ReadonlySet<AiStreamCapability> {

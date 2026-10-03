@@ -344,7 +344,7 @@ describe("AI feature service pilot (Stage 30)", () => {
 
     // H-4a: other advertised capabilities never imply the echo, and an
     // oversized header is ignored (200, no frame), never a 400.
-    for (const header of ["context-v1, split-all-v1", `debug-input-v1,${" ".repeat(256)}`]) {
+    for (const header of ["context-v1, split-all-v1", `debug-input-v1,${" ".repeat(256)}split-all-v1`]) {
       const otherCapabilities = await apiServer!.inject({
         method: "POST",
         url: "/api/v1/ai/features/fast-reply",
