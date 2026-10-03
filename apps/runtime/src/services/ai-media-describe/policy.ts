@@ -111,7 +111,3 @@ export function fanslyFastLaneModeForPage(config: FanslyFastLaneSwitches, pageLa
     .split(",").map((label) => label.trim()).filter((label) => label.length > 0);
   return pages.includes("*") || pages.includes(pageLabel) ? mode : "off";
 }
-
-export function isFanslyFastLaneServing(config: FanslyFastLaneSwitches, pageLabel: string) {
-  return fanslyFastLaneModeForPage(config, pageLabel) === "serve";
-}

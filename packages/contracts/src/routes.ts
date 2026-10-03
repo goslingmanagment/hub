@@ -2454,21 +2454,6 @@ export const syncMonitorActiveRunSchema = z.object({
   lastActivityAt: isoTimestamp,
 });
 
-export const syncMonitorDeepBackfillSchema = z.object({
-  pendingConversations: z.number().int(),
-  pendingPagesEstimate: z.number().int(),
-  spenderPendingConversations: z.number().int(),
-  spenderPendingPagesEstimate: z.number().int(),
-  regularPendingConversations: z.number().int(),
-  regularPendingPagesEstimate: z.number().int(),
-  recentRequests: z.number().int(),
-  lastCompletedAt: isoTimestamp.nullable(),
-  liveRequestsSinceDeepBackfill: z.number().int(),
-  active: z.boolean(),
-  stalled: z.boolean(),
-  stallReason: z.string().nullable(),
-});
-
 const extendedSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -2504,7 +2489,6 @@ export const syncMonitorStreamItemSchema = z.object({
   pending: z.boolean(),
   retryAt: isoTimestamp.nullable(),
   progress: syncMonitorProgressSchema.nullable(),
-  deepBackfill: syncMonitorDeepBackfillSchema.nullable().optional(),
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   rateHealth: syncMonitorRateHealthSchema,

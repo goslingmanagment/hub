@@ -132,14 +132,14 @@ describe("the legacy processes ask before they act", () => {
   });
 
   // Step 4 (S4-10): the legacy executor runs no Fansly stream, so the AI
-  // describer's accelerator wakes none (its head read is the engine's WS
-  // confirmation).
+  // describer's candidates and source wake none; since S4-14 they file no
+  // accelerator read either (the head read is the engine's WS confirmation).
   it.each([
-    ["apps/runtime/src/services/projections/ai-media-candidates.ts", "runAiMediaCandidatesProjection"],
-    ["apps/runtime/src/services/ai-media-describe/fansly-source.ts", "maybeAccelerate"],
-  ])("%s %s wakes no legacy DM stream", (path, name) => {
-    expect(functionBody(path, name)).not.toContain("requestPageSync");
+    "apps/runtime/src/services/projections/ai-media-candidates.ts",
+    "apps/runtime/src/services/ai-media-describe/fansly-source.ts",
+  ])("%s wakes no legacy DM stream and files no accelerator read", (path) => {
     expect(source(path)).not.toContain("requestPageSync");
+    expect(source(path)).not.toContain("requestAiMediaAcceleratorRead");
   });
 
   it("the verify route and the CLI verify go through the engine (S3-05), the targeted backfill CLI refuses an engine page", () => {

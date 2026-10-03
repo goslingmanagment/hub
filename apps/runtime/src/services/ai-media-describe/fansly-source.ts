@@ -1,12 +1,8 @@
 import {
   findLatestMediaOfferObservation,
   getFirstAiMediaDescriptionLink,
-  requestAiMediaAcceleratorRead,
-  type AiMediaDescriptionRow,
 } from "@agency_hub_core/db";
 
-import type { AppContext } from "../../bootstrap.ts";
-import { loadEffectiveConfig } from "../effective-config.ts";
 import { loadObservationPayload } from "../payload-reader.ts";
 import type { AiMediaSource, AiMediaSourceResolution } from "./worker.ts";
 
@@ -138,18 +134,6 @@ function kindOf(mime: string | null): "photo" | "video" | null {
   return null;
 }
 
-async function maybeAccelerate(app: AppContext, row: AiMediaDescriptionRow, groupRef: string | null, messageRef: string | null) {
-  // Fallback trigger (plan §4): a media id the hub has not captured yet asks
-  // for one head read of its conversation — only with the accelerator on. No
-  // legacy DM stream is woken: since step 4 (S4-10) the legacy executor runs
-  // no Fansly stream, and the head read is the engine's WS confirmation
-  // (step-3 design §3.1 item 7).
-  if (!groupRef || !messageRef) return;
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.aiMediaDescribeFanslyAcceleratorEnabled !== true) return;
-  await requestAiMediaAcceleratorRead(app.db, { pageId: row.pageId, groupRef, messageRef, now: new Date() });
-}
-
 export const fanslyAiMediaSource: AiMediaSource = {
   platform: "fansly",
   async resolve(app, row, context): Promise<AiMediaSourceResolution> {
@@ -164,7 +148,8 @@ export const fanslyAiMediaSource: AiMediaSource = {
     });
     const observationId = Math.max(row.sourceObservationId ?? 0, offered ?? 0);
     if (observationId === 0) {
-      await maybeAccelerate(app, row, link?.conversationRef ?? null, link?.messageRef ?? null);
+      // Not captured yet: the Fansly Sync Engine's socket confirmation reads
+      // the conversation's head (step-3 design §3.1 item 7), and the row waits.
       return { kind: "awaiting_source", retryAt: null, reason: "not_captured" };
     }
     const read = await loadObservationPayload(app, observationId);

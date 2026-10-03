@@ -12,18 +12,14 @@ import {
   listRunnablePageSync,
   requestPageSync,
   retryPageSync,
-  startSyncRun,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { fanslyDmConversationsChunk } from "../apps/runtime/src/services/sync/fansly-dm-conversations.ts";
 import {
   resetIntegrationDatabase, seedFanslyPage, startIntegrationTestDatabase, type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { fakeTelemetry, groupsPage, PAGE_ACCOUNT_ID, sweepAdapter } from "./helpers/fansly-dm-sweep.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -41,7 +37,8 @@ describe("page sync provider cooldown", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
-  async function seedLease(stream: "light" | "dm_messages" = "light") {
+  async function seedLease() {
+    const stream = "light";
     const now = new Date();
     const model = await createModel(testDb!.db, { slug: "cooldown", name: "Cooldown" });
     if (!model) throw new Error("Expected to create cooldown model");
@@ -142,44 +139,6 @@ describe("page sync provider cooldown", () => {
     expect(await acquirePageSyncLease(testDb!.db, {
       pageId: page.id, workerId: "next-worker", leaseToken: "next", leaseTtlMs: 60_000, now,
     })).toMatchObject({ leasedSeq: lease.requestSeq + 1 });
-  });
-
-  it("queues the actual DM sweep follow-up without waking dm_messages inside its cooldown", async () => {
-    const { page, lease, now } = await seedLease("dm_messages");
-    const retryAt = new Date(now.getTime() + 86_400_000);
-    await retryPageSync(testDb!.db, {
-      pageId: page.id, stream: "dm_messages", requestSeq: lease.requestSeq, leaseToken: "original",
-      retryKind: "rate_limit", retryAt, errorCode: "http_429", errorSummary: "Rate limited", now,
-    });
-    const { adapter, calls } = sweepAdapter({
-      pages: [groupsPage({ conversations: ["new-thread"], total: 1, offset: 0, done: true })],
-    });
-    const app = createTestAppContext(testDb!, { syncSharedRateLimitEnabled: true, adapter });
-    const run = await startSyncRun(testDb!.db, {
-      platformAccountId: page.id, stream: "dm_conversations", trigger: "manual",
-    });
-    if (!run) throw new Error("Expected to create DM sweep run");
-    const result = await fanslyDmConversationsChunk(app, {
-      pageContext: {
-        page: { ...page, platformAccountId: PAGE_ACCOUNT_ID }, platform: "fansly",
-        session: { authorization: "token" }, proxy: null, egressKey: "direct",
-      },
-      streamState: { requestSeq: 1 }, syncRunId: run.id,
-      telemetry: fakeTelemetry(), budget: new SyncChunkBudget(5),
-    } as never);
-
-    expect(result).toMatchObject({ satisfied: true, stats: { processedConversations: 1 } });
-    expect(calls).toEqual([
-      { method: "messaging_groups", offset: 0, limit: 100, sortOrder: 1, flags: 0 },
-    ]);
-    expect(await getPageSyncState(testDb!.db, page.id, "dm_messages")).toMatchObject({
-      status: "retrying", requestSeq: lease.requestSeq + 1,
-      requestSource: "scheduled", dispatchSource: "scheduled", requestPayload: {},
-      retryKind: "rate_limit", retryAt,
-    });
-    expect(await acquirePageSyncLease(testDb!.db, {
-      pageId: page.id, workerId: "follow-up", leaseToken: "follow-up", leaseTtlMs: 60_000, now: new Date(),
-    })).toBeNull();
   });
 
   // R04: a provider hold speaks for the page's session, not for one endpoint:

@@ -7,7 +7,6 @@ import {
   getSyncStreamsForPlatform,
   listSyncMonitorStreamRows,
   listPageSyncStates,
-  listCheckpointStates,
   listVisiblePages,
   type PageSyncState,
   SYNC_DOMAIN_POLICY,
@@ -33,9 +32,6 @@ import {
   parseSubscribersCursorState,
 } from "./sync/cursor-state.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
-import {
-  dmFullSweepCompletedAt, dmFullSweepFreshnessSlaSeconds, parseDmBoundedSweepState, resolveDmBoundedPolicy,
-} from "./sync/dm-bounded-state.ts";
 import {
   FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
   followersReconcileFloorWaitUntil,
@@ -101,7 +97,6 @@ export interface SyncTaskReadStatus {
   requestedSeq: number;
   appliedSeq: number;
   succeededAt: string | null;
-  lastFullSweepCompletedAt?: string | null;
   progressedAt: string | null;
   failedAt: string | null;
   nextDueAt: string | null;
@@ -951,8 +946,7 @@ function buildProgressFromPayload(
     const total = monitorRow.dmEligibleConversationCount;
     const current = monitorRow.dmBackfillCompleteConversationCount;
     const lagging = monitorRow.dmLaggingConversationCount;
-    const deepPages = monitorRow.dmDeepBackfillPendingPageEstimate ?? 0;
-    if (total > 0 || current > 0 || lagging > 0 || deepPages > 0) {
+    if (total > 0 || current > 0 || lagging > 0) {
       const labelParts = [
         total > 0
           ? `${current.toLocaleString()} / ${total.toLocaleString()} conversations ready`
@@ -960,9 +954,6 @@ function buildProgressFromPayload(
       ];
       if (lagging > 0) {
         labelParts.push(`${lagging.toLocaleString()} lagging`);
-      }
-      if (deepPages > 0) {
-        labelParts.push(`${deepPages.toLocaleString()} deep pages`);
       }
       return {
         label: labelParts.join(", "),
@@ -974,13 +965,6 @@ function buildProgressFromPayload(
         details: {
           ...payload,
           laggingConversationCount: lagging,
-          deepBackfillPendingPagesEstimate: deepPages,
-          deepBackfillPendingConversationCount:
-            monitorRow.dmDeepBackfillPendingConversationCount ?? 0,
-          deepBackfillSpenderPendingPagesEstimate:
-            monitorRow.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
-          deepBackfillRegularPendingPagesEstimate:
-            monitorRow.dmDeepBackfillRegularPendingPageEstimate ?? 0,
         },
       };
     }
@@ -1006,17 +990,9 @@ function deriveTaskState(
   monitorRow: SyncMonitorStreamRow | null,
   now: Date,
   queueContext?: QueueContext,
-  dmCheckpoint?: unknown,
-  dmFullSweepSlaSeconds?: number | null,
 ): SyncTaskReadStatus {
-  const fullCompletedAt = task.stream === "dm_conversations" ? dmFullSweepCompletedAt(dmCheckpoint, now) : undefined;
-  if (fullCompletedAt !== undefined) task = { ...task, succeededAt: fullCompletedAt === null ? null : new Date(fullCompletedAt) };
   const policy = SYNC_STREAM_POLICY[task.stream];
-  // Decision 366: a page with an accepted longer full interval is judged
-  // against that interval, not the full30 target it no longer promises. Only a
-  // certified A1 proof earns it; a legacy full cursor keeps the stream target.
-  const freshnessSlaSeconds = task.stream === "dm_conversations" && fullCompletedAt !== undefined
-    && dmFullSweepSlaSeconds !== undefined ? dmFullSweepSlaSeconds : policy.freshnessSlaSeconds;
+  const freshnessSlaSeconds = policy.freshnessSlaSeconds;
   const floorUntil = followersReconcileFloorWaitUntil(task, task.progress, now);
   // A floored walk's request can be a day old by the time the walk runs.
   const queuedSince = task.stream === "followers_reconcile"
@@ -1033,12 +1009,7 @@ function deriveTaskState(
   const queueDelayed = queueAgeSeconds !== null &&
     (queueAgeSeconds * 1000) > policy.queueDelayThresholdMs;
   const nextDueAt = computeNextDueAt(task);
-  const bounded = task.stream === "dm_conversations" ? parseDmBoundedSweepState(dmCheckpoint) : null;
-  const progress = bounded ? {
-    label: `${bounded.observedCount.toLocaleString()} conversations checked in bounded scan`,
-    current: bounded.observedCount, total: null, unit: "conversations", percent: null, percentValid: false,
-    details: { mode: "bounded", completedAt: bounded.completedAt, lastFullSweepCompletedAt: fullCompletedAt ?? null },
-  } : buildProgressFromPayload(task, monitorRow);
+  const progress = buildProgressFromPayload(task, monitorRow);
 
   let state: Exclude<SyncDomainBlockState, "not_available">;
   let statusReason: SyncStatusReason | null = null;
@@ -1103,9 +1074,6 @@ function deriveTaskState(
     } else {
       state = "scheduled";
     }
-  } else if (fullCompletedAt === null) {
-    state = "delayed";
-    statusReason = buildStatusReason("full_sweep_unconfirmed", "No confirmed full dialog scan is available.");
   } else if (task.succeededAt === null && task.requestSeq === 0) {
     state = "not_started";
   } else if (task.succeededAt !== null && freshnessSlaSeconds !== null && freshnessAgeSeconds !== null &&
@@ -1138,7 +1106,6 @@ function deriveTaskState(
     requestedSeq: task.requestSeq,
     appliedSeq: task.appliedSeq,
     succeededAt: iso(task.succeededAt),
-    ...(fullCompletedAt === undefined ? {} : { lastFullSweepCompletedAt: fullCompletedAt }),
     progressedAt: iso(task.progressedAt),
     failedAt: iso(task.failedAt),
     // The floor's end is when the walk is due, not a retry of a failure.
@@ -1222,12 +1189,10 @@ function deriveDomainState(
   const allPrimaryFresh = primaryTasks.every(isFreshEnough);
   const primaryFresh = allPrimaryFresh;
   const messagesMonitorRow = monitorRows.find((row) => row.stream === "dm_messages") ?? monitorRows[0] ?? null;
-  const deepBackfillPendingPages = messagesMonitorRow?.dmDeepBackfillPendingPageEstimate ?? 0;
   const messagesHistoryComplete = messagesMonitorRow
-    ? (messagesMonitorRow.dmEligibleConversationCount === 0 && deepBackfillPendingPages === 0) ||
+    ? messagesMonitorRow.dmEligibleConversationCount === 0 ||
       (messagesMonitorRow.dmBackfillCompleteConversationCount >= messagesMonitorRow.dmEligibleConversationCount &&
-        messagesMonitorRow.dmLaggingConversationCount === 0 &&
-        deepBackfillPendingPages === 0)
+        messagesMonitorRow.dmLaggingConversationCount === 0)
     : !primaryPending;
   const maxPhysicalAttemptsSinceLastSuccess = monitorRows.reduce(
     (maximum, row) => Math.max(maximum, row.physicalAttemptsSinceLastSuccess),
@@ -1297,10 +1262,6 @@ function deriveDomainState(
           messagesMonitorRow.dmLaggingConversationCount > 0
             ? `, ${messagesMonitorRow.dmLaggingConversationCount.toLocaleString()} lagging`
             : ""
-        }${
-          deepBackfillPendingPages > 0
-            ? `, ${deepBackfillPendingPages.toLocaleString()} deep pages`
-            : ""
         }`,
       current: messagesMonitorRow.dmBackfillCompleteConversationCount,
       total: messagesMonitorRow.dmEligibleConversationCount,
@@ -1313,12 +1274,6 @@ function deriveDomainState(
       details: {
         laggingConversationCount: messagesMonitorRow.dmLaggingConversationCount,
         messageCount: messagesMonitorRow.dmMessageCount,
-        deepBackfillPendingPagesEstimate: deepBackfillPendingPages,
-        deepBackfillPendingConversationCount: messagesMonitorRow.dmDeepBackfillPendingConversationCount ?? 0,
-        deepBackfillSpenderPendingPagesEstimate:
-          messagesMonitorRow.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
-        deepBackfillRegularPendingPagesEstimate:
-          messagesMonitorRow.dmDeepBackfillRegularPendingPageEstimate ?? 0,
       },
     } satisfies SyncDomainProgress
     : progressTask?.progress ?? null;
@@ -1326,7 +1281,6 @@ function deriveDomainState(
   const progressRole = progressStream ? taskRoleForBlock(policy, progressStream) : null;
 
   const metricsRow = monitorRows[0] ?? null;
-  const fullCompletedAt = supportedTasks.find((task) => task.stream === "dm_conversations")?.lastFullSweepCompletedAt;
   const domainMetrics = (() => {
     switch (block) {
       case "connection":
@@ -1343,19 +1297,12 @@ function deriveDomainState(
       case "messages_live":
         return {
           visibleConversationCount: metricsRow?.dmConversationCount ?? 0,
-          ...(fullCompletedAt === undefined ? {} : { lastFullSweepCompletedAt: fullCompletedAt }),
         };
       case "messages_history":
         return {
           eligibleConversationCount: metricsRow?.dmEligibleConversationCount ?? 0,
           readyConversationCount: metricsRow?.dmBackfillCompleteConversationCount ?? 0,
           laggingConversationCount: metricsRow?.dmLaggingConversationCount ?? 0,
-          deepBackfillPendingConversationCount: metricsRow?.dmDeepBackfillPendingConversationCount ?? 0,
-          deepBackfillPendingPagesEstimate: metricsRow?.dmDeepBackfillPendingPageEstimate ?? 0,
-          deepBackfillSpenderPendingPagesEstimate:
-            metricsRow?.dmDeepBackfillSpenderPendingPageEstimate ?? 0,
-          deepBackfillRegularPendingPagesEstimate:
-            metricsRow?.dmDeepBackfillRegularPendingPageEstimate ?? 0,
           messageCount: metricsRow?.dmMessageCount ?? 0,
         };
     }
@@ -1651,7 +1598,7 @@ export async function getSyncStatusSnapshot(
     ? (input?.monitorStreams ?? [...getSyncStreamsForPlatform("fansly")])
     : (input?.monitorStreams ?? []);
   const fanslyPageIds = scopedPages.filter((page) => page.platform === "fansly").map((page) => page.id);
-  const [taskRows, monitorRows, dmCheckpoints, effectiveConfig] = await Promise.all([
+  const [taskRows, monitorRows, effectiveConfig] = await Promise.all([
     listPageSyncStates(app.db),
     monitorStreams.length > 0
       ? listSyncMonitorStreamRows(app.db, {
@@ -1661,11 +1608,8 @@ export async function getSyncStatusSnapshot(
         streams: monitorStreams,
       })
       : Promise.resolve([] as SyncMonitorStreamRow[]),
-    listCheckpointStates(app.db, fanslyPageIds, "dm_conversations"),
-    // The live A1 policy decides each Fansly page's full-list freshness target.
     fanslyPageIds.length > 0 ? loadEffectiveConfig(app.db, app.config) : Promise.resolve(null),
   ]);
-  const dmCheckpointByPage = new Map(dmCheckpoints.map((row) => [row.pageId, row.state]));
   // Pages the Fansly Sync Engine owns report its live work, not their frozen
   // legacy cursors (design step 3 §3.2 item 2).
   const engineFacts: Map<number, EngineStatusFacts> = fanslyPageIds.length > 0 && effectiveConfig !== null
@@ -1673,12 +1617,6 @@ export async function getSyncStatusSnapshot(
     : new Map();
   const hintDiagnostics = new Map(await Promise.all(scopedPages.filter(page => fanslyPageIds.includes(page.id) && !engineFacts.has(page.id))
     .map(async page => [page.id, await getFanslyWsHintDiagnostic(app, page.label, effectiveConfig ?? app.config)] as const)));
-  const dmFullSweepSlaByPage = new Map(scopedPages
-    .filter((page) => fanslyPageIds.includes(page.id))
-    .map((page) => [page.id, dmFullSweepFreshnessSlaSeconds(
-      effectiveConfig ? resolveDmBoundedPolicy(effectiveConfig, page.label) : null,
-      SYNC_STREAM_POLICY.dm_conversations.freshnessSlaSeconds,
-    )] as const));
 
   const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
     ? new Set(
@@ -1823,7 +1761,7 @@ export async function getSyncStatusSnapshot(
 
             return deriveTaskState(effectiveTaskRow, monitorRow, now, {
               activeSiblingStreams,
-            }, dmCheckpointByPage.get(page.id), dmFullSweepSlaByPage.get(page.id));
+            });
           });
         const domainMonitorRows = monitorRows.filter((row) =>
           row.pageId === page.id &&

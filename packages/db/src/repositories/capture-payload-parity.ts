@@ -6,8 +6,8 @@
 // reference to it. This module is the proof that the second copy is faithful —
 // and it is the ONLY thing in the slice that reads the catalog.
 //
-// House style is the G2.2 dual proof (apps/runtime/src/services/sync/
-// dm-sweep-dual-proof.ts): write both, compare the FULL content, report bounded
+// House style is the G2.2 dual proof of the legacy DM sweep (deleted at step
+// 4, S4-14): write both, compare the FULL content, report bounded
 // counts plus a capped sample, and never let a digest pronounce two things
 // equal on its own. The digests below travel in the report because they are a
 // good fingerprint for a telemetry line; the verdict is decided by

@@ -128,15 +128,18 @@ describe("projection registry", () => {
   });
 
   // Step 4 (S4-11): the ws-hints projector is gone. Its receipts stay as
-  // records nothing files any more, so no rebuild may truncate them, and the
-  // socket signals feed only the AI media describer's candidates.
+  // records nothing files any more, so no rebuild may truncate them. Since
+  // S4-14 the AI media accelerator's request filer is gone too, so no
+  // projection reads the socket signals, and none writes accelerator reads.
   it("files no ws-hint receipts any more and keeps them from every rebuild", () => {
     expect(findProjection("fansly_ws_hints")).toBeNull();
     expect(PROJECTION_REGISTRY.flatMap((projection) => projection.tables)).not.toContain("fansly_ws_hint_receipts");
     expect(isOperationalStateTable("fansly_ws_hint_receipts")).toBe(true);
     expect(PROJECTION_REGISTRY
       .filter((projection) => projection.eventTypes.includes("fansly.ws_signal_observed"))
-      .map((projection) => projection.name)).toEqual(["ai_media_candidates"]);
+      .map((projection) => projection.name)).toEqual([]);
+    expect(PROJECTION_REGISTRY.flatMap((projection) => projection.tables)).not.toContain("ai_media_accelerator_reads");
+    expect(isOperationalStateTable("fansly_ws_hint_attempts")).toBe(true);
   });
 
   it("keeps every canonicalizer lane unique, so health-floor gauges cannot collide", () => {

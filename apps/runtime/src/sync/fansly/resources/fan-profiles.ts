@@ -207,7 +207,8 @@ export const fanProfilesLookupModule: ResourceModule = {
 export type FanslyAccountResolution = "resolved" | "unresolved" | "unknown";
 
 /** The probe's verdict on one answer: `[]` is unresolved, the id present is
- *  resolved, anything else says nothing (legacy `probeFanslyAccountResolution`). */
+ *  resolved, anything else says nothing (as the legacy DM partner probe judged
+ *  it before step 4 removed it, S4-14). */
 export function probeResolution(accounts: readonly FanslyAccount[], partner: string): FanslyAccountResolution {
   if (accounts.length === 0) return "unresolved";
   return accounts.some((account) => account.id === partner) ? "resolved" : "unknown";
