@@ -5,7 +5,12 @@ import {
   type ClientFeatureUnavailableReason,
   type ClientHubCapabilityName,
 } from "@agency_hub_core/contracts";
-import type { Platform } from "@agency_hub_core/shared";
+import {
+  compareClientSemver,
+  parseChatExtensionClientVersion,
+  parseClientSemver,
+  type Platform,
+} from "@agency_hub_core/shared";
 
 /**
  * Whether a chat-extension feature is available on a page, and if not, why.
@@ -15,6 +20,9 @@ import type { Platform } from "@agency_hub_core/shared";
  * call that a later PR puts behind a flag. It is also the only place that asks
  * about a page's platform for these features, so a new platform is one table
  * edit, not a branch in every handler.
+ *
+ * The owner's switches it reads come from client-switches.ts, which also holds
+ * `requireClientFeature`, the server-side check every client route runs.
  */
 
 /** What a feature needs before the hub can offer it. */
@@ -50,6 +58,24 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   previewSend: { platforms: ONLYFANS, capabilities: ["preview-send-custody-v1"] },
 };
 
+/**
+ * The host apps the extension runs over, by the prefix of a host account
+ * (`onlymonster:36408`), with the platforms of the accounts each one holds: an
+ * OnlyMonster account is an OnlyFans account. An owner's host binding counts
+ * only toward a page of one of those platforms, and a host the hub does not
+ * know binds nothing.
+ */
+const CLIENT_HOST_PLATFORMS: ReadonlyMap<string, readonly Platform[]> = new Map([
+  ["onlymonster", ONLYFANS],
+]);
+
+/** Whether the owner's binding of this host account can point at a page of
+ *  this platform. The bootstrap's `bindingsByHost` keeps only such bindings. */
+export function hostBindingFitsPlatform(hostAccount: string, platform: Platform): boolean {
+  const [host = ""] = hostAccount.split(":", 1);
+  return CLIENT_HOST_PLATFORMS.get(host)?.includes(platform) ?? false;
+}
+
 /** The owner's switches, as the evaluation reads them. */
 export interface ClientFeatureSettings {
   /** The master switch: off = every feature off on every page. */
@@ -60,17 +86,22 @@ export interface ClientFeatureSettings {
    * names are ignored.
    */
   features: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
+  /** The owner's explicit host-account bindings: host account → page label. */
+  hostBindings: Readonly<Record<string, string>>;
 }
 
-/** Until the owner's switches exist, the hub runs on these: everything off. */
+/** The switches at rest, and what a broken one falls back to: everything off. */
 export const CLIENT_FEATURE_CODE_DEFAULTS: ClientFeatureSettings = Object.freeze({
   enabled: false,
   features: Object.freeze({}),
+  hostBindings: Object.freeze({}),
 });
 
 export interface ClientFeaturePage {
   label: string;
   platform: Platform;
+  /** `pages.external_page_id`: what the extension binds a host account by. */
+  platformAccountId: string | null;
 }
 
 function unavailable(reason: ClientFeatureUnavailableReason): ClientFeatureAvailability {
@@ -82,10 +113,19 @@ function flagValue(settings: ClientFeatureSettings, scope: string, flag: ClientF
   return typeof value === "boolean" ? value : undefined;
 }
 
+/** The extension can bind a host account to the page: by the page's platform
+ *  account id, or by an explicit owner binding from a host of the page's platform. */
+function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boolean {
+  return page.platformAccountId !== null || Object.entries(settings.hostBindings).some(
+    ([hostAccount, label]) => label === page.label && hostBindingFitsPlatform(hostAccount, page.platform),
+  );
+}
+
 /**
  * The reasons, in the order they are checked: the feature does not exist on the
  * page's platform; the master switch is off; the flag is off for the page; the
- * hub does not serve what the feature needs yet.
+ * extension has no way to bind a host account to the page; the hub does not
+ * serve what the feature needs yet.
  */
 export function evaluateClientFeature(input: {
   settings: ClientFeatureSettings;
@@ -105,6 +145,9 @@ export function evaluateClientFeature(input: {
     ?? false;
   if (!on) {
     return unavailable("flag_off");
+  }
+  if (!bindable(input.settings, input.page)) {
+    return unavailable("binding_missing");
   }
   if (!requirement.capabilities.every((capability) => input.served.includes(capability))) {
     return unavailable("hub_not_ready");
@@ -130,4 +173,20 @@ export function clientBootstrapFlags(settings: ClientFeatureSettings): Record<Cl
     flag,
     settings.enabled && flagValue(settings, "*", flag) === true,
   ])) as Record<ClientFeatureFlagName, boolean>;
+}
+
+/**
+ * The server's own check of the extension's version (the owner's
+ * `chatExtensionMinVersion`): `client_outdated` when the caller's
+ * `x-client-version` is not `chat-extension/<MAJOR.MINOR.PATCH>` at or above the
+ * minimum, null when it is. Unreadable fails closed, both ways: a header that
+ * does not parse, and a minimum that does not parse.
+ */
+export function clientVersionRefusal(minVersion: string, clientVersionHeader: unknown): "client_outdated" | null {
+  const minimum = parseClientSemver(minVersion);
+  const version = parseChatExtensionClientVersion(clientVersionHeader);
+  if (minimum === null || version === null) {
+    return "client_outdated";
+  }
+  return compareClientSemver(version, minimum) < 0 ? "client_outdated" : null;
 }

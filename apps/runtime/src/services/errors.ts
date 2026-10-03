@@ -164,3 +164,17 @@ export class OfapiCollectionRefusedError extends AppError {
       : Math.max(0, retryAt.getTime() - (options?.now ?? new Date()).getTime());
   }
 }
+
+// Chat extension (hub-pr-plan H-2b): a client route, or an AI call of the
+// extension's narrow token, asked for a feature that is not available to it.
+// 409 because only the owner (or an extension update, for `client_outdated`)
+// lifts it: never retried automatically. Documented structured extension
+// (docs/error-handling.md §3): the machine `reason` beside the code, one of the
+// open vocabulary CLIENT_FEATURE_UNAVAILABLE_REASONS (`disabled`, `flag_off`,
+// `platform_unsupported`, `binding_missing`, `hub_not_ready`, `not_granted`,
+// `client_outdated`).
+export class ClientFeatureDisabledError extends AppError {
+  constructor(readonly flag: string, readonly reason: string) {
+    super(`Chat-extension feature "${flag}" is unavailable (${reason})`, 409, "client_feature_disabled");
+  }
+}
