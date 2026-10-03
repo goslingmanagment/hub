@@ -19,7 +19,6 @@ import { ensureOfapiCreditQueues, ensureOfapiCreditSchedules } from "./ofapi-cre
 import { ensureOfapiDmAnalyticsQueues, ensureOfapiDmAnalyticsSchedules } from "./ofapi-dm-analytics.ts";
 import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
-import { ensureProjectionDebtQueue, ensureProjectionDebtSchedule } from "./projection-debt-sweep.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import {
   ensureAiMediaDescribeSweepQueue,
@@ -39,6 +38,7 @@ import {
   ensureSyncQueues,
   ensureTelegramDailyReportSchedule,
   reconcileQueueRetention,
+  retireRemovedQueues,
 } from "./sync-queue.ts";
 
 // Kernel Stage 25: the ONE place cron registrations live. Called from the
@@ -48,8 +48,16 @@ import {
 // Queue creation runs first (also idempotent) so a scheduler booting into a
 // fresh environment never schedules into a queue no worker has created yet.
 
+export interface ScheduleRegistrationLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
 export async function registerAllSchedules(
-  boss: Pick<PgBoss, "schedule" | "createQueue" | "getQueue" | "updateQueue">,
+  boss: Pick<
+    PgBoss,
+    "schedule" | "createQueue" | "getQueue" | "updateQueue" | "unschedule" | "deleteQueue"
+  >,
+  logger?: ScheduleRegistrationLogger,
 ): Promise<void> {
   const createdQueues = new Set<string>();
   await ensureSyncQueues(boss, createdQueues);
@@ -69,7 +77,6 @@ export async function registerAllSchedules(
   await ensureCapturePayloadParityQueue(boss, createdQueues);
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
-  await ensureProjectionDebtQueue(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
@@ -77,6 +84,14 @@ export async function registerAllSchedules(
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
   await ensureTieringQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
+  // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
+  // effort: a stale queue row costs nothing, so a failure here must never keep
+  // the live schedules below from registering.
+  try {
+    await retireRemovedQueues(boss);
+  } catch (error) {
+    logger?.warn({ err: error }, "Retiring removed pg-boss queues failed; continuing");
+  }
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);
@@ -100,7 +115,6 @@ export async function registerAllSchedules(
     ensureCapturePayloadParitySchedule(boss),
     ensureCanonicalizeSchedule(boss),
     ensureMessageArchiveSchedule(boss),
-    ensureProjectionDebtSchedule(boss),
     ensureVoiceNotesSweepSchedule(boss),
     ensureAiMediaDescribeSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),

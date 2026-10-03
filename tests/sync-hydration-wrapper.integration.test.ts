@@ -7,10 +7,8 @@ import {
   createModel,
   ensureSyncPage,
   findAgentHydrationRequestByRef,
-  hasDispatchingAgentHydrationRequestOnPage,
   insertAgentKey,
   listAgentHydrationEvents,
-  listAutoApprovableAgentHydrationRequests,
   setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
@@ -31,9 +29,10 @@ import { setModeDirect } from "./helpers/sync-engine-host.ts";
 // idempotent by the legacy ref) and the legacy row reads as that request's
 // fan, in the legacy vocabulary, until the hydration cycle settles it to that
 // state once the request is over. Before the requests open the row stays
-// `requested`; a page being switched answers 409; nobody decides a wrapper;
-// no legacy page-wide check (the lane's page slot, the auto-approval's one
-// run per page) counts a wrapper row.
+// `requested`; a page being switched answers 409; nobody decides a wrapper.
+// Since step 4 (S4-15) the executor has no Fansly lane: a Fansly request the
+// engine did not take can be rejected, never approved, and an approval of an
+// earlier image is never claimed.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -142,11 +141,6 @@ async function historyOf(ref: string) {
   )).rows[0]!;
 }
 
-/** The hydration cycle's pg-boss: nothing queued (no legacy run here). */
-function idleBoss() {
-  return { send: vi.fn(async () => "job-1"), findJobs: vi.fn(async () => []) } as unknown as Parameters<typeof runAgentHydrationCycle>[1];
-}
-
 describe("the hydration wrapper", () => {
   it("files a one-fan history request on a live page with open requests and reads its fan as the legacy state", async () => {
     await live({ requestsOpen: true });
@@ -223,7 +217,7 @@ describe("the hydration wrapper", () => {
     const runningState = await testDb!.pool.query<{ state: string }>("select state from history_requests where id = $1", [runningHistory.id]);
     expect(runningState.rows[0]!.state).toBe("open");
 
-    const cycle = await runAgentHydrationCycle(appContext, idleBoss());
+    const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle.engineSettled).toBe(1);
     const settled = (await findAgentHydrationRequestByRef(testDb!.db, ended.requestRef)).request!;
     expect(settled).toMatchObject({ state: "completed", lastError: "none", executionRef: endedRow.executionRef });
@@ -233,22 +227,88 @@ describe("the hydration wrapper", () => {
     expect((await poll(ended.requestRef)).json().request).toMatchObject({ state: "completed" });
     expect((await findAgentHydrationRequestByRef(testDb!.db, runningRef)).request!.state).toBe("dispatching");
     expect((await poll(runningRef)).json().request).toMatchObject({ state: "dispatching" });
-    expect((await runAgentHydrationCycle(appContext, idleBoss())).engineSettled).toBe(0);
+    expect((await runAgentHydrationCycle(appContext)).engineSettled).toBe(0);
   });
 
-  it("no legacy page-wide check counts a row the engine serves (the lane's page slot, the auto-approval)", async () => {
-    await live({ requestsOpen: true });
-    const wrapped = (await file()).json().request as { requestRef: string; state: string };
-    expect(wrapped.state).toBe("dispatching");
-    // The page is the legacy engine's again (a rollback) with the wrapper row
-    // still in flight on its history request; a new hydration request is a
-    // legacy one.
+  it("a Fansly request the engine did not take is rejected by the owner, never approved (no executor lane)", async () => {
+    await live({ requestsOpen: false });
+    const filed = (await file()).json().request as { requestRef: string; state: string };
+    expect(filed.state).toBe("requested");
+    const row = (await findAgentHydrationRequestByRef(testDb!.db, filed.requestRef)).request!;
+    const decide = (decision: "approve" | "reject") => server!.inject({
+      method: "POST", url: `/api/v1/agent/hydration-requests/${filed.requestRef}/decision`, headers: { cookie: ownerCookie },
+      payload: decision === "approve"
+        ? {
+          decision, expectedVersion: row.rowVersion, coverageFingerprint: row.coverageFingerprint, idempotencyKey: randomUUID(),
+          maxCalls: 5, maxCredits: 0, maxPages: 5, maxItems: 100, expiresAt: new Date(Date.now() + DAY_MS).toISOString(),
+          allowMarkReadSideEffect: false,
+        }
+        : {
+          decision, expectedVersion: row.rowVersion, coverageFingerprint: row.coverageFingerprint, idempotencyKey: randomUUID(),
+          reason: "no executor runs it",
+        },
+    });
+
+    const approval = await decide("approve");
+    expect(approval.statusCode, approval.body).toBe(409);
+    expect(approval.json()).toMatchObject({ error: "hydration_not_admissible" });
+    expect((await findAgentHydrationRequestByRef(testDb!.db, filed.requestRef)).request!.state).toBe("requested");
+
+    const rejection = await decide("reject");
+    expect(rejection.statusCode, rejection.body).toBe(200);
+    expect(rejection.json()).toMatchObject({ disposition: "rejected", request: { state: "rejected" } });
+  });
+
+  it("the executor claims no Fansly approval: an earlier image's approval waits out its expiry unspent", async () => {
+    // A page the engine does not own (no production page is one; the legacy
+    // lane dispatched there until step 4 S4-15), with an approval on it.
     await setModeDirect(testDb!.pool, pageId, "off");
-    const legacy = (await file()).json().request as { requestRef: string; state: string };
-    expect(legacy.state).toBe("requested");
-    expect(await hasDispatchingAgentHydrationRequestOnPage(testDb!.db, pageId)).toBe(false);
-    const candidates = await listAutoApprovableAgentHydrationRequests(testDb!.db, { limit: 10, utcDayStart: new Date(Date.now() - DAY_MS) });
-    expect(candidates.map((row) => row.requestRef)).toEqual([legacy.requestRef]);
+    const filed = (await file()).json().request as { requestRef: string; state: string };
+    expect(filed.state).toBe("requested");
+    await testDb!.pool.query(
+      `update agent_hydration_requests
+          set state = 'approved', decided_at = now(), decision_source = 'owner', decision_approved = true,
+              decision_allow_mark_read = false, decision_max_calls = 5, decision_max_credits = 0, decision_max_pages = 5,
+              expires_at = now() + interval '1 hour'
+        where request_ref = $1::uuid`,
+      [filed.requestRef],
+    );
+    await setConfigOverride(testDb!.db, { key: "agentHydrationMode", value: "dispatch", userId: null, groupId: randomUUID() });
+
+    const cycle = await runAgentHydrationCycle(appContext);
+    expect(cycle).toMatchObject({ mode: "dispatch", dispatched: 0, refused: 1, swept: 0, reconciled: 0 });
+    const waiting = (await findAgentHydrationRequestByRef(testDb!.db, filed.requestRef)).request!;
+    expect(waiting).toMatchObject({ state: "approved", dispatchCount: 0, executionRef: null });
+    expect((await testDb!.pool.query("select to_regclass('pgboss.job') is null as absent")).rows[0].absent).toBe(true);
+
+    // Its window closes: expired, nothing spent.
+    await testDb!.pool.query(
+      "update agent_hydration_requests set expires_at = now() - interval '1 second' where request_ref = $1::uuid", [filed.requestRef],
+    );
+    expect((await runAgentHydrationCycle(appContext)).expired).toBe(1);
+    expect((await findAgentHydrationRequestByRef(testDb!.db, filed.requestRef)).request!.state).toBe("expired");
+  });
+
+  it("a legacy Fansly run still dispatching past its deadline is closed failed/timeout by the sweep", async () => {
+    await setModeDirect(testDb!.pool, pageId, "off");
+    const filed = (await file()).json().request as { requestRef: string };
+    await testDb!.pool.query(
+      `update agent_hydration_requests
+          set state = 'dispatching', decided_at = now(), decision_source = 'auto_policy', decision_policy_version = 1,
+              decision_approved = true, decision_allow_mark_read = false, decision_max_calls = 5, decision_max_pages = 5,
+              expires_at = now() + interval '1 hour', dispatched_at = now() - interval '2 hours',
+              dispatch_deadline_at = now() - interval '90 minutes', dispatch_count = 1,
+              execution_lane = 'vendor_paid_low', execution_ref = $2
+        where request_ref = $1::uuid`,
+      [filed.requestRef, randomUUID()],
+    );
+
+    const cycle = await runAgentHydrationCycle(appContext);
+    expect(cycle).toMatchObject({ reconciled: 0, swept: 1 });
+    const closed = (await findAgentHydrationRequestByRef(testDb!.db, filed.requestRef)).request!;
+    expect(closed).toMatchObject({ state: "failed", lastError: "timeout" });
+    const events = await listAgentHydrationEvents(testDb!.db, closed.id);
+    expect(events.at(-1)).toMatchObject({ kind: "failed", fromState: "dispatching", toState: "failed", actor: "sweeper" });
   });
 
   it("leaves the row requested while the page's requests are not open yet", async () => {

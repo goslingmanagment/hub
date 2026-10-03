@@ -610,59 +610,10 @@ export interface AiMediaAcceleratorClaim {
 }
 
 /**
- * The oldest pending read for the page whose conversation was not read by the
- * accelerator within `perConversationGapMs`. Stale requests (the ordinary DM
- * sync has had time to catch up) are closed as skipped on the way.
+ * Admits one physical attempt against the agency-wide rolling 24 h cap.
+ * Compare-and-set on the pending status: two lanes that both picked the
+ * request cannot both send. 'taken' means another lane admitted it first.
  */
-export async function claimAiMediaAcceleratorRead(
-  db: Database,
-  input: {
-    pageId: number;
-    now: Date;
-    perConversationGapMs: number;
-    staleAfterMs: number;
-    /** Only requests at least this old (the chunk step leaves fresh ones to
-     * the fast lane while it serves the page). */
-    minAgeMs?: number;
-  },
-): Promise<AiMediaAcceleratorClaim | null> {
-  await db.execute(sql`
-    update ai_media_accelerator_reads set status = 'skipped', outcome = 'stale', finished_at = ${input.now}
-    where page_id = ${input.pageId} and status = 'pending'
-      and requested_at < ${new Date(input.now.getTime() - input.staleAfterMs)}
-  `);
-  const gapStart = new Date(input.now.getTime() - input.perConversationGapMs);
-  const result = await db.execute<{ id: string; group_ref: string; message_ref: string }>(sql`
-    select r.id::text as id, r.group_ref, r.message_ref from ai_media_accelerator_reads r
-    where r.page_id = ${input.pageId} and r.status = 'pending'
-      and r.requested_at <= ${new Date(input.now.getTime() - (input.minAgeMs ?? 0))}
-      and not exists (
-        select 1 from ai_media_accelerator_reads a
-        where a.page_id = r.page_id and a.group_ref = r.group_ref
-          and a.admitted_at is not null and a.admitted_at >= ${gapStart}
-      )
-    order by r.requested_at asc, r.id asc
-    limit 1
-    for update skip locked
-  `);
-  const row = result.rows[0];
-  return row ? { id: Number(row.id), groupRef: row.group_ref, messageRef: row.message_ref } : null;
-}
-
-/**
- * Admits one physical attempt against the agency-wide rolling 24 h cap
- * (shared by the chunk step and the fast lane). Compare-and-set on the
- * pending status: two lanes that both picked the request cannot both send.
- * Returns true only when this caller admitted it; see
- * `admitAiMediaAcceleratorReadOutcome` for why not.
- */
-export async function admitAiMediaAcceleratorRead(
-  db: Database,
-  input: { id: number; requestId: string; limit24h: number; now: Date },
-): Promise<boolean> {
-  return (await admitAiMediaAcceleratorReadOutcome(db, input)) === "admitted";
-}
-
 export async function admitAiMediaAcceleratorReadOutcome(
   db: Database,
   input: { id: number; requestId: string; limit24h: number; now: Date },

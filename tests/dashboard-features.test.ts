@@ -54,14 +54,14 @@ describe("feature configuration truth", () => {
   it("does not confuse a true gate with any enabled pages", () => {
     expect(state("voice", view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: "" })).label).toBe("Нет выбранных страниц");
     expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: "" })).detail).toContain("Все страницы");
-    expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: "none" })).kind).toBe("off");
+    expect(state("earnings-shadow", view({ fanslyFanEarningsShadowPageAllowlist: "none" })).kind).toBe("off");
   });
   it.each(["", "   ", ",", " , , "])("matches the runtime's opposite empty-CSV gates for %j", (value) => {
     expect(fanslyNewStreamAllowed(value, "future-page")).toBe(true);
     expect(isPageAllowlisted(value, "future-page")).toBe(false);
     expect(state("earnings", view({ fanslyFanEarningsSyncEnabled: true, fanslyNewStreamPageAllowlist: value })).detail).toContain("Все страницы");
     expect(state("voice", view({ voiceNotesEnabled: true, voiceNotesPageAllowlist: value })).kind).toBe("off");
-    expect(state("dm-shadow", view({ fanslyDmShadowPageAllowlist: value })).kind).toBe("off");
+    expect(state("earnings-shadow", view({ fanslyFanEarningsShadowPageAllowlist: value })).kind).toBe("off");
   });
   it("never promotes saved intent to applied state", () => {
     const data = view({ chatMuseAiPromptDebugEchoEnabled: false });
@@ -128,7 +128,7 @@ describe("page and mode choices", () => {
   });
   it("retains unknown labels and disables diagnostics with the supported sentinel", () => {
     expect(selectedConfigPages("old-page,lora-1", "voiceNotesPageAllowlist", ["lora-1"], true)).toEqual(["old-page", "lora-1"]);
-    expect(serializeConfigPages("fanslyDmShadowPageAllowlist", [])).toBe("none");
+    expect(serializeConfigPages("fanslyFanEarningsShadowPageAllowlist", [])).toBe("none");
     expect(serializeConfigPages("voiceNotesPageAllowlist", [])).toBe("");
     expect(validateConfigOverride("voiceNotesPageAllowlist", "").ok).toBe(false);
   });

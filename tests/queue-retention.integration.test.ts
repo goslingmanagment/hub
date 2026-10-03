@@ -21,7 +21,6 @@ import { ensureOfapiDmAnalyticsQueues } from "../apps/runtime/src/services/ofapi
 import { ensureOfapiQueues } from "../apps/runtime/src/services/ofapi-events.ts";
 import { ensureOfapiLinkStatsQueue } from "../apps/runtime/src/services/ofapi-link-stats-sync.ts";
 import { ensureOfapiPendingReconcileQueue } from "../apps/runtime/src/services/ofapi-pending-reconcile.ts";
-import { ensureProjectionDebtQueue } from "../apps/runtime/src/services/projection-debt-sweep.ts";
 import { ensureMessageArchiveQueues } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   DEFAULT_DELETE_AFTER_SECONDS,
@@ -29,10 +28,12 @@ import {
   HEARTBEAT_RETENTION_SECONDS,
   QUEUE_RETENTION_SETTINGS,
 } from "../apps/runtime/src/services/queue-retention.ts";
-import { ensureTargetedThreadBackfillQueue } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
+import { registerAllSchedules } from "../apps/runtime/src/services/schedules.ts";
 import {
   ensureSyncQueues,
   reconcileQueueRetention,
+  RETIRED_QUEUES,
+  RETIRED_SCHEDULES,
 } from "../apps/runtime/src/services/sync-queue.ts";
 import { ensureTieringQueue } from "../apps/runtime/src/services/tiering/index.ts";
 import { ensureVoiceNotesSweepQueue } from "../apps/runtime/src/services/voice-notes-sweep.ts";
@@ -69,7 +70,6 @@ async function createAllQueues(boss: PgBoss) {
   await ensureCapturePayloadParityQueue(boss);
   await ensureCanonicalizeQueues(boss);
   await ensureMessageArchiveQueues(boss);
-  await ensureProjectionDebtQueue(boss);
   await ensureVoiceNotesSweepQueue(boss);
   await ensureAiMediaDescribeSweepQueue(boss);
   await ensureOpsMetricsQueue(boss);
@@ -77,7 +77,6 @@ async function createAllQueues(boss: PgBoss) {
   await ensureNotificationPagingSweepQueue(boss);
   await ensureTieringQueue(boss);
   await ensureAgentHydrationQueue(boss);
-  await ensureTargetedThreadBackfillQueue(boss);
 }
 
 /**
@@ -237,6 +236,56 @@ describe("pg-boss queue retention integration", () => {
           deleteAfterSeconds: DLQ_DELETION_SENTINEL,
         });
       }
+    } finally {
+      await boss.stop({ graceful: false });
+    }
+  });
+
+  it("the scheduler boot retires a removed job's cron, queue and job rows, and nothing else", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Production before the deploy: the previous image created the queue,
+    // registered its cron, and ticks sit in pgboss.job.
+    const boss = new PgBoss({ connectionString: testDb.connectionString, schedule: false });
+    await boss.start();
+    try {
+      for (const name of RETIRED_QUEUES) {
+        await boss.createQueue(name, { policy: "exclusive" });
+        await boss.send(name, {});
+      }
+      for (const name of RETIRED_SCHEDULES) {
+        await boss.schedule(name, "*/5 * * * *", null, { tz: "UTC" });
+      }
+      const scheduled = async () => (await boss.getSchedules()).map((row) => row.name);
+      const jobs = async (name: string) => Number((await testDb!.pool.query<{ n: string }>(
+        "select count(*) as n from pgboss.job where name = $1",
+        [name],
+      )).rows[0]!.n);
+      expect(await scheduled()).toEqual(expect.arrayContaining([...RETIRED_SCHEDULES]));
+      for (const name of RETIRED_QUEUES) {
+        expect(await jobs(name), name).toBe(1);
+      }
+
+      await registerAllSchedules(boss);
+
+      const after = await scheduled();
+      for (const name of RETIRED_SCHEDULES) {
+        expect(after, name).not.toContain(name);
+      }
+      for (const name of RETIRED_QUEUES) {
+        expect(await boss.getQueue(name), name).toBeNull();
+        expect(await jobs(name), name).toBe(0);
+      }
+      // The live crons are registered, on queues that exist.
+      expect(after).toEqual(expect.arrayContaining(["sync.planner", "agent.hydration.execute"]));
+      expect(await boss.getQueue("agent.hydration.execute")).not.toBeNull();
+
+      // Every leader takeover repeats it: a second boot changes nothing.
+      await registerAllSchedules(boss);
+      expect((await scheduled()).sort()).toEqual([...after].sort());
     } finally {
       await boss.stop({ graceful: false });
     }

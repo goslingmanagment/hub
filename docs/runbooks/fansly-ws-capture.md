@@ -16,19 +16,18 @@ no socket: `FANSLY_WS_CAPTURE_ENABLED=false` and
    presence evidence, six-hour continuity and short/long-gap recovery receipts
    remain required. A pong, HTTP 101 or REST 200 does not meet those gates.
    See [W0 continuity](fansly-ws-continuity.md). There is no invented receipt TTL.
-   Decision 364 permits the separately bounded early experiment described in
-   [the B1 runbook](fansly-ws-hints.md#bounded-early-canary-decision-364): quiet
-   gaps stay unknown without forcing another live run; transport failures do
-   not qualify. Full polling remains the recovery authority.
+   Decision 364 permitted a separately bounded early B1 experiment (its runbook
+   was removed with the ws-hints projector at step 4, S4-11): quiet gaps stay
+   unknown without forcing another live run; transport failures do not
+   qualify. Full polling remains the recovery authority.
 3. Set one reviewed page allowlist, verify it, then separately flip the enabled
    flag. Follow the existing one-flag-at-a-time audit ritual. B0 changes no REST
    cadence, and the receiver itself performs no hints, canonicalization or
    business writes. After each capture commit the worker applies the frame to
-   the [live overlay](#live-overlay) (no HTTP, no work). Downstream, a captured
-   DM deletion frame becomes an exact
-   receipt that marks that page's stored copy of the message deleted, text
-   kept ([Platform deletions](fansly-ws-reliability.md#platform-deletions)).
-   No separate flag gates these marks: adding a page here starts them.
+   the [live overlay](#live-overlay) (no HTTP, no work). A captured DM deletion
+   frame marks nothing by itself: since step 4 (S4-11) only the Fansly Sync
+   Engine's `dm-live.deletions` marks the stored copies, text kept
+   ([Platform deletions](fansly-ws-reliability.md#platform-deletions)).
 4. Kill-switch: set enabled to false (or remove the page from the allowlist).
    Config polling is ten seconds; failed/stuck checks stop sockets. Verify a
    closed connection receipt within 60 seconds and continued REST health.

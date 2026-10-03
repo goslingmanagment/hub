@@ -336,7 +336,7 @@ describe("database migration invariants", () => {
     expect(recovery).toContain("not a.succeeded and a.idempotency_key is not null");
   });
 
-  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, on the readers' own clauses", async () => {
+  it("builds the purchase-history and DM 5xx-streak lookup indexes concurrently, the first on its reader's own clauses", async () => {
     const index = await readFile(
       "packages/db/migrations/0223_raw_payload_and_attempt_lookup_indexes.sql",
       "utf8",
@@ -375,11 +375,11 @@ describe("database migration invariants", () => {
     const observability = await readFile("packages/db/src/repositories/sync/observability.ts", "utf8");
     expect(observability).toContain(`and rp.endpoint in (${predicate})`);
 
-    // The attempt index predicate is a contract with the streak query: the
-    // query spells the same clauses as constants, so it implies it.
+    // The attempt index served the legacy dm_messages 5xx breaker's streak
+    // query, which went with the legacy DM handler at step 4 (S4-14); the
+    // index stays (migrations are forward-only) and no reader is pinned to it.
     expect(index).toContain("where stream = 'dm_messages' and operation = 'messages';");
-    expect(sync).toContain("and a.stream = 'dm_messages'\n        and a.operation = 'messages'\n"
-      + "        and a.request_shape ->> 'groupId' = ");
+    expect(sync).not.toContain("a.request_shape ->> 'groupId' = ");
 
     // Index-only, so a failed deploy may still restore the previous image.
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");

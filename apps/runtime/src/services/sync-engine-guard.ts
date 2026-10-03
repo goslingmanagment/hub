@@ -1,4 +1,4 @@
-import { findPageById, findPageByLabel, isFanslyPageEngineOwned, type Database } from "@agency_hub_core/db";
+import { findPageByLabel, isFanslyPageEngineOwned, type Database } from "@agency_hub_core/db";
 
 import { AppError } from "./errors.ts";
 
@@ -22,9 +22,6 @@ export const SYNC_ENGINE_HINTS = {
     + ` see \`pnpm cli sync page status --page ${label}\``,
   probe: (label: string) =>
     `ask the engine for one paced read: \`pnpm cli sync probe --page ${label} --operation <wire id>\``,
-  history: (label: string) =>
-    `ask the engine for the chat's history: \`pnpm cli sync history request --page ${label}`
-    + " --conversation <group id> --all --reason <why>`",
   aliasBackfill: (label: string) =>
     `fan profiles of an engine page are the engine's: \`pnpm cli sync work enqueue --page ${label}`
     + " --resource fan-profiles.alias-backfill`",
@@ -94,16 +91,4 @@ export async function assertLegacyOwnsFanslyPageLabels(
     const stored = await findPageByLabel(app.db, label);
     if (stored) await assertLegacyOwnsFanslyPage(app, stored.page, { hint: hint(stored.page.label) });
   }
-}
-
-/** The same refusal for a page known by id (the page of a DM thread). */
-export async function assertLegacyOwnsFanslyPageId(
-  app: { db: Database },
-  pageId: number,
-  hint: (label: string) => string,
-): Promise<void> {
-  const ownership = await isFanslyPageEngineOwned(app.db, pageId);
-  if (!ownership.owned) return;
-  const label = (await findPageById(app.db, pageId))?.page.label ?? String(pageId);
-  throw new FanslyPageOnSyncEngineError({ pageId, pageLabel: label, mode: ownership.mode ?? "?", hint: hint(label) });
 }

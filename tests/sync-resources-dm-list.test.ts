@@ -310,8 +310,8 @@ describe("resolveConversationListItem", () => {
   });
 
   it("stores the tier and unread ids as legacy does: served as is, null only when absent", () => {
-    // Legacy writes `conversation.<field> ?? null` (services/sync/fansly-dm-conversations.ts)
-    // and its writer stores it unchanged, so an empty string stays an empty string.
+    // Legacy wrote `conversation.<field> ?? null` (its dm_conversations sweep, deleted at
+    // step 4, S4-14) and its writer stores it unchanged, so an empty string stays an empty string.
     for (const served of ["", "88", null, undefined]) {
       const fields = served === undefined ? {} : { subscriptionTierId: served, lastUnreadMessageId: served };
       const { subscriptionTierId: _tier, lastUnreadMessageId: _unread, ...rest } = row();

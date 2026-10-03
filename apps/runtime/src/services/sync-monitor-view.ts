@@ -75,13 +75,11 @@ function rowFlags(input: {
   stalled: boolean;
   pending: boolean;
   retryAt: string | null;
-  deepBackfill?: { stalled: boolean } | null;
 }) {
   const flags = [];
   if (input.stalled) flags.push("stalled");
   if (input.pending) flags.push("pending");
   if (input.retryAt) flags.push("retrying");
-  if (input.deepBackfill?.stalled) flags.push("deep-stalled");
   return flags.length > 0 ? flags.join(",") : "-";
 }
 

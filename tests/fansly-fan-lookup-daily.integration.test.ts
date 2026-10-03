@@ -5,9 +5,10 @@
 //
 // Before this rule every transactions page, subscribers page and follower
 // fallback looked the same fans up again (about 540 account_lookup requests a
-// day in prod), and the DM sweep re-probed an unresolvable partner on every
-// sweep (about 96 a day). End to end against Postgres: the real journal, the
-// real fan upserts and the per-page stamps; only the adapter is faked.
+// day in prod). End to end against Postgres: the real journal, the real fan
+// upserts and the per-page stamps; only the adapter is faked. (The legacy DM
+// partner probe that shared the rule went with the legacy DM sweep at step 4,
+// S4-14; the engine's fan-profiles resource asks the same once-a-day question.)
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -21,7 +22,6 @@ import type { FanslyAccount } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { lookupHydratedFans } from "../apps/runtime/src/services/sync/fan-hydration.ts";
-import { probeFanslyAccountResolution } from "../apps/runtime/src/services/sync/fansly-account-probe.ts";
 import { upsertHydratedFansForPage } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import {
   resetIntegrationDatabase,
@@ -143,8 +143,7 @@ async function journaledLookups(pageId: number) {
 async function ageStamps(pageId: number) {
   await testDb!.pool.query(
     `update page_fans
-        set account_lookup_at = account_lookup_at - interval '1 day 1 minute',
-            account_probe_at = account_probe_at - interval '1 day 1 minute'
+        set account_lookup_at = account_lookup_at - interval '1 day 1 minute'
       where platform_account_id = $1`,
     [pageId],
   );
@@ -229,47 +228,5 @@ describe("Fansly fan lookup at most once a day per page", () => {
     expect(lookups).toEqual([["fan-1"], ["fan-1"]]);
     // The failed page's lookup was still journaled: it was made.
     expect(await journaledLookups(pageA)).toEqual([["fan-1"], ["fan-1"]]);
-  });
-
-  it("asks Fansly about an unresolvable DM partner at most once a day, and a returning partner still resolves", async () => {
-    await upsertHydratedFansForPage(testDb!.db, { platformAccountId: pageA, accounts: [], unverifiedIds: ["partner"] });
-    const probe = () => inRun(pageA, (syncRunId) => probeFanslyAccountResolution(
-      app,
-      requestContext,
-      "partner",
-      { platformAccountId: pageA, syncRunId },
-    ));
-
-    expect(await probe()).toBe("unresolved");
-    expect(await probe()).toBe("unresolved");
-    expect(lookups).toEqual([["partner"]]);
-    expect(await journaledLookups(pageA)).toEqual([["partner"]]);
-
-    // The partner came back; the next probe after a day sees it, and that
-    // answer holds for a day too.
-    served.set("partner", account("partner"));
-    await ageStamps(pageA);
-    expect(await probe()).toBe("resolved");
-    expect(await probe()).toBe("resolved");
-    expect(lookups).toEqual([["partner"], ["partner"]]);
-    expect(await journaledLookups(pageA)).toEqual([["partner"], ["partner"]]);
-
-    // The probe stores no profile, so the fan hydration lanes do not treat
-    // its answer as a lookup they can reuse.
-    await hydratePage(pageA, ["partner"]);
-    expect(lookups).toHaveLength(3);
-  });
-
-  it("probes a partner Hub has not linked to the page every time, as before", async () => {
-    const probe = () => inRun(pageA, (syncRunId) => probeFanslyAccountResolution(
-      app,
-      requestContext,
-      "stranger",
-      { platformAccountId: pageA, syncRunId },
-    ));
-
-    expect(await probe()).toBe("unresolved");
-    expect(await probe()).toBe("unresolved");
-    expect(lookups).toEqual([["stranger"], ["stranger"]]);
   });
 });

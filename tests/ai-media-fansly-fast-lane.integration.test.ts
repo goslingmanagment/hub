@@ -2,12 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   admitAiMediaAcceleratorReadOutcome,
-  claimAiMediaAcceleratorRead,
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
   ensureSyncProviderRateLimitProfile,
   insertSyncRequestAttempt,
+  peekAiMediaFastLaneRead,
   requestAiMediaAcceleratorRead,
   startSyncRun,
   storeProxyConfig,
@@ -356,20 +356,12 @@ describe("Fansly fast lane", () => {
 });
 
 describe("fast lane plumbing", () => {
-  it("admission is compare-and-set: the second lane to admit a request is told it was taken", async () => {
+  it("admission is compare-and-set: a second admission of the same request is told it was taken", async () => {
     const now = new Date();
-    await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "7001", now });
-    const claim = await claimAiMediaAcceleratorRead(app.db, { pageId, now, perConversationGapMs: 0, staleAfterMs: 600_000 });
-    await expect(admitAiMediaAcceleratorReadOutcome(app.db, { id: claim!.id, requestId: "a", limit24h: 10, now })).resolves.toBe("admitted");
-    await expect(admitAiMediaAcceleratorReadOutcome(app.db, { id: claim!.id, requestId: "b", limit24h: 10, now })).resolves.toBe("taken");
-  });
-
-  it("the chunk step leaves fresh requests to a serving fast lane", async () => {
-    const now = new Date();
-    await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "7101", now });
-    await expect(claimAiMediaAcceleratorRead(app.db, { pageId, now, perConversationGapMs: 0, staleAfterMs: 600_000, minAgeMs: 60_000 })).resolves.toBeNull();
-    const later = new Date(now.getTime() + 61_000);
-    await expect(claimAiMediaAcceleratorRead(app.db, { pageId, now: later, perConversationGapMs: 0, staleAfterMs: 600_000, minAgeMs: 60_000 })).resolves.not.toBeNull();
+    await requestAiMediaAcceleratorRead(app.db, { pageId, groupRef: GROUP, messageRef: "7001", now, lane: "fast" });
+    const read = await peekAiMediaFastLaneRead(app.db, { pageId, now, staleAfterMs: 600_000 });
+    await expect(admitAiMediaAcceleratorReadOutcome(app.db, { id: read!.id, requestId: "a", limit24h: 10, now })).resolves.toBe("admitted");
+    await expect(admitAiMediaAcceleratorReadOutcome(app.db, { id: read!.id, requestId: "b", limit24h: 10, now })).resolves.toBe("taken");
   });
 
   it("a read is paced by the page's send guard alone: it holds no legacy pacing row of the egress", async () => {

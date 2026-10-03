@@ -57,7 +57,6 @@
     "apps/runtime/src/services/sync/onlyfans-top-spenders.ts:37",
     "apps/runtime/src/services/sync/onlyfans-top-spenders.ts:74",
     "apps/runtime/src/services/sync/ofapi-fan-identities.ts:227",
-    "apps/runtime/src/services/sync/targeted-thread-backfill.ts:381",
     "apps/runtime/src/services/sync/fansly-post-replies.ts:358",
     "apps/runtime/src/services/sync/fansly-stream-gate.ts:33",
     "apps/runtime/src/services/sync/posts.ts:73",

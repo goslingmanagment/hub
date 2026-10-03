@@ -2454,21 +2454,6 @@ export const syncMonitorActiveRunSchema = z.object({
   lastActivityAt: isoTimestamp,
 });
 
-export const syncMonitorDeepBackfillSchema = z.object({
-  pendingConversations: z.number().int(),
-  pendingPagesEstimate: z.number().int(),
-  spenderPendingConversations: z.number().int(),
-  spenderPendingPagesEstimate: z.number().int(),
-  regularPendingConversations: z.number().int(),
-  regularPendingPagesEstimate: z.number().int(),
-  recentRequests: z.number().int(),
-  lastCompletedAt: isoTimestamp.nullable(),
-  liveRequestsSinceDeepBackfill: z.number().int(),
-  active: z.boolean(),
-  stalled: z.boolean(),
-  stallReason: z.string().nullable(),
-});
-
 const extendedSyncStreamEnum = z.enum([
   "light",
   "fan_identities",
@@ -2504,7 +2489,6 @@ export const syncMonitorStreamItemSchema = z.object({
   pending: z.boolean(),
   retryAt: isoTimestamp.nullable(),
   progress: syncMonitorProgressSchema.nullable(),
-  deepBackfill: syncMonitorDeepBackfillSchema.nullable().optional(),
   recentRuns: syncMonitorRecentRunsSchema,
   recentErrors: syncMonitorRecentErrorsSchema,
   rateHealth: syncMonitorRateHealthSchema,
@@ -7667,7 +7651,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
     },
   },
@@ -7682,7 +7667,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
       503: errorResponseSchema,
     },
@@ -7698,6 +7684,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
+      409: errorResponseSchema,
     },
   },
   adminSyncBlockResume: {
@@ -7711,6 +7699,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
+      409: errorResponseSchema,
     },
   },
   adminSyncBlockReset: {
@@ -7724,7 +7714,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
       503: errorResponseSchema,
     },
@@ -7740,7 +7731,8 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
-      // fansly_page_switching: the page is being switched to the Fansly Sync Engine
+      // fansly_page_switching: the page is being switched to the Fansly Sync Engine;
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-10)
       409: errorResponseSchema,
       503: errorResponseSchema,
     },

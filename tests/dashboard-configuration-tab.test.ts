@@ -35,13 +35,13 @@ import {
 
 function configItem(overrides: Partial<ConfigItem> = {}): ConfigItem {
   return {
-    key: "fanslyDeepBackfillIgnoreRetentionLimit",
-    envName: "FANSLY_DEEP_BACKFILL_IGNORE_RETENTION_LIMIT",
-    configField: "fanslyDeepBackfillIgnoreRetentionLimit",
+    key: "accountLinksEnabled",
+    envName: "ACCOUNT_LINKS_ENABLED",
+    configField: "accountLinksEnabled",
     kind: "boolean",
-    subsystem: "Fansly",
-    label: "Fansly deep backfill: ignore retention cap",
-    default: "false",
+    subsystem: "Security",
+    label: "Account links (invite / password reset)",
+    default: "true",
     editability: "editable",
     runtimeApply: "live",
     comparable: true,
@@ -107,7 +107,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     const html = renderTab([configItem()]);
     expect(html).toContain('role="switch"');
     expect(html).toContain('aria-checked="false"');
-    expect(html).toContain('aria-label="История без ограничения чата value"');
+    expect(html).toContain('aria-label="Ссылки-приглашения value"');
   });
 
   it("seeds the switch from the desired override when one exists", () => {
@@ -216,7 +216,7 @@ describe("resolveBooleanToggle", () => {
       kind: "save",
       body: {
         patches: [
-          { key: "fanslyDeepBackfillIgnoreRetentionLimit", value: true, expectedVersion: 0 },
+          { key: "accountLinksEnabled", value: true, expectedVersion: 0 },
         ],
       },
     });
@@ -235,19 +235,19 @@ describe("resolveBooleanToggle", () => {
       kind: "save",
       body: {
         patches: [
-          { key: "fanslyDeepBackfillIgnoreRetentionLimit", value: false, expectedVersion: 4 },
+          { key: "accountLinksEnabled", value: false, expectedVersion: 4 },
         ],
       },
     });
   });
 
   it("only arms the confirm gate on the first click for a costWarning key", () => {
-    const item = configItem({ costWarning: "The Stage 17 exhaustion crawl grows the hot table." });
+    const item = configItem({ costWarning: "Enabling it costs something." });
     expect(resolveBooleanToggle({ item, target: true, confirm: null })).toEqual({ kind: "arm" });
   });
 
   it("saves a costWarning key once armed for the SAME target", () => {
-    const item = configItem({ costWarning: "The Stage 17 exhaustion crawl grows the hot table." });
+    const item = configItem({ costWarning: "Enabling it costs something." });
     const action = resolveBooleanToggle({
       item,
       target: true,
@@ -257,7 +257,7 @@ describe("resolveBooleanToggle", () => {
       kind: "save",
       body: {
         patches: [
-          { key: "fanslyDeepBackfillIgnoreRetentionLimit", value: true, expectedVersion: 0 },
+          { key: "accountLinksEnabled", value: true, expectedVersion: 0 },
         ],
       },
     });

@@ -3,11 +3,8 @@ import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark,
   hasRecentAiGenerationInConversation,
-  isFanslyPageEngineOwned,
   listEventAccounts,
   listEventsSince,
-  requestAiMediaAcceleratorRead,
-  requestPageSync,
   setProjectionWatermark,
   upsertAiMediaDescriptionCandidate,
 } from "@agency_hub_core/db";
@@ -16,16 +13,13 @@ import type { AppContext } from "../../bootstrap.ts";
 import {
   aiMediaNotesPolicyForPage,
   isAfterAiMediaDescribeBoundary,
-  isAiMediaDescribeWindowOpen,
   type AiMediaDescribePagePolicy,
 } from "../ai-media-describe/policy.ts";
-import { FANSLY_WS_SIGNAL_EVENT } from "../canonicalize/fansly-ws.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 
 // AI media describer — Fansly candidates (plan §4). Consumes the canonical
 // `message.attachments_observed` events (the same events the media plane
-// projects; this projector writes only its own tables) and, for the
-// accelerator, `fansly.ws_signal_observed`.
+// projects; this projector writes only its own tables).
 //
 // Only pages with a describer policy are processed, and only messages
 // strictly after the policy's `since`. Every other account's watermark is
@@ -166,7 +160,6 @@ export interface AiMediaCandidatesResult extends Record<string, unknown> {
   accounts: number;
   eventsSeen: number;
   candidates: number;
-  accelerations: number;
   fastForwarded: number;
 }
 
@@ -174,7 +167,7 @@ export async function runAiMediaCandidatesProjection(
   app: ProjectorApp,
   input?: { accountId?: number | null },
 ): Promise<AiMediaCandidatesResult> {
-  const totals: AiMediaCandidatesResult = { accounts: 0, eventsSeen: 0, candidates: 0, accelerations: 0, fastForwarded: 0 };
+  const totals: AiMediaCandidatesResult = { accounts: 0, eventsSeen: 0, candidates: 0, fastForwarded: 0 };
   if (!app.config) {
     // Diagnostic callers without config neither project nor move watermarks.
     return totals;
@@ -199,35 +192,11 @@ export async function runAiMediaCandidatesProjection(
       continue;
     }
     const liveChatOnly = effective.aiMediaDescribeLiveChatOnly !== false;
-    const accelerator = effective.aiMediaDescribeFanslyAcceleratorEnabled === true;
-    let wakeDm = false;
     for (;;) {
       const events = await listEventsSince(app.db, { accountId, afterSeq: watermark, limit: EVENT_PAGE_SIZE });
       if (events.length === 0) break;
       totals.eventsSeen += events.length;
       for (const event of events) {
-        const data = asRecord(event.data) ?? {};
-        if (event.type === FANSLY_WS_SIGNAL_EVENT) {
-          const hint = asRecord(data.hint);
-          const receivedAt = asText(data.receivedAt);
-          const groupRef = asText(hint?.groupRef);
-          const messageRef = asText(hint?.messageRef);
-          const senderRef = asText(hint?.senderRef);
-          if (
-            !accelerator || data.outcome !== "hint" || hint?.type !== "message_created"
-            || hint.hasAttachments !== true || !groupRef || !messageRef || !senderRef
-            || senderRef === page.own_ref || receivedAt === null
-            || !isAiMediaDescribeWindowOpen(policy, new Date(receivedAt))
-            || !isAfterAiMediaDescribeBoundary(policy, new Date(receivedAt))
-          ) {
-            continue;
-          }
-          if (await requestAiMediaAcceleratorRead(app.db, { pageId: accountId, groupRef, messageRef, now: new Date() })) {
-            totals.accelerations += 1;
-            wakeDm = true;
-          }
-          continue;
-        }
         if (event.type !== ATTACHMENTS_EVENT || !event.observationId) continue;
         const applied = await applyAiMediaAttachmentsEvent(app, {
           pageId: accountId,
@@ -252,13 +221,6 @@ export async function runAiMediaCandidatesProjection(
       watermark = events[events.length - 1]!.accountSeq;
       await setProjectionWatermark(app.db, AI_MEDIA_CANDIDATES_PROJECTION, accountId, watermark);
       if (events.length < EVENT_PAGE_SIZE) break;
-    }
-    // Wakes an idle DM stream for the addressed read only; busy streams run
-    // the accelerator step inside their ordinary chunk. Never on a page the
-    // Fansly Sync Engine owns: its legacy DM stream is fenced, and the head
-    // read there is the WS confirmation's (step-3 design §3.1 item 7).
-    if (wakeDm && !(await isFanslyPageEngineOwned(app.db, accountId)).owned) {
-      await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
     }
   }
   return totals;

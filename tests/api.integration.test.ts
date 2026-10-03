@@ -13,7 +13,6 @@ import {
   ensurePageSyncStates,
   setPageOfapiAccountId,
   findUserByUsername,
-  finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
   getNotificationIncidentByKey,
@@ -29,6 +28,7 @@ import {
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  refreshPageDmConversationWindow,
   storeFanslySession,
   pageSyncCursors as pageSyncCursorRows,
   syncRateLimits,
@@ -555,6 +555,23 @@ function createAutoSyncFanslyAdapter(input: {
   } as AppContext["adapter"];
 }
 
+/** The stored summary of a thread whose messages are all read: the window
+ *  recounted from the stored rows, coverage `complete`, and the head-read
+ *  watermark. (The legacy sync's closing write, gone since step 4 S4-15; the
+ *  Fansly Sync Engine writes the same columns from the archive.) */
+async function settleCompleteThreadSummary(
+  testDb: StartedTestDatabase,
+  input: { conversationId: number; headReadAt: Date },
+) {
+  await refreshPageDmConversationWindow(testDb.db, { conversationId: input.conversationId });
+  await testDb.pool.query(
+    `update page_dm_threads
+        set message_coverage_status = 'complete', message_backfill_complete = true, last_message_sync_at = $2
+      where id = $1`,
+    [input.conversationId, input.headReadAt],
+  );
+}
+
 async function seedConversationApiFixture(input: {
   testDb: StartedTestDatabase;
   pageId: number;
@@ -648,9 +665,8 @@ async function seedConversationApiFixture(input: {
     },
   ]);
 
-  await finalizePageDmConversationMessageSync(input.testDb.db, {
+  await settleCompleteThreadSummary(input.testDb, {
     conversationId: conversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
@@ -946,9 +962,8 @@ async function seedSyncMonitorScenario(
       inReplyToRootMessageId: null,
     },
   ]);
-  await finalizePageDmConversationMessageSync(testDb.db, {
+  await settleCompleteThreadSummary(testDb, {
     conversationId: completedConversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: completedSyncAt,
   });
 
@@ -9331,9 +9346,17 @@ describe("api integration", () => {
     }));
     await server.ready();
 
+    // Since step 4 (S4-10) the legacy executor serves OnlyFans pages only: a
+    // Fansly page off the engine is refused (the engine's levers:
+    // tests/sync-engine-levers.integration.test.ts).
+    const onlyFansPage = await createOnlyFansPage(activeTestDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-blocks",
+    });
+    if (!onlyFansPage) throw new Error("Expected the OnlyFans page");
     const now = new Date("2026-03-24T12:00:00.000Z");
     await ensurePageSyncStates(activeTestDb.db, {
-      pageId: fixture.lanaPage.id,
+      pageId: onlyFansPage.id,
       now,
     });
 
@@ -9344,12 +9367,21 @@ describe("api integration", () => {
     });
     const ownerCookie = sessionCookieFrom(ownerLogin);
 
+    const fansly = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/trigger",
+      headers: { cookie: ownerCookie },
+      payload: { pageLabel: "lana", block: "financials" },
+    });
+    expect(fansly.statusCode).toBe(409);
+    expect(fansly.json()).toMatchObject({ error: "legacy_sync_retired" });
+
     const trigger = await server.inject({
       method: "POST",
       url: "/api/v1/admin/sync/blocks/trigger",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "financials",
       },
     });
@@ -9357,7 +9389,7 @@ describe("api integration", () => {
     expect(trigger.json()).toMatchObject({
       accepted: true,
       action: "trigger",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "financials",
     });
 
@@ -9366,7 +9398,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/pause",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9382,7 +9414,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/resume",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9401,7 +9433,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "messages_history",
       },
     });
@@ -9414,7 +9446,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9422,7 +9454,7 @@ describe("api integration", () => {
     expect(audienceReset.json()).toMatchObject({
       accepted: true,
       action: "reset",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "audience",
     });
 
@@ -9431,7 +9463,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "financials",
       },
     });
@@ -9439,7 +9471,7 @@ describe("api integration", () => {
     expect(financialsReset.json()).toMatchObject({
       accepted: true,
       action: "reset",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "financials",
     });
   }, 15_000);

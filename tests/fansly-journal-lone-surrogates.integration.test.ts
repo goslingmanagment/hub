@@ -8,7 +8,9 @@
 // body (a DM page holding a fan's broken emoji) would fail every retry.
 //
 // End to end through the real capture seam (persistRawPayload), the real
-// content-addressed catalog, and the DM lane's own journal-then-normalize step.
+// content-addressed catalog, and the DM journal-then-normalize step (the
+// legacy raw journal of a `dm_messages` page, then the page normalization the
+// Fansly Sync Engine's DM apply uses).
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -25,9 +27,8 @@ import {
   verifyCapturePayloadParity,
   type SyncStream,
 } from "@agency_hub_core/db";
-import type { FanslyAccount } from "@agency_hub_core/fansly";
+import { FANSLY_MAPPER_VERSION, type FanslyAccount } from "@agency_hub_core/fansly";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   getCaptureCasDualWriteCounters,
   publishCaptureCasDualWritePages,
@@ -35,15 +36,14 @@ import {
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { buildFanslyMetadata } from "../apps/runtime/src/services/fansly.ts";
 import { createFanslyLaneJournal } from "../apps/runtime/src/services/sync/fansly-lane.ts";
-import { fetchAndJournalFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
-import { retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
+import { dmRetentionDate, persistRawPayload, retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
+import { normalizeFanslyDmMessages } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
 import { upsertHydratedFansForPageDetailed } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
 let pageId = 0;
@@ -218,36 +218,27 @@ describe("a Fansly body with unpaired surrogates is journaled, not refused", () 
     ];
     const raw = { success: true, response: { messages, accountMedia: [], accountMediaBundles: [] } };
     const snapshot = JSON.stringify(raw);
-    const app: AppContext = createTestAppContext(testDb!, {
-      adapter: {
-        getMessagesPage: async () => ({
-          items: messages,
-          groupId: "920000000000000001",
-          before: null,
-          done: true,
-          contractAccepted: true,
-          raw,
-        }),
-      } as unknown as AppContext["adapter"],
-    });
 
-    const outcome = await inRun("dm_messages", (syncRunId) => fetchAndJournalFanslyDmMessagePage(app, {
-      requestContext: {} as never,
-      telemetry: { addAnomaly: async () => {} } as never,
+    await inRun("dm_messages", (syncRunId) => persistRawPayload(testDb!.db, {
+      platformAccountId: pageId,
       syncRunId,
+      endpoint: "dm_messages",
+      requestParams: { groupId: "920000000000000001", limit: 25, before: null },
+      responsePayload: raw,
+      mapperVersion: FANSLY_MAPPER_VERSION,
+      payloadKind: "dm_messages",
+      retainUntil: dmRetentionDate(),
+    }, { action: "inserting dm_messages raw payload", platform: "fansly" }));
+    expect(JSON.stringify(raw)).toBe(snapshot);
+    // Normalized from the served object, which the journal never mutates.
+    const normalized = normalizeFanslyDmMessages(messages as never, {
+      conversationId: conversation.id,
       platformAccountId: pageId,
       platform: "fansly",
       pageAccountId: "700000000000000001",
-      conversation: {
-        id: conversation.id,
-        platformConversationId: "920000000000000001",
-        partnerPlatformUserId: "700000000000000003",
-      },
-      before: null,
-    }));
-    expect(JSON.stringify(raw)).toBe(snapshot);
-    // Normalized from the served object, exactly as before.
-    expect(outcome.normalizedMessages.map((message) => message.content)).toEqual([FAN_TEXT, CAPTION]);
+      partnerPlatformUserId: "700000000000000003",
+    });
+    expect(normalized.rows.map((message) => message.content)).toEqual([FAN_TEXT, CAPTION]);
 
     type Page = typeof raw;
     const [stored] = await rows<{ mapper_version: string; body: Page; object_id: string | null }>(
@@ -274,7 +265,7 @@ describe("a Fansly body with unpaired surrogates is journaled, not refused", () 
 
     // The hot table: `content` is text, which the driver sends as UTF-8, so an
     // unpaired surrogate arrives as U+FFFD and the upsert succeeds.
-    await upsertPageDmMessages(testDb!.db, outcome.normalizedMessages);
+    await upsertPageDmMessages(testDb!.db, normalized.rows);
     await refreshPageDmConversationWindow(testDb!.db, { conversationId: conversation.id });
     const projected = await rows<{ platform_message_id: string; content: string }>(
       "select platform_message_id, content from page_dm_messages order by platform_message_id desc",

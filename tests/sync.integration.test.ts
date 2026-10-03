@@ -1,27 +1,21 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createFanslyPage,
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
-  getCurrentSubscribers,
-  getFollowersForPage,
   listPageSyncStates,
   requestPageSync as requestPageSyncRows,
   resolvePageSyncPriority,
-  storeFanslySession,
   storePlatformCredentials,
   storeProxyConfig,
-  syncRuns,
   updatePageMetadata,
 } from "@agency_hub_core/db";
-import { buildProxyEgressKey, buildSyncPageExecuteGroupId, encryptJson } from "@agency_hub_core/shared";
+import { buildSyncPageExecuteGroupId, encryptJson } from "@agency_hub_core/shared";
 import { PgBoss, type Db as PgBossDb } from "pg-boss";
 
-import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import { runSyncPlannerCycle } from "../apps/runtime/src/services/sync/planner.ts";
-import { requestPageSync, waitForRequestedSyncRequests } from "../apps/runtime/src/services/sync-control.ts";
+import { requestPageSync } from "../apps/runtime/src/services/sync-control.ts";
 import {
   ensureSyncQueues,
   sendSyncPageWakeup,
@@ -32,269 +26,10 @@ import {
 } from "../apps/runtime/src/services/sync-queue.ts";
 import {
   resetIntegrationDatabase,
-  seedFanslyPage,
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-
-function createFanslySyncAdapter() {
-  return {
-    async verifySession() {
-      return {
-        parsed: {
-          account: {
-            id: "acct-sync",
-            username: "sync_user",
-            displayName: "Sync User",
-            createdAt: 1_770_000_000_000,
-            followCount: 1,
-            subscriberCount: 1,
-            earningsWallet: null,
-            walls: [],
-            subscriptionTiers: [],
-          },
-        },
-        raw: {},
-      };
-    },
-    async getAccountMe() {
-      return {
-        parsed: {
-          account: {
-            id: "acct-sync",
-            username: "sync_user",
-            displayName: "Sync User",
-            createdAt: 1_770_000_000_000,
-            followCount: 1,
-            subscriberCount: 1,
-            earningsWallet: null,
-            walls: [],
-            subscriptionTiers: [],
-          },
-        },
-        raw: {},
-      };
-    },
-    async getAccountsByIdsPage(_context: unknown, ids: string[]) {
-      return {
-        parsed: ids.map((id) => ({
-          id,
-          username: `fan_${id}`,
-          displayName: `Fan ${id}`,
-          createdAt: 1_770_000_000_000,
-        })),
-        raw: {},
-      };
-    },
-    async getTransactionsPage() {
-      return {
-        total: 0,
-        items: [],
-        offset: 0,
-        done: true,
-        raw: {
-          total: 0,
-          data: [],
-        },
-      };
-    },
-    async getEarningsAccountsPage(_context: unknown, params: { after?: Date | null; before?: Date | null }) {
-      return {
-        items: [],
-        after: params.after ?? null,
-        before: params.before ?? null,
-        done: true,
-        raw: [],
-      };
-    },
-    async getSubscribersPage() {
-      return {
-        total: 1,
-        items: [{
-          id: "sub-1",
-          subscriberId: "fan-1",
-          historyId: null,
-          subscriptionTierId: null,
-          subscriptionTierName: null,
-          subscriptionTierColor: null,
-          planId: null,
-          status: 3,
-          price: 5,
-          renewPrice: 5,
-          autoRenew: 1,
-          billingCycle: 30,
-          duration: 30,
-          renewDate: "2026-03-20T00:00:00.000Z",
-          createdAt: "2026-03-01T00:00:00.000Z",
-          updatedAt: "2026-03-10T00:00:00.000Z",
-          endsAt: "2026-03-20T00:00:00.000Z",
-        }],
-        offset: 0,
-        done: true,
-        raw: {},
-      };
-    },
-    async getFollowersPage() {
-      return {
-        items: [{
-          id: "1710000000000000000",
-          followerId: "fan-1",
-        }],
-        accounts: [{
-          id: "fan-1",
-          username: "fan_1",
-          displayName: "Fan 1",
-          createdAt: 1_770_000_000_000,
-        }],
-        done: true,
-        raw: {},
-      };
-    },
-    async getMessagingGroupsPage() {
-      return {
-        total: 0,
-        items: [],
-        accounts: [],
-        groups: [],
-        offset: 0,
-        done: true,
-        raw: {
-          data: [],
-          aggregationData: {
-            total: 0,
-            accounts: [],
-            groups: [],
-          },
-        },
-      };
-    },
-    async getGroupDetail(_context: unknown, groupId: string) {
-      const parsed = {
-        id: groupId,
-        type: 1,
-        groupFlags: 0,
-        users: [],
-        lastMessage: null,
-      };
-
-      return {
-        parsed,
-        raw: parsed,
-      };
-    },
-    async getMessagesPage(_context: unknown, params: { groupId: string; before?: string | null }) {
-      return {
-        items: [],
-        groupId: params.groupId,
-        before: params.before ?? null,
-        done: true,
-        raw: {
-          messages: [],
-        },
-      };
-    },
-  };
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function createConcurrencyProbe() {
-  let inFlight = 0;
-  let maxInFlight = 0;
-
-  return {
-    async run<T>(work: () => Promise<T>) {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      try {
-        return await work();
-      } finally {
-        inFlight -= 1;
-      }
-    },
-    get maxInFlight() {
-      return maxInFlight;
-    },
-  };
-}
-
-function buildFanslyAccountPayload(accountId: string) {
-  return {
-    parsed: {
-      account: {
-        id: accountId,
-        username: `user_${accountId}`,
-        displayName: `User ${accountId}`,
-        createdAt: 1_770_000_000_000,
-        followCount: 0,
-        subscriberCount: 0,
-        earningsWallet: null,
-        walls: [],
-        subscriptionTiers: [],
-      },
-    },
-    raw: {},
-  };
-}
-
-function createInstrumentedFanslyLightAdapter(probe: ReturnType<typeof createConcurrencyProbe>) {
-  return {
-    async verifySession(context: { session: { authorization: string } }) {
-      return buildFanslyAccountPayload(`acct-${context.session.authorization}`);
-    },
-    async getAccountMe(context: { session: { authorization: string } }) {
-      return probe.run(async () => {
-        await sleep(75);
-        return buildFanslyAccountPayload(`acct-${context.session.authorization}`);
-      });
-    },
-  };
-}
-
-async function createFanslyLightPage(
-  testDb: StartedTestDatabase,
-  input: {
-    modelId: number;
-    label: string;
-    authorization: string;
-    proxyUrl?: string | null;
-    rateLimitScopeKey?: string | null;
-  },
-) {
-  const page = await createFanslyPage(testDb.db, {
-    modelId: input.modelId,
-    label: input.label,
-  });
-  const session = {
-    authorization: input.authorization,
-    fanslyClientId: "client-id",
-    fanslyClientCheck: "client-check",
-    fanslySessionId: `session-${input.authorization}`,
-  };
-
-  await storeFanslySession(
-    testDb.db,
-    page.id,
-    JSON.stringify(encryptJson(session, Buffer.alloc(32, 7), 1)),
-    1,
-  );
-
-  if (input.proxyUrl) {
-    await storeProxyConfig(testDb.db, page.id, {
-      url: input.proxyUrl,
-      encryptedAuth: null,
-      keyVersion: null,
-      rateLimitScopeKey: input.rateLimitScopeKey,
-    });
-  }
-
-  return page;
-}
 
 async function createOnlyFansLightPage(
   testDb: StartedTestDatabase,
@@ -343,40 +78,6 @@ async function createOnlyFansLightPage(
 
   return page;
 }
-
-async function requestLightSync(
-  app: ReturnType<typeof createTestAppContext>,
-  boss: Pick<PgBoss, "send">,
-  input: {
-    platformAccountId: number;
-    provider: "fansly" | "onlyfans";
-    proxyUrl?: string | null;
-    egressKey?: string | null;
-  },
-) {
-  await ensurePageSyncStates(app.db, {
-    pageId: input.platformAccountId,
-    now: new Date(),
-  });
-
-  const requests = await requestPageSyncRows(app.db, {
-    pageId: input.platformAccountId,
-    streams: ["light"],
-    source: "manual",
-  });
-
-  await sendSyncPageWakeup(boss, {
-    platformAccountId: input.platformAccountId,
-    priority: resolvePageSyncPriority("light", "manual"),
-    provider: input.provider,
-    egressKey: input.egressKey ?? buildProxyEgressKey(input.proxyUrl ? { url: input.proxyUrl } : null),
-  });
-
-  return requests;
-}
-
-/** Idle poll for the executor tests: production naps 1 s after an empty fetch,
- * which a worker whose egress group is busy also pays. */
 
 describe("sync integration", () => {
   let testDb: StartedTestDatabase | null = null;
@@ -838,21 +539,28 @@ describe("sync integration", () => {
       return;
     }
 
-    const { page } = await seedFanslyPage(testDb.db, Buffer.alloc(32, 7));
+    // Step 4 (S4-10): the legacy executor serves OnlyFans pages only (a
+    // Fansly page is refused: tests/sync-fansly-off-legacy.integration.test.ts).
+    const model = await createModel(testDb.db, { slug: "follower-stamp", name: "Follower Stamp" });
+    const page = await createOnlyFansLightPage(testDb, {
+      modelId: model.id,
+      label: "follower-stamp-of",
+      token: "follower-stamp",
+      accountId: 7,
+    });
     await updatePageMetadata(testDb.db, page.id, {
-      platformAccountIdValue: "acct-sync",
-      username: "sync_user",
-      displayName: "Sync User",
+      platformAccountIdValue: "of-7",
+      username: "of_7",
+      displayName: "OnlyFans 7",
       followerCount: 1,
       subscriberCount: 1,
       earningsBalanceMills: 0n,
-      metadata: {},
+      metadata: { onlyMonsterAccountId: 7, accountCreatedAt: "2026-01-01T00:00:00.000Z" },
       syncType: "followers",
     });
 
     const app = createTestAppContext(testDb, {
       databaseUrl: testDb.connectionString,
-      adapter: createFanslySyncAdapter() as never,
     });
 
     try {
@@ -865,7 +573,7 @@ describe("sync integration", () => {
       });
 
       expect(request.page.id).toBe(page.id);
-      expect(request.requests).toHaveLength(1);
+      expect(request.requests.map((entry) => entry.stream)).toEqual(["light", "transactions", "fan_identities"]);
     } finally {
       await app.close();
     }
@@ -883,10 +591,12 @@ describe("sync integration", () => {
     });
     const proxyUrl = "socks5://planner-proxy.example";
     const egressKey = "planner-shared-proxy";
-    const page = await createFanslyLightPage(testDb, {
+    // Step 4 (S4-10): the planner serves OnlyFans pages only.
+    const page = await createOnlyFansLightPage(testDb, {
       modelId: model.id,
       label: "planner-regression-page",
-      authorization: "planner-regression",
+      token: "planner-regression",
+      accountId: 11,
       proxyUrl,
       rateLimitScopeKey: egressKey,
     });
@@ -915,7 +625,7 @@ describe("sync integration", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]).toMatchObject({
       pageId: page.id,
-      platform: "fansly",
+      platform: "onlyfans",
       priority: resolvePageSyncPriority("light", "manual"),
       proxyUrl,
       egressKey,
@@ -930,7 +640,7 @@ describe("sync integration", () => {
         expireInSeconds: SYNC_PAGE_EXECUTE_EXPIRE_SECONDS,
         retryLimit: SYNC_PAGE_EXECUTE_RETRY_LIMIT,
         group: {
-          id: buildSyncPageExecuteGroupId("fansly", egressKey),
+          id: buildSyncPageExecuteGroupId("onlyfans", egressKey),
         },
       }),
     );
@@ -981,11 +691,13 @@ describe("sync integration", () => {
       },
     ] as const;
     const pagesById = new Map<number, { expectedEgressKey: string }>();
-    for (const testCase of cases) {
-      const page = await createFanslyLightPage(testDb, {
+    for (const [index, testCase] of cases.entries()) {
+      // Step 4 (S4-10): the planner serves OnlyFans pages only.
+      const page = await createOnlyFansLightPage(testDb, {
         modelId: model.id,
         label: testCase.label,
-        authorization: testCase.label,
+        token: testCase.label,
+        accountId: 100 + index,
         proxyUrl: "socks5://planner-proxy.example:1080",
       });
       await testDb.pool.query(
@@ -1034,351 +746,10 @@ describe("sync integration", () => {
         { platformAccountId: page.pageId },
         expect.objectContaining({
           group: {
-            id: buildSyncPageExecuteGroupId("fansly", expected?.expectedEgressKey ?? ""),
+            id: buildSyncPageExecuteGroupId("onlyfans", expected?.expectedEgressKey ?? ""),
           },
         }),
       );
     }
   });
-
-  it("converges a Fansly all-scope sync through page sync state and executor wakeups", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const { page } = await seedFanslyPage(testDb.db, Buffer.alloc(32, 7));
-    // W3.1 (decision #124): Fansly resolution fails closed proxyless.
-    await storeProxyConfig(testDb.db, page!.id, {
-      url: "socks5://proxy-converge.example",
-      encryptedAuth: null,
-      keyVersion: null,
-      rateLimitScopeKey: null,
-    });
-    const app = createTestAppContext(testDb, {
-      databaseUrl: testDb.connectionString,
-      adapter: createFanslySyncAdapter() as never,
-      syncSharedRateLimitEnabled: true,
-    });
-    const boss = new PgBoss({ connectionString: testDb.connectionString });
-    const abortController = new AbortController();
-
-    await boss.start();
-    await ensureSyncQueues(boss);
-    let executorPromise: Promise<void> | undefined;
-
-    try {
-      // Work is queued BEFORE the executor starts, so its first fetch finds it
-      // instead of idling a poll interval on an empty queue.
-      const request = await requestPageSync(app, boss, {
-        pageLabel: page.label,
-        scope: "all",
-        reason: "manual",
-      });
-      executorPromise = startSyncPageExecutor(app, boss, {
-        signal: abortController.signal,
-      });
-
-      await waitForRequestedSyncRequests(app, {
-        pageId: page.id,
-        requests: request.requests,
-        timeoutMs: 20_000,
-        pollMs: 100,
-      });
-
-      // The manual all-scope request expands via domains (8 streams — bulk
-      // streams are deliberately outside domain lists); fan_earnings /
-      // purchase_history settle via the recovery scheduler. The posts lane is
-      // seeded too, but remains default-paused and must never produce a run.
-      // Poll briefly until every requested state row has applied.
-      let stateRows = await listPageSyncStates(app.db, { pageId: page.id });
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if (stateRows.length >= 12 && stateRows.every((row) => row.requestSeq === row.appliedSeq)) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        stateRows = await listPageSyncStates(app.db, { pageId: page.id });
-      }
-      expect(stateRows.map((row) => row.stream)).toEqual([
-        "light",
-        "transactions",
-        "top_spenders",
-        "subscribers",
-        "followers",
-        "followers_reconcile",
-        "dm_conversations",
-        "dm_messages",
-        "fan_earnings",
-        "purchase_history",
-        "posts",
-        "stats_snapshot",
-        "notifications",
-        "catalog",
-        "post_replies",
-        "payouts",
-        "media_stats",
-      ]);
-      expect(stateRows.every((row) => row.requestSeq === row.appliedSeq)).toBe(true);
-      // WP-F1 generalized the seed pause: `posts` was the only stream that
-      // seeded paused, and every OTHER stream seeds pending/recovery — so a
-      // gated-off lane without an entry in SEED_PAUSED_SYNC_STREAMS would seed
-      // one pending row per page, fleet-wide, on the deploy that ships it.
-      // Paused WITHOUT a blocker, which is what distinguishes it from a
-      // feature_gate pause.
-      for (
-        const stream of [
-          "posts",
-          "stats_snapshot",
-          "notifications",
-          "catalog",
-          "post_replies",
-          "payouts",
-          "media_stats",
-        ]
-      ) {
-        expect(stateRows.find((row) => row.stream === stream), stream).toMatchObject({
-          status: "paused",
-          blockerKind: null,
-        });
-      }
-
-      const subscribers = await getCurrentSubscribers(app.db, page.id);
-      const followers = await getFollowersForPage(app.db, page.id);
-      expect(subscribers.rows).toHaveLength(1);
-      expect(followers.rows).toHaveLength(1);
-
-      const syncRunDb = testDb.db;
-      const selectRunRows = () => syncRunDb.select({
-        stream: syncRuns.stream,
-        status: syncRuns.outcome,
-        startedAt: syncRuns.startedAt,
-      }).from(syncRuns).orderBy(syncRuns.startedAt);
-      let runRows = await selectRunRows();
-      // appliedSeq is committed inside the stream handler; the executor stamps
-      // sync_runs.outcome immediately afterward. On a loaded CI runner the
-      // final recovery stream can be observable in that narrow terminalization
-      // gap, so wait for the run ledger rather than asserting across the race.
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        if (runRows.length === 10 && runRows.every((row) => row.status !== "running")) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        runRows = await selectRunRows();
-      }
-      expect(runRows).toHaveLength(10);
-      expect(runRows.map((row) => row.stream)).toEqual([
-        "light",
-        "transactions",
-        "top_spenders",
-        "subscribers",
-        "followers",
-        "followers_reconcile",
-        "dm_conversations",
-        "dm_messages",
-        "fan_earnings",
-        "purchase_history",
-      ]);
-      // The OLD pin here was `runRows.every(row => row.status === "succeeded")`,
-      // and that pin WAS the bug. Both ramp flags are off in this runtime
-      // (tests/helpers/runtime.ts), so fan_earnings and purchase_history never
-      // issue a single request — yet they were recorded as successful syncs,
-      // which is precisely the reporting that hid lora-1's 13-day outage
-      // (2026-07-17 to 2026-07-31). A gated skip is now `skipped`.
-      expect(new Map(runRows.map((row) => [row.stream, row.status]))).toEqual(new Map([
-        ["light", "succeeded"],
-        ["transactions", "succeeded"],
-        ["top_spenders", "succeeded"],
-        ["subscribers", "succeeded"],
-        ["followers", "succeeded"],
-        ["followers_reconcile", "succeeded"],
-        ["dm_conversations", "succeeded"],
-        ["dm_messages", "succeeded"],
-        ["fan_earnings", "skipped"],
-        ["purchase_history", "skipped"],
-      ]));
-    } finally {
-      abortController.abort();
-      await executorPromise;
-      await boss.stop();
-      await app.close();
-    }
-  }, 30_000);
-
-  it("serializes two Fansly pages sharing one proxy egress even with parallel workers", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // W3.1 (decision #124): proxyless Fansly pages fail closed, so the
-    // shared-egress serialization property now rides a shared proxy key.
-    const model = await createModel(testDb.db, {
-      slug: "serial-fansly",
-      name: "Serial Fansly",
-    });
-    const firstPage = await createFanslyLightPage(testDb, {
-      modelId: model.id,
-      label: "serial-a",
-      authorization: "serial-a",
-      proxyUrl: "socks5://proxy-serial.example",
-    });
-    const secondPage = await createFanslyLightPage(testDb, {
-      modelId: model.id,
-      label: "serial-b",
-      authorization: "serial-b",
-      proxyUrl: "socks5://proxy-serial.example",
-    });
-    const probe = createConcurrencyProbe();
-    const app = createTestAppContext(testDb, {
-      adapter: createInstrumentedFanslyLightAdapter(probe) as never,
-      fanslyDefaultDelayMs: 1,
-      syncPageExecutorConcurrency: 4,
-      syncSharedRateLimitEnabled: true,
-    });
-    const boss = new PgBoss({ connectionString: testDb.connectionString });
-    const abortController = new AbortController();
-
-    await boss.start();
-    await ensureSyncQueues(boss);
-    let executorPromise: Promise<void> | undefined;
-
-    try {
-      // Both pages are queued before the four workers start, so they compete
-      // for the shared egress from the first fetch.
-      const firstRevisions = await requestLightSync(app, boss, {
-        platformAccountId: firstPage.id,
-        provider: "fansly",
-        proxyUrl: "socks5://proxy-serial.example",
-      });
-      const secondRevisions = await requestLightSync(app, boss, {
-        platformAccountId: secondPage.id,
-        provider: "fansly",
-        proxyUrl: "socks5://proxy-serial.example",
-      });
-      executorPromise = startSyncPageExecutor(app, boss, {
-        signal: abortController.signal,
-      });
-
-      await Promise.all([
-        waitForRequestedSyncRequests(app, {
-          pageId: firstPage.id,
-          requests: firstRevisions,
-          timeoutMs: 10_000,
-          pollMs: 50,
-        }),
-        waitForRequestedSyncRequests(app, {
-          pageId: secondPage.id,
-          requests: secondRevisions,
-          timeoutMs: 10_000,
-          pollMs: 50,
-        }),
-      ]);
-
-      expect(probe.maxInFlight).toBe(1);
-    } finally {
-      abortController.abort();
-      await executorPromise;
-      await boss.stop();
-      await app.close();
-    }
-  }, 20_000);
-
-  it("overlaps pages on different proxy egresses and across Fansly vs direct OnlyFans", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // W3.1 (decision #124): proxyless Fansly pages fail closed — the
-    // different-egress overlap property now rides two distinct proxy keys.
-    const fanslyModel = await createModel(testDb.db, {
-      slug: "parallel-fansly",
-      name: "Parallel Fansly",
-    });
-    const onlyFansModel = await createModel(testDb.db, {
-      slug: "parallel-onlyfans",
-      name: "Parallel OnlyFans",
-    });
-    const directFanslyPage = await createFanslyLightPage(testDb, {
-      modelId: fanslyModel.id,
-      label: "parallel-direct",
-      authorization: "parallel-direct",
-      proxyUrl: "socks5://proxy-parallel-b.example",
-    });
-    const proxiedFanslyPage = await createFanslyLightPage(testDb, {
-      modelId: fanslyModel.id,
-      label: "parallel-proxy",
-      authorization: "parallel-proxy",
-      proxyUrl: "socks5://proxy-parallel.example",
-    });
-    const onlyFansPage = await createOnlyFansLightPage(testDb, {
-      modelId: onlyFansModel.id,
-      label: "parallel-onlyfans",
-      token: "parallel-onlyfans",
-      accountId: 42,
-    });
-    const probe = createConcurrencyProbe();
-    const app = createTestAppContext(testDb, {
-      adapter: createInstrumentedFanslyLightAdapter(probe) as never,
-      fanslyDefaultDelayMs: 1,
-      onlyFansDefaultDelayMs: 1,
-      syncPageExecutorConcurrency: 4,
-      syncSharedRateLimitEnabled: true,
-    });
-    const boss = new PgBoss({ connectionString: testDb.connectionString });
-    const abortController = new AbortController();
-
-    await boss.start();
-    await ensureSyncQueues(boss);
-    let executorPromise: Promise<void> | undefined;
-
-    try {
-      const directFanslyRevisions = await requestLightSync(app, boss, {
-        platformAccountId: directFanslyPage.id,
-        provider: "fansly",
-        proxyUrl: "socks5://proxy-parallel-b.example",
-      });
-      const proxiedFanslyRevisions = await requestLightSync(app, boss, {
-        platformAccountId: proxiedFanslyPage.id,
-        provider: "fansly",
-        proxyUrl: "socks5://proxy-parallel.example",
-      });
-      const onlyFansRevisions = await requestLightSync(app, boss, {
-        platformAccountId: onlyFansPage.id,
-        provider: "onlyfans",
-      });
-      // All three pages are queued before the workers start.
-      executorPromise = startSyncPageExecutor(app, boss, {
-        signal: abortController.signal,
-      });
-
-      await Promise.all([
-        waitForRequestedSyncRequests(app, {
-          pageId: directFanslyPage.id,
-          requests: directFanslyRevisions,
-          timeoutMs: 10_000,
-          pollMs: 50,
-        }),
-        waitForRequestedSyncRequests(app, {
-          pageId: proxiedFanslyPage.id,
-          requests: proxiedFanslyRevisions,
-          timeoutMs: 10_000,
-          pollMs: 50,
-        }),
-        waitForRequestedSyncRequests(app, {
-          pageId: onlyFansPage.id,
-          requests: onlyFansRevisions,
-          timeoutMs: 10_000,
-          pollMs: 50,
-        }),
-      ]);
-
-      expect(probe.maxInFlight).toBeGreaterThanOrEqual(2);
-    } finally {
-      abortController.abort();
-      await executorPromise;
-      await boss.stop();
-      await app.close();
-    }
-  }, 20_000);
 });

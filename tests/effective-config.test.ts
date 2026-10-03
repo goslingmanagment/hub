@@ -178,8 +178,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     // the whole request-count enforcement on the highest-volume lane in the
     // system) and the long-tail cycle, live because it re-aims a running
     // round-robin without a deploy.
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsCaptureEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsCapturePageAllowlist")).toBe(true);
@@ -187,9 +185,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsTypeAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsPolicies")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
@@ -215,8 +210,7 @@ describe("LIVE_CONFIG_KEYS", () => {
       "aiMediaDescribeLiveChatOnly",
       "aiMediaDescribeModelMedia",
       "aiMediaDescribeLoopEnabled",
-      // H3: the Fansly freshness accelerator switch and its budget.
-      "aiMediaDescribeFanslyAcceleratorEnabled",
+      // H3: the Fansly freshness accelerator's budget (the fast lane shares it).
       "aiMediaDescribeFanslyAcceleratorDailyLimit",
       "aiMediaDescribeFanslyFastLaneMode",
       "aiMediaDescribeFanslyFastLanePages",
@@ -227,6 +221,25 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(97);
+    // Step 4 (S4-14): retired with the legacy DM handlers (the bounded scan, the
+    // sweep shadow, the head catch-up, the deep backfill) and the in-chunk AI
+    // media accelerator — nothing reads them, so no override applies.
+    for (const key of [
+      "fanslyDmBoundedEnabled",
+      "fanslyDmBoundedPageAllowlist",
+      "fanslyDmBoundedPolicies",
+      "fanslyDmShadowPageAllowlist",
+      "fanslyDmHeadCatchupPageAllowlist",
+      "fanslyDeepBackfillIgnoreRetentionLimit",
+      "aiMediaDescribeFanslyAcceleratorEnabled",
+    ]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    // Step 4 (S4-15): retired with the hydration auto-approve policy.
+    for (const key of ["agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget"]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(88);
   });
 });
