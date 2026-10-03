@@ -26,6 +26,10 @@ const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
 /** Global latches of the AI media describer under `ai_provider_failed`. */
 export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
+/** The Fansly fast lane's "unavailable > 10 min" latch. The lane is deleted
+ * (step 4, S4-12): nothing opens it any more, and one an older build left
+ * open resolves on the describer's next sweep. */
+export const AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY = "media_describe_fast_lane";
 /** Plan §2.5/§10: the page-scoped latches of the Fansly send guard, under the
  * Fansly-only `sync_silent` kind (a new kind is a contract change). A closed
  * page sends nothing — its sync is silent — until the holder of its last
@@ -153,6 +157,9 @@ function openTitleForIncident(
   }
   if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
     return "🚨 AI image describer stopped: provider rejected the key (401/403)";
+  }
+  if (input.kind === "ai_provider_failed" && input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+    return "⚠️ Fansly image fast lane unavailable for over 10 minutes";
   }
   // The send guard's latches share the Fansly-only kind, not its title: a
   // closed page and a pace violation each say what happened and what to do.
@@ -343,6 +350,9 @@ function resolveDetailForIncident(
       }
       if (input.subKey === AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY) {
         return "AI image describer re-enabled by the owner";
+      }
+      if (input.subKey === AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY) {
+        return "Fansly image fast lane retired: the Sync Engine reads a fan's new media";
       }
       return "AI provider generation recovered";
     case "capture_payload_parity":

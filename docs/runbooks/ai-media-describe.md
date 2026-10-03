@@ -105,7 +105,9 @@ fast window, `sync/fansly/ws/router.ts`) journals the fresh DM page, and the
 projector makes its media due from there.
 `AI_MEDIA_DESCRIBE_FANSLY_FAST_LANE_MODE` / `_PAGES` are retired and ignored
 (removed in S4-26). Its rows stay as records: `ai_media_accelerator_reads`
-with `lane = 'fast'` and `ai_media_fast_lane_health`.
+with `lane = 'fast'` and `ai_media_fast_lane_health`. Its incident
+(`ai_provider_failed` / `media_describe_fast_lane`), if an older build left it
+open, resolves on the describer's next sweep.
 
 ## Sources
 

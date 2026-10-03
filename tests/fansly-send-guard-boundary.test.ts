@@ -49,7 +49,7 @@ describe("the Fansly send-guard boundary (plan §2.5)", () => {
     expect(matching(origins)).toEqual(Object.keys(SANCTIONED_FANSLY_ORIGIN_FILES).sort());
   });
 
-  it("opens a WebSocket only in the socket helper, on a lease of the page's guard", () => {
+  it("opens a WebSocket only in the socket helper, its Upgrade on a send lease", () => {
     const sockets = matching(/new WebSocket\(/);
     expect(sockets).toEqual([
       "apps/runtime/src/services/egress/fansly-receiver-socket.ts",
