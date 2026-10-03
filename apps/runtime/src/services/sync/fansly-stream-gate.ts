@@ -49,11 +49,6 @@ type FanslyGateConfigKey = FanslyStreamGate["enabledField"]
   | "fanslyNewStreamPageAllowlist";
 type FanslyGateConfig = Partial<Pick<AppConfig, FanslyGateConfigKey>>;
 
-// A config edit can wake a stream only if it changes one of its gate fields.
-export const FANSLY_GATE_CONFIG_KEYS = new Set<string>(GATED_FANSLY_STREAMS.flatMap(
-  (gate) => [gate.enabledField, gate.failClosedAllowlistField ?? "fanslyNewStreamPageAllowlist"],
-));
-
 /**
  * The CANONICAL fail-closed allowlist: an empty, blank or unset CSV allows NO
  * page. Every new gated mode uses this one; `fanslyNewStreamAllowed` below is

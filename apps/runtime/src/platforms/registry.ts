@@ -7,18 +7,11 @@ import {
 } from "@agency_hub_core/platform-core";
 
 import { getSyncStreamsForPlatform, type PageSyncLease } from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
   executeFanIdentitiesChunk,
-  executeFollowersChunk,
-  executeFollowersReconcileChunk,
-  executePurchaseHistoryChunk,
-  fanslyDmMessagesChunk,
-  fanslyLightChunk,
-  fanslySubscribersChunk,
-  fanslyTopSpendersChunk,
-  fanslyTransactionsChunk,
   onlyfansDmConversationsChunk,
   onlyfansLightChunk,
   onlyfansSubscribersChunk,
@@ -27,18 +20,7 @@ import {
   type ExecutorRequestContext,
   type StreamChunkResult,
 } from "../services/sync/executor-handlers.ts";
-import { executeFanEarningsChunk } from "../services/sync/fan-earnings.ts";
-import { fanslyDmConversationsChunk } from "../services/sync/fansly-dm-conversations.ts";
-import {
-  fanslyPostsChunk,
-  onlyfansPostsChunk,
-} from "../services/sync/posts.ts";
-import { fanslyCatalogChunk } from "../services/sync/fansly-catalog.ts";
-import { fanslyNotificationsChunk } from "../services/sync/fansly-notifications.ts";
-import { fanslyMediaStatsChunk } from "../services/sync/fansly-media-stats.ts";
-import { fanslyPayoutsChunk } from "../services/sync/fansly-payouts.ts";
-import { fanslyPostRepliesChunk } from "../services/sync/fansly-post-replies.ts";
-import { fanslyStatsSnapshotChunk } from "../services/sync/fansly-stats.ts";
+import { onlyfansPostsChunk } from "../services/sync/posts.ts";
 
 // Adapters are assembled in the app layer because pull handlers require
 // AppContext. Capabilities share the planner's per-platform stream lists;
@@ -57,9 +39,8 @@ export type ExecutorPullHandler = (
 ) => Promise<StreamChunkResult>;
 
 /** Sync-trigger scope policy: which streams a manual/API trigger of each
- * scope schedules. POLICY, not capability — e.g. Fansly's "all" deliberately
- * excludes the bulk fan_earnings/purchase_history streams (Stage 16: manual
- * sync-all must not fire the heavy crawls). Always a subset of
+ * scope schedules. POLICY, not capability — e.g. OnlyFans' "light" also
+ * schedules transactions and fan identities. Always a subset of
  * capabilities.streams (pinned by the registry suite). A scope absent from
  * the map is unsupported on that platform (resolveStreamsForScope throws). */
 export type SyncScopePolicy = Partial<Record<"light" | "followers" | "all" | "data" | "messages" | "posts", CanonicalStream[]>>;
@@ -71,37 +52,15 @@ export type AppPlatformRegistry = PlatformRegistry<AppPlatformAdapter>;
 
 // The per-platform pull maps route straight to the split handler halves —
 // no platform branch survives on the dispatched path (Stage 18 Tasks 2–3).
-const FANSLY_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
-  light: fanslyLightChunk,
-  transactions: fanslyTransactionsChunk,
-  top_spenders: fanslyTopSpendersChunk,
-  subscribers: fanslySubscribersChunk,
-  followers: executeFollowersChunk,
-  followers_reconcile: executeFollowersReconcileChunk,
-  dm_conversations: fanslyDmConversationsChunk,
-  dm_messages: fanslyDmMessagesChunk,
-  fan_earnings: executeFanEarningsChunk,
-  purchase_history: executePurchaseHistoryChunk,
-  posts: fanslyPostsChunk,
-  // WP-F1. A stream in SYNC_STREAMS without a handler here throws
-  // "Unsupported executor stream" on every dispatch, FLEET-WIDE — and the
-  // adapter conformance check makes it a boot crash rather than a 500.
-  stats_snapshot: fanslyStatsSnapshotChunk,
-  // WP-F2. Same rule: a stream in SYNC_STREAMS without a handler here throws
-  // "Unsupported executor stream" on every dispatch, FLEET-WIDE.
-  notifications: fanslyNotificationsChunk,
-  // WP-F3. Same rule again.
-  catalog: fanslyCatalogChunk,
-  // WP-F5. Same rule again.
-  post_replies: fanslyPostRepliesChunk,
-  // WP-F7. Same rule again.
-  payouts: fanslyPayoutsChunk,
-  // WP-F4. Same rule again — and this is the lane where the consequence is
-  // widest: it is declared for every Fansly page the moment it enters
-  // SYNC_STREAMS.
-  media_stats: fanslyMediaStatsChunk,
-};
-
+//
+// Fansly has none since step 4 (S4-10): the Fansly Sync Engine
+// (`apps/runtime/src/sync/`) reads every Fansly page, so the legacy executor
+// declares no Fansly stream and has no Fansly handler. The planner seeds and
+// schedules only the platforms that declare streams
+// (`legacyExecutorPlatforms`), the app-level `requestPageSync` refuses a
+// platform with none (`LegacySyncRetiredError`), and the owner levers resolve a
+// Fansly page's scopes straight to the engine's registry keys
+// (`services/sync-engine-levers.ts`).
 const ONLYFANS_PULL: Partial<Record<CanonicalStream, ExecutorPullHandler>> = {
   light: onlyfansLightChunk,
   transactions: onlyfansTransactionsChunk,
@@ -116,30 +75,14 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   key: "fansly",
   displayName: "Fansly",
   capabilities: {
-    streams: getSyncStreamsForPlatform("fansly"),
+    streams: [],
     webhooks: false,
     writes: [],
     presenceSource: "poll",
     billing: "session",
   },
-  syncScopes: {
-    light: ["light"],
-    followers: ["followers"],
-    posts: ["posts"],
-    data: ["light", "transactions", "top_spenders", "subscribers", "followers", "followers_reconcile"],
-    messages: ["dm_conversations", "dm_messages"],
-    all: [
-      "light",
-      "transactions",
-      "top_spenders",
-      "subscribers",
-      "followers",
-      "followers_reconcile",
-      "dm_conversations",
-      "dm_messages",
-    ],
-  },
-  pull: FANSLY_PULL,
+  syncScopes: {},
+  pull: {},
   session: {
     kind: "browser_session",
     lifecycle: "Pasted session material; verified on paste (resolvePageContext/verifySession); "
@@ -201,3 +144,18 @@ export function createAppPlatformRegistry(): AppPlatformRegistry {
 /** The process-wide registry (pure/stateless — handlers take AppContext).
  * Built eagerly so a conformance failure is a boot failure, not a 500. */
 export const appPlatformRegistry: AppPlatformRegistry = createAppPlatformRegistry();
+
+/** The platforms the legacy page-sync executor serves: those whose adapter
+ *  declares a stream (OnlyFans since step 4 S4-10). The planner seeds,
+ *  schedules and executes page-sync state only for their pages. */
+export function legacyExecutorPlatforms(registry: AppPlatformRegistry = appPlatformRegistry): Platform[] {
+  return registry.all().filter((adapter) => adapter.capabilities.streams.length > 0).map((adapter) => adapter.key);
+}
+
+/** Whether the legacy page-sync executor serves `platform`. */
+export function isLegacyExecutorPlatform(
+  platform: Platform,
+  registry: AppPlatformRegistry = appPlatformRegistry,
+): boolean {
+  return legacyExecutorPlatforms(registry).includes(platform);
+}
