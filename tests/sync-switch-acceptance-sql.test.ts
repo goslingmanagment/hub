@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  acceptanceIncidentKeys,
   ACCEPTANCE_CHECKS,
   ACCEPTANCE_LATENCY_SLOS,
   ACCEPTANCE_RULES,
@@ -60,6 +61,7 @@ describe("step3-accept.sql v2 against the code", () => {
       slowdown_factor: ACCEPTANCE_RULES.slowdownFactor,
       slowdown_floor_share: ACCEPTANCE_RULES.slowdownFloorShare,
       network_failures_to_hold: ACCEPTANCE_RULES.networkFailuresToHold,
+      alert_clean_ms: ACCEPTANCE_RULES.alertCleanMs,
       lookback_ms: ACCEPTANCE_RULES.lookbackMs,
       send_window_ms: ACCEPTANCE_RULES.sendWindowMs,
       mismatch_share: ACCEPTANCE_RULES.mismatchShare,
@@ -101,6 +103,18 @@ describe("step3-accept.sql v2 against the code", () => {
       expect(script).toContain(`select page_id, '${slo.name}', latency_s from wk where resource = '${slo.resource}'`);
     }
     expect(script).toContain(`k.resource in (${ACCEPTANCE_SLO_RESOURCES.map((resource) => `'${resource}'`).join(", ")})`);
+  });
+
+  it("reads the engine's latches under the keys the code builds: alert 1, and a route's own incident by its prefix", () => {
+    // `fansly_sync_engine:7:page_stopped` → 'fansly_sync_engine:' || w.page_id || ':page_stopped'
+    const sqlKey = (key: string) => `'${key.replace(":7:", ":' || w.page_id || ':")}'`;
+    const keys = acceptanceIncidentKeys(7);
+    expect(script.split(`n.incident_key = ${sqlKey(keys.pageStopped)}`)).toHaveLength(2);
+    expect(script.split(`c.incident_key = ${sqlKey(keys.pageStopped)}`)).toHaveLength(2);
+    expect(script).toContain(`starts_with(n.incident_key, ${sqlKey(keys.routePrefix)})`);
+    expect(script).toContain(`length(n.incident_key) > length(${sqlKey(keys.routePrefix)})`);
+    // No other way to leave an incident to the route rule (an error code never decides it).
+    expect(script).not.toMatch(/error_code\s*!?~/);
   });
 
   it("names every check of the code, in its order", () => {

@@ -10,6 +10,7 @@ import {
 } from "@agency_hub_core/db";
 
 import {
+  acceptanceIncidentKeys,
   acceptanceRouteOf,
   acceptanceWindows,
   ACCEPTANCE_RULES,
@@ -29,6 +30,7 @@ import {
   type AcceptanceCheckName,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
+  type PageStopEpisode,
   type PageVerdict,
 } from "./acceptance-rules.ts";
 
@@ -149,6 +151,29 @@ async function readJournal(db: Database, pageId: number, from: Date): Promise<Ac
     httpStatus: num(row.httpStatus),
     retryAfterMs: num(row.retryAfterMs),
     errorClass: row.errorClass,
+  }));
+}
+
+/** Every episode of the page's alert 1 (`page_stopped`): the latch row's
+ *  newest, and the earlier ones the paging sweep recorded. */
+async function readPageStops(db: Database, pageId: number): Promise<PageStopEpisode[]> {
+  const key = acceptanceIncidentKeys(pageId).pageStopped;
+  const result = await db.execute<{ openedAt: Date | string; lastSeenAt: Date | string | null; resolvedAt: Date | string | null; detail: string | null }>(sql`
+    select n.opened_at as "openedAt", case when n.resolved_at is null then n.last_seen_at end as "lastSeenAt",
+           n.resolved_at as "resolvedAt", n.error_code as detail
+      from notification_incidents n
+     where n.incident_key = ${key}
+    union all
+    select c.opened_at, null, c.resolved_at, null
+      from notification_incident_cycles c
+     where c.incident_key = ${key}
+       and not exists (select 1 from notification_incidents n where n.incident_key = c.incident_key and n.opened_at = c.opened_at)
+  `);
+  return result.rows.map((row) => ({
+    openedAt: dateOf(row.openedAt),
+    lastSeenAt: row.lastSeenAt === null ? null : dateOf(row.lastSeenAt),
+    resolvedAt: row.resolvedAt === null ? null : dateOf(row.resolvedAt),
+    detail: row.detail,
   }));
 }
 
@@ -297,8 +322,8 @@ async function sloChecks(db: Database, pageId: number, window: AcceptanceWindow)
   ];
 }
 
-/** Open incidents of the page; a rate-limit one is a route's 429, judged by
- *  the route rule and shown here only. */
+/** Open incidents of the page; a route's own (D5, by its key) is judged by the
+ *  route rule and shown here only. */
 async function incidentsCheck(db: Database, pageId: number): Promise<AcceptanceCheck> {
   const incidents = await db.execute<{ kind: string; incidentKey: string; openedAt: unknown; errorCode: string | null; summary: string | null }>(sql`
     select n.kind, n.incident_key as "incidentKey", n.opened_at as "openedAt", n.error_code as "errorCode", n.error_summary as summary
@@ -306,7 +331,7 @@ async function incidentsCheck(db: Database, pageId: number): Promise<AcceptanceC
      where n.platform_account_id = ${pageId} and n.resolved_at is null
      order by n.opened_at, n.id
   `);
-  const judged = incidents.rows.filter((entry) => !judgedByRouteRule(entry.errorCode));
+  const judged = incidents.rows.filter((entry) => !judgedByRouteRule(pageId, entry.incidentKey));
   return {
     name: "open_incidents",
     verdict: judged.length === 0 ? "pass" : "fail",
@@ -317,7 +342,7 @@ async function incidentsCheck(db: Database, pageId: number): Promise<AcceptanceC
         openedAt: iso(entry.openedAt),
         errorCode: entry.errorCode,
         summary: entry.summary,
-        judgedByRouteRule: judgedByRouteRule(entry.errorCode),
+        judgedByRouteRule: judgedByRouteRule(pageId, entry.incidentKey),
       })),
     },
   };
@@ -428,7 +453,7 @@ async function checkPage(db: Database, page: SyncPageRow, window: AcceptanceWind
     },
     route429Check(route429Outcomes(rows, window)),
     authRefusalsCheck(rows, window),
-    pageHoldCheck(rows, window, page),
+    pageHoldCheck(rows, window, page, await readPageStops(db, pageId)),
     mediaStartCheck(rows, window, paused),
     await stuckCheck(db, pageId, window),
     ...await sloChecks(db, pageId, window),

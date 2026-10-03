@@ -15,15 +15,18 @@ import {
 // The live-hour acceptance (step 3b ruling 13, A6; plan PR 1-11) on its
 // shared fixtures: `pnpm cli sync switch check` (switch/acceptance.ts) and
 // `step3-accept.sql` (psql 16, read-only, as prodsqlf.sh runs it) judge the
-// same eleven pages of one shared window — each after a stretch of legacy
+// same thirteen pages of one shared window — each after a stretch of legacy
 // reads denser than the budgets, which are not the window's — and must agree
-// on every page's verdict, every check and every route's 429s: one route 429 (recovered:
-// accepted), a second 429 on the same route via another resource (fail), one
-// each on two routes (the owner's review), a subject's 403 (fail), a page
-// hold the journal alone still shows (fail), a late 429 whose recovery is
-// unproven (inconclusive), an open work's age in the SLO tail (fail), a small
-// sample (inconclusive), a route over its budget (fail), a route at full rate
-// after its 429 (fail).
+// on every page's verdict, every check and every route's 429s: a clean hour
+// after a handover stop that ended before live (pass), one route 429 with its
+// route incident open (recovered: accepted), the same 429 holding the whole
+// page — alert 1 opened and resolved in the window (fail), a page stop only
+// the paging sweep's history still shows (fail), a second 429 on the same
+// route via another resource (fail), one each on two routes (the owner's
+// review), a subject's 403 (fail), a page hold the journal alone still shows
+// (fail), a late 429 whose recovery is unproven (inconclusive), an open work's
+// age in the SLO tail (fail), a small sample (inconclusive), a route over its
+// budget (fail), a route at full rate after its 429 (fail).
 
 let testDb: StartedTestDatabase | null = null;
 let seeded: SeededAcceptance | null = null;
@@ -69,8 +72,8 @@ describe("the live-hour acceptance on its shared fixtures", () => {
   });
 
   it.for([
-    "acc-clean", "acc-route-429", "acc-same-route", "acc-two-routes", "acc-auth-403", "acc-page-hold",
-    "acc-late-429", "acc-slo-tail", "acc-small-sample", "acc-budget", "acc-slowdown",
+    "acc-clean", "acc-route-429", "acc-page-429", "acc-stop-history", "acc-same-route", "acc-two-routes", "acc-auth-403",
+    "acc-page-hold", "acc-late-429", "acc-slo-tail", "acc-small-sample", "acc-budget", "acc-slowdown",
   ])("%s: the CLI and the SQL reach the scenario's verdict, check by check", (label, context) => {
     if (!seeded) return context.skip();
     const scenario = seeded.pages.find((page) => page.label === label)!;
@@ -122,6 +125,28 @@ describe("the live-hour acceptance on its shared fixtures", () => {
     ]);
     expect(output).toContain("acc-route-429|messages.page|response|rate_limit|429|1");
     expect(runtimePage("acc-clean").failures).toEqual([]);
+  });
+
+  it("finds the same alert 1 episodes in the window: the latch's, the sweep's history, not a stop that ended before T_i", (context) => {
+    if (!seeded) return context.skip();
+    const sqlDetail = (label: string, check: string) => {
+      const line = script!.output.split("\n").find((entry) => entry.startsWith(`${label}|${check}|`));
+      if (line === undefined) throw new Error(`step3-accept.sql printed no ${check} of ${label}`);
+      return JSON.parse(line.split("|").slice(3).join("|")) as Record<string, unknown>;
+    };
+    const opened = (detail: Record<string, unknown>) =>
+      (detail.stopped as Array<{ openedAt: string }>).map((episode) => Date.parse(episode.openedAt));
+    for (const [label, afterLiveS] of [["acc-clean", []], ["acc-route-429", []], ["acc-page-429", [1_002.4]], ["acc-stop-history", [1_200]]] as const) {
+      const page = runtimePage(label);
+      const cli = page.checks.find((check) => check.name === "page_hold")!.detail;
+      const expected = afterLiveS.map((seconds) => Date.parse(page.windowStart) + seconds * 1_000);
+      expect({ label, opened: opened(cli) }).toEqual({ label, opened: expected });
+      expect({ label, opened: opened(sqlDetail(label, "page_hold")) }).toEqual({ label, opened: expected });
+    }
+    // The open route incident (code `route_held`) is shown, judged by the route rule.
+    const incidents = runtimePage("acc-route-429").checks.find((check) => check.name === "open_incidents")!.detail.incidents;
+    expect(incidents).toEqual([expect.objectContaining({ errorCode: "route_held", judgedByRouteRule: true })]);
+    expect(sqlDetail("acc-route-429", "open_incidents").incidents).toEqual([expect.objectContaining({ errorCode: "route_held", judgedByRouteRule: true })]);
   });
 
   it("an interim check before T* + 1 h is open (inconclusive) for a clean page, and fails a failing one at once", async (context) => {

@@ -66,6 +66,41 @@ export interface SeededPage {
   slotOf(operation: (typeof ROTATION)[number]["operation"], fromSlot: number): number;
 }
 
+/** One episode of an engine latch, in seconds after T_i: resolved, or open and
+ *  last seen at `lastSeenS`. */
+interface LatchEpisode {
+  openedS: number;
+  resolvedS: number | null;
+  lastSeenS?: number;
+}
+
+/**
+ * An engine latch (`fansly_sync_engine:<page>:<subKey>`) as its producers
+ * leave it: the row holds the newest episode (a resolve stamps `last_seen_at`
+ * too), and the paging sweep's `notification_incident_cycles` every episode.
+ */
+async function engineLatch(page: SeededPage, subKey: string, errorCode: string, episodes: readonly LatchEpisode[]): Promise<void> {
+  const at = (seconds: number) => new Date(page.liveAt.getTime() + seconds * 1_000);
+  const newest = episodes.at(-1)!;
+  const resolvedAt = newest.resolvedS === null ? null : at(newest.resolvedS);
+  const latch = await page.pool.query<{ id: string; incidentKey: string }>(
+    `insert into notification_incidents (incident_key, kind, platform_account_id, status, opened_at, last_seen_at, resolved_at,
+                                         error_code, error_summary)
+     values ($1, 'fansly_sync_engine', $2, $3, $4, $5, $6, $7, $7)
+     returning id, incident_key as "incidentKey"`,
+    [`fansly_sync_engine:${page.pageId}:${subKey}`, page.pageId, resolvedAt === null ? "open" : "resolved",
+      at(newest.openedS), resolvedAt ?? at(newest.lastSeenS ?? newest.openedS), resolvedAt, errorCode],
+  );
+  for (const episode of episodes) {
+    await page.pool.query(
+      `insert into notification_incident_cycles (notification_incident_id, incident_key, kind, platform_account_id, opened_at, resolved_at)
+       values ($1, $2, 'fansly_sync_engine', $3, $4, $5)`,
+      [latch.rows[0]!.id, latch.rows[0]!.incidentKey, page.pageId, at(episode.openedS),
+        episode.resolvedS === null ? null : at(episode.resolvedS)],
+    );
+  }
+}
+
 async function setSlot(pool: Pool, pageId: number, liveAt: Date, slot: number, columns: Record<string, string | number | null>): Promise<void> {
   const names = Object.keys(columns);
   const assignments = names.map((name, index) => `${name} = $${index + 4}`).join(", ");
@@ -79,24 +114,59 @@ async function setSlot(pool: Pool, pageId: number, liveAt: Date, slot: number, c
 
 export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
   {
+    // A clean hour. The handover's page stop (a legacy 429 hold imported at
+    // the switch) ended 5 min before live; its latch resolved 10 clean
+    // minutes later, inside the window: not the window's hold.
     label: "acc-clean",
     expected: "pass",
-    expectedChecks: { route_budgets: "pass", route_429: "pass", media_start: "pass", slo_confirm: "pass", open_incidents: "pass" },
+    expectedChecks: {
+      route_budgets: "pass", route_429: "pass", page_hold: "pass", media_start: "pass", slo_confirm: "pass", open_incidents: "pass",
+    },
+    async apply(page) {
+      await engineLatch(page, "page_stopped", "rate_limit", [{ openedS: -1_200, resolvedS: 300 }]);
+    },
   },
   {
     // One 429 on `/message`, its hold kept, the route answering again 20 s
-    // later at its halved rate; the per-route incident (D5) stays open.
+    // later at its halved rate; the per-route incident (D5, PR 1-2's
+    // `route_limited:<route>`) stays open under the code its hold left
+    // (`route_held`) — judged by the route rule, not as an open incident.
     label: "acc-route-429",
     expected: "accepted_with_route_429",
     expectedChecks: { route_429: "pass", route_budgets: "pass", page_hold: "pass", open_incidents: "pass" },
     expectedRoutes: { "messages.page": "recovered" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", 200), { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
-      await page.pool.query(
-        `insert into notification_incidents (incident_key, kind, platform_account_id, status, error_code, error_summary)
-         values ($1, 'fansly_sync_engine', $2, 'open', 'rate_limit', 'a 429 on messages.page')`,
-        [`fansly_sync_engine:${page.pageId}:route:messages.page`, page.pageId],
-      );
+      const slot = page.slotOf("messages.page", 200);
+      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await engineLatch(page, "route_limited:messages.page", "route_held", [{ openedS: slotAt(slot) + 0.4, resolvedS: null, lastSeenS: slotAt(slot) + 6 }]);
+    },
+  },
+  {
+    // The same recovered 429, but it held the whole page: alert 1 opened
+    // (`page_stopped`, `rate_limit`) and resolved within the window, the page
+    // row's hold long cleared — only the latch still shows it.
+    label: "acc-page-429",
+    expected: "fail",
+    expectedChecks: { page_hold: "fail", route_429: "pass", route_budgets: "pass", open_incidents: "pass" },
+    expectedRoutes: { "messages.page": "recovered" },
+    async apply(page) {
+      const slot = page.slotOf("messages.page", 200);
+      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await engineLatch(page, "page_stopped", "rate_limit", [{ openedS: slotAt(slot) + 0.4, resolvedS: slotAt(slot) + 665 }]);
+    },
+  },
+  {
+    // The page stopped 20 min into the window (no owner for over 2 min) and
+    // again after the window: the latch holds the later episode, the paging
+    // sweep's record the earlier one.
+    label: "acc-stop-history",
+    expected: "fail",
+    expectedChecks: { page_hold: "fail", auth_refusals: "pass", open_incidents: "pass" },
+    async apply(page) {
+      await engineLatch(page, "page_stopped", "ownership_unconfirmed", [
+        { openedS: 1_200, resolvedS: 1_860 },
+        { openedS: 3_960, resolvedS: 4_320 },
+      ]);
     },
   },
   {

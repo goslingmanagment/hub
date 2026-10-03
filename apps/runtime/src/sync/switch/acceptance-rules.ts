@@ -1,5 +1,7 @@
 import { SYNC_SEND_WINDOW_MS } from "@agency_hub_core/db";
 
+import { incidentKey, syncEngineIncidentKey } from "../../services/notification-incidents.ts";
+import { SYNC_ALERT_CLEAN_MS } from "../engine/alerts.ts";
 import { NETWORK_FAILURES_TO_PAUSE } from "../engine/errors.ts";
 import {
   FAMILY_BUDGETS,
@@ -24,10 +26,11 @@ import {
 // owner's `since` and the instant the page became live, T* = max(T_i) over
 // the pages checked together — a fault in a page's first minutes counts. Per
 // (page, canonical route): at most one 429; a second one on the same pair,
-// any 401/403 or a page hold fails the page; 429s on different routes of a
-// page are shown together for the owner. A 429 whose route was not seen to
-// recover, a sample under 10, an open window: `inconclusive`, never a pass
-// for lack of data.
+// any 401/403 or a page hold fails the page — a 429 that held more than its
+// route is a page hold (alert 1's latch shows it after the hold is gone);
+// 429s on different routes of a page are shown together for the owner. A 429
+// whose route was not seen to recover, a sample under 10, an open window:
+// `inconclusive`, never a pass for lack of data.
 
 /** Every number of the acceptance (the same `\set` values in step3-accept.sql). */
 export const ACCEPTANCE_RULES = {
@@ -50,6 +53,10 @@ export const ACCEPTANCE_RULES = {
   slowdownFloorShare: 0.125,
   /** Consecutive network failures that hold the page (`engine/errors.ts`). */
   networkFailuresToHold: NETWORK_FAILURES_TO_PAUSE,
+  /** Alert 1's latch resolves only after its stop has stayed clear this long
+   *  (`engine/alerts.ts`): a resolved episode was last seen this long before
+   *  its resolve. */
+  alertCleanMs: SYNC_ALERT_CLEAN_MS,
   /** The journal is read from this long before T_i (a network streak that
    *  began before the window). */
   lookbackMs: 60 * 60_000,
@@ -412,13 +419,47 @@ export interface PageHoldColumns {
 }
 
 /**
+ * One episode of the page's alert 1 (`page_stopped`, `engine/alerts.ts`): the
+ * latch row's newest one, or an earlier one the paging sweep recorded
+ * (`notification_incident_cycles`; the latch keeps only its newest).
+ */
+export interface PageStopEpisode {
+  openedAt: Date;
+  /** While the latch is open: the newest instant its stop was seen
+   *  (`last_seen_at`). Null once resolved (the resolve overwrites it). */
+  lastSeenAt: Date | null;
+  resolvedAt: Date | null;
+  /** The stop's newest reason (`error_code`): the latch row's episode only. */
+  detail: string | null;
+}
+
+/** The last instant an episode's stop was seen: an open latch's `last_seen_at`;
+ *  a resolved one waited 10 clean minutes before its resolve (an earlier,
+ *  never-settled one: its opening) — never before it opened. */
+export function pageStopSeenUntil(episode: PageStopEpisode): Date {
+  if (episode.resolvedAt === null && episode.lastSeenAt !== null) return episode.lastSeenAt;
+  const cleared = episode.resolvedAt === null ? episode.openedAt.getTime() : episode.resolvedAt.getTime() - ACCEPTANCE_RULES.alertCleanMs;
+  return new Date(Math.max(episode.openedAt.getTime(), cleared));
+}
+
+/**
  * A page hold within the window (A6): an answer that holds the page
  * (`auth`, `identity_mismatch`), a network failure that reached the streak
  * that holds it (`engine/errors.ts` `onOutcome`: every other answer ends the
- * streak; a request never sent leaves it), or the page row's hold overlapping
- * the window (a carried or imported hold, one still in force).
+ * streak; a request never sent leaves it), the page row's hold overlapping
+ * the window (a carried or imported hold, one still in force), or an episode
+ * of alert 1 — the page stopped — seen within the window, resolved ones
+ * included: the only trace of a hold that has ended and been cleared, such as
+ * a 429 that held the whole page instead of its route (a `rate_limit` page
+ * hold, imported from the legacy engine or set by a regression). A stop that
+ * ended before T_i (its latch still in its clean minutes) is not the window's.
  */
-export function pageHoldCheck(rows: readonly AcceptanceJournalRow[], window: AcceptanceWindow, page: PageHoldColumns): AcceptanceCheck {
+export function pageHoldCheck(
+  rows: readonly AcceptanceJournalRow[],
+  window: AcceptanceWindow,
+  page: PageHoldColumns,
+  stops: readonly PageStopEpisode[],
+): AcceptanceCheck {
   let credentialsAnswers = 0;
   for (const row of rows) {
     if (row.journal === "engine" && (row.errorClass === "auth" || row.errorClass === "identity_mismatch") && inWindow(row.doneAt, window)) {
@@ -439,15 +480,26 @@ export function pageHoldCheck(rows: readonly AcceptanceJournalRow[], window: Acc
   const current = page.holdKind !== null && page.holdUntil !== null
     && page.holdUntil.getTime() > window.start.getTime()
     && (page.holdSince === null || page.holdSince.getTime() < window.observedUntil.getTime());
+  const stopped = stops
+    .map((episode) => ({ episode, seenUntil: pageStopSeenUntil(episode) }))
+    .filter(({ episode, seenUntil }) => episode.openedAt.getTime() < window.observedUntil.getTime()
+      && seenUntil.getTime() >= window.start.getTime())
+    .sort((a, b) => a.episode.openedAt.getTime() - b.episode.openedAt.getTime());
   return {
     name: "page_hold",
-    verdict: credentialsAnswers > 0 || networkHolds > 0 || current ? "fail" : "pass",
+    verdict: credentialsAnswers > 0 || networkHolds > 0 || current || stopped.length > 0 ? "fail" : "pass",
     detail: {
       credentialsAnswers,
       networkHolds,
       current: current
         ? { kind: page.holdKind, since: page.holdSince?.toISOString() ?? null, until: page.holdUntil!.toISOString() }
         : null,
+      stopped: stopped.map(({ episode, seenUntil }) => ({
+        openedAt: episode.openedAt.toISOString(),
+        seenUntil: seenUntil.toISOString(),
+        resolvedAt: episode.resolvedAt?.toISOString() ?? null,
+        detail: episode.detail,
+      })),
     },
   };
 }
@@ -511,10 +563,26 @@ export function mismatchCheck(confirmed: number, mismatches: number): Acceptance
   };
 }
 
-/** An open incident whose error code names a rate limit is a route's 429
- *  (alert 1, D5's per-route incident): judged by the route rule. */
-export function judgedByRouteRule(errorCode: string | null): boolean {
-  return errorCode !== null && errorCode.includes("rate_limit");
+/** D5's per-route incident (step 3b PR 1-2, `SYNC_ENGINE_ROUTE_SUBKEY_PREFIX`):
+ *  one latch per page+route, `route_limited:<route>`. */
+export const ACCEPTANCE_ROUTE_INCIDENT_SUBKEY_PREFIX = "route_limited:";
+
+/** The latch keys of a page the acceptance reads (`services/notification-incidents.ts`):
+ *  alert 1 (the page stopped) and the prefix of its per-route incidents. */
+export function acceptanceIncidentKeys(pageId: number): { pageStopped: string; routePrefix: string } {
+  return {
+    pageStopped: syncEngineIncidentKey({ subKey: "page_stopped", pageId }),
+    routePrefix: incidentKey({ kind: "fansly_sync_engine", platformAccountId: pageId, subKey: ACCEPTANCE_ROUTE_INCIDENT_SUBKEY_PREFIX }),
+  };
+}
+
+/** An open incident of the page that is a route's own (D5): judged by the
+ *  route rule, told by its key — its error code follows the route's hold
+ *  (`rate_limit`, `route_held`, `unavailable` for a 5xx naming its
+ *  Retry-After). Alert 1 (`page_stopped`, a 429's included) is never one. */
+export function judgedByRouteRule(pageId: number, key: string): boolean {
+  const { routePrefix } = acceptanceIncidentKeys(pageId);
+  return key.startsWith(routePrefix) && key.length > routePrefix.length;
 }
 
 /** The page's verdict: fail > inconclusive > owner_review (429s on two or

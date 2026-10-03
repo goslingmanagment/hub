@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { acceptanceExitCode } from "../apps/runtime/src/sync/switch/acceptance.ts";
 import {
+  acceptanceIncidentKeys,
   acceptanceRouteOf,
   acceptanceWindows,
   authRefusalsCheck,
@@ -11,6 +12,7 @@ import {
   mediaStartCheck,
   mismatchCheck,
   pageHoldCheck,
+  pageStopSeenUntil,
   pageVerdict,
   percentileCont,
   route429Check,
@@ -20,6 +22,7 @@ import {
   type AcceptanceCheck,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
+  type PageStopEpisode,
 } from "../apps/runtime/src/sync/switch/acceptance-rules.ts";
 
 // The live-hour acceptance's rules (step 3b ruling 13, A1 §2b, A6), pure:
@@ -242,28 +245,66 @@ describe("401/403 and page holds", () => {
   const noHold = { holdKind: null, holdSince: null, holdUntil: null };
 
   it("finds a page hold from an auth or identity answer", () => {
-    expect(pageHoldCheck([send(10, "account.me", { errorClass: "identity_mismatch" })], window(), noHold).verdict).toBe("fail");
-    expect(pageHoldCheck([send(10, "account.me", { errorClass: "auth", httpStatus: 401 })], window(), noHold).verdict).toBe("fail");
-    expect(pageHoldCheck([send(10, "account.me", { errorClass: "rate_limit", httpStatus: 429 })], window(), noHold).verdict).toBe("pass");
+    expect(pageHoldCheck([send(10, "account.me", { errorClass: "identity_mismatch" })], window(), noHold, []).verdict).toBe("fail");
+    expect(pageHoldCheck([send(10, "account.me", { errorClass: "auth", httpStatus: 401 })], window(), noHold, []).verdict).toBe("fail");
+  });
+
+  const episode = (openedS: number, resolvedS: number | null, lastSeenS: number | null = null, detail: string | null = null): PageStopEpisode => ({
+    openedAt: at(openedS),
+    resolvedAt: resolvedS === null ? null : at(resolvedS),
+    lastSeenAt: lastSeenS === null ? null : at(lastSeenS),
+    detail,
+  });
+
+  it("leaves a 429 that held only its route to the route rule, and fails one that stopped the page (alert 1, resolved since)", () => {
+    const rate429 = [send(10, "messages.page", { errorClass: "rate_limit", httpStatus: 429 }), send(40, "messages.page")];
+    expect(pageHoldCheck(rate429, window(), noHold, []).verdict).toBe("pass");
+    // The 429 held the page: `page_stopped` (`rate_limit`) opened with it and
+    // resolved 10 clean minutes after the hold ended; the row's hold is cleared.
+    const stopped = pageHoldCheck(rate429, window(), noHold, [episode(10.3, 625, null, "rate_limit")]);
+    expect(stopped).toMatchObject({
+      verdict: "fail",
+      detail: { stopped: [{ openedAt: at(10.3).toISOString(), seenUntil: at(25).toISOString(), resolvedAt: at(625).toISOString(), detail: "rate_limit" }] },
+    });
+  });
+
+  it("judges an alert 1 episode by when its stop was last seen, inside the window or not", () => {
+    // Open: seen until its last sighting.
+    expect(pageStopSeenUntil(episode(100, null, 400))).toEqual(at(400));
+    // Resolved: 10 clean minutes before its resolve, never before it opened.
+    expect(pageStopSeenUntil(episode(100, 1_000))).toEqual(at(400));
+    expect(pageStopSeenUntil(episode(100, 300))).toEqual(at(100));
+    // An earlier episode the sweep never saw resolve: at its opening.
+    expect(pageStopSeenUntil(episode(100, null))).toEqual(at(100));
+    const judged = (stop: PageStopEpisode, w = window()) => pageHoldCheck([], w, noHold, [stop]).verdict;
+    // A stop that ended 5 min before T_i, its latch resolved in the window's first minutes: not the window's.
+    expect(judged(episode(-1_200, 300))).toBe("pass");
+    // Begun before T_i and still seen after it; seen inside; still open now.
+    expect(judged(episode(-1_200, 700))).toBe("fail");
+    expect(judged(episode(1_200, 1_860))).toBe("fail");
+    expect(judged(episode(3_000, null, 3_990))).toBe("fail");
+    // Opened after the window's end (or after now, for an open window).
+    expect(judged(episode(3_660, 4_000))).toBe("pass");
+    expect(judged(episode(1_200, 1_860), window(3_600, 1_000))).toBe("pass");
   });
 
   it("finds the network streak that holds the page, from the journal alone", () => {
     const network = (seconds: number) => send(seconds, "messages.page", { outcome: "transport_error", httpStatus: null, errorClass: "network" });
-    expect(pageHoldCheck([network(10), network(20), network(30)], window(), noHold))
+    expect(pageHoldCheck([network(10), network(20), network(30)], window(), noHold, []))
       .toMatchObject({ verdict: "fail", detail: { networkHolds: 1 } });
     // An answer in between ends the streak; a request never sent leaves it.
-    expect(pageHoldCheck([network(10), network(20), send(25, "group.detail"), network(30)], window(), noHold).verdict).toBe("pass");
+    expect(pageHoldCheck([network(10), network(20), send(25, "group.detail"), network(30)], window(), noHold, []).verdict).toBe("pass");
     const notSent = send(25, "group.detail", { outcome: "transport_error", httpStatus: null, errorClass: "not_sent" });
-    expect(pageHoldCheck([network(10), network(20), notSent, network(30)], window(), noHold).verdict).toBe("fail");
+    expect(pageHoldCheck([network(10), network(20), notSent, network(30)], window(), noHold, []).verdict).toBe("fail");
     // A streak begun before the window holds the page inside it.
-    expect(pageHoldCheck([network(-30), network(-20), network(10)], window(), noHold).verdict).toBe("fail");
-    expect(pageHoldCheck([network(-30), network(-20), network(-10)], window(), noHold).verdict).toBe("pass");
+    expect(pageHoldCheck([network(-30), network(-20), network(10)], window(), noHold, []).verdict).toBe("fail");
+    expect(pageHoldCheck([network(-30), network(-20), network(-10)], window(), noHold, []).verdict).toBe("pass");
   });
 
   it("finds the page row's hold overlapping the window, not one that ended before it", () => {
-    expect(pageHoldCheck([], window(), { holdKind: "network", holdSince: at(-60), holdUntil: at(30) }).verdict).toBe("fail");
-    expect(pageHoldCheck([], window(), { holdKind: "rate_limit", holdSince: at(-600), holdUntil: at(-10) }).verdict).toBe("pass");
-    expect(pageHoldCheck([], window(3_600, 1_000), { holdKind: "auth", holdSince: at(2_000), holdUntil: at(9_999_999) }).verdict).toBe("pass");
+    expect(pageHoldCheck([], window(), { holdKind: "network", holdSince: at(-60), holdUntil: at(30) }, []).verdict).toBe("fail");
+    expect(pageHoldCheck([], window(), { holdKind: "rate_limit", holdSince: at(-600), holdUntil: at(-10) }, []).verdict).toBe("pass");
+    expect(pageHoldCheck([], window(3_600, 1_000), { holdKind: "auth", holdSince: at(2_000), holdUntil: at(9_999_999) }, []).verdict).toBe("pass");
   });
 });
 
@@ -331,10 +372,19 @@ describe("the page verdict", () => {
     expect(acceptanceExitCode({ accepted: false, pages: [page("owner_review")] })).toBe(2);
   });
 
-  it("leaves a rate-limit incident to the route rule", () => {
-    expect(judgedByRouteRule("rate_limit")).toBe(true);
-    expect(judgedByRouteRule("rate_limit_list")).toBe(true);
-    expect(judgedByRouteRule("auth")).toBe(false);
-    expect(judgedByRouteRule(null)).toBe(false);
+  it("leaves the page's route incidents to the route rule by their key, whatever their code; alert 1 never", () => {
+    expect(acceptanceIncidentKeys(7)).toEqual({
+      pageStopped: "fansly_sync_engine:7:page_stopped",
+      routePrefix: "fansly_sync_engine:7:route_limited:",
+    });
+    // PR 1-2's latch: opened `rate_limit` (`unavailable` for a 503 naming its
+    // Retry-After), refreshed `route_held` while the route is held.
+    expect(judgedByRouteRule(7, "fansly_sync_engine:7:route_limited:messages.page")).toBe(true);
+    // A 429 that stopped the page is alert 1's, code `rate_limit` or not.
+    expect(judgedByRouteRule(7, "fansly_sync_engine:7:page_stopped")).toBe(false);
+    expect(judgedByRouteRule(7, "fansly_sync_engine:7:page_stopped:pace_violation")).toBe(false);
+    expect(judgedByRouteRule(7, "fansly_sync_engine:8:route_limited:messages.page")).toBe(false);
+    expect(judgedByRouteRule(7, "fansly_sync_engine:7:route_limited:")).toBe(false);
+    expect(judgedByRouteRule(7, "stream_failed_threshold:7:dm_conversations")).toBe(false);
   });
 });

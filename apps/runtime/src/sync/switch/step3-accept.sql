@@ -35,6 +35,7 @@
 \set slowdown_factor 0.5
 \set slowdown_floor_share 0.125
 \set network_failures_to_hold 3
+\set alert_clean_ms 600000
 \set lookback_ms 3600000
 \set send_window_ms 15000
 \set mismatch_share 0.001
@@ -272,7 +273,8 @@ select page, "check", verdict, detail
   from json_to_recordset(:'c_state') as x(page text, ord int, "check" text, verdict text, detail json) order by page, ord;
 
 \echo '== 3. per page and canonical route: budgets (each send: <= ceil(W/T) + 1 within 60 s and 300 s, halved after a 429),'
-\echo '      429s (<= 1 per page+route, hold kept, recovery seen), 401/403 (none), page holds (none), first media request (<= 60 s)'
+\echo '      429s (<= 1 per page+route, hold kept, recovery seen), 401/403 (none), page holds (none: the journal, the page row,'
+\echo '      alert 1 page_stopped seen in the window), first media request (<= 60 s)'
 with w as (
   select * from json_to_recordset(:'windows') as w(page_id bigint, page text, mode text, mode_changed_at timestamptz,
                                                    t_i timestamptz, t_end timestamptz, o_end timestamptz, now timestamptz,
@@ -397,12 +399,39 @@ streak as (
                 over (partition by s.page_id, s.grp order by s.done_at, s.ref rows between unbounded preceding and current row) as pos
     from seq s
 ),
+-- Alert 1 (the page stopped): the latch row's newest episode and the earlier ones the paging sweep recorded. An open
+-- latch was last seen at last_seen_at; a resolved one :alert_clean_ms before its resolve (an earlier, never-settled one:
+-- at its opening), never before it opened. An episode seen within the window is a page hold — a 429 that held the page
+-- after its hold was cleared included; one that ended before T_i is not the window's.
+stops as (
+  select w.page_id, e.opened_at, e.seen_until, e.resolved_at, e.detail
+    from w cross join lateral (
+      select date_trunc('milliseconds', n.opened_at) as opened_at, date_trunc('milliseconds', n.resolved_at) as resolved_at,
+             n.error_code as detail,
+             date_trunc('milliseconds', case when n.resolved_at is null then n.last_seen_at
+                                             else greatest(n.opened_at, n.resolved_at - :alert_clean_ms * interval '1 millisecond') end)
+               as seen_until
+        from notification_incidents n
+       where n.incident_key = 'fansly_sync_engine:' || w.page_id || ':page_stopped'
+      union all
+      select date_trunc('milliseconds', c.opened_at), date_trunc('milliseconds', c.resolved_at), null,
+             date_trunc('milliseconds', greatest(c.opened_at,
+                                                 coalesce(c.resolved_at - :alert_clean_ms * interval '1 millisecond', c.opened_at)))
+        from notification_incident_cycles c
+       where c.incident_key = 'fansly_sync_engine:' || w.page_id || ':page_stopped'
+         and not exists (select 1 from notification_incidents n
+                          where n.incident_key = c.incident_key and n.opened_at = c.opened_at)) as e
+   where e.opened_at < w.o_end and e.seen_until >= w.t_i
+),
 holds as (
   select w.page_id,
          (select count(*) from j where j.page_id = w.page_id and j.journal = 'engine'
              and j.error_class in ('auth', 'identity_mismatch') and j.done_at >= w.t_i and j.done_at < w.o_end) as credentials,
          (select count(*) from streak s where s.page_id = w.page_id and s.error_class = 'network'
              and s.pos >= :network_failures_to_hold and s.done_at >= w.t_i and s.done_at < w.o_end) as network,
+         (select coalesce(json_agg(json_build_object('openedAt', s.opened_at, 'seenUntil', s.seen_until,
+                                                     'resolvedAt', s.resolved_at, 'detail', s.detail) order by s.opened_at), '[]')
+            from stops s where s.page_id = w.page_id) as stopped,
          sp.hold_kind, sp.hold_since, sp.hold_until,
          coalesce(sp.hold_kind is not null and sp.hold_until > w.t_i and coalesce(sp.hold_since, '-infinity') < w.o_end,
                   false) as current_hold,
@@ -442,10 +471,12 @@ checks as (
    group by w.page_id, w.page
   union all
   select w.page_id, w.page, 8, 'page_hold',
-         case when h.credentials > 0 or h.network > 0 or h.current_hold then 'fail' else 'pass' end,
+         case when h.credentials > 0 or h.network > 0 or h.current_hold or json_array_length(h.stopped) > 0 then 'fail'
+              else 'pass' end,
          json_build_object('credentialsAnswers', h.credentials, 'networkHolds', h.network,
                            'current', case when h.current_hold
-                                           then json_build_object('kind', h.hold_kind, 'since', h.hold_since, 'until', h.hold_until) end)
+                                           then json_build_object('kind', h.hold_kind, 'since', h.hold_since, 'until', h.hold_until) end,
+                           'stopped', h.stopped)
     from w join holds h on h.page_id = w.page_id
   union all
   select w.page_id, w.page, 9, 'media_start',
@@ -592,21 +623,27 @@ select coalesce(json_agg(json_build_object('page_id', page_id, 'page', page, 'or
 select page, "check", verdict, detail
   from json_to_recordset(:'c_slo') as x(page text, ord int, "check" text, verdict text, detail json) order by page, ord;
 
-\echo '== 6. open incidents of the page (a rate-limit one is a route 429: judged by section 3, shown here)'
+\echo '== 6. open incidents of the page (a route incident, route_limited:<route> told by its key whatever its code, is judged'
+\echo '      by section 3 and shown here; alert 1 page_stopped never is)'
 with w as (
   select * from json_to_recordset(:'windows') as w(page_id bigint, page text, mode text, mode_changed_at timestamptz,
                                                    t_i timestamptz, t_end timestamptz, o_end timestamptz, now timestamptz,
                                                    complete boolean)
 ),
+open_incidents as (
+  select w.page_id, n.id, n.kind, n.incident_key, n.opened_at, n.error_code, n.error_summary,
+         starts_with(n.incident_key, 'fansly_sync_engine:' || w.page_id || ':route_limited:')
+           and length(n.incident_key) > length('fansly_sync_engine:' || w.page_id || ':route_limited:') as route_rule
+    from w join notification_incidents n on n.platform_account_id = w.page_id and n.resolved_at is null
+),
 x as (
   select w.page_id, w.page,
-         case when count(n.id) filter (where n.error_code is null or n.error_code !~ 'rate_limit') = 0 then 'pass' else 'fail' end
-           as verdict,
+         case when count(o.id) filter (where not o.route_rule) = 0 then 'pass' else 'fail' end as verdict,
          json_build_object('incidents', coalesce(json_agg(json_build_object(
-             'kind', n.kind, 'key', n.incident_key, 'openedAt', n.opened_at, 'errorCode', n.error_code,
-             'summary', n.error_summary, 'judgedByRouteRule', coalesce(n.error_code ~ 'rate_limit', false))
-           order by n.opened_at, n.id) filter (where n.id is not null), '[]')) as detail
-    from w left join notification_incidents n on n.platform_account_id = w.page_id and n.resolved_at is null
+             'kind', o.kind, 'key', o.incident_key, 'openedAt', o.opened_at, 'errorCode', o.error_code,
+             'summary', o.error_summary, 'judgedByRouteRule', o.route_rule)
+           order by o.opened_at, o.id) filter (where o.id is not null), '[]')) as detail
+    from w left join open_incidents o on o.page_id = w.page_id
    group by w.page_id, w.page
 )
 select coalesce(json_agg(json_build_object('page_id', page_id, 'page', page, 'ord', 20, 'check', 'open_incidents',
