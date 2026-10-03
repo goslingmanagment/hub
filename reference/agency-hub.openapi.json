@@ -118682,6 +118682,14 @@
                         ]
                       }
                     },
+                    "compatibleClientSdks": {
+                      "maxItems": 64,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    },
                     "checks": {
                       "type": "object",
                       "properties": {
@@ -118788,6 +118796,14 @@
                         "enum": [
                           "desktop-lifecycle-v2"
                         ]
+                      }
+                    },
+                    "compatibleClientSdks": {
+                      "maxItems": 64,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
                       }
                     },
                     "checks": {
