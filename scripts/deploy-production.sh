@@ -1082,6 +1082,20 @@ rollback_remote_stack() {
   else
     log "Rollback health check did not reach 200"
   fi
+
+  # The rollback recreated sync too: an owner of the replaced sync container
+  # that did not write its safe release leaves its page waiting
+  # `ownership_unconfirmed`, with no sender, as after a forward recreate. The
+  # same confirmation, once the rolled-back sync container is healthy (its
+  # depends_on already waited for a healthy api), whatever the API check above
+  # saw from here. Like the rest of the rollback, it never stops fail().
+  log "Waiting for the rolled-back sync container healthcheck"
+  if ! wait_for_sync_container_health; then
+    log "WARNING: the rolled-back sync container never reached a healthy state; a page whose owner was cut off by the rollback waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
+    return 0
+  fi
+  confirm_sync_owner_handover \
+    || log "WARNING: the sync engine owner confirmation failed after the rollback; a page whose owner was cut off by the rollback waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
 }
 
 capture_remote_schema_migrations() {
