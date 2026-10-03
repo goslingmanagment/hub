@@ -1,10 +1,11 @@
 import { and, eq, ne } from "drizzle-orm";
 
-import { pages, updatePageMetadata, type Database, type SyncWorkRow } from "@agency_hub_core/db";
+import { pages, updatePageMetadata, type Database } from "@agency_hub_core/db";
 import { parseFanslyAccountMe, type FanslyAccountMe } from "@agency_hub_core/fansly";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { buildFanslyMetadata } from "../../../services/fansly.ts";
+import { identityCandidateOf } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -30,7 +31,8 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 // - identity (urgent, live only): a candidate session or proxy is checked
 //   against the page before the caller commits it; nothing of the page is
 //   written. The candidate itself rides in the work's `secret_params`, which
-//   only the live transport reads (step 3).
+//   only the live transport reads (step 3); the answer carries the proof the
+//   caller's save presents (the attempt, its send instant, the stored base).
 //
 // An answer for another account (`PlatformAccountIdentity*Error` out of
 // `updatePageMetadata`) is deterministic: the engine holds the page
@@ -78,17 +80,6 @@ export async function applyAccountMeToPage(
   return { accountId: account.id, username: account.username, followCount, subscriberCount };
 }
 
-/** The candidate an identity check verifies: set by its caller together with
- *  the work's `secret_params` (the candidate session/proxy, ciphertext). */
-function identityCandidate(work: SyncWorkRow): { generation: string } | null {
-  const params = work.params;
-  if (typeof params !== "object" || params === null) return null;
-  const candidate = (params as Record<string, unknown>).candidate;
-  if (typeof candidate !== "object" || candidate === null) return null;
-  const generation = (candidate as Record<string, unknown>).generation;
-  return typeof generation === "string" && generation.length > 0 ? { generation } : null;
-}
-
 /** Does `accountId` belong to this page: its own external id, or — for a
  *  page without one — an id no other page of its platform holds. */
 async function judgeIdentity(tx: Database, pageId: number, accountId: string): Promise<boolean> {
@@ -112,7 +103,7 @@ function accountOf(parsed: unknown): FanslyAccountMe["account"] {
 export function accountModule(variant: AccountVariant): ResourceModule {
   return {
     async plan(work): Promise<StepPlan> {
-      if (variant === "identity" && identityCandidate(work) === null) {
+      if (variant === "identity" && identityCandidateOf(work) === null) {
         // Without a candidate the check would test the page's own
         // credentials and answer "matches" for nothing.
         return { kind: "quarantine", reason: "identity_candidate_missing" };
@@ -124,12 +115,19 @@ export function accountModule(variant: AccountVariant): ResourceModule {
       const account = accountOf(input.parsed);
       if (variant === "identity") {
         const matches = await judgeIdentity(tx, input.pageId, account.id);
+        // The proof its caller's save presents (step 3b ruling 5): which
+        // request proved the candidate over which stored base, and when.
+        const proof = {
+          attemptId: input.attempt.id,
+          sentAt: (input.attempt.sentAt ?? input.attempt.admittedAt).toISOString(),
+          base: identityCandidateOf(input.work)?.base ?? null,
+        };
         return {
           work: {
             satisfiesRevision: true,
             close: "done",
             closeReason: matches ? "identity_matches" : "identity_differs",
-            result: { accountId: account.id, username: account.username, matches },
+            result: { accountId: account.id, username: account.username, matches, proof },
           },
           followups: [],
         };

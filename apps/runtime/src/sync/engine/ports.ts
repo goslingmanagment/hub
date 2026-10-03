@@ -126,14 +126,17 @@ export interface OwnershipSession {
 // ── alerts and metrics ──────────────────────────────────────────────────────
 
 /** The five alerts of plan §10 as subKeys of the one incident kind
- *  `fansly_sync_engine` (design §9.6). */
-export const SYNC_ALERT_SUB_KEYS = ["page_stopped", "live_degraded", "freshness", "stuck", "process"] as const;
+ *  `fansly_sync_engine` (design §9.6), and a route's own incident (step 3b
+ *  D5: a 429 holds one route of a page; one latch per page+route). */
+export const SYNC_ALERT_SUB_KEYS = ["page_stopped", "live_degraded", "freshness", "stuck", "process", "route_limited"] as const;
 export type SyncAlertSubKey = (typeof SYNC_ALERT_SUB_KEYS)[number];
 
 export interface SyncAlertKey {
   subKey: SyncAlertSubKey;
   /** Null for the process-wide alert 5. */
   pageId: number | null;
+  /** `route_limited` only: the canonical route (`fansly/routes.ts`). */
+  route?: string;
 }
 
 export interface SyncAlertInput extends SyncAlertKey {

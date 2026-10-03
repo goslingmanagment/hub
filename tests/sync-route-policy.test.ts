@@ -345,7 +345,11 @@ describe("the admission at the pick", () => {
   it("why waiting names the routes still closed; the status lists the routes and families", () => {
     const clocks = new RouteClocks({ sends: [engine("messaging.groups", 1_000)], state: state({ polls: entry({ holdUntil: at(9_000).toISOString() }) }) });
     const why = routeAdmissionView(clocks, null, specs, NOW);
-    expect(why.keyOpensAt("dm-conversations.find")).toEqual({ at: at(3_000), routes: ["group.detail", "messaging.groups"] });
+    expect(why.keyOpensAt("dm-conversations.find")).toEqual({ at: at(3_000), routes: ["group.detail", "messaging.groups"], held: [] });
+    // A route a 429 holds is named as held too.
+    const listHeld = new RouteClocks({ sends: [], state: state({ "messaging.groups": entry({ holdUntil: at(9_000).toISOString() }) }) });
+    expect(routeAdmissionView(listHeld, null, [...specs, { key: "dm-conversations.head", operations: ["messaging.groups"] }], NOW)
+      .keyOpensAt("dm-conversations.head")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
     expect(why.keyOpensAt("media-stats.walk")).toBeNull();
     expect(why.keyOpensAt("probe.manual")).toBeNull();
     expect(routeAdmissionView(null, "route_state_version:9", specs, NOW)).toMatchObject({ stateError: "route_state_version:9" });
@@ -354,9 +358,11 @@ describe("the admission at the pick", () => {
     expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings"]);
     expect(status.routes[0]).toEqual({
       name: "messaging.groups", family: "messaging", ceilingPerMin: 12, currentPerMin: 12, effectivePerMin: 12, intervalMs: 5_000,
-      lastSendAt: at(-1_000).toISOString(), holdUntil: null, opensAt: at(4_000).toISOString(),
+      lastSendAt: at(-1_000).toISOString(), holdUntil: null, ladderStep: null, last429At: null, revision: null, opensAt: at(4_000).toISOString(),
     });
-    expect(status.routes[1]).toMatchObject({ name: "polls", holdUntil: at(9_000).toISOString(), opensAt: at(9_000).toISOString() });
+    expect(status.routes[1]).toMatchObject({
+      name: "polls", holdUntil: at(9_000).toISOString(), ladderStep: 0, revision: 1, opensAt: at(9_000).toISOString(),
+    });
     expect(status.routes[2]).toMatchObject({ name: "family:messaging", opensAt: at(3_000).toISOString() });
     expect(status.routes[3]).toMatchObject({ name: "family:earnings", lastSendAt: null, opensAt: null });
     expect(routeStatusView(null, "route_state_routes", NOW)).toEqual({ policyHash: ROUTE_POLICY_HASH, stateError: "route_state_routes", routes: [] });

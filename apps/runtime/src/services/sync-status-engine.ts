@@ -9,8 +9,8 @@ import {
   type SyncWorkResourceCounts,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
-import { activePageHold } from "../sync/engine/errors.ts";
 import { estimateSlotOpensAt, explainWork, type StatusPage, type StatusWork } from "../sync/engine/status.ts";
 import { fanslyKeysForStreams, fanslyStreamPollSeconds } from "../sync/fansly/legacy-streams.ts";
 import { FANSLY_RESOURCE_SPECS } from "../sync/fansly/registry.ts";
@@ -114,8 +114,8 @@ function statusPageOf(page: SyncPageRow): StatusPage {
     pausedResources: page.pausedResources,
     holdKind: page.holdKind,
     holdUntil: page.holdUntil,
+    holdSince: page.holdSince,
     holdDetail: page.holdDetail,
-    credentialsGeneration: page.credentialsGeneration,
     resourceHolds: page.resourceHolds,
     owner: page.owner,
   };
@@ -221,8 +221,8 @@ export function buildEngineDomainBlock(
   const substreams = streams.map(({ stream, role }) => engineSubstream(stream, role, facts, now));
   const blockKeys = fanslyKeysForStreams(streams.map(({ stream }) => stream));
   const attention = substreams.find((substream) => substream.needsAttention) ?? null;
-  const hold = activePageHold(facts.page, now);
-  const credentialsRefused = hold !== null && (hold.kind === "auth" || hold.kind === "identity_mismatch");
+  const hold = activeFanslyPageHold(facts.page, now)?.credentials ?? null;
+  const credentialsRefused = hold !== null;
   const mode = facts.page.mode;
   const engineReason: SyncStatusReason = {
     code: "fansly_sync_engine",

@@ -6,7 +6,7 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 import { FANSLY_SEND_HOLDER_ROLES } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../apps/runtime/src/services/transactions-writer-gate.ts";
-import { credentialsVerifiedSince, pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
+import { pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
 import {
   ApplyDeferred,
   applyErrorScope,
@@ -14,18 +14,9 @@ import {
   deferredRetryInMs,
   errorName,
   FanslyContractViolationError,
-  RATE_LIMIT_LOOKBACK_MS,
   requestJsonOf,
 } from "../apps/runtime/src/sync/engine/commit.ts";
-import {
-  escalateResourceHold,
-  onOutcome,
-  RATE_LIMIT_LADDER_RESET_MS,
-  RESOURCE_HOLD_LADDER_MS,
-  type OutcomeClass,
-  type OutcomeInput,
-} from "../apps/runtime/src/sync/engine/errors.ts";
-import { REQUEST_TIMEOUT_MS, SEND_WINDOW_MS } from "../apps/runtime/src/sync/engine/pacer.ts";
+import { escalateResourceHold, RESOURCE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
@@ -172,35 +163,12 @@ describe("what a pick leaves out", () => {
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 
-  it("a media-stats 429 hold leaves out only the media-stats walk, never the file of anything else (owner decision №20)", () => {
-    const exclusions = pickExclusions(page({
-      resourceHolds: {
-        "media-stats": { until: later, step: 1, since: NOW.toISOString(), kind: "rate_limit_media_stats" },
-      },
-    }), registry, false, NOW);
-    expect(exclusions).toEqual({ excludeResources: ["media-stats.walk"], excludeFiles: [], excludeClasses: [] });
-    // Expired: nothing left out.
-    expect(pickExclusions(page({
-      resourceHolds: {
-        "media-stats": { until: new Date(NOW.getTime() - 1).toISOString(), step: 1, since: NOW.toISOString(), kind: "rate_limit_media_stats" },
-      },
-    }), registry, false, NOW)).toEqual({ excludeResources: [], excludeFiles: [], excludeClasses: [] });
-  });
-
-  it("unverified credentials: only the identity checks, until the verified digest moved (to the refused one or any other)", () => {
+  it("unverified credentials (checks-only, derived from the database by the actor): only the identity checks", () => {
     const exclusions = pickExclusions(page(), registry, false, NOW, { checksOnly: true });
     expect(exclusions.excludeClasses).toEqual(["requests"]);
     expect(exclusions.excludeResources).not.toContain("account.verify");
     expect(exclusions.excludeResources).not.toContain("account.identity");
     expect(exclusions.excludeResources).toContain("dm-messages.catchup");
-    const takeover = { stored: "a".repeat(64), verified: null };
-    expect(credentialsVerifiedSince(takeover, null)).toBe(false);
-    expect(credentialsVerifiedSince(takeover, "a".repeat(64))).toBe(true);
-    // The refused digest failed its verify; the owner's checked credentials were trusted.
-    expect(credentialsVerifiedSince(takeover, "c".repeat(64))).toBe(true);
-    const changed = { stored: "a".repeat(64), verified: "b".repeat(64) };
-    expect(credentialsVerifiedSince(changed, "b".repeat(64))).toBe(false);
-    expect(credentialsVerifiedSince(changed, "c".repeat(64))).toBe(true);
   });
 });
 
@@ -275,44 +243,6 @@ describe("the resource hold of a wrong transactions writer", () => {
     const active = { transactions: { until: iso(60_000), step: 1, since: iso(-60_000) } };
     expect(escalateResourceHold(active, "transactions.head", NOW)).toEqual({ action: "keep" });
     expect(escalateResourceHold({}, "dm-messages.head", NOW)).toEqual({ action: "keep" });
-  });
-});
-
-describe("the capture's newest-429 read", () => {
-  const NOW = new Date("2026-10-02T12:00:00.000Z");
-  const input = (errorClass: OutcomeClass, lastRateLimitAt: Date | null): OutcomeInput => ({
-    errorClass,
-    now: NOW,
-    resource: "posts.refresh",
-    subject: "",
-    httpStatus: errorClass === "rate_limit" ? 429 : 200,
-    retryAfterMs: null,
-    page: {
-      holdKind: null,
-      holdUntil: null,
-      holdSince: null,
-      holdStep: 0,
-      holdDetail: {},
-      networkFailureStreak: 0,
-      resourceHolds: {},
-      credentialsGeneration: "1",
-    },
-    lastRateLimitAt,
-    subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
-    subjectQueue: false,
-    recentFailedSubjects: 0,
-  });
-
-  it.each<OutcomeClass>([
-    "ok", "rate_limit", "auth", "identity_mismatch", "subject_failure", "subject_terminal",
-    "network", "contract", "cursor_stuck", "envelope_unsuccessful", "not_sent",
-  ])("is not needed at 429 step 0 (%s): the capture skips it", (errorClass) => {
-    const recent = new Date(NOW.getTime() - 60_000);
-    expect(onOutcome(input(errorClass, recent))).toEqual(onOutcome(input(errorClass, null)));
-  });
-
-  it("looks back past the decay hour by more than an admission → completion span", () => {
-    expect(RATE_LIMIT_LOOKBACK_MS - RATE_LIMIT_LADDER_RESET_MS).toBeGreaterThan(SEND_WINDOW_MS + REQUEST_TIMEOUT_MS);
   });
 });
 

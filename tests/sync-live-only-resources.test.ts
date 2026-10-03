@@ -16,6 +16,7 @@ import type { SyncWorkRow } from "@agency_hub_core/db";
 
 import type { PlanContext } from "../apps/runtime/src/sync/engine/resource.ts";
 import { parseRepairCursor } from "../apps/runtime/src/sync/fansly/resources/repair.ts";
+import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { wsConnectModule, wsConnectOutcome, wsConnectPlan } from "../apps/runtime/src/sync/fansly/resources/ws-connect.ts";
 
 // The live-only resources of step 3 (design S3-04), their pure halves: what
@@ -36,7 +37,12 @@ const page: PageErrorState = {
   credentialsGeneration: "a".repeat(64),
 };
 
-function decide(errorClass: Parameters<typeof onOutcome>[0]["errorClass"], resource: string, httpStatus: number | null = null): OutcomeDecision {
+function decide(
+  errorClass: Parameters<typeof onOutcome>[0]["errorClass"],
+  resource: string,
+  httpStatus: number | null = null,
+  route: FanslyRoute | null = null,
+): OutcomeDecision {
   return onOutcome({
     errorClass,
     now: NOW,
@@ -45,7 +51,7 @@ function decide(errorClass: Parameters<typeof onOutcome>[0]["errorClass"], resou
     httpStatus,
     retryAfterMs: null,
     page,
-    lastRateLimitAt: null,
+    ...(route === null ? {} : { route: { route, entry: null, attemptId: 1, jitter: () => 0 } }),
     subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
     subjectQueue: false,
     recentFailedSubjects: 5,
@@ -91,14 +97,16 @@ describe("ws.connect", () => {
     expect(decide("network", "ws.connect").pageHold).toMatchObject({ action: "set", kind: "network" });
   });
 
-  it("keeps the page's holds: 401/403 auth, 429 rate limit with alert 1, never the ladder", () => {
+  it("keeps the holds: 401/403 the page's auth, a 429 the Upgrade route's with its incident — never the ladder", () => {
     const auth = wsConnectOutcome(decide("auth", "ws.connect", 401));
     expect(auth.pageHold).toMatchObject({ action: "set", kind: "auth" });
     expect(auth.work).toMatchObject({ action: "reopen", waitingReason: "page_hold" });
-    const limited = wsConnectOutcome(decide("rate_limit", "ws.connect", 429));
-    expect(limited.pageHold).toMatchObject({ action: "set", kind: "rate_limit" });
-    expect(limited.alerts).toEqual([{ subKey: "page_stopped", detail: "rate_limit" }]);
-    expect(limited.work).toMatchObject({ action: "reopen", waitingReason: "page_hold" });
+    const limited = wsConnectOutcome(decide("rate_limit", "ws.connect", 429, "ws.upgrade"));
+    expect(limited.pageHold).toEqual({ action: "keep" });
+    expect(limited.routeHold).toMatchObject({ action: "set", route: "ws.upgrade" });
+    expect(limited.alerts).toEqual([{ subKey: "route_limited", detail: "rate_limit", route: "ws.upgrade" }]);
+    // Open, not closed `failed_handshake`: the route admission keeps it out until the route opens.
+    expect(limited.work).toEqual({ action: "reopen", dueAt: null, waitingReason: null, waitingUntil: null });
     expect(wsConnectOutcome(decide("ok", "ws.connect", 101)).work).toEqual({ action: "apply" });
   });
 });
@@ -131,9 +139,10 @@ describe("media-download.fetch", () => {
     expect(timedOut.pageHold).toEqual({ action: "keep" });
     expect(mediaDownloadOutcome(decide("network", "media-download.fetch"), { ...step, outcome: "transport_error" }).work)
       .toMatchObject({ result: { failure: "transport" } });
-    // A 429 stays the page's (plan §9).
-    expect(mediaDownloadOutcome(decide("rate_limit", "media-download.fetch", 429), { ...step, httpStatus: 429, outcome: "response" }).pageHold)
-      .toMatchObject({ action: "set", kind: "rate_limit" });
+    // A 429 holds the CDN route (owner decision №22), never the page.
+    const limited = mediaDownloadOutcome(decide("rate_limit", "media-download.fetch", 429, "cdn.media"), { ...step, httpStatus: 429, outcome: "response" });
+    expect(limited.pageHold).toEqual({ action: "keep" });
+    expect(limited.routeHold).toMatchObject({ action: "set", route: "cdn.media" });
   });
 });
 
