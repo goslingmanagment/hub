@@ -28,6 +28,9 @@ export interface ClientSdkRegistryRow {
   /** sha256 over the client's vendored dist/ (sorted `path\0sha256(file)\n`
    *  lines): lets a client's release gate find its exact row. */
   vendorDistSha256: string;
+  /** zod bundled into sdk.mjs: read from the build metafile and checked
+   *  against the client's lockfile, since vendorDistSha256 covers dist/ only. */
+  zodVersion: string;
   status: "released" | "candidate";
   clients: ReadonlyArray<{ name: ClientSdkName; versions: readonly string[] }>;
   /** Operation keys the compat suite exercises beyond its shared core. */
@@ -43,6 +46,7 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     "contractHash": "b95b765c12f50905cb8f98c2d9644cf5adc4234299cd6516f0cd649b39235aab",
     "sourceCommit": "e033e3ec097f913a32433febcf60c6f3615ba071",
     "vendorDistSha256": "15a0f5f4a2f466abc7ed0fe247ae3f708ee572937f87cf8f2f72e0110e83e1f6",
+    "zodVersion": "4.4.3",
     "status": "released",
     "clients": [
       {
@@ -65,12 +69,18 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
       "authActivateDeviceToken",
       "authIssueDeviceTokenWithPassword",
       "authRevokeCurrentDeviceToken",
+      "cancelOfapiCommand",
+      "createOfapiCommand",
+      "eventsV2Facts",
       "followerOutreachAttempt",
+      "getOfapiCommand",
       "ofapiCreditsChatterSummary",
       "pageConversationProfile",
       "pageFanProfile",
       "pageTopSpenders",
-      "upsertFanProfile"
+      "upsertFanProfile",
+      "voiceNoteCreate",
+      "voiceNoteStatus"
     ],
     "fixture": "tests/fixtures/client-sdks/6d2ce2a90751"
   },

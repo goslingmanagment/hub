@@ -38,7 +38,12 @@ describe("client SDK registry", () => {
       expect(row.vendorDistSha256).toMatch(HEX64);
       expect(row.sourceCommit, "40 hex, never -dirty").toMatch(/^[a-f0-9]{40}$/);
       expect(["released", "candidate"]).toContain(row.status);
-      expect(sha256(readFileSync(join(repoRoot, row.fixture, "sdk.mjs")))).toBe(row.bundleSha256);
+      const bundle = readFileSync(join(repoRoot, row.fixture, "sdk.mjs"));
+      expect(sha256(bundle)).toBe(row.bundleSha256);
+      // The zod the bundle holds: a pnpm client's module paths name it.
+      expect(row.zodVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      const pathVersions = new Set([...bundle.toString("utf8").matchAll(/node_modules\/\.pnpm\/zod@(\d+\.\d+\.\d+)\//g)].map((match) => match[1]));
+      for (const version of pathVersions) expect(version).toBe(row.zodVersion);
       const manifest = JSON.parse(readFileSync(join(repoRoot, row.fixture, "kernel-sdk.vendor.json"), "utf8")) as Record<string, unknown>;
       expect(manifest).toMatchObject({ contractHash: row.contractHash, sourceCommit: row.sourceCommit });
       const sdk = await loadFrozenSdk(row);
