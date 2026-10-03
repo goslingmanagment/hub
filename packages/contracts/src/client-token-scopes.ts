@@ -1,3 +1,4 @@
+import { routeSchemas, type RouteAuthPolicy } from "./routes.ts";
 import type { KernelOperationKey } from "./sdk-runtime.ts";
 
 /**
@@ -57,6 +58,15 @@ export function isClientTokenProfile(value: unknown): value is ClientTokenProfil
   return typeof value === "string" && Object.hasOwn(CLIENT_TOKEN_PROFILES, value);
 }
 
+/** Route kinds that take no principal (sign-in, webhooks, a reservation's
+ *  activation): a narrow token's list does not apply to them. */
+const UNGUARDED_ROUTE_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac", "pending-device-token"]);
+
+/** Whether a narrow token's list is checked on a route of this kind. */
+export function clientTokenAllowlistApplies(auth: Pick<RouteAuthPolicy, "kind">): boolean {
+  return !UNGUARDED_ROUTE_KINDS.has(auth.kind);
+}
+
 /** Whether a token of this profile may call the route with this key. */
 export function clientTokenProfileAllows(profile: ClientTokenProfile, operationKey: string): boolean {
   return (CLIENT_TOKEN_PROFILES[profile].operations as readonly string[]).includes(operationKey);
@@ -64,13 +74,19 @@ export function clientTokenProfileAllows(profile: ClientTokenProfile, operationK
 
 /**
  * The operations a client SDK calls that a token of this profile is refused:
- * empty when every one of them is on the profile's list. For the frozen-SDK
- * registry (hub-pr-plan H-1a, critic 2): a chat-extension SDK row must call
- * nothing its narrow token cannot reach, or the gap shows up only in prod.
+ * empty when each is on the profile's list or takes no principal (the
+ * password sign-in, health). A key no route has counts as refused. For the
+ * frozen-SDK registry (hub-pr-plan H-1a, critic 2): a chat-extension SDK row
+ * must call nothing its narrow token cannot reach, or the gap shows up only in
+ * prod.
  */
 export function operationsOutsideClientTokenProfile(
   profile: ClientTokenProfile,
   operations: readonly string[],
 ): string[] {
-  return operations.filter((key) => !clientTokenProfileAllows(profile, key));
+  const schemas = routeSchemas as unknown as Record<string, { auth?: RouteAuthPolicy } | undefined>;
+  return operations.filter((key) => {
+    const auth = schemas[key]?.auth;
+    return (auth === undefined || clientTokenAllowlistApplies(auth)) && !clientTokenProfileAllows(profile, key);
+  });
 }

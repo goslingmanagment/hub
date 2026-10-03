@@ -2,7 +2,6 @@ import {
   CLIENT_TOKEN_PROFILES,
   clientTokenProfileAllows,
   type ClientTokenProfile,
-  type RouteAuthPolicy,
 } from "@agency_hub_core/contracts";
 
 import { isAgentPrincipal, type AuthPrincipal } from "./auth.ts";
@@ -14,14 +13,6 @@ import { ForbiddenError } from "./errors.ts";
  * read off the token row into `HumanAuthPrincipal.clientProfile`; the request
  * never names it.
  */
-
-/** Route kinds that take no principal: a narrow token's allowlist does not apply. */
-const NO_PRINCIPAL_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac", "pending-device-token"]);
-
-/** Whether the allowlist is checked on a route of this kind. */
-export function clientTokenAllowlistApplies(auth: RouteAuthPolicy): boolean {
-  return !NO_PRINCIPAL_KINDS.has(auth.kind);
-}
 
 /** The narrow token's refusal: a plain 403 with no `reason`, the same in both
  *  enforcement modes. A 403 never wipes a client's sign-in. */
@@ -52,19 +43,24 @@ export function clientTokenIngestKinds(profile: ClientTokenProfile): readonly st
   return CLIENT_TOKEN_PROFILES[profile].ingestKinds;
 }
 
-const MAX_PRODUCER_VERSION_LENGTH = 64;
+// The header a profile's client names its version with, as the capture lane's
+// producer rule spells it: H-12a's `ingestProducerForClientVersion` maps the
+// same /^chat-extension\/(.+)$/ to `chat-extension@$1` for a full token.
+const PROFILE_CLIENT_VERSION: Record<ClientTokenProfile, RegExp> = {
+  "chat-extension": /^chat-extension\/(.+)$/,
+};
 
 /**
  * The producer a narrow token's captures journal under: decided by the
- * profile, not by the header. `<profile>@<version>`, the version taken from an
- * `x-client-version` of `<profile>/<version>`, otherwise `unknown`. (The same
- * stamp the header lane gives `chat-extension/<v>`, so one client's facts never
- * split across two producers.)
+ * profile, not by the header. `<profile>@<v>` for an `x-client-version` of
+ * `<profile>/<v>` (v as sent, any length), otherwise `<profile>@unknown`.
+ * On a `chat-extension/<v>` header this is exactly the stamp H-12a gives a full
+ * token (branch client/ingest-producer-chat-extension), so one client's facts
+ * never split across two producers. tests/client-token-scopes.test.ts holds the
+ * two equal as soon as both are on main, in either merge order; the second to
+ * land then makes this delegate to that rule, leaving one implementation.
  */
 export function clientTokenIngestProducer(profile: ClientTokenProfile, clientVersion: string | null): string {
-  const prefix = `${profile}/`;
-  const version = clientVersion?.startsWith(prefix) ? clientVersion.slice(prefix.length).trim() : "";
-  return version.length > 0 && version.length <= MAX_PRODUCER_VERSION_LENGTH
-    ? `${profile}@${version}`
-    : `${profile}@unknown`;
+  const version = clientVersion === null ? undefined : PROFILE_CLIENT_VERSION[profile].exec(clientVersion)?.[1];
+  return version === undefined ? `${profile}@unknown` : `${profile}@${version}`;
 }

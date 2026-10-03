@@ -79,7 +79,8 @@ import {
   ensureSyncQueues,
   reconcileQueueRetention,
 } from "../services/sync-queue.ts";
-import { clientTokenAllowlistApplies, clientTokenRouteRefusal } from "../services/client-token-profile.ts";
+import { clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
+import { clientTokenRouteRefusal } from "../services/client-token-profile.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { ensureOfapiCommandQueues } from "../services/ofapi-command-executor.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";

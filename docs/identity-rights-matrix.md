@@ -140,7 +140,12 @@ control.
   leaked or misbehaving extension inside the extension's routes; the person
   who signed it in can still sign in again with the same password and take a
   full device token. An application rollback to a hub older than H-3 also
-  reads a narrow token as a full one until the next forward deploy.
+  reads a narrow token as a full one until the next forward deploy. Before
+  rolling back past H-3, list the live narrow tokens read-only
+  (`select id, user_id, label from device_tokens where client_profile is not
+  null and revoked_at is null and expires_at > now()`) and revoke each one in
+  the cabinet (the person's card, «Завершить вход на устройстве»); the
+  extension signs in again after the forward deploy.
 - **Streams lag by up to 60 seconds.** A revoked assignment closes an already
   open SSE stream at the next revalidation tick, not instantly.
 - **The desktop's local cache outlives the account.** Removing an assignment or
