@@ -23,8 +23,9 @@ import { makeTestActor, okResponse, pollsRequest, ScriptedLiveTransport, testSpe
 //   second request.
 // - A fan erased before the read: when the chat comes back (the fan writes
 //   again), the vendor still serves the old messages; none of them reaches
-//   the hot tables, the ledger's events or the archive — only what the fan
-//   wrote after the erasure (the fence is material-time-bounded).
+//   the ledger's events or the archive (nor `page_dm_messages`, which the
+//   engine never writes, step 4 S4-13) — only what the fan wrote after the
+//   erasure (the fence is material-time-bounded).
 // - A read captured before the erasure and applied after it (the process
 //   died in between): the restarted actor finds nothing to bring back.
 //
@@ -129,7 +130,19 @@ function eraseFan(fanRef: string) {
     executeErasure(app, { scopeType: "fan", platform: "fansly", fanRef }, { initiatedBy: operatorId }));
 }
 
+/** The chat's messages in `message_archive`, a live page's store (step 4 S4-08). */
 async function storedIds(pageId: number, groupId: string): Promise<string[]> {
+  const result = await rows<{ id: string }>(
+    `select message_ref as id from message_archive
+      where account_id = $1 and platform = 'fansly' and conversation_ref = $2 order by message_ref::numeric`,
+    [pageId, groupId],
+  );
+  return result.map((row) => row.id);
+}
+
+/** The chat's `page_dm_messages` rows: what legacy stored (the fixture's
+ *  `stored`); the engine writes none (step 4 S4-13). */
+async function hotIds(pageId: number, groupId: string): Promise<string[]> {
   const result = await rows<{ id: string }>(
     `select m.platform_message_id as id from page_dm_messages m join page_dm_threads t on t.id = m.conversation_id
       where t.platform_account_id = $1 and t.platform_conversation_id = $2 order by m.platform_message_id::numeric`,
@@ -175,7 +188,7 @@ describe("the erasure fence of the applies (I15)", () => {
         { resource: "transactions.head", apply_error: expect.stringContaining("erasure_busy"), work_state: "running" },
       ]);
       // Nothing of either answer was written under the erasure.
-      expect(await storedIds(pageId, chat.groupId)).toEqual(chat.messages.slice(0, 5).map((message) => message.id));
+      expect(await storedIds(pageId, chat.groupId)).toEqual([]);
       expect(await count("select count(*)::int as n from transactions where platform_account_id = $1", [pageId])).toBe(0);
       expect(scripted.hits.map((hit) => hit.spec).sort()).toEqual(["messages.page", "polls", "transactions.page"]);
     } finally {
@@ -191,6 +204,7 @@ describe("the erasure fence of the applies (I15)", () => {
     expect(scripted.hits).toHaveLength(3);
     expect(await count("select count(*)::int as n from sync_attempts where page_id = $1", [pageId])).toBe(3);
     expect(await storedIds(pageId, chat.groupId)).toEqual(chat.messages.map((message) => message.id));
+    expect(await hotIds(pageId, chat.groupId)).toEqual(chat.messages.slice(0, 5).map((message) => message.id));
     expect(await rows("select transaction_id from transactions where platform_account_id = $1", [pageId])).toEqual([{ transaction_id: "tx-1" }]);
     expect(await count(
       "select count(*)::int as n from sync_work where page_id = $1 and resource in ('dm-messages.head', 'transactions.head') and state = 'running'",
@@ -238,6 +252,9 @@ describe("the erasure fence of the applies (I15)", () => {
     )).toBe(0);
     // The bystander's chat is untouched by the fence.
     expect(await storedIds(pageId, bystander.groupId)).toEqual(bystander.messages.map((message) => message.id));
+    const bystanderNewIds = new Set(bystanderNew.map((message) => message.id));
+    expect(await hotIds(pageId, bystander.groupId))
+      .toEqual(bystander.messages.filter((message) => !bystanderNewIds.has(message.id)).map((message) => message.id));
   }, 90_000);
 
   it("a read captured before the erasure and applied after it: the restarted actor brings nothing back and reads nothing again", async (context) => {
