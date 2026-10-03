@@ -54,7 +54,7 @@ do not maintain client-side copies.
 | Desktop AI generation | No automatic generation retry. EOF without `done` fails closed. | Manual action after the mapped card; a provider-rate deadline is display only. |
 | chat-extension AI generation | No SSE error code is auto-retried. A structured HTTP 503 `service_unavailable` on the AI stream before the first output frame gets exactly one transparent retry after 5 seconds ("Сервис недоступен, повтор через 5 с…"); never after an output frame and never for a send. EOF without `done` fails closed as `CG-STREAM-TRUNCATED`. | Manual retry after the mapped card; a provider-rate `retryAfterMs` is kept as an absolute display deadline only. |
 | chat-extension hub calls (non-AI) | No transport failure (network, timeout, contract, truncation) is repeated automatically. A rejected cursor (`cursor_invalid`, `cursor_window_mismatch`) is read again once from the first page, without a toast. H-5 `generation_not_ready` repeats only the idempotent link write, never the generation: 5 s, 15 s, 60 s, then every 3 min up to 30 min while the tab is open, then `CG-RECAP-SAVE`. A claim `dispatch` that fails in transport ends its attempt held: no ticket, so no command was enqueued. | The chatter's next click; only a new click makes a new send attempt. |
-| Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; neither client owns them. |
+| Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; no client owns them. |
 | OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
 | Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
 | OFAPI state-changing commands | One execution attempt per command row; an indeterminate mutation is never automatically sent again. Typing, unsend, and mark-read reject retry lineage. | Only an explicitly requested, policy-permitted same-kind retry creates a new command row and lineage; it is never a second attempt on the old row. |
@@ -196,17 +196,18 @@ frozen ahead of them.
 | 44 | `not_found` | any | page, fan lookup | — | Empty: the lookup answers null, nothing is shown. |
 | 45 | `not_found` | any | any | `CG-HUB-REQUEST` | Show. |
 | 46 | `bad_request` | any | any | `CG-HUB-REQUEST` | Show. |
-| 47 | unknown (status 400) | any | any | `CG-HUB-REQUEST` | Show. |
-| 48 | unknown (status 401) | any | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
-| 49 | unknown (status 401) | any | any | `CG-AUTH-REJECTED` | Show; never wipes the sign-in. |
-| 50 | unknown (status 403) | any | any | `CG-HUB-FORBIDDEN` | Show. |
-| 51 | unknown (status 429) | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
-| 52 | unknown (status 429) | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
-| 53 | unknown (status 5xx) | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 47 | not matched above (status 400) | any | any | `CG-HUB-REQUEST` | Show. |
+| 48 | not matched above (status 401) | any | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
+| 49 | not matched above (status 401) | any | any | `CG-AUTH-REJECTED` | Show; never wipes the sign-in. |
+| 50 | not matched above (status 403) | any | any | `CG-HUB-FORBIDDEN` | Show. |
+| 51 | not matched above (status 429) | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 52 | not matched above (status 429) | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 53 | not matched above (status 5xx) | any | any | `CG-HUB-UNAVAILABLE` | Show. |
 | 54 | anything else | any | any | `CG-HUB-UNKNOWN` | Show; kept apart in diagnostics. |
 
 Rows 47–53 read a code no earlier row matched by its status alone: 400, 401,
-403, 429 and 5xx. Any other status falls to row 54, so a §3 code without a row
+403, 429 and 5xx. That includes a known code outside its route-restricted row
+(`preview_send_rate_limited` off a claim route, 429 → row 52). Any other status falls to row 54, so a §3 code without a row
 here reads by its status (`voice_script_invalid`, 400 → `CG-HUB-REQUEST`) or
 as `CG-HUB-UNKNOWN` (`proxy_missing`, 409). A known code that comes with an
 unexpected status is still read by its code. Every deadline is fixed once as an
