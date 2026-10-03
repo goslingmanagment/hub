@@ -36,7 +36,7 @@
 // gets the deletions whose engine work it cancelled before the engine applied
 // them. They never write a thread's stored window there:
 // on those pages the window is the engine's
-// (`syncLegacyThreadSummaryAfterDeletion`, I9).
+// (`writeThreadSummaryAfterDeletion`, I9).
 //
 // Neither shape inserts a row or calls Fansly: they read Hub's own receipts.
 // A mark is sticky. A later REST read of the message cannot clear it
