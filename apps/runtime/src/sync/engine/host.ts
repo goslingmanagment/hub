@@ -24,6 +24,7 @@ import {
   judgeFanslySendHolderTermination,
   type FanslySendOsProbe,
 } from "../../services/fansly-send-guard/os-probe.ts";
+import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
 import { createPageTransport } from "../fansly/transport.ts";
 import { FanslyWsSource, type FanslyWsSourceDeps } from "../fansly/ws/source.ts";
 import { createSyncWorkSecretBox } from "../requests/secret-params.ts";
@@ -590,6 +591,23 @@ export class SyncEngineHost {
       .catch((error: unknown): ActorExit => ({ kind: "failed", error: errorName(error) }))
       .then((exit) => this.#onActorExit(slot, exit, session));
     ws?.start();
+    if (mode === "live") await this.#closeLegacyStreamIncidents(page);
+  }
+
+  /**
+   * Every live takeover closes the page's legacy stream latches, which only
+   * the legacy executor's chunk recovery resolved and which nothing resolves
+   * once the engine runs the page (`resolveLegacyStreamIncidentsOfEnginePage`,
+   * reason `engine_owned`): the switch's phase C does it too, and a page
+   * switched before this build has its own closed on its first takeover after
+   * it. Idempotent (nothing open, nothing written); never throws.
+   */
+  async #closeLegacyStreamIncidents(page: SyncPageRow): Promise<void> {
+    const closed = await resolveLegacyStreamIncidentsOfEnginePage(this.#o, { pageId: page.pageId, pageLabel: page.pageLabel });
+    if (closed.length > 0) {
+      this.#o.logger.info({ pageId: page.pageId, pageLabel: page.pageLabel, streams: closed },
+        "Fansly sync host: the legacy stream incidents of a live page closed (engine_owned)");
+    }
   }
 
   async #liveTransport(page: SyncPageRow, links: LivePageLinks): Promise<PageTransport> {

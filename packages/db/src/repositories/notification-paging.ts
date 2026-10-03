@@ -31,6 +31,9 @@ export interface NotificationPagingCandidate {
   lastSeenAt: Date;
   resolvedAt: Date | null;
   errorSummary: string | null;
+  /** `metadata.resolution` of the row: why a resolve that is not the
+   *  condition's own recovery happened (the resolve message names it). */
+  resolution: string | null;
   paging: NotificationIncidentPagingRow | null;
 }
 
@@ -66,6 +69,7 @@ export async function listNotificationPagingCandidates(
       lastSeenAt: notificationIncidents.lastSeenAt,
       resolvedAt: notificationIncidents.resolvedAt,
       errorSummary: notificationIncidents.errorSummary,
+      resolution: sql<string | null>`${notificationIncidents.metadata} ->> 'resolution'`,
       paging: notificationIncidentPaging,
     })
     .from(notificationIncidents)
@@ -105,6 +109,7 @@ export async function listNotificationPagingCandidates(
     lastSeenAt: toDate(row.lastSeenAt),
     resolvedAt: row.resolvedAt ? toDate(row.resolvedAt) : null,
     errorSummary: row.errorSummary ?? null,
+    resolution: row.resolution ?? null,
     paging: row.paging ?? null,
   }));
 }
