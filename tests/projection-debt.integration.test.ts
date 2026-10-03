@@ -1,31 +1,27 @@
 // #135 A2b: projection debt machinery. The 05..11.07 incident: the
 // page_dm_threads summary recompute (finalize) violated the 0026 CHECK
 // constraint inside the same transaction as the message upsert + checkpoint
-// advance, wedging the page's whole dm_messages stream. This suite recreates
-// that failure shape with a test-only CHECK constraint and proves:
-//   1. the chunk records projection debt, clears the cursor pin, keeps the
-//      already-journaled message facts, and does NOT throw;
-//   2. the repair sweep re-runs the recompute and resolves the debt.
+// advance, wedging the page's whole dm_messages stream. A writer that meets
+// that failure keeps the committed message facts and records projection debt
+// instead (the legacy dm_messages chunk did until step 4 S4-14; the targeted
+// thread backfill still does). This suite recreates the failure shape with a
+// test-only CHECK constraint and proves the repair sweep re-runs the recompute
+// and resolves the debt.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createFanslyPage,
   createModel,
-  getCheckpoint,
   listUnresolvedProjectionDebt,
   PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
   recordProjectionDebt,
   resolveProjectionDebt,
-  startSyncRun,
-  findPageById,
   upsertFans,
+  upsertPageDmMessages,
 } from "@agency_hub_core/db";
-import type { HttpRequestEvent } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { fanslyDmMessagesChunk } from "../apps/runtime/src/services/sync/executor-handlers.ts";
 import { runProjectionDebtSweep } from "../apps/runtime/src/services/projection-debt-sweep.ts";
 import {
   resetIntegrationDatabase,
@@ -37,7 +33,6 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 
-const PAGE_SELF_ACCOUNT_ID = "model-self-1";
 const FAN_PLATFORM_USER_ID = "fan-77";
 const CONVERSATION_GROUP_ID = "conv-group-77";
 
@@ -55,57 +50,8 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { syncSharedRateLimitEnabled: true });
+  appContext = createTestAppContext(testDb);
 });
-
-function fakeTelemetry() {
-  return {
-    recordPhaseStarted: vi.fn(async () => {}),
-    recordCheckpointLoaded: vi.fn(async () => {}),
-    recordCheckpointAdvanced: vi.fn(async () => {}),
-    recordDmMessagesChunkSummary: vi.fn(async () => {}),
-    addAnomaly: vi.fn(async () => {}),
-    addNote: vi.fn(async () => {}),
-    getRequestObserver: () => null,
-  };
-}
-
-function fanslyMessagesAdapter(messages: Array<{ id: string; createdAt: number }>) {
-  return {
-    async getMessagesPage(
-      requestContext: {
-        requestObserver?: {
-          onRequestEvent(event: HttpRequestEvent): Promise<void>;
-        } | null;
-      },
-      params: { groupId: string; before?: string | null },
-    ) {
-      // Report the request the way the real transport does so the chunk
-      // budget counts it (the loop-termination contract under test).
-      await requestContext.requestObserver?.onRequestEvent({
-        state: "started",
-        requestId: `req-${Date.now()}-${Math.random()}`,
-        operation: "messages",
-        endpointTemplate: "/message",
-        method: "GET",
-        attemptNumber: 1,
-        timestamp: new Date(),
-      });
-      return {
-        items: messages.map((message) => ({
-          id: message.id,
-          senderId: FAN_PLATFORM_USER_ID,
-          createdAt: message.createdAt,
-          content: `message ${message.id}`,
-        })),
-        groupId: params.groupId,
-        before: params.before ?? null,
-        done: true,
-        raw: { response: { messages: messages.map((message) => message.id) } },
-      };
-    },
-  };
-}
 
 async function seedConversation() {
   if (!testDb) {
@@ -119,12 +65,6 @@ async function seedConversation() {
   if (!page) {
     throw new Error("page seed failed");
   }
-  // fanslyDmMessagesChunk resolves the page's own platform account id from
-  // external_page_id to classify sender roles.
-  await testDb.pool.query(
-    "update pages set external_page_id = $1 where id = $2",
-    [PAGE_SELF_ACCOUNT_ID, page.id],
-  );
   const [fan] = await upsertFans(appContext.db, [{
     platform: "fansly",
     platformUserId: FAN_PLATFORM_USER_ID,
@@ -174,110 +114,7 @@ async function seedConversation() {
   return { page, fan: fan!, conversationId: Number(conversation.rows[0]!.id) };
 }
 
-async function buildChunkInput(
-  page: { id: number },
-  telemetry: ReturnType<typeof fakeTelemetry>,
-  budget: SyncChunkBudget,
-) {
-  const run = await startSyncRun(appContext.db, {
-    platformAccountId: page.id,
-    stream: "dm_messages",
-    trigger: "manual",
-  });
-  if (!run) {
-    throw new Error("sync run seed failed");
-  }
-  const stored = await findPageById(appContext.db, page.id);
-  if (!stored) {
-    throw new Error(`page ${page.id} missing`);
-  }
-  return {
-    pageContext: {
-      page: stored.page,
-      platform: "fansly" as const,
-      session: null,
-      proxy: null,
-      egressKey: "direct",
-    } as never,
-    streamState: { stream: "dm_messages" } as never,
-    syncRunId: run.id,
-    telemetry: telemetry as never,
-    budget,
-  };
-}
-
 describe("projection debt (#135 A2b)", () => {
-  it("records debt, clears the cursor pin, and keeps the chunk alive when only the finalize step fails", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const { page, conversationId } = await seedConversation();
-    // Recreate the incident shape: a CHECK constraint the summary recount
-    // violates while the message rows themselves commit fine.
-    await testDb.pool.query(
-      "alter table page_dm_threads drop constraint if exists test_summary_wedge",
-    );
-    await testDb.pool.query(`
-      alter table page_dm_threads
-        add constraint test_summary_wedge check (stored_message_count <= 2)
-    `);
-
-    appContext = {
-      ...appContext,
-      adapter: fanslyMessagesAdapter([
-        { id: "m3", createdAt: Date.UTC(2026, 6, 10, 12, 0, 0) },
-        { id: "m2", createdAt: Date.UTC(2026, 6, 10, 11, 0, 0) },
-        { id: "m1", createdAt: Date.UTC(2026, 6, 10, 10, 0, 0) },
-      ]) as never,
-    };
-
-    const telemetry = fakeTelemetry();
-    // Two requests: first records the debt, second proves the loop moves on
-    // (re-selects, hits the wedge again, bumps attempts) and then yields on
-    // budget instead of spinning or throwing.
-    const result = await fanslyDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, telemetry, new SyncChunkBudget(2, 60_000)),
-    );
-
-    expect(result.satisfied).toBe(false);
-    expect(result.stats).toMatchObject({
-      projectionDebtRecorded: 2,
-      completedConversations: 0,
-    });
-
-    // One open debt row for the conversation, attempts bumped by the retry.
-    const debts = await listUnresolvedProjectionDebt(appContext.db, 10);
-    expect(debts).toHaveLength(1);
-    expect(debts[0]).toMatchObject({
-      kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
-      platformAccountId: page.id,
-      conversationId,
-      attempts: 2,
-    });
-    expect(debts[0]!.errorSummary).toContain("test_summary_wedge");
-
-    // The cursor pin was cleared — the stream is NOT parked on the wedged
-    // conversation.
-    const checkpoint = await getCheckpoint(appContext.db, page.id, "dm_messages");
-    expect(checkpoint?.state).toMatchObject({ currentConversationId: null });
-
-    // Message facts survived the finalize failure (tx1 committed)...
-    const messages = await testDb.pool.query<{ n: string }>(
-      "select count(*)::text as n from page_dm_messages where conversation_id = $1",
-      [conversationId],
-    );
-    expect(messages.rows).toEqual([{ n: "3" }]);
-
-    // ...while the thread summary is honestly stale (the debt is the signal).
-    const thread = await testDb.pool.query<{ storedMessageCount: number }>(
-      'select stored_message_count as "storedMessageCount" from page_dm_threads where id = $1',
-      [conversationId],
-    );
-    expect(thread.rows[0]).toEqual({ storedMessageCount: 0 });
-  }, 60_000);
-
   it("repair sweep re-runs the summary recompute and resolves the debt", async (context) => {
     if (!testDb) {
       context.skip();
@@ -291,19 +128,30 @@ describe("projection debt (#135 A2b)", () => {
       alter table page_dm_threads
         add constraint test_summary_wedge check (stored_message_count <= 2)
     `);
-    appContext = {
-      ...appContext,
-      adapter: fanslyMessagesAdapter([
-        { id: "m3", createdAt: Date.UTC(2026, 6, 10, 12, 0, 0) },
-        { id: "m2", createdAt: Date.UTC(2026, 6, 10, 11, 0, 0) },
-        { id: "m1", createdAt: Date.UTC(2026, 6, 10, 10, 0, 0) },
-      ]) as never,
-    };
-    const telemetry = fakeTelemetry();
-    await fanslyDmMessagesChunk(
-      appContext,
-      await buildChunkInput(page, telemetry, new SyncChunkBudget(1, 60_000)),
-    );
+    // The message facts are committed; the summary recount failed, so the
+    // writer recorded the debt.
+    await upsertPageDmMessages(appContext.db, [
+      { id: "m3", createdAt: Date.UTC(2026, 6, 10, 12, 0, 0) },
+      { id: "m2", createdAt: Date.UTC(2026, 6, 10, 11, 0, 0) },
+      { id: "m1", createdAt: Date.UTC(2026, 6, 10, 10, 0, 0) },
+    ].map((message) => ({
+      conversationId,
+      platformAccountId: page.id,
+      platformMessageId: message.id,
+      senderPlatformUserId: FAN_PLATFORM_USER_ID,
+      senderRole: "fan" as const,
+      createdAt: new Date(message.createdAt),
+      content: `message ${message.id}`,
+      totalTipAmountCents: 0,
+      inReplyToMessageId: null,
+      inReplyToRootMessageId: null,
+    })));
+    await recordProjectionDebt(appContext.db, {
+      kind: PROJECTION_DEBT_KIND_PAGE_DM_THREAD_SUMMARY,
+      platformAccountId: page.id,
+      conversationId,
+      errorSummary: "summary recompute violated test_summary_wedge",
+    });
     expect(await listUnresolvedProjectionDebt(appContext.db, 10)).toHaveLength(1);
 
     // While the wedge persists, the sweep fails honestly and bumps attempts.

@@ -17,10 +17,6 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
-  reconcileRecentFanslyWsDeletions,
-  type FanslyWsDeletionApplyCounts,
-} from "../fansly-ws-deletions.ts";
-import {
   reconcileRecentPpvPurchases,
   type PpvPurchaseApplyCounts,
 } from "../ppv-purchase-backfill.ts";
@@ -81,13 +77,6 @@ export interface MessageArchiveProjectionResult {
    * stores) is applied once the row exists. Zeros when nothing was late.
    */
   purchases: PpvPurchaseApplyCounts;
-  /**
-   * D-6: the going-forward Fansly WS deletion reconcile that also closes
-   * every sweep. Exact deletion receipts filed in the last hour mark hot and
-   * archive rows deleted (content kept), including an archive row that
-   * appeared after its deletion. Zeros when nothing was new.
-   */
-  wsDeletions: FanslyWsDeletionApplyCounts;
 }
 
 export async function runMessageArchiveProjection(
@@ -101,7 +90,6 @@ export async function runMessageArchiveProjection(
     tombstoned: 0,
     opened: 0,
     purchases: { hotPurchasedMarked: 0, messageArchiveOpened: 0, dmArchiveOpened: 0 },
-    wsDeletions: { hotMarked: 0, archiveMarked: 0, windowsRepaired: 0 },
   };
   const platformCache = new Map<number, string | null>();
   const accounts = input?.accountId != null
@@ -158,9 +146,6 @@ export async function runMessageArchiveProjection(
   // After this tick's events: a message row inserted above may be the late
   // twin of an unlock applied (to nothing) in an earlier tick.
   totals.purchases = await reconcileRecentPpvPurchases(app, { accountId: input?.accountId ?? null });
-  // Same reason: a Fansly message captured just before its deletion can
-  // reach the archive after the deletion receipt.
-  totals.wsDeletions = await reconcileRecentFanslyWsDeletions(app, { accountId: input?.accountId ?? null });
   return totals;
 }
 

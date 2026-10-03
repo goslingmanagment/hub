@@ -1,12 +1,9 @@
-// The Fansly DM message-page unit, extracted from the sync executor's
-// dm_messages chunk so the targeted thread backfill (slice C′) runs the SAME
-// code: same adapter call through the page's egress context, same raw capture
-// + observation journal, same normalization and overlap accounting.
-//
-// Nothing here decides WHICH conversation to walk or WHEN to stop — those are
-// the callers' policies (the executor's candidate loop, the targeted run's
-// bounded walk). This module is the shared inner step plus the DM helpers both
-// callers need.
+// The Fansly DM message-page unit of the legacy targeted thread backfill
+// (targeted-thread-backfill.ts): the adapter call through the page's egress
+// context, the raw capture + observation journal, normalization and overlap
+// accounting. Its other caller, the legacy executor's dm_messages chunk, is
+// gone since step 4 (S4-14); this module goes with the targeted backfill in
+// S4-15. The Fansly Sync Engine reads DM pages through its own resources.
 
 import {
   getExistingPageDmMessageIds,
@@ -20,25 +17,23 @@ import type { HttpRequestEvent, HttpRequestObserver } from "@agency_hub_core/sha
 import type { AppContext } from "../../bootstrap.ts";
 import {
   type FanslyDmMessageUpsertInput,
-  isClearlyImplausibleDmTimestamp,
   normalizeFanslyDmMessages,
 } from "../../sync/fansly/lib/dm-normalize.ts";
-import { normalizeFanslyTimestamp } from "../../sync/fansly/lib/timestamp.ts";
 import { isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import type { DmMessagesChunkSummary, SyncRunTelemetry } from "./observability.ts";
 import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
 import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 
-/** Vendor page size for every DM message fetch (executor and targeted run). */
+/** Vendor page size for every DM message fetch of the targeted run. */
 export const FANSLY_DM_MESSAGE_PAGE_LIMIT = 25;
 
 export type FanslyDmMessageRequestContext = Parameters<AppContext["adapter"]["getMessagesPage"]>[0];
 
-// Per-thread breaker outage guard, shared by the executor's dm_messages walk
-// and the targeted thread backfill: a failure while this many OTHER groups of
-// the page failed since its last successful /message read (3+ distinct
-// threads) is a page-wide outage, not a poison thread.
+// Per-thread breaker outage guard of the targeted thread backfill: a failure
+// while this many OTHER groups of the page failed since its last successful
+// /message read (3+ distinct threads) is a page-wide outage, not a poison
+// thread.
 export const DM_MESSAGES_BREAKER_OUTAGE_OTHER_FAILING_GROUPS = 2;
 // Scan window for that guard; also lets a guarded pin fall to the breaker
 // once nothing else has failed for this long.
@@ -73,22 +68,6 @@ export function assertDmSharedRateLimitEnabled(app: AppContext) {
   if (!app.config.syncSharedRateLimitEnabled) {
     throw new Error("DM sync requires SYNC_SHARED_RATE_LIMIT_ENABLED=true");
   }
-}
-
-/** The list head differs from the newest stored message and arrived after the
- * last head read: a head read is due. Mirrors the time-based stale-head
- * predicate in page-dm.ts selectNextPageDmMessageSyncCandidate; keep the two
- * in step. */
-export function isDmHeadStaleByTime(conversation: {
-  lastMessageId: string | null;
-  newestStoredMessageId: string | null;
-  lastMessageAt: Date | null;
-  lastMessageSyncAt: Date | null;
-}) {
-  return conversation.lastMessageId !== conversation.newestStoredMessageId && (
-    conversation.lastMessageSyncAt === null ||
-    (conversation.lastMessageAt !== null && conversation.lastMessageSyncAt < conversation.lastMessageAt)
-  );
 }
 
 export function resolveDmConversationCoverageStatus(input: {
@@ -140,22 +119,6 @@ function resolveDmWalkCoverageStatus(
   return input.existingStatus;
 }
 
-/**
- * Every message on this page was sent at or after the page's DM onboarding
- * (getPageDmOnboardedAt): it is history of a conversation that began while
- * Hub was watching the page, which a first read may walk on through past its
- * start window. An older message is the pre-onboarding depth the deep
- * backfill owns (off), and a message without a parseable date cannot be
- * placed, so either one ends the walk as before.
- */
-export function isDmMessagePageAfterOnboarding(
-  page: { normalizedMessages: readonly { createdAt: Date }[]; normalizationDebt: boolean },
-  onboardedAt: Date | null,
-) {
-  return onboardedAt !== null && !page.normalizationDebt && page.normalizedMessages.length > 0 &&
-    page.normalizedMessages.every((message) => message.createdAt.getTime() >= onboardedAt.getTime());
-}
-
 async function recordDmTimestampAnomaly(
   telemetry: SyncRunTelemetry,
   input: {
@@ -174,29 +137,6 @@ async function recordDmTimestampAnomaly(
       normalizedAt: input.normalizedAt.toISOString(),
     },
   });
-}
-
-export async function normalizeDmTimestampWithAnomaly(
-  telemetry: SyncRunTelemetry,
-  input: {
-    context: string;
-    value: number | null | undefined;
-  },
-) {
-  if (typeof input.value !== "number" || !Number.isFinite(input.value)) {
-    return null;
-  }
-
-  const normalized = normalizeFanslyTimestamp(input.value);
-  if (isClearlyImplausibleDmTimestamp(normalized)) {
-    await recordDmTimestampAnomaly(telemetry, {
-      context: input.context,
-      rawValue: input.value,
-      normalizedAt: normalized,
-    });
-  }
-
-  return normalized;
 }
 
 export class DmMessagesChunkRequestObserver implements HttpRequestObserver {

@@ -864,7 +864,7 @@ export async function readFanslyWsLiveGauges(
 // copy; their socket rows stay visible, marked `apiUnavailable` (plan §7.9a).
 // A chat Hub has no thread row for stays invisible (plan §7.6). A socket
 // deletion hides the store's copy of that message as well (tombstone
-// dominance), ahead of the legacy deletion reconcile. Money is REST-only
+// dominance), ahead of the engine's `dm-live.deletions` mark. Money is REST-only
 // (owner decision №7): an overlay row carries no tip, price or purchase.
 
 /** The REST store a reader already reads; the overlay dedups against it. */

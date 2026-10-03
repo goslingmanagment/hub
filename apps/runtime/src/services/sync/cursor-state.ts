@@ -1,5 +1,3 @@
-import { parseDmFullSweepSchedule, type DmFullSweepSchedule } from "./dm-bounded-state.ts";
-import { parseDmShadowState, type DmShadowState } from "./dm-shadow-state.ts";
 
 type SubscribersCursorState = {
   revision: number;
@@ -86,8 +84,6 @@ type DmConversationCursorState = {
    *  already applied. Persisted only while positive, so a document without it
    *  is byte-identical to the one every earlier writer produced. */
   repeatOnlyPageStreak?: number;
-  diagnostics?: DmShadowState;
-  polling?: DmFullSweepSchedule;
 };
 
 type DmMessagesCursorState = {
@@ -105,9 +101,9 @@ type DmMessagesCursorState = {
    * stamps it as last_message_sync_at; a walk without it (from a stored
    * cursor, or checkpointed before the field existed) leaves that alone. */
   headReadAt?: string;
-  /** Pages this first read has walked past the 25-message start window
-   * because the thread's history began after the page's DM onboarding;
-   * bounded by PAGE_DM_NEW_THREAD_EXTRA_HISTORY_PAGES across chunks. */
+  /** Pages the legacy chunk's first read of a thread walked past the
+   * 25-message start window because the thread's history began after the
+   * page's DM onboarding. Kept only so a stored cursor round-trips. */
   newThreadHistoryPages?: number;
 };
 
@@ -360,18 +356,11 @@ export function parseFollowersReconcileCursorState(
 }
 
 /**
- * Accepts BOTH stored shapes and always returns the v2 one.
- *
- * v1 → v2 migration on load: the sweep read its observed count back out of
- * `snapshotConversationIds.length` on every resume, so adopting that length
- * makes a migrated cursor resume with exactly the count the pre-G3 binary
- * would have computed. The array is then dropped and never written again.
- *
- * A v1 state that carries NEITHER the array NOR a persisted `observedCount`
- * parses with a zero count, which is a lie about a sweep already in flight —
- * isUnresumableLegacyDmConversationCursorState flags exactly that record and
- * the handler restarts the sweep before the zero can reach a decision, which
- * is what the retired legacy-snapshot guard did with the missing array.
+ * The status readers' view of a legacy Fansly dm_conversations sweep cursor
+ * (the sweep itself is gone since step 4, S4-14; its last cursors stay as
+ * records). Accepts BOTH stored shapes and always returns the v2 one: a v1
+ * cursor counts its `snapshotConversationIds` array, or its persisted
+ * `observedCount`, or zero.
  */
 export function parseDmConversationCursorState(value: unknown): DmConversationCursorState | null {
   const state = asRecord(value);
@@ -391,7 +380,7 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     ? asOptionalStringArray(state.snapshotConversationIds)
     : undefined;
   // v2 must carry the count — it is the whole reason the array could go. v1 may
-  // fall back to zero because the handler refuses such a cursor outright.
+  // fall back to zero.
   const observedCount = version === 1
     ? snapshotConversationIds?.length ?? asNumber(state.observedCount) ?? 0
     : asNumber(state.observedCount);
@@ -425,8 +414,6 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     return null;
   }
 
-  const diagnostics = parseDmShadowState(state.diagnostics);
-  const polling = parseDmFullSweepSchedule(state.polling);
   // A garbled streak reads as none: it can only let one more repeat-only page
   // through before the guard counts again, never refuse a healthy cursor.
   const repeatOnlyPageStreak = asNumber(state.repeatOnlyPageStreak);
@@ -445,199 +432,6 @@ export function parseDmConversationCursorState(value: unknown): DmConversationCu
     ...(repeatOnlyPageStreak !== null && Number.isSafeInteger(repeatOnlyPageStreak) && repeatOnlyPageStreak > 0
       ? { repeatOnlyPageStreak }
       : {}),
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-    ...(polling === undefined ? {} : { polling }),
-  };
-}
-
-/**
- * A stored in-progress sweep from before either count representation existed:
- * version 1, no id array, no `observedCount`. Resuming it would restart the
- * count at zero mid-sweep, so the sweep restarts from offset 0 under a fresh
- * generation instead (loudly — the anomaly is the operator's signal), which is
- * what the retired legacy-snapshot guard did. Deliberately narrow: every OTHER
- * reason the parser refuses a record already meant a silent fresh sweep before
- * G3, and still does.
- */
-export function isUnresumableLegacyDmConversationCursorState(value: unknown) {
-  const state = asRecord(value);
-  if (!state || state.mode !== "full_scan" || asNumber(state.version) !== 1) {
-    return false;
-  }
-
-  return asOptionalStringArray(state.snapshotConversationIds) === undefined &&
-    asNumber(state.observedCount) === null;
-}
-
-/**
- * The dm_conversations sweep as the HANDLER holds it: one tagged union over the
- * two documents this stream persists. The tag lives in memory ONLY — the JSON
- * in `page_sync_cursors.state` is unchanged to the byte, because a rolled-back
- * binary parses that JSON with the pre-union reader and an added or renamed key
- * would strand it (the `mode`-presence test below is exactly what the old
- * reader keys off).
- *
- *   in_progress — `mode: "full_scan"`, a resumable cursor;
- *   completed   — no `mode` at all, which is what makes the next chunk open a
- *                 FRESH sweep under a higher generation instead of resuming a
- *                 finished one.
- *
- * `unchangedPageStreak` stays in the persisted in-progress document as it
- * always was, even though nothing reads it back yet.
- */
-type DmConversationSweepInProgressState = {
-  kind: "in_progress";
-  generation: number;
-  offset: number;
-  observedCount: number;
-  pageCount: number;
-  providerTotalMode: DmConversationProviderTotalMode;
-  providerReportedTotal: number | null;
-  unchangedPageStreak: number;
-  fullSweepStartedAt: string;
-  lastFullSweepCompletedAt: string | null;
-  repeatOnlyPageStreak?: number;
-  diagnostics?: DmShadowState;
-  polling?: DmFullSweepSchedule;
-};
-
-type DmConversationSweepCompletedState = {
-  kind: "completed";
-  generation: number;
-  observedCount: number;
-  generationSetCount: number;
-  providerTotalMode: DmConversationProviderTotalMode;
-  providerReportedTotal: number | null;
-  destructiveFinalization: boolean;
-  membershipCertified: boolean;
-  /** Serialized ONLY when non-null — the completed document omits the key
-   *  entirely otherwise, which is what it has always done. */
-  erasureDelta: number | null;
-  lastFullSweepCompletedAt: string | null;
-  diagnostics?: DmShadowState;
-  polling?: DmFullSweepSchedule;
-};
-
-type DmConversationSweepState =
-  | DmConversationSweepInProgressState
-  | DmConversationSweepCompletedState;
-
-function parseCompletedDmConversationSweepState(
-  value: unknown,
-): DmConversationSweepCompletedState | null {
-  const state = asRecord(value);
-  // No `mode` — not "some other mode": an unknown mode is a shape this codec
-  // does not know, and guessing at it is how a sweep resumes a cursor that
-  // means something else.
-  if (!state || asNumber(state.version) !== 2 || state.mode !== undefined) {
-    return null;
-  }
-
-  const generation = asNumber(state.generation);
-  const observedCount = asNumber(state.observedCount);
-  const generationSetCount = asNumber(state.generationSetCount);
-  const providerReportedTotal = asNullableNumber(state.providerReportedTotal);
-  const lastFullSweepCompletedAt = asNullableString(state.lastFullSweepCompletedAt);
-  const providerTotalMode = state.providerTotalMode === "unobserved" ||
-      state.providerTotalMode === "absent" || state.providerTotalMode === "present"
-    ? state.providerTotalMode
-    : null;
-  const erasureDelta = state.erasureDelta === undefined ? null : asNumber(state.erasureDelta);
-  if (
-    generation === null ||
-    observedCount === null ||
-    generationSetCount === null ||
-    providerTotalMode === null ||
-    (providerReportedTotal === null && state.providerReportedTotal !== null) ||
-    typeof state.destructiveFinalization !== "boolean" ||
-    typeof state.membershipCertified !== "boolean" ||
-    (state.erasureDelta !== undefined && erasureDelta === null)
-  ) {
-    return null;
-  }
-
-  const diagnostics = parseDmShadowState(state.diagnostics);
-  const polling = parseDmFullSweepSchedule(state.polling);
-  return {
-    kind: "completed",
-    generation,
-    observedCount,
-    generationSetCount,
-    providerTotalMode,
-    providerReportedTotal,
-    destructiveFinalization: state.destructiveFinalization,
-    membershipCertified: state.membershipCertified,
-    erasureDelta,
-    lastFullSweepCompletedAt,
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-    ...(polling === undefined ? {} : { polling }),
-  };
-}
-
-/**
- * Parses BOTH persisted forms. The in-progress arm delegates to
- * parseDmConversationCursorState, so the v1 → v2 migration and every refusal it
- * encodes apply unchanged; only when that returns null is the completed shape
- * tried. A record that is neither (an unknown `mode`, a version this codec does
- * not know, a missing count) is null — the caller's fresh-sweep path.
- */
-export function parseDmConversationSweepState(value: unknown): DmConversationSweepState | null {
-  const inProgress = parseDmConversationCursorState(value);
-  if (inProgress) {
-    const { version: _version, mode: _mode, ...rest } = inProgress;
-    return { kind: "in_progress", ...rest };
-  }
-
-  return parseCompletedDmConversationSweepState(value);
-}
-
-/**
- * The inverse: the exact JSON document each form has always written.
- *
- * `generationSetCount` on an in-progress write is TELEMETRY, not cursor state —
- * the mid-sweep progress write rides it along so summarizeCheckpoint can carry
- * it into the bounded projection, and parseDmConversationCursorState drops it on
- * resume. It is a parameter rather than a union field for that reason: the two
- * checkpoint writes that open a sweep (fresh init, restart) do not carry one,
- * and must keep not carrying one.
- */
-export function serializeDmConversationSweepState(
-  state: DmConversationSweepState,
-  telemetry?: { generationSetCount: number },
-): Record<string, unknown> {
-  if (state.kind === "completed") {
-    return {
-      version: 2,
-      generation: state.generation,
-      observedCount: state.observedCount,
-      generationSetCount: state.generationSetCount,
-      providerTotalMode: state.providerTotalMode,
-      providerReportedTotal: state.providerReportedTotal,
-      destructiveFinalization: state.destructiveFinalization,
-      membershipCertified: state.membershipCertified,
-      lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
-      ...(state.erasureDelta === null ? {} : { erasureDelta: state.erasureDelta }),
-      ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
-      ...(state.polling === undefined ? {} : { polling: state.polling }),
-    };
-  }
-
-  return {
-    version: 2,
-    mode: "full_scan",
-    generation: state.generation,
-    offset: state.offset,
-    observedCount: state.observedCount,
-    pageCount: state.pageCount,
-    providerTotalMode: state.providerTotalMode,
-    providerReportedTotal: state.providerReportedTotal,
-    unchangedPageStreak: state.unchangedPageStreak,
-    fullSweepStartedAt: state.fullSweepStartedAt,
-    lastFullSweepCompletedAt: state.lastFullSweepCompletedAt,
-    ...(state.repeatOnlyPageStreak ? { repeatOnlyPageStreak: state.repeatOnlyPageStreak } : {}),
-    ...(telemetry === undefined ? {} : { generationSetCount: telemetry.generationSetCount }),
-    ...(state.diagnostics === undefined ? {} : { diagnostics: state.diagnostics }),
-    ...(state.polling === undefined ? {} : { polling: state.polling }),
   };
 }
 
@@ -821,9 +615,6 @@ export function emptyDmMessagesCursorState(): DmMessagesCursorState {
 export type {
   DmConversationCursorState,
   DmConversationProviderTotalMode,
-  DmConversationSweepCompletedState,
-  DmConversationSweepInProgressState,
-  DmConversationSweepState,
   DmMessagesCursorState,
   FollowersCursorState,
   FollowersReconcileCursorState,

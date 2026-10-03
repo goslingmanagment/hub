@@ -3,6 +3,7 @@ import {
   deletePageTopSpenders,
   ensurePageSyncStates,
   findPageByLabel,
+  getSyncStreamsForPlatform,
   listPageSyncStates,
   pausePageSync,
   requestPageSync as requestPageSyncRows,
@@ -12,7 +13,6 @@ import {
   resumePageSync,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { appPlatformRegistry } from "../platforms/registry.ts";
 import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
@@ -31,6 +31,7 @@ import {
   type SyncStatusPage,
 } from "./sync-status.ts";
 import { sendSyncPageWakeup } from "./sync-queue.ts";
+import { assertLegacyExecutorServes } from "./sync-control.ts";
 import {
   engineOwnedSyncPage,
   pauseEngineStreams,
@@ -178,8 +179,11 @@ function assertLegacyOnlyFansHistoryNotRequested(
   }
 }
 
+/** The block's streams that exist on the platform (its stream catalogue, the
+ *  vocabulary of the status blocks): on an engine page they name the registry
+ *  keys the lever acts on, elsewhere the legacy streams it requests. */
 function blockTasksForPlatform(platform: Platform, block: SyncBlockKey) {
-  const supportedStreams = new Set(appPlatformRegistry.get(platform).capabilities.streams);
+  const supportedStreams = new Set(getSyncStreamsForPlatform(platform));
   return BLOCK_TASKS[block].filter((stream) => supportedStreams.has(stream));
 }
 
@@ -449,6 +453,7 @@ export async function triggerSyncBlock(
   if (engine !== null) {
     return engineBlockResponse("trigger", stored.page.label, input.block, await triggerEngineStreams(app.db, engine, tasks));
   }
+  assertLegacyExecutorServes(stored.page);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -502,6 +507,7 @@ export async function pauseSyncBlock(
   if (engine !== null) {
     return engineBlockResponse("pause", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "pause"));
   }
+  assertLegacyExecutorServes(stored.page);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -543,6 +549,7 @@ export async function resumeSyncBlock(
   if (engine !== null) {
     return engineBlockResponse("resume", stored.page.label, input.block, await pauseEngineStreams(app.db, engine, tasks, "resume"));
   }
+  assertLegacyExecutorServes(stored.page);
 
   await ensurePageSyncStates(app.db, {
     pageId: stored.page.id,
@@ -616,6 +623,7 @@ export async function resetSyncBlock(
     }
     return engineBlockResponse("reset", stored.page.label, input.block, await requeueEngineStreams(app.db, engine, tasks));
   }
+  assertLegacyExecutorServes(stored.page);
 
   // Stage 2 destruction-door guard: the messages_history reset would
   // hard-delete every stored DM for the page (resetPageDmSyncState) with no
@@ -712,6 +720,7 @@ export async function resetFollowersReconcileStream(
       requests: [{ stream: "followers_reconcile" as const, requestedSeq: reset.demandRevision }],
     };
   }
+  assertLegacyExecutorServes(stored.page);
   const dependencyInput = pageSyncDependencyInput(app);
   const streams: SyncStream[] = ["followers_reconcile"];
   await ensurePageSyncStates(app.db, {

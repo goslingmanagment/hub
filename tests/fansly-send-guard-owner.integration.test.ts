@@ -14,7 +14,6 @@ import {
   ensureSyncPage,
   getPageSyncState,
   listFanslySendGuards,
-  requestAiMediaAcceleratorRead,
   requestPageSync,
   upsertFans,
   upsertPageDmConversation,
@@ -40,7 +39,6 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { seedThreadInput } from "./helpers/fansly-dm-sweep.ts";
 import type { FanslySendGuardChildConfig } from "./helpers/fansly-send-guard-child.ts";
 import { startFakeFanslyNetwork, type FakeFanslyNetwork } from "./helpers/fansly-send-guard-network.ts";
 import { silentFanslySendGuardLogger } from "./helpers/fansly-send-guard.ts";
@@ -372,6 +370,29 @@ describe("every source of every process, on a page the engine owns", () => {
 const POISON = "group-poison";
 const HEALTHY = "group-healthy";
 
+function seedThreadInput(platformAccountId: number, platformConversationId: string) {
+  return {
+    platformAccountId,
+    fanId: null,
+    platformConversationId,
+    partnerPlatformUserId: `fan-${platformConversationId}`,
+    partnerUsername: `fan_${platformConversationId}`,
+    partnerDisplayName: null,
+    conversationFlags: 0,
+    unreadCount: 0,
+    subscriptionTierId: null,
+    lastMessageId: `msg-${platformConversationId}`,
+    lastUnreadMessageId: null,
+    lastMessageAt: new Date("2026-03-09T12:00:00.000Z"),
+    lastMessageSenderId: `fan-${platformConversationId}`,
+    lastMessageSenderRole: "fan" as const,
+    lastMessagePreview: "seeded",
+    isVisible: true,
+    lastSeenGeneration: 1,
+    metadata: {},
+  };
+}
+
 async function legacyDmFixture(network: FakeFanslyNetwork) {
   const app = createTestAppContext(testDb!, {
     syncSharedRateLimitEnabled: true,
@@ -383,20 +404,11 @@ async function legacyDmFixture(network: FakeFanslyNetwork) {
   if (!page) throw new Error("Expected a fixture page");
   await testDb!.pool.query("update pages set external_page_id = '999' where id = $1", [page.id]);
   await saveProxy(app, page.id, { url: network.proxyUrl });
-  Object.assign(app.config, {
-    aiMediaDescribeEnabled: true,
-    aiMediaDescribePagePolicies: JSON.stringify({
-      "owner-dm": { since: new Date(Date.now() - 24 * 3600_000).toISOString() },
-    }),
-    aiMediaDescribeFanslyAcceleratorEnabled: true,
-    aiMediaDescribeFanslyAcceleratorDailyLimit: 50,
-  });
-
   const threads: Record<string, number> = {};
   for (const group of [POISON, HEALTHY]) {
     const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: `fan-${group}` }]);
     const thread = await upsertPageDmConversation(app.db, {
-      ...seedThreadInput(page.id, group, 1), fanId: fan!.id, unreadCount: 1,
+      ...seedThreadInput(page.id, group), fanId: fan!.id, unreadCount: 1,
     });
     threads[group] = thread!.id;
   }
@@ -428,45 +440,6 @@ describe("the legacy DM paths on a page the engine owns", () => {
     const refusal = new FanslyPageOwnedBySyncEngineError(1);
     expect(isThreadAttributableFanslyFailure(refusal)).toBe(false);
     expect(isThreadAttributableFanslyFailure(new Error("chunk failed", { cause: refusal }))).toBe(false);
-  });
-
-  it("the executor's DM chunk stops at the guard: the accelerator's read is held, no breaker row moves", async (context) => {
-    if (!testDb) return context.skip();
-    const network = await startFakeFanslyNetwork();
-    try {
-      const f = await legacyDmFixture(network);
-      expect(await requestAiMediaAcceleratorRead(f.app.db, {
-        pageId: f.page.id, groupRef: HEALTHY, messageRef: "media-1", now: new Date(Date.now() - 60_000),
-      })).toBe(true);
-      const healthBefore = await f.health();
-      await requestPageSync(f.app.db, { pageId: f.page.id, streams: ["dm_messages"], source: "scheduled" });
-
-      const result = await executeNextSyncPageChunk(f.app, f.page.id);
-
-      expect(result).toMatchObject({ kind: "failed", stream: "dm_messages" });
-      expect(await getPageSyncState(f.app.db, f.page.id, "dm_messages")).toMatchObject({
-        status: "retrying",
-        retryKind: "fansly_sync_engine_owned",
-        consecutiveFailures: 1,
-        blockerKind: null,
-      });
-      // No thread was charged: the lapsed row is untouched, none was added.
-      expect(await f.health()).toEqual(healthBefore);
-      expect(healthBefore).toHaveLength(1);
-      // The accelerator's read was refused before anything was sent.
-      const reads = await testDb.pool.query(
-        "select status, outcome, admitted_at from ai_media_accelerator_reads where page_id = $1", [f.page.id]);
-      expect(reads.rows).toEqual([{ status: "skipped", outcome: "page_held", admitted_at: null }]);
-      // Nothing reached the origin, nothing was journaled, nothing captured.
-      expect(network.arrivals).toEqual([]);
-      expect(await journalCount(f.page.id)).toBe(0);
-      expect(f.app.fanslySendGuards!.counters).toMatchObject({ captures: 0 });
-      expect(f.app.fanslySendGuards!.counters.engineOwnedRefusals).toBeGreaterThanOrEqual(2);
-      // The page is still the engine's.
-      expect((await guardRow(f.page.id)).owner_engine).toBe("fansly_sync_engine");
-    } finally {
-      await network.close();
-    }
   });
 
   it("the targeted thread backfill fails with the refusal and leaves the thread's breaker alone", async (context) => {

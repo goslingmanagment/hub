@@ -3,15 +3,16 @@ import { link, open, unlink, writeFile } from "node:fs/promises";
 import pg from "pg";
 
 const [operation, from, to, outputPath] = process.argv.slice(2);
-if (!["report", "corpus"].includes(operation ?? "") || !from || !to || !outputPath) {
-  throw new Error("Usage: read.ts report|corpus FROM_ISO TO_ISO OUTPUT");
+// The `corpus` export fed the DM shadow analyzer, which went with the legacy
+// DM sweep at step 4 (S4-14).
+if (operation !== "report" || !from || !to || !outputPath) {
+  throw new Error("Usage: read.ts report FROM_ISO TO_ISO OUTPUT");
 }
 const connectionString = process.env.HUB_READ_ONLY_DATABASE_URL;
 if (!connectionString) throw new Error("Set HUB_READ_ONLY_DATABASE_URL for the read_only role");
 const client = new pg.Client({ connectionString, application_name: "fansly-events-read" });
 const file = await open(`${outputPath}.partial`, "wx", 0o600);
 const hash = createHash("sha256");
-let records = 0;
 const startedAt = new Date().toISOString();
 
 async function read(sql: string, parameters: unknown[]) {
@@ -38,26 +39,9 @@ async function append(text: string) {
 
 try {
   await client.connect();
-  if (operation === "report") {
-    const report = await read("select fansly_events_measurement_report($1, $2) as result", [from, to]);
-    await append(JSON.stringify(report, null, 2) + "\n");
-    records = report.sweeps.length;
-  } else {
-    let afterId = 0;
-    let upperId: number | null = null;
-    while (true) {
-      const batch = await read("select fansly_dm_shadow_corpus_batch($1, $2, $3, $4) as result",
-        [from, to, afterId, upperId]);
-      upperId ??= batch.upperId;
-      for (const record of batch.records) {
-        await append(JSON.stringify(record) + "\n");
-        records += 1;
-      }
-      if (batch.scannedRows === 0) break;
-      if (batch.nextId <= afterId) throw new Error("Corpus cursor did not advance");
-      afterId = batch.nextId;
-    }
-  }
+  const report = await read("select fansly_events_measurement_report($1, $2) as result", [from, to]);
+  await append(JSON.stringify(report, null, 2) + "\n");
+  const records = report.sweeps.length;
   await file.close();
   await link(`${outputPath}.partial`, outputPath);
   await unlink(`${outputPath}.partial`);
