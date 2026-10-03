@@ -187,7 +187,7 @@ export async function markFanslyWsHotDeletion(
  * receipt marked are considered, so an in-flight REST walk (which only adds
  * rows and recomputes the window itself) is not touched. A thread of a page
  * the Fansly Sync Engine owns (`handover`/`live`) is never listed: there the
- * window is the engine's (`syncLegacyThreadSummaryAfterDeletion`, step-3
+ * window is the engine's (`writeThreadSummaryAfterDeletion`, step-3
  * design §3.1 item 12, I9).
  */
 export async function listFanslyWsDeletionWindowDrift(

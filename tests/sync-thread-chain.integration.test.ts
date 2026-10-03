@@ -10,18 +10,20 @@ import {
   effectiveHistoryStateSql,
   ensureSyncPage,
   issueSyncSwitchCapability,
-  LegacyThreadSummaryRefusedError,
   listPageThreadChains,
+  openThreadSummary,
   readThreadChain,
   readThreadStoredFacts,
   resetThreadChain,
   setSyncPageMode,
-  syncLegacyThreadSummary,
   ThreadChainInvalidError,
   ThreadChainRebuildModeError,
+  ThreadSummaryRefusedError,
   upsertPageDmMessages,
   writeRebuiltThreadChain,
   writeThreadChain,
+  writeThreadSummary,
+  writeThreadSummaryAfterDeletion,
   type Database,
   type SyncPageMode,
   type ThreadChainState,
@@ -35,8 +37,9 @@ import {
 } from "./helpers/db.ts";
 
 // Fansly Sync Engine design §2.3, §2.10, I9: the chain columns of a DM thread
-// and their one writer, the legacy-column bridge that only an engine-owned
-// page may use, the effective history state, and 0231's one-time marking.
+// and their one writer, the summary columns only an engine-owned page may
+// write (from message_archive since step 4, S4-08), the effective history
+// state, and 0231's one-time marking.
 
 const CHAIN_COLUMNS = [
   "head_confirmed_id", "head_confirmed_at", "contiguous_oldest_id", "contiguous_oldest_at", "contiguous_count",
@@ -107,6 +110,21 @@ async function seedThread(pageId: number, groupId: string, legacy: {
     })));
   }
   return threadId;
+}
+
+/** Archive rows of a thread's conversation (the DM apply's feed writes them). */
+async function archive(pageId: number, groupId: string, rows: Array<{
+  ref: string; at: string; role?: "fan" | "model" | "unknown"; deleted?: boolean; pending?: boolean;
+}>): Promise<void> {
+  for (const row of rows) {
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me,
+         occurred_at, text_plain, deleted_at, content_pending)
+       values ($1, 'fansly', $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [pageId, groupId, row.ref, row.role ?? "fan", row.role === "model", row.at, `m${row.ref}`,
+        row.deleted ? row.at : null, row.pending === true],
+    );
+  }
 }
 
 async function threadRow(threadId: number): Promise<Record<string, unknown>> {
@@ -270,41 +288,83 @@ describe("stored facts", () => {
     ])).toEqual([2, 1, 0, 0]);
     expect(await countStoredMessagesOlderThan(db(), [])).toEqual([]);
   });
+
+  it("read from the archive: stored messages only (no tombstone, no stub), the thread's conversation only", async () => {
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId, "921");
+    const other = await seedThread(pageId, "922");
+    await archive(pageId, "921", [
+      { ref: "10000", at: "2026-09-30T10:00:00Z" },
+      { ref: "9999", at: "2026-09-30T09:00:00Z", role: "model" },
+      { ref: "998", at: "2026-09-30T08:00:00Z" },
+      { ref: "50", at: "2026-09-30T07:00:00Z", deleted: true },
+      { ref: "40", at: "2026-09-30T06:00:00Z", deleted: true, pending: true },
+    ]);
+    await archive(pageId, "922", [{ ref: "7", at: "2026-09-30T05:00:00Z" }]);
+    const store = { store: "message_archive" as const };
+    expect(await readThreadStoredFacts(db(), threadId, store)).toEqual({ nonDeletedCount: 3, oldestNonDeletedId: "998" });
+    // The hot table holds nothing of the thread.
+    expect(await readThreadStoredFacts(db(), threadId)).toEqual({ nonDeletedCount: 0, oldestNonDeletedId: null });
+    expect(await countStoredMessagesOlderThan(db(), [
+      { threadId, beforeId: "10000" },
+      { threadId, beforeId: "999" },
+      { threadId, beforeId: "998" },
+      { threadId: other, beforeId: "100" },
+    ], store)).toEqual([2, 1, 0, 1]);
+  });
 });
 
-describe("syncLegacyThreadSummary (legacy columns, engine-owned pages only)", () => {
-  const inserted = [
-    { platformMessageId: "1005", createdAt: new Date("2026-09-30T10:05:00Z"), senderRole: "fan" as const },
-    { platformMessageId: "1004", createdAt: new Date("2026-09-30T10:04:00Z"), senderRole: "model" as const },
-    { platformMessageId: "998", createdAt: new Date("2026-09-30T09:00:00Z"), senderRole: "fan" as const },
+describe("thread summary (the archive's messages, engine-owned pages only)", () => {
+  const feed = [
+    { ref: "1005", at: "2026-09-30T10:05:00Z", role: "fan" as const },
+    { ref: "1004", at: "2026-09-30T10:04:00Z", role: "model" as const },
+    { ref: "998", at: "2026-09-30T09:00:00Z", role: "fan" as const },
   ];
 
   it("throws on an off or shadow page and changes nothing", async () => {
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, "930", { stored: ["1001"] });
+    await archive(pageId, "930", feed);
     const before = await threadRow(threadId);
-    await expect(inTx((tx) => syncLegacyThreadSummary(tx, threadId, { inserted, headReadAt: new Date() })))
-      .rejects.toBeInstanceOf(LegacyThreadSummaryRefusedError);
+    const write = (id: number) => inTx(async (tx) => {
+      const opening = await openThreadSummary(tx, id, ["1005"]);
+      return writeThreadSummary(tx, { ...opening, storedBefore: new Set() }, { headReadAt: new Date() });
+    });
+    await expect(write(threadId)).rejects.toBeInstanceOf(ThreadSummaryRefusedError);
+    await expect(inTx((tx) => writeThreadSummaryAfterDeletion(tx, threadId))).rejects.toBeInstanceOf(ThreadSummaryRefusedError);
     await moveTo(pageId, ["shadow"]);
-    await expect(inTx((tx) => syncLegacyThreadSummary(tx, threadId, { inserted, headReadAt: new Date() })))
-      .rejects.toThrow(/handover or live .*'shadow'/);
+    await expect(write(threadId)).rejects.toThrow(/handover or live .*'shadow'/);
     expect(await threadRow(threadId)).toEqual(before);
-    await expect(inTx((tx) => syncLegacyThreadSummary(tx, threadId + 999, { inserted, headReadAt: null })))
-      .rejects.toThrow(/no such thread/);
+    await expect(write(threadId + 999)).rejects.toThrow(/no such thread/);
   });
 
-  it("updates the window incrementally and maps the effective history state on a live page", async () => {
+  it("adds the archive messages the feed stored, incrementally, and maps the effective history state on a live page", async () => {
     const pageId = await seedPage();
     const lastSync = new Date("2026-09-30T12:00:00Z");
     const threadId = await seedThread(pageId, "931", { stored: ["1003", "1001"], lastSyncAt: lastSync });
+    await archive(pageId, "931", [
+      { ref: "1003", at: "2026-09-30T08:03:00Z" },
+      { ref: "1001", at: "2026-09-30T08:01:00Z" },
+    ]);
+    await seedThread(pageId, "939");
     await moveTo(pageId, ["shadow", "handover", "live"]);
 
     // 0231 marked nothing here (the thread was created after it): 'none' with
     // stored messages reads as unverified ⇒ partial_window.
-    const first = await inTx((tx) => syncLegacyThreadSummary(tx, threadId, {
-      inserted, headReadAt: new Date("2026-09-30T11:00:00Z"),
-    }));
-    expect(first).toEqual({ storedMessageCount: 5, messageCoverageStatus: "partial_window" });
+    const first = await inTx(async (tx) => {
+      const opening = await openThreadSummary(tx, threadId, ["1005", "1004", "998", "1003", "1006", "1007", "1008", "x"]);
+      expect([...opening.storedBefore]).toEqual(["1003"]);
+      // The feed: three new messages; a deletion that came first (a stub
+      // hydrated, still tombstoned); a stub; another chat's message.
+      await archive(pageId, "931", [
+        ...feed,
+        { ref: "1006", at: "2026-09-30T10:06:00Z", deleted: true },
+        { ref: "1007", at: "2026-09-30T10:07:00Z", deleted: true, pending: true },
+      ]);
+      await archive(pageId, "939", [{ ref: "1008", at: "2026-09-30T10:08:00Z" }]);
+      return writeThreadSummary(tx, opening, { headReadAt: new Date("2026-09-30T11:00:00Z") });
+    });
+    expect(first).toEqual({ storedMessageCount: 5, messageCoverageStatus: "partial_window", added: 3 });
     expect(await threadRow(threadId)).toMatchObject({
       stored_message_count: 5,
       newest_stored_message_id: "1005",
@@ -316,9 +376,11 @@ describe("syncLegacyThreadSummary (legacy columns, engine-owned pages only)", ()
       last_model_message_at: "2026-09-30T10:04:00+00:00",
     });
 
+    // A re-read of the same page stores nothing new: the count does not move.
     await inTx(async (tx) => {
+      const opening = await openThreadSummary(tx, threadId, ["1005", "1004", "998"]);
       await writeThreadChain(tx, threadId, { chain: completeChain, source: "engine" });
-      return syncLegacyThreadSummary(tx, threadId, { inserted: [], headReadAt: new Date("2026-09-30T13:00:00Z") });
+      return writeThreadSummary(tx, opening, { headReadAt: new Date("2026-09-30T13:00:00Z") });
     });
     expect(await threadRow(threadId)).toMatchObject({
       stored_message_count: 5,
@@ -332,10 +394,9 @@ describe("syncLegacyThreadSummary (legacy columns, engine-owned pages only)", ()
       await writeThreadChain(tx, threadId, {
         chain: { ...completeChain, state: "partial", proof: null, proofWitness: null, provenAt: null }, source: "engine",
       });
-      return syncLegacyThreadSummary(tx, threadId, {
-        inserted: [{ platformMessageId: "10000", createdAt: new Date("2026-10-01T00:00:00Z"), senderRole: "system" }],
-        headReadAt: null,
-      });
+      const opening = await openThreadSummary(tx, threadId, ["10000"]);
+      await archive(pageId, "931", [{ ref: "10000", at: "2026-10-01T00:00:00Z", role: "unknown" }]);
+      return writeThreadSummary(tx, opening, { headReadAt: null });
     });
     expect(await threadRow(threadId)).toMatchObject({
       stored_message_count: 6,
@@ -351,8 +412,37 @@ describe("syncLegacyThreadSummary (legacy columns, engine-owned pages only)", ()
     const pageId = await seedPage();
     const threadId = await seedThread(pageId, "932", { coverage: "complete" });
     await moveTo(pageId, ["shadow", "handover"]);
-    expect(await inTx((tx) => syncLegacyThreadSummary(tx, threadId, { inserted: [], headReadAt: null })))
-      .toEqual({ storedMessageCount: 0, messageCoverageStatus: "pending_backfill" });
+    expect(await inTx(async (tx) => writeThreadSummary(tx, await openThreadSummary(tx, threadId, []), { headReadAt: null })))
+      .toEqual({ storedMessageCount: 0, messageCoverageStatus: "pending_backfill", added: 0 });
+  });
+
+  it("recounts the window from the archive after a deletion; head, coverage and chain stay", async () => {
+    const pageId = await seedPage();
+    const threadId = await seedThread(pageId, "933", { stored: ["1003", "1002", "1001"], coverage: "complete" });
+    await archive(pageId, "933", [
+      { ref: "1003", at: "2026-09-30T10:03:00Z", role: "model" },
+      { ref: "1002", at: "2026-09-30T10:02:00Z", deleted: true },
+      { ref: "1001", at: "2026-09-30T10:01:00Z" },
+      { ref: "999", at: "2026-09-30T09:59:00Z", deleted: true, pending: true },
+      { ref: "998", at: "2026-09-30T09:58:00Z" },
+    ]);
+    await moveTo(pageId, ["shadow", "handover", "live"]);
+    await inTx((tx) => writeThreadChain(tx, threadId, { chain: completeChain, source: "engine" }));
+    const before = await threadRow(threadId);
+    expect(await inTx((tx) => writeThreadSummaryAfterDeletion(tx, threadId))).toEqual({ storedMessageCount: 3 });
+    const after = await threadRow(threadId);
+    expect(after).toMatchObject({
+      stored_message_count: 3,
+      newest_stored_message_id: "1003",
+      oldest_stored_message_id: "998",
+      last_fan_message_at: "2026-09-30T10:01:00+00:00",
+      last_model_message_at: "2026-09-30T10:03:00+00:00",
+      message_coverage_status: "complete",
+    });
+    const untouched = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).filter(([column]) =>
+      !["stored_message_count", "newest_stored_message_id", "oldest_stored_message_id", "last_fan_message_at",
+        "last_model_message_at", "updated_at"].includes(column)));
+    expect(untouched(after)).toEqual(untouched(before));
   });
 });
 

@@ -47,6 +47,9 @@ sync/
   switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
                              `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
+  parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
+                             read-only DM reader parity of page_dm_messages and message_archive (the readers
+                             serve live pages from the archive: "DM readers on the archive")
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -62,9 +65,10 @@ to 100 of them not looked up through the page within the day.
 A DM thread has three writers, each with its own columns: the conversation list (`dm-conversations.*`, through
 `upsertPageDmConversationListFields`: partner and fan, flags, unread count, the `last_message_*` head, visibility, the
 membership generation and the list's two metadata keys — never an unbinding), the chain (`writeThreadChain`) and, on
-pages the engine owns, the legacy coverage columns (`syncLegacyThreadSummary` after a read,
-`syncLegacyThreadSummaryAfterDeletion` after a socket deletion). A list head newer than what the message
-reads reached becomes one `dm-messages.catchup` (planned; `dm-messages.head` when the list is the live signal).
+pages the engine owns, the legacy coverage columns (`writeThreadSummary` after a read, from the messages it stored in
+`message_archive`; `writeThreadSummaryAfterDeletion` after a socket deletion, a recount of the thread's archive
+messages). A list head newer than what the message reads reached becomes one `dm-messages.catchup` (planned;
+`dm-messages.head` when the list is the live signal).
 
 A socket event in a chat the page does not know raises `dm-conversations.find` (urgent, 12 s). A burst of new chats
 shares one read of the list head (step 3b ruling 1, plan PR 1-3): the first read of offset 0 by any key of the list
@@ -213,8 +217,9 @@ broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it clo
 `local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
 the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
-from it (tombstone-first, sticky against a later REST copy), and the stored window of every touched thread is
-recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
+from it (tombstone-first, sticky against a later REST copy), and then the stored window of every thread whose archive
+holds one of the messages is recounted from the archive by `writeThreadSummaryAfterDeletion` — the head stays the
+conversation list's, the chain is untouched.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
 page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
@@ -424,6 +429,49 @@ while the actor stopped puts a page the rollback took from live back to live; a 
 rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
 (J5). Runbook: step-3 design §6.
 
+## DM readers on the archive (step 4, owner decision №11)
+
+The DM readers serve a page from the store its sync mode names (`dmReaderStoreOf` / `readDmReaderStore` in
+`repositories/sync/live-messages.ts`): `message_archive` on a page the engine runs `live`, `page_dm_messages` on every
+other page (OnlyFans writes it; a Fansly page off the engine is legacy's). It is the page's data, never a platform
+branch. On a live page:
+- the chat messages and the preview (`services/conversations.ts`) read the archive, the live overlay dedups against
+  it, tips go mills→cents through the shared codec;
+- the agent transcript drops its `page_dm_messages` arm (`hotArm: false`): PPV state is `message_archive.is_opened`,
+  and the response reports `page_dm_messages` as not queried;
+- the engine's own reads use the archive: the fold's stored facts (`readThreadStoredFacts`), `sync chain
+  check-end-rule` (`countStoredMessagesOlderThan`), `sync chain check-window` (`getPageDmMessageWindowSummary`), the
+  ETA backtest, and the `dm-live.deletions` overflow picker;
+- the DM apply confirms the overlay against the archive rows it just fed (`confirm_source = 'message_archive'`): it
+  locks the overlay rows before its event appends (`claimDmLiveMessagesForConfirm`, lock order) and judges them after
+  the archive feed (`confirmDmLiveMessagesInTransaction`); the passive pass judges a live page's rows by the archive
+  too;
+- the thread summary columns (`stored_message_count`, newest/oldest stored ids, last fan/model times) count the
+  thread's archive messages [E4]: `writeThreadSummary` adds the messages the apply's archive feed stored (the thread
+  is locked and the archive's copies of the page noted before the feed, `openThreadSummary`), and
+  `writeThreadSummaryAfterDeletion` recounts the thread from the archive after a socket deletion's tombstones.
+  Migration 0236 recomputed the count and the newest/oldest ids from the archive once, on the live pages. Their
+  readers (coverage, Top Supporters, agent datasets, ETA, chain checks) did not change.
+
+`page_dm_messages` is still written for Fansly (inserts and deletion marks) until S4-13, so reverting this step
+serves the hot table again with nothing lost.
+
+**Parity.** `pnpm cli sync dm-reader-parity --window 1h --rounds 12 --interval 5m [--page P] [--full] --out <json>`
+compares the two stores reader by reader, read-only (every statement in a READ ONLY transaction, each thread in one
+repeatable-read snapshot; it runs in the worker container on the app connection, which can read these tables). It
+calls the real readers both ways (their `page_dm_messages` default and the archive variant, whatever the page's
+mode): the chat messages (25 and 100) and the preview with the live overlay, the page's coverage, the agent
+transcript with and without its hot arm, the summary columns against the archive, the fold's stored facts and the
+window summary. Each round samples per page the threads active since
+the last round, 50 stratified by stored count, the threads with a pending overlay row and those whose live rows
+differ between the stores; the threads with a deletion, tip, PPV, reply ref or exclusion are spread over the rounds
+(each checked once). Classes (`parity/classify.ts`): `missing_in_archive` fails only when a recheck of both stores
+≥ 2 min later still finds it missing, `field_mismatch` fails, `extra_in_archive` (the archive knows more: the
+September sidecar rows, a deletion first) and `tie_order` are reported. `--full` also judges every Fansly hot row
+against its archive row. The JSON report goes to `--out`; stdout carries the verdict and the archive-only list for
+the owner; exit 1 on a fail. It ran for an hour before the readers moved (S4-08) and runs again before the Fansly
+hot writes stop (S4-13).
+
 ## Invariants
 
 Each is enforced in exactly one place and pinned by a test (design §1). The first is the owner's rule.
@@ -438,7 +486,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I6 | No automatic takeover from a live old process: an unconfirmed stop leaves the page `ownership_unconfirmed`; a lost lock session is never a confirmation, the owner's own safe release is. | `engine/host.ts` |
 | I7 | Every write of an actor is fenced by `owner_generation`. | `repositories/sync/pages.ts` `lockOwnedPage` |
 | I8 | The raw answer is committed before it is parsed; apply is replayable from the observation without HTTP. | `engine/commit.ts` |
-| I9 | The chain columns of a thread have one writer (`writeThreadChain`); the legacy coverage columns are written by the engine only on pages in `handover`/`live` (`syncLegacyThreadSummary`, `syncLegacyThreadSummaryAfterDeletion`). | `repositories/sync/thread-chain.ts` |
+| I9 | The chain columns of a thread have one writer (`writeThreadChain`); the legacy coverage columns are written by the engine only on pages in `handover`/`live` (`writeThreadSummary`, `writeThreadSummaryAfterDeletion`), from `message_archive`. | `repositories/sync/thread-chain.ts` |
 | I10 | `history_complete` only by an accepted empty page at `before = contiguous_oldest_id`; a short page is not the end; overlap is not proof. | `fansly/lib/chain.ts` |
 | I11 | A new event during a read raises `demand_revision`; an older answer never closes newer demand. | `engine/commit.ts` |
 | I12 | No history walk without a request. | `fansly/registry.ts` (`dm-messages.history` triggers only on a request) |

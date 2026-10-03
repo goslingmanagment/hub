@@ -488,3 +488,30 @@ describe("0235_sync_pages_lifted_dm_exclusions.sql", () => {
     expect(rollbackCompatible()).toContain(`"${migration}"`);
   });
 });
+
+describe("0236_fansly_thread_summary_from_archive.sql", () => {
+  const migration = "0236_fansly_thread_summary_from_archive.sql";
+  const text = readFileSync(`packages/db/migrations/${migration}`, "utf8");
+  const sql = stripComments(text);
+  const statements = topLevelStatements(sql);
+
+  it("is one data update of the live pages' stored window, and no DDL", () => {
+    expect(statements).toHaveLength(1);
+    const [update] = statements;
+    expect(update).toMatch(/^with archive as \(.*\) update page_dm_threads t set stored_message_count = a\.stored_count, newest_stored_message_id = a\.newest_id, oldest_stored_message_id = a\.oldest_id, updated_at = now\(\) from archive a where t\.id = a\.thread_id and /);
+    expect(update).toContain("join sync_pages sp on sp.page_id = t.platform_account_id and sp.mode = 'live'");
+    expect(update).toContain("is distinct from (a.stored_count, a.newest_id, a.oldest_id)");
+    expect(sql).not.toMatch(/\b(alter|create|drop|rename|truncate|delete|insert|grant)\b/i);
+  });
+
+  it("counts what the archive readers show: no tombstone, no content_pending stub, an instant", () => {
+    expect(sql.replace(/\s+/g, " "))
+      .toContain("and ma.deleted_at is null and ma.content_pending = false and ma.occurred_at is not null");
+    expect(sql).not.toMatch(/last_(fan|model)_message_at\s*=/);
+    expect(sql).not.toMatch(/message_coverage_status\s*=/);
+  });
+
+  it("allows application rollback after the data-only migration", () => {
+    expect(rollbackCompatible()).toContain(`"${migration}"`);
+  });
+});

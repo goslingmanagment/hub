@@ -26,6 +26,7 @@ import {
   readAgentThreadArchiveFloor,
   readAgentThreadCoverage,
   readAgentThreadsHighWater,
+  readDmReaderStore,
   searchAgentArchive,
   type AgentTranscriptFilters,
 } from "@agency_hub_core/db";
@@ -825,11 +826,18 @@ export async function handleAgentThreadMessages(
         conversationRef: params.conversationRef,
       }), "agent_transcript_coverage");
 
+    // Step 4 (S4-08): on a page the Fansly Sync Engine runs live the readers
+    // read message_archive, so the union drops its page_dm_messages arm and
+    // PPV state comes from the archive alone.
+    const hotArm = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
+      readDmReaderStore(tx, page.id), "agent_transcript_store") === "page_dm_messages";
+
     const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
     const transcriptInput = {
       pageId: page.id,
       platform: page.platform,
       conversationRef: params.conversationRef,
+      hotArm,
       from: new Date(from),
       to: new Date(to),
       sortDir,

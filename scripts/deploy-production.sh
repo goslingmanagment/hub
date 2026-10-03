@@ -573,6 +573,13 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # made lapses there (its conversation list re-applies the reason) until a
   # forward deploy returns.
   "0235_sync_pages_lifted_dm_exclusions.sql"
+  # DM thread summary from the archive (step 4, design S4-08 [E4]): one data
+  # update of the live pages' stored_message_count and newest/oldest stored
+  # ids, recounted from message_archive where they differ. No DDL. The
+  # previous image increments the same columns from its hot inserts and
+  # recounts them from page_dm_messages after a socket deletion, so it runs
+  # unchanged after a rollback (it still writes page_dm_messages).
+  "0236_fansly_thread_summary_from_archive.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"
