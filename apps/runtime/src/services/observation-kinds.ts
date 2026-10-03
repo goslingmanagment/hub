@@ -62,21 +62,23 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "account_me", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "dm_conversations", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "dm_messages", source: "pull", writer: "sync/fansly/capture.ts" },
-  { kind: "earnings_accounts", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "earnings_transactions", source: "pull", writer: "services/sync/transactions.ts" },
-  { kind: "fan_earnings_stats", source: "pull", writer: "services/sync/fan-earnings-capture.ts" },
-  { kind: "fan_earnings_monthly", source: "pull", writer: "services/sync/fan-earnings-capture.ts" },
+  { kind: "earnings_accounts", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.accounts)" },
+  { kind: "earnings_transactions", source: "pull", writer: "sync/engine/commit.ts (wire spec transactions.page)" },
+  { kind: "fan_earnings_stats", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.stats_accounts)" },
+  { kind: "fan_earnings_monthly", source: "pull", writer: "sync/engine/commit.ts (wire spec earnings.monthly_accounts)" },
   { kind: "fans_active", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "followers", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "group_detail", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "post_tips", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "posts", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "purchase_history", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  { kind: "purchase_history", source: "pull", writer: "sync/engine/commit.ts (wire spec media.order_history)" },
   // Decision 358: a witness page the purchase-history contract proof re-asked
   // for. Same body as `purchase_history` (real order rows), journaled apart so
   // it never forks a completed target chain; canonicalized by the same family.
-  { kind: "purchase_history_contract_probe", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "purchase_history_contract_storm", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  // Both kinds were written by the legacy purchase-history lane, deleted at
+  // step 4 (S4-16); their journaled rows stay and stay claimed.
+  { kind: "purchase_history_contract_probe", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
+  { kind: "purchase_history_contract_storm", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
   { kind: "subscribers", source: "pull", writer: "services/sync/executor-handlers.ts" },
   // ── WP-F1: the `stats_snapshot` lane (services/sync/fansly-stats.ts) ──────
   // Every one is claimed by the `fansly-stats` family. `media_offer_stats` was

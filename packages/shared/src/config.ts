@@ -478,11 +478,19 @@ export interface AppConfig {
   /** Pages whose chatter routes and AI kernel context read the live overlay
    * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
   fanslyLiveOverlayReadPages?: string;
+  /** @deprecated Retired, ignored: nothing reads it since the legacy Fansly
+   *  money lanes were deleted (step 4, S4-16). Parsed so an env that sets it
+   *  still boots; removed with its production override in S4-26. */
   fanslyFanEarningsRecoveryEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRecoveryPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsPageAllowlist?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsTargetsDailyAttemptLimit?: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsRosterMaxAgeHours?: number;
   fanslyFollowersSettlementReuseEnabled?: boolean;
   fanslyFollowersSettlementReusePageAllowlist?: string;
@@ -493,6 +501,7 @@ export interface AppConfig {
   fanslyWsHintsPageAllowlist?: string;
   fanslyWsHintsTypeAllowlist?: string;
   fanslyWsHintsPolicies?: string;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyFanEarningsShadowPageAllowlist?: string;
   fanslyDmDeepBackfillEnabled?: boolean;
   fanslyDmDeepBackfillMaxRequestsPerRun?: number;
@@ -504,7 +513,9 @@ export interface AppConfig {
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
   syncPageExecutorConcurrency: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionLookbackDays: number;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   transactionRescanCapDays: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
@@ -530,6 +541,7 @@ export interface AppConfig {
   ofapiDmSyncEnabled?: boolean;
   ofapiDmColdArchiveEnabled?: boolean;
   fanslyFanEarningsSyncEnabled?: boolean;
+  /** @deprecated Retired, ignored, like {@link AppConfig.fanslyFanEarningsRecoveryEnabled}. */
   fanslyPurchaseHistorySyncEnabled?: boolean;
   fanslyNewStreamPageAllowlist?: string;
   fanslyStatsSnapshotSyncEnabled?: boolean;
