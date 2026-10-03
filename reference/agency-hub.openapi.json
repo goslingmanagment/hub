@@ -33942,7 +33942,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "label": {
@@ -34074,7 +34075,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
@@ -34217,7 +34219,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "state": {
@@ -34514,7 +34517,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -34777,7 +34781,8 @@
                       "balances",
                       "profile_notifications",
                       "content_history",
-                      "media_previews"
+                      "media_previews",
+                      "account_settings"
                     ]
                   },
                   "expectedRevision": {
@@ -35531,7 +35536,8 @@
                             "balances",
                             "profile_notifications",
                             "content_history",
-                            "media_previews"
+                            "media_previews",
+                            "account_settings"
                           ]
                         },
                         "mode": {
@@ -35634,7 +35640,8 @@
                               "balances",
                               "profile_notifications",
                               "content_history",
-                              "media_previews"
+                              "media_previews",
+                              "account_settings"
                             ]
                           },
                           "mode": {
