@@ -17,6 +17,7 @@ import { createEngineRegistry, type EngineRegistry } from "../../apps/runtime/sr
 import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
 import { ROUTE_POLICY_HASH } from "../../apps/runtime/src/sync/fansly/routes.ts";
 import { SHADOW_FINGERPRINT_VERSION } from "../../apps/runtime/src/sync/report/shadow-fingerprint.ts";
+import { SHADOW_VERDICT_CHECKS } from "../../apps/runtime/src/sync/report/shadow-report.ts";
 import type { SwitchContext, SwitchTiming } from "../../apps/runtime/src/sync/switch/context.ts";
 import { silentFanslySendGuardLogger } from "./fansly-send-guard.ts";
 import { fanslyJson, harnessRegistry, seedHarnessPage, type FakeRoute, type HarnessHandles, type HarnessPage } from "./sync-engine.ts";
@@ -118,6 +119,14 @@ export function acceptedShadowReport(labels: readonly string[], endedAt = new Da
     window: { window: { start: new Date(endedAt.getTime() - 3_600_000).toISOString(), end: endedAt.toISOString() } },
     verdict: { accepted: true },
   });
+}
+
+/** The same report, not accepted: its verdict fails `failing` and passes
+ *  every other check. */
+export function redShadowReport(labels: readonly string[], failing: readonly string[], endedAt = new Date()): string {
+  const report = JSON.parse(acceptedShadowReport(labels, endedAt)) as Record<string, unknown>;
+  const verdict = Object.fromEntries(Object.keys(SHADOW_VERDICT_CHECKS).map((key) => [key, !failing.includes(key)]));
+  return JSON.stringify({ ...report, verdict: { ...verdict, accepted: false } });
 }
 
 export interface SwitchContextHandles {

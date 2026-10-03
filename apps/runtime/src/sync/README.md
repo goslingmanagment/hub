@@ -380,9 +380,16 @@ restores the legacy engine with no other action.
 ## Switch and rollback (step 3)
 
 `pnpm cli sync switch --page P --shadow-report <path> [--dry-run]` moves one page to the live engine (the report: an
-accepted shadow hour of the build `sync` runs and of its route policy, by the report's fingerprint); it is resumable
-(where it stands is read from the mode, the guard owner, `legacy_imported_at`, `requests_enabled_at` and the page's
-newest `admin.sync_switch` / `admin.sync_rollback` audit row) and refuses a page a rollback left half done (J4).
+accepted shadow hour of the build `sync` runs and of its route policy, by the report's fingerprint, that judged P in
+shadow); it is resumable (where it stands is read from the mode, the guard owner, `legacy_imported_at`,
+`requests_enabled_at` and the page's newest `admin.sync_switch` / `admin.sync_rollback` audit row) and refuses a page a
+rollback left half done (J4). A report that is not accepted carries the switch only on the owner's judgement of its red
+lines (step 3b ruling 12: the frozen A1/A2 rules stay as they are, red lines are judged by the owner with evidence):
+`--accept-red-lines <a1,a2,a3,b5,b6,b7> --red-lines-reason "<evidence>"` passes it when every failing check is a red
+line listed there, every hard check passed (coverage, A4, route budgets, walks, build — never accepted), every part ran
+and the page and fingerprint check as for an accepted one; the switch and `--dry-run` print the acceptance, and the
+switch records it (`admin.sync_switch_red_lines_accepted`: the page, the report's window, the checks, the reason, the
+actor) before its `start` row. Without the flag nothing changes.
 Phases: **A** mode `handover` (the legacy engine is fenced, the shadow actor releases, the host keeps the page's
 lock) and the guard row handed to the engine once no legacy request is in flight; **B** the legacy stop confirmed
 (`switch/legacy-stop.ts`: no running lease, open run, open HTTP attempt, open guarded send, socket lock holder or
@@ -596,7 +603,10 @@ ETA's fact over forecast). The ops sampler records a compact set every 5 minutes
 for switched pages, `sync_shadow_*` for shadow ones) — per-page series would double the sample table for figures the
 page status already shows.
 
-`pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only):
+`pnpm cli sync shadow report --window <start>/<end>` is the shadow acceptance's evidence (design §3.12, read-only).
+It judges the pages in shadow alone — the switch candidates: every part, verdict and fingerprint reads them; a page
+`live`, in `handover` or `off` is listed under `notJudged` with its mode and why (a live page is judged by `sync switch
+check`) and counts nowhere, and `--page` of such a page is refused. Its parts:
 part A over the live hour in one repeatable-read transaction — the coverage (every page in shadow, its actor running,
 from 10 min before the start: a window begun before the deploy or a page's switch to shadow is never accepted), demand against a computed expectation (polls
 judged in runs against their schedule, the reads the hour's socket frames imply after coalescing; keys on a period
@@ -622,7 +632,9 @@ fresh `sync` heartbeat build started before the window, every shadow page's owne
 window, no shadow attempt of another owner generation in it (so run the report right after its hour: a deploy or restart
 since leaves the build unproven and the report not accepted) —, `ROUTE_POLICY_HASH`, the registry's hash, each page's
 overrides and media model, and S (now and as the window's admissions recorded it). `--out <path>` keeps the report for
-the step-3 switch, which accepts it only of the build `sync` runs and of this build's route policy. Where the design's
+the step-3 switch, which accepts it only of the build `sync` runs and of this build's route policy. The verdict's checks
+are hard or red lines (`SHADOW_VERDICT_CHECKS`): a red line of a frozen rule (A1–A3, B5–B7) that fails is the owner's to
+judge at the switch (`--accept-red-lines`, above), a hard check never; no rule or threshold changes for it. Where the design's
 wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in `report/shadow-window.ts`: A1.rate, A1.rate-assumed,
 A1.ceiling, A1.ceiling-demand, A1.shared-read, A1.floor, A1.floor-scheduled, A1.floor-queue, A1.floor-idle,
 A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every report prints the rule it applied.
@@ -661,4 +673,5 @@ another pick.
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
-| The shadow acceptance | `pnpm cli sync shadow report --window <start>/<end> --out <path>` (part B alone: `--part b`, outside 00:00–05:00 UTC) |
+| The shadow acceptance | `pnpm cli sync shadow report --window <start>/<end> --out <path>` (the pages in shadow; part B alone: `--part b`, outside 00:00–05:00 UTC) |
+| Switch on a report with red lines | `pnpm cli sync switch --page <label> --shadow-report <path> --accept-red-lines <a1,…> --red-lines-reason '<evidence>' --dry-run`, then without `--dry-run` (audited) |
