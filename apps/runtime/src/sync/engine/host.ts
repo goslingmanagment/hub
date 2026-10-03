@@ -151,6 +151,9 @@ export interface SyncHostOptions {
   liveLoopEnabled?: boolean;
   /** TESTS ONLY: a pacer with a test setting floor. Never passed by `main.ts`. */
   pacerFactory?: (deps: PacerDeps) => Pacer;
+  /** TESTS ONLY: the route budgets' time scale for every actor (paired with a
+   *  test pause; `RoutePolicyOptions`). Never passed by `main.ts`. */
+  routeTimeScale?: number;
   /** TESTS ONLY: a stand-in for the live page transport. `links.ws` is the
    *  page's socket source, whose `handshake` runs the `ws.connect` Upgrade;
    *  `links.socket` is the socket owner the production transport sends
@@ -534,6 +537,7 @@ export class SyncEngineHost {
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.shadowFeed === undefined ? {} : { shadowFeed: this.#o.shadowFeed }),
       ...(this.#o.faults === undefined ? {} : { faults: this.#o.faults }),
+      ...(this.#o.routeTimeScale === undefined ? {} : { routeTimeScale: this.#o.routeTimeScale }),
       ...(mode === "live" ? { socket: socketRef, secrets: createSyncWorkSecretBox(this.#o.config) } : {}),
     });
     const stop = new AbortController();
