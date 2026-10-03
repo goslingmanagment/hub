@@ -4,11 +4,11 @@ import {
   withOwnedPageSyncTransaction, type Database,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
-import type { AppConfig, HttpRequestObserver } from "@agency_hub_core/shared";
+import { isPageAllowlisted, type AppConfig, type HttpRequestObserver } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import type { ExecutorRequestContext } from "./executor-types.ts";
-import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 

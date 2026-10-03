@@ -30,7 +30,7 @@ import {
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
-import { isPageAllowlisted } from "../../../services/voice-notes.ts";
+import { isPageAllowlisted } from "@agency_hub_core/shared";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import {

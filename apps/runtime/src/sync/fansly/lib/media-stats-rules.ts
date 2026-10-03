@@ -12,8 +12,7 @@ import { classifyStatsWindow, parseWindowGuard, type BackfillWindowGuard } from 
 // resources (resources/media-stats.ts): the `media_stats` cursor and the
 // per-media backfill cursor, the steady windows of each tier and the refresh
 // that closes a hole below them, the first-month probe and the creation floor,
-// and the checks over a served window. Pure. The legacy `media_stats` lane
-// (fansly-media-stats.ts) imports them from here until step 4 deletes it.
+// and the checks over a served window. Pure.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

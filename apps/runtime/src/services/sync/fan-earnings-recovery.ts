@@ -10,7 +10,7 @@ import {
   fanEarningsEffectiveMaxAgeMs, fanEarningsRosterMaxAgeMs, runFanEarningsTargetStep,
 } from "./fan-earnings-targets.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { isPageAllowlisted } from "@agency_hub_core/shared";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 

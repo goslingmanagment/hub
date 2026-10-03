@@ -3,8 +3,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFanslyPage,
   createModel,
-  ensurePageSyncStates,
+  ensureSyncPage,
   upsertCaptureCoverage,
+  upsertDemand,
   upsertCreatorMedia,
   upsertCreatorVaultAlbum,
   upsertCreatorVaultAlbumMember,
@@ -30,6 +31,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { setModeDirect } from "./helpers/sync-engine-host.ts";
 
 // Fixture passwords hash at minimum cost; sign-in still runs the real argon2
 // verify (tests/helpers/cheap-argon2.ts).
@@ -129,10 +131,19 @@ beforeAll(async () => {
   const page = await createFanslyPage(testDb.db, { modelId: model!.id, label: PAGE });
   pageId = page!.id;
   const db = testDb.db;
-  // Production reality: every active page carries a `page_sync_states` row per
-  // stream, seeded by the planner. The coverage panel reads those rows for the
-  // per-lane gate and budget state, so the test seeds them the same way.
-  await ensurePageSyncStates(db, { pageId });
+  // Production reality: the Fansly Sync Engine owns every Fansly page. The
+  // coverage panel reads its live work: the media walk is open and due, and the
+  // owner paused the notifications resources.
+  await ensureSyncPage(db, { pageId });
+  await setModeDirect(testDb.pool, pageId, "live");
+  await testDb.pool.query(
+    "update sync_pages set paused_resources = array['notifications.forward', 'notifications.backfill'] where page_id = $1",
+    [pageId],
+  );
+  await upsertDemand(db, {
+    pageId, shadow: false, resource: "media-stats.walk", kind: "goal", class: "planned",
+    dueAt: new Date("2026-08-20T13:00:00.000Z"),
+  });
 
   // ── traffic: the four profile families, both members, plus an unknown code ──
   // 44011 carries views with interactionTime 0 (member 1 is the UI counter);
@@ -823,7 +834,7 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     expect(body.platformTags[0].viewCount).toBe(1_000_000);
   });
 
-  it("the honesty panel's data: floors, lane gates and the live cycle field", async (context) => {
+  it("the honesty panel's data: floors, what the engine reads, and the rows held", async (context) => {
     if (!requireServer(context)) return;
     const response = await get(`/api/v1/pages/${PAGE}/stats/coverage`);
     expect(response.statusCode).toBe(200);
@@ -835,24 +846,38 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     expect(planes.get(CAPTURE_COVERAGE_PLANES.statsAccountDaily)!.status).toBe("window_captured");
     expect(planes.get("post_replies")!.proof).toBe("none");
 
-    // Every Fansly lane reports its gate. The flags default OFF, so this page
-    // reads `flagEnabled: false` — which is the fact the panel must show
-    // instead of an empty chart with no explanation.
-    const streams = new Map<string, { flagEnabled: boolean | null; allowlisted: boolean | null }>(
-      body.streams.map((row: { stream: string }) => [row.stream, row]),
+    // The engine block replaces the legacy lanes' gates and budgets: each legacy
+    // stream is described by the live work of the registry keys that read it.
+    expect(body).not.toHaveProperty("streams");
+    expect(body.engine.mode).toBe("live");
+    type EngineStream = {
+      stream: string; resources: string[]; succeededAt: string | null; nextDueAt: string | null;
+      paused: boolean; needsAttention: boolean; reason: string | null; consecutiveFailures: number;
+    };
+    const streams = new Map<string, EngineStream>(
+      body.engine.streams.map((row: EngineStream) => [row.stream, row]),
     );
-    expect(streams.get("media_stats")!.flagEnabled).toBe(false);
-    // FAIL-CLOSED: an empty allowlist means NO pages on these lanes.
-    expect(streams.get("media_stats")!.allowlisted).toBe(false);
-    // A lane with no ramp gate of its own reports null rather than "enabled".
-    expect(streams.get("light")!.flagEnabled).toBeNull();
-    // The shared Stage 16 gate does not become a new coverage-panel field.
-    for (const legacy of ["fan_earnings", "purchase_history"]) {
-      expect(streams.get(legacy)).toMatchObject({ flagEnabled: null, allowlisted: null });
-    }
-    // The A16 item 3 field exists on the wire even before the lane has run: a
-    // missing field and an unrun lane would look the same to the panel.
-    expect(streams.get("media_stats")!).toHaveProperty("progress");
+    expect(streams.get("media_stats")).toMatchObject({
+      resources: ["media-stats.walk"],
+      succeededAt: null,
+      nextDueAt: "2026-08-20T13:00:00.000Z",
+      paused: false,
+      needsAttention: false,
+      consecutiveFailures: 0,
+    });
+    // Why the open walk waits is said, never left blank.
+    expect(streams.get("media_stats")!.reason).toMatch(/^media-stats\.walk: /);
+    expect(streams.get("notifications")).toMatchObject({
+      resources: ["notifications.forward", "notifications.backfill"],
+      paused: true,
+      nextDueAt: null,
+    });
+    // A stream nothing read yet still reports, with nothing claimed.
+    expect(streams.get("stats_snapshot")).toMatchObject({
+      resources: ["stats.daily", "stats.hourly", "stats.backfill"],
+      succeededAt: null,
+      paused: false,
+    });
 
     const holdings = new Map<string, { rowCount: number }>(
       body.holdings.map((row: { projection: string }) => [row.projection, row]),

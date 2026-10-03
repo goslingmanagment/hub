@@ -5,7 +5,8 @@ import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts"
 import { MemoryRouter } from "../apps/dashboard/node_modules/react-router/dist/development/index.js";
 import { CONFIG_DESCRIPTORS } from "../packages/shared/src/config-registry.ts";
 import { validateConfigOverride } from "../packages/shared/src/config-settings.ts";
-import { fanslyNewStreamAllowed, isPageAllowlisted } from "../apps/runtime/src/services/sync/fansly-stream-gate.ts";
+import { isPageAllowlisted } from "../packages/shared/src/page-allowlist.ts";
+import { fanslyNewStreamAllowed } from "../apps/runtime/src/services/sync/fansly-stream-gate.ts";
 import { HUB_FEATURES, findHubFeature, featureSettingsHref, featureReturnHref } from "../apps/dashboard/src/pages/settings/featureCatalog.ts";
 import { featureState } from "../apps/dashboard/src/pages/settings/featuresView.ts";
 import { CONFIG_MODE_CHOICES, selectedConfigPages, serializeConfigPages, humanConfigValue } from "../apps/dashboard/src/pages/settings/configurationChoices.ts";

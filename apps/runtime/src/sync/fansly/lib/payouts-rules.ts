@@ -4,9 +4,7 @@ import { classifyFanslyResponse } from "./lane.ts";
 
 // The payouts rules of the Sync Engine's `payouts.*` resources
 // (resources/payouts.ts): the `payouts` cursor, the request-history walk's stop
-// and catch-up rules, and the reads of a served page. Pure. The legacy
-// `payouts` lane (fansly-payouts.ts) imports them from here until step 4
-// deletes it.
+// and catch-up rules, and the reads of a served page. Pure.
 
 /** One kind PER ROUTE: two routes, two response shapes. */
 export const FANSLY_PAYOUTS_OBSERVATION_KINDS = {

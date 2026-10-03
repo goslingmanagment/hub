@@ -45,6 +45,7 @@ import {
   rebuildFanslyEngagementProjection,
   runFanslyEngagementProjection,
 } from "../apps/runtime/src/services/projections/fansly-engagement.ts";
+import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -574,7 +575,7 @@ describe("[sync-critical] WP-F2 engagement projections", () => {
       pageId: page.id,
       limit: 10,
       now: CENSUS_RECEIVED_AT,
-      longTailCycleDays: 30,
+      tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
     });
     expect(chunk).toHaveLength(1);
     expect(chunk[0]).toMatchObject({

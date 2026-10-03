@@ -196,8 +196,7 @@ export function classifyWireOutcome<P, R>(
         return classified("subject_terminal");
       }
       // A 5xx that names its own deadline is the provider's pace, not the
-      // subject's failure (the legacy `isSubjectScopedFanslyFailure` split):
-      // the route that answered it waits until that deadline.
+      // subject's failure: the route that answered it waits until that deadline.
       if (status >= 500 && retryAfterMs !== null) return classified("rate_limit");
       return classified("subject_failure");
   }

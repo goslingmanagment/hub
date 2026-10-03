@@ -103,6 +103,7 @@ import {
   compareFanslyFollowIds,
   fanslyFollowIdToDate,
   isFanslyDmMessageSyncExcluded,
+  isPageAllowlisted,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
@@ -112,7 +113,7 @@ import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveRawCapturePayloadRow } from "../payload-reader.ts";
 import { isPageDmPruneAllowed } from "../page-dm-retention.ts";
-import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,

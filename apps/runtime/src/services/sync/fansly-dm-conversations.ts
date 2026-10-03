@@ -34,6 +34,7 @@ import {
   getFanslyDmMessageSyncExcludedReason,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
+  isPageAllowlisted,
   type FanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
 
@@ -43,7 +44,6 @@ import {
 } from "./dm-bounded-state.ts";
 
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveFanslyPlatformAccountId } from "../fansly.ts";
 import { summarizeCheckpoint } from "./observability.ts";

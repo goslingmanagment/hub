@@ -1,10 +1,8 @@
-// WP-F3 — the catalog walk's pure helpers. No database: the form, paging,
-// coverage and physical-attempt invariants that need one stay in
-// fansly-catalog-lane.integration.test.ts.
+// WP-F3 — the catalog walk's pure rules (`sync/fansly/lib/catalog-rules.ts`),
+// which the engine's catalog resource reads. No database.
 
 import { describe, expect, it } from "vitest";
 
-import { walkContinuationAt } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
 import { nextVaultCursor, vaultMediaRows } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
 
 describe("WP-F3 catalog lane helpers", () => {
@@ -22,13 +20,5 @@ describe("WP-F3 catalog lane helpers", () => {
     // is better than pretending it did.
     expect(nextVaultCursor([{ mediaId: "x" }])).toBeNull();
     expect(nextVaultCursor([])).toBeNull();
-  });
-
-  it("jitters the continuation so a deep walk cannot run contiguously", () => {
-    const base = new Date("2026-08-22T09:00:00.000Z");
-    // Burst SHAPE, not daily volume, is the real ban-risk surface.
-    expect(walkContinuationAt(base, 20_000, () => 0).getTime() - base.getTime()).toBe(14_000);
-    expect(walkContinuationAt(base, 20_000, () => 1).getTime() - base.getTime()).toBe(26_000);
-    expect(walkContinuationAt(base, 20_000, () => 0.5).getTime() - base.getTime()).toBe(20_000);
   });
 });

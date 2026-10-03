@@ -37,7 +37,6 @@ import {
   listInsightsWalls,
   countCreatorVaultUniqueMembers,
   countPageUniqueCreatorMedia,
-  listPageSyncStates,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
@@ -58,17 +57,18 @@ import { canAccessPage, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
 import { getPageSummary } from "../../services/reporting.ts";
-import { evaluateFanslyStreamGate, GATED_FANSLY_STREAMS } from "../../services/sync/fansly-stream-gate.ts";
+import { engineStreamState, readEngineStatusFacts } from "../../services/sync-status-engine.ts";
+import { fanslyEngineLegacyStreams } from "../../sync/fansly/legacy-streams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * WP-S1 — the endpoints-cover SERVING module (Fansly only, A28-2).
  *
  * **SERVING NEVER AUTHORIZES CAPTURE.** Every handler below is a pure read of
- * projections that some capture lane already filled. Nothing here enqueues a
- * sync, opens a window, marks a subject dirty or flips a flag; a page whose lane
- * flag is off answers with what it holds (usually nothing) and SAYS the flag is
- * off, which is the entire point of the coverage route.
+ * projections the Fansly Sync Engine already filled. Nothing here enqueues a
+ * sync, opens a window, marks a subject dirty or flips a flag; a page whose
+ * data nobody reads answers with what it holds (usually nothing) and SAYS so,
+ * which is the entire point of the coverage route.
  *
  * Every route is `owner-session` + page scope. On the REST surface that IS the
  * money gate for `/money/*`: there is no separate money capability for cookie
@@ -537,18 +537,12 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   }, async (request): Promise<StatsCoverageResponse> => {
     const page = await resolveOwnerPage(request);
     const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-    const [planes, states, holdings] = await Promise.all([
+    const [planes, engineFacts, holdings] = await Promise.all([
       listInsightsCoverage(appContext.db, { pageId: page.id }),
-      listPageSyncStates(appContext.db, { pageId: page.id }),
+      readEngineStatusFacts(appContext.db, { pageIds: [page.id], settingMs: effective.fanslyDefaultDelayMs }),
       listInsightsHoldings(appContext.db, { pageId: page.id }),
     ]);
-
-    const numberOrNull = (value: unknown) =>
-      typeof value === "number" && Number.isFinite(value) ? value : null;
-    const intOrNull = (value: unknown) =>
-      typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
-    const stringOrNull = (value: unknown) => typeof value === "string" ? value : null;
-    const boolOrNull = (value: unknown) => typeof value === "boolean" ? value : null;
+    const facts = engineFacts.get(page.id);
 
     return {
       page: { label: page.label, platform: page.platform },
@@ -562,60 +556,27 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
             || left.scopeRef.localeCompare(right.scopeRef);
         })
         .map(coverageRowToWire),
-      streams: states.map((state) => {
-        const progress = (state.progress ?? {}) as Record<string, unknown>;
-        // The coverage contract reports only lanes with their own fail-closed
-        // gate. Legacy streams keep null/null even though the shared ramp exists.
-        const gate = GATED_FANSLY_STREAMS.find((entry) =>
-          entry.stream === state.stream && entry.failClosedAllowlistField !== null);
-        const verdict = gate === undefined
-          ? null
-          : evaluateFanslyStreamGate(effective, gate.stream, page.label);
-        return {
-          stream: state.stream,
-          status: state.status,
-          phase: state.phase ?? null,
-          succeededAt: state.succeededAt ? new Date(state.succeededAt).toISOString() : null,
-          failedAt: state.failedAt ? new Date(state.failedAt).toISOString() : null,
-          consecutiveFailures: state.consecutiveFailures,
-          blockerKind: state.blockerKind ?? null,
-          blockerCode: state.blockerCode ?? null,
-          flagEnabled: verdict?.flagEnabled ?? null,
-          allowlisted: verdict?.allowlisted ?? null,
-          progress: {
-            journaled: intOrNull(progress.journaled),
-            callsToday: intOrNull(progress.callsToday),
-            calledToday: intOrNull(progress.calledToday),
-            dailyCap: intOrNull(progress.dailyCap),
-            deferred: stringOrNull(progress.deferred),
-            mediaKnown: intOrNull(progress.mediaKnown),
-            queueSize: intOrNull(progress.queueSize),
-            dueToday: intOrNull(progress.dueToday),
-            deferredToday: intOrNull(progress.deferredToday),
-            neverVisited: intOrNull(progress.neverVisited),
-            backfillComplete: intOrNull(progress.backfillComplete),
-            backfillStopped: intOrNull(progress.backfillStopped),
-            estimatedCycleDays: numberOrNull(progress.estimatedCycleDays),
-            requestsPerDayWanted: numberOrNull(progress.requestsPerDayWanted),
-            saturating: boolOrNull(progress.saturating),
-            longTailCycleDays: numberOrNull(progress.longTailCycleDays),
-            uniqueMediaCount: intOrNull(progress.uniqueMediaCount),
-            vaultMemberUniqueCount: intOrNull(progress.vaultMemberUniqueCount),
-            albumMembershipSum: intOrNull(progress.albumMembershipSum),
-            vaultWalkStatus: stringOrNull(progress.vaultWalkStatus),
-            rootsKnown: intOrNull(progress.rootsKnown),
-            rootsWalked: intOrNull(progress.rootsWalked),
-            rootsDirty: intOrNull(progress.rootsDirty),
-            postsKnown: intOrNull(progress.postsKnown),
-            commentsSeen: intOrNull(progress.commentsSeen),
-            commentsMissing: intOrNull(progress.commentsMissing),
-            possiblyTruncated: intOrNull(progress.possiblyTruncated),
-            paginationMode: stringOrNull(progress.paginationMode),
-            phase: stringOrNull(progress.phase),
-            seedComplete: boolOrNull(progress.seedComplete),
-          },
-        };
-      }),
+      // The Fansly Sync Engine reads this page's data; each legacy stream is
+      // described by the live work of the keys that took it over, as the
+      // Settings sync blocks describe it.
+      engine: facts === undefined
+        ? null
+        : {
+          mode: facts.page.mode,
+          streams: fanslyEngineLegacyStreams().map((stream) => {
+            const state = engineStreamState(stream, facts);
+            return {
+              stream,
+              resources: state.keys,
+              succeededAt: isoOrNull(state.succeededAt),
+              nextDueAt: isoOrNull(state.nextDueAt),
+              paused: state.paused,
+              needsAttention: state.needsAttention,
+              reason: state.statusReason?.summary ?? null,
+              consecutiveFailures: state.consecutiveFailures,
+            };
+          }),
+        },
       holdings: holdings.map((row) => ({
         projection: row.projection,
         rowCount: row.rowCount,

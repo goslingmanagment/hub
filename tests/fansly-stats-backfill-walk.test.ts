@@ -6,15 +6,6 @@ import {
   probeStatsMonth,
 } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import {
-  backfillContinuationAt,
-  hourlyCaptureDue,
-  isEmptyStatsMonth,
-  rollUtcDay,
-  servedEarningsWindow,
-  utcDayKey,
-  windowsAreContiguous,
-} from "../apps/runtime/src/services/sync/fansly-stats.ts";
-import {
   advanceBroadcastWalk,
   broadcastMessageRows,
   classifyStatsMonth,
@@ -119,23 +110,6 @@ describe("stats backfill cursor state", () => {
     expect(parseFanslyStatsCursorState({ version: 1, mode: "steady" }, NOW)).toBeNull();
   });
 
-  it("rolls the UTC day and nothing else", () => {
-    const state = {
-      ...emptyFanslyStatsCursorState(NOW),
-      callsToday: 25,
-      sweepDay: "2026-08-19",
-      stepIndex: 6,
-    };
-    const same = rollUtcDay(state, new Date("2026-08-19T23:59:59.999Z"));
-    expect(same.callsToday).toBe(25);
-    const rolled = rollUtcDay(state, new Date("2026-08-20T00:00:00.000Z"));
-    expect(rolled.callsToday).toBe(0);
-    expect(rolled.utcDay).toBe("2026-08-20");
-    expect(rolled.stepIndex).toBe(6);
-    expect(rolled.sweepDay).toBe("2026-08-19");
-    expect(utcDayKey(new Date("2026-01-01T00:00:00.000Z"))).toBe("2026-01-01");
-  });
-
   it("migrates an ambiguous v1 sweep conservatively so the current head is re-read once", () => {
     const inProgress = {
       ...emptyFanslyStatsCursorState(NOW),
@@ -165,33 +139,6 @@ describe("the hourly plane's clock", () => {
   // than 23 h apart can lose an hour for good.
   const HOUR = 3_600_000;
   const CAPTURED = Date.parse("2026-08-19T05:01:00.000Z");
-
-  it("is due on the last slot that keeps two captures within 23 h, and not before", () => {
-    // Asked on a slot, the next dispatch is six hours on. Twelve hours after a
-    // capture that next slot is still in time; eighteen hours after, not — so
-    // on 6-hourly slots the window is taken every third slot, 18 h apart.
-    const onSlot = (hoursSince: number) => hourlyCaptureDue(
-      CAPTURED, CAPTURED + hoursSince * HOUR, CAPTURED + (hoursSince + 6) * HOUR,
-    );
-    expect(onSlot(12)).toBe(false);
-    expect(onSlot(18)).toBe(true);
-    // Exactly 23 h is in time; a millisecond more is not.
-    const laterMs = CAPTURED + 17 * HOUR;
-    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR)).toBe(false);
-    expect(hourlyCaptureDue(CAPTURED, laterMs, CAPTURED + 23 * HOUR + 1)).toBe(true);
-    expect(hourlyCaptureDue(null, CAPTURED, CAPTURED)).toBe(true);
-  });
-
-  it("does not take the window again within the hour of the last capture", () => {
-    // A history walk at 00:05, asked against the NEXT 00:05: that is 24 h out
-    // even right after it captured, and its continuations follow seconds apart.
-    const walkMs = Date.parse("2026-08-20T00:05:00.000Z");
-    const nextDayStartMs = Date.parse("2026-08-21T00:05:00.000Z");
-    expect(hourlyCaptureDue(walkMs, walkMs + 20_000, nextDayStartMs)).toBe(false);
-    expect(hourlyCaptureDue(walkMs, walkMs + HOUR - 1, nextDayStartMs)).toBe(false);
-    // An hour on, a capture brings the next 00:05 back within 23 h.
-    expect(hourlyCaptureDue(walkMs, walkMs + HOUR, nextDayStartMs)).toBe(true);
-  });
 
   it("finds no served hole between captures up to 23 h apart, whatever the end lag does", () => {
     // Served the way the route serves an hourly window: snapped to the hour,
@@ -417,55 +364,6 @@ describe("account creation floor", () => {
   });
 });
 
-describe("window contiguity (§7)", () => {
-  it("accepts an overlap and rejects a hole", () => {
-    // The walk asks for 31-day windows with a one-day overlap, so the older
-    // window's END must reach at least the newer window's START. A gap means
-    // buckets were skipped — and because each next window is derived from the
-    // provider's RETURNED bounds, a gap is evidence the derivation drifted.
-    const newer = { afterMs: Date.UTC(2026, 4, 1), beforeMs: Date.UTC(2026, 7, 9) };
-    expect(windowsAreContiguous(
-      { afterMs: Date.UTC(2026, 1, 1), beforeMs: Date.UTC(2026, 4, 2) },
-      newer,
-    )).toBe(true);
-    // Exactly touching is contiguous: no bucket falls between them.
-    expect(windowsAreContiguous(
-      { afterMs: Date.UTC(2026, 1, 1), beforeMs: Date.UTC(2026, 4, 1) },
-      newer,
-    )).toBe(true);
-    expect(windowsAreContiguous(
-      { afterMs: Date.UTC(2026, 1, 1), beforeMs: Date.UTC(2026, 3, 1) },
-      newer,
-    )).toBe(false);
-  });
-
-  it("treats a window the provider did not describe as no contradiction", () => {
-    // Absence of served bounds is absence of EVIDENCE. Reporting a gap here
-    // would raise an anomaly about a window nobody described.
-    const newer = { afterMs: Date.UTC(2026, 4, 1), beforeMs: Date.UTC(2026, 7, 9) };
-    expect(windowsAreContiguous({ afterMs: null, beforeMs: null }, newer)).toBe(true);
-    expect(windowsAreContiguous({ afterMs: 1, beforeMs: 2 }, { afterMs: null, beforeMs: null }))
-      .toBe(true);
-  });
-});
-
-describe("backfill continuation spread", () => {
-  it("applies the configured delay with ±30% jitter", () => {
-    // Burst shape is the ban-risk surface: a chunk spends 5 requests in ~13 s
-    // and is re-queued immediately, so an unspaced deep walk runs contiguously
-    // at ~23 req/min for as long as it has work.
-    const base = new Date("2026-08-19T09:00:00.000Z");
-    expect(backfillContinuationAt(base, 20_000, () => 0.5).getTime() - base.getTime())
-      .toBe(20_000);
-    expect(backfillContinuationAt(base, 20_000, () => 0).getTime() - base.getTime())
-      .toBe(14_000);
-    expect(backfillContinuationAt(base, 20_000, () => 1).getTime() - base.getTime())
-      .toBe(26_000);
-    // A zero delay is "no spread", not a negative instant.
-    expect(backfillContinuationAt(base, 0, () => 0).getTime()).toBe(base.getTime());
-  });
-});
-
 describe("the unhonoured-window guard", () => {
   // PROD 2026-08-22 04:16–04:20 UTC, first enable on ari-1 (lilly-1 identical):
   // the walk asked for 100 days, the provider answered with its own default
@@ -537,27 +435,6 @@ describe("the unhonoured-window guard", () => {
     // The hourly lane's 4-day step is already below the floor: it must not be
     // WIDENED into a span the provider was just seen refusing.
     expect(narrowedSpanDays(4)).toBe(4);
-  });
-
-  it("reads the earnings window off the rows, since the route describes none", () => {
-    const rows = [
-      { type: 1, totalGross: 10, timestamp: Date.UTC(2026, 6, 3) },
-      { type: 2, totalGross: 20, timestamp: Date.UTC(2026, 6, 19) },
-      { type: 3, totalGross: 30, timestamp: Date.UTC(2026, 5, 30) },
-    ];
-    expect(servedEarningsWindow(rows)).toEqual({
-      afterMs: Date.UTC(2026, 5, 30),
-      beforeMs: Date.UTC(2026, 6, 19),
-    });
-    // Rows inside the asked-for window; rows from today against a historical
-    // window are the same refusal the daily lane hit.
-    expect(windowWasHonoured(requested, servedEarningsWindow(rows))).toBe(true);
-    expect(windowWasHonoured(requested, servedEarningsWindow([
-      { type: 1, timestamp: Date.UTC(2026, 7, 22) },
-    ]))).toBe(false);
-    // No rows is no evidence, not a refusal.
-    expect(servedEarningsWindow([])).toEqual({ afterMs: null, beforeMs: null });
-    expect(windowWasHonoured(requested, servedEarningsWindow([]))).toBe(true);
   });
 
   it("carries the guard across the checkpoint round-trip", () => {
@@ -684,21 +561,21 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
         }],
       },
     };
-    expect(isEmptyStatsMonth(zeroMonth)).toBe(true);
+    expect(classifyStatsMonth(zeroMonth)).toBe("empty");
     // ANY non-zero counter anywhere is traffic — including one inside a
     // profileDatapoints row, which is where an idle month's evidence lives.
     const oneView = JSON.parse(JSON.stringify(zeroMonth)) as typeof zeroMonth;
     oneView.dataset.profileDatapoints[0]!.stats[0]!.views = 1;
-    expect(isEmptyStatsMonth(oneView)).toBe(false);
+    expect(classifyStatsMonth(oneView)).not.toBe("empty");
     // `type` is identity, not a counter: a non-zero type must not read as data.
     const typeOnly = JSON.parse(JSON.stringify(zeroMonth)) as typeof zeroMonth;
-    expect(isEmptyStatsMonth(typeOnly)).toBe(true);
+    expect(classifyStatsMonth(typeOnly)).toBe("empty");
     // A valid dataset with no rows is empty; a missing envelope is INVALID and
     // must not be mistaken for evidence that the provider has no older data.
-    expect(isEmptyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe(true);
-    expect(isEmptyStatsMonth(null)).toBe(false);
+    expect(classifyStatsMonth({ dataset: { datapoints: [], profileDatapoints: [] } })).toBe("empty");
+    expect(classifyStatsMonth(null)).not.toBe("empty");
     // A dataset whose datapoints drifted is not an empty month either.
-    expect(isEmptyStatsMonth({ dataset: {} })).toBe(false);
+    expect(classifyStatsMonth({ dataset: {} })).not.toBe("empty");
   });
 
   it("reads the EXACT terminal-null month as empty — the canonicalizer's shape, nothing wider", () => {
@@ -706,7 +583,6 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     // this, 200 and all, and the walk threw on it six times running.
     const terminalNull = { dataset: null, aggregationData: null };
     expect(classifyStatsMonth(terminalNull)).toBe("empty");
-    expect(isEmptyStatsMonth(terminalNull)).toBe(true);
     expect(canParseFanslyStatsObservation({
       kind: "account_stats",
       payload: terminalNull,
@@ -725,7 +601,6 @@ describe("the month form — the only history /it/amoie/stats serves", () => {
     ];
     for (const payload of nearMisses) {
       expect(classifyStatsMonth(payload)).toBe("invalid");
-      expect(isEmptyStatsMonth(payload)).toBe(false);
       expect(canParseFanslyStatsObservation({
         kind: "account_stats",
         payload,

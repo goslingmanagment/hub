@@ -6,12 +6,10 @@ import { parseVaultWalkProof, type VaultWalkProof } from "./vault-walk-proof.ts"
 // The catalog rules of the Sync Engine's `catalog.*` resources
 // (resources/catalog.ts): the observation kind of each catalog route, the
 // `catalog` cursor with each vault album's walk, and the reads of a served
-// page (its response class, the vault rows and the next `before`). Pure. The
-// legacy `catalog` lane (fansly-catalog.ts) imports them from here until step 4
-// deletes it.
+// page (its response class, the vault rows and the next `before`). Pure.
 
 /** One kind PER ROUTE: nine routes, nine response shapes. */
-export const FANSLY_CATALOG_OBSERVATION_KINDS = {
+const FANSLY_CATALOG_OBSERVATION_KINDS = {
   vaultAlbums: "vault_albums",
   userVaultAlbums: "uservault_albums",
   subscriptionTiers: "subscription_tiers",

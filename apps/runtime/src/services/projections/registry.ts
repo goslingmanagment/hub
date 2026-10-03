@@ -434,7 +434,7 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   {
     table: "capture_coverage",
     stateClass: "operational_state",
-    writer: "services/sync/fansly-stats.ts",
+    writer: "sync/fansly/lib/lane.ts",
     justification:
       "A17-6: cursors, floors and blockers that no event carries. `proof_observation_id` "
       + "points into the 100-year journal at the response that proves the claim, so the "

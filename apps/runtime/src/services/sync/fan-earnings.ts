@@ -8,7 +8,8 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
-import { evaluateFanslyStreamGate, isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { isPageAllowlisted } from "@agency_hub_core/shared";
+import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { captureFanEarningsEndpoint } from "./fan-earnings-capture.ts";
 import {
   executeFanEarningsRecovery, FAN_EARNINGS_UNCONFIRMED_COVERAGE_HOLD,

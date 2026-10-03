@@ -103,7 +103,7 @@ const COVERED = {
     coveredPlane("catalog"),
     coveredPlane("post_replies"),
   ],
-  streams: [],
+  engine: { mode: "live", streams: [] },
   holdings: [],
 };
 
@@ -113,7 +113,7 @@ const EMPTY = {
   traffic: { rows: [] },
   media: { media: [], top: [], bucketsTruncated: false },
   tags: { topTags: [], platformTags: [] },
-  coverage: { planes: [], streams: [], holdings: [] },
+  coverage: { planes: [], engine: { mode: "live", streams: [] }, holdings: [] },
   comments: { perPost: [], likers: { rows: [] } },
   revenue: { daily: [], months: [] },
 };

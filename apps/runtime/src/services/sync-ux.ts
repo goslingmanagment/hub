@@ -5,26 +5,19 @@ type SyncUxState = SyncUxSummary["state"];
 
 /** Stage 16 bulk enrichment streams (decision #166). They stay VISIBLE with
  *  their own honest per-stream state on the detailed monitor, but they must
- *  never dominate a page or fleet rollup: both ramp flags default to false, so
- *  letting a gated bulk stream vote would make every Fansly page — and the
- *  whole fleet — read "Off" forever on a default configuration. Shared by every
- *  rollup site so the filters cannot drift apart. */
+ *  never dominate a page or fleet rollup: each was a gated legacy lane that
+ *  defaulted off, and since step 4 the Fansly Sync Engine reads these resources
+ *  while the legacy rows stay frozen. Letting them vote would make every Fansly
+ *  page — and the whole fleet — read "Off". Shared by every rollup site so the
+ *  filters cannot drift apart. */
 export const BULK_ENRICHMENT_SYNC_STREAMS: readonly SyncStream[] = [
   "fan_earnings",
   "purchase_history",
-  // WP-F1: same reasoning, same default. `fanslyStatsSnapshotSyncEnabled`
-  // defaults false, so letting this lane vote would make every Fansly page —
-  // and the fleet — read "Off" from the deploy that ships it.
   "stats_snapshot",
-  // WP-F2: same default, same consequence.
   "notifications",
-  // WP-F3: same default, same consequence.
   "catalog",
-  // WP-F5: same default, same consequence.
   "post_replies",
-  // WP-F7: same default, same consequence.
   "payouts",
-  // WP-F4: same default, same consequence.
   "media_stats",
 ];
 

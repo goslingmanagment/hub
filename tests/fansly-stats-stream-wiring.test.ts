@@ -109,34 +109,6 @@ describe("stats_snapshot stream wiring", () => {
     expect(FANSLY_BULK_SYNC_STREAMS).toContain("stats_snapshot");
   });
 
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
-    // The registration itself lives in modules/ops; what is pinned here is that
-    // the KEYS exist with the shapes that registration reads.
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyStatsSnapshotSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyStatsSnapshotPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // FAIL-CLOSED semantics are the whole point of a per-stream key, and the
-    // note is where an operator reads which rule applies.
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
-
-    const budget = byKey.get("fanslyStatsSnapshotDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    expect(budget?.default).toBe("25");
-    expect(budget?.min).toBe(1);
-    expect(budget?.max).toBeGreaterThan(25);
-
-    expect(byKey.get("fanslyStatsHourlyEnabled")?.default).toBe("true");
-    expect(byKey.get("fanslyStatsHourlyBackfillMaxDays")?.default).toBe("30");
-    expect(byKey.get("fanslyBackfillContinuationDelayMs")?.default).toBe("20000");
-  });
-
   // A28-4's negative pins. These mechanisms were DELETED, and a key reappearing
   // is how a deleted mechanism comes back without a decision.
   it("adds no global per-page request cap, no byte ceiling and no per-egress-key day counter", () => {
@@ -209,29 +181,6 @@ describe("notifications stream wiring", () => {
     expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("notifications");
     expect(MONITORED_SYNC_STREAMS).toContain("notifications");
   });
-
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyNotificationsSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyNotificationsPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // Its OWN key, on the FAIL-CLOSED template (S4). Reading this lane through
-    // the shared new-stream key would open it fleet-wide on the deploy.
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
-
-    const budget = byKey.get("fanslyNotificationsDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    // 48 head polls + pagination, in HTTP ATTEMPTS.
-    expect(budget?.default).toBe("96");
-    expect(budget?.min).toBe(1);
-    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
-  });
 });
 
 // WP-F3 — the same fourteen sites for `catalog`.
@@ -289,29 +238,6 @@ describe("catalog stream wiring", () => {
     expect(isBulkEnrichmentSyncStream("catalog")).toBe(true);
     expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("catalog");
     expect(MONITORED_SYNC_STREAMS).toContain("catalog");
-  });
-
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyCatalogSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyCatalogPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // Its OWN key, on the FAIL-CLOSED template (S4).
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
-
-    const budget = byKey.get("fanslyCatalogDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    // Six fixed steps plus the vault walk plus the batch hydrations, in
-    // HTTP ATTEMPTS.
-    expect(budget?.default).toBe("60");
-    expect(budget?.min).toBe(1);
-    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
   });
 });
 
@@ -374,45 +300,6 @@ describe("post_replies stream wiring", () => {
     expect(isBulkEnrichmentSyncStream("post_replies")).toBe(true);
     expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("post_replies");
     expect(MONITORED_SYNC_STREAMS).toContain("post_replies");
-  });
-
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyPostRepliesSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyPostRepliesPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // Its OWN key, on the FAIL-CLOSED template (S4).
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
-  });
-
-  it("SHIPS AT 100 CALLS A DAY with 400 as the registry ceiling", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const budget = byKey.get("fanslyRepliesDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    // The raise to 300 is a SEPARATE, criteria-gated config flip with its own
-    // window (A29). Shipping at 300 would spend the ritual before the criteria
-    // could be measured, so 100 is pinned here rather than trusted.
-    expect(budget?.default).toBe("100");
-    expect(budget?.min).toBe(1);
-    // 400 without a fresh owner decision — the registry is what makes that a
-    // refusal rather than a note in a document.
-    expect(budget?.max).toBe(400);
-    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
-
-    const cycle = byKey.get("fanslyRepliesRewalkCycleDays");
-    expect(cycle?.kind).toBe("number");
-    expect(cycle?.default).toBe("14");
-    expect(cycle?.runtimeApply).toBe("live");
-    // It changes WHICH posts the budget is spent on, never HOW MANY calls are
-    // made — the wording matters because a tunable that looks like a throttle
-    // gets edited like one.
-    expect(cycle?.costWarning).toMatch(/does not raise egress|NOT change egress/i);
   });
 });
 
@@ -477,39 +364,6 @@ describe("payouts stream wiring", () => {
     expect(isBulkEnrichmentSyncStream("payouts")).toBe(true);
     expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("payouts");
     expect(MONITORED_SYNC_STREAMS).toContain("payouts");
-  });
-
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyPayoutsSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyPayoutsPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // Its OWN key, on the FAIL-CLOSED template (S4). It matters more here than
-    // anywhere else in the initiative: this lane reads payout credentials, and
-    // the `fanslyNewStreamPageAllowlist` semantic (empty = ALL pages) would
-    // have opened it fleet-wide on the deploy that shipped it.
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
-  });
-
-  it("SHIPS AT 20 CALLS A DAY against a steady state of two", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const budget = byKey.get("fanslyPayoutsDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    // §6.1's CORRECTED number. The pre-A28 8 was sized for F7 alone and then
-    // kept while the plan believed the wallet ledger rode this lane; the ledger
-    // turned out to be a duplicate of the existing `transactions` stream
-    // (A28-1) and was deleted, but 20 stays — it is what leaves the one-off
-    // nine-call offset walk room to finish on the day the lane is enabled.
-    expect(budget?.default).toBe("20");
-    expect(budget?.min).toBe(1);
-    expect(budget?.max).toBe(100);
-    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
   });
 });
 
@@ -576,57 +430,49 @@ describe("media_stats stream wiring", () => {
     expect(BULK_ENRICHMENT_SYNC_STREAMS).toContain("media_stats");
     expect(MONITORED_SYNC_STREAMS).toContain("media_stats");
   });
+});
 
-  it("registers its gate keys so opening the gate wakes the lane (#192)", () => {
+// Step 4 retired the legacy content lanes: the Fansly Sync Engine's registry
+// paces these resources, so their stream flags, page allowlists, daily call
+// budgets and continuation delay are read by nothing. Each stays registered,
+// ignored, until the retired keys are removed together.
+describe("the legacy content lanes' keys are retired", () => {
+  const RETIRED = [
+    "fanslyStatsSnapshotSyncEnabled", "fanslyStatsSnapshotPageAllowlist", "fanslyStatsSnapshotDailyCallBudget",
+    "fanslyNotificationsSyncEnabled", "fanslyNotificationsPageAllowlist", "fanslyNotificationsDailyCallBudget",
+    "fanslyCatalogSyncEnabled", "fanslyCatalogPageAllowlist", "fanslyCatalogDailyCallBudget",
+    "fanslyPostRepliesSyncEnabled", "fanslyPostRepliesPageAllowlist", "fanslyRepliesDailyCallBudget",
+    "fanslyPayoutsSyncEnabled", "fanslyPayoutsPageAllowlist", "fanslyPayoutsDailyCallBudget",
+    "fanslyMediaStatsSyncEnabled", "fanslyMediaStatsPageAllowlist", "fanslyMediaStatsDailyCallBudget",
+    "fanslyMediaStatsLongTailCycleDays",
+    "fanslyPostEngagementRefreshEnabled", "fanslyPostEngagementDailyCallBudget",
+    "fanslyStatsHourlyEnabled", "fanslyStatsHourlyBackfillMaxDays",
+    "fanslyBackfillContinuationDelayMs",
+  ];
+
+  it("keeps each one registered, labelled retired and applied nowhere", () => {
     const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const enabled = byKey.get("fanslyMediaStatsSyncEnabled");
-    expect(enabled?.kind).toBe("boolean");
-    expect(enabled?.default).toBe("false");
-    expect(enabled?.runtimeApply).toBe("live");
-
-    const allowlist = byKey.get("fanslyMediaStatsPageAllowlist");
-    expect(allowlist?.kind).toBe("string");
-    expect(allowlist?.default).toBe("");
-    expect(allowlist?.runtimeApply).toBe("live");
-    // Its OWN key, on the FAIL-CLOSED template (S4). The fail-OPEN semantic
-    // here would start a 300-call-a-day per-media walk on every Fansly page on
-    // the deploy that shipped the lane.
-    expect(allowlist?.note).toMatch(/FAILS CLOSED/);
+    for (const key of RETIRED) {
+      const descriptor = byKey.get(key);
+      expect(descriptor, key).toBeDefined();
+      expect(descriptor?.runtimeApply, key).toBe("none");
+      expect(descriptor?.label, key).toMatch(/— retired, ignored$/);
+      expect(descriptor?.costWarning, key).toBeUndefined();
+    }
   });
 
-  it("SHIPS AT 300 CALLS A DAY and says the saturation out loud", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const budget = byKey.get("fanslyMediaStatsDailyCallBudget");
-    expect(budget?.kind).toBe("number");
-    // A16's number, and the lane is DESIGNED to spend it: at M = 2 000 the
-    // decay wants 294 a day.
-    expect(budget?.default).toBe("300");
-    expect(budget?.min).toBe(1);
-    // The registry ceiling. A raise toward what the decay wants is a NAMED
-    // per-lane owner step, which the ceiling is what makes refusable.
-    expect(budget?.max).toBe(1000);
-    expect(budget?.costWarning).toMatch(/ATTEMPTS/);
-    // The cost warning must SAY that the long tail goes quarterly at M = 5 000
-    // — A16's honesty rule is that the plan never calls it monthly when it is
-    // not, and the registry is where an operator reads it.
-    expect(budget?.costWarning).toMatch(/QUARTERLY/i);
-  });
-
-  it("makes the long-tail cycle tunable and the age boundaries NOT", () => {
-    const byKey = new Map(CONFIG_DESCRIPTORS.map((descriptor) => [descriptor.key, descriptor]));
-    const cycle = byKey.get("fanslyMediaStatsLongTailCycleDays");
+  it("keeps the replies re-walk cycle live: it changes which posts, never the request rate", () => {
+    const cycle = CONFIG_DESCRIPTORS.find((descriptor) => descriptor.key === "fanslyRepliesRewalkCycleDays");
     expect(cycle?.kind).toBe("number");
-    expect(cycle?.default).toBe("30");
+    expect(cycle?.default).toBe("14");
     expect(cycle?.runtimeApply).toBe("live");
-    // It changes WHICH media the budget is spent on, never HOW MANY calls are
-    // made — the wording matters because a tunable that looks like a throttle
-    // gets edited like one.
-    expect(cycle?.costWarning).toMatch(/does not raise egress/i);
+    // The wording matters: a tunable that looks like a throttle gets edited
+    // like one.
+    expect(cycle?.costWarning).toMatch(/does not raise the request rate/i);
+  });
 
-    // The three age-class boundaries are CONSTANTS, deliberately: they describe
-    // how traffic decays with an item's age, which is a property of the
-    // platform, not a knob. A key appearing here would be scope creep with a
-    // config row attached.
+  it("adds no media-stats age boundary as a key", () => {
+    // The age tiers are the engine registry's (owner decision №6), not knobs.
     const keys = new Set(CONFIG_DESCRIPTORS.map((descriptor) => descriptor.key));
     expect(keys.has("fanslyMediaStatsFreshDays")).toBe(false);
     expect(keys.has("fanslyMediaStatsMidDays")).toBe(false);

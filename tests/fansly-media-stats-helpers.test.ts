@@ -1,11 +1,9 @@
-// WP-F4 — the media-stats lane's pure helpers: the floor rule, the A16 cycle
-// arithmetic, the backfill cursor and window helpers. No database: the queue,
-// window and coverage invariants that need one stay in
-// fansly-media-stats-lane.integration.test.ts.
+// WP-F4 — the media-stats walk's pure rules (`sync/fansly/lib/media-stats-rules.ts`),
+// which the engine's media-stats resource reads: the floor rule, the backfill
+// cursor and window helpers. No database.
 
 import { describe, expect, it } from "vitest";
 
-import { estimateMediaStatsCycle } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import {
   answeredFloor,
   countMediaStatBuckets,
@@ -60,137 +58,6 @@ describe("media_stats lane — the windows and their guards", () => {
       beforeMs: NOW.getTime(),
       periodMs: 86_400_000,
     }))).toBe(false);
-  });
-});
-
-describe("media_stats — the cycle arithmetic (A16)", () => {
-  // A16's binding table, at the stated publication rate of 5 media a day:
-  // fresh (<=30 d) = 150, mid (31-180 d) = 750, and the rest is long tail.
-  //
-  //   requestsPerDayWanted = H + Mid/7 + L/cycle
-  //   estimatedCycleDays   = L / (cap - H - Mid/7)
-  //
-  // The weekly term is deliberately NOT rounded before it is applied: A16's own
-  // numbers only reproduce on the unrounded one, and a lane that reported 98
-  // days where the owner's table says 96 would be reporting a different design.
-  const rows = [
-    { m: 2_000, wanted: 294, cycle: 26 },
-    { m: 5_000, wanted: 394, cycle: 96 },
-    { m: 10_000, wanted: 560, cycle: 212 },
-    { m: 20_000, wanted: 894, cycle: 446 },
-  ];
-
-  for (const row of rows) {
-    it(`reproduces A16's row for M = ${row.m}`, () => {
-      const estimate = estimateMediaStatsCycle({
-        fresh: 150,
-        mid: 750,
-        longTail: row.m - 900,
-        dailyCap: 300,
-        longTailCycleDays: 30,
-      });
-      expect(estimate.requestsPerDayWanted).toBe(row.wanted);
-      expect(estimate.estimatedCycleDays).toBe(row.cycle);
-      // 294 against a cap of 300 is NOT saturating; everything above it is, and
-      // this lane is exempt from the 70 %-of-its-own-cap rule by design.
-      expect(estimate.saturating).toBe(row.m > 2_000);
-      // 96 days is QUARTERLY. The plan must never call it monthly.
-      expect(estimate.quarterlyOrWorse).toBe(row.cycle > 90);
-    });
-  }
-
-  it("never claims a cycle it cannot fund when the daily tiers alone exceed the cap", () => {
-    const estimate = estimateMediaStatsCycle({
-      fresh: 400,
-      mid: 700,
-      longTail: 5_000,
-      dailyCap: 300,
-      longTailCycleDays: 30,
-    });
-    expect(estimate.saturating).toBe(true);
-    // The denominator is clamped to 1, so the number means "at LEAST this many
-    // days" — the long tail is not being funded at all, and the due backlog is
-    // what says so.
-    expect(estimate.estimatedCycleDays).toBe(5_000);
-    expect(estimate.quarterlyOrWorse).toBe(true);
-  });
-
-  it("counts a SPLIT long tail at three calls a visit", () => {
-    // M = 2 000 again, on a page whose route refuses 90 days: each long-tail
-    // visit is three 31-day windows, so the long tail wants three times the
-    // calls and comes round three times slower on the same leftover.
-    const estimate = estimateMediaStatsCycle({
-      fresh: 150,
-      mid: 750,
-      longTail: 1_100,
-      dailyCap: 300,
-      longTailCycleDays: 30,
-      longTailRequestsPerVisit: 3,
-    });
-    expect(estimate.requestsPerDayWanted).toBe(Math.round(150 + 750 / 7 + (3 * 1_100) / 30));
-    expect(estimate.estimatedCycleDays).toBe(Math.round((3 * 1_100) / (300 - 150 - 750 / 7)));
-    expect(estimate.saturating).toBe(true);
-  });
-
-  it("counts a never-visited item at its FIRST visit's cost while that backlog lasts", () => {
-    const census = {
-      fresh: 20,
-      mid: 350,
-      longTail: 1_000,
-      dailyCap: 300,
-      longTailCycleDays: 30,
-      longTailRequestsPerVisit: 3,
-    };
-    const backlog = estimateMediaStatsCycle({
-      ...census,
-      neverVisited: { fresh: 5, mid: 70, longTail: 300 },
-    });
-    // A first visit walks the item's history: two windows for a fresh item —
-    // its trailing window and the one below it, where its creation ends the
-    // walk — and the visit's whole four for mid and the long tail.
-    const fresh = 15 + 5 * 2;
-    const weekly = (280 + 70 * 4) / 7;
-    const longTail = 700 * 3 + 300 * 4;
-    expect(backlog.requestsPerDayWanted).toBe(Math.round(fresh + weekly + longTail / 30));
-    // The long tail waits for the first looks ahead of it — what they cost
-    // over a steady visit, paid ONCE — then takes what the steady fresh and
-    // mid visits leave. Its own first looks are part of its cycle.
-    const firstLooksAhead = 5 * (2 - 1) + 70 * (4 - 1);
-    expect(backlog.estimatedCycleDays)
-      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 20 - 350 / 7)));
-    // No backlog, no change: the steady arithmetic above still holds.
-    expect(estimateMediaStatsCycle({
-      ...census,
-      neverVisited: { fresh: 0, mid: 0, longTail: 0 },
-    })).toEqual(estimateMediaStatsCycle(census));
-  });
-
-  it("prices the first-look backlog ONCE, so the long tail's cycle does not collapse to the clamp", () => {
-    // lora-1's census, production 2026-09-30: the steady fresh and mid visits
-    // leave 14 calls a day. Charged every week, 399 never-visited mid items at
-    // four calls each would take 171 of the cap a day, drive that leftover
-    // below zero and report the clamp — the long tail's whole cost in days,
-    // 7 874 of them — although the backlog clears once and the long tail is
-    // funded again after it.
-    const estimate = estimateMediaStatsCycle({
-      fresh: 199,
-      mid: 608,
-      longTail: 1_984,
-      dailyCap: 300,
-      longTailCycleDays: 30,
-      longTailRequestsPerVisit: 3,
-      neverVisited: { fresh: 14, mid: 399, longTail: 1_922 },
-    });
-    const firstLooksAhead = 14 * (2 - 1) + 399 * (4 - 1);
-    const longTail = 62 * 3 + 1_922 * 4;
-    expect(estimate.estimatedCycleDays)
-      .toBe(Math.round((firstLooksAhead + longTail) / (300 - 199 - 608 / 7)));
-    expect(estimate.estimatedCycleDays).toBe(642);
-    // What the tiers WANT still prices each first look within its tier's
-    // cadence: that is the rate that would keep every tier on time.
-    expect(estimate.requestsPerDayWanted)
-      .toBe(Math.round(199 + 14 + (608 + 399 * 3) / 7 + longTail / 30));
-    expect(estimate.saturating).toBe(true);
   });
 });
 

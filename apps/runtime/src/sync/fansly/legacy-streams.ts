@@ -26,6 +26,12 @@ const SECOND_MS = 1_000;
 const TABLE = fanslyLegacyStreamTable();
 const SPEC_BY_KEY = new Map(FANSLY_RESOURCE_SPECS.map((spec) => [spec.key, spec] as const));
 
+/** Every legacy stream some registry key takes over, in order of first
+ *  appearance in the registry. */
+export function fanslyEngineLegacyStreams(): SyncStream[] {
+  return [...new Set(TABLE.flatMap(([, streams]) => streams))];
+}
+
 /** The registry keys that take over any of `streams`, in registry order. */
 export function fanslyKeysForStreams(streams: readonly SyncStream[]): string[] {
   const wanted = new Set(streams);

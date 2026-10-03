@@ -32,7 +32,7 @@ import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { assertPageTransactionsWriter } from "../transactions-writer-gate.ts";
 import { DAY_MS, persistRawPayload, retentionDate } from "./shared.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
+import { isPageAllowlisted } from "@agency_hub_core/shared";
 import {
   buildBackfillProgressMessage,
   isoDateOrNull,

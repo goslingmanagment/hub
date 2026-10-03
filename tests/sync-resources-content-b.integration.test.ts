@@ -703,7 +703,7 @@ describe("media-stats.walk", () => {
     // The visit began before midnight, after that day's mark, and has its
     // first answer.
     const candidates = await listMediaStatsRefreshChunk(db(), {
-      pageId, limit: 10, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+      pageId, limit: 10, now: new Date(), tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
     });
     const begun = startMediaVisit(candidates.find((candidate) => candidate.subjectRef === ITEM_LONG)!, page, new Date(Date.now() - 10 * 60_000));
     const first = runMediaVisit(begun);
@@ -858,7 +858,7 @@ describe("media-stats.walk", () => {
     // The visit in flight began under other rules: the window it recorded is
     // not one today's code asks for.
     const [candidate] = await listMediaStatsRefreshChunk(db(), {
-      pageId, limit: 1, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+      pageId, limit: 1, now: new Date(), tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
     });
     const begun = startMediaVisit(candidate!, { longTailWindowMode: "unproven", longTailWindowAnnounced: false, longTailProbeFailedDay: null }, new Date());
     await setCursor(pageId, "media-stats.walk", {
