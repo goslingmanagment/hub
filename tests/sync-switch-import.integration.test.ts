@@ -202,27 +202,28 @@ describe("the switch's legacy import: holds (I.4)", () => {
     expect((handed as { lastCompletedAt: Date }).lastCompletedAt.getTime()).toBeGreaterThanOrEqual(legacyUntil.getTime());
   }, 60_000);
 
-  for (const [file, kind] of [["dm-conversations", "rate_limit_list"], ["media-stats", "rate_limit_media_stats"]] as const) {
-    it(`a rollback moves the legacy guard past an endpoint group's 429 hold in force (${kind}; legacy has no endpoint holds)`, async (context) => {
-      if (!testDb) return context.skip();
-      const page = await handoverPage(`import-holds-${file}`);
-      await importOnce(page);
-      const until = (await testDb.pool.query<{ until: Date }>(
-        `update sync_pages
-            set resource_holds = jsonb_build_object($2::text, jsonb_build_object(
-                  'until', clock_timestamp() + interval '2 minutes', 'step', 3, 'since', clock_timestamp(), 'kind', $3::text)),
-                owner_released_at = clock_timestamp(), owner_release_generation = owner_generation
-          where page_id = $1
-        returning (resource_holds -> $2::text ->> 'until')::timestamptz as until`,
-        [page.pageId, file, kind],
-      )).rows[0]!.until;
-      await ensureFanslyPageSendGuard(db(), page.pageId);
-      await testDb.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [page.pageId]);
-      const handed = await handFanslySendGuardBackToLegacy(db(), { pageId: page.pageId });
-      expect(handed.kind).toBe("handed");
-      expect((handed as { lastCompletedAt: Date }).lastCompletedAt.getTime()).toBeGreaterThanOrEqual(until.getTime());
-    }, 60_000);
-  }
+  it("the legacy guard's floor never carries a route hold (A4): it would stop every endpoint of the page", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await handoverPage("import-holds-route");
+    await importOnce(page);
+    const before = (await testDb.pool.query<{ now: Date; until: Date }>(
+      `update sync_pages
+          set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes', jsonb_build_object(
+                'media.offer_stats', jsonb_build_object('holdUntil', clock_timestamp() + interval '2 minutes', 'ladderStep', 1,
+                  'effectivePerMin', 2.5, 'policyVersion', null, 'last429AttemptId', 1, 'last429At', clock_timestamp(), 'revision', 1)))),
+              owner_released_at = clock_timestamp(), owner_release_generation = owner_generation
+        where page_id = $1
+      returning clock_timestamp() as now, (resource_holds #>> '{route:state,routes,media.offer_stats,holdUntil}')::timestamptz as until`,
+      [page.pageId],
+    )).rows[0]!;
+    await ensureFanslyPageSendGuard(db(), page.pageId);
+    await testDb.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [page.pageId]);
+    const handed = await handFanslySendGuardBackToLegacy(db(), { pageId: page.pageId });
+    expect(handed.kind).toBe("handed");
+    const floor = (handed as { lastCompletedAt: Date }).lastCompletedAt.getTime();
+    expect(floor).toBeLessThan(before.until.getTime() - 60_000);
+    expect(floor - before.now.getTime()).toBeLessThan(5_000);
+  }, 60_000);
 });
 
 /** A legacy breaker in force on the chat's thread (`page_dm_message_sync_health`),

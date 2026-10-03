@@ -33,7 +33,6 @@ import {
 
 import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import { listRateLimitHold, type ResourceHoldEntry } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -47,6 +46,8 @@ import type {
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
+import { routeHoldUntil } from "../../engine/route-holds.ts";
+import { parseRouteState } from "../../engine/route-policy.ts";
 import {
   listHeadInstant,
   listHeadNeedsRead,
@@ -79,7 +80,7 @@ import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/rep
 //   twice; past that it closes withheld.
 // - find (urgent, a socket event in an unknown chat): the list head; if the
 //   chat is not on it, its group detail, which creates the thread (D5). While
-//   a list 429 holds the list (owner decision 2026-10-02, `rate_limit_list`:
+//   a 429 holds the list's route (`messaging.groups`, owner decision №22:
 //   only the keys that can only read the list wait), straight to the detail.
 // - detail (planned, from a list apply): the group detail of a chat whose
 //   partner the list could not name; a 5xx breaks only this chat (§9).
@@ -983,9 +984,10 @@ const findModule: ResourceModule = {
     const groupId = work.subject;
     if (groupId.length === 0) return { kind: "quarantine", reason: "find_without_chat" };
     const cursor = parseFindCursor(work.cursor);
-    // While a list 429 holds the list (owner decision 2026-10-02), the chat is
-    // found through its group detail alone.
-    const listHeld = listRateLimitHold(ctx.page.resourceHolds as Record<string, ResourceHoldEntry>, ctx.now) !== null;
+    // While a 429 holds the list's route, the chat is found through its group
+    // detail alone.
+    const routes = parseRouteState(ctx.page.routeState);
+    const listHeld = routes.ok && routeHoldUntil(routes.state, "messaging.groups", ctx.now) !== null;
     return planWithIdentity(FIND_KEY, ctx, () => ({
       kind: "request",
       request: !ctx.shadow && (cursor.step === "detail" || listHeld) ? detailRequest(groupId) : listRequest(0),

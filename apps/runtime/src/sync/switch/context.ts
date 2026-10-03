@@ -24,6 +24,12 @@ export interface SwitchTiming {
   ownerRetryMs: number;
   /** Rollback step 2: the live owner's safe release within this long. */
   releaseTimeoutMs: number;
+  /** Rollback: the hand-back waits at most this long for the page's route
+   *  holds to end (A4) — the ladder's top, 300 s + 20 % jitter, fits; a longer
+   *  `Retry-After` exits (run the rollback again after it) … */
+  routeHoldWaitMs: number;
+  /** … re-reading the page's route state this often. */
+  routeHoldRetryMs: number;
   /** The first switched page opens its history requests this long after C. */
   firstPageRequestsDelayMs: number;
 }
@@ -36,6 +42,8 @@ export const SWITCH_TIMING: SwitchTiming = {
   ownerTimeoutMs: 2 * 60_000,
   ownerRetryMs: 1_000,
   releaseTimeoutMs: 60_000,
+  routeHoldWaitMs: 6.5 * 60_000,
+  routeHoldRetryMs: 5_000,
   firstPageRequestsDelayMs: 60 * 60_000,
 };
 
@@ -75,6 +83,9 @@ export const SWITCH_EXIT = {
   noLiveOwner: 4,
   /** The rollback refuses under an auth/identity hold. */
   authHold: 5,
+  /** The rollback waits for the page's route holds to end (or cannot read
+   *  its route state): run it again later. */
+  waitsForRouteHolds: 6,
 } as const;
 
 /** A duration for the operator's line, in whole seconds (rounded up). */

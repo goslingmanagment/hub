@@ -27,9 +27,10 @@ import type {
 // - apply: the 101 closes the work; the connection row
 //   (`fansly_ws_connections`) is the record.
 // - outcome: a 401/403 at the handshake is the page's `auth` hold and a 429
-//   (or a 5xx naming its `Retry-After`) the page's `rate_limit` hold with
-//   alert 1 — plan §9 names the socket connection among the held requests, so
-//   neither goes to the reconnect ladder. Any other status, a transport error
+//   (or a 5xx naming its `Retry-After`) holds the Upgrade's route
+//   (`ws.upgrade`, `engine/route-holds.ts`) with the route's own incident —
+//   neither goes to the reconnect ladder: the work stays open and the route
+//   admission keeps it out until the route opens. Any other status, a transport error
 //   or a timeout failed the handshake only: the work closes
 //   `failed_handshake` and the socket owner schedules the next attempt on its
 //   ladder — no page network streak, no subject or resource breaker (a
@@ -65,8 +66,8 @@ export function wsConnectPlan(state: WsSourceState | null, now: Date, notBefore:
 }
 
 /** The error classes that are the handshake's own failure (the ladder's),
- *  never the page's: everything but a held page (auth, rate limit) and a
- *  success. */
+ *  never the page's or the route's: everything but a hold (auth, rate limit)
+ *  and a success. */
 const HANDSHAKE_FAILURES: ReadonlySet<string> = new Set([
   "network",
   "subject_failure",

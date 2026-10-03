@@ -220,7 +220,7 @@ These four keys never run in shadow (`liveOnly`, as the identity check `account.
 - `ws.connect` — the socket's HTTP Upgrade (wire `ws.upgrade`) as an admitted request: the page's socket owner
   (the slot's `FanslyWsSource`, seen by the actor and the transport as a `LivePageSocket`) asks for it at start and
   after every close, the actor admits it through the pacer — never before the owner's reconnect ladder allows
-  (`connectNotBefore`) — and the transport sends it through the owner's handshake with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 holds it `rate_limit`; any
+  (`connectNotBefore`) — and the transport sends it through the owner's handshake with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 (or a 5xx naming its `Retry-After`) holds only the Upgrade's route `ws.upgrade`; any
   other failure closes the work `failed_handshake` for the owner's reconnect ladder — no page network streak.
 - `repair.ws-gap` — after a socket gap: the conversation list from offset 0 down to the earliest gap of the
   unreconciled verified connections (60 s earlier; with none, the work's first demand), pages at the list route's budget,
@@ -232,7 +232,7 @@ These four keys never run in shadow (`liveOnly`, as the identity check `account.
 - `media-download.fetch` — the AI describer's CDN download of a chat file (wire `cdn.media`): the signed URL is
   the work's secret (`sync_work.secret_params`, sealed with the page-credentials box, read only by the live
   transport, dropped at close), one admission per hop, Fansly media CDN hosts only, ≤ 5 MiB; a 401/403 is the
-  signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the page. The bytes cross to
+  signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the `cdn.media` route. The bytes cross to
   the worker through the transient handoff table `sync_media_handoff` (owner decision №17): not a captured fact,
   consumed by the describer's read, swept after 24 h.
 
@@ -254,7 +254,7 @@ family version — a stamp at the DM family's own version would be replayed by i
 canonicalizes it and an excluded chat gets no events, messages or archive rows from a probe. A served page closes the
 probe `served: true` (messages, newest/oldest time, ids the socket showed first); a 403 (`subjectScopedAuthStatuses`),
 a declared 400/404/410/422, a `success: false` envelope or a refused body is the chat's answer: `served: false`,
-nothing held, no breaker. A 401 and a 429 stay the page's (plan §9).
+nothing held, no breaker. A 401 stays the page's (plan §9); a 429 holds the probe's route.
 
 `sync excluded report --page P [--reason R] [--record]` prints the newest probe's verdicts (served / not served /
 pending) with the evidence ids; `--record` keeps the summary as `admin.sync_dm_exclusion_probe`. `sync excluded lift
@@ -290,7 +290,7 @@ and storing a matching candidate makes its digest the trusted one, which lifts t
 (`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
 hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
 hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
-check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
+check's network failure under an auth hold is carried beside it (its 429 holds only its route) — the auth hold is never replaced or lifted by
 it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
 auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
 
@@ -336,8 +336,9 @@ refusals, nothing stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
-engine with its floor past the engine's last send and the end of an engine 429/list/network hold (also one an auth
-hold carries), live work
+engine with its floor past the engine's last send and the end of a real page hold (a legacy 429 hold the switch
+imported, a network hold; also one an auth hold carries) — never a route hold's: the page's route holds are waited
+out first (A4; exit 6 when one outlasts 6.5 min), live work
 cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
 state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
 auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
@@ -401,23 +402,22 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `running` | admitted; its request or apply is in progress | the step's completion |
 | `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, mode `off`/`handover`, or the previous owner's stop is not confirmed | the host acquiring the page (safe release, OS proof, container restart, `sync ownership confirm-stopped`) |
 | `paused` | the owner paused the page, its requests, or this resource | the owner |
-| `page_hold` | 429 (until `Retry-After`, else 2 → 4 → 8 → 30 min), 401/403 or identity mismatch (until new credentials), network (after 3 failures: 10 s → 5 min) | the hold's end; new credentials |
+| `page_hold` | a legacy 429 hold the switch imported (until its end), 401/403 or identity mismatch (until new credentials), network (after 3 failures: 10 s → 5 min) | the hold's end; new credentials |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
-| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`); or the conversation list answered 429: only the keys that can only read the list wait, 5 s → 10 s → … → 300 s | the hold's end |
+| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
-| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`; a request its planned route put off is due when that route opens) | the pause; the route's opening |
+| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`, and `detail.held` for the routes a 429 holds; a request its planned route put off is due when that route opens) | the pause; the route's opening |
 | `class_share` | runnable; the slot belongs to another class or to earlier work of its class | its turn |
 
 ## Errors
 
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
-transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
-except a 429 on an endpoint group with a quota of its own (`ENDPOINT_RATE_GROUPS`): the conversation list (owner
-decision №14) and the media statistics (owner decision №20), which holds only that group's keys. How often a route
-is read is its budget's (below), never a group's.
+transactions only write what it decided. The engine never changes `S`: a 429 holds ONLY the route that answered
+it — never the page, a resource file or the route's family — slows that route down and opens the route's own
+incident (route holds, below). How often a route is read is its budget's (below).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -425,9 +425,8 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx, success envelope, contract accepts | `ok` | streak reset, subject breaker reset, expired holds cleared |
 | 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
-| 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
-| 429 on the media statistics (`media.offer_stats`) | `rate_limit_media_stats` | `media-stats.walk` only (`resource_holds['media-stats']`): the list's rule and ladder — until `Retry-After`, else 5 s → … → 300 s, reset after 10 min without one; alert 1 only at the 300 s step |
-| any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 429 (any route: REST, probe, CDN, the socket's Upgrade) | `rate_limit` | a hold of that route only: until `Retry-After` (never shortened), else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s + 0–20 % jitter; the page+route's rate halved (≥ ⅛ ceiling) until a raise; the route's incident (`route_limited:<route>`); while the list's route is held `.find` goes straight to `group.detail` |
+| a 5xx naming its own `Retry-After` | `rate_limit` | a hold of that route until `Retry-After`, no slowdown, no ladder step; the route's incident |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
 | 401 / 403 | `auth` | page hold until new credentials, alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
@@ -473,15 +472,36 @@ the pause S every route of a page has a strict budget of its own (owner decision
   only make a route slower: the effective rate is the lower of `current` and the stored one, a stored hold closes
   its route to its end. A namespace this build cannot read closes the page's admission (`page_hold` with
   `detail.routeState` in "why", alert 1 `route_state_unreadable`, metric `sync_route_state_unreadable`).
+- **Route holds** (`engine/route-holds.ts`, owner decisions №22, D3, plan PR 1-2): a 429 holds only the route that
+  answered it — a valid `Retry-After` (delta-seconds, or an HTTP-date measured against the answer's own `Date` too)
+  to the letter and never shortened, else owner decision №14's ladder 5 → 10 → 20 → 40 → 80 → 160 → 300 s plus
+  0–20 % jitter (the ladder climbs by the 429s of one slowdown). Each 429 halves the page+route's effective rate,
+  never below ⅛ of the route's ceiling, durably: a restart, new demand, new credentials or a success never lift it.
+  A 5xx naming its `Retry-After` holds its route the same way, without a slowdown. The state is written only by
+  `writeSyncRouteState`, a compare-and-set on the entry's revision.
+- **Raise** (A2): the only way up is one step of at most +1/min, never above the route's `current` — the owner's
+  audited `pnpm cli sync route raise --page P --route R --to <rate> --revision <n> --evidence <report>` (a
+  compare-and-set on the revision the evidence was read at, so a 429 after it refuses the stale step; a hold in
+  force stays; reaching `current` ends the slowdown), or a calibration PR moving `current` for every page. The
+  evidence is `budgets-calibration.sql` (next to this file; read-only): per live page and route/family the hours on
+  the step, 429s of the route and its family, saturated 2-hour stretches, `low_exposure`, and the step's command.
+- **Incident** (D5, owner decision №23): one latch per page+route (`route_limited:<route>`), opened by the capture on
+  the route's first 429, refreshed — never repeated — by the next ones and by the evaluator while the route is held,
+  resolved 10 clean minutes after; urgent work behind a route hold is no alert 3.
+- **Rollback** (A4, D6): the hand-back waits for the page's route holds to end (≤ 6.5 min; a longer `Retry-After`
+  exits 6, run it again), while the engine keeps serving the page's other routes; the shared send-guard floor carries
+  only the sender boundary, the real page holds and 1.2 × S. After the hand-back the legacy engine runs its own
+  semantics (S, its page hold on a 429); the engine's route slowdowns are not carried over.
 - **Status and why** (owner CLI): `sync page status` lists each route the page used recently and each family —
-  ceiling, current, effective rate, interval, newest send, hold, when it opens — with the policy hash; `sync why`
-  names the closed routes of a key waiting on `pacer`.
+  ceiling, current, effective rate, interval, newest send, hold, ladder step, newest 429, revision, when it opens —
+  with the policy hash; `sync why` names the closed routes of a key waiting on `pacer` and those a 429 holds.
 
 ## Alerts, metrics and the shadow report
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
 `live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
-transaction (a 429, a refused credential, another identity, a pace violation); `engine/alerts.ts` re-derives every
+transaction (a refused credential, another identity, a pace violation; a 429 opens its route's own latch,
+`route_limited:<route>`); `engine/alerts.ts` re-derives every
 condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
 view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes since the latch last saw it (alert 4 as
 soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own

@@ -940,36 +940,6 @@ export async function readRouteJournal(
 }
 
 /**
- * The newest 429 of a page before this outcome (the [A8] ladder decay), among
- * the attempts admitted within the last `withinMs`; null when there is none.
- * The bound keeps it a short range scan of `sync_attempts_page_admitted` (it
- * runs inside the capture transaction under the page row lock): the caller
- * passes its decay window plus the longest admission → completion span, so a
- * 429 outside the bound is one the ladder has already forgotten. The bound is
- * by `statement_timestamp()`: a volatile `clock_timestamp()` cannot bound an
- * index scan.
- */
-export async function lastRateLimitAt(
-  db: Database,
-  input: { pageId: number; withinMs: number; excludeAttemptId?: number | null },
-): Promise<Date | null> {
-  const result = await db.execute<{ at: Date | string | null }>(sql`
-    select max(coalesce(a.completed_at, a.admitted_at)) as at
-      from sync_attempts a
-     where a.page_id = ${input.pageId}
-       and a.admitted_at > statement_timestamp() - ${Math.max(0, input.withinMs)}::double precision * interval '1 millisecond'
-       and not a.shadow
-       and a.http_status = 429
-       -- A 429 of an endpoint group with a quota of its own (the conversation
-       -- list, the media statistics) holds only that group (its own ladder):
-       -- it never keeps the page's ladder up.
-       and (a.error_class is null or a.error_class not in ('rate_limit_list', 'rate_limit_media_stats'))
-       and a.id is distinct from ${input.excludeAttemptId ?? null}::bigint
-  `);
-  return toDate(result.rows[0]?.at);
-}
-
-/**
  * Distinct subjects of one resource file whose request failed as a subject
  * failure within the last `windowMs` (the §9 resource breaker counts them).
  * Keys a resource hold never stops are left out. Bounded by the stable

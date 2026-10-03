@@ -27,9 +27,10 @@ import {
 // a tenth of their production intervals. Pinned: two requests on the
 // media-stats route of one page are never sent closer than its interval — a
 // demand that pulls the walk forward and a restarted actor included — while
-// other work keeps going in between; a 429 there holds only the media-stats
-// walk (`Retry-After`, else the list's ladder), never the page, and the chat
-// and money reads still go out; a shadow page paces its simulated walk the
+// other work keeps going in between; a 429 there holds only its route
+// (`Retry-After`, else the ladder of owner decision №14, then the route at half
+// rate), never the page, and the chat and money reads still go out; a shadow
+// page paces its simulated walk the
 // same way, so the shadow report counts what the live walk will send.
 
 let testDb: StartedTestDatabase | null = null;
@@ -272,7 +273,7 @@ describe("media stats at their route's budget (owner decisions №20, D2)", () =
   }, 90_000);
 });
 
-describe("a 429 on the media statistics (owner decision №20)", () => {
+describe("a 429 on the media statistics (owner decisions №20, №22)", () => {
   async function run429(retryAfter: string | null) {
     const pageId = await seedPage("live");
     for (const n of [1, 2]) await seedItem(pageId, itemOf(n));
@@ -292,34 +293,38 @@ describe("a 429 on the media statistics (owner decision №20)", () => {
       return mediaAnswer(req);
     };
     const alerts = new RecordingAlerts();
-    let heldSeen: { hold_kind: string | null; kind: string | null; until: Date | null } | null = null;
+    type Held = { hold_kind: string | null; media_stats_file: unknown; until: Date | null; effective: number | null };
+    let heldSeen: Held | null = null;
     await runLive(pageId, reg, transport, async () => {
       if (heldSeen === null) {
-        const page = await testDb!.pool.query<{ hold_kind: string | null; kind: string | null; until: Date | null }>(
-          `select hold_kind, resource_holds -> 'media-stats' ->> 'kind' as kind,
-                  (resource_holds -> 'media-stats' ->> 'until')::timestamptz as until
+        const page = await testDb!.pool.query<Held>(
+          `select hold_kind, resource_holds -> 'media-stats' as media_stats_file,
+                  (resource_holds #>> '{route:state,routes,media.offer_stats,holdUntil}')::timestamptz as until,
+                  (resource_holds #>> '{route:state,routes,media.offer_stats,effectivePerMin}')::float8 as effective
              from sync_pages where page_id = $1`, [pageId]);
-        if (page.rows[0]?.kind !== null && page.rows[0]?.kind !== undefined) heldSeen = page.rows[0];
+        if (page.rows[0]?.until !== null && page.rows[0]?.until !== undefined) heldSeen = page.rows[0];
       }
       return (await visited(pageId)) >= 2;
     }, alerts);
-    return { pageId, transport, alerts, heldSeen: heldSeen as { hold_kind: string | null; kind: string | null; until: Date | null } | null };
+    return { pageId, transport, alerts, heldSeen: heldSeen as Held | null };
   }
 
   for (const [retryAfter, holdMs] of [[null, 5_000], ["7", 7_000]] as const) {
-    it(`holds only the walk (${retryAfter === null ? "the ladder's 5 s" : `Retry-After ${retryAfter} s`}), never the page; chat and money still go out`, async (context) => {
+    it(`holds only the route (${retryAfter === null ? "the ladder's 5 s" : `Retry-After ${retryAfter} s`}), never the page; chat and money still go out`, async (context) => {
       if (!testDb) return context.skip();
       const { pageId, transport, alerts, heldSeen } = await run429(retryAfter);
       const all = await attemptsOf(pageId);
       const media = all.filter((attempt) => attempt.operation === "media.offer_stats");
       expect(media.map((attempt) => [attempt.http_status, attempt.error_class])).toEqual([
-        [429, "rate_limit_media_stats"], [200, null], [200, null],
+        [429, "rate_limit"], [200, null], [200, null],
       ]);
-      // The hold was the walk's own, the page never held.
-      expect(heldSeen).toMatchObject({ hold_kind: null, kind: "rate_limit_media_stats" });
+      // The hold was the route's own (and it runs at half its 5/min after);
+      // the page and the media-stats file were never held.
+      expect(heldSeen).toMatchObject({ hold_kind: null, media_stats_file: null, effective: 2.5 });
       const holdMsSet = heldSeen!.until!.getTime() - media[0]!.completed_at!.getTime();
+      // The ladder's first step stretched by ≤ 20 % jitter; a Retry-After as stated.
       expect(holdMsSet).toBeGreaterThan(holdMs - 1_000);
-      expect(holdMsSet).toBeLessThanOrEqual(holdMs + 1_000);
+      expect(holdMsSet).toBeLessThanOrEqual(retryAfter === null ? holdMs * 1.2 + 1_000 : holdMs + 1_000);
       const page = await testDb.pool.query<{ hold_kind: string | null; hold_step: number }>(
         "select hold_kind, hold_step from sync_pages where page_id = $1", [pageId]);
       expect(page.rows).toEqual([{ hold_kind: null, hold_step: 0 }]);
@@ -332,8 +337,10 @@ describe("a 429 on the media statistics (owner decision №20)", () => {
       expect(between).toEqual(["dm-messages.head", "transactions.head"]);
       // The next media request waited for the hold.
       expect(media[1]!.admitted_at.getTime() - media[0]!.completed_at!.getTime()).toBeGreaterThanOrEqual(Math.min(holdMs, heldSeen!.until!.getTime() - media[0]!.completed_at!.getTime()) - 50);
-      // A single 429 of the walk pages nobody (only the ladder's top does).
+      // The route's own incident (D5), never alert 1.
       expect(alerts.opened.filter((alert) => alert.subKey === "page_stopped")).toEqual([]);
+      expect(alerts.opened.filter((alert) => alert.subKey === "route_limited"))
+        .toEqual([expect.objectContaining({ route: "media.offer_stats", detail: "rate_limit", shadow: false })]);
     }, 60_000);
   }
 });

@@ -188,14 +188,14 @@ async function answeredUpgrade(answer: (handler: FakeHandler, controller: { abor
 }
 
 describe("the Upgrade's answer reaches the classifier (step 3b ruling 10)", () => {
-  it("keeps of an answer only its safe headers: Retry-After by lower-case name, a repeat joined as a REST answer's", () => {
+  it("keeps of an answer only its safe headers: Retry-After and Date by lower-case name, a repeat joined as a REST answer's", () => {
     expect(safeFanslyAnswerHeaders({
       "Retry-After": "600",
       "set-cookie": ["f-s-c=secret; Path=/", "f-s-d=secret"],
       "sec-websocket-accept": "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
-      date: NOW.toUTCString(),
+      Date: NOW.toUTCString(),
       "x-absent": undefined,
-    })).toEqual({ "retry-after": "600" });
+    })).toEqual({ "retry-after": "600", date: NOW.toUTCString() });
     expect(safeFanslyAnswerHeaders({ "retry-after": ["600", "600"] })).toEqual({ "retry-after": "600, 600" });
     expect(safeFanslyAnswerHeaders(null)).toEqual({});
     expect(safeFanslyAnswerHeaders(undefined)).toEqual({});

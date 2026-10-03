@@ -52,8 +52,13 @@ import {
 // `pnpm cli sync rollback` (design step 3 §3.5 item 7, S2 §11.2, J2/J4/J5):
 // a live page goes back to the legacy engine, which continues from its own
 // marks. Pinned at the origin and in both journals: the first legacy request
-// ≥ 1.2 × S after the engine's last one, and — under an engine 429 hold — not
-// before the hold's end + 1.2 × S; without the owner's release or a stop
+// ≥ 1.2 × S after the engine's last one, and — under a page 429 hold (the
+// legacy one the switch imported) — not before the hold's end + 1.2 × S; the
+// page's route holds are waited out before the hand-back (A4: while the page
+// stays live and the engine serves its other routes; one that outlasts the
+// wait exits 6 with nothing moved, in handover the page stays there), never
+// carried into the shared floor, and the route's slowdown stays on the page
+// for the engine (D6); without the owner's release or a stop
 // confirmation nothing moves (exit 3); an auth hold refuses (exit 5) unless
 // the owner says so — on a live page before anything moves, so the owner can
 // renew the credentials through the engine, and a hold that came in while the
@@ -213,6 +218,19 @@ async function rollbackKilledAfter(r: Rig, step: string): Promise<void> {
   expect(killed).toBe(true);
 }
 
+/** A 429's hold of `route` on the page, ending `ms` from now (by the database clock). */
+async function holdRoute(pageId: number, route: string, ms: number): Promise<Date> {
+  return (await testDb!.pool.query<{ until: Date }>(
+    `update sync_pages set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes', jsonb_build_object(
+            $2::text, jsonb_build_object('holdUntil', clock_timestamp() + make_interval(secs => $3::double precision / 1000),
+              'ladderStep', 1, 'effectivePerMin', 2.5, 'policyVersion', null, 'last429AttemptId', null,
+              'last429At', clock_timestamp(), 'revision', 1))))
+      where page_id = $1
+    returning (resource_holds #>> array['route:state', 'routes', $2::text, 'holdUntil'])::timestamptz as until`,
+    [pageId, route, ms],
+  )).rows[0]!.until;
+}
+
 async function released(pageId: number): Promise<boolean> {
   const owner = (await getSyncPage(db(), pageId))!.owner;
   return owner.releasedAt !== null && owner.releaseGeneration === owner.generation;
@@ -308,7 +326,7 @@ describe("sync rollback", () => {
     expect(await steps(page.pageId)).toEqual(["start", "waiting_stop", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
   }, 120_000);
 
-  it("carries an engine 429 hold into the legacy guard: the first legacy capture ≥ the hold's end + 1.2 × S", async (context) => {
+  it("carries a page 429 hold (the legacy one the switch imported) into the legacy guard: the first legacy capture ≥ the hold's end + 1.2 × S", async (context) => {
     if (!testDb) return context.skip();
     const r = await livePage("rollback-c", 23);
     const { page } = r;
@@ -329,6 +347,67 @@ describe("sync rollback", () => {
       "select captured_at from fansly_send_log where page_id = $1 order by captured_at limit 1", [page.pageId],
     );
     expect(first.rows[0]!.captured_at.getTime() - holdUntil.getTime()).toBeGreaterThanOrEqual(1.2 * S);
+  }, 120_000);
+
+  it("waits out the page's route holds while it stays live — the engine reads its other routes meanwhile — then hands back; the slowdown stays on the page (A4, D6)", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-route", 31);
+    const { page } = r;
+    const holdUntil = await holdRoute(page.pageId, "media.offer_stats", 1_500);
+    const started = Date.now();
+    expect(await rollback(r)).toEqual({ exitCode: 0, step: "done", page: page.pageLabel });
+    expect(await steps(page.pageId)).toEqual(["start", "1_handover", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
+    expect(r.lines.some((line) => line.startsWith(`0 ${page.pageLabel}: waiting`) && line.includes("media.offer_stats"))).toBe(true);
+    // The page left live only once the route's hold had ended …
+    const handover = await testDb.pool.query<{ at: Date }>(
+      `select created_at as at from audit_events where event_type = 'admin.sync_rollback' and platform_account_id = $1
+          and metadata ->> 'step' = '1_handover'`, [page.pageId]);
+    expect(handover.rows[0]!.at.getTime()).toBeGreaterThanOrEqual(holdUntil.getTime());
+    // … and its engine kept reading its other routes during the wait.
+    expect(r.server.arrivalsAt("/api/v1/polls").filter((arrival) => arrival.wallMs > started && arrival.wallMs < holdUntil.getTime()).length)
+      .toBeGreaterThan(0);
+    // D6: the route's slowdown is the engine's to keep for its next switch.
+    expect((await getSyncPage(db(), page.pageId))!.routeState).toMatchObject({ version: 1, routes: { "media.offer_stats": { effectivePerMin: 2.5 } } });
+  }, 120_000);
+
+  it("a route hold that outlasts the wait: exit 6 with nothing moved on a live page; in handover the page stays there (audited) until a rerun after it ends", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await livePage("rollback-route-long", 32);
+    const { page } = r;
+    await holdRoute(page.pageId, "media.offer_stats", 60_000);
+    expect(await rollback(r)).toMatchObject({ exitCode: 6, step: "route_holds" });
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("live");
+    expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(await steps(page.pageId)).toEqual([]);
+    expect(r.lines.some((line) => line.includes("media.offer_stats until") && line.includes("the page stays live"))).toBe(true);
+    // A route state this build cannot read: refused the same way.
+    await testDb.pool.query(
+      `update sync_pages set resource_holds = jsonb_build_object('route:state', '{"version": 9, "routes": {}}'::jsonb) where page_id = $1`,
+      [page.pageId],
+    );
+    expect(await rollback(r)).toMatchObject({ exitCode: 6, step: "route_holds" });
+    expect(r.lines.some((line) => line.includes("route_state_version:9"))).toBe(true);
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("live");
+
+    // In handover (a request in flight brought the 429 before the actor
+    // stopped): nothing is sent there, the hand-back waits.
+    await r.host.stop();
+    hosts.splice(hosts.indexOf(r.host), 1);
+    await testDb.pool.query(
+      `update sync_pages set mode = 'handover', mode_changed_at = clock_timestamp(), mode_changed_by = 'test',
+              owner_released_at = clock_timestamp(), owner_release_generation = owner_generation
+        where page_id = $1`,
+      [page.pageId],
+    );
+    await holdRoute(page.pageId, "messages.page", 60_000);
+    expect(await rollback(r)).toMatchObject({ exitCode: 6, step: "route_holds" });
+    expect((await getSyncPage(db(), page.pageId))!.mode).toBe("handover");
+    expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(await steps(page.pageId)).toEqual(["start", "2_released", "route_holds"]);
+    await holdRoute(page.pageId, "messages.page", -1_000);
+    expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
+    expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
+    expect(await steps(page.pageId)).toEqual(["start", "2_released", "route_holds", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
   }, 120_000);
 
   it("refuses under an auth hold while the page is live (exit 5, nothing moves); the owner's renewal through the engine lifts it", async (context) => {

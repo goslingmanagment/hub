@@ -12,9 +12,10 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 // `sync_work_runnable`, the receipts' primary key below an id watermark).
 // Live and shadow are separate journals (`shadow`).
 
-/** Attempt error classes that stop a page (alert 1): a 429 of the page, a
- *  refused credential, another account behind the credentials. */
-export const SYNC_PAGE_STOP_ERROR_CLASSES = ["rate_limit", "auth", "identity_mismatch"] as const;
+/** Attempt error classes that stop a page (alert 1): a refused credential,
+ *  another account behind the credentials. A 429 holds only its route (its
+ *  own incident, `route_limited:<route>`). */
+export const SYNC_PAGE_STOP_ERROR_CLASSES = ["auth", "identity_mismatch"] as const;
 
 /** A socket whose receiver has not renewed its connection row for this long
  *  is down (the receiver renews it every few seconds). */

@@ -392,7 +392,7 @@ describe("repair.ws-gap", () => {
     expect((await workRow(pageId, "dm-messages.head"))).toMatchObject({ state: "done" });
   }, 60_000);
 
-  it("a list 429 holds only the list: the chat and money reads still go out, the repair goes on after the hold", async (context) => {
+  it("a list 429 holds only the list's route: the chat and money reads still go out, the repair goes on after the hold", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     await connection(pageId, { gapAgoMs: 2 * MINUTE, verifiedAgoMs: MINUTE });
@@ -417,9 +417,11 @@ describe("repair.ws-gap", () => {
     expect(secondList).toBeGreaterThan(firstList);
     // Both other reads went out inside the list's hold.
     expect(order.slice(firstList + 1, secondList).filter((spec) => spec === "polls").length).toBeGreaterThanOrEqual(2);
-    const page = await testDb.pool.query<{ hold_kind: string | null; list_hold: string | null }>(
-      "select hold_kind, resource_holds->'dm-conversations'->>'kind' as list_hold from sync_pages where page_id = $1", [pageId]);
-    expect(page.rows).toEqual([{ hold_kind: null, list_hold: "rate_limit_list" }]);
+    const page = await testDb.pool.query<{ hold_kind: string | null; list_file: unknown; list_step: string | null }>(
+      `select hold_kind, resource_holds -> 'dm-conversations' as list_file,
+              resource_holds #>> '{route:state,routes,messaging.groups,ladderStep}' as list_step
+         from sync_pages where page_id = $1`, [pageId]);
+    expect(page.rows).toEqual([{ hold_kind: null, list_file: null, list_step: "1" }]);
     expect((await listOffsets(pageId, "repair.ws-gap")).map((read) => read.http_status)).toEqual([429, 200]);
   }, 60_000);
 });

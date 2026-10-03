@@ -27,9 +27,11 @@ import { productionWsHostOptions, speakFansly } from "./helpers/sync-ws.ts";
 // socket source and receiver lease binding against a fake origin behind the
 // page proxy — only the socket's URL is the origin's. Pinned: a 429's
 // `Retry-After` (delta-seconds or an HTTP-date) is journaled on the attempt
-// and holds the Upgrade for the whole stated time, never the default ladder
-// and never the socket's reconnect ladder; a 503 naming its `Retry-After` is
-// the provider's pause, not a failed handshake; a 503 without one stays a
+// and holds the Upgrade's route (`ws.upgrade`, step 3b PR 1-2) for the whole
+// stated time, never the route ladder's step and never the socket's
+// reconnect ladder, and `sync why` says until when; a 503 naming its
+// `Retry-After` is the provider's pause of that route, not a failed
+// handshake; a 503 without one stays a
 // failed handshake on the socket's ladder; nothing of the answer but its safe
 // headers (a cookie) is kept anywhere.
 
@@ -168,10 +170,13 @@ describe("a refused Upgrade's answer on the production socket path", () => {
       send_mark: "request_start",
     });
     // The stated 600 s, measured from the send (the capture comes a moment
-    // later); the default 429 ladder would say 120 s.
+    // later); the route ladder's first step would say 5 s.
     const waitMs = await upgradeWaitMs(r, attempt.sent_at);
     expect(waitMs).toBeGreaterThanOrEqual(600_000);
     expect(waitMs).toBeLessThan(630_000);
+    const page = await findSyncPageByLabel(db(), r.page.pageLabel);
+    expect(page.holdKind).toBeNull();
+    expect(page.routeState).toMatchObject({ version: 1, routes: { "ws.upgrade": { ladderStep: 1, effectivePerMin: 7.5 } } });
     // The socket's reconnect ladder (≈ 200 ms on this timing) asks again at
     // once; the Upgrade still waits.
     await sleep(2_000);

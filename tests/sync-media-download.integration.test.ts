@@ -265,16 +265,21 @@ describe("media-download.fetch on a live page", () => {
     expect(alerts.opened.filter((alert) => alert.detail === "auth")).toEqual([]);
   }, 60_000);
 
-  it("a CDN 429 holds the page like any 429 (plan §9)", async (context) => {
+  it("a CDN 429 holds the CDN route like any route's 429 (owner decision №22), never the page: REST goes on", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const alerts = new RecordingAlerts();
     const busy = await download(r, "/cdn/busy");
     await startHost(r, { seed: 65, alerts });
     await until(async () => (await scalar(
-      "select count(*)::int as n from sync_pages where page_id = $1 and hold_kind = 'rate_limit'", [r.page.pageId])) === 1, 30_000, "the page hold");
-    expect(await work(busy.workId)).toMatchObject({ state: "open", waiting_reason: "page_hold", secret: true });
-    expect(alerts.opened.map((alert) => [alert.subKey, alert.detail])).toContainEqual(["page_stopped", "rate_limit"]);
+      "select count(*)::int as n from sync_pages where page_id = $1 and resource_holds #> '{route:state,routes,cdn.media,holdUntil}' is not null",
+      [r.page.pageId])) === 1, 30_000, "the CDN route's hold");
+    expect(await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind is not null", [r.page.pageId])).toBe(0);
+    expect(await work(busy.workId)).toMatchObject({ state: "open", waiting_reason: null, secret: true });
+    expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
+      .toEqual([["cdn.media", "rate_limit"]]);
+    await upsertDemand(db(), { pageId: r.page.pageId, shadow: false, resource: HARNESS_KEY.urgent, subject: "beside", kind: "trigger", class: "urgent" });
+    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "a REST read beside the held CDN");
     expect(cdnArrivals(r)).toEqual([["/cdn/busy", 429]]);
   }, 60_000);
 });

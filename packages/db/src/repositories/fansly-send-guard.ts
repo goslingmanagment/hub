@@ -630,7 +630,12 @@ const ENGINE_CARRIED_TIMED_HOLD_UNTIL = sql`case
    and (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz > clock_timestamp()
   then (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz end`;
 
-/** Engine → legacy (rollback step 3): the flip, or why not. */
+/** Engine → legacy (rollback step 3): the flip, or why not. The legacy
+ *  floor is the sender boundary (the engine's last send and completion),
+ *  the page's real holds (a 429/network hold of the row or carried beside an
+ *  auth hold) and, through `next_u`, 1.2 × S — never a route hold's end, which
+ *  would stop every endpoint of the page (A4): the rollback waits for the
+ *  page's route holds to end before it gets here. */
 export async function handFanslySendGuardBackToLegacy(
   db: Database,
   input: { pageId: number; allowAuthHold?: boolean },
@@ -649,11 +654,7 @@ export async function handFanslySendGuardBackToLegacy(
              clock_timestamp(),
              case when sp.hold_kind in ('rate_limit', 'network') and sp.hold_until > clock_timestamp()
                   then sp.hold_until end,
-             ${ENGINE_CARRIED_TIMED_HOLD_UNTIL},
-             (select max((h.value ->> 'until')::timestamptz)
-                from jsonb_each(sp.resource_holds) h
-               where h.value ->> 'kind' in ('rate_limit_list', 'rate_limit_media_stats')
-                 and (h.value ->> 'until')::timestamptz > clock_timestamp()))
+             ${ENGINE_CARRIED_TIMED_HOLD_UNTIL})
       from sync_pages sp
      where g.page_id = ${input.pageId}
        and sp.page_id = g.page_id
