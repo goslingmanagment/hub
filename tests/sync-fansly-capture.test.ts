@@ -45,7 +45,7 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
 const { FANSLY_MAPPER_VERSION } = await import("@agency_hub_core/fansly");
 const shared = await import("../apps/runtime/src/services/sync/shared.ts");
 const trims = await import("../apps/runtime/src/sync/fansly/lib/capture-trims.ts");
-const { FANSLY_STATS_MAPPER_VERSION } = await import("../apps/runtime/src/services/sync/fansly-stats.ts");
+const { FANSLY_STATS_MAPPER_VERSION } = await import("../apps/runtime/src/sync/fansly/lib/stats-rules.ts");
 const { prepareJournalBody } = await import("../apps/runtime/src/sync/fansly/capture.ts");
 
 const SIGNED = "https://cdn3.fansly.com/700000000000000001/800000000000000001.jpeg"

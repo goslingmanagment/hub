@@ -24,7 +24,7 @@ import {
   settleWalkStop,
   type FanslyPayoutsCatchUp,
   type FanslyPayoutsWalkStop,
-} from "../../../services/sync/fansly-payouts.ts";
+} from "../lib/payouts-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

@@ -28,9 +28,9 @@ import {
   VAULT_ALBUM_MAX_PAGES,
   vaultMediaRows,
   type VaultAlbumWalkState,
-} from "../../../services/sync/fansly-catalog.ts";
+} from "../lib/catalog-rules.ts";
 import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../lib/lane.ts";
-import { observeVaultWalkPage, vaultWalkIsComplete, type VaultWalkProof } from "../../../services/sync/vault-walk-proof.ts";
+import { observeVaultWalkPage, vaultWalkIsComplete, type VaultWalkProof } from "../lib/vault-walk-proof.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import {
   effectiveCadence,

@@ -2,6 +2,8 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "../capture-payloads.ts";
+import { archiveStoredMessageSql, archiveThreadRowsFromSql } from "../dm-archive-store.ts";
+import type { DmLiveReaderStore } from "./live-messages.ts";
 import { holdsSyncSwitchCapability, type SyncPageMode, type SyncSwitchCapability } from "./pages.ts";
 import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
@@ -360,19 +362,32 @@ export async function resetThreadChain(tx: Database, threadId: number): Promise<
 const NUMERIC_MESSAGE_ID = sql.raw(`'^[0-9]{1,30}$'`);
 
 /** The fold's `StoredFacts` (§8.1): non-deleted stored messages of the thread
- *  and the oldest of them by snowflake. Read only for empty pages. */
+ *  and the oldest of them by snowflake. Read only for empty pages.
+ *  `store: "message_archive"` reads the thread's stored archive messages
+ *  instead (dm-archive-store.ts). */
 export async function readThreadStoredFacts(
   db: Database,
   threadId: number,
+  options: { store?: DmLiveReaderStore } = {},
 ): Promise<{ nonDeletedCount: number; oldestNonDeletedId: string | null }> {
-  const result = await db.execute<{ nonDeletedCount: number; oldestNonDeletedId: string | null }>(sql`
+  const result = await db.execute<{ nonDeletedCount: number; oldestNonDeletedId: string | null }>(
+    options.store === "message_archive"
+      ? sql`
+    select count(*)::int as "nonDeletedCount",
+           min(case when ma.message_ref ~ ${NUMERIC_MESSAGE_ID} then ma.message_ref::numeric end)::text
+             as "oldestNonDeletedId"
+      from ${archiveThreadRowsFromSql(threadId)}
+       and ${archiveStoredMessageSql("ma")}
+  `
+      : sql`
     select count(*)::int as "nonDeletedCount",
            min(case when m.platform_message_id ~ ${NUMERIC_MESSAGE_ID} then m.platform_message_id::numeric end)::text
              as "oldestNonDeletedId"
       from page_dm_messages m
      where m.conversation_id = ${threadId}
        and m.deleted_at is null
-  `);
+  `,
+  );
   const row = result.rows[0];
   return { nonDeletedCount: Number(row?.nonDeletedCount ?? 0), oldestNonDeletedId: row?.oldestNonDeletedId ?? null };
 }

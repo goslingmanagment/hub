@@ -49,8 +49,8 @@ import {
   type LongTailWindowMode,
   type MediaBackfillCursor,
   type WindowFailure,
-} from "../../../services/sync/fansly-media-stats.ts";
-import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../../../services/sync/fansly-stats.ts";
+} from "../lib/media-stats-rules.ts";
+import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../lib/stats-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import {
   effectiveTiers,

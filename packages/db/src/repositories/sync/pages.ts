@@ -1,7 +1,11 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
-import type { FanslySendGuardOwnerEngine, FanslySendHolderIdentity } from "../fansly-send-guard.ts";
+import {
+  FANSLY_SEND_GUARD_RESTART_U,
+  type FanslySendGuardOwnerEngine,
+  type FanslySendHolderIdentity,
+} from "../fansly-send-guard.ts";
 import {
   generationParam,
   jsonParam,
@@ -24,7 +28,10 @@ import {
 //
 // Mode: `off ↔ shadow` is the owner's ordinary lever. `handover` and `live`
 // are reachable only with the switch capability of the step-3 switch CLI; no
-// step-2 build can issue it (I17, pinned by tests/sync-engine-repositories.test.ts).
+// step-2 build can issue it. The one other way to `live` is a page's birth:
+// onboarding creates a new Fansly page's row live in the transaction that
+// creates the page (`createLiveSyncPage`, step 4 S4-05). Both are pinned by
+// tests/sync-engine-repositories.test.ts (I17).
 
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
 export type SyncPageMode = (typeof SYNC_PAGE_MODES)[number];
@@ -528,10 +535,10 @@ export async function setSyncPageMode(
 // legacy processes ask `isFanslyPageEngineOwned` /
 // `listEngineOwnedFanslyPages`; the step-1 guard row (`owner_engine`, 0229)
 // stays the catch-all at the wire. `off` and `shadow` fence nothing (J8). A
-// page without a `sync_pages` row (OnlyFans, a Fansly page onboarded after the
-// host last listed its pages) is legacy-owned by construction. Every check is
-// evaluated per query, so leaving to `off` restores the legacy engine with no
-// other action.
+// page without a `sync_pages` row (OnlyFans) is legacy-owned by construction;
+// a Fansly page onboarded since step 4 is born live (`createLiveSyncPage`),
+// so it never has a moment without its row. Every check is evaluated per
+// query, so leaving to `off` restores the legacy engine with no other action.
 
 /** The modes in which the Fansly Sync Engine owns a page. */
 export const ENGINE_OWNED_SYNC_PAGE_MODES = ["handover", "live"] as const satisfies readonly SyncPageMode[];
@@ -640,6 +647,117 @@ export async function setSyncRequestsEnabledAt(
   if ((result.rowCount ?? 0) === 0) return false;
   await db.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
   return true;
+}
+
+// ── a new page, straight to live (step 4, S4-05) ─────────────────────────────
+
+/** Why `createLiveSyncPage` refused a page: not a Fansly page, an engine row
+ *  or a guard row it already has, or a footprint of the legacy engine — its
+ *  stream states, its cursors, a request it journaled. */
+export const LIVE_SYNC_PAGE_REFUSALS = [
+  "no_fansly_page",
+  "sync_page_exists",
+  "send_guard_exists",
+  "legacy_sync_states",
+  "legacy_sync_cursors",
+  "legacy_send_log",
+] as const;
+export type LiveSyncPageRefusal = (typeof LIVE_SYNC_PAGE_REFUSALS)[number];
+
+/** A page `createLiveSyncPage` will not make live; nothing was written. */
+export class LiveSyncPageRefusedError extends Error {
+  readonly pageId: number;
+  readonly reasons: readonly LiveSyncPageRefusal[];
+
+  constructor(pageId: number, reasons: readonly LiveSyncPageRefusal[]) {
+    super(`Fansly page ${pageId} cannot be created live on the Fansly Sync Engine (${reasons.join(", ")})`);
+    this.name = "LiveSyncPageRefusedError";
+    this.pageId = pageId;
+    this.reasons = reasons;
+  }
+}
+
+/**
+ * Onboarding's way to `live` (step 4 S4-05, I17): run in the transaction that
+ * creates the page, its credentials and its proxy, after the identity check
+ * of exactly that session and proxy. The page is born the engine's — it is
+ * never `off`, never the legacy engine's, and has nothing to import:
+ *
+ * - its `sync_pages` row in `live`, the legacy import stamped (there is no
+ *   legacy state: J3 holds trivially), history requests open, the identity
+ *   the check proved (`identity_account_id`, `identity_checked_at` = the
+ *   check's send instant) and the digest of the stored credentials it proved
+ *   as the engine's trusted one (`credentials_generation`, G1);
+ * - its step-1 guard row owned by the engine (0229) and seeded as 0225 seeds
+ *   one: the host's takeover floor (`paceFloorFromDb`, I5) puts the first send
+ *   ≥ 1.2 × S after the page is acquired.
+ *
+ * Refused, writing nothing, for a page that is not a Fansly page or that has
+ * an engine row, a guard row or any legacy footprint (`page_sync_states`,
+ * `page_sync_cursors`, a `fansly_send_log` row of the page): such a page has
+ * a past this capability does not import — the switch is its way to `live`.
+ */
+export async function createLiveSyncPage(
+  tx: Database,
+  input: {
+    pageId: number;
+    /** Who onboarded the page (`mode_changed_by`). */
+    by: string;
+    identityAccountId: string;
+    identityCheckedAt: Date;
+    credentialsGeneration: string;
+  },
+): Promise<void> {
+  if (input.by.trim().length === 0) throw new Error("createLiveSyncPage needs who onboards the page (by)");
+  if (input.identityAccountId.length === 0) throw new Error("An identity account id is non-empty");
+  if (!/^[0-9a-f]{64}$/.test(input.credentialsGeneration)) {
+    throw new Error("A credentials generation is a sha256 hex digest");
+  }
+  const found = await tx.execute<{
+    syncPage: boolean;
+    sendGuard: boolean;
+    syncStates: boolean;
+    syncCursors: boolean;
+    sendLog: boolean;
+  }>(sql`
+    select exists (select 1 from sync_pages sp where sp.page_id = p.id) as "syncPage",
+           exists (select 1 from fansly_page_send_guards g where g.page_id = p.id) as "sendGuard",
+           exists (select 1 from page_sync_states st where st.page_id = p.id) as "syncStates",
+           exists (select 1 from page_sync_cursors c where c.page_id = p.id) as "syncCursors",
+           exists (select 1 from fansly_send_log l where l.page_id = p.id) as "sendLog"
+      from pages p
+     where p.id = ${input.pageId}
+       and p.platform = 'fansly'
+     for no key update of p
+  `);
+  const footprint = found.rows[0];
+  if (footprint === undefined) throw new LiveSyncPageRefusedError(input.pageId, ["no_fansly_page"]);
+  const reasons: LiveSyncPageRefusal[] = [];
+  if (footprint.syncPage) reasons.push("sync_page_exists");
+  if (footprint.sendGuard) reasons.push("send_guard_exists");
+  if (footprint.syncStates) reasons.push("legacy_sync_states");
+  if (footprint.syncCursors) reasons.push("legacy_sync_cursors");
+  if (footprint.sendLog) reasons.push("legacy_send_log");
+  if (reasons.length > 0) throw new LiveSyncPageRefusedError(input.pageId, reasons);
+
+  const row = await tx.execute(sql`
+    insert into sync_pages (
+      page_id, mode, mode_changed_at, mode_changed_by, legacy_imported_at, requests_enabled_at,
+      identity_account_id, identity_checked_at, credentials_generation
+    ) values (
+      ${input.pageId}, 'live', clock_timestamp(), ${input.by}, clock_timestamp(), clock_timestamp(),
+      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration}
+    )
+    on conflict (page_id) do nothing
+  `);
+  if ((row.rowCount ?? 0) === 0) throw new LiveSyncPageRefusedError(input.pageId, ["sync_page_exists"]);
+  const guard = await tx.execute(sql`
+    insert into fansly_page_send_guards (page_id, last_completed_at, next_u, owner_engine, engine_switched_at, updated_at)
+    values (${input.pageId}, clock_timestamp(), ${FANSLY_SEND_GUARD_RESTART_U}, ${SYNC_ENGINE_GUARD_OWNER},
+            clock_timestamp(), clock_timestamp())
+    on conflict (page_id) do nothing
+  `);
+  if ((guard.rowCount ?? 0) === 0) throw new LiveSyncPageRefusedError(input.pageId, ["send_guard_exists"]);
 }
 
 /**

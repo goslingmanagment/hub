@@ -5,7 +5,7 @@ import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_c
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
 import { resolveEgress } from "../apps/runtime/src/services/egress/resolver.ts";
-import { onboardFanslyPage } from "../apps/runtime/src/services/page-onboarding.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -25,35 +25,11 @@ async function seedFanslyPage(label: string, proxyUrl: string) {
   if (!model) {
     throw new Error(`Failed to seed model for ${label}`);
   }
-  const app = {
-    db: appContext.db,
-    config: appContext.config,
-    adapter: {
-      async verifySession() {
-        return {
-          parsed: {
-            account: {
-              id: `acct-${label}`,
-              username: label,
-              displayName: label,
-              followCount: 0,
-              subscriberCount: 0,
-            },
-          },
-          raw: null,
-        };
-      },
-    },
-  } as never;
-  const { page } = await onboardFanslyPage(app, {
-    modelSlug: model.slug,
-    label,
-    session: { authorization: `token-${label}` },
-    proxy: { url: proxyUrl },
-  });
+  const page = await createFanslyPage(appContext.db, { modelId: model.id, label });
   if (!page) {
     throw new Error(`Failed to seed Fansly page ${label}`);
   }
+  await saveProxy(appContext, page.id, { url: proxyUrl });
   return page;
 }
 
@@ -135,6 +111,30 @@ describe("egress resolver (Stage 26)", () => {
       .rejects.toThrow(/vendor-side/);
     await expect(resolveEgress(appContext, { kind: "page_candidate", pageId: 999_999, proxy: { url: "http://candidate.example.internal:3128" } }))
       .rejects.toThrow(/not found/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resolves a fansly_candidate scope onto the candidate proxy without a page — unpaced, never direct, its target checked", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    // Step 4 S4-05: the no-page identity check (onboarding, the create-page
+    // check) rides the proxy the page will get; there is no page to look up.
+    const candidate = await resolveEgress(appContext, {
+      kind: "fansly_candidate",
+      proxy: { url: "http://candidate.example.internal:3128" },
+    });
+    expect(candidate.egressKey).toBe("http://candidate.example.internal:3128");
+    expect(candidate.dispatcher).not.toBeNull();
+    // Owner decision №4: paced against no page.
+    await expect(candidate.pace("interactive")).resolves.toBe(0);
+    await candidate.close();
+
+    await expect(resolveEgress(appContext, { kind: "fansly_candidate", proxy: { url: "socks5://127.0.0.1:1080" } }))
+      .rejects.toThrow(/Proxy host must not be loopback/);
+    await expect(resolveEgress(appContext, { kind: "fansly_candidate", proxy: { url: "http://10.0.0.7:3128" } }))
+      .rejects.toThrow(/Proxy host must not be loopback/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("records service-vendor identity while preserving OFAPI/Fansly policies", async (context) => {

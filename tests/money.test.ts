@@ -170,6 +170,7 @@ import {
   millsToDollarsNumber,
   millsToMicroUsd,
   millsToRoundedDollars,
+  millsToWholeCents,
   microUsdFromDbInt,
   microUsdFromDollars,
   microUsdToMills,
@@ -199,6 +200,22 @@ describe("money codec (Stage 27)", () => {
     expect(millsFromCents(0)).toBe(0n);
     expect(millsFromCents(-25)).toBe(-250n);
     expect(millsFromCents(120n)).toBe(1200n);
+  });
+
+  it("millsToWholeCents is the way back over the _cents bridge", () => {
+    for (const cents of [0, 1, 499, 12_345, -25]) {
+      expect(millsToWholeCents(millsFromCents(cents))).toBe(cents);
+    }
+    // DB drivers hand mills back as numeric strings and numbers too.
+    expect(millsToWholeCents("4990")).toBe(499);
+    expect(millsToWholeCents(4990)).toBe(499);
+    // A sub-cent rest rounds half away from zero, as the legacy Fansly write.
+    expect(millsToWholeCents(4994n)).toBe(499);
+    expect(millsToWholeCents(4995n)).toBe(500);
+    expect(millsToWholeCents(-4995n)).toBe(-500);
+    for (const mills of [0, 4, 5, 15, 994, 995, 1_234_567]) {
+      expect(millsToWholeCents(mills)).toBe(Math.max(0, Math.round(mills / 10)));
+    }
   });
 
   it("micro-USD constructors and the explicit converters round-trip honestly", () => {

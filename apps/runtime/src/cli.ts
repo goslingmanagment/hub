@@ -63,6 +63,7 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSyncDmReaderParityCommands } from "./sync/cli/dm-reader-parity.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
 import { registerSyncHistoryCommands } from "./sync/cli/history.ts";
 import { registerSyncReportCommands } from "./sync/cli/report.ts";
@@ -1632,11 +1633,12 @@ export function buildProgram() {
           label: options.label,
           session,
           proxy,
+          by: "cli",
         });
-        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, app, created.label);
 
+        // Step 4 S4-05: born live; no legacy sync is queued for it.
         console.log(`Created Fansly page ${created.label} (${created.id})`);
-        console.log(`Queued initial full sync for ${created.label}`);
+        console.log(`${created.label} is live on the Fansly Sync Engine: the sync host adopts it within seconds`);
       } finally {
         await app.close();
       }
@@ -3388,6 +3390,8 @@ export function buildProgram() {
   // Owner decision №8 (step-3 design S3-06): `sync excluded probe | report |
   // lift | unlift`.
   registerSyncExcludedCommands(sync);
+  // Step 4 S4-06, owner decision №11: `sync dm-reader-parity` (read-only).
+  registerSyncDmReaderParityCommands(sync);
 
   queue
     .command("planner-recover")
