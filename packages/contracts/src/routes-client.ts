@@ -181,3 +181,130 @@ export type ClientReceiptProfile = z.infer<typeof clientReceiptProfileSchema>;
 export type ClientBootstrapPage = z.infer<typeof clientBootstrapPageSchema>;
 export type ClientBootstrapLimits = z.infer<typeof clientBootstrapLimitsSchema>;
 export type ClientBootstrapResponse = z.infer<typeof clientBootstrapResponseSchema>;
+
+// ── client_health v1 (H-11a) ─────────────────────────────────────────────────
+//
+// The chat extension's health report: its version, the host build fingerprint,
+// the host-contract verdict, what is switched off, counters by code, perf
+// histograms and an estimate of its own storage. No text and no fan, chat,
+// message or operation id: every name in it is a code (CLIENT_HEALTH_CODE_PATTERN).
+//
+// No route carries it and nothing on the hub reads it yet, so the contract hash
+// does not move: this is the shape the client and the hub agree on. The client
+// sends a report as one `ingestObservations` event of kind
+// CLIENT_HEALTH_INGEST_KIND, in a batch of its own, and ONLY once the bootstrap
+// lists `client-health-perf-v1`; until then it keeps its reports to itself. A
+// hub without that capability journals an unknown kind in `observations`
+// (`desktop.unknown:<kind>`) with the user, forever and on into the lake, which
+// is exactly what this report must never become. The intake behind the
+// capability (H-11b) checks a report against this schema and the bounds
+// registry, folds it into hourly rollups keyed without the user, and never
+// journals it.
+//
+// A client→hub shape, so strict (§4.0): an unknown key is a malformed report,
+// and a new field is a new report version. Growing names (metric, host kind,
+// codes) stay open strings; one the hub does not know it drops, and the rest of
+// the report still counts.
+
+/** The `ingestObservations` event kind of a health report. */
+export const CLIENT_HEALTH_INGEST_KIND = "client_health";
+
+/** A code, never free text: error and P1 codes, contract anchors, switched-off features. */
+export const CLIENT_HEALTH_CODE_PATTERN = /^[A-Za-z0-9._:-]{1,80}$/;
+const healthCode = z.string().regex(CLIENT_HEALTH_CODE_PATTERN);
+
+/**
+ * The perf metrics and the fixed upper bounds (ms) of their buckets: the client
+ * builds every histogram from these, and the hub checks a histogram against
+ * them before it merges one.
+ *
+ * Buckets: a histogram with n bounds has n + 1 counts. counts[0] holds values
+ * ≤ bounds[0]; counts[i] values in (bounds[i-1], bounds[i]]; counts[n] values
+ * above bounds[n-1] (that bucket tops out at the histogram's `max`).
+ *
+ * The bounds of one (metric, schemaVersion) never change: new bounds are a new
+ * schemaVersion. Names and bounds are a proposal until the client's R01 freezes
+ * them; from then on the registry is append-only.
+ */
+export const CLIENT_HEALTH_PERF_METRICS = {
+  routeToDockMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000] },
+  panelOpenMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500] },
+  requestOverheadMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250, 500] },
+  firstChunkPaintMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500] },
+  insertMs: { unit: "ms", schemaVersion: 1, bounds: [4, 8, 16, 32, 50, 75, 100, 150, 250, 500, 1000] },
+  boardOpenMs: { unit: "ms", schemaVersion: 1, bounds: [8, 16, 32, 50, 75, 100, 150, 250, 500, 1000, 2500] },
+  handlerMs: { unit: "ms", schemaVersion: 1, bounds: [0.1, 0.5, 1, 2, 4, 8, 16, 50, 100] },
+  composerInputDelayMs: { unit: "ms", schemaVersion: 1, bounds: [1, 2, 4, 8, 16, 32, 50, 100, 250] },
+} as const satisfies Record<string, { unit: "ms"; schemaVersion: number; bounds: readonly number[] }>;
+
+export type ClientHealthPerfMetricName = keyof typeof CLIENT_HEALTH_PERF_METRICS;
+
+/** One perf metric over the report window. Percentiles are the hub's job: it
+ *  computes them from buckets merged across reports, never from the client's. */
+export const clientHealthPerfHistogramSchema = z.object({
+  /** Open token; known values: the keys of CLIENT_HEALTH_PERF_METRICS. */
+  metric: clientOpenToken,
+  unit: z.literal("ms"),
+  schemaVersion: positive,
+  bounds: z.array(z.number().nonnegative()).min(1).max(32),
+  counts: z.array(count).min(2).max(33),
+  count,
+  sum: z.number().nonnegative(),
+  max: z.number().nonnegative(),
+}).strict().superRefine((histogram, ctx) => {
+  if (histogram.counts.length !== histogram.bounds.length + 1) {
+    ctx.addIssue({ code: "custom", path: ["counts"], message: "counts must have one more entry than bounds" });
+  }
+  if (histogram.counts.reduce((total, bucket) => total + bucket, 0) !== histogram.count) {
+    ctx.addIssue({ code: "custom", path: ["count"], message: "count must equal the sum of counts" });
+  }
+  for (let index = 1; index < histogram.bounds.length; index += 1) {
+    if (!(histogram.bounds[index]! > histogram.bounds[index - 1]!)) {
+      ctx.addIssue({ code: "custom", path: ["bounds", index], message: "bounds must strictly increase" });
+    }
+  }
+});
+
+/**
+ * A real instant with an explicit offset. The house `isoTimestamp` is a bare
+ * string; a report admits no free text, the window included.
+ */
+const healthInstant = z.iso.datetime({ offset: true });
+
+export const clientHealthReportV1Schema = z.object({
+  v: z.literal(1),
+  /** The aggregation window on the client's clock. */
+  window: z.object({ from: healthInstant, to: healthInstant }).strict()
+    .refine((window) => Date.parse(window.from) <= Date.parse(window.to), {
+      path: ["to"],
+      message: "window.to must not precede window.from",
+    }),
+  client: z.object({
+    name: z.literal("chat-extension"),
+    version: z.string().min(1).max(32),
+    browser: z.literal("firefox"),
+    browserMajor: positive,
+    os: z.enum(["windows", "macos", "linux", "other"]),
+  }).strict(),
+  host: z.object({
+    /** Open token: the host page the client works over (`chatspace` today). */
+    kind: clientOpenToken,
+    /** The host's build fingerprint; null when it could not be read. */
+    build: z.string().max(80).nullable(),
+    /** Whether every anchor of the host contract was found. */
+    contractOk: z.boolean(),
+    /** Anchors of the host contract that were not found. */
+    missing: z.array(healthCode).max(64),
+  }).strict(),
+  /** Features switched off by the owner's flags or by a broken host contract. */
+  disabled: z.array(healthCode).max(64),
+  perf: z.array(clientHealthPerfHistogramSchema).max(16),
+  /** Code → occurrences in the window: errors by code, prevented inserts, P1s. */
+  counters: z.record(healthCode, z.number().int().min(0).max(1_000_000))
+    .refine((counters) => Object.keys(counters).length <= 200, { message: "at most 200 counters" }),
+  /** The client's own caches and logs, not the heap (Firefox has no portable heap reading). */
+  footprint: z.object({ kind: z.literal("owned-estimate"), cachesKB: count, logsKB: count }).strict(),
+}).strict();
+
+export type ClientHealthPerfHistogram = z.infer<typeof clientHealthPerfHistogramSchema>;
+export type ClientHealthReportV1 = z.infer<typeof clientHealthReportV1Schema>;
