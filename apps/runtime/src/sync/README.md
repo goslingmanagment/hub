@@ -514,19 +514,21 @@ observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-h
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. Besides the frozen A1–A4 rules part A runs
 two SQL checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — every
 route and family of `fansly/routes.ts` at most ⌈W / T⌉ + 1 sends in every 60 s and 300 s span (T: its `current`
-interval; a send this build places on no route fails) — and the **walks per route** — no run of a non-poll key asks
-a route the same request twice. It prints the **media model** the shadow walk ran per page (the owner's tiers, the
-long-tail window mode: an unproven route is modelled as live meets it, the refused 90-day window then the 31-day
-split) with the queue under those tiers, and the **fingerprint** (`report/shadow-fingerprint.ts`): the `sync` build
-of the whole window, proven from the database — one fresh `sync` heartbeat build started before the window, every
-shadow page's owner taken since then and before the window, no shadow attempt of another owner generation in it (so
-run the report right after its hour: a deploy or restart since leaves the build unproven and the report not
-accepted) —, `ROUTE_POLICY_HASH`, the registry's hash, each page's overrides and media model, and S (now and as the
-window's admissions recorded it). `--out <path>` keeps the report for the step-3 switch, which accepts it only of the
-build `sync` runs and of this build's route policy. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
-`report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.ceiling-demand, A1.floor, A1.floor-scheduled,
-A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every
-report prints the rule it applied.
+interval; a send this build places on no route fails) — and the **walks per route** — no run of a non-poll key asks a
+route from the same position twice: its parameters, or the place a shadow step names when they cannot
+(`RequestPlan.position`: a media window, cut at the step's clock, names its pass, item and window number; the fan
+earnings roster its subject; a subject-queue walk its pass, so the next pass is not a repeat). It prints the **media
+model** the shadow walk ran per page (the owner's tiers, the long-tail window mode: an unproven route is modelled as
+live meets it, the refused 90-day window then the 31-day split) with the queue under those tiers, and the
+**fingerprint** (`report/shadow-fingerprint.ts`): the `sync` build of the whole window, proven from the database — one
+fresh `sync` heartbeat build started before the window, every shadow page's owner taken since then and before the
+window, no shadow attempt of another owner generation in it (so run the report right after its hour: a deploy or restart
+since leaves the build unproven and the report not accepted) —, `ROUTE_POLICY_HASH`, the registry's hash, each page's
+overrides and media model, and S (now and as the window's admissions recorded it). `--out <path>` keeps the report for
+the step-3 switch, which accepts it only of the build `sync` runs and of this build's route policy. Where the design's
+wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in `report/shadow-window.ts`: A1.rate, A1.rate-assumed,
+A1.ceiling, A1.ceiling-demand, A1.floor, A1.floor-scheduled, A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate,
+A2.legacy-regime, A2.live-only, A2.demand-replaced), every report prints the rule it applied.
 Three of them ask the resource modules read-only questions (`ResourceModule`), each in its own savepoint:
 `estimateRunSteps` sizes a key on a period longer than the hour before its first shadow run, while its row keeps that
 run on schedule (its `shadow()` estimate, A1.rate-assumed; a key that ran before stays unknown until it runs again),

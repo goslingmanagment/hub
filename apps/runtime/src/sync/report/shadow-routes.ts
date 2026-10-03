@@ -24,14 +24,22 @@ import {
 //                  the simulated send, else its admission + the send window.
 //                  A send this build places on no route fails the check.
 //   endless walks  no run of a walk — one work row of a key that is not a
-//                  poll — asks a route the same request twice in the window:
-//                  a walk whose position does not advance goes round in
-//                  circles. A request without parameters (a snapshot read,
-//                  `/account/me` before and after a reconcile) has no position
-//                  and is not one; a poll's runs re-read by design and are
-//                  judged by rule A1.poll-schedule. A request asked again after
-//                  a restart closed its first shadow attempt unsent (no
-//                  simulated send) is the same step resumed, not a repeat.
+//                  poll — asks a route from the same position twice in the
+//                  window: a walk whose position does not advance goes round
+//                  in circles. A request's position is its parameters, or the
+//                  place its shadow plan named when they cannot
+//                  (`RequestPlan.position`): a window cut at the step's clock
+//                  names the subject and the step (the media walk: the pass,
+//                  the item's queue position and the window's number in the
+//                  visit; the fan earnings roster: the subject), a
+//                  subject-queue walk names its pass (the next pass re-reads
+//                  the subjects: another pass, not a circle). A request without
+//                  parameters (a snapshot read, `/account/me` before and after
+//                  a reconcile) has no position and is not one; a poll's runs
+//                  re-read by design and are judged by rule A1.poll-schedule.
+//                  A request asked again after a restart closed its first
+//                  shadow attempt unsent (no simulated send) is the same step
+//                  resumed, not a repeat.
 
 /** The spans the budget check counts over (amendment A1). */
 export const ROUTE_BUDGET_CHECK_WINDOWS_MS = [60_000, 300_000] as const;
@@ -103,8 +111,9 @@ export interface EndlessWalkRow {
   route: string;
   resource: string;
   workId: number;
-  /** The repeated request's parameters, how often the run asked it, when. */
-  params: unknown;
+  /** The repeated request's position (its parameters, or the place its
+   *  shadow plan named), how often the run asked it, when. */
+  position: unknown;
   times: number;
   firstAt: Date;
   lastAt: Date;
@@ -113,9 +122,9 @@ export interface EndlessWalkRow {
 export interface ShadowWalks {
   /** Walk runs (work rows of the keys judged) with a shadow send in the window. */
   runs: number;
-  /** Runs that asked a request twice, per repeated request (capped). */
+  /** Runs that asked from one position twice, per repeated position (capped). */
   endless: EndlessWalkRow[];
-  /** Repeated requests in all (uncapped). */
+  /** Repeated asks in all (uncapped). */
   repeats: number;
 }
 
@@ -236,7 +245,8 @@ async function readWalks(
   const keys = sql.param(walkKeys());
   const label = labelOf(input.pages);
   const runs = sql`
-    select a.page_id, a.work_id, a.resource, a.operation, a.request -> 'params' as params, a.admitted_at
+    select a.page_id, a.work_id, a.resource, a.operation, coalesce(a.request -> 'position', a.request -> 'params') as position,
+           a.admitted_at
       from sync_attempts a
      where a.shadow
        and a.page_id = any(${pageIds}::bigint[])
@@ -249,14 +259,14 @@ async function readWalks(
     select count(distinct (r.page_id, r.work_id))::int as runs from (${runs}) r
   `);
   const repeated = await db.execute<{
-    pageId: string; workId: string; resource: string; operation: string; params: unknown; times: number;
+    pageId: string; workId: string; resource: string; operation: string; position: unknown; times: number;
     firstAt: Date | string; lastAt: Date | string;
   }>(sql`
-    select r.page_id::text as "pageId", r.work_id::text as "workId", r.resource, r.operation, r.params,
+    select r.page_id::text as "pageId", r.work_id::text as "workId", r.resource, r.operation, r.position,
            count(*)::int as times, min(r.admitted_at) as "firstAt", max(r.admitted_at) as "lastAt"
       from (${runs}) r
-     where jsonb_typeof(r.params) = 'object' and r.params <> '{}'::jsonb
-     group by r.page_id, r.work_id, r.resource, r.operation, r.params
+     where jsonb_typeof(r.position) = 'object' and r.position <> '{}'::jsonb
+     group by r.page_id, r.work_id, r.resource, r.operation, r.position
     having count(*) > 1
      order by r.page_id, r.operation, min(r.admitted_at)
   `);
@@ -265,7 +275,7 @@ async function readWalks(
     route: row.operation,
     resource: row.resource,
     workId: Number(row.workId),
-    params: row.params,
+    position: row.position,
     times: Number(row.times),
     firstAt: new Date(row.firstAt),
     lastAt: new Date(row.lastAt),
@@ -304,9 +314,9 @@ export function routeCheckLines(checks: ShadowRouteChecks): string[] {
         + `${unplaced.length === 0 ? "" : `; sends this build places on no route: ${unplaced.join(", ")}`}`}`,
   ];
   const listed = walks.endless.map((row) => `${row.page} ${row.resource} (work ${row.workId}) asked ${row.route} `
-    + `${JSON.stringify(row.params)} ${row.times} times ${row.firstAt.toISOString()} … ${row.lastAt.toISOString()}`);
+    + `${JSON.stringify(row.position)} ${row.times} times ${row.firstAt.toISOString()} … ${row.lastAt.toISOString()}`);
   lines.push(walks.repeats === 0
-    ? `Walks per route: ${walks.runs} walk run(s), none asked a route the same request twice`
+    ? `Walks per route: ${walks.runs} walk run(s), none asked a route from the same position twice`
     : `Walks per route: ENDLESS — ${walks.repeats} repeated request(s): ${listed.join("; ")}`);
   return lines;
 }

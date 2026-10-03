@@ -325,6 +325,18 @@ describe("the journaled request", () => {
       query: { "ngsw-bypass": "true", groupId: "123", before: "456", limit: "25" },
     });
   });
+
+  it("keeps the step and a shadow step's walk position beside the parameters (never on the wire)", () => {
+    const position = { pass: 2, item: "[0,0,1,\"-Infinity\",\"-1\",\"777\"]", window: 1 };
+    const json = requestJsonOf({
+      spec: "media.offer_stats",
+      params: { mediaOfferId: "777", beforeMs: 2_000, afterMs: 1_000, periodMs: 86_400_000 },
+      step: { shadowVisit: { done: 1 } },
+      position,
+    });
+    expect(json).toMatchObject({ spec: "media.offer_stats", step: { shadowVisit: { done: 1 } }, position });
+    for (const key of Object.keys(position)) expect(json.query).not.toHaveProperty(key);
+  });
 });
 
 describe("the shadow transport", () => {

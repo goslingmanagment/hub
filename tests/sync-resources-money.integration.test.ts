@@ -861,6 +861,13 @@ describe("shadow", () => {
       "top-spenders.window": 1,
     });
     expect(await workRow(pageId, "transactions.rescan", { shadow: true })).toMatchObject({ state: "open", waiting_reason: "dependency" });
+    // The roster asks the fan's history up to the step's clock: the step
+    // names its subject (step 3b ruling 12, the endless-walk check).
+    const roster = await testDb.pool.query(
+      "select request -> 'position' as position from sync_attempts where page_id = $1 and shadow and resource = 'fan-earnings.roster'",
+      [pageId],
+    );
+    expect(roster.rows).toEqual([{ position: { fan: "500000000000000021", window: "lifetime" } }]);
     // The roster subject was not claimed or settled.
     const subject = await testDb.pool.query("select claim_token, last_visited_at from subject_refresh_state where page_id = $1", [pageId]);
     expect(subject.rows).toEqual([{ claim_token: null, last_visited_at: null }]);

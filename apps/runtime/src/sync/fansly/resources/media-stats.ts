@@ -72,6 +72,7 @@ import {
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
+  shadowPassNumber,
   shadowPassWaitUntil,
   standingRecheckAt,
   type ShadowPass,
@@ -674,6 +675,9 @@ interface ShadowVisit {
   /** The long-tail window mode the visit was estimated under
    *  (`shadowLongTailMode`); absent on a visit an older build began. */
   mode?: LongTailWindowMode;
+  /** The shadow pass that picked the item (`shadowPassNumber`); absent on a
+   *  visit an older build began. */
+  pass?: number;
 }
 
 export interface MediaStatsWalkCursor extends MediaStatsPageState {
@@ -707,7 +711,8 @@ function parseShadowVisit(value: unknown): ShadowVisit | null {
   if (subjectRef === null || keyset === null || steps === null || done === null) return null;
   const tier = record.tier === "mid" || record.tier === "long_tail" ? record.tier : "fresh";
   const mode = record.mode === undefined ? undefined : parseLongTailMode(record.mode);
-  return { subjectRef, keyset, tier, steps, done, ...(mode === undefined ? {} : { mode }) };
+  const pass = int(record.pass);
+  return { subjectRef, keyset, tier, steps, done, ...(mode === undefined ? {} : { mode }), ...(pass === null ? {} : { pass }) };
 }
 
 export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
@@ -870,14 +875,29 @@ export async function shadowLongTailMode(
 
 // ── the module ───────────────────────────────────────────────────────────────
 
+/**
+ * A shadow visit's next window. Shadow asks the visit's first steady window
+ * at every step — its bounds cut at the step's clock — so the request names
+ * its place in the walk (`RequestPlan.position`): the pass that picked the
+ * item, the item's queue position and the window's number in the visit. A
+ * walk that does not advance asks one of them twice (the shadow report's
+ * endless-walk check); the next pass re-reading the item is another pass.
+ */
+function shadowWindowRequest(visit: ShadowVisit, mode: LongTailWindowMode, now: Date): RequestPlan<"media.offer_stats"> {
+  const [window] = steadyWindows(visit.tier, now, mode);
+  return {
+    ...windowRequest(visit.subjectRef, window!, { shadowVisit: visit }),
+    position: { pass: visit.pass ?? null, item: visit.keyset, window: visit.done },
+  };
+}
+
 async function planShadow(
   cursor: MediaStatsWalkCursor,
   ctx: { db: Database; pageId: number; now: Date; tiers: MediaStatsTiers },
 ): Promise<StepPlan> {
   const visit = cursor.shadowVisit;
   if (visit !== null && visit.done < visit.steps) {
-    const [window] = steadyWindows(visit.tier, ctx.now, visit.mode ?? cursor.longTailWindowMode);
-    return { kind: "request", request: windowRequest(visit.subjectRef, window!, { shadowVisit: visit }) };
+    return { kind: "request", request: shadowWindowRequest(visit, visit.mode ?? cursor.longTailWindowMode, ctx.now) };
   }
   const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
   const [candidate] = await pickDueMedia(ctx.db, { pageId: ctx.pageId, now: ctx.now, limit: 1, after: pass.after, tiers: ctx.tiers });
@@ -892,9 +912,9 @@ async function planShadow(
     steps: Math.max(1, shadowVisitWindows(candidate, mode, ctx.now)),
     done: 0,
     mode,
+    pass: shadowPassNumber(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS),
   };
-  const [window] = steadyWindows(candidate.tier, ctx.now, mode);
-  return { kind: "request", request: windowRequest(candidate.subjectRef, window!, { shadowVisit }) };
+  return { kind: "request", request: shadowWindowRequest(shadowVisit, mode, ctx.now) };
 }
 
 /** Mark the page's latest top-50 media dirty, due now (the items visited

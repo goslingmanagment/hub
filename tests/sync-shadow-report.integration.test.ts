@@ -88,16 +88,19 @@ async function shadowPage(): Promise<WsCapturePage> {
 }
 
 /** One shadow attempt: on the key's first route unless named, its simulated
- *  send 50 ms after its admission (`sent: false`: closed unsent by a restart). */
+ *  send 50 ms after its admission (`sent: false`: closed unsent by a restart);
+ *  `position`: the walk position its shadow plan named. */
 async function shadowAttempt(
   pageId: number,
   input: {
     resource: string; workClass: string; subject?: string; at: Date; workId?: number;
-    operation?: string; params?: Record<string, unknown>; generation?: number; sent?: boolean;
+    operation?: string; params?: Record<string, unknown>; position?: Record<string, unknown>; generation?: number; sent?: boolean;
   },
 ): Promise<void> {
   const operation = input.operation ?? fanslyResourceSpec(input.resource)?.operations[0] ?? "account.me";
-  const request = input.params === undefined ? {} : { spec: operation, params: input.params };
+  const request = input.params === undefined
+    ? {}
+    : { spec: operation, params: input.params, ...(input.position === undefined ? {} : { position: input.position }) };
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                                 admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
@@ -225,12 +228,35 @@ describe("the shadow report (design §3.12)", () => {
       const resource = i % 2 === 0 ? "dm-conversations.detail" : "dm-messages.head";
       await shadowAttempt(page.pageId, { resource, workClass: i % 2 === 0 ? "planned" : "urgent", subject: `chat-${i}`, at: at(20 * MINUTE + i * 2_500) });
     }
-    // The media walk at its 5/min: within its budget.
+    // The media walk at its 5/min: within its budget. Every window is cut at
+    // its step's clock, so the step names its place: the visit's three
+    // windows in pass 1, its last window asked once more (the visit did not
+    // advance: a circle the bounds alone never show), then the next pass
+    // re-reading the item from its first window (another pass, not a circle).
     const media = await shadowWorkRow(page.pageId, "media-stats.walk");
-    for (let i = 0; i < 3; i += 1) {
+    const ITEM = '[1,2,1,"-Infinity","-1745960794.000000","777"]';
+    const mediaWindows = [
+      { ms: 25 * MINUTE, pass: 1, window: 0 },
+      { ms: 25 * MINUTE + 12_000, pass: 1, window: 1 },
+      { ms: 25 * MINUTE + 24_000, pass: 1, window: 2 },
+      { ms: 25 * MINUTE + 36_000, pass: 1, window: 2 },
+      { ms: 27 * MINUTE, pass: 2, window: 0 },
+    ];
+    for (const step of mediaWindows) {
       await shadowAttempt(page.pageId, {
-        resource: "media-stats.walk", workClass: "planned", at: at(25 * MINUTE + i * 12_000), workId: media,
-        params: { mediaOfferId: "777", beforeMs: at(25 * MINUTE + i * 12_000).getTime(), afterMs: 0, periodMs: 86_400_000 },
+        resource: "media-stats.walk", workClass: "planned", at: at(step.ms), workId: media,
+        params: { mediaOfferId: "777", beforeMs: at(step.ms).getTime(), afterMs: at(step.ms).getTime() - 30 * 86_400_000, periodMs: 86_400_000 },
+        position: { pass: step.pass, item: ITEM, window: step.window },
+      });
+    }
+    // The fan earnings roster's pass asks each fan's history up to its clock:
+    // a fan asked again in the same pass is a circle.
+    const roster = await shadowWorkRow(page.pageId, "fan-earnings.roster");
+    for (const [ms, fan] of [[35 * MINUTE, "501"], [35 * MINUTE + 30_000, "502"], [36 * MINUTE, "501"]] as const) {
+      await shadowAttempt(page.pageId, {
+        resource: "fan-earnings.roster", workClass: "planned", at: at(ms), workId: roster, operation: "earnings.stats_accounts",
+        params: { correlationAccountId: fan, afterMs: 0, beforeMs: at(ms).getTime() },
+        position: { fan, window: "lifetime" },
       });
     }
     // A send of a route this build no longer knows.
@@ -280,15 +306,23 @@ describe("the shadow report (design §3.12)", () => {
     expect(budget("group.detail")).toMatchObject({ sends: 9, minGapMs: 5_000, violations: 0 });
     expect(budget("messages.page")).toMatchObject({ sends: 9 + 2, violations: 0 });
     expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 2 });
-    expect(budget("media.offer_stats")).toMatchObject({ sends: 3, minGapMs: 12_000, max60s: 3, bound60s: 6, violations: 0 });
+    expect(budget("media.offer_stats")).toMatchObject({ sends: 5, minGapMs: 12_000, max60s: 4, bound60s: 6, violations: 0 });
+    expect(budget("earnings.stats_accounts")).toMatchObject({ sends: 3, minGapMs: 30_000, violations: 0 });
     expect(budgets.unplaced).toEqual([{ page: "lilly-1", operation: "retired.route", sends: 1 }]);
     expect(budgets.violations).toBe(1 + 2 + 1);
-    // The media walk, the vault walk, the reconcile and the two catch-ups.
+    // The media walk, the roster, the vault walk, the reconcile and the two
+    // catch-ups.
     expect(walks).toEqual({
-      runs: 5,
-      repeats: 1,
+      runs: 6,
+      repeats: 3,
       endless: [{
-        page: "lilly-1", route: "vault.media", resource: "catalog.vault", workId: vault, params: vaultPage("shadow-1"), times: 2,
+        page: "lilly-1", route: "earnings.stats_accounts", resource: "fan-earnings.roster", workId: roster,
+        position: { fan: "501", window: "lifetime" }, times: 2, firstAt: at(35 * MINUTE), lastAt: at(36 * MINUTE),
+      }, {
+        page: "lilly-1", route: "media.offer_stats", resource: "media-stats.walk", workId: media,
+        position: { pass: 1, item: ITEM, window: 2 }, times: 2, firstAt: at(25 * MINUTE + 24_000), lastAt: at(25 * MINUTE + 36_000),
+      }, {
+        page: "lilly-1", route: "vault.media", resource: "catalog.vault", workId: vault, position: vaultPage("shadow-1"), times: 2,
         firstAt: at(30 * MINUTE), lastAt: at(30 * MINUTE + 20_000),
       }],
     });
@@ -315,9 +349,12 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContainEqual(expect.stringMatching(
       /^Route budgets in shadow: 4 violation\(s\): lilly-1 family:messaging 2 send\(s\) over \(max 18\/16 in 60 s, .*lilly-1 messaging\.groups 1 send\(s\) over .*; sends this build places on no route: lilly-1 retired\.route 1$/,
     ));
-    expect(report.summary).toContainEqual(expect.stringMatching(
-      /^Walks per route: ENDLESS — 1 repeated request\(s\): lilly-1 catalog\.vault \(work \d+\) asked vault\.media \{"before":"shadow-1","albumId":"a1"\} 2 times /,
-    ));
+    expect(report.summary).toContainEqual(expect.stringMatching(new RegExp(
+      "^Walks per route: ENDLESS — 3 repeated request\\(s\\): "
+        + `lilly-1 fan-earnings\\.roster \\(work ${roster}\\) asked earnings\\.stats_accounts \\{"fan":"501","window":"lifetime"\\} 2 times .*; `
+        + `lilly-1 media-stats\\.walk \\(work ${media}\\) asked media\\.offer_stats \\{"item":".+?777.+?","pass":1,"window":2\\} 2 times .*; `
+        + `lilly-1 catalog\\.vault \\(work ${vault}\\) asked vault\\.media \\{"before":"shadow-1","albumId":"a1"\\} 2 times `,
+    )));
     expect(report.summary).toContainEqual(expect.stringMatching(/^Media model lilly-1: tiers ≤ 30 d every 1 d, ≤ 90 d every 7 d, older every 30 d; long-tail windows split_31; queue 0 /));
     expect(report.summary.at(-1)).toMatch(/, route budgets FAIL, walks FAIL, build ok, B5 n\/a, .* — not accepted$/);
 

@@ -86,7 +86,7 @@ export interface ShadowReportVerdict {
   a4: boolean | null;
   /** Every route and family kept its budget in shadow (ruling 12). */
   budgets: boolean | null;
-  /** No walk asked a route the same request twice (ruling 12). */
+  /** No walk asked a route from the same position twice (ruling 12). */
   walks: boolean | null;
   /** The fingerprint proves the one sync build of the window. */
   build: boolean;

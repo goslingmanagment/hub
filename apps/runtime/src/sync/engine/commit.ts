@@ -313,8 +313,9 @@ export function isAnswerInMemory(operation: string): boolean {
 
 /** `sync_attempts.request` of an API route: the wire id, its parameters (the
  *  coverage evidence, design §2.9 D1), the request line and — when the
- *  resource keeps one — its account of the step (`RequestPlan.step`). Never a
- *  header. A route of another host keeps no request line (design J7): the
+ *  resource keeps them — its account of the step (`RequestPlan.step`) and the
+ *  shadow step's walk position (`RequestPlan.position`). Never a header. A
+ *  route of another host keeps no request line (design J7): the
  *  Upgrade has nothing to name, and a CDN hop names only its hop and the
  *  sha256 of its URL path — the signed URL itself stays in the work's
  *  ciphertext. */
@@ -330,10 +331,14 @@ export function requestJsonOf(
   hop?: number;
   pathSha256?: string | null;
   step?: unknown;
+  position?: unknown;
   credentialsGeneration?: string;
 } {
   const host = fanslyWireSpec(request.spec).host;
-  const step = request.step === undefined ? {} : { step: request.step };
+  const step = {
+    ...(request.step === undefined ? {} : { step: request.step }),
+    ...(request.position === undefined ? {} : { position: request.position }),
+  };
   // Not a secret: the sha256 of the stored (or candidate) credentials, so an
   // auth hold names the credentials that failed (step-3 §3.5 item 3) — the
   // Upgrade is sent with the page's stored session too.
@@ -359,7 +364,7 @@ export function requestJsonOf(
     params: request.params,
     path: target.pathname,
     query,
-    ...(request.step === undefined ? {} : { step: request.step }),
+    ...step,
     ...credentials,
   };
 }
