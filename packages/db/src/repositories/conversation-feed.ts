@@ -16,14 +16,35 @@
 //   - newest first by the key (event time desc nulls last, guarded-numeric
 //     message id desc nulls last, message id desc) — the union's own order —
 //     on BOTH sources, so a page boundary never depends on insertion order;
-//   - snapshot bounds: a walk reads only rows whose id existed at its first
-//     page (`message_archive.id <= archiveMaxId`, `dm_message_archive.id <=
-//     dmMaxId`). Messages that arrive during the walk are newer than its key
-//     anyway; the bounds keep late backfill of OLD messages out of a walk
-//     already past them. Deletions and edits update rows in place, keep the
-//     id and stay visible (a deletion turns the row `deleted`). A rebuild swap
-//     renumbers message_archive, so the snapshot carries the archive
-//     generation and the caller's cursor is bound to it.
+//   - snapshot bounds on the two content stores (`message_archive.id <=
+//     archiveMaxId`, `dm_message_archive.id <= dmMaxId`, read at the walk's
+//     first page). Messages that arrive during the walk are newer than its
+//     key anyway; the bounds keep a late backfill of an OLD message, committed
+//     after the snapshot under a higher id, out of a walk already past it.
+//     A rebuild swap renumbers message_archive, so the snapshot carries the
+//     archive generation and the caller's cursor is bound to it.
+//
+// What a walk guarantees, and what it does not:
+//   - inserts and deletions: no hole, no duplicate. A deletion either updates
+//     the row in place (same id, same key) or adds a tombstone that the union
+//     reads live (cross-source dm deletions and the hot table are not
+//     bounded), so the row stays and turns `deleted`;
+//   - an id is handed out at insert, not at commit: a row from a transaction
+//     still open at the snapshot can commit under an id below the bound and
+//     show up later in the walk if it sorts older than the cursor (never a
+//     duplicate — it was not served before). The same holds for a
+//     content-pending stub or a dm row without a creation time that gets its
+//     content in place;
+//   - a change, in place, to the KEY of a row the walk has not finished with
+//     is not frozen: the bounds stop inserts, not updates. The archive's
+//     superseding-head repair rewrites `occurred_at` on the existing row, and
+//     in the union a REST re-observation of a dm row (`rest_*` columns) can
+//     switch which copy of a message wins, and the two copies may carry
+//     different times. A served row whose time moves older than the cursor is
+//     served again (a duplicate); an unserved row whose time moves newer than
+//     the cursor is skipped (a hole) until a walk from the head. Callers drop
+//     a repeated `messageRef` across pages; a skipped message is back on the
+//     next walk.
 //
 // `source_account_seq` is not a usable bound: only material observations
 // write it (message.received/sent rows and backfilled rows hold NULL), and a
@@ -70,12 +91,31 @@ export interface ConversationFeedPosition {
 export const CONVERSATION_FEED_POSITION_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 export const CONVERSATION_FEED_POSITION_REF_MAX_LENGTH = 200;
 
+/**
+ * What a walk is frozen to, read once at its first page. The cursor (H-9c)
+ * carries all of it in its signed state and hands `archiveMaxId`/`dmMaxId`
+ * back to every later page as the reader's `snapshot`.
+ *
+ * Only `archiveGeneration` is checked against the live value: a rebuild swap
+ * renumbers message_archive ids, so a cursor from another generation is
+ * refused (`cursor_invalid`) rather than bounded by ids that now name other
+ * rows. Nothing else is ever compared with a live value — every other field
+ * moves on ordinary traffic, and a walk that refused on it would break on the
+ * next message.
+ */
 export interface ConversationFeedSnapshot {
-  /** Bumped by the message_archive rebuild swap (row ids change with it). */
+  /** Bumped by the message_archive rebuild swap (row ids change with it). The one live check. */
   archiveGeneration: number;
-  /** The message_archive projection's high watermark for the page. */
+  /**
+   * Where the message_archive projection stood for this page at the snapshot.
+   * Informational only (it may label the snapshot, e.g. `snapshotRevision`):
+   * it advances on every projected event of the page, in any of its chats, so
+   * it is never a cursor binding and never compared with a live value.
+   */
   archiveHighSeq: number;
+  /** The walk's frozen bound on message_archive.id. Never compared with a live value. */
   archiveMaxId: number;
+  /** The walk's frozen bound on dm_message_archive.id. Never compared with a live value. */
   dmMaxId: number;
 }
 
@@ -113,7 +153,9 @@ export interface ConversationFeedPage {
 
 /**
  * The snapshot a walk is bounded by, in one statement. The maxima are global
- * (primary-key lookups): any row inserted later has a higher id.
+ * (primary-key lookups) over committed rows: a row whose id is handed out
+ * after this read lands above them. A row inserted earlier by a transaction
+ * that commits later can sit below them (see the header).
  */
 export async function readConversationFeedSnapshot(
   db: Database,
