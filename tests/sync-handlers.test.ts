@@ -21,7 +21,6 @@ const dbMocks = vi.hoisted(() => ({
 // (apps/runtime/src/sync/fansly/lib/) and run for real.
 const sharedMocks = vi.hoisted(() => ({
   persistRawPayload: vi.fn(),
-  refreshPageMetadata: vi.fn(),
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
 }));
 
@@ -72,7 +71,6 @@ describe("sync executor handlers", () => {
       }
     }
     sharedMocks.persistRawPayload.mockReset();
-    sharedMocks.refreshPageMetadata.mockReset();
     fanHydrationMocks.upsertHydratedFansForPage.mockReset();
 
     dbMocks.upsertCheckpointProgress.mockResolvedValue({});

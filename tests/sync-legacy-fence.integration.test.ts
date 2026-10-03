@@ -409,7 +409,7 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     expect(f.adapter.verifySession).not.toHaveBeenCalled();
   });
 
-  it("the verify route still sends for a shadow page (J8)", async () => {
+  it("the verify route refuses a shadow page: no legacy sender is left behind it (S4-19)", async () => {
     const f = await engineFixture("shadow");
     await saveProxy(f.app, f.page.id, { url: "http://proxy.example.test:8080" });
     await createUserAccount(f.app, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
@@ -424,11 +424,14 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       const verify = await server.inject({
         method: "POST", url: `/api/v1/admin/pages/${f.page.label}/verify`, headers: { cookie },
       });
-      expect(verify.statusCode).not.toBe(409);
+      expect(verify.statusCode).toBe(409);
+      expect(verify.json()).toMatchObject({ error: "legacy_sync_retired", statusCode: 409 });
     } finally {
       await server.close();
     }
-    expect(f.adapter.getAccountMe).toHaveBeenCalled();
+    expect(f.adapter.getAccountMe).not.toHaveBeenCalled();
+    expect(f.adapter.verifySession).not.toHaveBeenCalled();
+    expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
   });
 
   it("the services behind the CLIs refuse before anything is resolved or sent", async () => {
@@ -467,7 +470,7 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       .rejects.toThrow();
   });
 
-  it("a shadow page passes every lever and reaches its send as before (J8)", async () => {
+  it("a shadow page passes the probes and the alias backfill as before (J8); its /account/me levers refuse (S4-19)", async () => {
     // The adapter answers with a sentinel: reaching it is the "as before".
     const sent = () => { throw new Error("adapter reached"); };
     const adapter = { getAccountMe: vi.fn(sent), verifySession: vi.fn(sent), getAccountsByIdsPage: vi.fn(sent) };
@@ -494,15 +497,18 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
         method: "PATCH", url: `/api/v1/admin/pages/${page.label}/credentials`, headers: { cookie },
         payload: { platform: "fansly", session: { authorization: "fresh-token" } },
       });
-      expect(credentials.statusCode).not.toBe(409);
-      expect(adapter.verifySession).toHaveBeenCalledOnce();
+      // The engine does not run a shadow page and no legacy `/account/me` is
+      // left to check a candidate with: refused before anything is sent.
+      expect(credentials.statusCode).toBe(409);
+      expect(credentials.json()).toMatchObject({ error: "legacy_sync_retired" });
     } finally {
       await server.close();
     }
 
     await expect(setPageProxy(app, page.label, { url: "http://proxy.example.test:8080" }))
-      .rejects.toThrow("adapter reached");
-    expect(adapter.verifySession).toHaveBeenCalledTimes(2);
+      .rejects.toMatchObject({ code: "legacy_sync_retired", statusCode: 409 });
+    expect(adapter.verifySession).not.toHaveBeenCalled();
+    expect(adapter.getAccountMe).not.toHaveBeenCalled();
     const endpoint = await runFanslyEndpointProbe(app, { pageLabels: [page.label], dryRun: true });
     expect(endpoint.length).toBeGreaterThan(0);
     expect(new Set(endpoint.map((row) => row.verdict))).toEqual(new Set(["skipped"]));
@@ -546,7 +552,7 @@ describe("(g) the runtime CLI", () => {
     expect(getAccountMe).not.toHaveBeenCalled();
   });
 
-  it("`page verify` serves a shadow page as before (J8)", async () => {
+  it("`page verify` refuses a shadow page: no legacy sender is left behind it (S4-19)", async () => {
     const getAccountMe = vi.fn(async () => { throw new Error("adapter reached"); });
     const app = createTestAppContext(db(), {
       adapter: { getAccountMe } as unknown as AppContext["adapter"], databaseUrl: db().connectionString,
@@ -557,8 +563,8 @@ describe("(g) the runtime CLI", () => {
     try {
       const verify = await loadCliProgram(app);
       await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
-        .rejects.toThrow("adapter reached");
-      expect(getAccountMe).toHaveBeenCalledOnce();
+        .rejects.toThrow(expect.objectContaining({ code: "legacy_sync_retired", statusCode: 409 }));
+      expect(getAccountMe).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../apps/runtime/src/bootstrap.ts");
       vi.resetModules();

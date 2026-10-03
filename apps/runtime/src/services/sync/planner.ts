@@ -12,7 +12,7 @@ import {
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { legacyExecutorPlatforms } from "../../platforms/registry.ts";
+import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
 import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
 import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
@@ -47,9 +47,10 @@ export async function runSyncPlannerCycle(
   }
 
   // The legacy executor serves only the platforms whose adapter declares
-  // streams (OnlyFans since step 4 S4-10: the Fansly Sync Engine reads every
-  // Fansly page). The planner seeds, schedules and dispatches page-sync state
-  // of their pages only; a Fansly page's legacy rows stay exactly as they are.
+  // streams (OnlyFans since step 4: the Fansly Sync Engine reads every Fansly
+  // page; `sync/onlyfans/boundary.ts`). The planner seeds, schedules and
+  // dispatches page-sync state of their pages only; a Fansly page's legacy
+  // rows stay exactly as they are.
   const platforms = legacyExecutorPlatforms();
   const dependencyInput = pageSyncDependencyInput(app);
   await ensurePageSyncStates(app.db, { now, platforms, ...dependencyInput });
@@ -153,6 +154,12 @@ export async function runSyncPlannerCycle(
     right.priority - left.priority ||
     left.requestedAt.getTime() - right.requestedAt.getTime() ||
     left.pageId - right.pageId);
+  // The boundary (I21): the listings are scoped to `platforms`, so every page
+  // here is one the legacy executor serves. A broken scope stops the pass
+  // before the first wake-up — after the recovery above, which sends nothing.
+  for (const page of orderedWork) {
+    assertLegacyExecutorPage(page, "planner");
+  }
   for (const page of orderedWork) {
     const wakeupId = await sendSyncPageWakeup(boss, {
       platformAccountId: page.pageId,

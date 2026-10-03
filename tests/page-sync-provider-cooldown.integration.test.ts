@@ -1,9 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   acquirePageSyncLease,
   acquireTargetedPageSyncLease,
-  armPageSyncProviderHold,
   completePageSync,
   createFanslyPage,
   createModel,
@@ -13,15 +12,10 @@ import {
   requestPageSync,
   retryPageSync,
 } from "@agency_hub_core/db";
-import { FanslyApiError } from "@agency_hub_core/fansly";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
-  resetIntegrationDatabase, seedFanslyPage, startIntegrationTestDatabase, type StartedTestDatabase,
+  resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
-import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -141,63 +135,35 @@ describe("page sync provider cooldown", () => {
     })).toMatchObject({ leasedSeq: lease.requestSeq + 1 });
   });
 
-  // R04: a provider hold speaks for the page's session, not for one endpoint:
-  // the page's other streams lease nothing inside the provider's window. (The
-  // executor's own Fansly 429 path is unreachable since step 4 S4-10: the
-  // legacy executor runs no Fansly stream.)
-  async function seedHeldPage(input: { failure: () => FanslyApiError; transactionsStreak?: number }) {
-    const getTransactionsPage = vi.fn(async () => {
-      throw input.failure();
-    });
-    const getSubscribersPage = vi.fn(async () => ({
-      total: 0, items: [], offset: 0, done: true, contractAccepted: true,
-      raw: { stats: { totalActive: 0, totalExpired: 0, total: 0 }, subscriptions: [] },
-    }));
-    const app = createTestAppContext(testDb!, {
-      adapter: { getTransactionsPage, getSubscribersPage } as unknown as AppContext["adapter"],
-      fanslyDefaultDelayMs: 0,
-    });
-    const { model, page } = await seedFanslyPage(app.db, app.config.encryptionKey, 1, "held");
-    if (!model || !page) throw new Error("Expected to seed the held page");
-    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
-    const neighbour = await createFanslyPage(app.db, { modelId: model.id, label: "neighbour" });
-    if (!neighbour) throw new Error("Expected to create the neighbour page");
-    for (const pageId of [page.id, neighbour.id]) await ensurePageSyncStates(app.db, { pageId });
-    // Every stream settled and idle, so each case queues exactly what it names.
+  // R04 held every stream of a page inside a Fansly 429's window
+  // (`page_sync_provider_holds`). Only a Fansly answer armed it, and the legacy
+  // executor serves no Fansly page (step 4), so nothing arms or obeys a hold
+  // any more: a row an older build left in force keeps no stream from leasing.
+  it("a provider hold row left in force holds nothing", async () => {
+    const stream = "light";
+    const now = new Date();
+    const model = await createModel(testDb!.db, { slug: "held", name: "Held" });
+    const page = await createFanslyPage(testDb!.db, { modelId: model!.id, label: "held" });
+    await ensurePageSyncStates(testDb!.db, { pageId: page!.id, now });
     await testDb!.pool.query(
       `update page_sync_states
-       set applied_seq = request_seq, status = 'idle', succeeded_at = now(),
-           blocker_kind = null, blocker_code = null, blocker_message = null, blocked_at = null,
-           consecutive_failures = case when page_id = $2 and stream = 'transactions' then $3 else 0 end
-       where page_id = any($1::bigint[])`,
-      [[page.id, neighbour.id], page.id, input.transactionsStreak ?? 0],
+       set applied_seq = request_seq, status = 'idle', succeeded_at = $2,
+           blocker_kind = null, blocker_code = null, blocker_message = null, blocked_at = null
+       where page_id = $1`,
+      [page!.id, now],
     );
-    await requestPageSync(app.db, { pageId: page.id, streams: ["transactions"], source: "scheduled" });
-    await requestPageSync(app.db, { pageId: neighbour.id, streams: ["subscribers"], source: "scheduled" });
-    return { app, page, neighbour, getTransactionsPage, getSubscribersPage };
-  }
+    await requestPageSync(testDb!.db, { pageId: page!.id, streams: [stream], source: "scheduled", now });
+    await testDb!.pool.query(
+      `insert into page_sync_provider_holds (page_id, hold_until, reason, stream, armed_at)
+       values ($1, $2, 'rate_limit', 'transactions', $3)`,
+      [page!.id, new Date(now.getTime() + 600_000), now],
+    );
 
-  const rateLimited = (retryAfterAt: Date | null) => () =>
-    new FanslyApiError("Fansly request failed (429)", 429, undefined, undefined, retryAfterAt);
-
-  const leaseAt = (pageId: number, now: Date) => acquirePageSyncLease(testDb!.db, {
-    pageId, workerId: "next-worker", leaseToken: `next-${pageId}-${now.getTime()}`, leaseTtlMs: 60_000, now,
+    expect((await listRunnablePageSync(testDb!.db, now)).map((row) => row.pageId)).toEqual([page!.id]);
+    expect(await acquireTargetedPageSyncLease(testDb!.db, {
+      pageId: page!.id, stream, workerId: "targeted", leaseToken: "targeted", leaseTtlMs: 60_000, now,
+    })).toMatchObject({ stream });
+    // The row stays as a record.
+    expect((await testDb!.pool.query("select count(*)::int as n from page_sync_provider_holds")).rows[0].n).toBe(1);
   });
-
-  it("never shortens a hold already in force", async () => {
-    const f = await seedHeldPage({ failure: rateLimited(null) });
-    const now = new Date();
-    const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
-    const arm = (holdUntil: Date) => armPageSyncProviderHold(f.app.db, {
-      pageId: f.page.id, stream: "transactions", syncRunId: null, reason: "rate_limit",
-      holdUntil, retryAfterAt: null, now,
-    });
-
-    expect(await arm(at(600_000))).toEqual(at(600_000));
-    expect(await arm(at(120_000))).toBeNull();
-    expect(await leaseAt(f.page.id, at(300_000))).toBeNull();
-    expect(await arm(at(900_000))).toEqual(at(900_000));
-    expect(await leaseAt(f.page.id, at(899_999))).toBeNull();
-    expect(await leaseAt(f.page.id, at(900_000))).toMatchObject({ stream: "transactions" });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

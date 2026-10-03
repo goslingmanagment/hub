@@ -3,7 +3,6 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   acquirePageSyncLease,
-  armPageSyncProviderHold,
   blockPageSync,
   clearPageSyncLease,
   completePageSync,
@@ -23,26 +22,19 @@ import {
   type SyncStream,
   type SyncWorkClass,
   yieldPageSync,
-  getSyncStreamsForPlatform,
-  pageSyncRetryBackoffMs,
-  pausePageSyncForAuth,
   OfapiCollectionPolicyError,
 } from "@agency_hub_core/db";
-import { FanslyApiError, FanslyProxyMissingError } from "@agency_hub_core/fansly";
 import { ofapiCollectionRefusalDisposition, runWithHttpRequestSignal } from "@agency_hub_core/shared";
 import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { legacyExecutorPlatforms } from "../../platforms/registry.ts";
-import { ProxyMissingError } from "../errors.ts";
-import { isFanslyPageOwnedBySyncEngineError } from "../fansly-send-guard/index.ts";
+import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
 import {
   executeOfapiCaptureJobChunk,
   isOfapiBackgroundCaptureRunnable,
 } from "../ofapi-capture-jobs.ts";
 import { OfapiApiError, ofapiAccountNotFound } from "../ofapi.ts";
 import {
-  notifyAuthFailedIncident,
   notifyOfapiGlobalIncident,
   notifySyncChunkFailureIncident,
   resolveOfapiGlobalIncident,
@@ -76,10 +68,6 @@ const SYNC_RUN_HEARTBEAT_MS = 30_000;
 const SYNC_TASK_LEASE_TTL_MS = 120_000;
 const MAX_LOCAL_EXECUTOR_CHUNKS = 500;
 const SYNC_PAGE_EXECUTE_HANDOFF_GUARD_MS = 60_000;
-const LONG_PROVIDER_COOLDOWN_MS = 30 * 60_000;
-/** R04: the first Fansly 429 of a stream's failure streak holds the whole page
- * at least this long (the whole hold when the provider named no deadline). */
-const PAGE_PROVIDER_HOLD_DEFAULT_MS = 120_000;
 
 export interface SyncPageChunkResult {
   kind: "idle" | "success" | "skipped" | "yielded" | "failed" | "blocked";
@@ -96,14 +84,6 @@ type PageExecuteBoss = Pick<PgBoss, "complete" | "fail" | "fetch" | "send" | "to
 interface ExecutorCoordinator {
   fetchLock: Promise<void>;
   localActiveGroups: Set<string>;
-}
-
-function isAuthError(error: unknown) {
-  if (error instanceof FanslyApiError) {
-    return error.status === 401 || error.status === 403;
-  }
-
-  return false;
 }
 
 function normalizeRunSource(source: SyncRequestSource | null) {
@@ -246,16 +226,6 @@ export const OFAPI_INSUFFICIENT_CREDITS_INCIDENT = { kind: "ofapi_low_credit" } 
 export const OFAPI_COLLECTION_POLICY_RETRY_CLASS = "ofapi_collection_policy";
 export const OFAPI_COLLECTION_PAUSE_RECHECK_MS = 15 * 60_000;
 
-/**
- * Sync engine design §2.7: the page's send guard belongs to the Fansly Sync
- * Engine (the step-3 switch), so the guard refused the capture before anything
- * was sent. A page-level stop under its own retry class on the ordinary
- * ladder — never a provider answer, a blocker or a thread's failure. The
- * switch fences the page's streams before it flips the guard, so only a chunk
- * already running meets this; a rollback's recovery request wakes them again.
- */
-export const FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS = "fansly_sync_engine_owned";
-
 function classifyOfapiApiError(
   error: OfapiApiError,
   failure: ReturnType<typeof buildNormalizedSyncError>,
@@ -323,10 +293,7 @@ async function resolveOfapiCreditsIncidentIfRecovered(
  * request, or whose every attempt failed, proves nothing (prod 2026-09-19/20:
  * 91 such chunks "recovered" a 38-hour proxy outage on one page). The chunk's
  * newest successful response is the recovery instant, not the chunk end, so a
- * chunk cannot close or tombstone past another stream's later failure. A
- * `succeededAt` is never evidence: a walk completion stamps it with the wall
- * clock even when the walk made no request, and a settlement retry reuses
- * that stamp without making one either.
+ * chunk cannot close or tombstone past another stream's later failure.
  */
 function resolveProviderRecoveredAt(
   telemetry: Pick<SyncRunTelemetry, "getRequestTotalsSnapshot">,
@@ -334,125 +301,9 @@ function resolveProviderRecoveredAt(
   return telemetry.getRequestTotalsSnapshot().lastSuccessfulAttemptAt;
 }
 
-/** A provider that named its own deadline outranks the local ladder, but only
- * upward: `retry_at` becomes the LATER of the two. Fansly answers a 429 with a
- * `Retry-After` far beyond anything the in-process loop may sleep (600s against
- * a 60s clamp), and without this the page woke on the 60s rung and walked
- * straight back into the same limit. Taking the max also keeps the ladder's
- * anti-hammering property: a 1s `Retry-After` on the fifth consecutive failure
- * cannot reset the stream to a hot loop. */
-function resolveProviderRetryAt(
-  retryAfterAt: Date | null,
-  input: { previousConsecutiveFailures: number; now: Date },
-): Date | undefined {
-  if (retryAfterAt === null) {
-    return undefined;
-  }
-  // retryPageSync computes the same rung from `consecutiveFailures + 1`.
-  const backoffAt = new Date(
-    input.now.getTime() + pageSyncRetryBackoffMs(input.previousConsecutiveFailures + 1),
-  );
-  return retryAfterAt.getTime() > backoffAt.getTime() ? retryAfterAt : backoffAt;
-}
-
-/**
- * R04: a Fansly 429 is the provider's rate limit for the page's session, not
- * for one endpoint, so the page's other streams must not keep calling inside
- * its window. Only a 429 holds the page: a 5xx `Retry-After` speaks for its
- * own endpoint (statsnew, #290). The failing stream's own retry is unchanged.
- * - A future `Retry-After` holds the page until exactly that instant on EVERY
- *   429, whatever the stream's streak (a 5xx before it, or an earlier hold
- *   that has passed), and is never capped: the failing stream itself waits the
- *   whole deadline (resolveProviderRetryAt), so its siblings may not resume
- *   sooner.
- * - The first 429 of the streak also holds the page at least 120 s, the whole
- *   hold when no deadline was named. A later 429 without a deadline holds
- *   nothing: a stream that keeps meeting them backs off on its own ladder
- *   without starving its siblings, and a sibling that meets one arms its own.
- */
-function resolvePageProviderHold(
-  error: unknown,
-  input: { previousConsecutiveFailures: number; now: Date },
-): { holdUntil: Date; retryAfterAt: Date | null } | null {
-  if (!(error instanceof FanslyApiError) || error.status !== 429) {
-    return null;
-  }
-  const nowMs = input.now.getTime();
-  const retryAfterAt = error.retryAfterAt;
-  const holdEnds: number[] = [];
-  if (retryAfterAt !== null && retryAfterAt.getTime() > nowMs) {
-    holdEnds.push(retryAfterAt.getTime());
-  }
-  if (input.previousConsecutiveFailures === 0) {
-    // Also a floor: a thrown 429 whose deadline is seconds away (or already
-    // passed) means the adapter's in-process retries met repeated 429s, so a
-    // first 429 never holds the page for less than without a Retry-After.
-    holdEnds.push(nowMs + PAGE_PROVIDER_HOLD_DEFAULT_MS);
-  }
-  if (holdEnds.length === 0) {
-    return null;
-  }
-  return { holdUntil: new Date(Math.max(...holdEnds)), retryAfterAt };
-}
-
-async function armPageProviderHold(
-  app: Pick<AppContext, "db" | "logger">,
-  telemetry: Pick<SyncRunTelemetry, "addAnomaly">,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    runId: number | null;
-    hold: { holdUntil: Date; retryAfterAt: Date | null };
-    now: Date;
-  },
-) {
-  let heldUntil: Date | null;
-  try {
-    heldUntil = await armPageSyncProviderHold(app.db, {
-      pageId: input.pageId,
-      stream: input.stream,
-      syncRunId: input.runId,
-      reason: "rate_limit",
-      holdUntil: input.hold.holdUntil,
-      retryAfterAt: input.hold.retryAfterAt,
-      now: input.now,
-    });
-  } catch (error) {
-    // The failing stream still records its own retry below.
-    app.logger.warn(
-      { err: error, platformAccountId: input.pageId, stream: input.stream },
-      "Failed to arm the page provider hold after a Fansly 429",
-    );
-    return;
-  }
-  if (heldUntil === null) {
-    // A longer hold is already in force.
-    return;
-  }
-  const details = {
-    holdUntil: heldUntil.toISOString(),
-    retryAfterAt: input.hold.retryAfterAt?.toISOString() ?? null,
-  };
-  app.logger.warn(
-    { platformAccountId: input.pageId, stream: input.stream, ...details },
-    "Fansly 429: every sync stream of the page is held",
-  );
-  await telemetry.addAnomaly({
-    code: "page_provider_hold",
-    severity: "warn",
-    message: `Fansly rate limit: every sync stream of the page is held until ${details.holdUntil}`,
-    details,
-  });
-}
-
 function classifyTaskFailure(
   error: unknown,
   failure: ReturnType<typeof buildNormalizedSyncError>,
-  input: {
-    previousConsecutiveFailures: number;
-    previousRetryKind: string | null;
-    now?: Date;
-  },
 ): {
   mode: "retry" | "blocked";
   retryClass?: string;
@@ -495,77 +346,6 @@ function classifyTaskFailure(
     };
   }
 
-  // W3.1 (decision #124): a refused proxyless resolution is a config state,
-  // not a transient — park the stream (manual action: assign a proxy) instead
-  // of hot-retrying a guaranteed refusal every cycle.
-  if (error instanceof ProxyMissingError || error instanceof FanslyProxyMissingError) {
-    return {
-      mode: "blocked",
-      blockerType: "manual_action_required",
-      blockerCode: "proxy_missing",
-      blockerReason: failure.summary,
-    };
-  }
-
-  if (isFanslyPageOwnedBySyncEngineError(error)) {
-    return {
-      mode: "retry",
-      retryClass: FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS,
-    };
-  }
-
-  if (error instanceof FanslyApiError) {
-    // The class stays exactly what it was; only the wake-up instant moves.
-    const providerRetryAt = resolveProviderRetryAt(error.retryAfterAt, {
-      previousConsecutiveFailures: input.previousConsecutiveFailures,
-      now: input.now ?? new Date(),
-    });
-
-    if (error.status === 429) {
-      return {
-        mode: "retry",
-        retryClass: "rate_limit",
-        ...(providerRetryAt ? { retryAt: providerRetryAt } : {}),
-      };
-    }
-
-    if (error.status && error.status >= 500) {
-      return {
-        mode: "retry",
-        retryClass: "provider_5xx",
-        ...(providerRetryAt ? { retryAt: providerRetryAt } : {}),
-      };
-    }
-
-    if (error.status === 404) {
-      const previous404Failures = input.previousRetryKind === "provider_404"
-        ? input.previousConsecutiveFailures
-        : 0;
-      if (previous404Failures < 2) {
-        return {
-          mode: "retry",
-          retryClass: "provider_404",
-        };
-      }
-
-      return {
-        mode: "blocked",
-        blockerType: "provider_bad_data",
-        blockerCode: "provider_404_exhausted",
-        blockerReason: failure.summary,
-      };
-    }
-
-    if (error.status && error.status >= 400) {
-      return {
-        mode: "blocked",
-        blockerType: "provider_bad_data",
-        blockerCode: "provider_bad_data",
-        blockerReason: failure.summary,
-      };
-    }
-  }
-
   if (error instanceof OfapiApiError) {
     return classifyOfapiApiError(error, failure);
   }
@@ -595,7 +375,7 @@ function classifyTaskFailure(
     };
   }
 
-  if (lowerSummary.includes("manual action") || lowerSummary.includes("shared rate limit")) {
+  if (lowerSummary.includes("manual action")) {
     return {
       mode: "blocked",
       blockerType: "manual_action_required",
@@ -637,58 +417,36 @@ function sanitizeProgressPayload(stats: Record<string, unknown> | undefined) {
 
 function resolveCurrentPhase(stats: Record<string, unknown> | undefined) {
   const phase = stats?.phase;
-  if (typeof phase === "string" && phase.trim().length > 0) {
-    return phase;
-  }
-
-  const currentMode = stats?.currentMode;
-  if (typeof currentMode === "string" && currentMode.trim().length > 0) {
-    return currentMode;
-  }
-
-  return null;
+  return typeof phase === "string" && phase.trim().length > 0 ? phase : null;
 }
 
-function resolveCurrentWorkClass(taskLease: PageSyncLease, stats: Record<string, unknown> | undefined): SyncWorkClass {
-  const currentMode = stats?.currentMode;
-  if (currentMode === "backfill" || currentMode === "deep_backfill") {
-    return "history";
-  }
-  if (currentMode === "incremental") {
-    return "live";
-  }
-  return taskLease.workClass ?? (taskLease.stream === "dm_messages"
-    ? "history"
-    : taskLease.stream === "top_spenders" ||
-        taskLease.stream === "fan_identities" ||
-        taskLease.stream === "followers_reconcile"
-      ? "maintenance"
-      : "live");
+function resolveCurrentWorkClass(taskLease: PageSyncLease): SyncWorkClass {
+  return taskLease.workClass ?? (
+    taskLease.stream === "top_spenders" || taskLease.stream === "fan_identities" ? "maintenance" : "live"
+  );
 }
 
 function hasMeaningfulProgress(
   result: {
     satisfied: boolean;
     gatedSkip?: string | null;
-    deferral?: string | null;
     stats?: Record<string, unknown>;
   },
 ) {
-  // A ramp-gated chunk issued zero requests. Treating it as progress moved
+  // A gated chunk issued zero requests. Treating it as progress moved
   // progressed_at on every cycle and made a frozen stream look alive.
   if (result.gatedSkip) return false;
-  // A deferral only rescheduled failing work; its stats describe the deferral.
-  if (result.deferral) return false;
   return result.satisfied || Boolean(result.stats && Object.keys(result.stats).length > 0);
 }
+
 export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
   const dependencyInput = pageSyncDependencyInput(app);
-  // Only the platforms whose adapter declares streams (OnlyFans since step 4
-  // S4-10): a stray wake-up for a Fansly page seeds, repairs and leases
-  // nothing of its legacy state and goes idle.
+  // Only the platforms whose adapter declares streams (OnlyFans since step 4;
+  // `sync/onlyfans/boundary.ts`): a stray wake-up for a Fansly page seeds,
+  // repairs and leases nothing of its legacy state and goes idle.
   const platforms = legacyExecutorPlatforms();
   await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms, ...dependencyInput });
   await pauseDisabledOnlyFansDmPollingForPage(app, platformAccountId);
@@ -737,6 +495,11 @@ export async function executeNextSyncPageChunk(
       continuationPriority: null,
     };
   }
+
+  // The boundary (I21): the lease is scoped to `platforms`, so the leased page
+  // is one the legacy executor serves. A broken scope stops here, before a
+  // run is opened or a handler is looked up.
+  assertLegacyExecutorPage({ pageId: storedPage.page.id, platform: storedPage.page.platform }, "executor");
 
   const { run, telemetry } = await createChunkTelemetry(app, taskLease, storedPage);
   const budget = new SyncChunkBudget();
@@ -794,7 +557,7 @@ export async function executeNextSyncPageChunk(
 
     const progress = sanitizeProgressPayload(result.stats);
     const phase = resolveCurrentPhase(result.stats);
-    const workClass = resolveCurrentWorkClass(taskLease, result.stats);
+    const workClass = resolveCurrentWorkClass(taskLease);
     const progressAt = hasMeaningfulProgress(result) ? new Date() : taskLease.progressedAt;
 
     if (result.satisfied) {
@@ -817,7 +580,6 @@ export async function executeNextSyncPageChunk(
           requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
           leaseToken: taskLease.leaseToken ?? "",
           progressedAt: progressAt,
-          ...(result.succeededAt ? { succeededAt: result.succeededAt } : {}),
           phase,
           workClass,
           progress,
@@ -894,9 +656,6 @@ export async function executeNextSyncPageChunk(
     // an endless chain of high-priority successors and starve its egress
     // peers. Handlers may still choose an explicit continuation source.
     const continuationRequestSource = result.continuationRequestSource ?? "scheduled";
-    // A deferral read nothing: the stream keeps its failure streak, last error
-    // and incidents, and only its wake-up time moves.
-    const deferral = result.deferral ?? null;
     const yieldResult = await yieldPageSync(app.db, {
       pageId: platformAccountId,
       stream: taskLease.stream,
@@ -908,7 +667,6 @@ export async function executeNextSyncPageChunk(
       progress,
       retryAt: result.continuationRetryAt ?? null,
       dispatchSource: continuationRequestSource,
-      ...(deferral ? { keepFailureStreak: true } : {}),
     });
     if (!yieldResult.updated) {
       return buildLeaseLostResult(telemetry, platformAccountId, run.id);
@@ -922,19 +680,16 @@ export async function executeNextSyncPageChunk(
         elapsedMs: budget.elapsedMs,
       },
       ...result.stats,
-      ...(deferral ? { deferral } : {}),
     });
-    if (!deferral) {
-      await resolveSyncChunkRecoveryIncidents(app, {
-        platformAccountId,
-        pageLabel: pageContext.page.label,
-        platform: pageContext.platform,
-        recoveredAt,
-        providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
-        stream: taskLease.stream,
-      });
-      await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
-    }
+    await resolveSyncChunkRecoveryIncidents(app, {
+      platformAccountId,
+      pageLabel: pageContext.page.label,
+      platform: pageContext.platform,
+      recoveredAt,
+      providerRecoveredAt: resolveProviderRecoveredAt(telemetry),
+      stream: taskLease.stream,
+    });
+    await resolveOfapiCreditsIncidentIfRecovered(app, taskLease, budget, recoveredAt);
     // A newer request OR another stream on this page may already be runnable.
     // Immediate page work wins over this stream's delayed yield; otherwise a
     // deferred retry stays only in page_sync_states for the planner to wake.
@@ -970,86 +725,7 @@ export async function executeNextSyncPageChunk(
     const pageLabel = storedPage.page.label;
     const hasProxy = storedPage.proxy !== null;
 
-    if (isAuthError(error)) {
-      const blockResult = await blockPageSync(app.db, {
-        pageId: platformAccountId,
-        stream: taskLease.stream,
-        requestSeq: taskLease.leasedSeq ?? taskLease.requestSeq,
-        leaseToken: taskLease.leaseToken ?? "",
-        blockerKind: "auth",
-        blockerCode: "credentials_invalid",
-        blockerMessage: failure.summary,
-        errorCode: failure.error.code,
-        errorSummary: failure.summary,
-        phase: taskLease.phase,
-        workClass: taskLease.workClass ?? "live",
-        progress: taskLease.progress,
-        now: failedAt,
-      });
-      if (!blockResult.updated) {
-        return buildLeaseLostResult(telemetry, platformAccountId, run.id);
-      }
-      if (!blockResult.blocked) {
-        await telemetry.finish("failed", failure, {
-          chunkStatus: "stale_block",
-        });
-        const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
-        return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
-      }
-
-      await persistFailedSyncPayload(app, {
-        platformAccountId,
-        syncRunId: run.id,
-        endpoint: taskLease.stream,
-        platform: provider,
-        failure,
-      });
-      await telemetry.finish("failed", failure, {
-        chunkStatus: "blocked",
-      });
-      // Stage 26: a dead session is dead for the WHOLE page — park every
-      // stream (paused + blocker_kind='auth') so no other stream keeps
-      // burning quota against it. Successful re-verify restores via
-      // clearPageSyncAuthBlock (handleSuccessfulPageVerificationRecovery).
-      try {
-        await pausePageSyncForAuth(app.db, {
-          pageId: platformAccountId,
-          streams: getSyncStreamsForPlatform(provider),
-          blockerCode: "credentials_invalid",
-          blockerMessage: failure.summary,
-          now: failedAt,
-        });
-      } catch (pauseError) {
-        app.logger.warn(
-          { platformAccountId, err: pauseError },
-          "Auth-dead page pause failed; the failing stream stays blocked",
-        );
-      }
-      await notifyAuthFailedIncident(app, {
-        platformAccountId,
-        pageLabel,
-        platform: provider,
-        errorCode: failure.error.code,
-        errorSummary: failure.summary,
-        occurredAt: failedAt,
-      });
-      return {
-        kind: "blocked",
-        platformAccountId,
-        stream: taskLease.stream,
-        runId: run.id,
-        needsContinuation: false,
-        continuationPriority: null,
-      };
-    }
-
-    const classified = classifyTaskFailure(error, failure, {
-      previousConsecutiveFailures: taskLease.consecutiveFailures,
-      previousRetryKind: taskLease.retryKind,
-      // Same clock sample as the persistence below: a retry deadline anchored
-      // to a second `Date.now()` would drift past the row it is written into.
-      now: failedAt,
-    });
+    const classified = classifyTaskFailure(error, failure);
     if (classified.mode === "blocked") {
       const blockResult = await blockPageSync(app.db, {
         pageId: platformAccountId,
@@ -1077,21 +753,6 @@ export async function executeNextSyncPageChunk(
         return buildContinuationResult(platformAccountId, taskLease.stream, run.id, "failed", continuationPriority);
       }
     } else {
-      const pageHold = resolvePageProviderHold(error, {
-        previousConsecutiveFailures: taskLease.consecutiveFailures,
-        now: failedAt,
-      });
-      if (pageHold) {
-        // Before the stream's own retry: the 429 happened even if the lease
-        // turns out to be lost below.
-        await armPageProviderHold(app, telemetry, {
-          pageId: platformAccountId,
-          stream: taskLease.stream,
-          runId: run?.id ?? null,
-          hold: pageHold,
-          now: failedAt,
-        });
-      }
       const retryResult = await retryPageSync(app.db, {
         pageId: platformAccountId,
         stream: taskLease.stream,
@@ -1140,12 +801,6 @@ export async function executeNextSyncPageChunk(
         occurredAt: failedAt,
       });
     } else {
-      // A long provider pause needs visibility on the first failure, without
-      // waking the stream before the provider's deadline.
-      const longProviderCooldown = error instanceof FanslyApiError &&
-        (classified.retryClass === "rate_limit" || classified.retryClass === "provider_5xx") &&
-        classified.retryAt !== undefined &&
-        classified.retryAt.getTime() > failedAt.getTime() + LONG_PROVIDER_COOLDOWN_MS;
       await notifySyncChunkFailureIncident(app, {
         platformAccountId,
         pageLabel,
@@ -1154,11 +809,9 @@ export async function executeNextSyncPageChunk(
         runId: run.id,
         hasProxy,
         previousConsecutiveFailures: taskLease.consecutiveFailures,
-        forceOpen: classified.mode === "blocked" || longProviderCooldown,
+        forceOpen: classified.mode === "blocked",
         errorCode: failure.error.code,
-        errorSummary: longProviderCooldown && classified.retryAt
-          ? `${failure.summary}; provider cooldown until ${classified.retryAt.toISOString()}`
-          : failure.summary,
+        errorSummary: failure.summary,
         occurredAt: failedAt,
       });
     }

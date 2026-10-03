@@ -250,7 +250,10 @@ describe("bootstrap", () => {
     expect(bootstrapMocks.logger.warn).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects executor concurrency above 1 when shared limiting is disabled", async () => {
+  it("boots with executor concurrency above 1 whatever the retired shared limiter key says (step 4, S4-19)", async () => {
+    // The boot invariant that tied the page executor's concurrency to
+    // SYNC_SHARED_RATE_LIMIT_ENABLED went with the limiter's last reader.
+    bootstrapMocks.assertRuntimeSchemaReady.mockResolvedValue(undefined);
     bootstrapMocks.loadConfig.mockReturnValueOnce({
       ...bootstrapMocks.loadConfig(),
       syncSharedRateLimitEnabled: false,
@@ -260,11 +263,10 @@ describe("bootstrap", () => {
     });
     const { createAppContext } = await import("../apps/runtime/src/bootstrap.ts");
 
-    await expect(createAppContext()).rejects.toThrow(
-      "SYNC_PAGE_EXECUTOR_CONCURRENCY > 1 requires SYNC_SHARED_RATE_LIMIT_ENABLED=true",
-    );
+    const app = await createAppContext();
 
-    expect(bootstrapMocks.createPool).not.toHaveBeenCalled();
+    expect(app.config.syncPageExecutorConcurrency).toBe(4);
+    expect(bootstrapMocks.createPool).toHaveBeenCalledTimes(1);
   });
 
   it("retries a transient override read failure, then boots with the graph normalized (A31)", async () => {

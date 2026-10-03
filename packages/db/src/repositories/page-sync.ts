@@ -4,7 +4,6 @@ import type { Database } from "../client.ts";
 import {
   egressEndpoints,
   pageFollows,
-  pageSyncProviderHolds,
   pageSyncStates,
   pages,
 } from "../schema.ts";
@@ -916,18 +915,6 @@ export function pageSyncRunnableSinceSql(tableAlias: string) {
   return sql.raw(
     `greatest(${tableAlias}.requested_at, ${tableAlias}.started_at, ${tableAlias}.retry_at)`,
   );
-}
-
-/** True unless the page is inside a provider hold at `now`
- * (armPageSyncProviderHold): then none of its streams may start. The planner,
- * the executor's lease and the targeted lease also carry
- * `legacyOwnsFanslyPageSql` (sync/pages.ts): no stream of a page the Fansly
- * Sync Engine owns (`handover`/`live`) is enqueued or leased. */
-function pageSyncProviderHoldClearSql(pageIdColumn: string, now: Date) {
-  return sql`not exists (
-    select 1 from ${pageSyncProviderHolds} ph
-    where ph.page_id = ${sql.raw(pageIdColumn)} and ph.hold_until > ${now}
-  )`;
 }
 
 /** SYNC_STREAM_STARVED_PRIORITY for a row that has starved past its stream's
@@ -1988,7 +1975,6 @@ export async function listRunnablePageSync(
         and not (p.platform = 'onlyfans' and st.stream = 'dm_messages')
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
         and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
         and ${pageSyncPlatformScopeSql("st.page_id", options?.platforms)}
     )
@@ -2075,7 +2061,6 @@ export async function acquirePageSyncLease(
         )
         and st.leased_seq is null
         and (st.retry_at is null or st.retry_at <= ${now})
-        and ${pageSyncProviderHoldClearSql("st.page_id", now)}
         and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
         and ${pageSyncPlatformScopeSql("st.page_id", input.platforms)}
     ), candidate as (
@@ -2225,7 +2210,6 @@ export async function acquireTargetedPageSyncLease(
       and st.blocker_kind is null
       and st.leased_seq is null
       and (st.retry_at is null or st.retry_at <= ${now})
-      and ${pageSyncProviderHoldClearSql("st.page_id", now)}
       and ${legacyOwnsFanslyPageSql(sql.raw("st.page_id"))}
       and exists (
         select 1 from ${pages} p
@@ -2362,15 +2346,10 @@ export async function completePageSync(
     workClass?: SyncWorkClass | null;
     progress?: Record<string, unknown>;
     now?: Date;
-    succeededAt?: Date;
     dependencyOptions?: PageSyncDependencyOptions;
   },
 ) {
   const now = input.now ?? new Date();
-  const succeededAt = input.succeededAt ?? now;
-  if (!Number.isFinite(succeededAt.getTime()) || succeededAt > now) {
-    throw new Error("A certified sync time must be finite and no later than settlement");
-  }
   const result = await db.execute(sql`
     update ${pageSyncStates}
     set status = case
@@ -2381,7 +2360,7 @@ export async function completePageSync(
         leased_seq = null,
         progressed_at = coalesce(${input.progressedAt ?? null}, progressed_at, ${now}),
         finished_at = ${now},
-        succeeded_at = ${succeededAt},
+        succeeded_at = ${now},
         retry_kind = null,
         retry_at = null,
         blocker_kind = null,
@@ -2504,16 +2483,12 @@ export async function yieldPageSync(
     progress?: Record<string, unknown>;
     retryAt?: Date | null;
     dispatchSource?: SyncRequestSource | null;
-    /** A deferral-only chunk (StreamChunkResult.deferral) read nothing: it
-     *  keeps the failure streak and last error, which only progress clears. */
-    keepFailureStreak?: boolean;
     now?: Date;
   },
 ): Promise<PageSyncYieldResult> {
   const now = input.now ?? new Date();
   const retryAt = input.retryAt ?? null;
   const dispatchSource = input.dispatchSource ?? null;
-  const keepFailureStreak = input.keepFailureStreak === true;
   const result = await db.execute(sql<{ requestSeq: number }>`
     update ${pageSyncStates}
     set status = 'pending',
@@ -2527,9 +2502,9 @@ export async function yieldPageSync(
                             when request_seq > ${input.requestSeq} then dispatch_source
                             else coalesce(${dispatchSource}::sync_request_source, dispatch_source)
                           end,
-        consecutive_failures = case when ${keepFailureStreak} then consecutive_failures else 0 end,
-        last_error_code = case when ${keepFailureStreak} then last_error_code else null end,
-        last_error_summary = case when ${keepFailureStreak} then last_error_summary else null end,
+        consecutive_failures = 0,
+        last_error_code = null,
+        last_error_summary = null,
         retry_kind = null,
         retry_at = case
                      when request_seq > ${input.requestSeq} then null::timestamptz
@@ -2579,51 +2554,6 @@ export function activePageSyncRetryAt(retryAt: Date | null, now: Date) {
 function hasProviderCooldown(retryKind: string | null, retryAt: Date | null, now: Date) {
   return (retryKind === "rate_limit" || retryKind === "provider_5xx") &&
     retryAt !== null && retryAt.getTime() > now.getTime();
-}
-
-/**
- * R04: hold EVERY sync stream of the page until `holdUntil` — the regular
- * lease, the targeted lease and the runnable listing all refuse a held page.
- * The hold lives beside page_sync_states on purpose: a Sync now, a B1 wake or
- * a planner tick rewrites a stream's retry state, and none of them may lift
- * it; sibling rows, streaks and health stay untouched. Never shortens a hold
- * already in force. Returns the hold's end when this call armed or extended
- * it, else null.
- */
-export async function armPageSyncProviderHold(
-  db: Database,
-  input: {
-    pageId: number;
-    stream: SyncStream;
-    syncRunId: number | null;
-    reason: string;
-    holdUntil: Date;
-    /** The provider's own deadline, unclamped (diagnostics only). */
-    retryAfterAt: Date | null;
-    now?: Date;
-  },
-): Promise<Date | null> {
-  const now = input.now ?? new Date();
-  const result = await db.execute<{ holdUntil: TimestampValue }>(sql`
-    insert into ${pageSyncProviderHolds} as ph
-      (page_id, hold_until, reason, stream, sync_run_id, retry_after_at, armed_at)
-    values (
-      ${input.pageId}, ${input.holdUntil}, ${input.reason}, ${input.stream},
-      ${input.syncRunId}, ${input.retryAfterAt}, ${now}
-    )
-    on conflict (page_id) do update
-    set hold_until = excluded.hold_until,
-        reason = excluded.reason,
-        stream = excluded.stream,
-        sync_run_id = excluded.sync_run_id,
-        retry_after_at = excluded.retry_after_at,
-        armed_at = excluded.armed_at
-    where ph.hold_until < excluded.hold_until
-    returning ph.hold_until as "holdUntil"
-  `);
-
-  const row = result.rows[0];
-  return row ? normalizeTimestamp(row.holdUntil, "holdUntil") : null;
 }
 
 export async function retryPageSync(
@@ -2811,38 +2741,6 @@ export async function markPageSyncAuthBlocked(
   `);
 }
 
-export async function clearPageSyncAuthBlock(
-  db: Database,
-  pageId: number,
-  input: Date | {
-    maxFailureAt?: Date;
-    now?: Date;
-  } = new Date(),
-) {
-  const now = input instanceof Date ? input : input.now ?? new Date();
-  const maxFailureAt = input instanceof Date ? undefined : input.maxFailureAt;
-  await db.execute(sql`
-    update ${pageSyncStates}
-    set status = case
-                   when request_seq > applied_seq then 'pending'::page_sync_status
-                   else 'idle'::page_sync_status
-                 end,
-        retry_kind = null,
-        retry_at = null,
-        blocker_kind = null,
-        blocker_code = null,
-        blocker_message = null,
-        blocked_at = null,
-        updated_at = ${now}
-    where page_id = ${pageId}
-      and blocker_kind = 'auth'
-      and (
-        ${maxFailureAt ?? null}::timestamptz is null or
-        coalesce(failed_at, blocked_at, updated_at) <= ${maxFailureAt ?? null}
-      )
-  `);
-}
-
 /**
  * Decision #249: an EXPLICIT operator request for a stream is the manual
  * action a `manual_action_required` block was waiting for. Clears that block
@@ -2944,8 +2842,9 @@ export async function pausePageSync(
 /**
  * Kernel Stage 26: typed auth death parks every runnable stream on the page
  * with blocker_kind='auth', so quota stops burning on a dead session. Streams
- * already parked by an operator or feature gate keep that ownership marker.
- * clearPageSyncAuthBlock can therefore restore only the rows auth paused.
+ * already parked by an operator or feature gate keep that ownership marker,
+ * so the recovery (the OFAPI account-health handler, by `blocker_kind = 'auth'`
+ * and its binding generation) restores only the rows auth paused.
  */
 export async function pausePageSyncForAuth(
   db: Database,

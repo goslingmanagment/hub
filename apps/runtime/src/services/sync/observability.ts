@@ -444,7 +444,6 @@ export class SyncRunTelemetry {
   private readonly requestObserver: HttpRequestObserver;
   private readonly runStartedAt: Date;
 
-  private hydration: Record<string, unknown> | null = null;
 
   constructor(
     private readonly app: Pick<AppContext, "config" | "db" | "logger">,
@@ -544,22 +543,6 @@ export class SyncRunTelemetry {
       code: input.code,
       ...input.details,
     }, input.severity === "error" ? "error" : "warn");
-  }
-
-  mergeHydrationSummary(hydration: Record<string, unknown>) {
-    const next = {
-      ...(this.hydration ?? {}),
-    };
-
-    for (const [key, value] of Object.entries(hydration)) {
-      if (typeof value === "number" && typeof next[key] === "number") {
-        next[key] = (next[key] as number) + value;
-      } else {
-        next[key] = value;
-      }
-    }
-
-    this.hydration = next;
   }
 
   async recordSkipped(reason: string) {
@@ -671,7 +654,6 @@ export class SyncRunTelemetry {
           ]),
         ),
       },
-      hydration: this.hydration,
       phases: this.phaseNames,
       ...extraStats,
       ...(error ? { error } : {}),
@@ -680,10 +662,6 @@ export class SyncRunTelemetry {
 
   getRequestTotalsSnapshot() {
     return this.requestSummaryCollector.getRequestTotalsSnapshot();
-  }
-
-  getHydrationSummary() {
-    return this.hydration;
   }
 
   private createCompositeRequestObserver(): HttpRequestObserver {

@@ -17,7 +17,7 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { BadRequestError, ConflictError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
@@ -31,7 +31,7 @@ import {
   type SyncStatusPage,
 } from "./sync-status.ts";
 import { sendSyncPageWakeup } from "./sync-queue.ts";
-import { assertLegacyExecutorServes, LegacySyncRetiredError } from "./sync-control.ts";
+import { assertLegacyExecutorServes } from "./sync-control.ts";
 import {
   engineOwnedSyncPage,
   pauseEngineStreams,

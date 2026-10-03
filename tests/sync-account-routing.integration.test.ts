@@ -27,8 +27,10 @@ import { setModeDirect } from "./helpers/sync-engine-host.ts";
 import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // The owner's `/account/me` levers by the page's engine mode (design step 3
-// §3.5 item 6, E10): `off` keeps the legacy path (the adapter's request,
-// paced by the step-1 guard); `handover` answers 409 `fansly_page_switching`
+// §3.5 item 6, E10): a page the engine does not run (`off`, `shadow`) answers
+// 409 `legacy_sync_retired` — its legacy path (the adapter's request) is
+// deleted since step 4 (S4-19), so nothing is resolved, sent or stored;
+// `handover` answers 409 `fansly_page_switching`
 // before anything is resolved or sent; `live` goes through the page's actor —
 // `account.verify` for the page verify, `account.identity` with the candidate
 // for a credentials or proxy change, stored only when it matches — and a
@@ -96,7 +98,7 @@ interface Rig {
   identityTokens: string[];
 }
 
-async function rig(mode: "off" | "handover" | "live"): Promise<Rig> {
+async function rig(mode: "off" | "shadow" | "handover" | "live"): Promise<Rig> {
   server = await FakeFanslyServer.start();
   const proxy = await CountingConnectProxy.start();
   proxies.push(proxy);
@@ -107,7 +109,7 @@ async function rig(mode: "off" | "handover" | "live"): Promise<Rig> {
   });
   for (const route of harnessRoutes(new FakeChats())) server.route(route);
   const page = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: mode === "live" ? "live" : "shadow", proxyUrl: proxy.url, label: "routing-page" });
-  if (mode !== "live") await setModeDirect(testDb!.pool, page.pageId, mode);
+  if (mode !== "live" && mode !== "shadow") await setModeDirect(testDb!.pool, page.pageId, mode);
   const adapter = { getAccountMe: vi.fn(sentinel), verifySession: vi.fn(sentinel) };
   const app = createTestAppContext(testDb!, { adapter: adapter as unknown as AppContext["adapter"], fanslySendGuardSettingMs: S });
   if (mode === "live") {
@@ -140,26 +142,33 @@ async function storedGeneration(page: HarnessPage): Promise<string> {
 }
 
 describe("the /account/me levers by engine mode", () => {
-  it("off: the legacy path (the adapter is reached)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig("off");
+  it.each(["off", "shadow"] as const)("%s: 409 legacy_sync_retired, nothing resolved, sent or stored", async (mode) => {
+    if (!testDb) throw new Error("no test database");
+    const r = await rig(mode);
+    const before = await storedGeneration(r.page);
     const apiServer = await buildApiServer(r.app);
     await apiServer.ready();
     try {
       const cookie = await ownerCookie(r.app, apiServer);
       const verify = await apiServer.inject({ method: "POST", url: `/api/v1/admin/pages/${r.page.pageLabel}/verify`, headers: { cookie } });
-      expect(verify.statusCode).not.toBe(409);
-      expect(r.adapter.getAccountMe).toHaveBeenCalled();
+      expect(verify.statusCode).toBe(409);
+      expect(verify.json()).toMatchObject({ error: "legacy_sync_retired" });
       const credentials = await apiServer.inject({
         method: "PATCH", url: `/api/v1/admin/pages/${r.page.pageLabel}/credentials`, headers: { cookie },
         payload: { platform: "fansly", session: { authorization: "fresh" } },
       });
-      expect(credentials.statusCode).not.toBe(409);
-      expect(r.adapter.verifySession).toHaveBeenCalled();
+      expect(credentials.statusCode).toBe(409);
+      expect(credentials.json()).toMatchObject({ error: "legacy_sync_retired" });
     } finally {
       await apiServer.close();
     }
+    await expect(setPageProxy(r.app, r.page.pageLabel, { url: "http://127.0.0.1:9" })).rejects.toMatchObject({ code: "legacy_sync_retired" });
+    // No legacy sender is left behind the levers, and the engine was not asked.
+    expect(r.adapter.getAccountMe).not.toHaveBeenCalled();
+    expect(r.adapter.verifySession).not.toHaveBeenCalled();
     expect(r.server.arrivals).toEqual([]);
+    expect(await storedGeneration(r.page)).toBe(before);
+    expect((await testDb.pool.query("select count(*)::int as n from sync_work where not shadow")).rows[0].n).toBe(0);
   }, 60_000);
 
   it("handover: 409 fansly_page_switching, nothing resolved, sent or stored", async (context) => {

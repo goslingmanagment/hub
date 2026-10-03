@@ -9,8 +9,6 @@ import { PLATFORM_STREAMS, checkAdapterConformance } from "@agency_hub_core/plat
 import {
   appPlatformRegistry,
   fanslyPlatformAdapter,
-  isLegacyExecutorPlatform,
-  legacyExecutorPlatforms,
   onlyfansPlatformAdapter,
 } from "../apps/runtime/src/platforms/registry.ts";
 import { resolveStreamsForScope } from "../apps/runtime/src/services/sync-control.ts";
@@ -53,16 +51,11 @@ describe("platform registry (Stage 18)", () => {
     expect(checkAdapterConformance(onlyfansPlatformAdapter)).toEqual([]);
   });
 
-  it("Fansly declares no legacy stream, handler or scope: the legacy executor serves OnlyFans only (step 4 S4-10)", () => {
+  it("Fansly declares no legacy stream, handler or scope (step 4 S4-10); the platform set it leaves is tests/sync-onlyfans-boundary.test.ts", () => {
     expect(fanslyPlatformAdapter.capabilities.streams).toEqual([]);
     expect(fanslyPlatformAdapter.pull).toEqual({});
     expect(fanslyPlatformAdapter.syncScopes).toEqual({});
-    expect(legacyExecutorPlatforms()).toEqual(["onlyfans"]);
-    expect(isLegacyExecutorPlatform("fansly")).toBe(false);
-    expect(isLegacyExecutorPlatform("onlyfans")).toBe(true);
-    // The set is derived from the declared streams, not named per platform.
-    const registry = { all: () => [onlyfansPlatformAdapter, { ...fanslyPlatformAdapter, capabilities: { ...fanslyPlatformAdapter.capabilities, streams: ["light" as const] } }] };
-    expect(legacyExecutorPlatforms(registry as unknown as typeof appPlatformRegistry)).toEqual(["onlyfans", "fansly"]);
+    expect(onlyfansPlatformAdapter.capabilities.streams.length).toBeGreaterThan(0);
   });
 
   it("the registry resolves both platforms and fails loudly on unknowns", () => {

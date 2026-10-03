@@ -275,10 +275,11 @@ async function checkVerifyBlessing(
  *     observations` is the desktop's and the extension's own capture lane; the
  *     OFAPI webhook receiver and the OFAPI read gateway each write their own,
  *     synchronously, in the request.
- *   * `sync_raw_payloads` — `POST /api/v1/admin/pages/:pageLabel/verify` calls
- *     `refreshPageMetadata`, which fetches from Fansly and journals the response
- *     through `persistRawPayload`. It is the one capture-lane PULL that happens
- *     outside the worker, and it lands in the exact table these phases rewrite.
+ *   * `sync_raw_payloads` — until step 4 of the Fansly Sync Engine the page
+ *     verify route fetched `/account/me` in the api and journaled it through
+ *     `persistRawPayload`, into the exact table these phases rewrite. A Fansly
+ *     page's verify is the engine's work in `sync` now, so the api's capture
+ *     writes are the observations above.
  *
  * So the honest fix was the runbook's, not this function's: the ritual now
  * stops `api` too and states the consequence (the dashboard and every client
@@ -296,8 +297,7 @@ async function checkWritersStopped(app: Ctx, ctx: PreconditionContext): Promise<
     ctx.refusals.push(
       `${roles.length} runtime instance(s) are still heartbeating (${roles.join(", ")}) — `
         + "stop api, worker, scheduler AND sync (every runtime role writes capture; the api "
-        + "journals an observation on every audited admin mutation and writes sync_raw_payloads "
-        + "itself on POST /api/v1/admin/pages/:pageLabel/verify), then allow the 3-minute heartbeat TTL "
+        + "journals an observation on every audited admin mutation), then allow the 3-minute heartbeat TTL "
         + "to lapse — docs/runbooks/capture-historical-rewrite.md step R2",
     );
   }

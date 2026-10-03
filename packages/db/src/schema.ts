@@ -786,8 +786,10 @@ export const pageSyncStates = pgTable("page_sync_states",
   }),
 );
 
-// 0219 (R04): a provider rate limit holds every sync stream of the page until
-// holdUntil, apart from the per-stream retry state that requests rewrite.
+// 0219 (R04): a Fansly 429 held every legacy sync stream of the page until
+// holdUntil. Nothing writes or obeys it since step 4 (S4-19: the legacy
+// executor serves OnlyFans only, and only a Fansly answer armed it); the rows
+// stay as records, and the switch import still reads a hold in force.
 export const pageSyncProviderHolds = pgTable("page_sync_provider_holds", {
   pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, {
     onDelete: "cascade",

@@ -1,4 +1,4 @@
-import { ofapiCollectionRefusalDisposition } from "@agency_hub_core/shared";
+import { ofapiCollectionRefusalDisposition, type Platform } from "@agency_hub_core/shared";
 
 export class AppError extends Error {
   constructor(
@@ -117,6 +117,32 @@ export class ServiceUnavailableError extends AppError {
 export class ProxyMissingError extends AppError {
   constructor(message: string) {
     super(message, 409, "proxy_missing");
+  }
+}
+
+export const LEGACY_SYNC_RETIRED_CODE = "legacy_sync_retired";
+
+/** Something of the legacy sync engine was asked for a page it no longer
+ *  serves. Since step 4 every Fansly page is read by the Fansly Sync Engine
+ *  (`sync/onlyfans/boundary.ts`): a legacy sync lever (request, trigger,
+ *  pause, resume, reset) of a Fansly page the engine does not own, and an
+ *  `/account/me` lever (page verify, a credentials or proxy change) of a
+ *  Fansly page the engine does not run, have nothing to act on. 409
+ *  `legacy_sync_retired`; nothing is written, queued, sent or stored. */
+export class LegacySyncRetiredError extends AppError {
+  readonly pageLabel: string;
+  readonly platform: Platform;
+
+  constructor(input: { pageLabel: string; platform: Platform }) {
+    super(
+      `Page ${input.pageLabel}: the legacy sync executor serves no ${input.platform} page since step 4; `
+        + `the Fansly Sync Engine reads it (see \`pnpm cli sync page status --page ${input.pageLabel}\`)`,
+      409,
+      LEGACY_SYNC_RETIRED_CODE,
+    );
+    this.name = "LegacySyncRetiredError";
+    this.pageLabel = input.pageLabel;
+    this.platform = input.platform;
   }
 }
 

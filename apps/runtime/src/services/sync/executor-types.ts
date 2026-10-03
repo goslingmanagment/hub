@@ -21,28 +21,19 @@ export type ExecutorRequestContext = {
 
 export type StreamChunkResult = {
   satisfied: boolean;
-  /** Original certified read time when settling an already committed result. */
-  succeededAt?: Date;
   yieldReason: SyncChunkYieldReason | null;
   continuationRetryAt?: Date | null;
   continuationRequestSource?: SyncRequestSource | null;
   stats?: Record<string, unknown>;
-  /** Set when a ramp gate short-circuited the chunk before any egress. Such a
-   *  chunk terminates WITHOUT recording a successful sync anywhere. ONLY
-   *  fanslyNewStreamSkip sets this — do not extend it to the other
-   *  "satisfied but did nothing" skips (onlyfans_top_spenders_disabled,
-   *  legacy_ofapi_dm_messages_retired, sweep_not_due, ...): their streams sit
-   *  in BLOCK_TASKS / SYNC_DOMAIN_POLICY, where withholding succeeded_at WOULD
-   *  degrade chatter-visible block health. That is a separate decision. */
+  /** Set when a gate short-circuited the chunk before any egress (the
+   *  OnlyFans top spenders switch is off; OnlyFans transactions are
+   *  webhook-sourced). Such a chunk terminates WITHOUT recording a successful
+   *  sync anywhere. Do not extend it to the other "satisfied but did nothing"
+   *  skips (onlyfans_audience_not_eligible, onlyfans_dm_requires_ofapi_mapping,
+   *  ...) without deciding it: withholding succeeded_at from a stream in
+   *  BLOCK_TASKS / SYNC_DOMAIN_POLICY degrades chatter-visible block health. */
   gatedSkip?: string | null;
   /** A completed attempt whose data failed certification. Settle the request
    *  without success, freshness, failure reset, or incident recovery. */
   qualityHold?: string | null;
-  /** A partial chunk (satisfied: false) whose only outcome was scheduling:
-   *  isolated failures deferred behind their own backoff (a Fansly DM
-   *  thread's breaker window) and no accepted read, or a request held by a
-   *  policy interval (the daily followers_reconcile floor) before any read.
-   *  Settle as a yield, waking at continuationRetryAt, without freshness,
-   *  failure reset, or incident recovery — deferral is not progress. */
-  deferral?: string | null;
 };

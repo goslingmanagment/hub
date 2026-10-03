@@ -112,10 +112,11 @@ describe("the legacy schedulers carry the predicate", () => {
 describe("the legacy processes ask before they act", () => {
   it.each([
     ["apps/runtime/src/services/ai-media-describe/worker.ts", "downloadAiMediaThroughPageEgress", "isFanslyPageEngineOwned(app.db, input.pageId)"],
-    // S3-05: the /account/me levers route a live page through the engine and
-    // refuse a page being switched before anything is resolved or sent.
-    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "const route = await fanslyAccountRoute(app, stored.page)"],
-    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await fanslyAccountRoute(app, known.page)"],
+    // S3-05, S4-19: the /account/me levers go through the engine and refuse a
+    // page being switched, or one the engine does not run, before anything is
+    // resolved or sent — no legacy `/account/me` is left behind them.
+    ["apps/runtime/src/services/connections.ts", "updatePageCredentials", "await assertFanslyPageOnEngine(app, stored.page);"],
+    ["apps/runtime/src/services/page-proxies.ts", "setPageProxy", "await assertFanslyPageOnEngine(app, known.page);"],
     ["apps/runtime/src/services/fansly-replay-probe.ts", "runFanslyReplayProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
     ["apps/runtime/src/services/fansly-endpoint-probe.ts", "runFanslyEndpointProbe", "assertLegacyOwnsFanslyPageLabels(app, options.pageLabels"],
     ["apps/runtime/src/services/fansly-page-alias-backfill.ts", "backfillFanslyPageAliases", "assertLegacyOwnsFanslyPageLabels(app, requestedPageLabels"],
@@ -135,14 +136,32 @@ describe("the legacy processes ask before they act", () => {
     expect(source(path)).not.toContain("requestAiMediaAcceleratorRead");
   });
 
-  it("the verify route and the CLI verify go through the engine (S3-05); the targeted backfill CLI is gone (S4-15)", () => {
-    // Before the page's context is resolved (which may open a proxy incident).
-    expect(source("apps/runtime/src/modules/catalog/index.ts")).toMatch(
-      /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;\s*const pageContext = await resolvePageContext\(/,
+  it("the verify route and the CLI verify go through the engine (S3-05) and have no legacy fallback (S4-19); the targeted backfill CLI is gone (S4-15)", () => {
+    // The route: the engine's answer or a refusal — the page's context (which
+    // may open a proxy incident) is never resolved, and nothing sends.
+    const route = functionBody("apps/runtime/src/modules/catalog/index.ts", "registerCatalogRoutes");
+    const verify = route.slice(route.indexOf('server.post("/api/v1/admin/pages/:pageLabel/verify"'), route.indexOf('server.patch("/api/v1/admin/pages/:pageLabel/credentials"'));
+    expect(verify).toMatch(
+      /const onEngine = await verifyPageOnEngine\(appContext, request\.params\.pageLabel\);\s*if \(onEngine !== null\) return onEngine;/,
     );
+    expect(verify).not.toMatch(/resolvePageContext|adapter|SendGuard/);
     const cli = source("apps/runtime/src/cli.ts");
     expect(cli).toMatch(
-      /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?const context = await resolvePageContext\(/,
+      /const onEngine = await verifyPageOnEngine\(app, options\.page\);[\s\S]{0,300}?return;\s*\}/,
+    );
+    // No sender behind the levers any more: the legacy `/account/me` of the
+    // adapter and its page send guard are reached by none of them.
+    for (const path of [
+      "apps/runtime/src/modules/catalog/index.ts",
+      "apps/runtime/src/cli.ts",
+      "apps/runtime/src/services/connections.ts",
+      "apps/runtime/src/services/page-proxies.ts",
+      "apps/runtime/src/services/sync-engine-account.ts",
+    ]) {
+      expect(source(path), path).not.toMatch(/refreshPageMetadata|adapter\.verifySession|adapter\.getAccountMe|fanslyPageSendGuard/);
+    }
+    expect(functionBody("apps/runtime/src/services/sync-engine-account.ts", "assertFanslyPageOnEngine")).toContain(
+      "if (!ownership.owned) throw new LegacySyncRetiredError(",
     );
     // `dm backfill-thread` queued a legacy read of one thread; nothing queues one now.
     expect(cli).not.toContain("backfill-thread");
