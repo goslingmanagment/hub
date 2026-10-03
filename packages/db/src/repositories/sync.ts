@@ -596,16 +596,6 @@ export async function listFanslyMessagePurchaseTargetsAfterId(
   }));
 }
 
-export interface FanslyPurchaseHistoryCaptureRow {
-  id: number;
-  targetKey: string;
-  requestBefore: string | null;
-  statusCode: number | null;
-  responsePayload: unknown;
-  /** G5 slice 2: the catalog reference this raw envelope carries, or null. */
-  payloadRef: CapturePayloadRef | null;
-}
-
 /**
  * The content ids the legacy purchase-history lane has captured on a page (any
  * answer, either namespace) — the ones its discovery skips. Request parameters
@@ -629,85 +619,6 @@ export async function listFanslyPurchaseHistoryCapturedContentIds(
       )
   `);
   return result.rows.map((row) => row.contentId);
-}
-
-/**
- * Returns the durable target-specific facts for local purchase-history
- * reconciliation. Capture alone prevents another provider request; the
- * runtime classifier decides from status + raw payload whether that fact is
- * complete or must keep the stream visibly blocked.
- */
-export async function listFanslyPurchaseHistoryCaptures(
-  db: Database,
-  pageId: number,
-  // The contract proof (Decision 358) journals witness pages under their own
-  // endpoint so they never enter a target's chain; it reads them back here.
-  endpoint: "purchase_history" | "purchase_history_contract_probe" = "purchase_history",
-): Promise<FanslyPurchaseHistoryCaptureRow[]> {
-  const result = await db.execute<{
-    id: string;
-    targetKey: string;
-    requestBefore: string | null;
-    statusCode: number | null;
-    responsePayload: unknown;
-    payloadBucketMonth: string | null;
-    payloadObjectId: string | null;
-  }>(sql`
-    select rp.id::text as id,
-           case
-             when nullif(rp.request_params ->> 'accountMediaId', '') is not null
-               then 'single:' || (rp.request_params ->> 'accountMediaId')
-             when nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-               then 'bundle:' || (rp.request_params ->> 'accountMediaBundleId')
-             else null
-           end as "targetKey",
-           nullif(rp.request_params ->> 'before', '') as "requestBefore",
-           rp.status_code as "statusCode",
-           rp.response_payload as "responsePayload",
-           to_char(rp.payload_bucket_month, 'YYYY-MM-DD') as "payloadBucketMonth",
-           rp.payload_object_id::text as "payloadObjectId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = ${endpoint}
-      and (
-        nullif(rp.request_params ->> 'accountMediaId', '') is not null
-        or nullif(rp.request_params ->> 'accountMediaBundleId', '') is not null
-      )
-    order by rp.id asc
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    targetKey: row.targetKey,
-    requestBefore: row.requestBefore,
-    statusCode: row.statusCode,
-    responsePayload: row.responsePayload,
-    payloadRef: capturePayloadRefFromColumns(row.payloadBucketMonth, row.payloadObjectId),
-  }));
-}
-
-/**
- * The storm verdicts the purchase-history contract proof journaled (Decision
- * 355): the lane's own record that it raised a storm, with the run that
- * raised it — the executor's record of THAT run says whether it blocked.
- */
-export async function listFanslyPurchaseHistoryStormVerdicts(
-  db: Database,
-  pageId: number,
-): Promise<Array<{ id: number; kind: string | null; syncRunId: number | null }>> {
-  const result = await db.execute<{ id: string; kind: string | null; syncRunId: string | null }>(sql`
-    select rp.id::text as id,
-           rp.request_params ->> 'mediaKind' as kind,
-           rp.sync_run_id::text as "syncRunId"
-    from ${syncRawPayloads} rp
-    where rp.page_id = ${pageId}
-      and rp.endpoint = 'purchase_history_contract_storm'
-    order by rp.id asc
-  `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    kind: row.kind,
-    syncRunId: row.syncRunId === null ? null : Number(row.syncRunId),
-  }));
 }
 
 /** Refreshes the page-level reporting cache from the authoritative current

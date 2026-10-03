@@ -18,7 +18,6 @@ import {
   recalculateFanPageSpend,
   refreshFanPageFollowerState,
   rebuildRevenueRollups,
-  startSyncRun,
   storeFanslySession,
   storeProxyConfig,
   updatePageMetadata,
@@ -26,6 +25,7 @@ import {
   upsertFanPage,
   upsertFanPageExternalPresences,
   upsertFans,
+  upsertFanslyTransactionWithEarningsDirty,
   upsertPageDmConversation,
   upsertPageTopSpenders,
   upsertPageFollow,
@@ -38,7 +38,7 @@ import { onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboardin
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
-import { syncTransactions } from "../apps/runtime/src/services/sync/transactions.ts";
+import { mapFanslyTransactionItem } from "../apps/runtime/src/sync/fansly/lib/money-rules.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
@@ -2420,73 +2420,36 @@ describe("db write safety", () => {
       modelId: model.id,
       label: "fansly-tip-sync",
     });
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: page.id,
-      stream: "transactions",
-      trigger: "worker",
-    });
-    const app = createTestAppContext(testDb, {
-      adapter: {
-        async getTransactionsPage() {
-          return {
-            items: [{
-              transactionId: "mapped-tip-20001",
-              walletId: null,
-              accountId: null,
-              correlationId: null,
-              correlationAccountId: null,
-              type: 20001,
-              status: 2,
-              destination: null,
-              amount: 12000,
-              destinationAmount: 12000,
-              destinationTax: null,
-              newBalance64: null,
-              senderId: null,
-              receiverId: null,
-              createdAt: new Date("2026-03-10T12:00:00.000Z").getTime(),
-              updatedAt: null,
-            }],
-            total: 1,
-            done: true,
-            raw: {
-              items: [{
-                transactionId: "mapped-tip-20001",
-                type: 20001,
-              }],
-            },
-          };
-        },
-        async getAccountsByIdsPage() {
-          return {
-            parsed: [],
-            raw: [],
-          };
-        },
-      } as never,
-    });
-    const telemetry = {
-      recordCheckpointLoaded: vi.fn(async () => {}),
-      recordCheckpointAdvanced: vi.fn(async () => {}),
-      addAnomaly: vi.fn(async () => {}),
-      addNote: vi.fn(async () => {}),
-      mergeHydrationSummary: vi.fn(),
-      setBoundarySummary: vi.fn(),
-      setScanSummary: vi.fn(),
-    };
+    const app = createTestAppContext(testDb);
 
-    await syncTransactions(app, {
-      pageLabel: page.label,
+    // The Sync Engine's transactions apply (resources/transactions.ts): the
+    // served item through the shared mapper into the ledger, then the
+    // dirty range's revenue rollups.
+    const { row } = mapFanslyTransactionItem({
+      transactionId: "mapped-tip-20001",
+      walletId: null,
+      accountId: null,
+      correlationId: null,
+      correlationAccountId: null,
+      type: 20001,
+      status: 2,
+      destination: null,
+      amount: 12000,
+      destinationAmount: 12000,
+      destinationTax: null,
+      newBalance64: null,
+      senderId: null,
+      receiverId: null,
+      createdAt: new Date("2026-03-10T12:00:00.000Z").getTime(),
+      updatedAt: null,
+    }, 0);
+    await upsertFanslyTransactionWithEarningsDirty(testDb.db, {
       platformAccountId: page.id,
-      commissionRate: 0,
-      requestContext: {
-        session: { authorization: "token" },
-        proxy: null,
-        requestObserver: null,
-      } as never,
-      syncRunId: run.id,
-      telemetry: telemetry as never,
+      source: "fansly:rest",
+      fanId: null,
+      ...row,
     });
+    await rebuildRevenueRollups(testDb.db, page.id, row.occurredAt);
 
     const transactionRows = await testDb.pool.query(`
       select raw_type, canonical_type

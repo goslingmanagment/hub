@@ -86,17 +86,10 @@ describe("config registry", () => {
     "fanslyWsCapturePageAllowlist",
     // Fansly Sync Engine step 1: the live overlay readers, page by page.
     "fanslyLiveOverlayReadPages",
-    "fanslyFanEarningsRecoveryEnabled",
-    "fanslyFanEarningsRecoveryPageAllowlist",
-    "fanslyFanEarningsTargetsEnabled",
-    "fanslyFanEarningsTargetsPageAllowlist",
-    "fanslyFanEarningsTargetsDailyAttemptLimit",
-    "fanslyFanEarningsRosterMaxAgeHours",
     "fanslyWsHintsEnabled",
     "fanslyWsHintsPageAllowlist",
     "fanslyWsHintsTypeAllowlist",
     "fanslyWsHintsPolicies",
-    "fanslyFanEarningsShadowPageAllowlist",
     "fanslyDmShadowPageAllowlist",
     "fanslyDmHeadCatchupPageAllowlist",
     // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
@@ -111,12 +104,9 @@ describe("config registry", () => {
     "ofapiWebhookAutoRedeliveryDailyCap",
     "healthSyncLightMaxAgeMinutes",
     "healthSyncFollowerMaxAgeMinutes",
-    "transactionLookbackDays",
-    "transactionRescanCapDays",
     "ofapiDmReconcileIntervalMinutes",
     // Stage 16 ramp gates (live so ramp flips need no restart).
     "fanslyFanEarningsSyncEnabled",
-    "fanslyPurchaseHistorySyncEnabled",
     "fanslyNewStreamPageAllowlist",
     // WP-F1 stats lane (live so a ramp flip and a budget change need no restart).
     "fanslyStatsSnapshotSyncEnabled",

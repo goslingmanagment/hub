@@ -5,11 +5,6 @@ import { describe, expect, it } from "vitest";
 import { OFAPI_SPEND_PROJECTION_EVENT_TYPES } from "@agency_hub_core/db";
 import { ofapiCaptureJobStates } from "@agency_hub_core/shared";
 
-import {
-  FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-  FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
-} from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
-
 describe("database migration invariants", () => {
   it("ties sync observability rows to their run page and stream", async () => {
     const migration = await readFile(
@@ -357,18 +352,19 @@ describe("database migration invariants", () => {
     expect(index).toContain("on sync_http_attempts (page_id, (request_shape ->> 'groupId'))");
     expect(index.split("-- agency-hub:statement").length - 1).toBe(3);
 
-    // The raw-payload index is partial on the endpoints the purchase-history
-    // chunk reads back. An endpoint renamed or added without this list goes
-    // back to a whole-table scan with no error, so the list is pinned to the
-    // lane's own constants.
+    // The raw-payload index is partial on the purchase-history endpoints. The
+    // legacy lane that journaled the probe and storm pages is gone (step 4,
+    // S4-16); the engine's import still reads `purchase_history` through it,
+    // and a reader that leaves this list goes back to a whole-table scan with
+    // no error.
     const predicate = /where endpoint in \(([^)]*)\)/.exec(index)?.[1];
     expect(predicate).toBeDefined();
     expect(predicate!.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([
       "purchase_history",
-      FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-      FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
+      "purchase_history_contract_probe",
+      "purchase_history_contract_storm",
     ]);
-    expect(sync).toContain(`rp.endpoint = '${FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT}'`);
+    expect(sync).toContain("and rp.endpoint = 'purchase_history'");
     // The shadow report's window read (rule A2.demand-replaced) spells the
     // predicate itself: without it, the stream and time filters alone are a
     // whole-table scan of the 788 MB heap.

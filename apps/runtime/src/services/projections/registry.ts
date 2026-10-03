@@ -423,7 +423,7 @@ export const OPERATIONAL_STATE_TABLES: readonly {
   },
   {
     table: "fan_earnings_target_attempts", stateClass: "operational_state",
-    writer: "services/sync/fan-earnings-targets.ts",
+    writer: "none since step 4 S4-16 (the legacy services/sync/fan-earnings-targets.ts); rows kept as records",
     justification: "C2c physical-attempt custody; replay or config changes must not reset the rolling budget.",
   },
   {

@@ -58,8 +58,8 @@ describe("validateStagedOverride", () => {
   it("rejects a 'never' key, an 'editable' live key, and a 'none' staged flag", () => {
     // databaseUrl: editability never / runtimeApply none
     expect(validateStagedOverride("databaseUrl", true).ok).toBe(false);
-    // transactionLookbackDays: editable but runtimeApply 'live' (not boot)
-    expect(validateStagedOverride("transactionLookbackDays", true).ok).toBe(false);
+    // healthSyncLightMaxAgeMinutes: editable but runtimeApply 'live' (not boot)
+    expect(validateStagedOverride("healthSyncLightMaxAgeMinutes", true).ok).toBe(false);
     // onlyFansDmPollingEnabled: staged editability but runtimeApply 'none'
     expect(validateStagedOverride("onlyFansDmPollingEnabled", true).ok).toBe(false);
     // logLevel: editable runtimeApply 'none'
@@ -106,13 +106,13 @@ describe("applyBootOverrides", () => {
   });
 
   it("does NOT report a live (runtime-overlay) override as boot-skipped", () => {
-    // transactionLookbackDays is runtimeApply:'live' — applied via the overlay, not at boot.
+    // healthSyncLightMaxAgeMinutes is runtimeApply:'live' — applied via the overlay, not at boot.
     // It must never appear in `skipped` (which the dashboard renders as "rejected at boot").
     const config = baseConfig();
-    const result = applyBootOverrides(config, overrides([["transactionLookbackDays", 14]]));
+    const result = applyBootOverrides(config, overrides([["healthSyncLightMaxAgeMinutes", 14]]));
     expect(result.config).toBe(config); // a live key is never boot-applied
     expect(result.skipped).toEqual([]);
-    expect(result.skipped.map((s) => s.key)).not.toContain("transactionLookbackDays");
+    expect(result.skipped.map((s) => s.key)).not.toContain("healthSyncLightMaxAgeMinutes");
   });
 
   it("skips an invalid (non-boolean) value for a boot key with a reason, never throwing", () => {
@@ -386,9 +386,9 @@ describe("validateStagedTransition", () => {
   });
 
   it("rejects a non-boot key", () => {
-    // logLevel is editable runtimeApply:'none'; transactionLookbackDays is live.
+    // logLevel is editable runtimeApply:'none'; healthSyncLightMaxAgeMinutes is live.
     expect(transition([{ key: "logLevel", desired: true }]).ok).toBe(false);
-    expect(transition([{ key: "transactionLookbackDays", desired: true }]).ok).toBe(false);
+    expect(transition([{ key: "healthSyncLightMaxAgeMinutes", desired: true }]).ok).toBe(false);
     expect(transition([{ key: "nopeNotAKey", desired: true }]).ok).toBe(false);
   });
 

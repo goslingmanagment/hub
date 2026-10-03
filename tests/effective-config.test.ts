@@ -19,8 +19,6 @@ function baseConfig(): AppConfig {
     ofapiBurnAlertCreditsPerHour: 300,
     healthSyncLightMaxAgeMinutes: 180,
     healthSyncFollowerMaxAgeMinutes: 1080,
-    transactionLookbackDays: 7,
-    transactionRescanCapDays: 30,
     ofapiDmReconcileIntervalMinutes: 360,
     fanslyDefaultDelayMs: 2500,
     // A runtimeApply:'none' editable key (must never be overlaid) and a boot/staged key.
@@ -47,10 +45,24 @@ describe("applyEffectiveOverrides", () => {
 
   it("applies a live reload override into its configField", () => {
     const config = baseConfig();
-    const merged = applyEffectiveOverrides(config, overrides([["transactionLookbackDays", 14]]));
-    expect(merged.transactionLookbackDays).toBe(14);
+    const merged = applyEffectiveOverrides(config, overrides([["healthSyncLightMaxAgeMinutes", 240]]));
+    expect(merged.healthSyncLightMaxAgeMinutes).toBe(240);
     // Original is not mutated.
-    expect(config.transactionLookbackDays).toBe(7);
+    expect(config.healthSyncLightMaxAgeMinutes).toBe(180);
+  });
+
+  it("ignores an override of a key retired with the legacy Fansly money lanes (step 4, S4-16)", () => {
+    const config = {
+      ...baseConfig(),
+      transactionLookbackDays: 7,
+      fanslyFanEarningsTargetsEnabled: false,
+    } as AppConfig;
+    const merged = applyEffectiveOverrides(config, overrides([
+      ["transactionLookbackDays", 14],
+      ["fanslyFanEarningsTargetsEnabled", true],
+    ]));
+    expect(merged.transactionLookbackDays).toBe(7);
+    expect(merged.fanslyFanEarningsTargetsEnabled).toBe(false);
   });
 
   it("applies multiple live keys at once", () => {
@@ -118,9 +130,9 @@ describe("applyEffectiveOverrides", () => {
   it("ignores an invalid (non-integer) override value, leaving env in place", () => {
     const merged = applyEffectiveOverrides(
       baseConfig(),
-      overrides([["transactionLookbackDays", 3.5]]),
+      overrides([["healthSyncLightMaxAgeMinutes", 3.5]]),
     );
-    expect(merged.transactionLookbackDays).toBe(7);
+    expect(merged.healthSyncLightMaxAgeMinutes).toBe(180);
   });
 
   it("never overlays the boot-only service proxy tuple", () => {
@@ -180,7 +192,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     // round-robin without a deploy.
     expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsCaptureEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsCapturePageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyWsHintsEnabled")).toBe(true);
@@ -192,13 +203,9 @@ describe("LIVE_CONFIG_KEYS", () => {
     expect(LIVE_CONFIG_KEYS.has("fanslyDmBoundedPolicies")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReuseEnabled")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFollowersSettlementReusePageAllowlist")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryEnabled")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRecoveryPageAllowlist")).toBe(true);
     // Decision 349 added the public invite/reset link kill switch, read per
     // request so a flip never waits for a deploy.
     expect(LIVE_CONFIG_KEYS.has("accountLinksEnabled")).toBe(true);
-    // Decision 368 wired the earnings roster max age as a live key.
-    expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsRosterMaxAgeHours")).toBe(true);
     // H2 (amends #265): the webhook auto-redelivery switch and its UTC-day
     // cap, read per sweep so enabling after deploy needs no restart.
     expect(LIVE_CONFIG_KEYS.has("ofapiWebhookAutoRedeliveryEnabled")).toBe(true);
@@ -227,6 +234,7 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(97);
+    // Step 4 S4-16 retired ten keys with the legacy Fansly money lanes.
+    expect(LIVE_CONFIG_KEYS.size).toBe(87);
   });
 });

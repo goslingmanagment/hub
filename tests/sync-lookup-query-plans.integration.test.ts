@@ -1,10 +1,11 @@
 // Two sync readers that want a handful of rows out of the two biggest sync
 // journals, and had no index leading with the columns they filter on:
 //
-// - every purchase_history chunk reads its captures, its contract-probe pages
-//   and its storm verdicts by (page_id, endpoint) from sync_raw_payloads
-//   (788 MB, 2.5M rows on prod 2026-09-30): three seq scans per chunk before
-//   any egress, ~0.8-1.1 s each;
+// - the purchase-history readers want rows by (page_id, endpoint) from
+//   sync_raw_payloads (788 MB, 2.5M rows on prod 2026-09-30): the legacy lane's
+//   three per chunk were seq scans of ~0.8-1.1 s each before any egress (that
+//   lane is gone since step 4, S4-16; the engine's switch import reads the
+//   captured ids through the same index);
 // - the dm_messages 5xx breaker reads one thread's attempts by (page_id,
 //   request_shape ->> 'groupId') from sync_http_attempts (598 MB): a seq scan,
 //   ~3 s mean, while the dm_messages lease is held.
@@ -22,15 +23,9 @@ import {
   createFanslyPage,
   createModel,
   listFanslyPurchaseHistoryCapturedContentIds,
-  listFanslyPurchaseHistoryCaptures,
-  listFanslyPurchaseHistoryStormVerdicts,
   startSyncRun,
 } from "@agency_hub_core/db";
 
-import {
-  FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-  FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT,
-} from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -74,10 +69,6 @@ async function explain(statement: { text: string; values: unknown[] }): Promise<
   return plan.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
 
-function ascending(ids: number[]): boolean {
-  return ids.every((id, index) => index === 0 || ids[index - 1]! < id);
-}
-
 describe("sync lookup query plans", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
@@ -89,7 +80,7 @@ describe("sync lookup query plans", () => {
   });
 
   it(
-    "serves every purchase_history chunk read from the purchase-history index",
+    "serves the purchase-history capture read from the purchase-history index",
     async (context) => {
       if (!testDb) {
         context.skip();
@@ -116,8 +107,8 @@ describe("sync lookup query plans", () => {
         select
           ($1::bigint[])[1 + n % 3],
           case
-            when n % 20000 = 13 then '${FANSLY_PURCHASE_HISTORY_CONTRACT_STORM_ENDPOINT}'
-            when n % 5000 = 11 then '${FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT}'
+            when n % 20000 = 13 then 'purchase_history_contract_storm'
+            when n % 5000 = 11 then 'purchase_history_contract_probe'
             when n % 250 = 7 then 'purchase_history'
             when n % 10 < 6 then 'dm_messages'
             when n % 10 < 8 then 'messaging_groups'
@@ -139,39 +130,21 @@ describe("sync lookup query plans", () => {
       );
       await pool.query("analyze sync_raw_payloads");
 
-      // What the chunk gets back, so the seed is known to reach every read.
+      // What the read gets back, so the seed is known to reach it: the
+      // engine's one-time import at the step-3 switch reads the captured ids.
       const count = (predicate: (n: number) => boolean) =>
         Array.from({ length: 100_000 }, (_, index) => index + 1)
           .filter((n) => n % 3 === 0 && predicate(n)).length;
-      const captures = await listFanslyPurchaseHistoryCaptures(testDb.db, pageId);
-      expect(captures).toHaveLength(count((n) => n % 250 === 7));
-      expect(ascending(captures.map((row) => row.id))).toBe(true);
-      const probes = await listFanslyPurchaseHistoryCaptures(
-        testDb.db,
-        pageId,
-        FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT,
-      );
-      expect(probes).toHaveLength(count((n) => n % 5000 === 11 && n % 20000 !== 13));
-      expect(ascending(probes.map((row) => row.id))).toBe(true);
-      const verdicts = await listFanslyPurchaseHistoryStormVerdicts(testDb.db, pageId);
-      expect(verdicts).toHaveLength(count((n) => n % 20000 === 13));
-      expect(verdicts.every((verdict) => verdict.kind === "single")).toBe(true);
-      // The engine's one-time import at the step-3 switch: the captured ids.
       const capturedIds = await listFanslyPurchaseHistoryCapturedContentIds(testDb.db, pageId);
       expect(capturedIds).toHaveLength(count((n) => n % 250 === 7));
 
       const statements = [
-        await captureStatement(() => listFanslyPurchaseHistoryCaptures(testDb!.db, pageId)),
-        await captureStatement(() =>
-          listFanslyPurchaseHistoryCaptures(testDb!.db, pageId, FANSLY_PURCHASE_HISTORY_CONTRACT_PROBE_ENDPOINT)
-        ),
-        await captureStatement(() => listFanslyPurchaseHistoryStormVerdicts(testDb!.db, pageId)),
         await captureStatement(() => listFanslyPurchaseHistoryCapturedContentIds(testDb!.db, pageId)),
       ];
       for (const statement of statements) {
         const plan = await explain(statement);
         expect(plan).toContain("sync_raw_payloads_purchase_history_idx");
-        // The defect this replaces: a whole-table read per call, three per chunk.
+        // The defect this replaces: a whole-table read per call.
         expect(plan).not.toContain("Seq Scan on sync_raw_payloads");
       }
     },

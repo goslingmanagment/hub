@@ -43,7 +43,6 @@ import {
 } from "./sync/followers-reconcile-floor.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { buildEngineDomainBlock, readEngineStatusFacts, type EngineStatusFacts } from "./sync-status-engine.ts";
-import { parseTransactionBackfillState } from "./sync/transaction-backfill.ts";
 
 export const SYNC_DOMAIN_BLOCKS = [
   "connection",
@@ -833,33 +832,6 @@ function buildProgressFromPayload(
           details: {
             ...payload,
             ...state,
-          },
-        };
-      }
-    }
-
-    if (task.stream === "transactions") {
-      const backfill = parseTransactionBackfillState(monitorRow.checkpointState);
-      if (backfill) {
-        const total = typeof backfill.providerReportedTotal === "number"
-          ? Math.max(backfill.providerReportedTotal, 0)
-          : null;
-        const current = clampProgress(
-          backfill.processedTransactions + backfill.processedChargebacks,
-          total,
-        );
-        return {
-          label: total !== null
-            ? `${current.toLocaleString()} / ${total.toLocaleString()} items backfilled`
-            : `${current.toLocaleString()} items backfilled`,
-          current,
-          total,
-          unit: "items",
-          percent: percent(current, total),
-          percentValid: total !== null && total > 0,
-          details: {
-            ...payload,
-            ...backfill,
           },
         };
       }
