@@ -586,6 +586,15 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # after a rollback; its attempts carry no interval and the audit reads their
   # pairs as inconclusive.
   "0237_sync_attempt_route_intervals.sql"
+  # Narrow chat-extension device tokens (chat-extension H-3): one nullable
+  # column on device_tokens (no default; its CHECK scans a few dozen rows) and
+  # an immutability trigger that fires only when an UPDATE names the column.
+  # The previous image never names it: it inserts and updates device tokens by
+  # named columns and runs unchanged. Known cost of a rollback: that image does
+  # not know the profile, so a narrow token issued meanwhile acts as a full
+  # token of the same person (who can mint one with the password anyway) until
+  # a forward deploy returns; revoke them in the cabinet if that matters.
+  "0236_device_token_client_profile.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -49,16 +49,24 @@ describe("authorization policy table", () => {
       expect(first).toContain(`## Routes (${server.routePolicyTable.length})`);
       expect(first).not.toContain("UNDECLARED");
       expect(first).toContain(
-        "| GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — |",
+        "| GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — | no |",
+      );
+      // No principal at all: the narrow token's allowlist does not apply.
+      expect(first).toContain(
+        "| POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |",
       );
       expect(first).toContain(
-        "| POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — |",
+        "| GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page | no |",
       );
       expect(first).toContain(
-        "| GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page |",
+        "| GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |",
+      );
+      // The chat-extension narrow token (H-3): its allowlist, one cell per route.
+      expect(first).toContain(
+        "| GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |",
       );
       expect(first).toContain(
-        "| GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page |",
+        "| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |",
       );
     } finally {
       await server.close();

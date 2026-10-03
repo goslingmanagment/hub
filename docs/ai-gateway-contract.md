@@ -125,6 +125,16 @@ falling back to the production host IP, because Anthropic has already rejected t
 a fan that is not yet in the core fan table only after page authorization succeeds; it must not use
 an unresolved fan to widen page scope.
 
+The chat extension's narrow device token (chat-extension H-3, `client: "chat-extension"` at sign-in)
+reaches `/api/v1/ai/features/:feature` only through the owner's switches, checked before any context
+load, quota reservation or provider call (`services/client-ai-switch.ts`). `coach-chat`,
+`fan-summary` and `chat-review` run the full check of the page's `coach` / `recap` / `review` flag
+(`requireClientFeature`); every other feature needs `chatExtensionEnabled` and an
+`x-client-version` of `chat-extension/<MAJOR.MINOR.PATCH>` at or above `chatExtensionMinVersion`. A
+refusal is `409 client_feature_disabled` with its `reason`. The raw gateway stream is not on the
+narrow token's route list at all. The restricted generation record of a narrow token carries
+`params.clientProfile = "chat-extension"`; a full token's params are unchanged.
+
 ## Quota and Ledger
 
 Before provider network, core checks quota for the `(chatter, page, feature)` request. R4d adds a
