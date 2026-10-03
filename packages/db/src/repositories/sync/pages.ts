@@ -647,23 +647,47 @@ export async function setSyncRequestsEnabledAt(
 }
 
 /**
- * The digest of the page's stored credentials the engine trusts
- * (`sync_pages.credentials_generation`, G1): written by the credentials and
- * proxy flows right after they stored what an identity check proved to be
- * this page's account (step-3 §3.5 item 6). A different trusted digest lifts
- * an auth/identity hold taken under another one (`activePageHold`). Not an
- * actor write (no generation fence); wakes the page's actor.
+ * The session and proxy rows of a page's stored-credentials digest
+ * (`readFanslyPageGeneration`), locked for a save the engine will trust (step
+ * 3b ruling 5: the candidate save is a CAS on the exact verified
+ * session+proxy pair): no other writer changes either half until the save
+ * commits. The engine row first — the lock order of every actor transaction —
+ * so an apply that writes the page between them never waits in a cycle with
+ * the save; the page row itself is not locked (the WS capture holds it FOR
+ * SHARE before the session rows; the trusted digest is read at the save's end
+ * either way).
  */
-export async function setSyncCredentialsGeneration(
+export async function lockFanslyCredentialsForSave(db: Database, pageId: number): Promise<void> {
+  await db.execute(sql`select sp.page_id from sync_pages sp where sp.page_id = ${pageId} for no key update`);
+  await db.execute(sql`select c.platform_account_id from page_credentials c where c.platform_account_id = ${pageId} for update`);
+  await db.execute(sql`select e.id from egress_endpoints e where e.platform_account_id = ${pageId} for update`);
+}
+
+/**
+ * The engine trusts the page's stored credentials (`credentials_generation`,
+ * G1): written by the credentials and proxy flows in the transaction that
+ * stored the pair an identity check proved to be this page's account
+ * (`lockFanslyCredentialsForSave` first). `verifiedAt` is when that check was
+ * sent: `identity_checked_at` keeps the newest proof's send instant, so an
+ * older answer applied late never overwrites it (`recordSyncPageIdentityProof`).
+ * Trusting a digest lifts no hold: a credentials hold clears only by the
+ * apply of a proof sent after its latest refusal — the verify of the new
+ * digest, which runs under the hold (A3). Not an actor write (no generation
+ * fence); wakes the page's actor.
+ */
+export async function trustSyncPageCredentials(
   db: Database,
-  input: { pageId: number; generation: string },
+  input: { pageId: number; generation: string; accountId: string; verifiedAt: Date },
 ): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/.test(input.generation)) {
     throw new Error("A credentials generation is a sha256 hex digest");
   }
+  if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
   const result = await db.execute(sql`
     update sync_pages
        set credentials_generation = ${input.generation},
+           identity_account_id = ${input.accountId},
+           identity_checked_at = greatest(identity_checked_at, ${input.verifiedAt}::timestamptz),
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
   `);
@@ -957,9 +981,11 @@ async function assertOwnedWrite(
 
 /**
  * Hold the whole page (§9): every request of the page waits until `until`
- * (`'infinity'` for auth / identity holds, lifted by a new credentials
- * generation or the owner). `hold_since` keeps the start of an ongoing hold of
- * the same kind. With `generation`, fenced like every actor write.
+ * (`'infinity'` for auth / identity holds, which only an identity proof sent
+ * after their latest refusal clears — the shared page-hold core decides).
+ * `hold_since` keeps the start of the episode: an ongoing hold of the same
+ * kind, or a credentials refusal over a credentials hold in force. With
+ * `generation`, fenced like every actor write.
  */
 export async function setPageHold(
   db: Database,
@@ -980,7 +1006,10 @@ export async function setPageHold(
     update sync_pages
        set hold_kind = ${input.kind},
            hold_until = ${until},
-           hold_since = case when hold_kind = ${input.kind} and hold_until > clock_timestamp()
+           hold_since = case when hold_until > clock_timestamp()
+                              and (hold_kind = ${input.kind}
+                                   or (hold_kind in ('auth', 'identity_mismatch')
+                                       and ${input.kind}::text in ('auth', 'identity_mismatch')))
                              then coalesce(hold_since, clock_timestamp()) else clock_timestamp() end,
            hold_step = ${input.step},
            hold_detail = ${jsonParam(input.detail ?? {})},
@@ -1011,28 +1040,34 @@ export async function clearPageHold(
 }
 
 /**
- * The account the page's credentials answer for (`/account/me`, design §5.1):
- * `identity_account_id` and the instant it was read, and — G1 — the digest of
- * the stored credentials that request carried (`credentials_generation`: the
- * engine has now verified them). Written by the `account` resource's live
- * apply, fenced like every actor write.
+ * An identity proof (design §5.1, step 3b ruling 5): an applied `/account/me`
+ * answer of the page's own account — `identity_account_id`, and — G1 — the
+ * digest of the stored credentials that request carried
+ * (`credentials_generation`: the engine has now verified them), written in
+ * the apply's own transaction. `identity_checked_at` is the proof's send
+ * instant; a proof sent before the newest recorded one (an answer applied
+ * late) writes nothing. True: recorded. Fenced like every actor write.
  */
-export async function recordSyncPageIdentity(
+export async function recordSyncPageIdentityProof(
   db: Database,
-  input: { pageId: number; generation: bigint; accountId: string; credentialsGeneration?: string | null },
-): Promise<void> {
+  input: { pageId: number; generation: bigint; accountId: string; credentialsGeneration: string | null; sentAt: Date },
+): Promise<boolean> {
   if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
-  const credentials = input.credentialsGeneration ?? null;
-  const result = await db.execute(sql`
+  const newer = sql`(identity_checked_at is null or identity_checked_at <= ${input.sentAt}::timestamptz)`;
+  const result = await db.execute<{ recorded: boolean }>(sql`
     update sync_pages
-       set identity_account_id = ${input.accountId},
-           identity_checked_at = clock_timestamp(),
-           credentials_generation = coalesce(${credentials}::text, credentials_generation),
+       set identity_account_id = case when ${newer} then ${input.accountId} else identity_account_id end,
+           credentials_generation = case when ${newer}
+                                         then coalesce(${input.credentialsGeneration}::text, credentials_generation)
+                                         else credentials_generation end,
+           identity_checked_at = case when ${newer} then ${input.sentAt}::timestamptz else identity_checked_at end,
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
        ${ownedPageFilter(input.generation)}
+    returning identity_checked_at = ${input.sentAt}::timestamptz as recorded
   `);
   await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+  return result.rows[0]?.recorded === true;
 }
 
 /** The consecutive network-failure count of §9 (3 ⇒ a `network` hold). */

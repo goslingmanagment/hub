@@ -95,8 +95,8 @@ function statusPage(page: SyncPageRow): StatusPage {
     pausedResources: page.pausedResources,
     holdKind: page.holdKind,
     holdUntil: page.holdUntil,
+    holdSince: page.holdSince,
     holdDetail: page.holdDetail,
-    credentialsGeneration: page.credentialsGeneration,
     resourceHolds: page.resourceHolds,
     owner: page.owner,
   };
@@ -189,7 +189,7 @@ export async function readSyncPageStatus(
   const routes = await readPageRoutes(db, page, now);
   const status = buildPageStatus({
     pageLabel: page.pageLabel,
-    page: { ...statusPage(page), holdSince: page.holdSince, lastSendAt: page.lastSendAt },
+    page: { ...statusPage(page), lastSendAt: page.lastSendAt },
     settingMs,
     now,
     runtime: {

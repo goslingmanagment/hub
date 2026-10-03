@@ -51,11 +51,11 @@ import {
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import { getFanslyDmMessageSyncExcludedReason, type AppConfig } from "@agency_hub_core/shared";
+import { activeFanslyPageHold, getFanslyDmMessageSyncExcludedReason, isIndefinite, type AppConfig } from "@agency_hub_core/shared";
 
 import { recordAudit } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { activePageHold, isIndefinite, type ResourceHoldEntry } from "../engine/errors.ts";
+import { type ResourceHoldEntry } from "../engine/errors.ts";
 import {
   EMPTY_ROUTE_STATE,
   parseRouteState,
@@ -455,7 +455,7 @@ async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promi
  *  known instant ends it (an auth or identity hold only new credentials
  *  lift; an unreadable route state, the operator). */
 function etaHold(eta: PageEtaContext, now: Date): { scope: "page" | "route"; until: Date | null } | null {
-  const held = eta.page === null ? null : activePageHold(statusPageOf(eta.page), now);
+  const held = eta.page === null ? null : activeFanslyPageHold(statusPageOf(eta.page), now);
   if (held !== null) return { scope: "page", until: isIndefinite(held.until) ? null : held.until };
   if (eta.routeStateError !== null) return { scope: "page", until: null };
   if (eta.routeHoldUntil !== null) return { scope: "route", until: eta.routeHoldUntil };
@@ -995,8 +995,8 @@ function statusPageOf(page: SyncPageRow): StatusPage {
     pausedResources: page.pausedResources,
     holdKind: page.holdKind,
     holdUntil: page.holdUntil,
+    holdSince: page.holdSince,
     holdDetail: page.holdDetail,
-    credentialsGeneration: page.credentialsGeneration,
     resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
     owner: page.owner,
   };

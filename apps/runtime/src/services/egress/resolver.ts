@@ -1,8 +1,10 @@
 import { findPageById, findPageByLabel } from "@agency_hub_core/db";
 import type { EgressContext, EgressScope } from "@agency_hub_core/platform-core";
 import {
+  buildProxyEgressKey,
   createProxyRequestDispatcher,
   createRequestDispatcher,
+  normalizeProxyConfig,
 } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
@@ -24,6 +26,11 @@ import {
 // present a scope, and an unknown scope throws.
 //
 // RECORDED ADDRESS POLICY (owner-visible, per vendor):
+// - page_candidate   — one identity check of a page through the candidate
+//   proxy the owner is assigning it (the engine's `account.identity`, step 3b
+//   ruling 5): checked before it is stored, so it cannot ride the page scope.
+//   Only a page of a platform with page-scoped egress, only with a proxy, and
+//   never as a fallback after the page proxy failed.
 // - page scope       — the page's assigned proxy is the address identity
 //   (Fansly direct-to-platform MUST ride it). The legacy OnlyFans page-scope
 //   branch below has no runtime callers: OFAPI callers must use vendor scope,
@@ -93,6 +100,25 @@ export async function resolveEgress(
   const stored = await findPageById(app.db, scope.pageId);
   if (!stored) {
     throw new NotFoundError(`Page ${scope.pageId} not found for egress resolution`);
+  }
+
+  if (scope.kind === "page_candidate") {
+    const vendor = PLATFORM_VENDORS[stored.page.platform];
+    if (vendor !== "fansly") {
+      // OFAPI pages have no hub-side address identity to check a proxy for.
+      throw new Error(`Egress scope page_candidate is refused for page ${scope.pageId}: its egress is vendor-side`);
+    }
+    const candidate = normalizeProxyConfig(scope.proxy);
+    const dispatcher = createProxyRequestDispatcher(candidate);
+    const pacer = createEgressPacer(app, { vendor });
+    return {
+      egressKey: buildProxyEgressKey(candidate),
+      dispatcher,
+      pace: (priorityClass) => pacer.pace(priorityClass),
+      close: async () => {
+        await dispatcher.close();
+      },
+    };
   }
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);

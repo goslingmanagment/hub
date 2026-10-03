@@ -8,8 +8,8 @@ import {
   type SyncPageRow,
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
-import { activePageHold } from "../engine/errors.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
 import { settleEngineManagedHydration } from "../requests/legacy-hydration.ts";
 import {
@@ -38,7 +38,8 @@ import { SWITCH_EXIT, SwitchRefusedError, type SwitchContext } from "./context.t
 //     confirmation newer than its acquisition (`sync ownership
 //     confirm-stopped`) — never assumed (J4); exit 3 otherwise.
 //   3 the guard back to the legacy engine: `last_completed_at` moved past the
-//     engine's last send and the end of an engine 429/list/network hold,
+//     engine's last send and the end of an engine 429/list/network hold (the
+//     page holds judged by the shared page-hold core under the row locks),
 //     `next_u = 0.2` (J2, G20). An auth/identity hold that came in while the
 //     actor stopped refuses too (exit 5): nothing was handed back, so a page
 //     this rollback took from `live` goes back to `live` (the renewal needs
@@ -76,15 +77,15 @@ export function engineOwnerStopped(page: Pick<SyncPageRow, "owner">): boolean {
   return owner.stopConfirmedAt !== null && owner.acquiredAt !== null && owner.stopConfirmedAt.getTime() > owner.acquiredAt.getTime();
 }
 
-/** The engine's auth/identity hold in force on the page (its own rule: one
- *  of credentials older than the verified ones is lifted), or null. */
+/** The engine's credentials hold in force on the page — by the page-hold
+ *  core, the rule the actor admits by and the hand-back refuses by — or null. */
 function authHoldInForce(page: SyncPageRow): string | null {
-  const hold = activePageHold(page, page.dbNow);
-  return hold !== null && (hold.kind === "auth" || hold.kind === "identity_mismatch") ? hold.kind : null;
+  return activeFanslyPageHold(page, page.dbNow)?.credentials?.kind ?? null;
 }
 
-const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update, or `page verify`: the identity "
-  + "check runs under the hold), then run this command again; or rerun with --with-auth-hold on the owner's word";
+const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update: its identity check, then the "
+  + "verify of the stored credentials, run under the hold and the verify lifts it), then run this command again; or "
+  + "rerun with --with-auth-hold on the owner's word";
 
 export async function runSyncRollback(ctx: SwitchContext, input: SyncRollbackInput): Promise<SyncRollbackOutcome> {
   const { db } = ctx;

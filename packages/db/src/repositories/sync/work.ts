@@ -578,22 +578,28 @@ export async function pickUrgent(
 }
 
 /**
- * The work an auth/identity page hold lets through (step-3 §3.5 item 3 (b),
- * E16): a live `account.identity` check that carries a candidate session or
- * proxy (`secret_params`) and is due — its request uses the candidate, not
- * the stored credentials that failed. Oldest demand first. A 429 or network
- * hold exempts nothing (the caller checks the hold's kind).
+ * The work a credentials page hold lets through (step-3 §3.5 item 3 (b),
+ * E16; step 3b A3), due, oldest demand first: a live `account.identity` check
+ * that carries a candidate session or proxy (`secret_params`) — its request
+ * uses the candidate, not the stored credentials that failed — and, with
+ * `verify`, the live `account.verify` of stored credentials the page-hold
+ * core admits under the hold (their digest is not the latest refusal's; the
+ * caller judged it). A 429 or network hold exempts nothing (the caller
+ * checks the hold).
  */
-export async function pickHoldExemptIdentity(db: Database, input: { pageId: number }): Promise<SyncWorkRow | null> {
+export async function pickCredentialsCheck(
+  db: Database,
+  input: { pageId: number; verify: boolean },
+): Promise<SyncWorkRow | null> {
   const result = await db.execute<WorkSqlRow>(sql`
     select ${workColumns}
       from sync_work w
      where w.page_id = ${input.pageId}
-       and w.resource = 'account.identity'
        and not w.shadow
        and w.state = 'open'
-       and w.secret_params is not null
        and w.due_at <= clock_timestamp()
+       and ((w.resource = 'account.identity' and w.secret_params is not null)
+            or (${input.verify}::boolean and w.resource = 'account.verify'))
      order by w.first_demand_at, w.id
      limit 1
   `);
@@ -1055,14 +1061,22 @@ export async function requeueQuarantinedWork(
 
 /**
  * Close a quarantined row by an owner's decision (the followers blast-radius
- * override applied its deactivation; an owner reset of the walk): `done` or
- * `cancelled` with the reason, the cursor/proof the decision leaves (the next
- * row of the key reads the newest closed one's), `result.quarantine` dropped.
- * The caller holds the row (`lockWorkRows`). False: not quarantined any more.
+ * override applied its deactivation; an owner reset of the walk) — `done` or
+ * `cancelled` — or as `superseded` when what it was for is gone (the verify
+ * of credentials no longer stored): with the reason, the cursor/proof the
+ * decision leaves (the next row of the key reads the newest closed one's),
+ * `result.quarantine` dropped. The caller holds the row (`lockWorkRows`).
+ * False: not quarantined any more.
  */
 export async function closeQuarantinedWork(
   db: Database,
-  input: { workId: number; to: "done" | "cancelled"; closeReason: string; cursor?: unknown; proof?: unknown },
+  input: {
+    workId: number;
+    to: "done" | "cancelled" | "superseded";
+    closeReason: string;
+    cursor?: unknown;
+    proof?: unknown;
+  },
 ): Promise<boolean> {
   const done = input.to === "done";
   const result = await db.execute(sql`

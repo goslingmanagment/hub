@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
@@ -110,6 +110,31 @@ describe("egress resolver (Stage 26)", () => {
     }
     await expect(resolveEgress(appContext, { kind: "page", pageId: direct.id }))
       .rejects.toThrow(/fail-closed/);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("resolves a page_candidate scope onto the candidate proxy — for one identity check of a Fansly page, never a vendor-side one", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+
+    const page = await seedFanslyPage("egress-candidate", "socks5://proxy.example.internal:1080");
+    const candidate = await resolveEgress(appContext, {
+      kind: "page_candidate",
+      pageId: page.id,
+      proxy: { url: "http://candidate.example.internal:3128" },
+    });
+    // The candidate's own address identity, never the stored proxy's.
+    expect(candidate.egressKey).toBe("http://candidate.example.internal:3128");
+    expect(candidate.dispatcher).not.toBeNull();
+    await candidate.close();
+
+    const model = await createModel(appContext.db, { slug: "model-egress-of", name: "Model egress-of" });
+    const ofPage = await createOnlyFansPage(appContext.db, { modelId: model!.id, label: "egress-of" });
+    await expect(resolveEgress(appContext, { kind: "page_candidate", pageId: ofPage!.id, proxy: { url: "http://candidate.example.internal:3128" } }))
+      .rejects.toThrow(/vendor-side/);
+    await expect(resolveEgress(appContext, { kind: "page_candidate", pageId: 999_999, proxy: { url: "http://candidate.example.internal:3128" } }))
+      .rejects.toThrow(/not found/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("records service-vendor identity while preserving OFAPI/Fansly policies", async (context) => {
