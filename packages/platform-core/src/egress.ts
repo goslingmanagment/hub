@@ -22,6 +22,9 @@ export type EgressPriorityClass = (typeof EGRESS_PRIORITY_CLASSES)[number];
  * - `page_candidate` — ONE identity check of a page through a candidate proxy
  *   the owner is about to assign it (the check runs before the proxy is
  *   stored); never a fallback after the page proxy failed.
+ * - `fansly_candidate` — ONE identity check of a Fansly session that belongs to
+ *   no page yet (onboarding, the create-page credentials check) through the
+ *   proxy the page will get: Fansly only, the proxy required, never direct.
  * - `vendor` — vendor-gateway egress with a RECORDED address policy (the
  *   resolver documents whether traffic proxies per-page or goes
  *   vendor-direct; it is never an accident of a bare fetch).
@@ -29,6 +32,7 @@ export type EgressPriorityClass = (typeof EGRESS_PRIORITY_CLASSES)[number];
 export type EgressScope =
   | { kind: "page"; pageId: number }
   | { kind: "page_candidate"; pageId: number; proxy: ProxyConfig }
+  | { kind: "fansly_candidate"; proxy: ProxyConfig }
   | { kind: "vendor"; vendor: string };
 
 export interface EgressContext<TDispatcher> {
@@ -53,6 +57,8 @@ export function egressScopeKey(scope: EgressScope) {
       return `page:${scope.pageId}`;
     case "page_candidate":
       return `page-candidate:${scope.pageId}`;
+    case "fansly_candidate":
+      return "fansly-candidate";
     case "vendor":
       return `vendor:${scope.vendor}`;
   }
