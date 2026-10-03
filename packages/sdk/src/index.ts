@@ -20,6 +20,8 @@ export {
 // Runtime surface for out-of-workspace consumers (Stage 24: client repos
 // cannot reach @agency_hub_core/contracts the way the dashboard does).
 export {
+  // The tokens streamAiFeature may advertise (`capabilities` option).
+  AI_STREAM_CAPABILITIES,
   decodeDomainEventCursor,
   fetchVoiceNoteAudio,
   // Shared client-side predicate (coach-chat spec §8): apply to a terminal
@@ -37,6 +39,7 @@ export {
   type AiFeatureDebugInputFrame,
   type AiFeatureStreamFrame,
   type AiGatewayStreamFrame,
+  type AiStreamCapability,
   type DomainEventFrame,
   type DomainEventsSnapshotRequired,
   type KernelStreamHandle,
