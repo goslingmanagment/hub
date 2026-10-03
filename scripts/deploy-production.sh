@@ -573,6 +573,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # made lapses there (its conversation list re-applies the reason) until a
   # forward deploy returns.
   "0235_sync_pages_lifted_dm_exclusions.sql"
+  # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
+  # new tables (client_fan_leases, client_greetings, client_send_custody),
+  # their checks, indexes and comments. The previous image never names them,
+  # and no route writes them until H-7b ships behind owner switches, so a
+  # rollback finds them empty (or unread) and runs unchanged.
+  "0236_client_claim_tables.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

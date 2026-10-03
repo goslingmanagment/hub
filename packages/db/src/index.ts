@@ -5,6 +5,9 @@ export * from "./repositories/sync/live-messages.ts";
 export * from "./repositories/fan-earnings-targets.ts";
 export * from "./client.ts";
 export * from "./repositories/follower-outreach.ts";
+// chat-extension greeting lease and send custody (0236, H-7a).
+export * from "./repositories/client-claim.ts";
+export * from "./repositories/client-claim-transition.ts";
 export * from "./schema.ts";
 export * from "./repositories/creator-raw-media.ts";
 export * from "./repositories/vault-album-scans.ts";
