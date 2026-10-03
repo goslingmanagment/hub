@@ -6,12 +6,7 @@ import {
   sendFanslyWireRequest,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
-import {
-  createProxyRequestDispatcher,
-  type AppConfig,
-  type FanslySessionBundle,
-  type ProxyConfig,
-} from "@agency_hub_core/shared";
+import { type AppConfig, type FanslySessionBundle, type ProxyConfig } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import { readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
@@ -19,7 +14,7 @@ import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } f
 import { resolveEgress, type AppEgressContext } from "../../services/egress/resolver.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { decodeStoredFanslySession } from "../../services/page-context.ts";
-import { CREDENTIALS_CHECK_KEYS } from "../engine/errors.ts";
+import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY, identityCandidateOf } from "../engine/errors.ts";
 import { REQUEST_TIMEOUT_MS } from "../engine/pacer.ts";
 import {
   CredentialsGenerationChangedError,
@@ -43,8 +38,10 @@ import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 //
 // - api: the wire layer's single-request send with the page's session — or,
 //   for an identity check (`account.identity`), the candidate session/proxy of
-//   the work's secret, through a one-shot dispatcher for a candidate proxy
-//   (still this page's admission, owner decision №4);
+//   the work's secret over the stored base the work names (step 3b ruling 5:
+//   the caller's save is a CAS on that exact pair), a candidate proxy through
+//   the egress resolver's one-shot candidate scope (still this page's
+//   admission, owner decision №4);
 // - cdn: one hop of a chat file's download (`media-download.fetch`): the URL
 //   is the work's secret (`sync_work.secret_params`, decrypted here and
 //   nowhere else, design J7), its host must be a Fansly media CDN, no session
@@ -56,8 +53,9 @@ import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 // Credentials (G1, G2, G18): every API request is built from a read-only
 // snapshot of the stored session and its digest (`readFanslyPageGeneration`,
 // the session AND the proxy). Unless the digest is the one the engine
-// verified (`sync_pages.credentials_generation`, written by an applied
-// `account.verify`) the request is refused before its admission with
+// trusts (`sync_pages.credentials_generation`, written by an applied
+// `/account/me` proof or the CAS save of a checked candidate) the request is
+// refused before its admission with
 // `CredentialsGenerationChangedError` — a null verified digest counts as
 // changed, so a live page sends nothing but `account.verify` /
 // `account.identity` (the checks themselves) before its first verify. The
@@ -120,16 +118,6 @@ async function resolvePageEgress(ctx: PageTransportContext, page: { pageId: numb
   return { egress: resolved.egress, dispatcher, generation: resolved.generation };
 }
 
-/** The digest an identity check's candidate is known by (`params.candidate`). */
-function candidateGeneration(work: SyncWorkRow): string | null {
-  const params = work.params;
-  if (typeof params !== "object" || params === null) return null;
-  const candidate = (params as Record<string, unknown>).candidate;
-  if (typeof candidate !== "object" || candidate === null) return null;
-  const generation = (candidate as Record<string, unknown>).generation;
-  return typeof generation === "string" && generation.length > 0 ? generation : null;
-}
-
 /**
  * The live transport of one page. The session is read per API request inside
  * a read-only snapshot together with its digest (the same 64-hex digest the
@@ -144,15 +132,15 @@ export async function createPageTransport(
 ): Promise<PageTransport> {
   let current = await resolvePageEgress(ctx, page);
   const cdnUrlAllowed = options.cdnUrlAllowed ?? isFanslyCdnUrl;
-  /** The one-shot dispatcher of the identity check prepared last (a candidate
+  /** The one-shot egress of the identity check prepared last (a candidate
    *  proxy): used by its send, closed after it or when another is prepared. */
-  let candidate: { request: FanslyWireRequest; dispatcher: Dispatcher } | null = null;
+  let candidate: { request: FanslyWireRequest; egress: AppEgressContext; dispatcher: Dispatcher } | null = null;
   let closed = false;
 
   async function dropCandidate(): Promise<void> {
     const pending = candidate;
     candidate = null;
-    await pending?.dispatcher.close().catch(() => undefined);
+    await pending?.egress.close().catch(() => undefined);
   }
 
   /** The proxy changed since the egress was resolved: resolve it again. */
@@ -165,7 +153,7 @@ export async function createPageTransport(
   }
 
   async function prepareApi(request: RequestPlan, work: SyncWorkRow | undefined): Promise<FanslyWireRequest> {
-    const identity = work?.resource === "account.identity";
+    const identity = work?.resource === IDENTITY_CHECK_KEY;
     const snapshot = await ctx.db.transaction(async (raw) => {
       const tx = raw as unknown as Database;
       const generation = await readFanslyPageGeneration(tx, page.pageLabel);
@@ -192,10 +180,16 @@ export async function createPageTransport(
         credentialsGeneration: snapshot.generation,
       };
     }
-    // The identity check: the candidate of the work's secret, never stored.
-    const generation = candidateGeneration(work);
-    if (snapshot.secret === null || generation === null) {
+    // The identity check: the candidate of the work's secret, never stored,
+    // over the stored base its caller read — the half the candidate does not
+    // replace is exactly that one's (the page egress followed the snapshot's
+    // digest above), or the check would prove a pair nobody saves.
+    const named = identityCandidateOf(work);
+    if (snapshot.secret === null || named === null) {
       throw new UnsendableRequestError("identity_candidate_missing", { failure: "identity_candidate_missing", matches: null });
+    }
+    if (named.base !== snapshot.generation || current.generation !== snapshot.generation) {
+      throw new UnsendableRequestError("identity_base_changed", { failure: "identity_base_changed", matches: null });
     }
     let secret: IdentityCandidateSecret;
     try {
@@ -210,11 +204,16 @@ export async function createPageTransport(
         session,
         timeoutMs: REQUEST_TIMEOUT_MS,
       }),
-      credentialsGeneration: generation,
+      credentialsGeneration: named.generation,
     };
     await dropCandidate();
     if (secret.proxy !== undefined) {
-      candidate = { request: built, dispatcher: createProxyRequestDispatcher(secret.proxy) };
+      const egress = await resolveEgress(ctx, { kind: "page_candidate", pageId: page.pageId, proxy: secret.proxy });
+      if (egress.dispatcher === null) {
+        await egress.close();
+        throw new UnsendableRequestError("candidate_egress_missing", { failure: "candidate_egress_missing", matches: null });
+      }
+      candidate = { request: built, egress, dispatcher: egress.dispatcher };
     }
     return built;
   }

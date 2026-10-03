@@ -69,7 +69,7 @@ function decide(outcome: FanslyWireOutcome): OutcomeDecision {
     httpStatus: classified.httpStatus,
     retryAfterMs: classified.retryAfterMs,
     page,
-    lastRateLimitAt: null,
+    route: { route: "messages.page", entry: null, attemptId: 1, jitter: () => 0 },
     subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
     subjectQueue: false,
     recentFailedSubjects: 6,
@@ -148,13 +148,15 @@ describe("probe.excluded-chat", () => {
     });
   });
 
-  it("a 401 and a 429 stay the page's; a 5xx is retried on the subject's ladder", () => {
+  it("a 401 stays the page's, a 429 its route's (never the probe's verdict); a 5xx is retried on the subject's ladder", () => {
     const auth = decide(answer(401, ""));
     expect(auth.pageHold).toMatchObject({ action: "set", kind: "auth" });
     expect(auth.work).toMatchObject({ action: "reopen", waitingReason: "page_hold" });
     expect(auth.alerts).toEqual([{ subKey: "page_stopped", detail: "auth" }]);
     const limited = decide(answer(429, ""));
-    expect(limited.pageHold).toMatchObject({ action: "set", kind: "rate_limit" });
+    expect(limited.pageHold).toEqual({ action: "keep" });
+    expect(limited.routeHold).toMatchObject({ action: "set", route: "messages.page" });
+    expect(limited.work).toEqual({ action: "reopen", dueAt: null, waitingReason: null, waitingUntil: null });
     const failed = decide(answer(502, "bad gateway"));
     expect(failed.work).toMatchObject({ action: "reopen", waitingReason: "subject_breaker" });
     expect(decide(answer(200, { success: true, response: { messages: [] } })).work).toEqual({ action: "apply" });

@@ -1,17 +1,31 @@
 import { describe, expect, it } from "vitest";
 
+import { HISTORY_WORK_RESOURCE, type SyncRouteUse } from "@agency_hub_core/db";
+
+import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { FAMILY_BUDGETS, familyOfRoute, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { backtestEstimate, quantiles } from "../apps/runtime/src/sync/requests/eta-backtest.ts";
 import {
+  budgetUseOf,
   estimateItemReads,
   estimateRequest,
+  ETA_USE_WINDOW_MS,
+  HISTORY_READ_ROUTE,
   itemEtaFacts,
-  requestsClassShare,
+  CYCLE_TURNS,
+  keptByRequests,
+  requestsCapacity,
+  type BudgetUse,
   type ItemEtaFacts,
+  type RequestsCapacity,
 } from "../apps/runtime/src/sync/requests/eta.ts";
 
-// The ETA of a history request (plan §4.3, design §7.2) with fixed inputs:
-// thread columns only, two numbers (a lower bound and an estimate), the
-// class share and the round robin between requests.
+// The ETA of a history request (plan §4.3, design §7.2; step 3b ruling 11)
+// with fixed inputs: thread columns only, two numbers (a lower bound and an
+// estimate), the rate from the tightest budget a history read draws on (the
+// page's slots, `/message`, the messaging family) less what the other
+// classes take of it, and the round robin between requests. The rate against
+// the real scheduler and route clocks: tests/sync-history-eta-sim.test.ts.
 
 const EPOCH_MS = 1561494359900;
 const HOUR = 3_600_000;
@@ -118,30 +132,149 @@ describe("one fan's reads", () => {
   });
 });
 
+/** The window's journal as `readRouteUse` returns it: sends a minute. */
+function use(rows: Array<[SyncRouteUse["class"], string, number]>): BudgetUse {
+  const minutes = ETA_USE_WINDOW_MS / 60_000;
+  return budgetUseOf(rows.map(([workClass, operation, perMin]) => ({ class: workClass, operation, sends: perMin * minutes })), ETA_USE_WINDOW_MS);
+}
+
+const QUIET = use([]);
+/** A busy page (lora-1, an ordinary hour): ≈ 90 confirmations and catch-ups
+ *  an hour, the list's head and a walk ≈ 20 an hour, the media statistics at
+ *  their 5/min, the money heads and the polls. */
+const BUSY = use([
+  ["urgent", "messages.page", 1.5],
+  ["planned", "messaging.groups", 0.3],
+  ["planned", "media.offer_stats", 5],
+  ["urgent", "transactions.page", 1],
+  ["planned", "account.stats", 0.5],
+]);
+
+function capacity(overrides: Partial<Parameters<typeof requestsCapacity>[0]> = {}): RequestsCapacity {
+  return requestsCapacity({
+    settingMs: 2_500,
+    routePerMin: routeBudget(HISTORY_READ_ROUTE).currentPerMin,
+    familyPerMin: FAMILY_BUDGETS.messaging.currentPerMin,
+    use: QUIET,
+    ...overrides,
+  });
+}
+
+describe("the rate of the requests class (step 3b ruling 11)", () => {
+  it("a history read is one /message page, paced by the messaging family", () => {
+    const history = FANSLY_RESOURCE_SPECS.find((spec) => spec.key === HISTORY_WORK_RESOURCE)!;
+    expect(history.operations).toEqual([HISTORY_READ_ROUTE]);
+    expect(familyOfRoute(HISTORY_READ_ROUTE)).toBe("messaging");
+  });
+
+  it("a budget is shared by the cycle's turns (U 5, R 4, P 1); a class that wants less leaves the rest", () => {
+    expect(CYCLE_TURNS).toEqual({ urgent: 5, requests: 4, planned: 1 });
+    const rates = (urgent: number, planned: number) => ({ urgent, planned, requests: 0 });
+    // Alone, and beside classes that want little: everything they leave.
+    expect(keptByRequests(20, rates(0, 0))).toBe(20);
+    expect(keptByRequests(20, rates(1, 2))).toBeCloseTo(17, 10);
+    // Beside classes that want more than their turns: 4 of 10, 4 of 9, 4 of 5.
+    expect(keptByRequests(20, rates(50, 50))).toBeCloseTo(8, 10);
+    expect(keptByRequests(18, rates(50, 0))).toBeCloseTo(8, 10);
+    expect(keptByRequests(20, rates(0, 50))).toBeCloseTo(16, 10);
+    // A light urgent class beside a planned backlog: the urgent class takes
+    // what it wants (1), the rest is shared 4 : 1 with the backlog.
+    expect(keptByRequests(21, rates(1, 50))).toBeCloseTo(16, 10);
+    // Urgent beyond its turns beside a light planned class.
+    expect(keptByRequests(20, rates(50, 1))).toBeCloseTo(19 * 4 / 9, 10);
+  });
+
+  it("the window's journal as rates: each send on the page's slots, /message on its route, the list and a chat's detail on its family", () => {
+    const rates = budgetUseOf([
+      { class: "urgent", operation: "messages.page", sends: 30 },
+      { class: "urgent", operation: "group.detail", sends: 15 },
+      { class: "planned", operation: "messaging.groups", sends: 15 },
+      { class: "planned", operation: "media.offer_stats", sends: 75 },
+      { class: "requests", operation: "messages.page", sends: 150 },
+    ], ETA_USE_WINDOW_MS);
+    expect(rates.page).toEqual({ urgent: 3, planned: 6, requests: 10 });
+    expect(rates.route).toEqual({ urgent: 2, planned: 0, requests: 10 });
+    expect(rates.family).toEqual({ urgent: 3, planned: 1, requests: 10 });
+    // An operation this build cannot place consumes every budget.
+    expect(budgetUseOf([{ class: "planned", operation: "legacy.mystery", sends: 15 }], ETA_USE_WINDOW_MS))
+      .toEqual({ page: { urgent: 0, planned: 1, requests: 0 }, route: { urgent: 0, planned: 1, requests: 0 }, family: { urgent: 0, planned: 1, requests: 0 } });
+  });
+
+  it("alone on a quiet page: the family's 15/min, 900 reads an hour — not S's 1 309", () => {
+    expect(capacity()).toEqual({ perMin: 15, slotShare: 1, limitedBy: "family" });
+  });
+
+  it("a busy page: the family less the confirmations and the list, ≈ 800 reads an hour (owner decision №24)", () => {
+    const busy = capacity({ use: BUSY });
+    expect(busy.limitedBy).toBe("family");
+    expect(busy.perMin).toBeCloseTo(15 - 1.8, 10);
+    expect(busy.perMin * 60).toBeGreaterThanOrEqual(780);
+    expect(busy.perMin * 60).toBeLessThanOrEqual(820);
+    // The page's slots are not what limits it: S = 2.5 s gives ≈ 21.8 a
+    // minute; the urgent class keeps its 2.5, the planned walks (5.8 wanted)
+    // 1 of 5 of the rest, the requests class 4 of 5 — ≈ 15.5, above 13.2.
+    const slots = 60_000 / 2_750;
+    expect(busy.slotShare).toBeCloseTo((0.8 * (slots - 2.5)) / slots, 10);
+  });
+
+  it("a slowdown after a 429 sets the rate on its route: half of /message less the confirmations", () => {
+    const slowed = capacity({ routePerMin: 7.5, use: BUSY });
+    expect(slowed).toMatchObject({ limitedBy: "route" });
+    expect(slowed.perMin).toBeCloseTo(7.5 - 1.5, 10);
+  });
+
+  it("a page busy with other work: the slots the cycle leaves the class — 4/10 beside urgent and planned, 4/5 beside planned alone", () => {
+    const full = capacity({ use: use([["urgent", "transactions.page", 15], ["planned", "media.offer_stats", 5], ["planned", "account.stats", 15]]) });
+    expect(full.limitedBy).toBe("page");
+    expect(full.slotShare).toBeCloseTo(0.4, 10);
+    expect(full.perMin).toBeCloseTo(0.4 * (60_000 / 2_750), 10);
+    // A planned backlog alone yields 4 slots of 5: the family limits it again.
+    const backlog = capacity({ use: use([["planned", "media.offer_stats", 5], ["planned", "account.stats", 15]]) });
+    expect(backlog).toMatchObject({ perMin: 15, limitedBy: "family" });
+    expect(backlog.slotShare).toBeCloseTo(0.8, 10);
+  });
+
+  it("what the other classes take is measured, never raised to a floor: a light use leaves the rest", () => {
+    // Beside a little urgent and planned work the class keeps 98 % of the
+    // slots — not the cycle's 40 %, and not a default share.
+    const light = capacity({ use: use([["urgent", "transactions.page", 0.2], ["planned", "account.stats", 0.2]]) });
+    expect(light.slotShare).toBeCloseTo(1 - 0.4 / (60_000 / 2_750), 10);
+    // The family, used heavily by the list walk while no request competed:
+    // the walk keeps its planned turn (1 of 5), the class the rest.
+    const walk = capacity({ use: use([["planned", "messaging.groups", 12]]) });
+    expect(walk).toMatchObject({ limitedBy: "family" });
+    expect(walk.perMin).toBeCloseTo(15 - 0.2 * 15, 10);
+    // A planned backlog beside a few confirmations: the confirmations keep
+    // theirs, the backlog its 1 of 5 of the rest — the family limits, not 40 %.
+    const backlog = capacity({ use: use([["urgent", "messages.page", 1.5], ["planned", "media.offer_stats", 5], ["planned", "account.stats", 15]]) });
+    expect(backlog).toMatchObject({ limitedBy: "family" });
+    expect(backlog.perMin).toBeCloseTo(13.5, 10);
+  });
+});
+
 describe("the request", () => {
-  it("is the sum of its fans at S × 1.1, divided between k requests and the class share", () => {
+  it("is the sum of its fans at the class's rate, divided between k requests", () => {
     const eta = estimateRequest({
       items: [{ readsMin: 10, readsEstimate: 20, readsMax: null }, { readsMin: 5, readsEstimate: 5, readsMax: null }],
       unanchoredItems: 2,
-      settingMs: 2_000,
-      share: 0.8,
+      capacity: { perMin: 15, slotShare: 1, limitedBy: "family" },
       k: 2,
     });
-    expect(eta).toMatchObject({ remainingMin: 15, remainingEstimate: 25, meanPauseMs: 2_200, share: 0.8, k: 2 });
-    // One read of this request every 2.2 s × 2 / 0.8 = 5.5 s.
-    expect(eta.etaMinMs).toBe(82_500);
-    expect(eta.etaEstimateMs).toBe(137_500);
-    expect(eta.firstRoundMs).toBe(11_000);
-    expect(eta.ratePerHour).toBeCloseTo(654.5, 1);
-    expect(estimateRequest({ items: [{ readsMin: 1, readsEstimate: null, readsMax: null }], unanchoredItems: 0, settingMs: 2_000, share: 1, k: 1 }))
-      .toMatchObject({ remainingEstimate: null, etaEstimateMs: null });
+    expect(eta).toMatchObject({ remainingMin: 15, remainingEstimate: 25, share: 1, limitedBy: "family", k: 2 });
+    // One read of this request every 60 s × 2 / 15 = 8 s.
+    expect(eta.perReadMs).toBe(8_000);
+    expect(eta.etaMinMs).toBe(120_000);
+    expect(eta.etaEstimateMs).toBe(200_000);
+    expect(eta.firstRoundMs).toBe(16_000);
+    expect(eta.ratePerHour).toBe(450);
+    expect(estimateRequest({ items: [{ readsMin: 1, readsEstimate: null, readsMax: null }], unanchoredItems: 0, capacity: capacity(), k: 1 }))
+      .toMatchObject({ remainingEstimate: null, etaEstimateMs: null, ratePerHour: 900 });
   });
 
-  it("the class share: 1 alone, 0.8 below 20 sends, the observed share never below the guaranteed 40 %", () => {
-    expect(requestsClassShare({ sends: { urgent: 50, requests: 0, planned: 50 }, otherClassesRunnable: false })).toBe(1);
-    expect(requestsClassShare({ sends: { urgent: 5, requests: 5, planned: 5 }, otherClassesRunnable: true })).toBe(0.8);
-    expect(requestsClassShare({ sends: { urgent: 10, requests: 80, planned: 10 }, otherClassesRunnable: true })).toBe(0.8);
-    expect(requestsClassShare({ sends: { urgent: 80, requests: 10, planned: 10 }, otherClassesRunnable: true })).toBe(0.4);
+  it("20 payers whole (≈ 180 reads) on a busy page: ≈ 13–14 min, not the 7 of S alone", () => {
+    const eta = estimateRequest({ items: [{ readsMin: 180, readsEstimate: 180, readsMax: null }], unanchoredItems: 20, capacity: capacity({ use: BUSY }), k: 1 });
+    expect(eta.etaEstimateMs! / 60_000).toBeGreaterThan(13);
+    expect(eta.etaEstimateMs! / 60_000).toBeLessThan(14);
   });
 });
 

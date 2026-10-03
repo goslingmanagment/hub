@@ -112,24 +112,14 @@ export interface SyncPageOwnerRecord {
   stopConfirmedBy: string | null;
 }
 
-/** The 429 holds of an endpoint group with a quota of its own (owner
- *  decisions №14 and №20): a 429 on the group's route holds only the keys
- *  that read it, never the page. */
-export const SYNC_ENDPOINT_HOLD_KINDS = ["rate_limit_list", "rate_limit_media_stats"] as const;
-export type SyncEndpointHoldKind = (typeof SYNC_ENDPOINT_HOLD_KINDS)[number];
-
-/** `resource_holds[<file>]`: the §9 resource breaker of one resource file
- *  (no `kind`), or an endpoint group's own 429 hold — the conversation list's
- *  (`kind: 'rate_limit_list'`, owner decision №14) in the `dm-conversations`
- *  entry, the media statistics' (`kind: 'rate_limit_media_stats'`, owner
- *  decision №20) in the `media-stats` entry. */
+/** `resource_holds[<file>]`: the §9 resource breaker of one resource file. A
+ *  429 holds its route, never a file (`writeSyncRouteState`); the page row
+ *  leaves out an older build's endpoint-group 429 hold (an entry with a
+ *  `kind`), which nothing reads or writes any more. */
 export interface SyncResourceHold {
   until: string;
   step: number;
   since: string;
-  kind?: SyncEndpointHoldKind;
-  /** The newest 429 of the group (its ladder's reset clock). */
-  lastRateLimitAt?: string;
 }
 
 type PageSqlRow = {
@@ -201,7 +191,13 @@ const pageColumns = sql`
   sp.hold_step as "holdStep",
   sp.hold_detail as "holdDetail",
   sp.network_failure_streak as "networkFailureStreak",
-  sp.resource_holds - ${SYNC_ROUTE_STATE_KEY}::text as "resourceHolds",
+  -- The resource breakers: the route-state namespace apart, and an entry with
+  -- a kind — an older build's endpoint-group 429 hold (step 3b replaced it
+  -- with route holds) — is no breaker of this build.
+  (select coalesce(jsonb_object_agg(h.key, h.value), '{}'::jsonb)
+     from jsonb_each(sp.resource_holds) h
+    where h.key <> ${SYNC_ROUTE_STATE_KEY}::text
+      and not (jsonb_typeof(h.value) = 'object' and h.value ? 'kind')) as "resourceHolds",
   sp.resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text as "routeState",
   sp.identity_account_id as "identityAccountId",
   sp.identity_checked_at as "identityCheckedAt",
@@ -647,23 +643,47 @@ export async function setSyncRequestsEnabledAt(
 }
 
 /**
- * The digest of the page's stored credentials the engine trusts
- * (`sync_pages.credentials_generation`, G1): written by the credentials and
- * proxy flows right after they stored what an identity check proved to be
- * this page's account (step-3 §3.5 item 6). A different trusted digest lifts
- * an auth/identity hold taken under another one (`activePageHold`). Not an
- * actor write (no generation fence); wakes the page's actor.
+ * The session and proxy rows of a page's stored-credentials digest
+ * (`readFanslyPageGeneration`), locked for a save the engine will trust (step
+ * 3b ruling 5: the candidate save is a CAS on the exact verified
+ * session+proxy pair): no other writer changes either half until the save
+ * commits. The engine row first — the lock order of every actor transaction —
+ * so an apply that writes the page between them never waits in a cycle with
+ * the save; the page row itself is not locked (the WS capture holds it FOR
+ * SHARE before the session rows; the trusted digest is read at the save's end
+ * either way).
  */
-export async function setSyncCredentialsGeneration(
+export async function lockFanslyCredentialsForSave(db: Database, pageId: number): Promise<void> {
+  await db.execute(sql`select sp.page_id from sync_pages sp where sp.page_id = ${pageId} for no key update`);
+  await db.execute(sql`select c.platform_account_id from page_credentials c where c.platform_account_id = ${pageId} for update`);
+  await db.execute(sql`select e.id from egress_endpoints e where e.platform_account_id = ${pageId} for update`);
+}
+
+/**
+ * The engine trusts the page's stored credentials (`credentials_generation`,
+ * G1): written by the credentials and proxy flows in the transaction that
+ * stored the pair an identity check proved to be this page's account
+ * (`lockFanslyCredentialsForSave` first). `verifiedAt` is when that check was
+ * sent: `identity_checked_at` keeps the newest proof's send instant, so an
+ * older answer applied late never overwrites it (`recordSyncPageIdentityProof`).
+ * Trusting a digest lifts no hold: a credentials hold clears only by the
+ * apply of a proof sent after its latest refusal — the verify of the new
+ * digest, which runs under the hold (A3). Not an actor write (no generation
+ * fence); wakes the page's actor.
+ */
+export async function trustSyncPageCredentials(
   db: Database,
-  input: { pageId: number; generation: string },
+  input: { pageId: number; generation: string; accountId: string; verifiedAt: Date },
 ): Promise<boolean> {
   if (!/^[0-9a-f]{64}$/.test(input.generation)) {
     throw new Error("A credentials generation is a sha256 hex digest");
   }
+  if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
   const result = await db.execute(sql`
     update sync_pages
        set credentials_generation = ${input.generation},
+           identity_account_id = ${input.accountId},
+           identity_checked_at = greatest(identity_checked_at, ${input.verifiedAt}::timestamptz),
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
   `);
@@ -957,9 +977,11 @@ async function assertOwnedWrite(
 
 /**
  * Hold the whole page (§9): every request of the page waits until `until`
- * (`'infinity'` for auth / identity holds, lifted by a new credentials
- * generation or the owner). `hold_since` keeps the start of an ongoing hold of
- * the same kind. With `generation`, fenced like every actor write.
+ * (`'infinity'` for auth / identity holds, which only an identity proof sent
+ * after their latest refusal clears — the shared page-hold core decides).
+ * `hold_since` keeps the start of the episode: an ongoing hold of the same
+ * kind, or a credentials refusal over a credentials hold in force. With
+ * `generation`, fenced like every actor write.
  */
 export async function setPageHold(
   db: Database,
@@ -980,7 +1002,10 @@ export async function setPageHold(
     update sync_pages
        set hold_kind = ${input.kind},
            hold_until = ${until},
-           hold_since = case when hold_kind = ${input.kind} and hold_until > clock_timestamp()
+           hold_since = case when hold_until > clock_timestamp()
+                              and (hold_kind = ${input.kind}
+                                   or (hold_kind in ('auth', 'identity_mismatch')
+                                       and ${input.kind}::text in ('auth', 'identity_mismatch')))
                              then coalesce(hold_since, clock_timestamp()) else clock_timestamp() end,
            hold_step = ${input.step},
            hold_detail = ${jsonParam(input.detail ?? {})},
@@ -1011,28 +1036,34 @@ export async function clearPageHold(
 }
 
 /**
- * The account the page's credentials answer for (`/account/me`, design §5.1):
- * `identity_account_id` and the instant it was read, and — G1 — the digest of
- * the stored credentials that request carried (`credentials_generation`: the
- * engine has now verified them). Written by the `account` resource's live
- * apply, fenced like every actor write.
+ * An identity proof (design §5.1, step 3b ruling 5): an applied `/account/me`
+ * answer of the page's own account — `identity_account_id`, and — G1 — the
+ * digest of the stored credentials that request carried
+ * (`credentials_generation`: the engine has now verified them), written in
+ * the apply's own transaction. `identity_checked_at` is the proof's send
+ * instant; a proof sent before the newest recorded one (an answer applied
+ * late) writes nothing. True: recorded. Fenced like every actor write.
  */
-export async function recordSyncPageIdentity(
+export async function recordSyncPageIdentityProof(
   db: Database,
-  input: { pageId: number; generation: bigint; accountId: string; credentialsGeneration?: string | null },
-): Promise<void> {
+  input: { pageId: number; generation: bigint; accountId: string; credentialsGeneration: string | null; sentAt: Date },
+): Promise<boolean> {
   if (input.accountId.length === 0) throw new Error("An identity account id is non-empty");
-  const credentials = input.credentialsGeneration ?? null;
-  const result = await db.execute(sql`
+  const newer = sql`(identity_checked_at is null or identity_checked_at <= ${input.sentAt}::timestamptz)`;
+  const result = await db.execute<{ recorded: boolean }>(sql`
     update sync_pages
-       set identity_account_id = ${input.accountId},
-           identity_checked_at = clock_timestamp(),
-           credentials_generation = coalesce(${credentials}::text, credentials_generation),
+       set identity_account_id = case when ${newer} then ${input.accountId} else identity_account_id end,
+           credentials_generation = case when ${newer}
+                                         then coalesce(${input.credentialsGeneration}::text, credentials_generation)
+                                         else credentials_generation end,
+           identity_checked_at = case when ${newer} then ${input.sentAt}::timestamptz else identity_checked_at end,
            updated_at = clock_timestamp()
      where page_id = ${input.pageId}
        ${ownedPageFilter(input.generation)}
+    returning identity_checked_at = ${input.sentAt}::timestamptz as recorded
   `);
   await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+  return result.rows[0]?.recorded === true;
 }
 
 /** The consecutive network-failure count of §9 (3 ⇒ a `network` hold). */
@@ -1052,10 +1083,8 @@ export async function setNetworkFailureStreak(
 
 /**
  * The §9 resource breaker of one resource file: `resource_holds[file] =
- * {until, step, since}`, or — with an endpoint group's `kind` (`rate_limit_list`,
- * `rate_limit_media_stats`) — that group's own 429 hold, which also keeps the
- * instant of its newest 429; `hold: null` lifts
- * it. `since` carries over while the entry keeps its kind.
+ * {until, step, since}`; `hold: null` lifts it. `since` carries over while an
+ * entry stays on the row.
  */
 export async function setResourceHold(
   db: Database,
@@ -1063,23 +1092,18 @@ export async function setResourceHold(
     pageId: number;
     generation?: bigint;
     file: string;
-    hold: { until: Date; step: number; kind?: SyncEndpointHoldKind; lastRateLimitAt?: Date } | null;
+    hold: { until: Date; step: number } | null;
   },
 ): Promise<void> {
   if (!SYNC_RESOURCE_FILE_PATTERN.test(input.file)) {
     throw new Error(`Not a resource file: ${input.file}`);
   }
-  const kind = input.hold?.kind ?? null;
   const value = input.hold === null
     ? sql`resource_holds - ${input.file}::text`
-    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_strip_nulls(jsonb_build_object(
+    : sql`jsonb_set(resource_holds, array[${input.file}::text], jsonb_build_object(
         'until', to_jsonb(${input.hold.until}::timestamptz),
         'step', ${input.hold.step}::int,
-        'since', case when (resource_holds -> ${input.file}::text ->> 'kind') is not distinct from ${kind}::text
-                      then coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))
-                      else to_jsonb(clock_timestamp()) end,
-        'kind', ${kind}::text,
-        'lastRateLimitAt', to_jsonb(${input.hold.lastRateLimitAt ?? null}::timestamptz))))`;
+        'since', coalesce(resource_holds -> ${input.file}::text -> 'since', to_jsonb(clock_timestamp()))))`;
   const result = await db.execute(sql`
     update sync_pages
        set resource_holds = ${value},
@@ -1088,6 +1112,89 @@ export async function setResourceHold(
        ${ownedPageFilter(input.generation)}
   `);
   await assertOwnedWrite(db, input.pageId, input.generation, result.rowCount);
+}
+
+/** One route's entry of a page's route state as the route-hold code writes it
+ *  (`apps/runtime/src/sync/engine/route-holds.ts`); the writer stamps its
+ *  revision. */
+export interface SyncRouteStateEntryWrite {
+  holdUntil: Date | null;
+  ladderStep: number;
+  effectivePerMin: number | null;
+  policyVersion: string | null;
+  last429AttemptId: number | null;
+  last429At: Date | null;
+}
+
+export type WriteSyncRouteStateResult =
+  | { kind: "written"; revision: number }
+  /** The entry's revision is not `expectRevision` (a newer 429 or raise), or
+   *  the namespace is not `version`: nothing was written. */
+  | { kind: "stale" };
+
+/**
+ * Write one route's entry of a page's route state — the namespace
+ * `resource_holds['route:state'] = {version, routes: {<route>: entry}}` (step
+ * 3b ruling 4) has no other writer. A compare-and-set on the entry's
+ * `revision` (`expectRevision`: 0 for a route without an entry): the entry is
+ * written with `expectRevision + 1`, the namespace created at `version` when
+ * the page has none and never written over another version. With
+ * `generation`, fenced like every actor write (a lost generation throws
+ * `OwnershipLostError`); without it (the owner's `sync route raise`) the
+ * revision alone orders the writers.
+ */
+export async function writeSyncRouteState(
+  db: Database,
+  input: {
+    pageId: number;
+    generation?: bigint;
+    version: number;
+    route: string;
+    expectRevision: number;
+    entry: SyncRouteStateEntryWrite;
+  },
+): Promise<WriteSyncRouteStateResult> {
+  if (!Number.isSafeInteger(input.expectRevision) || input.expectRevision < 0) {
+    throw new Error(`A route state revision is a count (got ${input.expectRevision})`);
+  }
+  const revision = input.expectRevision + 1;
+  const entry = {
+    holdUntil: input.entry.holdUntil?.toISOString() ?? null,
+    ladderStep: input.entry.ladderStep,
+    effectivePerMin: input.entry.effectivePerMin,
+    policyVersion: input.entry.policyVersion,
+    last429AttemptId: input.entry.last429AttemptId,
+    last429At: input.entry.last429At?.toISOString() ?? null,
+    revision,
+  };
+  const result = await db.execute(sql`
+    update sync_pages
+       set resource_holds = jsonb_set(
+             case when resource_holds ? ${SYNC_ROUTE_STATE_KEY}::text then resource_holds
+                  else resource_holds || jsonb_build_object(${SYNC_ROUTE_STATE_KEY}::text,
+                    jsonb_build_object('version', ${input.version}::int, 'routes', '{}'::jsonb)) end,
+             array[${SYNC_ROUTE_STATE_KEY}::text, 'routes', ${input.route}::text],
+             ${jsonParam(entry)}),
+           updated_at = clock_timestamp()
+     where page_id = ${input.pageId}
+       ${ownedPageFilter(input.generation)}
+       and (not (resource_holds ? ${SYNC_ROUTE_STATE_KEY}::text)
+            or (resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text -> 'version' = to_jsonb(${input.version}::int)
+                and jsonb_typeof(resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text -> 'routes') = 'object'))
+       and coalesce(resource_holds #> array[${SYNC_ROUTE_STATE_KEY}::text, 'routes', ${input.route}::text, 'revision'], '0'::jsonb)
+           = to_jsonb(${input.expectRevision}::int)
+  `);
+  if ((result.rowCount ?? 0) > 0) return { kind: "written", revision };
+  if (input.generation !== undefined) {
+    const owner = await db.execute<{ generation: string }>(sql`
+      select owner_generation::text as generation from sync_pages where page_id = ${input.pageId}
+    `);
+    const found = owner.rows[0];
+    if (found === undefined || BigInt(found.generation) !== input.generation) {
+      throw new OwnershipLostError(input.pageId, input.generation, found === undefined ? null : BigInt(found.generation));
+    }
+  }
+  return { kind: "stale" };
 }
 
 /**

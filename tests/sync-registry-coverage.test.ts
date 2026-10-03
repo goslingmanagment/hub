@@ -3,14 +3,6 @@ import { describe, expect, it } from "vitest";
 import { getSyncStreamsForPlatform } from "@agency_hub_core/db";
 import { FANSLY_SEND_SOURCES, fanslyWireSpec, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 
-import {
-  ENDPOINT_RATE_GROUPS,
-  LIST_RATE_LIMIT_HELD_KEYS,
-  LIST_RATE_LIMIT_ROUTE,
-  MEDIA_STATS_RATE_GROUP,
-  MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
-  MEDIA_STATS_RATE_LIMIT_ROUTE,
-} from "../apps/runtime/src/sync/engine/errors.ts";
 import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
@@ -21,7 +13,10 @@ import {
   type LegacyRef,
   type ResourceSpec,
 } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
+import { RouteClocks, routeExclusions, ROUTE_STATE_VERSION } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import { DM_LIST_READ_KEYS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
+import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { isQueueWalk, QUEUE_WALK_DRIVERS, ratePeriodMs, runGroupingOf } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 
@@ -147,52 +142,36 @@ describe("the Fansly registry table", () => {
   it("a `.find`'s shared list-head read may be any key of the list route, and its closure is a local step (step 3b, plan PR 1-3)", async () => {
     // Every key that reads the list writes each page through the list's
     // writer: an applied read of the head by any of them answers a find.
-    const listReaders = FANSLY_RESOURCE_SPECS.filter((spec) => spec.operations.includes(LIST_RATE_LIMIT_ROUTE)).map((spec) => spec.key);
+    const listReaders = FANSLY_RESOURCE_SPECS.filter((spec) => spec.operations.includes("messaging.groups")).map((spec) => spec.key);
     expect([...DM_LIST_READ_KEYS].sort()).toEqual(listReaders.sort());
     expect(plansBeforeGate(byKey("dm-conversations.find"))).toBe(true);
     expect(typeof (await createFanslyRegistry().module("dm-conversations.find")).applyLocal).toBe("function");
   });
 
-  it("a list 429 holds exactly the keys that can only read the list (owner decision 2026-10-02)", () => {
-    const listOnly = FANSLY_RESOURCE_SPECS
-      .filter((spec) => spec.operations.length > 0 && spec.operations.every((operation) => operation === LIST_RATE_LIMIT_ROUTE))
+  it("a route's 429 leaves out exactly the keys all of whose routes it holds (owner decisions №14, №20 → №22)", () => {
+    const now = new Date("2026-10-03T12:00:00.000Z");
+    const heldOnly = (route: FanslyRoute): string[] => {
+      const hold = routeHoldAfter({ route, entry: null, now, httpStatus: 429, retryAfterMs: 60_000, attemptId: 1, jitter: () => 0 })!;
+      const clocks = new RouteClocks({ sends: [], state: { version: ROUTE_STATE_VERSION, routes: { [route]: hold.entry } } });
+      return routeExclusions(FANSLY_RESOURCE_SPECS, clocks, now);
+    };
+    const onlyReading = (route: FanslyRoute) => FANSLY_RESOURCE_SPECS
+      .filter((spec) => spec.operations.length > 0 && spec.operations.every((operation) => operation === route))
       .map((spec) => spec.key)
       .sort();
-    expect([...LIST_RATE_LIMIT_HELD_KEYS].sort()).toEqual(listOnly);
-    // `.find` reads the list too, but goes on through the group detail.
-    expect(byKey("dm-conversations.find").operations).toEqual([LIST_RATE_LIMIT_ROUTE, "group.detail"]);
-  });
-
-  it("a media-stats 429 holds exactly the keys that read the media-stats endpoint (owner decision №20)", () => {
-    // Every wire route on the endpoint is in the group: whatever key reads
-    // `/it/moie/statsnew`, the group's hold covers it (its pace is the
-    // route's budget, tests/sync-route-policy.test.ts).
+    // The list: the keys that can only read it; `.find` reads it too, but goes
+    // on through the group detail.
+    expect(heldOnly("messaging.groups")).toEqual(onlyReading("messaging.groups"));
+    expect(heldOnly("messaging.groups")).toEqual(["dm-conversations.full", "dm-conversations.head", "dm-conversations.ws-down", "repair.ws-gap"]);
+    expect(byKey("dm-conversations.find").operations).toEqual(["messaging.groups", "group.detail"]);
+    // The media statistics: the walk alone; every wire route on the endpoint is that one route.
     const onEndpoint = Object.values(FANSLY_WIRE_SPECS)
-      .filter((spec) => spec.endpointTemplate === FANSLY_WIRE_SPECS[MEDIA_STATS_RATE_LIMIT_ROUTE].endpointTemplate)
-      .map((spec) => spec.id)
-      .sort();
-    expect(FANSLY_WIRE_SPECS[MEDIA_STATS_RATE_LIMIT_ROUTE].endpointTemplate).toBe("/it/moie/statsnew");
-    expect(onEndpoint).toEqual([...MEDIA_STATS_RATE_GROUP.routes].sort());
-    const readers = FANSLY_RESOURCE_SPECS
-      .filter((spec) => spec.operations.some((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)))
-      .map((spec) => spec.key)
-      .sort();
-    expect([...MEDIA_STATS_RATE_LIMIT_HELD_KEYS].sort()).toEqual(readers);
-    expect(readers).toEqual(["media-stats.walk"]);
-    // The held keys read nothing else: the hold stops no other endpoint.
-    for (const key of readers) {
-      expect(byKey(key).operations.every((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)), key).toBe(true);
-    }
-    // The groups: the list's (owner decision №14) and the media
-    // statistics' (№20).
-    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file])).toEqual([
-      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations"],
-      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats"],
-    ]);
-    // No two groups share a route or a hold entry.
-    const routes = ENDPOINT_RATE_GROUPS.flatMap((group) => [...group.routes]);
-    expect(new Set(routes).size).toBe(routes.length);
-    expect(new Set(ENDPOINT_RATE_GROUPS.map((group) => group.file)).size).toBe(ENDPOINT_RATE_GROUPS.length);
+      .filter((spec) => spec.endpointTemplate === FANSLY_WIRE_SPECS["media.offer_stats"].endpointTemplate)
+      .map((spec) => spec.id);
+    expect(onEndpoint).toEqual(["media.offer_stats"]);
+    expect(heldOnly("media.offer_stats")).toEqual(["media-stats.walk"]);
+    // Live confirmations: the head read's route held leaves out the keys of that route only.
+    expect(heldOnly("messages.page")).toEqual(onlyReading("messages.page"));
   });
 
   it("I12: a history walk only on a request", () => {

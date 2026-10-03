@@ -69,7 +69,7 @@ first demand and applied answers it — a read admitted earlier may have been se
 a read wrote since the demand is found with no request, before the HTTP gate: a `local` step closes the find
 `found_by_shared_read` and asks the chat's urgent `dm-messages.head` unless one is open (a list or detail apply asks
 it already for every chat a `.find` is open for, never a planned catch-up). A chat such a head read did not show
-goes to its group detail, which creates the thread (D5), as does every chat while a 429 holds the list; with
+goes to its group detail, which creates the thread (D5), as does every chat while a 429 holds the list's route; with
 neither, the find reads the list head itself. A shadow page writes no thread, so its find closes `shared_head_read`
 on the first such read its shadow journal settled, and the shadow report counts the chat read at that read's
 admission.
@@ -125,7 +125,12 @@ take `sync_work` rows before `history_requests` before `history_request_items`; 
 reference (`page_dm_threads`) before any work row, as the DM apply holds the chat it writes before its works, and the
 hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it)
 (`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
-always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
+always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal. Its time
+(step 3b ruling 11) is the reads at the tightest budget a history read draws on — the page's slots, the `/message`
+route (lower after a 429's slowdown) and the messaging family — each shared by the cycle's turns (U 5, R 4, P 1), the
+urgent and planned classes wanting what they sent on it over the last 15 minutes and a class that wants less leaving
+the rest (`requestsCapacity`); no share is raised to a floor. A page or route hold in force is shown beside it (`eta.hold`), not in it; `estimate_at_submit`
+is written once with the request and never again.
 
 Three clients share these service functions and nothing else: the agent plane (`agentHistoryRequestCreate|Get|Cancel|
 List` under `/api/v1/agent/`, `modules/agent-read/handlers-history.ts`, the `hub history-*` commands), the owner routes
@@ -232,7 +237,7 @@ These four keys never run in shadow (`liveOnly`, as the identity check `account.
 - `ws.connect` — the socket's HTTP Upgrade (wire `ws.upgrade`) as an admitted request: the page's socket owner
   (the slot's `FanslyWsSource`, seen by the actor and the transport as a `LivePageSocket`) asks for it at start and
   after every close, the actor admits it through the pacer — never before the owner's reconnect ladder allows
-  (`connectNotBefore`) — and the transport sends it through the owner's handshake with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 holds it `rate_limit`; any
+  (`connectNotBefore`) — and the transport sends it through the owner's handshake with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 (or a 5xx naming its `Retry-After`) holds only the Upgrade's route `ws.upgrade`; any
   other failure closes the work `failed_handshake` for the owner's reconnect ladder — no page network streak.
 - `repair.ws-gap` — after a socket gap: the conversation list from offset 0 down to the earliest gap of the
   unreconciled verified connections (60 s earlier; with none, the work's first demand), pages at the list route's budget,
@@ -244,7 +249,7 @@ These four keys never run in shadow (`liveOnly`, as the identity check `account.
 - `media-download.fetch` — the AI describer's CDN download of a chat file (wire `cdn.media`): the signed URL is
   the work's secret (`sync_work.secret_params`, sealed with the page-credentials box, read only by the live
   transport, dropped at close), one admission per hop, Fansly media CDN hosts only, ≤ 5 MiB; a 401/403 is the
-  signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the page. The bytes cross to
+  signed URL's and closes the download (`subjectScopedAuthStatuses`), a 429 holds the `cdn.media` route. The bytes cross to
   the worker through the transient handoff table `sync_media_handoff` (owner decision №17): not a captured fact,
   consumed by the describer's read, swept after 24 h.
 
@@ -266,7 +271,7 @@ family version — a stamp at the DM family's own version would be replayed by i
 canonicalizes it and an excluded chat gets no events, messages or archive rows from a probe. A served page closes the
 probe `served: true` (messages, newest/oldest time, ids the socket showed first); a 403 (`subjectScopedAuthStatuses`),
 a declared 400/404/410/422, a `success: false` envelope or a refused body is the chat's answer: `served: false`,
-nothing held, no breaker. A 401 and a 429 stay the page's (plan §9).
+nothing held, no breaker. A 401 stays the page's (plan §9); a 429 holds the probe's route.
 
 `sync excluded report --page P [--reason R] [--record]` prints the newest probe's verdicts (served / not served /
 pending) with the evidence ids; `--record` keeps the summary as `admin.sync_dm_exclusion_probe`. `sync excluded lift
@@ -292,19 +297,35 @@ database knows of (I5). A `live` page is acquired only once the switch imported 
 (`legacy_imported_at`); without it the page waits (`legacy_not_imported`, alert after 2 min) and nothing is sent.
 `sync page mode` moves pages only between `off` and `shadow`.
 
-Credentials (step 3): every live API request carries the digest of the stored session and proxy
-(`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine verified
-(`sync_pages.credentials_generation`, written by an applied `account.verify`) only the identity checks go out
-(`account.verify`, `account.identity`) and the actor asks for one verify. An auth/identity hold names the digest that
-failed: stored credentials that change out of band lift it for one verify; otherwise only an `account.identity`
-check of a candidate session/proxy (the owner's credentials or proxy change, sealed in the work's secret) passes it,
-and storing a matching candidate makes its digest the trusted one, which lifts the hold. The socket's Upgrade
-(`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
-hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
-hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
-check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
-it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
-auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
+Credentials (step 3; step 3b ruling 5, A3): every live API request carries the digest of the stored session and
+proxy (`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine trusts
+(`sync_pages.credentials_generation`) only the identity checks go out (`account.verify`, `account.identity`) and the
+actor raises one verify — checks-only is read from the database at every pick, never kept in memory. What a page hold
+is, what it admits and what clears it is ONE pure core, `@agency_hub_core/shared` `fansly-page-holds.ts`, read by the
+actor's gate and pick, the final check inside the admission transaction, the rollback's hand-back (SQL only locks the
+rows and CAS-writes what the core decided), status/why and the alerts. A credentials hold (`auth`,
+`identity_mismatch`) records its LATEST refusal in `hold_detail` (`failedAttemptId`, `failedAt`, the refused digest;
+`hold_since` stays the episode's start) and is in force until the apply of an identity proof — an applied
+`/account/me` of the page's own account — whose request was sent after that refusal; nothing else lifts it, a moved
+trusted digest included. The proof (identity, trusted digest, `identity_checked_at` = its send instant, never
+overwritten by an older one) and the clearing are written in the apply's own transaction, which takes the page row
+FOR NO KEY UPDATE from its start; a failed write leaves the attempt captured/deferred and its stored answer is applied
+again, without a request. Under the hold only an `account.identity` check of a candidate session/proxy (the owner's
+change, sealed in the work's secret, over the stored base its caller read) and — once per digest — the
+`account.verify` of stored credentials other than the refused ones pass: a candidate that matches is stored and
+trusted in one transaction that is a CAS on the exact pair it proved (`saveVerifiedFanslyCredentials`; a changed base
+stores nothing, 409), and the verify of what is stored then lifts the hold; a refusal of that verify makes its digest
+the latest and closes the exception. One verify per digest, under a hold or in checks-only: a verify quarantined for
+credentials no longer stored (its `identity_mismatch`, a contract violation) is closed as `superseded` in the
+transaction that raises the verify of the stored ones (audit `sync.credentials_verify_superseded`); one quarantined
+for the stored digest stays, for the owner's requeue. A candidate proxy comes from the egress resolver
+(`page_candidate` scope). The socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens
+only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
+core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (the switch's import of a legacy
+429 and a legacy auth block), and a candidate check's network failure under it is carried beside it (its 429 holds only its route) — the
+credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried
+hold ends; the proof lifts only the credentials hold. The egress follows the digest (a changed proxy is resolved
+again before the next request).
 
 ## Legacy fences (step 3)
 
@@ -342,18 +363,33 @@ fence), head-debt catch-ups —, one urgent head read per chat with an unconfirm
 auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a
 new owner generation within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are
 open, the page's hydration requests become history requests (`switch_migration`). A or B timing out reverts to
-`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync
-switch check --page P --since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor
-refusals, nothing stuck, the SLOs, volume, restarts, open incidents).
+`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page.
+
+`pnpm cli sync switch check --page P [--page Q …] --since <iso>` is the live-hour acceptance of the pages switched
+together (step 3b ruling 13, A6): each page over [T_i, T* + 1 h), T_i = the later of `--since` and its live instant, T*
+= the last one. The rules (`switch/acceptance-rules.ts`): pace over both journals, the handover boundary, every send
+within its route's and family's budget (⌈W/T⌉ + 1 per 60 s and 300 s, halved after a 429 of the page+route), per
+(page, canonical route) at most one 429 with its hold kept and its recovery seen, no 401/403 and no page hold (from
+the journal, the page row, or an alert 1 `page_stopped` episode seen in the window, resolved ones included — a 429 that
+held the whole page shows there after its hold is cleared), the first media request ≤ 60 s after live, nothing stuck,
+the SLOs over the whole window (route holds and the unfinished tail included; fewer than 10 samples: count and max), no
+open incident but a route's own (D5 `route_limited:<route>`, told by its key whatever its code). A page is `fail`,
+`inconclusive` (the window still open, a 429's recovery unproven, a small sample), `owner_review` (429s on two or more
+routes), `accepted_with_route_429` or `pass`; exit 0 every page accepted, 1 a page failed, 2 otherwise.
+`switch/step3-accept.sql` is the same acceptance in psql for the runbook (its route table and numbers pinned to the
+code by tests/sync-switch-acceptance-sql.test.ts, both run on the shared fixtures of
+tests/sync-switch-acceptance.integration.test.ts).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
-engine with its floor past the engine's last send and the end of an engine 429/list/network hold (also one an auth
-hold carries), live work
+engine with its floor past the engine's last send and the end of a real page hold (a legacy 429 hold the switch
+imported, a network hold; also one an auth hold carries) — never a route hold's: the page's route holds are waited
+out first (A4; exit 6 when one outlasts 6.5 min), live work
 cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
 state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
-auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
-live, where the owner's credentials renewal runs its identity check under the hold and lifts it; a hold that came in
+auth/identity hold in force by the page-hold core (whatever digest the engine trusts) refuses (exit 5) unless
+`--with-auth-hold`: on a live page before anything moves — the page stays live, where the owner's credentials renewal
+runs its identity check and then the verify of the new stored credentials under the hold, whose proof lifts it; a hold that came in
 while the actor stopped puts a page the rollback took from live back to live; a page in `handover` before the
 rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
 (J5). Runbook: step-3 design §6.
@@ -383,6 +419,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
+| I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
@@ -413,23 +450,22 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `running` | admitted; its request or apply is in progress | the step's completion |
 | `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, mode `off`/`handover`, or the previous owner's stop is not confirmed | the host acquiring the page (safe release, OS proof, container restart, `sync ownership confirm-stopped`) |
 | `paused` | the owner paused the page, its requests, or this resource | the owner |
-| `page_hold` | 429 (until `Retry-After`, else 2 → 4 → 8 → 30 min), 401/403 or identity mismatch (until new credentials), network (after 3 failures: 10 s → 5 min) | the hold's end; new credentials |
+| `page_hold` | a legacy 429 hold the switch imported (until its end), 401/403 or identity mismatch (until an identity proof sent after the latest refusal), network (after 3 failures: 10 s → 5 min) | the hold's end; the verify of renewed credentials |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
-| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`); or the conversation list answered 429: only the keys that can only read the list wait, 5 s → 10 s → … → 300 s | the hold's end |
+| `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`) | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
-| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`; a request its planned route put off is due when that route opens) | the pause; the route's opening |
+| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`, and `detail.held` for the routes a 429 holds; a request its planned route put off is due when that route opens) | the pause; the route's opening |
 | `class_share` | runnable; the slot belongs to another class or to earlier work of its class | its turn |
 
 ## Errors
 
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
-transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
-except a 429 on an endpoint group with a quota of its own (`ENDPOINT_RATE_GROUPS`): the conversation list (owner
-decision №14) and the media statistics (owner decision №20), which holds only that group's keys. How often a route
-is read is its budget's (below), never a group's.
+transactions only write what it decided. The engine never changes `S`: a 429 holds ONLY the route that answered
+it — never the page, a resource file or the route's family — slows that route down and opens the route's own
+incident (route holds, below). How often a route is read is its budget's (below).
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -437,11 +473,10 @@ A retry after an error is always a new attempt through the same admission.
 | 2xx, success envelope, contract accepts | `ok` | streak reset, subject breaker reset, expired holds cleared |
 | 2xx, contract refuses (or the cursor stuck) | `contract` / `cursor_stuck` | quarantine the work and the attempt, alert 2 |
 | 2xx without a success envelope | `envelope_unsuccessful` | as `subject_failure` |
-| 429 on the conversation list (`messaging.groups`) | `rate_limit_list` | the list only (`resource_holds['dm-conversations']`): until `Retry-After`, else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s by consecutive list 429s, reset after 10 min without one; `.find` goes straight to `group.detail`; alert 1 only at the 300 s step |
-| 429 on the media statistics (`media.offer_stats`) | `rate_limit_media_stats` | `media-stats.walk` only (`resource_holds['media-stats']`): the list's rule and ladder — until `Retry-After`, else 5 s → … → 300 s, reset after 10 min without one; alert 1 only at the 300 s step |
-| any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
+| 429 (any route: REST, probe, CDN, the socket's Upgrade) | `rate_limit` | a hold of that route only: until `Retry-After` (never shortened), else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s + 0–20 % jitter; the page+route's rate halved (≥ ⅛ ceiling) until a raise; the route's incident (`route_limited:<route>`); while the list's route is held `.find` goes straight to `group.detail` |
+| a 5xx naming its own `Retry-After` | `rate_limit` | a hold of that route until `Retry-After`, no slowdown, no ladder step; the route's incident |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
-| 401 / 403 | `auth` | page hold until new credentials, alert 1 |
+| 401 / 403 | `auth` | page hold until an identity proof sent after this refusal (recorded as the latest), alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
@@ -451,7 +486,7 @@ An apply that fails (`engine/commit.ts`, `classifyApplyError`) never stops the a
 journal body unreadable) and a transient database error retry without counting; an unexpected error is counted and
 quarantined at the third try; a deterministic one (SQLSTATE class 22/23, contract) is quarantined at once, alert 2.
 Two deterministic errors stop more than their work: an identity error (`PlatformAccountIdentity*Error`) goes through
-`onOutcome` as `identity_mismatch` (page hold until new credentials, alerts 1 and 2), and a wrong transactions writer
+`onOutcome` as `identity_mismatch` (page hold until an identity proof after it, alerts 1 and 2), and a wrong transactions writer
 holds the resource file (30 min → 2 h → 6 h).
 
 ## Route budgets (step 3b)
@@ -485,15 +520,36 @@ the pause S every route of a page has a strict budget of its own (owner decision
   only make a route slower: the effective rate is the lower of `current` and the stored one, a stored hold closes
   its route to its end. A namespace this build cannot read closes the page's admission (`page_hold` with
   `detail.routeState` in "why", alert 1 `route_state_unreadable`, metric `sync_route_state_unreadable`).
+- **Route holds** (`engine/route-holds.ts`, owner decisions №22, D3, plan PR 1-2): a 429 holds only the route that
+  answered it — a valid `Retry-After` (delta-seconds, or an HTTP-date measured against the answer's own `Date` too)
+  to the letter and never shortened, else owner decision №14's ladder 5 → 10 → 20 → 40 → 80 → 160 → 300 s plus
+  0–20 % jitter (the ladder climbs by the 429s of one slowdown). Each 429 halves the page+route's effective rate,
+  never below ⅛ of the route's ceiling, durably: a restart, new demand, new credentials or a success never lift it.
+  A 5xx naming its `Retry-After` holds its route the same way, without a slowdown. The state is written only by
+  `writeSyncRouteState`, a compare-and-set on the entry's revision.
+- **Raise** (A2): the only way up is one step of at most +1/min, never above the route's `current` — the owner's
+  audited `pnpm cli sync route raise --page P --route R --to <rate> --revision <n> --evidence <report>` (a
+  compare-and-set on the revision the evidence was read at, so a 429 after it refuses the stale step; a hold in
+  force stays; reaching `current` ends the slowdown), or a calibration PR moving `current` for every page. The
+  evidence is `budgets-calibration.sql` (next to this file; read-only): per live page and route/family the hours on
+  the step, 429s of the route and its family, saturated 2-hour stretches, `low_exposure`, and the step's command.
+- **Incident** (D5, owner decision №23): one latch per page+route (`route_limited:<route>`), opened by the capture on
+  the route's first 429, refreshed — never repeated — by the next ones and by the evaluator while the route is held,
+  resolved 10 clean minutes after; urgent work behind a route hold is no alert 3.
+- **Rollback** (A4, D6): the hand-back waits for the page's route holds to end (≤ 6.5 min; a longer `Retry-After`
+  exits 6, run it again), while the engine keeps serving the page's other routes; the shared send-guard floor carries
+  only the sender boundary, the real page holds and 1.2 × S. After the hand-back the legacy engine runs its own
+  semantics (S, its page hold on a 429); the engine's route slowdowns are not carried over.
 - **Status and why** (owner CLI): `sync page status` lists each route the page used recently and each family —
-  ceiling, current, effective rate, interval, newest send, hold, when it opens — with the policy hash; `sync why`
-  names the closed routes of a key waiting on `pacer`.
+  ceiling, current, effective rate, interval, newest send, hold, ladder step, newest 429, revision, when it opens —
+  with the policy hash; `sync why` names the closed routes of a key waiting on `pacer` and those a 429 holds.
 
 ## Alerts, metrics and the shadow report
 
 Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch per page and alert (`page_stopped`,
 `live_degraded`, `freshness`, `stuck`) plus the global `process`. The actor opens alert 1 at once from its capture
-transaction (a 429, a refused credential, another identity, a pace violation); `engine/alerts.ts` re-derives every
+transaction (a refused credential, another identity, a pace violation; a 429 opens its route's own latch,
+`route_limited:<route>`); `engine/alerts.ts` re-derives every
 condition from the database every 30 s and is the only path that resolves one, so a latch never flips on a partial
 view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes since the latch last saw it (alert 4 as
 soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own

@@ -147,7 +147,16 @@ function requestView(overrides: Partial<HistoryRequestView> = {}): HistoryReques
     cancelledAt: null,
     counts: { total: 3, ready: 1, queued: 1, loading: 0, blocked: 0, refused: 1, cancelled: 0 },
     reads: { done: 4, remainingMin: 2, remainingEstimate: null },
-    eta: { lowerBoundSeconds: 5, estimateSeconds: null, basis: "estimate", ratePerHour: 1309.1, sharePercent: 80 },
+    eta: {
+      lowerBoundSeconds: 5,
+      estimateSeconds: null,
+      basis: "estimate",
+      ratePerHour: 792,
+      sharePercent: 71,
+      limitedBy: "family",
+      slowdown: null,
+      hold: null,
+    },
     queuePosition: 1,
     waitingReason: "ownership_unconfirmed",
     waitingUntil: null,
@@ -192,6 +201,27 @@ describe("history requests: views on the wire", () => {
       requesterKind: "legacy_hydration_wrapper",
     }));
     expect(agentHistoryRequestSchema.safeParse(boundary).success).toBe(true);
+  });
+
+  it("the ETA carries its limiting budget, a route's slowdown and a hold in force apart (step 3b ruling 11)", () => {
+    const eta = requestView().eta;
+    const slowed = toHistoryRequestWire(requestView({
+      eta: {
+        ...eta,
+        limitedBy: "route",
+        slowdown: { route: "messages.page", effectivePerMin: 7.5, currentPerMin: 15 },
+        hold: { scope: "route", until: NOW },
+      },
+      waitingReason: "pacer",
+      waitingUntil: NOW,
+    }));
+    expect(agentHistoryRequestSchema.safeParse(slowed).success).toBe(true);
+    expect(slowed.eta).toMatchObject({ limitedBy: "route", slowdown: { effectivePerMin: 7.5 }, hold: { scope: "route" } });
+    // An auth hold has no end: `until` null.
+    const auth = toHistoryRequestWire(requestView({ eta: { ...eta, hold: { scope: "page", until: null } } }));
+    expect(agentHistoryRequestSchema.safeParse(auth).success).toBe(true);
+    expect(agentHistoryRequestSchema.safeParse({ ...slowed, eta: { ...slowed.eta, limitedBy: "pause" } }).success).toBe(false);
+    expect(agentHistoryRequestSchema.safeParse({ ...slowed, eta: { ...slowed.eta, hold: { scope: "family", until: NOW } } }).success).toBe(false);
   });
 
   it("an item goes out in the vocabulary a caller files it in", () => {

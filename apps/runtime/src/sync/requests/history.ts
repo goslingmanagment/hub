@@ -1,14 +1,12 @@
 import {
   closeWorkRows,
   countHistoryItems,
-  countSendsSince,
   endHistoryItems,
   findHistoryRequestByIdempotency,
   findHistoryThreadCandidates,
   getHistoryRequestByRef,
   getSyncPage,
   getSyncWorkRows,
-  hasRunnableWork,
   HISTORY_ITEM_OPEN_STATES,
   HISTORY_REQUEST_MAX_ITEMS,
   HISTORY_REQUEST_MAX_LATEST,
@@ -30,6 +28,8 @@ import {
   openWorkIdsForSubjects,
   readHistoryThreadFacts,
   readOpenVerifiedWsConnection,
+  readRouteJournal,
+  readRouteUse,
   refreshHistoryRequestCompletion,
   setHistoryItemAnchors,
   upsertDemands,
@@ -51,28 +51,41 @@ import {
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import { getFanslyDmMessageSyncExcludedReason, type AppConfig } from "@agency_hub_core/shared";
+import { activeFanslyPageHold, getFanslyDmMessageSyncExcludedReason, isIndefinite, type AppConfig } from "@agency_hub_core/shared";
 
 import { recordAudit } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { activePageHold, type ResourceHoldEntry } from "../engine/errors.ts";
+import { type ResourceHoldEntry } from "../engine/errors.ts";
+import {
+  EMPTY_ROUTE_STATE,
+  parseRouteState,
+  routeAdmissionView,
+  routeJournalLookbackMs,
+  RouteClocks,
+} from "../engine/route-policy.ts";
 import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
+  type RouteAdmissionView,
   type StatusPage,
   type StatusWork,
   type WaitingReason,
 } from "../engine/status.ts";
+import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import { parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
 import {
+  budgetUseOf,
   estimateItemReads,
   estimateRequest,
-  ETA_SHARE_WINDOW_MS,
+  ETA_USE_WINDOW_MS,
+  HISTORY_READ_ROUTE,
   itemEtaFacts,
-  requestsClassShare,
+  requestsCapacity,
+  type EtaLimit,
   type ItemReadsEstimate,
   type RequestEta,
+  type RequestsCapacity,
 } from "./eta.ts";
 import {
   anchorAtIntake,
@@ -212,6 +225,29 @@ export interface HistoryItemView {
   estimate: { readsMin: number; readsEstimate: number | null };
 }
 
+/** A request's ETA (plan §4.3, step 3b ruling 11): the time its reads take
+ *  at the rate its page's budgets leave it, with what stops or slows them
+ *  shown apart. */
+export interface HistoryEtaView {
+  /** The reads it needs at least ("не меньше"), at `ratePerHour`. */
+  lowerBoundSeconds: number;
+  estimateSeconds: number | null;
+  basis: "estimate";
+  /** Reads an hour this request gets while it is not held. */
+  ratePerHour: number;
+  /** The requests class's share of the page's slots, in percent. */
+  sharePercent: number;
+  /** The budget that sets the rate: the page's slots, the `/message` route
+   *  or its family (messaging). */
+  limitedBy: EtaLimit;
+  /** The route runs below its budget on this page after a 429 (it rises
+   *  only by a deliberate step); null: at its budget. In the rate. */
+  slowdown: EtaSlowdown | null;
+  /** A hold in force: no read until it ends (until null: no instant ends
+   *  it). Not in the seconds above. */
+  hold: { scope: "page" | "route"; until: string | null } | null;
+}
+
 export interface HistoryRequestView {
   ref: string;
   pageId: number;
@@ -224,7 +260,7 @@ export interface HistoryRequestView {
   cancelledAt: string | null;
   counts: { total: number; ready: number; queued: number; loading: number; blocked: number; refused: number; cancelled: number };
   reads: { done: number; remainingMin: number; remainingEstimate: number | null };
-  eta: { lowerBoundSeconds: number; estimateSeconds: number | null; basis: "estimate"; ratePerHour: number; sharePercent: number };
+  eta: HistoryEtaView;
   /** 1-based position in the page's round robin of open requests. */
   queuePosition: number | null;
   waitingReason: WaitingReason | null;
@@ -348,26 +384,82 @@ function fanOf(input: NormalizedHistoryInput, thread: HistoryThreadFacts | null)
 
 // ── ETA context of a page ─────────────────────────────────────────────────────
 
+/** The history read route's rate on the page after its 429s, when lower
+ *  than the budget table's (a slowdown, step 3b ruling 2). */
+interface EtaSlowdown {
+  route: string;
+  effectivePerMin: number;
+  currentPerMin: number;
+}
+
 interface PageEtaContext {
   page: SyncPageRow | null;
   settingMs: number;
-  share: number;
+  /** The requests class's reads a minute between holds. */
+  capacity: RequestsCapacity;
+  slowdown: EtaSlowdown | null;
+  /** The history read route's own hold in force (a 429's), when it ends. */
+  routeHoldUntil: Date | null;
+  /** The page's route state is one this build cannot read: it admits
+   *  nothing (the diagnostic); null: it reads. */
+  routeStateError: string | null;
+  /** The route admission, for each fan's "why waiting". */
+  routes: RouteAdmissionView;
   /** The page's open requests in round-robin order. */
   openRequests: Array<{ id: number; ref: string; runnable: boolean }>;
 }
 
+/**
+ * What a request's ETA reads of its page (step 3b ruling 11): S, the history
+ * read route's budgets as the page's route state leaves them (`/message` and
+ * its family), what the other classes sent of them over the last 15 minutes,
+ * and the route's hold. Requests run on the live journal; the legacy send log
+ * counts on the route clocks as the live actor counts it.
+ */
 async function pageEtaContext(ctx: HistoryServiceContext, pageId: number): Promise<PageEtaContext> {
   const page = await getSyncPage(ctx.db, pageId);
   const settingMs = (await loadEffectiveConfig(ctx.db, ctx.rawConfig)).fanslyDefaultDelayMs;
   const now = page?.dbNow ?? new Date();
-  const sends = await countSendsSince(ctx.db, { pageId, since: new Date(now.getTime() - ETA_SHARE_WINDOW_MS), shadow: false });
-  const otherClassesRunnable = await hasRunnableWork(ctx.db, { pageId, shadow: false, classes: ["urgent", "planned"] });
+  const read = parseRouteState(page?.routeState ?? null);
+  const state = read.ok ? read.state : EMPTY_ROUTE_STATE;
+  const sends = page === null
+    ? []
+    : await readRouteJournal(ctx.db, { pageId, shadow: false, withinMs: routeJournalLookbackMs(state), legacy: true });
+  const clocks = new RouteClocks({ sends, state });
+  const route = clocks.view(HISTORY_READ_ROUTE);
+  const family = route.family === null ? null : clocks.familyView(route.family);
+  const use = budgetUseOf(await readRouteUse(ctx.db, { pageId, shadow: false, withinMs: ETA_USE_WINDOW_MS }), ETA_USE_WINDOW_MS);
+  const stateError = read.ok ? null : read.diagnostic;
   return {
     page,
     settingMs,
-    share: requestsClassShare({ sends, otherClassesRunnable }),
+    capacity: requestsCapacity({
+      settingMs,
+      routePerMin: route.effectivePerMin,
+      familyPerMin: family === null ? null : family.currentPerMin,
+      use,
+    }),
+    slowdown: route.effectivePerMin < route.currentPerMin
+      ? { route: route.route, effectivePerMin: route.effectivePerMin, currentPerMin: route.currentPerMin }
+      : null,
+    routeHoldUntil: route.holdUntil !== null && route.holdUntil.getTime() > now.getTime() ? route.holdUntil : null,
+    routeStateError: stateError,
+    routes: routeAdmissionView(read.ok ? clocks : null, stateError, FANSLY_RESOURCE_SPECS, now),
     openRequests: await listOpenRequestsForPage(ctx.db, { pageId }),
   };
+}
+
+/** A known stop of a request's reads, shown beside its estimate (never in
+ *  it): the page's hold, a route state this build cannot read (the page
+ *  admits nothing), or the history read route's own hold. Until null: no
+ *  known instant ends it (an auth or identity hold only new credentials
+ *  lift; an unreadable route state, the operator). */
+function etaHold(eta: PageEtaContext, now: Date): { scope: "page" | "route"; until: Date | null } | null {
+  const held = eta.page === null ? null : activeFanslyPageHold(statusPageOf(eta.page), now);
+  if (held !== null) return { scope: "page", until: isIndefinite(held.until) ? null : held.until };
+  if (eta.routeStateError !== null) return { scope: "page", until: null };
+  if (eta.routeHoldUntil !== null) return { scope: "route", until: eta.routeHoldUntil };
+  return null;
 }
 
 function runnableRequestCount(eta: PageEtaContext, extra: number): number {
@@ -547,10 +639,13 @@ export async function submitHistoryRequest(
   const requestEta = estimateRequest({
     items: estimates,
     unanchoredItems: unanchored,
-    settingMs: eta.settingMs,
-    share: eta.share,
+    capacity: eta.capacity,
     k: runnableRequestCount(eta, estimates.length > 0 ? 1 : 0),
   });
+  // Written once, with the request, and never again: the forecast a backtest
+  // holds the fact against (ruling 11). A hold in force is beside it, not in
+  // it.
+  const hold = etaHold(eta, eta.page?.dbNow ?? new Date());
   const estimateAtSubmit = {
     readsMin: requestEta.remainingMin,
     readsEstimate: requestEta.remainingEstimate,
@@ -558,6 +653,11 @@ export async function submitHistoryRequest(
     etaEstimateMs: requestEta.etaEstimateMs,
     sharePercent: Math.round(requestEta.share * 100),
     settingMs: eta.settingMs,
+    ratePerHour: requestEta.ratePerHour,
+    limitedBy: requestEta.limitedBy,
+    k: requestEta.k,
+    slowdown: eta.slowdown,
+    hold: hold === null ? null : { scope: hold.scope, until: iso(hold.until) },
   };
 
   let created: HistoryRequestRow;
@@ -881,8 +981,10 @@ export async function cancelHistoryRequest(
 
 // ── views (design §7.1.8: computed on read, nothing duplicated) ──────────────
 
+/** An instant of a view; an indefinite one (an auth or identity hold only
+ *  new credentials lift) has none: null. */
 function iso(date: Date | null | undefined): string | null {
-  return date === null || date === undefined ? null : date.toISOString();
+  return date === null || date === undefined || isIndefinite(date) ? null : date.toISOString();
 }
 
 function statusPageOf(page: SyncPageRow): StatusPage {
@@ -893,8 +995,8 @@ function statusPageOf(page: SyncPageRow): StatusPage {
     pausedResources: page.pausedResources,
     holdKind: page.holdKind,
     holdUntil: page.holdUntil,
+    holdSince: page.holdSince,
     holdDetail: page.holdDetail,
-    credentialsGeneration: page.credentialsGeneration,
     resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
     owner: page.owner,
   };
@@ -916,17 +1018,22 @@ function statusWorkOf(work: SyncWorkRow): StatusWork {
 }
 
 /** What a request waits for as a whole: the page (an owner pause, no running
- *  live owner, a page hold), else nothing. The pause is named first (G19):
- *  after a rollback the page is `off` with its requests paused, and its open
- *  requests read `paused` (plan §15), not `ownership_unconfirmed`. */
-function requestWaiting(page: SyncPageRow | null, now: Date): { reason: WaitingReason; until: Date | null } | null {
+ *  live owner, a page hold, a route state this build cannot read), or the
+ *  hold of the route every history read takes, else nothing. The pause is
+ *  named first (G19): after a rollback the page is `off` with its requests
+ *  paused, and its open requests read `paused` (plan §15), not
+ *  `ownership_unconfirmed`. */
+function requestWaiting(eta: PageEtaContext, now: Date): { reason: WaitingReason; until: Date | null } | null {
+  const page = eta.page;
   if (page === null) return { reason: "ownership_unconfirmed", until: null };
   if (page.pausedAll || page.pausedRequests) return { reason: "paused", until: null };
   const status = statusPageOf(page);
   if (page.mode !== "live" || !ownerRunning(status, now)) return { reason: "ownership_unconfirmed", until: null };
-  const hold = activePageHold(status, now);
-  if (hold !== null) return { reason: "page_hold", until: hold.until };
-  return null;
+  const hold = etaHold(eta, now);
+  if (hold === null) return null;
+  // A route's hold is its budget's business (`pacer`, as "why waiting" names
+  // a route its hold or budget keeps closed).
+  return { reason: hold.scope === "page" ? "page_hold" : "pacer", until: hold.until };
 }
 
 const OPEN_ITEM_STATES: ReadonlySet<string> = new Set(HISTORY_ITEM_OPEN_STATES);
@@ -959,20 +1066,23 @@ function itemView(item: HistoryItemRow, depth: HistoryDepth, inputs: ViewInputs,
   const work = item.workId === null ? undefined : inputs.works.get(item.workId);
   const state = effectiveItemState(item, work);
   const open = OPEN_ITEM_STATES.has(state);
-  const page = inputs.pages.get(item.pageId)?.page ?? null;
+  const eta = inputs.pages.get(item.pageId);
+  const page = eta?.page ?? null;
   // A paused page or requests class is named before the owner (G19), as for
   // the request as a whole.
   const paused = open && work !== undefined && page !== null && work.state !== "running"
     && (page.pausedAll || (work.class === "requests" && page.pausedRequests));
   const waiting = paused
     ? { reason: "paused" as const, until: null }
-    : open && work !== undefined && page !== null
+    : open && work !== undefined && eta !== undefined && page !== null
     ? explainWork(statusWorkOf(work), statusPageOf(page), {
       slotOpensAt: estimateSlotOpensAt({
         lastSendAt: page.lastSendAt,
         lastCompletedAt: page.lastCompletedAt,
-        settingMs: inputs.pages.get(item.pageId)?.settingMs ?? 2_000,
+        settingMs: eta.settingMs,
       }),
+      // The fan's chat waits on its route's budget or hold like any work.
+      routes: eta.routes,
     }, now)
     : null;
   const frozen = !open && item.final !== null;
@@ -1072,12 +1182,12 @@ export async function historyRequestViews(
     const requestEta: RequestEta = estimateRequest({
       items: estimates,
       unanchoredItems: unanchored,
-      settingMs: eta.settingMs,
-      share: eta.share,
+      capacity: eta.capacity,
       k: runnableRequestCount(eta, 0),
     });
     const position = eta.openRequests.findIndex((entry) => entry.id === request.id);
-    const waiting = request.state === "open" && runnable ? requestWaiting(eta.page, now) : null;
+    const waiting = request.state === "open" && runnable ? requestWaiting(eta, now) : null;
+    const hold = request.state === "open" ? etaHold(eta, now) : null;
     return {
       ref: request.ref,
       pageId: request.pageId,
@@ -1100,6 +1210,9 @@ export async function historyRequestViews(
         basis: "estimate",
         ratePerHour: requestEta.ratePerHour,
         sharePercent: Math.round(requestEta.share * 100),
+        limitedBy: requestEta.limitedBy,
+        slowdown: request.state === "open" ? eta.slowdown : null,
+        hold: hold === null ? null : { scope: hold.scope, until: iso(hold.until) },
       },
       queuePosition: request.state === "open" && position !== -1 ? position + 1 : null,
       waitingReason: waiting?.reason ?? null,

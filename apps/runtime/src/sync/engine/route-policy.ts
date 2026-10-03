@@ -50,8 +50,9 @@ import type { RouteAdmissionView, RouteBudgetStatusView, RouteStatusView } from 
 /** The route-state namespace version this build writes and reads. */
 export const ROUTE_STATE_VERSION = 1;
 
-/** One route of a page, as its 429s left it (written by the route-hold code;
- *  every field is part of the stored shape). */
+/** One route of a page, as its 429s left it (written by `route-holds.ts`
+ *  through `writeSyncRouteState` only; every field is part of the stored
+ *  shape). */
 export interface RouteStateEntry {
   /** No send on the route before this instant (ISO): a 429's hold, a
    *  `Retry-After` honoured to the letter. Null: none. */
@@ -373,8 +374,12 @@ export function routeAdmissionView(
       const operations = byKey.get(resource);
       const at = clocks.keyNotBefore(operations);
       if (at === null || at.getTime() <= now.getTime()) return null;
-      const closed = (operations ?? []).map(routeOfWireId).filter((route) => !clocks.admits(route, now));
-      return { at, routes: [...new Set(closed)].sort() };
+      const closed = [...new Set((operations ?? []).map(routeOfWireId).filter((route) => !clocks.admits(route, now)))].sort();
+      const held = closed.filter((route) => {
+        const holdUntil = clocks.state.routes[route]?.holdUntil ?? null;
+        return holdUntil !== null && Date.parse(holdUntil) > now.getTime();
+      });
+      return { at, routes: closed, held };
     },
   };
 }
@@ -387,6 +392,7 @@ export function routeStatusView(clocks: RouteClocks | null, stateError: string |
   if (clocks !== null) {
     for (const route of clocks.activeRoutes()) {
       const view = clocks.view(route);
+      const entry = clocks.state.routes[route] ?? null;
       routes.push({
         name: route,
         family: view.family,
@@ -396,6 +402,9 @@ export function routeStatusView(clocks: RouteClocks | null, stateError: string |
         intervalMs: view.intervalMs,
         lastSendAt: view.lastSendAt?.toISOString() ?? null,
         holdUntil: view.holdUntil?.toISOString() ?? null,
+        ladderStep: entry?.ladderStep ?? null,
+        last429At: entry?.last429At ?? null,
+        revision: entry?.revision ?? null,
         opensAt: opensAt(view.notBefore),
       });
     }
@@ -410,6 +419,9 @@ export function routeStatusView(clocks: RouteClocks | null, stateError: string |
         intervalMs: view.intervalMs,
         lastSendAt: view.lastSendAt?.toISOString() ?? null,
         holdUntil: null,
+        ladderStep: null,
+        last429At: null,
+        revision: null,
         opensAt: opensAt(view.notBefore),
       });
     }

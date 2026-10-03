@@ -10,7 +10,7 @@ import { createSyncContext, type SyncContext } from "../context.ts";
 import { LIVE_LOOP_ENABLED } from "../engine/host.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
-import { checkSwitchAcceptance } from "../switch/acceptance.ts";
+import { acceptanceExitCode, checkSwitchAcceptance } from "../switch/acceptance.ts";
 import { SWITCH_TIMING, type SwitchContext, type SwitchTiming } from "../switch/context.ts";
 import { runSyncRollback } from "../switch/rollback.ts";
 import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
@@ -18,7 +18,7 @@ import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
 // The step-3 switch CLIs (design step 3 §3.5 item 8, runbook §6):
 //   pnpm cli sync switch --page P --shadow-report <path> [--dry-run]
 //   pnpm cli sync switch --page P --open-requests
-//   pnpm cli sync switch check --page P --since <iso> [--until <iso>] [--out <path>]
+//   pnpm cli sync switch check --page P [--page Q …] --since <iso> [--until <iso>] [--out <path>]
 //   pnpm cli sync rollback --page P [--with-auth-hold]
 // THE only place the switch capability is issued (I17, pinned by
 // tests/sync-engine-repositories.test.ts): `handover` and `live` are
@@ -27,7 +27,10 @@ import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
 // Exit codes: 0 done; 2 the switch reverted to shadow (A or B timed out);
 // 3 the rollback (or a revert) waits for a stop confirmation; 4 C timed out
 // (the page is live with the guard handed and no owner); 5 the rollback
-// refused under an auth hold; 1 refused or failed.
+// refused under an auth hold; 6 the rollback waits for the page's route holds
+// to end; 1 refused or failed. `switch check`: 0 every page accepted, 1 a page
+// failed, 2 otherwise (inconclusive, or 429s on two routes of a page for the
+// owner's review).
 
 export interface SyncSwitchCliDeps {
   openContext(): Promise<Pick<SyncContext, "db" | "rawConfig" | "logger" | "close">>;
@@ -72,6 +75,11 @@ function isoDate(value: string): Date {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`expected an ISO date, got "${value}"`);
   return parsed;
+}
+
+/** `--page a --page b,c` → [a, b, c]. */
+function collectLabels(value: string, previous: string[]): string[] {
+  return [...previous, ...value.split(",").map((label) => label.trim()).filter((label) => label !== "")];
 }
 
 function json(value: unknown): string {
@@ -141,19 +149,24 @@ export function registerSyncSwitchCommands(
 
   switchCommand
     .command("check")
-    .description("the acceptance checks of a switched page (runbook §6.3) as JSON, read-only")
-    .requiredOption("--page <label>", "the Fansly page")
-    .requiredOption("--since <iso>", "T0: the instant the page became live", isoDate)
-    .option("--until <iso>", "the window's end (default: now)", isoDate)
+    .description(
+      "the live-hour acceptance of switched pages (step 3b ruling 13, A6; the same rules as step3-accept.sql) as JSON, "
+      + "read-only; each page over [T_i, T* + 1 h) (exit 0 accepted, 1 a page failed, 2 inconclusive or the owner's review)",
+    )
+    .option("--page <labels>", "a Fansly page; repeat it (or separate by commas) for pages switched together", collectLabels, [])
+    .requiredOption("--since <iso>", "no window starts earlier: T_i = the later of this and the page's live instant", isoDate)
+    .option("--until <iso>", "the window's end (default: the last page's live instant + 1 h)", isoDate)
     .option("--out <path>", "also write the JSON to this file")
-    .action(async (options: { page: string; since: Date; until?: Date; out?: string }) => {
+    .action(async (options: { page: string[]; since: Date; until?: Date; out?: string }) => {
+      if (options.page.length === 0) throw new Error("sync switch check needs --page <label>");
       await withSwitchContext(resolved, async (ctx) => {
-        const page = await findSyncPageByLabel(ctx.db, options.page);
-        const report = await checkSwitchAcceptance(ctx.db, { pageId: page.pageId, since: options.since, until: options.until ?? null });
+        const pageIds: number[] = [];
+        for (const label of options.page) pageIds.push((await findSyncPageByLabel(ctx.db, label)).pageId);
+        const report = await checkSwitchAcceptance(ctx.db, { pageIds, since: options.since, until: options.until ?? null });
         const text = json(report);
         resolved.print(text);
         if (options.out !== undefined) await resolved.writeFile(options.out, `${text}\n`);
-        resolved.setExitCode(report.accepted ? 0 : 1);
+        resolved.setExitCode(acceptanceExitCode(report));
       });
     });
 
@@ -161,7 +174,7 @@ export function registerSyncSwitchCommands(
     .command("rollback")
     .description(
       "step 3: give a live (or switching) page back to the legacy engine (resumable; "
-      + "exit 3 waits for a stop confirmation, 5 refused under an auth hold)",
+      + "exit 3 waits for a stop confirmation, 5 refused under an auth hold, 6 waits for the page's route holds to end)",
     )
     .requiredOption("--page <label>", "the Fansly page")
     .option("--with-auth-hold", "roll back although an auth/identity hold is in force (the owner's word)", false)

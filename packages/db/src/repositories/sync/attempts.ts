@@ -940,36 +940,6 @@ export async function readRouteJournal(
 }
 
 /**
- * The newest 429 of a page before this outcome (the [A8] ladder decay), among
- * the attempts admitted within the last `withinMs`; null when there is none.
- * The bound keeps it a short range scan of `sync_attempts_page_admitted` (it
- * runs inside the capture transaction under the page row lock): the caller
- * passes its decay window plus the longest admission → completion span, so a
- * 429 outside the bound is one the ladder has already forgotten. The bound is
- * by `statement_timestamp()`: a volatile `clock_timestamp()` cannot bound an
- * index scan.
- */
-export async function lastRateLimitAt(
-  db: Database,
-  input: { pageId: number; withinMs: number; excludeAttemptId?: number | null },
-): Promise<Date | null> {
-  const result = await db.execute<{ at: Date | string | null }>(sql`
-    select max(coalesce(a.completed_at, a.admitted_at)) as at
-      from sync_attempts a
-     where a.page_id = ${input.pageId}
-       and a.admitted_at > statement_timestamp() - ${Math.max(0, input.withinMs)}::double precision * interval '1 millisecond'
-       and not a.shadow
-       and a.http_status = 429
-       -- A 429 of an endpoint group with a quota of its own (the conversation
-       -- list, the media statistics) holds only that group (its own ladder):
-       -- it never keeps the page's ladder up.
-       and (a.error_class is null or a.error_class not in ('rate_limit_list', 'rate_limit_media_stats'))
-       and a.id is distinct from ${input.excludeAttemptId ?? null}::bigint
-  `);
-  return toDate(result.rows[0]?.at);
-}
-
-/**
  * Distinct subjects of one resource file whose request failed as a subject
  * failure within the last `windowMs` (the §9 resource breaker counts them).
  * Keys a resource hold never stops are left out. Bounded by the stable
@@ -1021,6 +991,43 @@ export async function countSendsSince(
     counts.byResource[row.resource] = (counts.byResource[row.resource] ?? 0) + sends;
   }
   return counts;
+}
+
+/** What one class of a page sent on one wire operation within a window. */
+export interface SyncRouteUse {
+  class: SyncEngineWorkClass;
+  /** A wire id (`sync_attempts.operation`). */
+  operation: string;
+  sends: number;
+}
+
+/**
+ * The page's sends of the last `withinMs` by class and operation (step 3b
+ * ruling 11: the history ETA's measure of what the other classes take of
+ * the page's slots and budgets). Counted as the route clocks count them
+ * (`readRouteJournal`): an attempt that may have gone out without a recorded
+ * send (`admitted`, `sent`, `unknown`, a recovered `shadow`) counts at its
+ * admission; a refusal before sending does not. A short range scan of
+ * `sync_attempts_page_admitted`.
+ */
+export async function readRouteUse(
+  db: Database,
+  input: { pageId: number; shadow: boolean; withinMs: number },
+): Promise<SyncRouteUse[]> {
+  const withinMs = Math.max(0, input.withinMs);
+  const result = await db.execute<{ class: SyncEngineWorkClass; operation: string; sends: number }>(sql`
+    select a.class, a.operation, count(*)::int as sends
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.shadow = ${input.shadow}::boolean
+       and a.admitted_at > statement_timestamp()
+         - ${withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS}::double precision * interval '1 millisecond'
+       and coalesce(a.sent_at, a.admitted_at)
+         > statement_timestamp() - ${withinMs}::double precision * interval '1 millisecond'
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow'))
+     group by a.class, a.operation
+  `);
+  return result.rows.map((row) => ({ class: row.class, operation: row.operation, sends: Number(row.sends) }));
 }
 
 /** One attempt by id (status, the apply path). */

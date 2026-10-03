@@ -35,7 +35,6 @@ import {
 
 import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
-import { listRateLimitHold, type ResourceHoldEntry } from "../../engine/errors.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -50,6 +49,7 @@ import type {
   StepPlan,
   WorkOutcome,
 } from "../../engine/resource.ts";
+import { routeHoldUntil } from "../../engine/route-holds.ts";
 import { parseRouteState } from "../../engine/route-policy.ts";
 import type { FanslyRoute } from "../routes.ts";
 import {
@@ -89,9 +89,9 @@ import { DETAIL_NOT_A_CHAT, LEGACY_WS_HINT_MEMBERSHIP_PENDING } from "../lib/rep
 //   request, before the HTTP gate (a `local` step that makes sure the chat's
 //   urgent message read is asked); a chat such a head read did not show goes
 //   to its group detail, which creates the thread (D5), as does every chat
-//   while a 429 holds the list (owner decision 2026-10-02, `rate_limit_list`,
-//   or a hold of the list route); with neither, the find reads the list head
-//   itself.
+//   while a 429 holds the list's route (`messaging.groups`, owner decision
+//   №22: only the keys that can only read the list wait); with neither, the
+//   find reads the list head itself.
 // - detail (planned, from a list apply): the group detail of a chat whose
 //   partner the list could not name; a 5xx breaks only this chat (§9).
 // - ws-down (urgent, live only, step 3): the list head every 30 s while the
@@ -1012,14 +1012,11 @@ function parseFindCursor(value: unknown): DmListFindCursor {
   return { step: recordOf(value).step === "detail" ? "detail" : "list" };
 }
 
-/** The list cannot be read now: a 429 holds it — the list's own hold (owner
- *  decision 2026-10-02, `rate_limit_list`) or a hold of its route in the
- *  page's route state. */
+/** The list cannot be read now: a 429 holds its route (`messaging.groups`,
+ *  owner decision №22) in the page's route state. */
 function listHeld(page: SyncPageRow, now: Date): boolean {
-  if (listRateLimitHold(page.resourceHolds as Record<string, ResourceHoldEntry>, now) !== null) return true;
   const read = parseRouteState(page.routeState);
-  const until = read.ok ? read.state.routes[LIST_ROUTE]?.holdUntil ?? null : null;
-  return until !== null && Date.parse(until) > now.getTime();
+  return read.ok && routeHoldUntil(read.state, LIST_ROUTE, now) !== null;
 }
 
 /** The receipt of a find another key's read answered: that read (null: the

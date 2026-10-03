@@ -1046,12 +1046,32 @@ describe("a burst of .find under saturated history at the production ratios (A1:
   }, 90_000);
 });
 
-describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
+describe("a 429 on the conversation list (owner decisions №14, №22)", () => {
   function accountMe() {
     return { account: { id: OWN_ID, username: "model", displayName: "Model", followCount: 0, subscriberCount: 0 } };
   }
 
-  it("holds only the list: the page and every other resource go on, and .find goes straight to the group detail", async (context) => {
+  /** The list route's stored state (`resource_holds['route:state']`). */
+  async function listRoute(pageId: number) {
+    const result = await testDb!.pool.query<{ hold_kind: string | null; list_file: unknown; entry: { holdUntil: string; ladderStep: number; effectivePerMin: number } | null }>(
+      `select hold_kind, resource_holds -> 'dm-conversations' as list_file,
+              resource_holds #> '{route:state,routes,messaging.groups}' as entry
+         from sync_pages where page_id = $1`,
+      [pageId],
+    );
+    return result.rows[0]!;
+  }
+
+  /** The list route held for 5 more minutes (the test's stand-in for a long Retry-After). */
+  async function holdListLonger(pageId: number): Promise<void> {
+    await testDb!.pool.query(
+      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state,routes,messaging.groups,holdUntil}',
+              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
+      [pageId],
+    );
+  }
+
+  it("holds only the list's route: the page and every other resource go on, and .find goes straight to the group detail", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("live");
     await testDb.pool.query("update pages set last_verified_at = clock_timestamp() - interval '3 hours' where id = $1", [pageId]);
@@ -1071,23 +1091,17 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
     // One list read, no retry while held; the page's other work went out.
     expect(first.hits.filter((spec) => spec === "messaging.groups")).toHaveLength(1);
     expect(first.hits).toContain("account.me");
-    const page = await testDb.pool.query<{ hold_kind: string | null; hold: { kind: string; step: number; until: string } }>(
-      "select hold_kind, resource_holds -> 'dm-conversations' as hold from sync_pages where page_id = $1",
-      [pageId],
-    );
-    expect(page.rows[0]!.hold_kind).toBeNull();
-    expect(page.rows[0]!.hold).toMatchObject({ kind: "rate_limit_list", step: 1 });
-    const untilMs = new Date(page.rows[0]!.hold.until).getTime() - Date.now();
-    expect(untilMs).toBeLessThanOrEqual(5_000);
-    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: "resource_hold" });
-    expect(metrics.get("sync_list_rate_limited")).toBe(1);
+    const held = await listRoute(pageId);
+    expect(held).toMatchObject({ hold_kind: null, list_file: null, entry: { ladderStep: 1, effectivePerMin: 6 } });
+    const untilMs = new Date(held.entry!.holdUntil).getTime() - Date.now();
+    // The ladder's first step: 5 s + ≤ 20 % jitter.
+    expect(untilMs).toBeLessThanOrEqual(6_000);
+    // Open and due: the route admission keeps it out of the pick while its only route is held.
+    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: null });
+    expect(metrics.get("sync_route_held")).toBe(1);
 
     // While the list is held, a chat the socket names is found by its detail alone.
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{dm-conversations,until}',
-              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
-      [pageId],
-    );
+    await holdListLonger(pageId);
     await makeDue(pageId, false, "dm-conversations.find", groupOf(8));
     const second = await drive(pageId, "live", createEngineRegistry(FANSLY_RESOURCE_SPECS), (req) => {
       if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
@@ -1114,15 +1128,11 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
     const first = await drive(pageId, "live", registry, (req) => {
       if (req.spec === "messaging.groups") return statusResponse(429, { success: false });
       throw new Error(`unexpected ${req.spec}`);
-    }, async () => (await workRow(pageId, "dm-conversations.head"))?.waiting_reason === "resource_hold");
+    }, async () => (await listRoute(pageId)).entry !== null);
     expect(first.hits).toEqual(["messaging.groups"]);
 
     // While the list is held its walk is due, and a message and a money event arrive.
-    await testDb.pool.query(
-      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{dm-conversations,until}',
-              to_jsonb(clock_timestamp() + interval '5 minutes')) where page_id = $1`,
-      [pageId],
-    );
+    await holdListLonger(pageId);
     await testDb.pool.query(
       `update sync_work set due_at = clock_timestamp() - interval '1 second'
         where page_id = $1 and shadow = false and resource = 'dm-conversations.head' and state = 'open'`,
@@ -1147,13 +1157,8 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
     expect([...second.hits].sort()).toEqual(["messages.page", "transactions.page"]);
     expect((await workRow(pageId, "dm-messages.head"))!.close_reason).toBe("confirmed");
     expect(await thread(pageId, 3)).toMatchObject({ head_confirmed_id: messageOf(3), history_state: "partial", stored_message_count: 1 });
-    const page = await testDb.pool.query<{ hold_kind: string | null; hold: { kind: string } }>(
-      "select hold_kind, resource_holds -> 'dm-conversations' as hold from sync_pages where page_id = $1",
-      [pageId],
-    );
-    expect(page.rows[0]!.hold_kind).toBeNull();
-    expect(page.rows[0]!.hold).toMatchObject({ kind: "rate_limit_list" });
-    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: "resource_hold" });
+    expect(await listRoute(pageId)).toMatchObject({ hold_kind: null, list_file: null, entry: { ladderStep: 1 } });
+    expect(await workRow(pageId, "dm-conversations.head")).toMatchObject({ state: "open", waiting_reason: null });
     expect(await countRows(testDb.pool,
       "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'dm-conversations.head'", [pageId])).toBe(1);
   });
@@ -1208,19 +1213,19 @@ describe("a 429 on the conversation list (owner decision 2026-10-02)", () => {
       await run;
     }
     expect(transport.hits.map((hit) => hit.spec)).toEqual(["messaging.groups"]);
-    const held = await testDb.pool.query<{ resource: string; due_at: Date; waiting_reason: string | null }>(
-      `select resource, due_at, waiting_reason from sync_work
-        where page_id = $1 and shadow = false and resource in ('dm-conversations.head', 'dm-conversations.full') and state = 'open'`,
+    const held = await testDb.pool.query<{ resource: string; waiting_reason: string | null }>(
+      `select resource, waiting_reason from sync_work
+        where page_id = $1 and shadow = false and resource in ('dm-conversations.head', 'dm-conversations.full') and state = 'open'
+        order by resource`,
       [pageId],
     );
-    const hold = await testDb.pool.query<{ until: string }>(
-      "select resource_holds -> 'dm-conversations' ->> 'until' as until from sync_pages where page_id = $1",
-      [pageId],
-    );
-    // The walk that met the 429 is due again at the hold's end, not at once.
-    const answered = held.rows.find((row) => row.waiting_reason === "resource_hold");
-    expect(answered).toBeDefined();
-    expect(answered!.due_at.getTime()).toBe(new Date(hold.rows[0]!.until).getTime());
+    // Both walks stay open and due: the route's hold keeps them out of every
+    // pick (and out of the idle actor's next-due read) until it ends.
+    expect(held.rows).toEqual([
+      { resource: "dm-conversations.full", waiting_reason: null },
+      { resource: "dm-conversations.head", waiting_reason: null },
+    ]);
+    expect((await listRoute(pageId)).entry).toMatchObject({ ladderStep: 1 });
   });
 });
 
