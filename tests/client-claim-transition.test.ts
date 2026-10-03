@@ -288,11 +288,21 @@ describe("registerNativeSend and resolve", () => {
       .toMatchObject({ code: "part_already_sent" });
   });
 
-  it("is idempotent per page and message", () => {
+  it("is idempotent per page and message, only for a record of the same part", () => {
     const recorded = custody({ attemptId: A1, origin: "native-register", state: "sent", platformMessageId: "905" });
     expect(decideClaimTransition(snapshot({ messageOwner: recorded }), register())).toEqual({ outcome: "applied", writes: [] });
-    expect(decideClaimTransition(snapshot({ messageOwner: { ...recorded, fanRef: "77" } }), register()))
-      .toMatchObject({ code: "attempt_conflict" });
+    const resolvedSent = custody({ state: "resolved_sent", platformMessageId: "905" });
+    expect(decideClaimTransition(snapshot({ messageOwner: resolvedSent }), register())).toEqual({ outcome: "applied", writes: [] });
+    // Any other owner of the id contradicts the proof: ok would drop the send unrecorded.
+    for (const owner of [
+      { ...recorded, fanRef: "77" }, { ...recorded, partIndex: 1 }, { ...recorded, generationRef: "gen-9" },
+      { ...recorded, variant: 2 }, { ...recorded, purpose: "preview-reply" as const },
+      { ...recorded, state: "resolved_not_sent" as const }, { ...recorded, state: "failed" as const },
+    ]) {
+      expect(decideClaimTransition(snapshot({ messageOwner: owner }), register())).toEqual({
+        outcome: "rejected", code: "attempt_conflict", writes: [],
+      });
+    }
   });
 
   it("does not record a second greeting over a desktop one", () => {
@@ -318,6 +328,15 @@ describe("registerNativeSend and resolve", () => {
     expect(decideClaimTransition(snapshot({ attempt: resolved }), resolve("not_sent"))).toEqual({ outcome: "applied", writes: [] });
     expect(decideClaimTransition(snapshot({ attempt: resolved }), resolve("sent"))).toMatchObject({ code: "attempt_conflict" });
     expect(decideClaimTransition(snapshot(), resolve("sent"))).toMatchObject({ code: "not_found" });
+  });
+
+  it("refuses a not-sent resolve that carries a message id: it would take the real send's id slot", () => {
+    const resolve: ClientClaimRequest = {
+      ...actor, userId: 1, action: "resolve", attemptId: A1, outcome: "not_sent", platformMessageId: "906", note: "checked",
+    };
+    for (const attempt of [custody(), custody({ ticketExpiresAt: later(-1) }), custody({ state: "resolved_not_sent" })]) {
+      expect(decideClaimTransition(snapshot({ attempt }), resolve)).toEqual({ outcome: "rejected", code: "invalid_request", writes: [] });
+    }
   });
 });
 

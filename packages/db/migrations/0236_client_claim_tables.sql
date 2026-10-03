@@ -129,7 +129,16 @@ create table if not exists client_send_custody (
   constraint client_send_custody_platform_message_id_check check (
     platform_message_id is null or platform_message_id ~ '^[1-9][0-9]{0,29}$'
   ),
-  constraint client_send_custody_sent_message_check check (state <> 'sent' or platform_message_id is not null),
+  -- A message id is the proof of a send: a sent part has one, a resolved-sent
+  -- part may, and no other state carries one (it would take the page's slot
+  -- in client_send_custody_message from the real send's proof).
+  constraint client_send_custody_message_state_check check (
+    case state
+      when 'sent' then platform_message_id is not null
+      when 'resolved_sent' then true
+      else platform_message_id is null
+    end
+  ),
   -- failed only with evidence the native queue never took the part: the
   -- enqueue call returned nothing, or OnlyFans refused it with a 4xx other
   -- than 401 (a 401 proves nothing about the send). coalesce: a NULL check
