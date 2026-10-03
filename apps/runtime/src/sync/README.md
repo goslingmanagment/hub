@@ -113,7 +113,12 @@ take `sync_work` rows before `history_requests` before `history_request_items`; 
 reference (`page_dm_threads`) before any work row, as the DM apply holds the chat it writes before its works, and the
 hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it)
 (`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
-always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal.
+always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal. Its time
+(step 3b ruling 11) is the reads at the tightest budget a history read draws on — the page's slots, the `/message`
+route (lower after a 429's slowdown) and the messaging family — each shared by the cycle's turns (U 5, R 4, P 1), the
+urgent and planned classes wanting what they sent on it over the last 15 minutes and a class that wants less leaving
+the rest (`requestsCapacity`); no share is raised to a floor. A page or route hold in force is shown beside it (`eta.hold`), not in it; `estimate_at_submit`
+is written once with the request and never again.
 
 Three clients share these service functions and nothing else: the agent plane (`agentHistoryRequestCreate|Get|Cancel|
 List` under `/api/v1/agent/`, `modules/agent-read/handlers-history.ts`, the `hub history-*` commands), the owner routes

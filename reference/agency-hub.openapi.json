@@ -72109,6 +72109,78 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 100
+                              },
+                              "limitedBy": {
+                                "type": "string",
+                                "enum": [
+                                  "page",
+                                  "route",
+                                  "family"
+                                ]
+                              },
+                              "slowdown": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "route": {
+                                        "type": "string"
+                                      },
+                                      "effectivePerMin": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      },
+                                      "currentPerMin": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      }
+                                    },
+                                    "required": [
+                                      "route",
+                                      "effectivePerMin",
+                                      "currentPerMin"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "hold": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "scope": {
+                                        "type": "string",
+                                        "enum": [
+                                          "page",
+                                          "route"
+                                        ]
+                                      },
+                                      "until": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "scope",
+                                      "until"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -72116,7 +72188,10 @@
                               "estimateSeconds",
                               "basis",
                               "ratePerHour",
-                              "sharePercent"
+                              "sharePercent",
+                              "limitedBy",
+                              "slowdown",
+                              "hold"
                             ],
                             "additionalProperties": false
                           },
@@ -73691,6 +73766,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -73698,7 +73845,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },
@@ -75564,6 +75714,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -75571,7 +75793,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },
@@ -88375,6 +88600,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -88382,7 +88679,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },
@@ -146837,6 +147137,78 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 100
+                              },
+                              "limitedBy": {
+                                "type": "string",
+                                "enum": [
+                                  "page",
+                                  "route",
+                                  "family"
+                                ]
+                              },
+                              "slowdown": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "route": {
+                                        "type": "string"
+                                      },
+                                      "effectivePerMin": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      },
+                                      "currentPerMin": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                      }
+                                    },
+                                    "required": [
+                                      "route",
+                                      "effectivePerMin",
+                                      "currentPerMin"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "hold": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "scope": {
+                                        "type": "string",
+                                        "enum": [
+                                          "page",
+                                          "route"
+                                        ]
+                                      },
+                                      "until": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "scope",
+                                      "until"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -146844,7 +147216,10 @@
                               "estimateSeconds",
                               "basis",
                               "ratePerHour",
-                              "sharePercent"
+                              "sharePercent",
+                              "limitedBy",
+                              "slowdown",
+                              "hold"
                             ],
                             "additionalProperties": false
                           },
@@ -147357,6 +147732,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -147364,7 +147811,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },
@@ -148147,6 +148597,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -148154,7 +148676,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },
@@ -152640,6 +153165,78 @@
                               "type": "integer",
                               "minimum": 0,
                               "maximum": 100
+                            },
+                            "limitedBy": {
+                              "type": "string",
+                              "enum": [
+                                "page",
+                                "route",
+                                "family"
+                              ]
+                            },
+                            "slowdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "route": {
+                                      "type": "string"
+                                    },
+                                    "effectivePerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    },
+                                    "currentPerMin": {
+                                      "type": "number",
+                                      "exclusiveMinimum": 0
+                                    }
+                                  },
+                                  "required": [
+                                    "route",
+                                    "effectivePerMin",
+                                    "currentPerMin"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "hold": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "scope": {
+                                      "type": "string",
+                                      "enum": [
+                                        "page",
+                                        "route"
+                                      ]
+                                    },
+                                    "until": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "scope",
+                                    "until"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -152647,7 +153244,10 @@
                             "estimateSeconds",
                             "basis",
                             "ratePerHour",
-                            "sharePercent"
+                            "sharePercent",
+                            "limitedBy",
+                            "slowdown",
+                            "hold"
                           ],
                           "additionalProperties": false
                         },

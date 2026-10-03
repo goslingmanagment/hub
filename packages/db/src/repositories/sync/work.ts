@@ -1528,22 +1528,6 @@ export async function latestWorkForSubjects(
   return new Map(result.rows.map((row) => [row.subject, normalizeWorkRow(row)]));
 }
 
-/** Whether the page has runnable work of any of these classes now (the ETA's
- *  "no other class competes"). */
-export async function hasRunnableWork(
-  db: Database,
-  filter: SyncWorkPickFilter & { classes: readonly SyncEngineWorkClass[] },
-): Promise<boolean> {
-  for (const workClass of filter.classes) {
-    const result = await db.execute<{ found: boolean }>(sql`
-      select exists (select 1 from sync_work w where ${runnablePredicate(filter, workClass)} and ${requestsWorkHasOpenItem})
-        as found
-    `);
-    if (result.rows[0]?.found === true) return true;
-  }
-  return false;
-}
-
 /** Lock several work rows in id order (the lock order of §3.7). */
 export async function lockWorkRows(db: Database, ids: readonly number[]): Promise<SyncWorkRow[]> {
   if (ids.length === 0) return [];
