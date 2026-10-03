@@ -40,6 +40,7 @@ import {
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
+  shadowPassNumber,
   shadowPassWaitUntil,
   standingRecheckAt,
   type ShadowPass,
@@ -478,7 +479,13 @@ const engagementModule: ResourceModule = {
       const until = ctx.shadow ? shadowPassWaitUntil(pass, ctx.now, POST_ENGAGEMENT_RECHECK_MS) : standingRecheckAt(ctx.now, POST_ENGAGEMENT_RECHECK_MS);
       return { kind: "wait", reason: "not_due", until };
     }
-    return { kind: "request", request: { spec: "posts.by_ids", params: { ids: due.map((candidate) => candidate.subjectRef) } } };
+    const ids = due.map((candidate) => candidate.subjectRef);
+    const request: RequestPlan<"posts.by_ids"> = { spec: "posts.by_ids", params: { ids } };
+    if (!ctx.shadow) return { kind: "request", request };
+    // The next shadow pass asks the batches again (shadow records no visit):
+    // a shadow step names its pass besides the batch (`RequestPlan.position`).
+    const passNumber = shadowPassNumber(cursor.shadow, ctx.now, POST_ENGAGEMENT_RECHECK_MS);
+    return { kind: "request", request: { ...request, position: { pass: passNumber, ids } } };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {

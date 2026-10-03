@@ -442,7 +442,13 @@ export const fanEarningsRosterModule: ResourceModule = {
     if (due === null) {
       return { kind: "done", reason: ctx.shadow ? "shadow" : "roster_fresh", cursor: { shadowAfter: null, steps: cursor.steps } };
     }
-    return { kind: "request", request: fanEarningsRequest(due, ctx.now) };
+    const request = fanEarningsRequest(due, ctx.now);
+    // The request's history runs up to the step's clock: a shadow step names
+    // its subject, the roster pass's place (`RequestPlan.position`).
+    return {
+      kind: "request",
+      request: ctx.shadow ? { ...request, position: { fan: due.fanRef, window: due.window } } : request,
+    };
   },
 
   async onAdmit(tx, work, request) {

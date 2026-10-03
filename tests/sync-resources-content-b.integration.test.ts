@@ -6,12 +6,14 @@ import {
   ensurePollRows,
   getSyncPage,
   listMediaStatsRefreshChunk,
+  listSyncPages,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
@@ -19,6 +21,7 @@ import { projectionBehind } from "../apps/runtime/src/sync/fansly/lib/projection
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { mediaStatsOwnerTiers, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
 import { statsModule } from "../apps/runtime/src/sync/fansly/resources/stats.ts";
+import { readShadowRouteChecks } from "../apps/runtime/src/sync/report/shadow-routes.ts";
 import { changeSyncRegistryOverride, requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { allZeroBody, statsBody } from "./helpers/fansly-media-stats-fixtures.ts";
 import {
@@ -521,6 +524,8 @@ describe("catalog.hydrate", () => {
 const ITEM_FRESH = "777000000000000010";
 const ITEM_MID = "777000000000000020";
 const ITEM_GONE = "777000000000000030";
+const ITEM_LONG = "777000000000000040";
+const ITEM_LONG_OLDER = "777000000000000050";
 const BACKFILL_DONE = {
   version: 1, nextBeforeMs: 0, emptyStreak: 2, done: true, floorAt: null, stopReason: "created_at_floor", floorBasis: "created_at",
   guard: { spanDays: 31, narrowed: false, lastAfterMs: null, lastBeforeMs: null, lastObservationId: null },
@@ -868,6 +873,79 @@ describe("media-stats.walk", () => {
     expect(changedTables(before, await tableCounts(testDb.pool))).toEqual(["sync_attempts"]);
     const walk = (await workRow(pageId, "media-stats.walk", true))!;
     expect(walk.due_at.getTime() - Date.now()).toBeGreaterThan(5 * HOUR_MS);
+
+    // Each window's bounds are cut at its step's clock; the step names its
+    // place instead (step 3b ruling 12): the pass, the item's queue position,
+    // the window's number in the visit.
+    const positions = async () => (await testDb!.pool.query<{ position: { pass: number; item: string; window: number } }>(
+      "select request -> 'position' as position from sync_attempts where page_id = $1 and shadow and resource = 'media-stats.walk' order by id",
+      [pageId],
+    )).rows.map((row) => row.position);
+    const firstPass = await positions();
+    expect(firstPass).toEqual([
+      { pass: 1, item: expect.stringContaining(ITEM_FRESH), window: 0 },
+      { pass: 1, item: firstPass[0]!.item, window: 1 },
+      { pass: 1, item: expect.stringContaining(ITEM_MID), window: 0 },
+    ]);
+    // A re-check period later the next pass reads both items again (shadow
+    // records no visit): the same items and windows, another pass — no walk
+    // went round in circles.
+    await testDb.pool.query(
+      `update sync_work set cursor = jsonb_set(cursor, '{shadow,startedAt}', to_jsonb($2::text))
+        where page_id = $1 and shadow and resource = 'media-stats.walk'`,
+      [pageId, new Date(Date.now() - 7 * HOUR_MS).toISOString()],
+    );
+    await makeDue(pageId, true, "media-stats.walk");
+    await drive(pageId, "shadow", registry, null, async () =>
+      (await countRows(testDb!.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'media-stats.walk' and outcome = 'shadow'", [pageId])) === 6
+      && (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
+    expect((await positions()).slice(3)).toEqual(firstPass.map((position) => ({ ...position, pass: 2 })));
+    const checks = await readShadowRouteChecks(db(), {
+      pages: await listSyncPages(db()),
+      window: { start: new Date(Date.now() - HOUR_MS), end: new Date(Date.now() + 1_000) },
+      maxListed: 10,
+    });
+    expect(checks.walks).toEqual({ runs: 1, repeats: 0, endless: [] });
+  });
+
+  it("shadow models the long tail as live (step 3b ruling 12): on an unproven route the first visit asks the 90-day window and the split, every later one the split", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("shadow");
+    // Two long-tail items, both refreshed within their month; the one read
+    // longer ago goes first. Neither the shadow walk nor the legacy lane has
+    // learned the page's 90-day window.
+    await seedQueueItem(pageId, ITEM_LONG_OLDER, { ageDays: 500, lastVisitedDaysAgo: 40, backfillCursor: BACKFILL_DONE });
+    await seedQueueItem(pageId, ITEM_LONG, { ageDays: 400, lastVisitedDaysAgo: 35, backfillCursor: BACKFILL_DONE });
+    const registry = await quietRegistry(pageId, true);
+    await makeDue(pageId, true, "media-stats.walk");
+    await drive(pageId, "shadow", registry, null, async () => (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
+    const rows = await testDb.pool.query<{ subject: string; n: number }>(
+      `select request -> 'params' ->> 'mediaOfferId' as subject, count(*)::int as n from sync_attempts
+        where page_id = $1 and shadow and resource = 'media-stats.walk' and outcome = 'shadow' group by 1 order by min(id)`,
+      [pageId],
+    );
+    // Live's first long-tail visit: the refused 90-day window, then three
+    // 31-day windows; the route's answer known, the next asks the three.
+    expect(rows.rows).toEqual([{ subject: ITEM_LONG_OLDER, n: 1 + 3 }, { subject: ITEM_LONG, n: 3 }]);
+    const walk = (await workRow(pageId, "media-stats.walk", true))!;
+    expect(walk.cursor).toMatchObject({ longTailWindowMode: "split_31", longTailWindowAnnounced: true, shadowVisit: null });
+  });
+
+  it("shadow asks what the legacy lane learned of the 90-day window: the switch imports it (step 3b ruling 12)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("shadow");
+    await seedQueueItem(pageId, ITEM_LONG, { ageDays: 400, lastVisitedDaysAgo: 35, backfillCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `insert into page_sync_cursors (page_id, stream, state) values ($1, 'media_stats', $2::jsonb)`,
+      [pageId, JSON.stringify({ ...emptyFanslyMediaStatsCursorState(new Date()), longTailWindowMode: "split_31", longTailWindowAnnounced: true })],
+    );
+    const registry = await quietRegistry(pageId, true);
+    await makeDue(pageId, true, "media-stats.walk");
+    await drive(pageId, "shadow", registry, null, async () => (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'media-stats.walk'", [pageId]))
+      .toBe(3);
+    // The shadow's own mode stays unlearned: the legacy lane's stands in.
+    expect((await workRow(pageId, "media-stats.walk", true))!.cursor).toMatchObject({ longTailWindowMode: "unproven" });
   });
 });
 

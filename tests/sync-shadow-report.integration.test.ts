@@ -22,6 +22,10 @@ import { createEffectiveConfigSettingsSource, type SettingsSource } from "../app
 import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
+import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { FANSLY_REGISTRY_HASH, SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -59,6 +63,8 @@ const MINUTE = 60_000;
 /** Legacy listed the fixture's chats long before any frame of the window. */
 const LISTED_BEFORE = () => new Date(Date.now() - 24 * 3_600_000);
 const logger = createLogger("silent");
+/** The build the report process names in its fingerprint. */
+const REPORT_BUILD = "build-report";
 
 function db(): Database {
   return testDb!.db as unknown as Database;
@@ -81,15 +87,47 @@ async function shadowPage(): Promise<WsCapturePage> {
   return page;
 }
 
+/** One shadow attempt: on the key's first route unless named, its simulated
+ *  send 50 ms after its admission (`sent: false`: closed unsent by a restart);
+ *  `position`: the walk position its shadow plan named. */
 async function shadowAttempt(
   pageId: number,
-  input: { resource: string; workClass: string; subject?: string; at: Date; workId?: number },
+  input: {
+    resource: string; workClass: string; subject?: string; at: Date; workId?: number;
+    operation?: string; params?: Record<string, unknown>; position?: Record<string, unknown>; generation?: number; sent?: boolean;
+  },
 ): Promise<void> {
+  const operation = input.operation ?? fanslyResourceSpec(input.resource)?.operations[0] ?? "account.me";
+  const request = input.params === undefined
+    ? {}
+    : { spec: operation, params: input.params, ...(input.position === undefined ? {} : { position: input.position }) };
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
                                 admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
-     values ($1, true, $6, $2, $3, $4, 1, 2000, 0, 2000, $5, $5::timestamptz + interval '50 milliseconds', 'shadow', 'x', '{}'::jsonb, 'shadow', 'skipped')`,
-    [pageId, input.resource, input.subject ?? "", input.workClass, input.at, input.workId ?? null],
+     values ($1, true, $6, $2, $3, $4, $9, 2000, 0, 2000, $5,
+             case when $10::boolean then $5::timestamptz + interval '50 milliseconds' end, 'shadow', $7, $8::jsonb, 'shadow', 'skipped')`,
+    [pageId, input.resource, input.subject ?? "", input.workClass, input.at, input.workId ?? null, operation, JSON.stringify(request),
+      input.generation ?? 1, input.sent ?? true],
+  );
+}
+
+/** An open shadow work row of a key (a walk's run). */
+async function shadowWorkRow(pageId: number, resource: string, subject = ""): Promise<number> {
+  const spec = fanslyResourceSpec(resource)!;
+  const row = await testDb!.pool.query<{ id: string }>(
+    `insert into sync_work (page_id, shadow, resource, subject, kind, class) values ($1, true, $2, $3, $4, $5) returning id`,
+    [pageId, resource, subject, spec.kind, spec.class],
+  );
+  return Number(row.rows[0]!.id);
+}
+
+/** The `sync` process's heartbeat: its build, since when it runs. */
+async function syncHeartbeat(imageTag: string, startedAt: Date): Promise<void> {
+  await testDb!.pool.query(
+    `insert into runtime_instances (role, instance_id, started_at, last_seen_at, image_tag, running)
+     values ('sync', 'sync-test', $2, clock_timestamp(), $1, '{}'::jsonb)
+     on conflict (role, instance_id) do update set started_at = excluded.started_at, last_seen_at = clock_timestamp(), image_tag = excluded.image_tag`,
+    [imageTag, startedAt],
   );
 }
 
@@ -162,6 +200,179 @@ async function seedWindow(page: WsCapturePage, start: Date): Promise<void> {
 }
 
 describe("the shadow report (design §3.12)", () => {
+  it("step 3b ruling 12: the fingerprint, the route budgets and the walks per route over the shadow journal", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    const window = { start, end: new Date(start.getTime() + 3_600_000) };
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    // The sync process of build-sync started 21 min before the window and
+    // took the page a minute later; the legacy lane learned the page's
+    // 90-day window splits.
+    await syncHeartbeat("build-sync", at(-21 * MINUTE));
+    await testDb.pool.query("update sync_pages set owner_generation = 1, owner_acquired_at = $2 where page_id = $1", [page.pageId, at(-20 * MINUTE)]);
+    await testDb.pool.query(
+      "insert into page_sync_cursors (page_id, stream, state) values ($1, 'media_stats', $2::jsonb)",
+      [page.pageId, JSON.stringify({ ...emptyFanslyMediaStatsCursorState(new Date()), longTailWindowMode: "split_31", longTailWindowAnnounced: true })],
+    );
+    await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-15 * MINUTE) });
+
+    // The conversation list: 14 finds 4 s apart, one more in a minute than
+    // its 12/min allow.
+    for (let i = 0; i < 14; i += 1) {
+      await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: `chat-${i}`, at: at(5 * MINUTE + i * 4_000) });
+    }
+    // Chat details and heads 2.5 s apart: each route within its own 15/min,
+    // the messaging family over its combined 15/min.
+    for (let i = 0; i < 18; i += 1) {
+      const resource = i % 2 === 0 ? "dm-conversations.detail" : "dm-messages.head";
+      await shadowAttempt(page.pageId, { resource, workClass: i % 2 === 0 ? "planned" : "urgent", subject: `chat-${i}`, at: at(20 * MINUTE + i * 2_500) });
+    }
+    // The media walk at its 5/min: within its budget. Every window is cut at
+    // its step's clock, so the step names its place: the visit's three
+    // windows in pass 1, its last window asked once more (the visit did not
+    // advance: a circle the bounds alone never show), then the next pass
+    // re-reading the item from its first window (another pass, not a circle).
+    const media = await shadowWorkRow(page.pageId, "media-stats.walk");
+    const ITEM = '[1,2,1,"-Infinity","-1745960794.000000","777"]';
+    const mediaWindows = [
+      { ms: 25 * MINUTE, pass: 1, window: 0 },
+      { ms: 25 * MINUTE + 12_000, pass: 1, window: 1 },
+      { ms: 25 * MINUTE + 24_000, pass: 1, window: 2 },
+      { ms: 25 * MINUTE + 36_000, pass: 1, window: 2 },
+      { ms: 27 * MINUTE, pass: 2, window: 0 },
+    ];
+    for (const step of mediaWindows) {
+      await shadowAttempt(page.pageId, {
+        resource: "media-stats.walk", workClass: "planned", at: at(step.ms), workId: media,
+        params: { mediaOfferId: "777", beforeMs: at(step.ms).getTime(), afterMs: at(step.ms).getTime() - 30 * 86_400_000, periodMs: 86_400_000 },
+        position: { pass: step.pass, item: ITEM, window: step.window },
+      });
+    }
+    // The fan earnings roster's pass asks each fan's history up to its clock:
+    // a fan asked again in the same pass is a circle.
+    const roster = await shadowWorkRow(page.pageId, "fan-earnings.roster");
+    for (const [ms, fan] of [[35 * MINUTE, "501"], [35 * MINUTE + 30_000, "502"], [36 * MINUTE, "501"]] as const) {
+      await shadowAttempt(page.pageId, {
+        resource: "fan-earnings.roster", workClass: "planned", at: at(ms), workId: roster, operation: "earnings.stats_accounts",
+        params: { correlationAccountId: fan, afterMs: 0, beforeMs: at(ms).getTime() },
+        position: { fan, window: "lifetime" },
+      });
+    }
+    // A send of a route this build no longer knows.
+    await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(40 * MINUTE), operation: "retired.route" });
+
+    // The vault walk asks one album page twice in its run: a circle. Its next
+    // album's page asked again after a restart closed the first ask unsent is
+    // the same step resumed.
+    const vault = await shadowWorkRow(page.pageId, "catalog.vault");
+    const vaultPage = (before: string, album = "a1") => ({ albumId: album, before });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE), workId: vault, params: vaultPage("shadow-1") });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 10_000), workId: vault, params: vaultPage("shadow-2") });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 20_000), workId: vault, params: vaultPage("shadow-1") });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE), workId: vault, params: vaultPage("0", "a2"), sent: false });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE + 10_000), workId: vault, params: vaultPage("0", "a2") });
+    // Not circles: a reconcile's /account/me before and after its walk (no
+    // position), a poll's run re-reading its head, two catch-ups of one chat.
+    const reconcile = await shadowWorkRow(page.pageId, "followers.reconcile");
+    for (const minute of [45, 47]) {
+      await shadowAttempt(page.pageId, { resource: "followers.reconcile", workClass: "planned", at: at(minute * MINUTE), workId: reconcile, params: {} });
+    }
+    const insurance = await shadowWorkRow(page.pageId, "transactions.insurance");
+    for (const minute of [10, 15]) {
+      await shadowAttempt(page.pageId, { resource: "transactions.insurance", workClass: "planned", at: at(minute * MINUTE), workId: insurance, params: { limit: 20 } });
+    }
+    for (const minute of [50, 52]) {
+      const catchup = await shadowWorkRow(page.pageId, "dm-messages.catchup", `${GROUP}-${minute}`);
+      await shadowAttempt(page.pageId, { resource: "dm-messages.catchup", workClass: "planned", at: at(minute * MINUTE), workId: catchup, params: { groupId: GROUP } });
+    }
+
+    const build = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window,
+      journal: null,
+      maxListed: 50,
+    });
+    const report = await build();
+    const { budgets, walks } = report.routes!;
+    const budget = (name: string) => budgets.rows.find((row) => row.budget === name);
+    expect(budget("messaging.groups")).toEqual({
+      page: "lilly-1", budget: "messaging.groups", perMin: 12, intervalMs: 5_000, sends: 14, minGapMs: 4_000,
+      max60s: 14, bound60s: 13, max300s: 14, bound300s: 61, violations: 1, firstViolationAt: new Date(at(5 * MINUTE + 13 * 4_000).getTime() + 50),
+    });
+    expect(budget("group.detail")).toMatchObject({ sends: 9, minGapMs: 5_000, violations: 0 });
+    expect(budget("messages.page")).toMatchObject({ sends: 9 + 2, violations: 0 });
+    expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 2 });
+    expect(budget("media.offer_stats")).toMatchObject({ sends: 5, minGapMs: 12_000, max60s: 4, bound60s: 6, violations: 0 });
+    expect(budget("earnings.stats_accounts")).toMatchObject({ sends: 3, minGapMs: 30_000, violations: 0 });
+    expect(budgets.unplaced).toEqual([{ page: "lilly-1", operation: "retired.route", sends: 1 }]);
+    expect(budgets.violations).toBe(1 + 2 + 1);
+    // The media walk, the roster, the vault walk, the reconcile and the two
+    // catch-ups.
+    expect(walks).toEqual({
+      runs: 6,
+      repeats: 3,
+      endless: [{
+        page: "lilly-1", route: "earnings.stats_accounts", resource: "fan-earnings.roster", workId: roster,
+        position: { fan: "501", window: "lifetime" }, times: 2, firstAt: at(35 * MINUTE), lastAt: at(36 * MINUTE),
+      }, {
+        page: "lilly-1", route: "media.offer_stats", resource: "media-stats.walk", workId: media,
+        position: { pass: 1, item: ITEM, window: 2 }, times: 2, firstAt: at(25 * MINUTE + 24_000), lastAt: at(25 * MINUTE + 36_000),
+      }, {
+        page: "lilly-1", route: "vault.media", resource: "catalog.vault", workId: vault, position: vaultPage("shadow-1"), times: 2,
+        firstAt: at(30 * MINUTE), lastAt: at(30 * MINUTE + 20_000),
+      }],
+    });
+
+    expect(report.fingerprint).toEqual({
+      version: SHADOW_FINGERPRINT_VERSION,
+      build: { sync: "build-sync", unproven: null, report: REPORT_BUILD },
+      policyHash: ROUTE_POLICY_HASH,
+      registryHash: FANSLY_REGISTRY_HASH,
+      setting: { effectiveMs: (await liveSettings().read()).fanslyDefaultDelayMs, windowMs: [2_000] },
+      pages: [{
+        page: "lilly-1", overrides: {},
+        media: { tiers: mediaStatsOwnerTiers({ registryOverrides: {} }), longTailWindowMode: "split_31" },
+      }],
+    });
+    expect(report.media).toEqual([{
+      page: "lilly-1",
+      media: { tiers: mediaStatsOwnerTiers({ registryOverrides: {} }), longTailWindowMode: "split_31" },
+      queue: expect.objectContaining({ queueSize: 0, dueNow: 0 }),
+    }]);
+    expect(report.verdict).toMatchObject({ budgets: false, walks: false, build: true, accepted: false });
+    expect(report.summary[0]).toBe(`Fingerprint: sync build build-sync (report written by ${REPORT_BUILD}); route policy ${ROUTE_POLICY_HASH.slice(0, 12)}, `
+      + `registry ${FANSLY_REGISTRY_HASH.slice(0, 12)}; S ${report.fingerprint.setting.effectiveMs} ms now, 2000 ms in the window`);
+    expect(report.summary).toContainEqual(expect.stringMatching(
+      /^Route budgets in shadow: 4 violation\(s\): lilly-1 family:messaging 2 send\(s\) over \(max 18\/16 in 60 s, .*lilly-1 messaging\.groups 1 send\(s\) over .*; sends this build places on no route: lilly-1 retired\.route 1$/,
+    ));
+    expect(report.summary).toContainEqual(expect.stringMatching(new RegExp(
+      "^Walks per route: ENDLESS — 3 repeated request\\(s\\): "
+        + `lilly-1 fan-earnings\\.roster \\(work ${roster}\\) asked earnings\\.stats_accounts \\{"fan":"501","window":"lifetime"\\} 2 times .*; `
+        + `lilly-1 media-stats\\.walk \\(work ${media}\\) asked media\\.offer_stats \\{"item":".+?777.+?","pass":1,"window":2\\} 2 times .*; `
+        + `lilly-1 catalog\\.vault \\(work ${vault}\\) asked vault\\.media \\{"before":"shadow-1","albumId":"a1"\\} 2 times `,
+    )));
+    expect(report.summary).toContainEqual(expect.stringMatching(/^Media model lilly-1: tiers ≤ 30 d every 1 d, ≤ 90 d every 7 d, older every 30 d; long-tail windows split_31; queue 0 /));
+    expect(report.summary.at(-1)).toMatch(/, route budgets FAIL, walks FAIL, build ok, B5 n\/a, .* — not accepted$/);
+
+    // A process that started in the window ran it only in part: its build
+    // is not the window's.
+    await syncHeartbeat("build-sync", at(30 * MINUTE));
+    expect((await build()).fingerprint.build).toEqual({
+      sync: null, report: REPORT_BUILD,
+      unproven: `the sync process started ${at(30 * MINUTE).toISOString()}, after the window start: a deploy or restart in or after the window`,
+    });
+    // An owner generation the page has no more sent in the window.
+    await syncHeartbeat("build-sync", at(-21 * MINUTE));
+    await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(2 * MINUTE), generation: 0 });
+    const replaced = await build();
+    expect(replaced.fingerprint.build).toMatchObject({ sync: null, unproven: "lilly-1 has 1 shadow attempt(s) of another owner generation in the window" });
+    expect(replaced.verdict.build).toBe(false);
+  });
+
   it("part A: demand vs its expectation, the legacy volume, the live-path decisions and the pacer, in one read-only snapshot", async (context) => {
     if (!testDb) return context.skip();
     const page = await shadowPage();
@@ -231,6 +442,7 @@ describe("the shadow report (design §3.12)", () => {
       [page.pageId, randomUUID(), randomUUID(), at(33 * MINUTE)],
     );
     const report = await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -321,6 +533,12 @@ describe("the shadow report (design §3.12)", () => {
 
     expect(window.pacer).toMatchObject({ violations: 0, pages: [{ page: "lilly-1", sends: 43, violations: 0 }] });
     expect(window.verdict).toMatchObject({ covered: true, a1: false, a2: false, a3: true, a4: true });
+    // Every route kept its budget, no walk asked twice; no sync heartbeat
+    // names the window's build.
+    expect(report.verdict).toMatchObject({ budgets: true, walks: true, build: false });
+    expect(report.fingerprint.build).toEqual({
+      sync: null, unproven: "no fresh sync heartbeat: the process that ran the window is not known", report: REPORT_BUILD,
+    });
     expect(window.rules.map((rule) => rule.id)).toEqual([
       "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.shared-read", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
       "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
@@ -371,6 +589,7 @@ describe("the shadow report (design §3.12)", () => {
       window: { start, end: new Date(start.getTime() + 3_600_000) },
       journal: null,
       maxListed: 50,
+      reportBuild: REPORT_BUILD,
     });
     const window = report.window!;
     const find = window.demand[0]!.resources.find((entry) => entry.resource === "dm-conversations.find");
@@ -454,6 +673,7 @@ describe("the shadow report (design §3.12)", () => {
     await legacyRead({ accountMediaId: "900000000000000444" }, { error: { status: 422, code: 99, details: "error getting account media", body: null } }, at(33 * MINUTE), 422);
 
     const report = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -551,6 +771,7 @@ describe("the shadow report (design §3.12)", () => {
     );
     const report = async () => {
       const built = await buildShadowReport(ctx(), {
+        reportBuild: REPORT_BUILD,
         settings: liveSettings(),
         pages: await listSyncPages(db()),
         registry: createStubRegistry(),
@@ -628,6 +849,7 @@ describe("the shadow report (design §3.12)", () => {
     // A transactions step asks for no walk: nothing is due.
     expect(await step()).toEqual([]);
     const report = await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     });
@@ -689,6 +911,7 @@ describe("the shadow report (design §3.12)", () => {
       );
     }
     const counterparts = async () => (await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
@@ -724,6 +947,7 @@ describe("the shadow report (design §3.12)", () => {
     const end = new Date(start.getTime() + 3_600_000);
     await seedWindow(page, start);
     const report = async () => (await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     }));
@@ -783,6 +1007,7 @@ describe("the shadow report (design §3.12)", () => {
     );
     await queued("950000000000000001", at(-24 * 60 * MINUTE), at(-24 * 60 * MINUTE));
     const report = async () => (await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
@@ -814,6 +1039,7 @@ describe("the shadow report (design §3.12)", () => {
       module: async (key) => key === "post-replies.walk" ? { ...(await real.module(key)), dueAtLook } : real.module(key),
     });
     const reportWith = async (registry: Pick<EngineRegistry, "module">) => (await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()), registry, window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
@@ -856,6 +1082,7 @@ describe("the shadow report (design §3.12)", () => {
       [page.pageId, "950000000000000003", walked],
     );
     const report = async (settings: SettingsSource) => (await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings,
       pages: await listSyncPages(db()), registry: createFanslyRegistry(), window: { start, end }, journal: null, maxListed: 50,
     })).window!.demand[0]!.floor.counterparts;
@@ -952,6 +1179,7 @@ describe("the shadow report (design §3.12)", () => {
       await observe(verdict, new Date(now - (180 + i) * MINUTE));
     }
     const report = await buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -1004,6 +1232,7 @@ describe("the shadow report (design §3.12)", () => {
       });
     };
     const report = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
       settings: liveSettings(),
       pages: await listSyncPages(db()),
       registry: createStubRegistry(),
@@ -1108,6 +1337,7 @@ describe("the shadow report (design §3.12)", () => {
         print: (line) => void printed.push(line),
         writeFile: async () => undefined,
         now: () => new Date(),
+        buildSha: () => REPORT_BUILD,
       }).parseAsync([
         "shadow", "report", "--window", `${start.toISOString()}/${at(60 * MINUTE).toISOString()}`, "--force-window",
         "--sleep-ms", "0", "--replay-min", "1", "--journal-since", at(-24 * 60 * MINUTE).toISOString(),
@@ -1144,6 +1374,7 @@ describe("the shadow report (design §3.12)", () => {
       print: (line) => void printed.push(line),
       writeFile: async (path, text) => void written.push({ path, text }),
       now: () => new Date(),
+      buildSha: () => REPORT_BUILD,
     });
     await command().parseAsync([
       "shadow", "report", "--part", "a", "--window", `${start.toISOString()}/${new Date(start.getTime() + 3_600_000).toISOString()}`,

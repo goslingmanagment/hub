@@ -78,9 +78,15 @@ export interface ShadowPass {
   /** The pass reached the end of the due subjects: the walk rests until the
    *  next pass. */
   ended: boolean;
+  /** The pass's ordinal in the walk row's shadow passes, from 1 (0: none
+   *  begun, or begun by a build that did not number them). A pass re-reads
+   *  the subjects an earlier one read (shadow records no visit), so a step
+   *  names its pass (`shadowPassNumber`) for the shadow report to tell the
+   *  next pass from a walk going round in circles. */
+  number: number;
 }
 
-export const EMPTY_SHADOW_PASS: ShadowPass = Object.freeze({ after: null, startedAt: null, ended: false });
+export const EMPTY_SHADOW_PASS: ShadowPass = Object.freeze({ after: null, startedAt: null, ended: false, number: 0 });
 
 function recordOf(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -93,7 +99,8 @@ export function parseShadowPass(value: unknown): ShadowPass {
     : null;
   if (startedAt === null) return EMPTY_SHADOW_PASS;
   const after = typeof record.after === "string" && record.after.length > 0 ? record.after : null;
-  return { after, startedAt, ended: record.ended === true };
+  const number = typeof record.number === "number" && Number.isSafeInteger(record.number) && record.number > 0 ? record.number : 0;
+  return { after, startedAt, ended: record.ended === true, number };
 }
 
 /** The pass a shadow step continues: the current one while it is younger than
@@ -101,6 +108,12 @@ export function parseShadowPass(value: unknown): ShadowPass {
 export function currentShadowPass(pass: ShadowPass, now: Date, recheckMs: number): ShadowPass {
   if (pass.startedAt === null) return EMPTY_SHADOW_PASS;
   return now.getTime() - Date.parse(pass.startedAt) < recheckMs ? pass : EMPTY_SHADOW_PASS;
+}
+
+/** The number of the pass a shadow step at `now` belongs to: the current
+ *  pass's, else the next one's (the step begins it). */
+export function shadowPassNumber(pass: ShadowPass, now: Date, recheckMs: number): number {
+  return currentShadowPass(pass, now, recheckMs).startedAt === null ? pass.number + 1 : pass.number;
 }
 
 /** When the next pass starts: one re-check period after this one started (a
@@ -125,12 +138,13 @@ export function advanceShadowPass(input: {
 }): { pass: ShadowPass; nextDueAt: Date } {
   const current = currentShadowPass(input.pass, input.now, input.recheckMs);
   const startedAt = current.startedAt ?? input.now.toISOString();
+  const number = shadowPassNumber(input.pass, input.now, input.recheckMs);
   const last = input.taken.at(-1);
   if (last === undefined || input.taken.length < input.limit) {
-    const pass: ShadowPass = { after: null, startedAt, ended: true };
+    const pass: ShadowPass = { after: null, startedAt, ended: true, number };
     return { pass, nextDueAt: shadowPassWaitUntil(pass, input.now, input.recheckMs) };
   }
-  return { pass: { after: last.keyset, startedAt, ended: false }, nextDueAt: input.now };
+  return { pass: { after: last.keyset, startedAt, ended: false, number }, nextDueAt: input.now };
 }
 
 // ── the shadow report's look check (rule A1.floor-idle) ─────────────────────
