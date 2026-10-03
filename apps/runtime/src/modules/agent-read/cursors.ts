@@ -1,9 +1,16 @@
-import { Buffer } from "node:buffer";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import {
+  canonicalJson,
+  openCursorEnvelope,
+  sealCursorEnvelope,
+  type SignedCursorKeyRing,
+} from "../../services/signed-cursor.ts";
 import { AgentCursorInvalidError } from "./errors.ts";
+
+export { canonicalJson };
 
 /**
  * Opaque, signed, self-describing pagination cursors.
@@ -27,6 +34,11 @@ import { AgentCursorInvalidError } from "./errors.ts";
  * EVERY failure — bad base64, failed round-trip, failed Zod, failed MAC, unknown
  * key version, foreign key id, changed grant, changed generation, changed request
  * — produces the SAME 400. The differences are oracles of somebody else's scope.
+ *
+ * The envelope (encoding, canonical round-trip, domain-separated HMAC,
+ * constant-time compare) is the shared core in `services/signed-cursor.ts`; this
+ * file keeps the agent's payload, its expectations and its error. The wire is
+ * unchanged: `tests/signed-cursor.test.ts` pins an agent cursor byte for byte.
  */
 
 const CURSOR_HMAC_DOMAIN = "agency-hub:agent-read-cursor:v1";
@@ -65,58 +77,13 @@ const cursorPayloadSchema = z.object({
   issuedAt: z.string().min(1),
 }).strict();
 
-const signedCursorSchema = z.object({
-  format: z.literal(1),
-  keyVersion: z.number().int().positive(),
-  payload: cursorPayloadSchema,
-  mac: z.string().length(43).regex(/^[A-Za-z0-9_-]+$/),
-}).strict();
-
 export type AgentCursorPayload = z.infer<typeof cursorPayloadSchema>;
-
-/** Canonical JSON: keys sorted at every depth, so the digest of one request is
- *  stable across property order. */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value ?? null);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, entryValue]) => entryValue !== undefined)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  return `{${entries.map(([key, entryValue]) =>
-    `${JSON.stringify(key)}:${canonicalJson(entryValue)}`).join(",")}}`;
-}
 
 export function agentParamsHash(params: Record<string, unknown>): string {
   return createHash("sha256").update(canonicalJson(params), "utf8").digest("hex");
 }
 
-function encodePayload(payload: AgentCursorPayload): string {
-  return Buffer.from(canonicalJson(payload), "utf8").toString("base64url");
-}
-
-function cursorMac(payload: AgentCursorPayload, keyVersion: number, key: Buffer): string {
-  return createHmac("sha256", key)
-    .update(CURSOR_HMAC_DOMAIN, "utf8")
-    .update("\0", "utf8")
-    .update(String(keyVersion), "utf8")
-    .update("\0", "utf8")
-    .update(encodePayload(payload), "utf8")
-    .digest("base64url");
-}
-
-function encodeSigned(signed: z.infer<typeof signedCursorSchema>): string {
-  return Buffer.from(canonicalJson(signed), "utf8").toString("base64url");
-}
-
-export interface AgentCursorSigning {
-  key: Buffer;
-  keyVersion: number;
-  keysByVersion: ReadonlyMap<number, Buffer>;
-}
+export type AgentCursorSigning = SignedCursorKeyRing;
 
 export function encodeAgentCursor(
   payload: Omit<AgentCursorPayload, "paramsHash" | "version" | "issuedAt"> & {
@@ -130,12 +97,7 @@ export function encodeAgentCursor(
     paramsHash: agentParamsHash(payload.params),
     issuedAt: payload.issuedAt ?? new Date().toISOString(),
   } satisfies AgentCursorPayload);
-  return encodeSigned(signedCursorSchema.parse({
-    format: 1,
-    keyVersion: signing.keyVersion,
-    payload: canonical,
-    mac: cursorMac(canonical, signing.keyVersion, signing.key),
-  }));
+  return sealCursorEnvelope(CURSOR_HMAC_DOMAIN, canonical, signing);
 }
 
 export interface AgentCursorExpectation {
@@ -159,37 +121,19 @@ export function decodeAgentCursor(
   expectation: AgentCursorExpectation,
   signing: AgentCursorSigning,
 ): AgentCursorPayload {
-  if (text.length === 0 || text.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(text)) {
+  // Envelope: length, alphabet, canonical round-trip, key version, MAC.
+  const opened = openCursorEnvelope(CURSOR_HMAC_DOMAIN, text, signing);
+  if (!opened.ok) {
     throw new AgentCursorInvalidError();
   }
-  let parsed: unknown;
-  try {
-    const json = Buffer.from(text, "base64url").toString("utf8");
-    // Node's base64url decoder is permissive; the round-trip rejects padding,
-    // ignored characters and alternate encodings before anything is trusted.
-    if (Buffer.from(json, "utf8").toString("base64url") !== text) {
-      throw new AgentCursorInvalidError();
-    }
-    parsed = JSON.parse(json);
-  } catch {
+  const result = cursorPayloadSchema.safeParse(opened.payload);
+  // The envelope already proved the bytes canonical; a parse that rewrote the
+  // payload would serve something the cursor never carried.
+  if (!result.success || canonicalJson(result.data) !== canonicalJson(opened.payload)) {
     throw new AgentCursorInvalidError();
   }
 
-  const result = signedCursorSchema.safeParse(parsed);
-  if (!result.success || encodeSigned(result.data) !== text) {
-    throw new AgentCursorInvalidError();
-  }
-  const key = signing.keysByVersion.get(result.data.keyVersion);
-  if (!key) {
-    throw new AgentCursorInvalidError();
-  }
-  const expected = Buffer.from(cursorMac(result.data.payload, result.data.keyVersion, key), "base64url");
-  const provided = Buffer.from(result.data.mac, "base64url");
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-    throw new AgentCursorInvalidError();
-  }
-
-  const payload = result.data.payload;
+  const payload = result.data;
   if (payload.operation !== expectation.operation) {
     throw new AgentCursorInvalidError();
   }
