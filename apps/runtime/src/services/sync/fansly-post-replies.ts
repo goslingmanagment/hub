@@ -106,7 +106,6 @@ import { REPLIES_FULL_PAGE_THRESHOLD } from "../canonicalize/fansly-comments.ts"
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
-import { classifyFanslyResponse, fanslyUtcDayKey } from "../../sync/fansly/lib/lane.ts";
 import {
   createFanslyLaneCoverageWriter,
   createFanslyLaneJournal,
