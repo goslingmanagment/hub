@@ -44,6 +44,8 @@ sync/
   switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
                              `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
+  parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
+                             read-only DM reader parity of page_dm_messages and message_archive
 ```
 
 Files appear PR by PR during step 2; a file in this map that is not in the tree is not merged yet. The registry
@@ -395,6 +397,23 @@ runs its identity check and then the verify of the new stored credentials under 
 while the actor stopped puts a page the rollback took from live back to live; a page in `handover` before the
 rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
 (J5). Runbook: step-3 design §6.
+
+## DM reader parity (step 4, owner decision №11)
+
+Before the DM readers move from `page_dm_messages` to `message_archive` (S4-08), `pnpm cli sync dm-reader-parity
+--window 1h --rounds 12 --interval 5m [--page P] [--full] --out <json>` compares them, read-only (every statement in a
+READ ONLY transaction, each thread in one repeatable-read snapshot; it runs in the worker container on the app
+connection, which can read these tables). It calls the real readers both ways: the chat messages (25 and 100) and the
+preview with the live overlay, the page's coverage, the agent transcript with and without its hot arm, the summary
+columns against the archive, the fold's stored facts and the window summary. The archive variants are the readers'
+own `store: "message_archive"` (`hotArm: false` for the transcript), which S4-08 wires in; until then only this CLI
+passes them. Each round samples per page the threads active since the last round, 50 stratified by stored count,
+the threads with a pending overlay row and those whose live rows differ between the stores; the threads with a
+deletion, tip, PPV, reply ref or exclusion are spread over the rounds (each checked once). Classes
+(`parity/classify.ts`): `missing_in_archive` fails only when a recheck of both stores ≥ 2 min later still finds it
+missing, `field_mismatch` fails, `extra_in_archive` (the archive knows more: the September sidecar rows, a deletion
+first) and `tie_order` are reported. `--full` also judges every Fansly hot row against its archive row. The JSON
+report goes to `--out`; stdout carries the verdict and the archive-only list for the owner; exit 1 on a fail.
 
 ## Invariants
 
