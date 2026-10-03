@@ -215,6 +215,26 @@ export async function createWsHarnessTransport(
   };
 }
 
+/**
+ * A live host whose Upgrade runs the whole production path: the harness
+ * registry's production `ws.connect`, the production page transport (which
+ * sends `ws.upgrade` through the page's socket owner), the page's real
+ * `FanslyWsSource` and its receiver socket opener's lease binding — only the
+ * socket's URL is the fake origin's.
+ */
+export function productionWsHostOptions(input: Omit<Parameters<typeof harnessHostOptions>[0], "liveSocket"> & {
+  /** The fake origin (`FakeFanslyServer.origin`) the socket connects to. */
+  wsOrigin: string;
+  timing?: FanslyWsSourceTiming;
+}): SyncHostOptions {
+  // Without `liveSocket` the host creates a `FanslyWsSource` per live slot.
+  const { liveSocket: _standIn, ...base } = harnessHostOptions(input);
+  return {
+    ...base,
+    wsSourceOverrides: { timing: input.timing ?? WS_TEST_TIMING, openSocket: harnessSocketOpener(input.wsOrigin) },
+  };
+}
+
 /** A live host over the harness with the page's socket on the fake origin. */
 export function wsHostOptions(input: Parameters<typeof harnessHostOptions>[0] & {
   /** The fake origin (`FakeFanslyServer.origin`) the socket connects to. */
