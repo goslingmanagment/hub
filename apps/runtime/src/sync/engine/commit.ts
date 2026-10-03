@@ -655,8 +655,8 @@ export async function settleShadow(
 // ── no-HTTP outcomes ────────────────────────────────────────────────────────
 
 /** A plan that needs no request and writes nothing of its own: done, wait,
- *  quarantine (design §3.5). The slot is not consumed. A `local` plan is
- *  `applyLocal`'s. */
+ *  quarantine (design §3.5) — at a slot, or before the HTTP gate (ruling 9).
+ *  No slot is consumed. A `local` plan is `applyLocal`'s. */
 export async function commitNoHttp(
   d: CommitDeps,
   work: SyncWorkRow,
@@ -706,13 +706,14 @@ export async function commitNoHttp(
 }
 
 /**
- * A request an endpoint group's spacing puts off (owner decision №20): nothing
- * is admitted or sent, the slot stays open for other work, and the row is due
- * again when the spacing ends (`waiting_reason = 'pacer'`: it waits for its
- * endpoint's pace, not for its schedule). A demand bump pulls it forward; its
- * next plan meets the same spacing.
+ * A request whose route its budget or hold keeps closed (step 3b, plan PR
+ * 1-1: the final check of the planned route): nothing is admitted or sent,
+ * the slot stays open for other work, and the row is due again when the route
+ * opens (`waiting_reason = 'pacer'`: it waits for its route's pace, not for
+ * its schedule). A demand bump pulls it forward; its next plan meets the same
+ * clocks.
  */
-export async function deferForEndpointSpacing(d: CommitDeps, work: SyncWorkRow, until: Date): Promise<void> {
+export async function deferForRoute(d: CommitDeps, work: SyncWorkRow, until: Date): Promise<void> {
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     await settleWork(tx, {
@@ -748,9 +749,10 @@ export type LocalOutcome = "applied" | "fence_busy" | "nothing" | ApplyErrorKind
  * the work waits a second on `dependency`) → the module's `applyLocal` → the
  * work row (`settleWork`, I11 against the revision the plan read) → its
  * follow-ups → the work-closed hook (lock order of §3.7). Nothing is admitted
- * or sent, so the slot the pick waited for stays open. A failing write rolls
- * back whole and is classified like an apply error: retried (deferred,
- * transient, other) or quarantined (deterministic).
+ * or sent: before the HTTP gate (ruling 9) no hold or slot is waited for, at a
+ * slot the slot stays open. A failing write rolls back whole and is classified
+ * like an apply error: retried (deferred, transient, other) or quarantined
+ * (deterministic).
  */
 export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<LocalOutcome> {
   try {

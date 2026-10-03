@@ -1,15 +1,16 @@
 import {
-  endpointSpacingRemainingMs,
   ensurePollRows,
   getSyncPage,
   LiveGateClosedError,
   lockOwnedPage,
   nextOpenWorkDueAt,
   OwnershipLostError,
+  pickBeforeGateWork,
   pickCredentialsCheck,
   pickPlanned,
   pickRequests,
   pickUrgent,
+  readRouteJournal,
   SYNC_WORK_PICK_LIMIT,
   type Database,
   type SyncPageMode,
@@ -26,7 +27,7 @@ import {
   capture,
   commitNoHttp,
   deferAfterPlanError,
-  deferForEndpointSpacing,
+  deferForRoute,
   drainDueApplies,
   ensureCredentialsVerify,
   errorName,
@@ -41,17 +42,17 @@ import {
   type RequestTurn,
   type SyncFaultPoint,
 } from "./commit.ts";
+import { routeOfWireId } from "../fansly/routes.ts";
 import {
   activeResourceHold,
   CREDENTIALS_CHECK_KEYS,
   endpointRateGroupOfKind,
-  endpointRateGroupOfRoute,
   isEndpointRateLimitKind,
   isResourceHoldExempt,
   resourceFileOf,
   type ResourceHoldEntry,
 } from "./errors.ts";
-import { PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
+import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
 import {
   CredentialsGenerationChangedError,
   UnsendableRequestError,
@@ -61,16 +62,26 @@ import {
   type Wake,
 } from "./ports.ts";
 import {
+  beforeGateKeys,
   pollsFor,
   resourceDisabled,
   runsIn,
   WAIT_RECHECK_MS,
   type EngineRegistry,
+  type PlanContext,
   type ResourceModule,
   type ShadowResult,
   type StepPlan,
 } from "./resource.ts";
-import { CYCLE, pick, type ClassWorkSource, type WorkClass } from "./scheduler.ts";
+import {
+  lookaheadInstants,
+  parseRouteState,
+  routeExclusions,
+  routeJournalLookbackMs,
+  RouteClocks,
+  type RouteState,
+} from "./route-policy.ts";
+import { CYCLE, isPickWait, pick, type ClassWorkSource, type PickWait, type WorkClass } from "./scheduler.ts";
 import type { PageTransport } from "./shadow.ts";
 
 // One page's actor (plan §3, §8; design §3.5): recover → loop (plan → admit →
@@ -78,7 +89,10 @@ import type { PageTransport } from "./shadow.ts";
 // finish before the slot wait of step k+1 (I2 by construction; both take
 // ≪ 100 ms against a pause ≥ 2 s). The actor is the page's only sender while it
 // runs; whatever it learns about the world it reads from the database on every
-// lap, so a lost NOTIFY costs at most a second.
+// lap, so a lost NOTIFY costs at most a second. Steps that need no request
+// (a deletion carried to the hot table, a closure) run before the HTTP gate
+// on every lap (ruling 9, `stepBeforeGate`): a page hold or the pacer delays
+// requests only.
 //
 // It leaves its loop when it is told to stop (shutdown, mode change), when its
 // ownership is gone (the lock session ended, or a commit met a foreign
@@ -101,6 +115,13 @@ export const COMMIT_ATTEMPTS = 3;
 export const FAILURE_BACKOFF_MS = 1_000;
 /** A live page whose gates are closed re-checks this often (I17). */
 export const LIVE_GATE_RECHECK_MS = 5_000;
+/** A page whose route state this build cannot read re-reads it this often
+ *  (its admission stays closed meanwhile). */
+export const ROUTE_STATE_RECHECK_MS = 5_000;
+/** Due works planned before the HTTP gate per lap (ruling 9): a burst beyond
+ *  it goes on next lap, so a step that leaves its work due at once (an
+ *  overflowed deletion batch) never keeps the page from its requests. */
+export const STEPS_BEFORE_GATE_PER_LAP = 10;
 
 /** Routes the page's captured WS receipts into shadow demand, once per lap
  *  (design §3.12, S2-10); the only writer of `ws_router_cursor`. */
@@ -115,6 +136,9 @@ export interface ActorDeps extends CommitDeps {
   /** The live page's socket owner (`ws.connect` plans by its state); absent
    *  in shadow and where no socket owner runs. */
   socket?: LivePageSocketRef;
+  /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
+   *  host passes it through from its own test option, `main.ts` never. */
+  routeTimeScale?: number;
 }
 
 export type ActorExit =
@@ -144,8 +168,7 @@ type Gate =
    *  admits may take the slot — a candidate check (E16) and, with `verify`,
    *  the verify of changed stored credentials (A3). */
   | { open: true; page: SyncPageRow; checks: { verify: boolean } | null }
-  | { open: false; waitMs: number }
-  | { open: false; exit: ActorExit };
+  | { open: false; waitMs: number };
 
 function isAbort(error: unknown, signal: AbortSignal): boolean {
   return signal.aborted && (error === signal.reason || (error instanceof Error && error.name === "AbortError"));
@@ -154,6 +177,8 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
+  /** The route state diagnostic last logged (null: the state reads). */
+  #routeStateProblem: string | null = null;
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
 
@@ -208,9 +233,16 @@ export class SyncActor {
     }
     if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) await this.#ensurePolls();
 
-    const gate = await this.#gate();
+    const owned = await getSyncPage(d.db, d.pageId);
+    if (owned === null) return { kind: "mode_changed", mode: null };
+    const lost = this.#ownershipExit(owned);
+    if (lost !== null) return lost;
+    // Ruling 9: what needs no request is not the HTTP gate's to stop — no
+    // page hold, no pacer slot; the owner's pause of the page still stops it.
+    if (!owned.pausedAll) await stepBeforeGate(d, owned, signals.stop);
+
+    const gate = await this.#gate(owned);
     if (!gate.open) {
-      if ("exit" in gate) return gate.exit;
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
     }
@@ -224,10 +256,16 @@ export class SyncActor {
     }
     if (signals.stop.aborted) return { kind: "stopped" };
     // The work is chosen at the slot: re-read the page (cycle pointer, pauses,
-    // holds) now, not before the wait.
+    // holds, route state) and the route clocks now, not before the wait.
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
+    const routeState = this.#routeState(page);
+    if (routeState === null) {
+      await this.#sleep(ROUTE_STATE_RECHECK_MS, signals.stop);
+      return null;
+    }
     const now = d.clock.wallNow();
+    const clocks = await this.#routeClocks(routeState);
     const held = activeFanslyPageHold(page, now);
     const underCredentials = gate.checks !== null && held !== null && held.credentials !== null && held.timed === null;
     // G2 from the database, never from memory: while the stored credentials
@@ -237,13 +275,21 @@ export class SyncActor {
     const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly });
     const picked = underCredentials
       ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
-      : await this.#pick(page, now, exclusions);
+      : await this.#pick(page, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
+    if (picked !== null && isPickWait(picked)) {
+      // The short look-ahead: the slot waits for the class whose turn it is
+      // (nothing is reserved; a wake picks again).
+      d.metrics.increment("sync_route_lookahead_waits", { workClass: picked.workClass, shadow });
+      await d.wake.wait(d.pageId, Math.max(0, picked.waitUntil.getTime() - now.getTime()), signals.stop);
+      return null;
+    }
     if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed", unverified)) return null;
     if (picked === null) {
-      // Idle until the next work this pick could take: a paused, switched-off
-      // or held row is never "due" here, or the actor would lap without
-      // sleeping for as long as it stays so.
-      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...exclusions });
+      // Idle until the next work this pick could take: a paused, switched-off,
+      // held or route-closed row is never "due" here, or the actor would lap
+      // without sleeping for as long as it stays so.
+      const idleExclusions = withRouteExclusions(exclusions, d.registry, clocks, now);
+      const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...idleExclusions });
       const untilDue = due === null ? ACTOR_IDLE_WAIT_MS : due.getTime() - now.getTime();
       await d.wake.wait(d.pageId, Math.max(0, Math.min(untilDue, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -252,23 +298,16 @@ export class SyncActor {
     const module = await d.registry.module(picked.work.resource);
     let plan: StepPlan;
     try {
-      plan = await module.plan(picked.work, {
-        db: d.db,
-        pageId: d.pageId,
-        shadow,
-        now,
-        page,
-        registry: d.registry,
-        ...(d.settings === undefined ? {} : { settings: d.settings }),
-        ...(shadow || d.socket === undefined ? {} : { socket: d.socket() }),
-      });
+      plan = await module.plan(picked.work, planContextOf(d, page, now));
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
       return null;
     }
     if (plan.kind === "local") {
-      // A write without a request (design §3.3 item 3): picked at a slot like
-      // any work, but nothing is admitted or sent, so the slot stays open.
+      // A write without a request (design §3.3 item 3) of a key that plans at
+      // its slot (a walk's stamp between its reads), or of one the bounded
+      // step before the gate did not reach this lap: nothing is admitted or
+      // sent, so the slot stays open.
       await applyLocal(d, picked.work, module);
       return null;
     }
@@ -276,14 +315,15 @@ export class SyncActor {
       await commitNoHttp(d, picked.work, plan);
       return null;
     }
-    // Owner decision №20: an endpoint group with a quota of its own (the
-    // media statistics) takes at most one request per its spacing on this
-    // page, on top of the pause S — whatever key, demand or restart asks.
-    // Nothing is admitted; the slot stays open for other work.
-    const spacedUntil = await this.#endpointSpacedUntil(plan.request.spec, now);
-    if (spacedUntil !== null) {
-      d.metrics.increment("sync_endpoint_spaced", { resource: picked.work.resource, shadow });
-      await deferForEndpointSpacing(d, picked.work, spacedUntil);
+    // The planned request's own route, for every key (a walk over several
+    // routes, a probe, the CDN, the Upgrade): a route its budget or hold
+    // keeps closed admits nothing — the work is due again when it opens and
+    // the slot stays open for other work.
+    const route = routeOfWireId(plan.request.spec);
+    if (!clocks.admits(route, d.clock.wallNow())) {
+      const until = clocks.notBefore(route)!;
+      d.metrics.increment("sync_route_deferred", { resource: picked.work.resource, route, shadow });
+      await deferForRoute(d, picked.work, until);
       return null;
     }
 
@@ -427,29 +467,51 @@ export class SyncActor {
     return { ok: false, exit: { kind: "failed", error: errorName(last) } };
   }
 
-  /** When the page may next admit a request on `route`'s endpoint group, if
-   *  that is later than now; null: now (or the route has no spacing). Read
-   *  from the attempt journal by the database clock, so a demand bump, a
-   *  restarted walk or a restarted process never shortens it. */
-  async #endpointSpacedUntil(route: string, now: Date): Promise<Date | null> {
+  /** The page's route state, or null while this build cannot read it: the
+   *  page admits nothing then (a metric, and one log line per diagnostic). */
+  #routeState(page: SyncPageRow): RouteState | null {
+    const read = parseRouteState(page.routeState);
+    if (read.ok) {
+      this.#routeStateProblem = null;
+      return read.state;
+    }
     const d = this.#d;
-    const group = endpointRateGroupOfRoute(route);
-    if (group === null || group.spacingMs === null) return null;
-    const remainingMs = await endpointSpacingRemainingMs(d.db, {
-      pageId: d.pageId,
-      shadow: d.mode === "shadow",
-      operations: [...group.routes],
-      spacingMs: group.spacingMs,
-    });
-    return remainingMs > 0 ? new Date(now.getTime() + remainingMs) : null;
+    d.metrics.increment("sync_route_state_unreadable", { pageId: d.pageId });
+    if (this.#routeStateProblem !== read.diagnostic) {
+      this.#routeStateProblem = read.diagnostic;
+      d.logger.error({ pageId: d.pageId, diagnostic: read.diagnostic },
+        "Fansly sync actor: the page's route state is not one this build reads; nothing is admitted until it is");
+    }
+    return null;
   }
 
-  async #gate(): Promise<Gate> {
+  /** The route clocks at this slot, from the journal the page runs (and the
+   *  legacy send log on a live page): never from memory. */
+  async #routeClocks(state: RouteState): Promise<RouteClocks> {
     const d = this.#d;
-    const page = await getSyncPage(d.db, d.pageId);
-    if (page === null) return { open: false, exit: { kind: "mode_changed", mode: null } };
-    if (page.owner.generation !== d.generation) return { open: false, exit: { kind: "ownership_lost", foreign: true } };
-    if (page.mode !== d.mode) return { open: false, exit: { kind: "mode_changed", mode: page.mode } };
+    const options = d.routeTimeScale === undefined ? {} : { timeScale: d.routeTimeScale };
+    const sends = await readRouteJournal(d.db, {
+      pageId: d.pageId,
+      shadow: d.mode === "shadow",
+      withinMs: routeJournalLookbackMs(state, options),
+      legacy: d.mode === "live",
+    });
+    return new RouteClocks({ sends, state, ...options });
+  }
+
+  /** Why this actor may not step the page at all (null: it may): another
+   *  generation owns it, or it left this actor's mode. */
+  #ownershipExit(page: SyncPageRow): ActorExit | null {
+    const d = this.#d;
+    if (page.owner.generation !== d.generation) return { kind: "ownership_lost", foreign: true };
+    if (page.mode !== d.mode) return { kind: "mode_changed", mode: page.mode };
+    return null;
+  }
+
+  /** The HTTP gate of a page this actor owns: the owner's pause, then the
+   *  page hold. */
+  async #gate(page: SyncPageRow): Promise<Gate> {
+    const d = this.#d;
     if (page.pausedAll) return { open: false, waitMs: ACTOR_IDLE_WAIT_MS };
     const now = d.clock.wallNow();
     const hold = activeFanslyPageHold(page, now);
@@ -520,15 +582,33 @@ export class SyncActor {
     return { work, workClass: "urgent", slot, nextCyclePos: (slot + 1) % CYCLE.length, requestTurn: null };
   }
 
-  async #pick(page: SyncPageRow, now: Date, exclusions: PickExclusions): Promise<PickedWork | null> {
+  async #pick(
+    page: SyncPageRow,
+    now: Date,
+    exclusions: PickExclusions,
+    clocks: RouteClocks,
+    lookaheadUntilMs: number,
+  ): Promise<PickedWork | PickWait | null> {
     const d = this.#d;
     const shadow = d.mode === "shadow";
     const eligible = (work: SyncWorkRow): boolean =>
       activeResourceHold(page.resourceHolds as Record<string, ResourceHoldEntry>, work.resource, now) === null;
+    // The keys whose routes are all closed at an instant stay out of the pick
+    // at that instant (by key, in SQL: a closed key never hides open work
+    // behind the candidate limit).
+    const byInstant = new Map<number, PickExclusions>();
+    const exclusionsAt = (at: Date): PickExclusions => {
+      let found = byInstant.get(at.getTime());
+      if (found === undefined) {
+        found = withRouteExclusions(exclusions, d.registry, clocks, at);
+        byInstant.set(at.getTime(), found);
+      }
+      return found;
+    };
     const source: ClassWorkSource<{ work: SyncWorkRow; requestTurn: RequestTurn | null }> = {
-      async pickInClass(workClass: WorkClass) {
+      async pickInClass(workClass: WorkClass, _now: Date, admissibleAt?: Date) {
         // Due times are written by the database clock: compare by it too.
-        const filter = { pageId: d.pageId, shadow, now: null, ...exclusions };
+        const filter = { pageId: d.pageId, shadow, now: null, ...exclusionsAt(admissibleAt ?? now) };
         switch (workClass) {
           case "urgent": {
             const rows = await pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT });
@@ -557,8 +637,8 @@ export class SyncActor {
       pausedAll: page.pausedAll,
       pausedRequests: page.pausedRequests,
       holdUntil: hold === null ? null : hold.until,
-    }, now);
-    if (picked === null) return null;
+    }, now, lookaheadInstants(d.registry.specs, clocks, now, new Date(lookaheadUntilMs)));
+    if (picked === null || isPickWait(picked)) return picked;
     return {
       work: picked.work.work,
       workClass: picked.workClass,
@@ -588,6 +668,61 @@ export class SyncActor {
   async #sleep(ms: number, signal: AbortSignal): Promise<void> {
     await this.#d.clock.sleep(ms, signal).catch(() => undefined);
   }
+}
+
+/** What a plan reads: the page as the step sees it, the live settings and,
+ *  on a live page whose process runs one, its socket owner. */
+function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext {
+  const shadow = d.mode === "shadow";
+  return {
+    db: d.db,
+    pageId: d.pageId,
+    shadow,
+    now,
+    page,
+    registry: d.registry,
+    ...(d.settings === undefined ? {} : { settings: d.settings }),
+    ...(shadow || d.socket === undefined ? {} : { socket: d.socket() }),
+  };
+}
+
+/**
+ * Ruling 9 (step 3b): the steps that need no request run before the page's
+ * HTTP gate, so a page hold (auth, identity, 429, network) or the pacer's
+ * pause delays only requests — never a socket deletion carried to the hot
+ * table and the archive, nor a closure that needs no read. The due work of
+ * the keys that plan here (`beforeGateKeys`: those without HTTP first), at
+ * most `STEPS_BEFORE_GATE_PER_LAP` rows a lap, is planned on `page` (read
+ * this lap, owned by this generation and mode, not paused): a `local` plan
+ * commits through `applyLocal` (the generation fence, the erasure fence its
+ * entry declares, live only), a closure, a wait or a quarantine through
+ * `commitNoHttp` (the generation fence); a plan that asks for a request is
+ * left as it is for its slot. Nothing is admitted, sent or paced, and the
+ * cycle does not move. Returns the steps committed.
+ */
+export async function stepBeforeGate(d: ActorDeps, page: SyncPageRow, stop: AbortSignal): Promise<number> {
+  const shadow = d.mode === "shadow";
+  const resources = beforeGateKeys(d.registry, page, shadow);
+  if (resources.length === 0) return 0;
+  const works = await pickBeforeGateWork(d.db, { pageId: d.pageId, shadow, resources, limit: STEPS_BEFORE_GATE_PER_LAP });
+  let committed = 0;
+  for (const work of works) {
+    if (stop.aborted) break;
+    const module = await d.registry.module(work.resource);
+    let plan: StepPlan;
+    try {
+      plan = await module.plan(work, planContextOf(d, page, d.clock.wallNow()));
+    } catch (error) {
+      await deferAfterPlanError(d, work, error);
+      continue;
+    }
+    if (plan.kind === "request") continue;
+    if (plan.kind === "local") await applyLocal(d, work, module);
+    else await commitNoHttp(d, work, plan);
+    committed += 1;
+    d.metrics.increment("sync_steps_before_gate", { resource: work.resource, plan: plan.kind, shadow });
+  }
+  return committed;
 }
 
 /**
@@ -649,4 +784,17 @@ export function pickExclusions(
     excludeFiles: files.sort(),
     excludeClasses: page.pausedRequests === true || options.checksOnly === true ? ["requests"] : [],
   };
+}
+
+/** `exclusions` plus the keys none of whose routes admits a send at `at`
+ *  (`routeExclusions`). */
+export function withRouteExclusions(
+  exclusions: PickExclusions,
+  registry: Pick<EngineRegistry, "specs">,
+  clocks: RouteClocks,
+  at: Date,
+): PickExclusions {
+  const closed = routeExclusions(registry.specs, clocks, at);
+  if (closed.length === 0) return exclusions;
+  return { ...exclusions, excludeResources: [...new Set([...exclusions.excludeResources, ...closed])].sort() };
 }

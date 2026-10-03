@@ -56,7 +56,8 @@ export interface ResourceSpec extends EngineResourceSpec {
   minIntervalMs?: number;
   proof: ProofKind;
   walk: WalkKind;
-  /** Every wire route its steps send; empty for socket, CDN and no-HTTP work. */
+  /** Every wire route its steps send (the route admission's pick-time
+   *  check); empty for socket frames, no-HTTP work and the owner's probe. */
   operations: readonly FanslyWireId[];
   /** The observation kinds this entry replays for the shadow report (one
    *  owner per kind, design §3.12 B5). */
@@ -222,10 +223,14 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: dmConversationsModule("full"),
   },
   {
+    // Planned before the HTTP gate too (ruling 9): what its plan settles
+    // without a request (a wait for the page's identity; a closure, once a
+    // list read answered the find) commits there with no slot; its reads
+    // wait for theirs.
     key: "dm-conversations.find", file: "dm-conversations", subject: "thread", kind: "trigger", class: "urgent",
     triggers: ["ws:group_created", "ws:message_unknown_chat", "dependency"],
     coalesce: { quietMs: 0, maxMs: 0, extendOnSignal: false }, slo: { resultMs: 12 * SECOND },
-    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
+    proof: "snapshot", walk: "single", http: true, planBeforeGate: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups", "group.detail"], replayKinds: ["group_detail"],
     legacy: [stream("dm_conversations"), sender("ws_hint")],
     module: dmConversationsModule("find"),

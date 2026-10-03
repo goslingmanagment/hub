@@ -607,6 +607,34 @@ export async function pickCredentialsCheck(
   return row ? normalizeWorkRow(row) : null;
 }
 
+/**
+ * The due open work of the keys the actor plans before its HTTP gate (ruling
+ * 9: steps that need no request wait for no page hold and no pacer slot), in
+ * the order of `resources`, then by deadline (none last), oldest demand and
+ * id. No class, page hold or resource hold filters it — none of those stops
+ * a step without a request; a subject breaker still does, as in every pick.
+ */
+export async function pickBeforeGateWork(
+  db: Database,
+  input: { pageId: number; shadow: boolean; resources: readonly string[]; limit: number },
+): Promise<SyncWorkRow[]> {
+  if (input.resources.length === 0) return [];
+  const resources = textArrayParam(input.resources);
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns}
+      from sync_work w
+     where w.page_id = ${input.pageId}
+       and w.shadow = ${input.shadow}::boolean
+       and w.state = 'open'
+       and w.resource = any(${resources})
+       and w.due_at <= clock_timestamp()
+       and (w.breaker_until is null or w.breaker_until <= clock_timestamp())
+     order by array_position(${resources}, w.resource), w.deadline_at nulls last, w.first_demand_at, w.id
+     limit ${Math.max(1, input.limit)}
+  `);
+  return result.rows.map(normalizeWorkRow);
+}
+
 export interface PlannedPick {
   work: SyncWorkRow;
   /** `due_poll`: a poll whose due time passed (level 1); `round_robin`: the

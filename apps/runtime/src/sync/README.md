@@ -18,19 +18,21 @@ sync/
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
     pacer.ts                 the ONLY admission authority: the pause rule, one request in flight, takeover floor
-    scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes
+    route-policy.ts          the route budgets on top of it: clocks from the journal, route state, pick exclusion, look-ahead
+    scheduler.ts             the 10-slot cycle U R U R U R U R U P over the three classes (+ the short look-ahead)
     errors.ts                outcome → error class → page hold / network pause / breakers / quarantine
     status.ts                "why waiting" and the page status
     resource.ts              the resource contract (plan / apply / shadow) and the rules every entry shares
     host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
-    actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
+    actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
+    routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
@@ -81,6 +83,15 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+Steps that need no request do not wait for the HTTP gate (step 3b, ruling 9; `stepBeforeGate` in `engine/actor.ts`).
+On every lap, after the due applies and before the page hold and the pacer, the actor plans the due work of the keys
+without HTTP (`dm-live.deletions`) and of the keys that plan before the gate by choice (`planBeforeGate`:
+`dm-conversations.find`, which a list read may already have answered) — at most 10 rows a lap, the keys without HTTP
+first, under the same fences: the owner generation and mode, the erasure fence the entry takes; the owner's pause of
+the page and of a key still stops them. A `local` plan, a closure, a wait or a quarantine commits there; a plan that
+asks for a request is left for its slot. Nothing is admitted or paced and the cycle does not move; "why waiting"
+never shows a key without HTTP as held by the page or the pacer.
 
 ## History requests
 
@@ -178,11 +189,11 @@ decoder plus new chats, money, subscriptions and payouts) and one routing table 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
 broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; on a live page it is a
-`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, picked at a
-slot like any work but admitting nothing): the page's hot rows of the message are marked (sticky), one deliverable
-`message.deleted` is appended and the archive tombstoned from it (tombstone-first, sticky against a later REST copy),
-and the stored window of every touched thread is recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays
-the conversation list's, the chain is untouched.
+`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
+the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
+rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
+from it (tombstone-first, sticky against a later REST copy), and the stored window of every touched thread is
+recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
 page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
@@ -212,7 +223,7 @@ These four keys never run in shadow (`liveOnly`, as the identity check `account.
   (`connectNotBefore`) — and the transport sends it through the owner's handshake with the admission's check. A 401/403 at the handshake holds the page `auth`, a 429 holds it `rate_limit`; any
   other failure closes the work `failed_handshake` for the owner's reconnect ladder — no page network streak.
 - `repair.ws-gap` — after a socket gap: the conversation list from offset 0 down to the earliest gap of the
-  unreconciled verified connections (60 s earlier; with none, the work's first demand), pages ≥ 5 s apart,
+  unreconciled verified connections (60 s earlier; with none, the work's first demand), pages at the list route's budget,
   every moved chat read at once, the money head and the subscribers poll bumped; when what it asked for has
   served its demand (≤ 10 min), a `local` step stamps the connections (`state_reconciled_at`,
   `transient_unknown`). Demand during a pass starts a new pass on the same row.
@@ -376,7 +387,8 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
 | I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
-| I19 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
+| I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
+| I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
@@ -414,7 +426,7 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `resource_hold` | ≥ 5 subjects of the resource failed within 10 min: 30 min → 2 h → 6 h (never `dm-messages.head`); or the conversation list answered 429: only the keys that can only read the list wait, 5 s → 10 s → … → 300 s | the hold's end |
 | `dependency` | the resource waits for other work or data | that work |
 | `not_due` | its time has not come (poll period, coalescing window) | the due time |
-| `pacer` | runnable; the page's next slot has not opened yet | the pause |
+| `pacer` | runnable; the page's next slot has not opened yet, or every route of the key is closed by its budget or a route hold (`detail.routes`; a request its planned route put off is due when that route opens) | the pause; the route's opening |
 | `class_share` | runnable; the slot belongs to another class or to earlier work of its class | its turn |
 
 ## Errors
@@ -422,10 +434,8 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 `engine/errors.ts` classifies every outcome and decides every consequence in one place (`onOutcome`); the commit
 transactions only write what it decided. The engine never changes `S`: a 429 holds the page and alerts the owner —
 except a 429 on an endpoint group with a quota of its own (`ENDPOINT_RATE_GROUPS`): the conversation list (owner
-decision №14) and the media statistics (owner decision №20), which holds only that group's keys. The media
-statistics are also spaced: the actor admits a request on `media.offer_stats` no sooner than 5 s after the page's
-previous one there (by the attempt journal, on top of `S`; a put-off row waits with `waiting_reason = 'pacer'`
-while other work takes the slot).
+decision №14) and the media statistics (owner decision №20), which holds only that group's keys. How often a route
+is read is its budget's (below), never a group's.
 A retry after an error is always a new attempt through the same admission.
 
 | Answer | Class | Consequence |
@@ -449,6 +459,41 @@ quarantined at the third try; a deterministic one (SQLSTATE class 22/23, contrac
 Two deterministic errors stop more than their work: an identity error (`PlatformAccountIdentity*Error`) goes through
 `onOutcome` as `identity_mismatch` (page hold until an identity proof after it, alerts 1 and 2), and a wrong transactions writer
 holds the resource file (30 min → 2 h → 6 h).
+
+## Route budgets (step 3b)
+
+Fansly's quota is a bucket per page and endpoint (≈ 20 a minute; `impl/research-astra-quota-model.md`), so on top of
+the pause S every route of a page has a strict budget of its own (owner decisions №21–№26, plan PR 1-1).
+
+- **Routes** (`fansly/routes.ts`): one canonical route per GET endpoint — every wire spec (the socket's Upgrade
+  `ws.upgrade` and the media CDN `cdn.media` included) under its wire id, plus the endpoints only the legacy engine
+  reads. Parameters never make another route. `FANSLY_LEGACY_OPERATION_ROUTES` maps every
+  `fansly_send_log.operation` onto them (pinned complete by `tests/sync-route-policy.test.ts`).
+- **Budgets**: `ceiling` (the code maximum) and `current` (what every page runs at) per route — 15/min by
+  default, the list 12, the media statistics 5 under a 12 ceiling — and per family on top: messaging (the list, a
+  group's detail, `/message`) 15/min, earnings (`/account/wallets/earnings/*`) 17/min. `current` moves only by a
+  calibration PR, +1/min a step, on evidence. `ROUTE_POLICY_HASH` names the table.
+- **Strict admission** (`engine/route-policy.ts`): a route (and its family) admits its next send no sooner than one
+  interval of its effective rate after its previous ACTUAL send — no burst, an idle hour earns nothing. The clocks
+  are read from the journal at every slot (`readRouteJournal`): the page's own journal (a shadow page its shadow
+  one, so the shadow report sees the budgets live pages keep), and on a live page the legacy send log too (what the
+  legacy engine sent before the switch). A send whose instant is unknown counts at its upper bound (admission +
+  the send window; a guard capture's completion or lease end); an operation nobody can place counts on every route.
+- **At the pick** a key all of whose routes are closed is left out (`routeExclusions`, in SQL like every
+  exclusion): a spent route never takes a slot. **The short look-ahead**: when the class whose turn it is has
+  nothing admissible now but a candidate that opens within 1.2 × S, the slot waits for it rather than serve a
+  later class (a planned read squeezed in would push it a whole pause later); nothing is reserved, the pointer
+  moves only on an admission. **After the plan** the planned request's own route is checked for every key (a walk
+  over several routes, `probe.manual`, the CDN, the Upgrade): closed, the work is put off until it opens
+  (`waiting_reason = 'pacer'`), nothing admitted, the slot open for other work.
+- **Route state**: a page's holds and slowdowns after a 429 live in one versioned namespace of its row
+  (`resource_holds['route:state']`, `SYNC_ROUTE_STATE_KEY`; the page row hands it out apart as `routeState`). It may
+  only make a route slower: the effective rate is the lower of `current` and the stored one, a stored hold closes
+  its route to its end. A namespace this build cannot read closes the page's admission (`page_hold` with
+  `detail.routeState` in "why", alert 1 `route_state_unreadable`, metric `sync_route_state_unreadable`).
+- **Status and why** (owner CLI): `sync page status` lists each route the page used recently and each family —
+  ceiling, current, effective rate, interval, newest send, hold, when it opens — with the policy hash; `sync why`
+  names the closed routes of a key waiting on `pacer`.
 
 ## Alerts, metrics and the shadow report
 
@@ -506,6 +551,7 @@ another pick.
 | The pause | the owner's console ("Пауза между запросами Fansly"); 0 files |
 | The jitter rule | one line in `engine/pacer.ts` + the invariant tests (`tests/sync-pacer*.test.ts`) |
 | How fresh a resource is | one line in `fansly/registry.ts` |
+| A route's budget (a calibration step) | one entry in `fansly/routes.ts` (`ROUTE_BUDGETS` / `FAMILY_BUDGETS`) + the pinned table in `tests/sync-route-policy.test.ts` |
 | How fresh a resource is on one page, without a deploy | `pnpm cli sync page override --page <label> --resource <key>` with `--period-ms` (a poll), `--period-ms`/`--full-period-ms` (`catalog.vault`) or `--tiers '<json>'` (`media-stats.walk`); owner decision №6 keys need `--owner-approved` |
 | Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
 | The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |

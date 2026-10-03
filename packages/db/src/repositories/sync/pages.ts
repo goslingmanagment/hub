@@ -42,6 +42,15 @@ export const SYNC_ENGINE_GUARD_OWNER = "fansly_sync_engine" satisfies FanslySend
 export const SYNC_RESOURCE_KEY_PATTERN = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 /** A resource file (the part of a key before the dot). */
 export const SYNC_RESOURCE_FILE_PATTERN = /^[a-z][a-z0-9-]*$/;
+/**
+ * The route-state namespace of a page (step 3b ruling 4): one versioned
+ * object inside `resource_holds`, under a key no resource file can have (the
+ * colon), so `setResourceHold` never touches it and a build that predates it
+ * reads it as an entry without an `until` — never a hold. The page row hands
+ * it out apart (`SyncPageRow.routeState`, raw); the engine's route policy
+ * (`apps/runtime/src/sync/engine/route-policy.ts`) reads it.
+ */
+export const SYNC_ROUTE_STATE_KEY = "route:state";
 
 export interface SyncPageRow {
   pageId: number;
@@ -62,7 +71,11 @@ export interface SyncPageRow {
   holdStep: number;
   holdDetail: Record<string, unknown>;
   networkFailureStreak: number;
+  /** The resource holds by file, the route-state namespace left out. */
   resourceHolds: Record<string, SyncResourceHold>;
+  /** `resource_holds['route:state']` as stored (null: none); the route policy
+   *  parses it and closes admission on a shape it does not know. */
+  routeState: unknown;
   identityAccountId: string | null;
   identityCheckedAt: Date | null;
   credentialsGeneration: string | null;
@@ -139,6 +152,7 @@ type PageSqlRow = {
   holdDetail: Record<string, unknown> | null;
   networkFailureStreak: number;
   resourceHolds: Record<string, SyncResourceHold> | null;
+  routeState: unknown;
   identityAccountId: string | null;
   identityCheckedAt: Date | string | null;
   credentialsGeneration: string | null;
@@ -187,7 +201,8 @@ const pageColumns = sql`
   sp.hold_step as "holdStep",
   sp.hold_detail as "holdDetail",
   sp.network_failure_streak as "networkFailureStreak",
-  sp.resource_holds as "resourceHolds",
+  sp.resource_holds - ${SYNC_ROUTE_STATE_KEY}::text as "resourceHolds",
+  sp.resource_holds -> ${SYNC_ROUTE_STATE_KEY}::text as "routeState",
   sp.identity_account_id as "identityAccountId",
   sp.identity_checked_at as "identityCheckedAt",
   sp.credentials_generation as "credentialsGeneration",
@@ -256,6 +271,7 @@ function normalizePageRow(row: PageSqlRow): SyncPageRow {
     holdDetail: row.holdDetail ?? {},
     networkFailureStreak: Number(row.networkFailureStreak),
     resourceHolds: row.resourceHolds ?? {},
+    routeState: row.routeState ?? null,
     identityAccountId: row.identityAccountId,
     identityCheckedAt: toDate(row.identityCheckedAt),
     credentialsGeneration: row.credentialsGeneration,

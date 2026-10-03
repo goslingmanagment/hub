@@ -1065,8 +1065,9 @@ export interface TakeoverRecord {
  * The options of a live host over the harness: the production host, ownership
  * session and takeover floor (`paceFloorFromDb`), journal codec and history
  * hooks (as `main.ts` wires them), the harness transport and registry, S from
- * `sync_test_setting`, the test-only 1 ms setting floor. `takeovers` records
- * every pacer's takeover instant.
+ * `sync_test_setting`, the test-only 1 ms setting floor and no route budget
+ * unless asked (`routeTimeScale`). `takeovers` records every pacer's takeover
+ * instant.
  */
 export function harnessHostOptions(input: {
   db: Database;
@@ -1084,6 +1085,8 @@ export function harnessHostOptions(input: {
   logger?: SyncHostOptions["logger"];
   alerts?: SyncHostOptions["alerts"];
   faults?: SyncHostOptions["faults"];
+  /** The route budgets' time scale (default 0: none at the test pause). */
+  routeTimeScale?: number;
 }): SyncHostOptions {
   return {
     db: input.db,
@@ -1102,6 +1105,7 @@ export function harnessHostOptions(input: {
     ...(input.probe === undefined ? {} : { probe: input.probe }),
     pause: harnessPauseSource(input.pool),
     liveLoopEnabled: true,
+    routeTimeScale: input.routeTimeScale ?? 0,
     pacerFactory: (deps): Pacer => {
       const pacer = createPacer({ ...deps, minSettingMs: 1 });
       const takeovers = input.takeovers;

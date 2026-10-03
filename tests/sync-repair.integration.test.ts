@@ -8,7 +8,7 @@ import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fans
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
-import { REPAIR_LIST_SPACING_MS } from "../apps/runtime/src/sync/fansly/resources/repair.ts";
+import { intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   makeTestActor,
@@ -28,7 +28,8 @@ import {
 // `/polls`, so only the repair's own walk is under test. Pinned: a pass takes
 // its window from the unreconciled verified connections (or the work's first
 // demand), reads the list down to the first chat older than the window with
-// pages ≥ 5 s apart, asks for an urgent head read of every chat that moved and
+// pages its route's budget apart (the list's 12/min, here at a fifth of the
+// production intervals), asks for an urgent head read of every chat that moved and
 // for money and subscribers, waits for them, stamps every connection it
 // covered; a reconnect during a pass starts a new pass that stamps the new
 // connection too; a list 429 holds only the list. `.ws-down` reads the list
@@ -56,6 +57,9 @@ function db(): Database {
 const OWN_ID = "300000000000000001";
 const MINUTE = 60_000;
 const GENERATION = "a".repeat(64);
+/** The route budgets at a fifth of production: the list's 5 s is 1 s here. */
+const ROUTE_SCALE = 0.2;
+const LIST_INTERVAL_MS = Math.ceil(intervalMsOf(routeBudget("messaging.groups").currentPerMin) * ROUTE_SCALE);
 
 const pad = (n: number, width: number) => String(n).padStart(width, "0");
 const groupOf = (n: number) => `71000000000${pad(n, 7)}`;
@@ -217,7 +221,9 @@ type Responder = (req: FanslyWireRequest, index: number) => FanslyWireOutcome;
 async function run(pageId: number, reg: EngineRegistry, respond: Responder, done: () => Promise<boolean>, timeoutMs = 30_000) {
   const transport = new ScriptedLiveTransport();
   transport.respond = respond;
-  const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID });
+  const { actor, stop, abort } = await makeTestActor({
+    db: db(), pageId, mode: "live", registry: reg, transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
+  });
   const running = actor.run({ stop: stop.signal, abort: abort.signal });
   try {
     await waitFor(async () => ((await done()) ? true : null), timeoutMs, "the repair to settle");
@@ -257,9 +263,9 @@ describe("repair.ws-gap", () => {
 
     const reads = await listOffsets(pageId, "repair.ws-gap");
     expect(reads.map((read) => read.offset)).toEqual([0, 100]);
-    expect(reads[1]!.sent_at.getTime() - reads[0]!.sent_at.getTime()).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+    expect(reads[1]!.sent_at.getTime() - reads[0]!.sent_at.getTime()).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
     const listHits = transport.hits.filter((hit) => hit.spec === "messaging.groups");
-    expect(listHits[1]!.mono - listHits[0]!.mono).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+    expect(listHits[1]!.mono - listHits[0]!.mono).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
     // The pass's window travels with its first step.
     const pass = (reads[0]!.step as { repair: { pass: { since: string; targets: string[] } } }).repair.pass;
     expect(pass.targets).toEqual([first, second]);
@@ -299,7 +305,7 @@ describe("repair.ws-gap", () => {
     const transport = new ScriptedLiveTransport();
     transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(chats)) : polls());
     const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId, mode: "live", registry: registry({ moneyGate: () => released }), transport, ownRef: OWN_ID,
+      db: db(), pageId, mode: "live", registry: registry({ moneyGate: () => released }), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
     });
     const running = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
@@ -319,7 +325,7 @@ describe("repair.ws-gap", () => {
     expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 1, stamped: 1 } });
   }, 60_000);
 
-  it("keeps its list pages ≥ 5 s apart when new demand pulls the row forward, across a restarted pass too", async (context) => {
+  it("keeps its list pages the list route's budget apart when new demand pulls the row forward, across a restarted pass too", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
     const now = Date.now();
@@ -333,7 +339,9 @@ describe("repair.ws-gap", () => {
     await demand(pageId, "repair.ws-gap");
     const transport = new ScriptedLiveTransport();
     transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls());
-    const { actor, stop, abort } = await makeTestActor({ db: db(), pageId, mode: "live", registry: registry(), transport, ownRef: OWN_ID });
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId, mode: "live", registry: registry(), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
+    });
     const running = actor.run({ stop: stop.signal, abort: abort.signal });
     try {
       // Between the first pass's two pages, an unbindable frame asks for a
@@ -351,12 +359,12 @@ describe("repair.ws-gap", () => {
     const reads = await listOffsets(pageId, "repair.ws-gap");
     expect(reads.map((read) => read.offset)).toEqual([0, 100, 0]);
     for (let i = 1; i < reads.length; i += 1) {
-      expect(reads[i]!.sent_at.getTime() - reads[i - 1]!.sent_at.getTime(), `list read ${i}`).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+      expect(reads[i]!.sent_at.getTime() - reads[i - 1]!.sent_at.getTime(), `list read ${i}`).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
     }
     const listHits = transport.hits.filter((hit) => hit.spec === "messaging.groups");
     expect(listHits).toHaveLength(3);
     for (let i = 1; i < listHits.length; i += 1) {
-      expect(listHits[i]!.mono - listHits[i - 1]!.mono, `list hit ${i}`).toBeGreaterThanOrEqual(REPAIR_LIST_SPACING_MS);
+      expect(listHits[i]!.mono - listHits[i - 1]!.mono, `list hit ${i}`).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
     }
     expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 0, listPages: 1 } });
   }, 75_000);
