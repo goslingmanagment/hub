@@ -49,6 +49,11 @@ pages that account is granted; the owner is granted every page implicitly.
 | `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — |
 | Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — |
 | Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — |
+| Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — |
+
+The client bootstrap lists the caller's **active** pages only (a tombstoned
+page is never listed, assigned or not) and announces every feature off until
+the owner switches it on; its row is held by `client-bootstrap.integration`.
 
 Three consequences worth stating out loud, because each has already surprised
 someone:
