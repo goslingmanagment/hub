@@ -61,7 +61,6 @@ import {
   buildNormalizedSyncError,
   FanslyPurchaseHistoryContractError,
   FanslyTransactionsItemContractError,
-  FollowersReconcileConsistencyError,
 } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
@@ -518,21 +517,6 @@ function classifyTaskFailure(
     return {
       mode: "retry",
       retryClass: FANSLY_SYNC_ENGINE_OWNED_RETRY_CLASS,
-    };
-  }
-
-  if (error instanceof FollowersReconcileConsistencyError) {
-    if (error.retryable) {
-      return {
-        mode: "retry",
-        retryClass: "followers_reconcile_snapshot_drift",
-      };
-    }
-    return {
-      mode: "blocked",
-      blockerType: "provider_bad_data",
-      blockerCode: error.code,
-      blockerReason: failure.summary,
     };
   }
 
