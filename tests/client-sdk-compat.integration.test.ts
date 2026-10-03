@@ -239,7 +239,10 @@ for (const row of CLIENT_SDK_REGISTRY) {
         if (!ready(context)) return;
         expect(await call(ctx.sdk, ctx.client, "health")).toMatchObject({ status: "ok" });
         const healthy = await raw(ctx.client, "health");
-        expect(ctx.sdk.routeSchemas.health!.response[200]!.safeParse(await healthy.json()).success).toBe(true);
+        const healthyBody = await healthy.json() as { compatibleClientSdks?: string[] };
+        expect(ctx.sdk.routeSchemas.health!.response[200]!.safeParse(healthyBody).success).toBe(true);
+        // H-1b: the hub serves this row, so a release gate for its clients passes.
+        expect(healthyBody.compatibleClientSdks).toContain(row.contractHash);
 
         const query = appContext.pool.query.bind(appContext.pool) as (...args: unknown[]) => unknown;
         const down = vi.spyOn(appContext.pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) =>
@@ -249,7 +252,7 @@ for (const row of CLIENT_SDK_REGISTRY) {
           const degraded = await raw(ctx.client, "health");
           const payload = await degraded.json() as unknown;
           expect(degraded.status).toBe(503);
-          expect(payload).toMatchObject({ status: "degraded" });
+          expect(payload).toMatchObject({ status: "degraded", compatibleClientSdks: expect.arrayContaining([row.contractHash]) });
           expect(ctx.sdk.routeSchemas.health!.response[200]!.safeParse(payload).success).toBe(true);
           expect(ctx.sdk.routeSchemas.health!.response[503]!.safeParse(payload).success).toBe(true);
         } finally {
