@@ -1,22 +1,42 @@
-const DEBUG_INPUT_CAPABILITY = "debug-input-v1";
+import { AI_STREAM_CAPABILITIES, type AiStreamCapability } from "@agency_hub_core/contracts";
+
 const MAX_CAPABILITIES_HEADER_LENGTH = 256;
 
+function isAiStreamCapability(token: string): token is AiStreamCapability {
+  return (AI_STREAM_CAPABILITIES as readonly string[]).includes(token);
+}
+
 // The capability header is client-controlled compatibility NEGOTIATION, not
-// authorization: it says "this client understands and wants the debug_input_v1
-// frame" so an old client never receives an unknown frame. The authorization —
-// whether echo is allowed at all — is the server-side kill-switch
-// `chatMuseAiPromptDebugEchoEnabled` (below), and the data boundary is the
-// unchanged page-authorization the feature lane already enforces (#140).
+// authorization: each token says "this client understands and wants the
+// matching frame or field" so an old client never receives an unknown frame.
+// The header is deliberately NOT declared in the route schema: a malformed or
+// oversized value is ignored here (empty set), never a 400 from Fastify.
+// Parsing: a single string of at most 256 chars, split on commas, trimmed,
+// case-sensitive, known tokens only; a repeated header (array) yields nothing.
+export function parseAiStreamCapabilities(
+  header: string | string[] | undefined,
+): ReadonlySet<AiStreamCapability> {
+  const capabilities = new Set<AiStreamCapability>();
+  if (typeof header !== "string" || header.length > MAX_CAPABILITIES_HEADER_LENGTH) {
+    return capabilities;
+  }
+  for (const raw of header.split(",")) {
+    const token = raw.trim();
+    if (isAiStreamCapability(token)) {
+      capabilities.add(token);
+    }
+  }
+  return capabilities;
+}
+
+// For the debug_input_v1 frame the authorization — whether echo is allowed at
+// all — is the server-side kill-switch `chatMuseAiPromptDebugEchoEnabled`
+// (below), and the data boundary is the unchanged page-authorization the
+// feature lane already enforces (#140).
 export function hasDebugInputCapability(
   header: string | string[] | undefined,
 ): boolean {
-  if (typeof header !== "string" || header.length > MAX_CAPABILITIES_HEADER_LENGTH) {
-    return false;
-  }
-  return header
-    .split(",")
-    .map((token) => token.trim())
-    .some((token) => token === DEBUG_INPUT_CAPABILITY);
+  return parseAiStreamCapabilities(header).has("debug-input-v1");
 }
 
 // The whole gate. The owner decided the assembled prompt is not withheld from

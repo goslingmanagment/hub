@@ -34,12 +34,13 @@ import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/a
 import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
-import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
+import { parseAiStreamCapabilities } from "./prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "./persona-definition.ts";
 
 export {
   hasDebugInputCapability,
   isPromptDebugEchoEnabled,
+  parseAiStreamCapabilities,
 } from "./prompt-debug-echo.ts";
 
 interface PersonaRecord {
@@ -324,15 +325,16 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
+    // Parsed once per request; unknown or malformed values are ignored.
+    const capabilities = parseAiStreamCapabilities(request.headers["x-kernel-ai-capabilities"]);
     const stream = await prepareAiFeatureStream(
       appContext,
       principal,
       request.params.feature,
       request.body,
       {
-        debugPromptEcho: hasDebugInputCapability(
-          request.headers["x-kernel-ai-capabilities"],
-        ),
+        capabilities,
+        debugPromptEcho: capabilities.has("debug-input-v1"),
       },
     );
     await pipeAiGatewaySse(request, reply, stream);
