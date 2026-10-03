@@ -4,14 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  normalizeDmTipAmountCents,
-  normalizeFanslyTimestamp,
-  trimFanslyMessagingGroupsPayload,
-} from "../apps/runtime/src/services/sync/shared.ts";
-import {
   isDmHeadStaleByTime,
   resolveDmConversationCoverageStatus,
 } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
+import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
+import { normalizeDmTipAmountCents } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
+import { normalizeFanslyTimestamp } from "../apps/runtime/src/sync/fansly/lib/timestamp.ts";
 import { FanslyAdapter } from "../packages/fansly/src/adapter.ts";
 import { createTestFanslySendGuard } from "./helpers/fansly-send-guard.ts";
 

@@ -193,12 +193,14 @@ import {
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
-  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
   persistRawPayload,
   refreshPageMetadata,
   retentionDate,
-  captureFanslyFollowerPayload,
 } from "./shared.ts";
+import {
+  captureFanslyFollowerPayload,
+  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
+} from "../../sync/fansly/lib/capture-trims.ts";
 import {
   assertDmSharedRateLimitEnabled,
   DM_MESSAGES_BREAKER_OUTAGE_LOOKBACK_MS,

@@ -44,7 +44,7 @@ const {
   FANSLY_CDN_TOKENS_STRIPPED_KINDS,
   FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
   stripFanslySignedCdnTokens,
-} = await import("../apps/runtime/src/services/sync/fansly-cdn-tokens.ts");
+} = await import("../apps/runtime/src/sync/fansly/lib/cdn-tokens.ts");
 const { persistRawPayload, retentionDate } = await import("../apps/runtime/src/services/sync/shared.ts");
 const { scrubObservationPayload } = await import("../apps/runtime/src/modules/agent-read/observation-scrub.ts");
 

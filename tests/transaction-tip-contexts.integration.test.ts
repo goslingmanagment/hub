@@ -12,7 +12,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { materializeFanslyDmTipContexts } from
-  "../apps/runtime/src/services/sync/fansly-tip-contexts.ts";
+  "../apps/runtime/src/sync/fansly/lib/tip-contexts.ts";
 import {
   runTransactionTipContextsBackfill,
   TransactionTipContextsBackfillError,

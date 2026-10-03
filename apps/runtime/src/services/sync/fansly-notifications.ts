@@ -99,11 +99,8 @@ import {
 } from "./fansly-lane.ts";
 import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";
-import {
-  FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
-  retentionDate,
-  trimFanslyNotificationsPayload,
-} from "./shared.ts";
+import { retentionDate } from "./shared.ts";
+import { FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION, trimFanslyNotificationsPayload } from "../../sync/fansly/lib/capture-trims.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
 const STREAM = "notifications" as const;
