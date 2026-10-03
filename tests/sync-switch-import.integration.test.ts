@@ -13,8 +13,8 @@ import {
   type Database,
   type ImportWorkBreakerInput,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold, INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
-import { activePageHold, INDEFINITE_UNTIL } from "../apps/runtime/src/sync/engine/errors.ts";
 import { routeFanslyWsReceiptDemand } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { SYNC_SWITCH_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
 import { importLegacyState } from "../apps/runtime/src/sync/switch/import.ts";
@@ -141,19 +141,20 @@ describe("the switch's legacy import: holds (I.4)", () => {
     expect(row.holdDetail).toMatchObject({
       importedFrom: "page_sync_states.blocker_kind",
       streams: ["light"],
+      // No engine attempt was refused: only a proof sent after the import
+      // (hold_since) clears it.
+      failedAttemptId: null,
+      failedAt: null,
       timedHold: { kind: "rate_limit", until: legacyUntil.toISOString(), detail: { importedFrom: "page_sync_provider_holds" } },
     });
     // Both in force: nothing goes out before the 429 ends (not even a
     // candidate identity check), then the auth hold alone.
-    expect(activePageHold(row, row.dbNow)).toEqual({
+    expect(activeFanslyPageHold(row, row.dbNow)).toMatchObject({
       kind: "auth",
       until: INDEFINITE_UNTIL,
-      timed: { kind: "rate_limit", until: legacyUntil },
+      timed: { kind: "rate_limit", until: legacyUntil, carried: true },
     });
-    expect(activePageHold(row, new Date(legacyUntil.getTime() + 1))).toEqual({ kind: "auth", until: INDEFINITE_UNTIL, timed: null });
-    // The owner's identity-checked renewal lifts the auth hold only.
-    expect(activePageHold({ ...row, credentialsGeneration: "f".repeat(64) }, row.dbNow))
-      .toEqual({ kind: "rate_limit", until: legacyUntil, timed: { kind: "rate_limit", until: legacyUntil } });
+    expect(activeFanslyPageHold(row, new Date(legacyUntil.getTime() + 1))).toMatchObject({ kind: "auth", until: INDEFINITE_UNTIL, timed: null });
 
     // A resumed import changes nothing.
     await setModeDirect(testDb.pool, page.pageId, "handover");

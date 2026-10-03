@@ -1,9 +1,8 @@
+import { activeFanslyPageHold, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
+
 import {
-  activePageHold,
   activeResourceHold,
   isEndpointRateLimitKind,
-  isIndefinite,
-  type PageHoldKind,
   type ResourceHoldEntry,
   type ResourceHoldKind,
 } from "./errors.ts";
@@ -69,10 +68,10 @@ export interface StatusPage {
   pausedAll: boolean;
   pausedRequests: boolean;
   pausedResources: readonly string[];
-  holdKind: PageHoldKind | null;
+  holdKind: FanslyPageHoldKind | null;
   holdUntil: Date | null;
+  holdSince: Date | null;
   holdDetail: Readonly<Record<string, unknown>>;
-  credentialsGeneration: string | null;
   resourceHolds: Readonly<Record<string, ResourceHoldEntry>>;
   owner: StatusPageOwner;
 }
@@ -132,7 +131,7 @@ export function explainWork(
   if (page.pausedResources.includes(work.resource)) {
     return { reason: "paused", until: null, detail: { scope: "resource" } };
   }
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   if (hold !== null) {
     return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
   }
@@ -250,7 +249,7 @@ export interface PageStatus {
   holds: {
     /** `until` is an ISO instant, or "infinity" for an auth / identity hold
      *  that only new credentials lift. */
-    page: { kind: PageHoldKind; until: string; since: string | null } | null;
+    page: { kind: FanslyPageHoldKind; until: string; since: string | null } | null;
     /** `kind`: the file's breaker, or the conversation list's own 429 hold. */
     resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
@@ -263,7 +262,7 @@ export interface PageStatus {
 
 export interface PageStatusInput {
   pageLabel: string | null;
-  page: StatusPage & { holdSince: Date | null; lastSendAt: Date | null };
+  page: StatusPage & { lastSendAt: Date | null };
   /** S as the actor reads it (the live owner key). */
   settingMs: number;
   now: Date;
@@ -285,7 +284,7 @@ export interface PageStatusInput {
 export function buildPageStatus(input: PageStatusInput): PageStatus {
   const { page, now } = input;
   const at = now.getTime();
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   const resources = Object.entries(page.resourceHolds)
     .filter(([, entry]) => new Date(entry.until).getTime() > at)
     .map(([file, entry]) => ({

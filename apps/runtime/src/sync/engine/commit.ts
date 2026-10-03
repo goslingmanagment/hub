@@ -10,6 +10,7 @@ import {
   getSyncPage,
   getSyncWork,
   insertAdmission,
+  insertAuditEvent,
   insertObservation,
   lastRateLimitAt,
   listUnfinishedAttempts,
@@ -26,7 +27,7 @@ import {
   PlatformAccountIdentityImmutableError,
   quarantineWork,
   recordApplyFailure,
-  recordSyncPageIdentity,
+  recordSyncPageIdentityProof,
   recoverUnfinishedAttempts,
   setNetworkFailureStreak,
   setPageHold,
@@ -54,15 +55,24 @@ import {
   type FanslyWireRead,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
+import {
+  admitUnderFanslyPageHolds,
+  fanslyPageHoldAfterCredentials,
+  fanslyPageHoldInForce,
+  proofClearsCredentialsHold,
+  readFanslyPageHolds,
+  type FanslyPageHoldOperation,
+} from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../services/sync/fansly-cdn-tokens.ts";
 import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
 import {
-  afterCredentialsHold,
   classifyWireOutcome,
   escalateResourceHold,
+  IDENTITY_CHECK_KEY,
+  identityCandidateOf,
   onOutcome,
   RATE_LIMIT_LADDER_RESET_MS,
   RESOURCE_BREAKER_WINDOW_MS,
@@ -72,6 +82,7 @@ import {
   type OutcomeDecision,
   type PageErrorState,
   type ResourceHoldEntry,
+  VERIFY_KEY,
 } from "./errors.ts";
 import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
 import type { AlertSink, Clock, Metrics, Rng, SecretBox, SettingsSource } from "./ports.ts";
@@ -455,9 +466,33 @@ async function afterSettle(
 
 // ── tx 1: admission ─────────────────────────────────────────────────────────
 
+/** What a picked work's request is to the page holds: a live candidate
+ *  identity check, the live verify of the stored credentials with the digest
+ *  its request carries (A3), or any other request. */
+export function pageHoldOperationOf(
+  d: Pick<CommitDeps, "mode">,
+  work: Pick<SyncWorkRow, "resource" | "params">,
+  prepared: Pick<FanslyWireRequest, "credentialsGeneration"> | null,
+): FanslyPageHoldOperation {
+  if (d.mode !== "live") return { kind: "request" };
+  if (work.resource === IDENTITY_CHECK_KEY && identityCandidateOf(work) !== null) return { kind: "candidate_check" };
+  if (work.resource === VERIFY_KEY) return { kind: "verify", digest: prepared?.credentialsGeneration ?? null };
+  return { kind: "request" };
+}
+
+/** A page hold refused the request at its admission (tx 1 rolled back:
+ *  nothing was written, the slot is not consumed). */
+export class AdmissionHeldError extends Error {
+  constructor(readonly kind: string, readonly until: Date) {
+    super(`The page is held (${kind}) until ${until.toISOString()}`);
+    this.name = "AdmissionHeldError";
+  }
+}
+
 /**
  * Admit one request (tx 1). Null when the work is no longer open (another
  * step took it): nothing was written and the slot is not consumed. Throws
+ * `AdmissionHeldError` when a page hold refuses the request now,
  * `OwnershipLostError` for a foreign generation and `LiveGateClosedError` for
  * a live admission without its gates (I17).
  */
@@ -480,6 +515,17 @@ export async function admit(
       lock: "no_key_update",
       live: d.mode === "live",
     });
+    // The final word of the page holds, under the row lock (ruling 5): the
+    // gate and the pick judged a snapshot; a hold written since refuses
+    // here, before anything is counted. The work stays open.
+    const page = await getSyncPage(tx, d.pageId);
+    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+    const holds = admitUnderFanslyPageHolds(
+      readFanslyPageHolds(page),
+      pageHoldOperationOf(d, picked.work, prepared),
+      d.clock.wallNow(),
+    );
+    if (!holds.admitted) throw new AdmissionHeldError(holds.kind, holds.until);
     const running = await markWorkRunning(tx, { workId: picked.work.id, generation: d.generation });
     if (running === null) return null;
     const admitted = await insertAdmission(tx, {
@@ -799,61 +845,28 @@ async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown
   return kind;
 }
 
-// ── credentials (step-3 §3.5 item 3, G1/G2/G14) ─────────────────────────────
-
-/** The demand an actor raises for its own page (an identity check after the
- *  stored credentials changed): one generation-fenced transaction through the
- *  registry's demand rules. False: a key the registry does not run here. */
-export async function enqueueOwnDemand(d: CommitDeps, signals: readonly DemandSignal[]): Promise<boolean> {
-  const now = d.clock.wallNow();
-  return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    const page = await getSyncPage(tx, d.pageId);
-    const upserts = upsertsOf(d, signals, page, now);
-    if (upserts.length > 0) await upsertDemands(tx, upserts);
-    return upserts.length > 0;
-  });
-}
+// ── credentials (step-3 §3.5 item 3, G1/G2; step 3b ruling 5, A3) ───────────
 
 /**
- * The stored credentials changed out of band while an auth/identity hold of
- * the credentials that failed is in force (G14 (a)): the hold is lifted and
- * one urgent `account.verify` raised, in one generation-fenced transaction —
- * the transport admits nothing but that check until it passed. False: the
- * hold is no longer the one read (another writer got there first).
+ * The verify of the page's stored credentials, raised by the actor from what
+ * the database says (never from memory): the stored digest is not the one
+ * the engine trusts (checks-only), or a credentials hold admits the verify of
+ * changed credentials (A3). Created only when the page has no open, running
+ * or quarantined verify — a merge would bump a waiting one on every lap. True:
+ * a new verify was raised.
  */
-export async function liftHoldForChangedCredentials(
-  d: CommitDeps,
-  input: { holdKind: string; failedGeneration: string; storedGeneration: string },
-): Promise<boolean> {
+export async function ensureCredentialsVerify(d: CommitDeps, reason: string): Promise<boolean> {
   const now = d.clock.wallNow();
-  const lifted = await inTx(d.db, async (tx) => {
+  const created = await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     const page = await getSyncPage(tx, d.pageId);
-    if (page === null || page.holdKind !== input.holdKind) return false;
-    const heldUnder = page.holdDetail.credentialsGeneration;
-    if ((typeof heldUnder === "string" ? heldUnder : page.credentialsGeneration) !== input.failedGeneration) return false;
-    // A 429/network hold the auth hold carried beside itself stays until its end.
-    const left = afterCredentialsHold(pageErrorState(page), now);
-    if (left.action === "set") {
-      await setPageHold(tx, { pageId: d.pageId, generation: d.generation, kind: left.kind, until: left.until, step: left.step, detail: left.detail });
-    } else {
-      await clearPageHold(tx, { pageId: d.pageId, generation: d.generation });
-    }
-    const upserts = upsertsOf(d, [{ resource: "account.verify", demand: { reason: "credentials_changed" } }], page, now);
-    if (upserts.length > 0) await upsertDemands(tx, upserts);
-    return true;
+    const upserts = upsertsOf(d, [{ resource: VERIFY_KEY, demand: { reason } }], page, now)
+      .map((upsert) => ({ ...upsert, createOnly: true }));
+    if (upserts.length === 0) return false;
+    return (await upsertDemands(tx, upserts)).some((result) => result.created);
   });
-  if (lifted) {
-    d.metrics.increment("sync_hold_lifted_credentials_changed", { pageId: d.pageId, kind: input.holdKind });
-    d.logger.warn({
-      pageId: d.pageId,
-      holdKind: input.holdKind,
-      failedGeneration: input.failedGeneration.slice(0, 12),
-      storedGeneration: input.storedGeneration.slice(0, 12),
-    }, "Fansly sync: the stored credentials changed under an auth hold; the hold is lifted for one account.verify");
-  }
-  return lifted;
+  if (created) d.metrics.increment("sync_credentials_verify_raised", { pageId: d.pageId, reason });
+  return created;
 }
 
 /** A plan threw: the work waits a minute (an unexpected error of a module
@@ -1028,6 +1041,7 @@ export async function capture(
         })
         : 0,
       requestCredentialsGeneration: admission.credentialsGeneration ?? null,
+      attempt: { id: admission.attemptId, sentAt: armed.sentWall },
     });
     // The resource's own word on what this outcome means for it (a failed
     // WebSocket handshake belongs to the socket's reconnect ladder).
@@ -1310,21 +1324,33 @@ async function readJournalBody(
 
 export type ApplyOutcome = "applied" | "nothing" | ApplyErrorKind;
 
+/** The routes whose answer is an identity proof of the page (`/account/me`:
+ *  `account.*`, the followers reconcile's ends): their apply writes the proof
+ *  and may clear a credentials hold, so it takes the page row FOR NO KEY
+ *  UPDATE from its start — never an upgrade of a held FOR SHARE, which
+ *  deadlocks with the heartbeat waiting on the row. */
+export const IDENTITY_PROOF_OPERATIONS: readonly FanslyWireId[] = ["account.me"];
+
 /**
  * Apply a captured answer (tx 3), from memory right after the capture or from
  * the journal after a restart (no HTTP, I8). Idempotent: an attempt that is no
  * longer `captured`/`deferred` is left alone. Every error is classified and
  * written in its own fenced transaction; only an ownership loss (foreign
- * generation) and a test crash leave this function by throwing.
+ * generation) and a test crash leave this function by throwing. An identity
+ * proof is written in this same transaction (ruling 5): a failure leaves the
+ * attempt captured/deferred, and its stored answer is applied again — never
+ * a new request.
  */
 export async function apply(
   d: CommitDeps,
-  attemptId: number,
+  target: { attemptId: number; operation: string },
   inMemory: { response: unknown; parsed: unknown } | null = null,
 ): Promise<ApplyOutcome> {
+  const attemptId = target.attemptId;
+  const lock = (IDENTITY_PROOF_OPERATIONS as readonly string[]).includes(target.operation) ? "no_key_update" : "share";
   try {
     const applied = await inTx(d.db, async (tx) => {
-      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "share" });
+      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock });
       const attempt = await lockAttemptForApply(tx, attemptId);
       if (attempt === null || attempt.shadow) return "nothing" as const;
       const spec = d.registry.spec(attempt.resource);
@@ -1416,8 +1442,11 @@ export async function apply(
     for (const [name, by] of Object.entries(applied.counters ?? {})) {
       d.metrics.increment("sync_apply_effect", { resource: applied.resource, effect: name }, by);
     }
-    if (applied.pageIdentity !== null) {
-      await recordIdentity(d, applied.pageIdentity.accountId, applied.credentialsGeneration);
+    if (applied.proof?.superseded === true) d.metrics.increment("sync_identity_proof_superseded", { pageId: d.pageId });
+    if (applied.proof?.cleared != null) {
+      d.metrics.increment("sync_credentials_hold_cleared", { pageId: d.pageId, kind: applied.proof.cleared });
+      d.logger.info({ pageId: d.pageId, attemptId, kind: applied.proof.cleared },
+        "Fansly sync: an identity proof sent after the latest refusal cleared the credentials hold");
     }
     return applied.outcome;
   } catch (error) {
@@ -1435,6 +1464,9 @@ async function settleApplied(
   input: { attempt: SyncAttemptRow; work: SyncWorkRow; spec: EngineResourceSpec; page: SyncPageRow; result: ApplyResult },
 ) {
   const { attempt, work, spec, page, result } = input;
+  const proof = result.pageIdentity === undefined
+    ? null
+    : await recordIdentityProof(tx, d, attempt, page, result.pageIdentity.accountId);
   // sync_work after every event append (lock order): the work row, then the
   // follow-ups in (resource, subject) order.
   const now = d.clock.wallNow();
@@ -1460,29 +1492,84 @@ async function settleApplied(
   return {
     outcome: "applied" as const,
     counters: result.counters ?? null,
-    pageIdentity: result.pageIdentity ?? null,
-    // The digest the verified request carried: what the engine now trusts.
-    credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+    proof,
     resource: attempt.resource,
   };
 }
 
-/** The page's identity after an applied `/account/me` (the identity guard is
- *  `updatePageMetadata` inside the apply) and the digest of the credentials
- *  that request carried — the engine has verified them (G1). Its own small
- *  fenced transaction — tx 3 holds the page row FOR SHARE, and upgrading that
- *  lock while the heartbeat waits on the row would deadlock. A failure is
- *  logged; the next read writes it again. */
-async function recordIdentity(d: CommitDeps, accountId: string, credentialsGeneration: string | null): Promise<void> {
-  try {
-    await inTx(d.db, async (tx) => {
-      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-      await recordSyncPageIdentity(tx, { pageId: d.pageId, generation: d.generation, accountId, credentialsGeneration });
-    });
-  } catch (error) {
-    if (error instanceof OwnershipLostError) throw error;
-    d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync: the page identity could not be recorded");
+/** The durable record of a credentials hold an identity proof cleared: the
+ *  verifying attempt, the digest it proved and the refusal it cleared
+ *  (`audit_events`, beside the page row's proof — ruling 5). */
+export const SYNC_CREDENTIALS_HOLD_CLEARED_AUDIT_EVENT = "sync.credentials_hold_cleared";
+
+/** What an identity proof wrote: the credentials hold it cleared (kind), and
+ *  whether a newer proof was recorded already. */
+interface IdentityProofWrite {
+  cleared: string | null;
+  superseded: boolean;
+}
+
+/**
+ * The identity proof of an applied `/account/me` of the page's own account
+ * (the identity guard is `updatePageMetadata` inside the apply), in the
+ * apply's transaction (ruling 5): the page's identity and the digest of the
+ * credentials that request carried — the engine has verified them (G1) —
+ * unless a newer proof is recorded already; and a credentials hold whose
+ * latest refusal came before this request was sent is cleared — the timed
+ * hold it carried staying while in force — with its audit row naming the
+ * verifying attempt and the refusal it cleared. Requires the page row FOR NO KEY
+ * UPDATE (`IDENTITY_PROOF_OPERATIONS`).
+ */
+async function recordIdentityProof(
+  tx: Database,
+  d: CommitDeps,
+  attempt: SyncAttemptRow,
+  page: SyncPageRow,
+  accountId: string,
+): Promise<IdentityProofWrite> {
+  if (!(IDENTITY_PROOF_OPERATIONS as readonly string[]).includes(attempt.operation)) {
+    // Its apply held the page row FOR SHARE: never upgraded (see above).
+    throw new ApplyQuarantine("identity_proof_route", { operation: attempt.operation });
   }
+  const sentAt = attempt.sentAt ?? attempt.admittedAt;
+  const recorded = await recordSyncPageIdentityProof(tx, {
+    pageId: d.pageId,
+    generation: d.generation,
+    accountId,
+    credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+    sentAt,
+  });
+  // `superseded`: an answer applied late — a newer proof stands; the hold
+  // rule below still judges this one by its own send.
+  const proof = { cleared: null, superseded: !recorded };
+  const held = fanslyPageHoldInForce(readFanslyPageHolds(page), d.clock.wallNow())?.credentials ?? null;
+  if (held === null || !proofClearsCredentialsHold(held, { attemptId: attempt.id, sentAt })) return proof;
+  const left = fanslyPageHoldAfterCredentials(page, d.clock.wallNow());
+  const fenced = { pageId: d.pageId, generation: d.generation };
+  if (left === null) {
+    await clearPageHold(tx, fenced);
+  } else {
+    await setPageHold(tx, { ...fenced, kind: left.kind, until: left.until, step: page.holdStep, detail: left.detail });
+  }
+  await insertAuditEvent(tx, {
+    platformAccountId: d.pageId,
+    source: "sync",
+    eventType: SYNC_CREDENTIALS_HOLD_CLEARED_AUDIT_EVENT,
+    metadata: {
+      attemptId: attempt.id,
+      resource: attempt.resource,
+      sentAt: sentAt.toISOString(),
+      credentialsGeneration: credentialsGenerationOfAttempt(attempt),
+      cleared: {
+        kind: held.kind,
+        since: held.since?.toISOString() ?? null,
+        failedAttemptId: held.failure.attemptId,
+        failedAt: held.failure.at?.toISOString() ?? null,
+        credentialsGeneration: held.failure.digest,
+      },
+    },
+  });
+  return { ...proof, cleared: held.kind };
 }
 
 async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown): Promise<ApplyErrorKind> {
@@ -1565,6 +1652,7 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         subjectQueue,
         recentFailedSubjects: 0,
         requestCredentialsGeneration: credentialsGenerationOfAttempt(attempt),
+        attempt: { id: attempt.id, sentAt: attempt.sentAt },
       });
       // The decision has no subject breaker, so no module hook is needed.
       await writeOutcomeDecision(tx, d, {
@@ -1630,7 +1718,7 @@ export async function drainDueApplies(d: CommitDeps, max: number): Promise<numbe
   let applied = 0;
   for (const attempt of due) {
     if (attempt.shadow) continue;
-    if ((await apply(d, attempt.id)) === "applied") applied += 1;
+    if ((await apply(d, { attemptId: attempt.id, operation: attempt.operation })) === "applied") applied += 1;
   }
   return applied;
 }

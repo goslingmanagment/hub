@@ -1,6 +1,14 @@
 import { sql } from "drizzle-orm";
 
+import {
+  fanslyPageHoldInForce,
+  fanslyTimedHoldEnd,
+  readFanslyPageHolds,
+  type FanslyPageHoldKind,
+} from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
+import { toDate as toSyncDate } from "./sync/values.ts";
 
 // Plan §2.5 step 1: the per-page Fansly send guard of the legacy engine. One
 // row per page, shared by every process (api, worker, CLI); every statement
@@ -604,94 +612,92 @@ export type HandFanslySendGuardBackToLegacyResult =
   | { kind: "already"; lastCompletedAt: Date };
 
 /**
- * An engine auth/identity hold in force on `sync_pages sp`, by the engine's
- * own rule (`activePageHold`): not expired, and not keyed on credentials older
- * than the ones the engine verified since (the owner's identity-checked
- * renewal lifts it before any answer clears the row).
+ * Engine → legacy (rollback step 3): the flip, or why not. One transaction:
+ * the engine row and the guard row are locked first (`sync_pages` FOR NO KEY
+ * UPDATE, then the guard FOR UPDATE), the page's holds are judged by the
+ * shared page-hold core — the same rule the actor admits by (step 3b ruling
+ * 5) — and the flip is a CAS on what was read: still the engine's, the page
+ * in `handover` and released. The legacy floor `last_completed_at` moves
+ * past the engine's last send and the end of a timed page hold in force (the
+ * page's own 429/network hold, or the one a credentials hold carries).
  */
-const ENGINE_AUTH_HOLD_IN_FORCE = sql`coalesce(
-  sp.hold_kind in ('auth', 'identity_mismatch')
-  and sp.hold_until > clock_timestamp()
-  and not (jsonb_typeof(sp.hold_detail -> 'credentialsGeneration') = 'string'
-           and sp.credentials_generation is not null
-           and sp.hold_detail ->> 'credentialsGeneration' <> sp.credentials_generation),
-  false)`;
-
-/**
- * The end of a 429/network hold an engine auth/identity hold carries beside
- * itself (`hold_detail.timedHold`, the engine's `combinePageHold`) while it is
- * in force, else null: it crosses to the legacy engine like the engine's own
- * 429 hold (G20), also when the owner rolls back with `--with-auth-hold`.
- */
-const ENGINE_CARRIED_TIMED_HOLD_UNTIL = sql`case
-  when sp.hold_kind in ('auth', 'identity_mismatch')
-   and jsonb_typeof(sp.hold_detail -> 'timedHold') = 'object'
-   and sp.hold_detail -> 'timedHold' ->> 'kind' in ('rate_limit', 'network')
-   and (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz > clock_timestamp()
-  then (sp.hold_detail -> 'timedHold' ->> 'until')::timestamptz end`;
-
-/** Engine → legacy (rollback step 3): the flip, or why not. */
 export async function handFanslySendGuardBackToLegacy(
   db: Database,
   input: { pageId: number; allowAuthHold?: boolean },
 ): Promise<HandFanslySendGuardBackToLegacyResult> {
   const allowAuthHold = input.allowAuthHold === true;
-  const flipped = await db.execute<{ lastCompletedAt: Date | string }>(sql`
-    update fansly_page_send_guards g
-       set owner_engine = ${FANSLY_SEND_GUARD_LEGACY_OWNER},
-           engine_switched_at = clock_timestamp(),
-           updated_at = clock_timestamp(),
-           next_u = ${FANSLY_SEND_GUARD_RESTART_U},
-           last_completed_at = greatest(
-             g.last_completed_at,
-             sp.last_completed_at,
-             sp.last_send_at,
-             clock_timestamp(),
-             case when sp.hold_kind in ('rate_limit', 'network') and sp.hold_until > clock_timestamp()
-                  then sp.hold_until end,
-             ${ENGINE_CARRIED_TIMED_HOLD_UNTIL},
-             (select max((h.value ->> 'until')::timestamptz)
-                from jsonb_each(sp.resource_holds) h
-               where h.value ->> 'kind' in ('rate_limit_list', 'rate_limit_media_stats')
-                 and (h.value ->> 'until')::timestamptz > clock_timestamp()))
-      from sync_pages sp
-     where g.page_id = ${input.pageId}
-       and sp.page_id = g.page_id
-       and g.owner_engine = ${FANSLY_SEND_GUARD_ENGINE_OWNER}
-       and sp.mode = 'handover'
-       and ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
-            or sp.owner_stop_confirmed_at > sp.owner_acquired_at)
-       and (${allowAuthHold}::boolean or not ${ENGINE_AUTH_HOLD_IN_FORCE})
-    returning g.last_completed_at as "lastCompletedAt"
-  `);
-  const row = flipped.rows[0];
-  if (row) return { kind: "handed", lastCompletedAt: toDate(row.lastCompletedAt) as Date };
-  const state = await db.execute<{
-    ownerEngine: string | null;
-    lastCompletedAt: Date | string | null;
-    mode: string | null;
-    released: boolean | null;
-    authHold: string | null;
-  }>(sql`
-    select g.owner_engine as "ownerEngine",
-           g.last_completed_at as "lastCompletedAt",
-           sp.mode,
-           ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
-             or coalesce(sp.owner_stop_confirmed_at > sp.owner_acquired_at, false)) as released,
-           case when ${ENGINE_AUTH_HOLD_IN_FORCE} then sp.hold_kind end as "authHold"
-      from fansly_page_send_guards g
-      left join sync_pages sp on sp.page_id = g.page_id
-     where g.page_id = ${input.pageId}
-  `);
-  const current = state.rows[0];
-  if (!current) return { kind: "not_released", mode: null };
-  if (current.ownerEngine === FANSLY_SEND_GUARD_LEGACY_OWNER) {
-    return { kind: "already", lastCompletedAt: toDate(current.lastCompletedAt) as Date };
-  }
-  if (current.mode === "handover" && current.released === true && current.authHold !== null && !allowAuthHold) {
-    return { kind: "auth_hold", holdKind: current.authHold };
-  }
-  return { kind: "not_released", mode: current.mode };
+  return db.transaction(async (tx) => {
+    const page = (await tx.execute<{
+      mode: string;
+      released: boolean;
+      holdKind: FanslyPageHoldKind | null;
+      /** A credentials hold's `'infinity'` comes back as the number Infinity. */
+      holdUntil: Date | string | number | null;
+      holdSince: Date | string | null;
+      holdDetail: Record<string, unknown> | null;
+      dbNow: Date | string;
+    }>(sql`
+      select sp.mode,
+             ((sp.owner_released_at is not null and sp.owner_release_generation = sp.owner_generation)
+               or coalesce(sp.owner_stop_confirmed_at > sp.owner_acquired_at, false)) as released,
+             sp.hold_kind as "holdKind",
+             sp.hold_until as "holdUntil",
+             sp.hold_since as "holdSince",
+             sp.hold_detail as "holdDetail",
+             clock_timestamp() as "dbNow"
+        from sync_pages sp
+       where sp.page_id = ${input.pageId}
+       for no key update
+    `)).rows[0];
+    const guard = (await tx.execute<{ ownerEngine: string; lastCompletedAt: Date | string }>(sql`
+      select owner_engine as "ownerEngine", last_completed_at as "lastCompletedAt"
+        from fansly_page_send_guards
+       where page_id = ${input.pageId}
+       for update
+    `)).rows[0];
+    if (!guard) return { kind: "not_released", mode: page?.mode ?? null };
+    if (guard.ownerEngine === FANSLY_SEND_GUARD_LEGACY_OWNER) {
+      return { kind: "already", lastCompletedAt: toDate(guard.lastCompletedAt) as Date };
+    }
+    if (!page || guard.ownerEngine !== FANSLY_SEND_GUARD_ENGINE_OWNER || page.mode !== "handover" || page.released !== true) {
+      return { kind: "not_released", mode: page?.mode ?? null };
+    }
+    const now = toDate(page.dbNow) as Date;
+    const holds = readFanslyPageHolds({
+      holdKind: page.holdKind,
+      holdUntil: toSyncDate(page.holdUntil),
+      holdSince: toSyncDate(page.holdSince),
+      holdDetail: page.holdDetail ?? {},
+    });
+    const credentials = fanslyPageHoldInForce(holds, now)?.credentials ?? null;
+    if (credentials !== null && !allowAuthHold) return { kind: "auth_hold", holdKind: credentials.kind };
+    const timedEnd = fanslyTimedHoldEnd(holds, now);
+    const flipped = await tx.execute<{ lastCompletedAt: Date | string }>(sql`
+      update fansly_page_send_guards g
+         set owner_engine = ${FANSLY_SEND_GUARD_LEGACY_OWNER},
+             engine_switched_at = clock_timestamp(),
+             updated_at = clock_timestamp(),
+             next_u = ${FANSLY_SEND_GUARD_RESTART_U},
+             last_completed_at = greatest(
+               g.last_completed_at,
+               sp.last_completed_at,
+               sp.last_send_at,
+               clock_timestamp(),
+               ${timedEnd}::timestamptz,
+               (select max((h.value ->> 'until')::timestamptz)
+                  from jsonb_each(sp.resource_holds) h
+                 where h.value ->> 'kind' in ('rate_limit_list', 'rate_limit_media_stats')
+                   and (h.value ->> 'until')::timestamptz > clock_timestamp()))
+        from sync_pages sp
+       where g.page_id = ${input.pageId}
+         and sp.page_id = g.page_id
+         and g.owner_engine = ${FANSLY_SEND_GUARD_ENGINE_OWNER}
+      returning g.last_completed_at as "lastCompletedAt"
+    `);
+    const row = flipped.rows[0];
+    if (!row) throw new Error(`The send guard of page ${input.pageId} changed under its row lock`);
+    return { kind: "handed", lastCompletedAt: toDate(row.lastCompletedAt) as Date };
+  });
 }
 
 /** The guard row of one page (the switch's phase derivation and checks). */

@@ -1,16 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { fanslyWireSpec, type FanslyWireOutcome } from "@agency_hub_core/fansly";
+import { activeFanslyPageHold, CARRIED_TIMED_HOLD_FIELD, INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import {
-  activePageHold,
   activeResourceHold,
-  afterCredentialsHold,
   BLOCKED_PROBE_EVERY_MS,
-  CARRIED_TIMED_HOLD_FIELD,
   classifyWireOutcome,
-  combinePageHold,
-  INDEFINITE_UNTIL,
   endpointRateGroupOfRoute,
   LIST_RATE_LIMIT_HELD_KEYS,
   LIST_RATE_LIMIT_LADDER_MS,
@@ -234,16 +230,16 @@ describe("sync errors: ok", () => {
     expect(decision.pageHold).toEqual({ action: "keep" });
   });
 
-  it("clears an auth hold taken under older credentials", () => {
+  it("never clears a credentials hold, whatever digest the engine trusts now (ruling 5: only an identity proof's apply does)", () => {
     const decision = onOutcome(input("ok", {
       page: pageState({
         holdKind: "auth",
         holdUntil: INDEFINITE_UNTIL,
-        holdDetail: { credentialsGeneration: "gen-0" },
+        holdDetail: { credentialsGeneration: "gen-0", failedAttemptId: 7, failedAt: at(-MIN).toISOString() },
         credentialsGeneration: "gen-1",
       }),
     }));
-    expect(decision.pageHold).toEqual({ action: "clear", resetStep: false });
+    expect(decision.pageHold).toEqual({ action: "keep" });
   });
 
   it("clears an expired resource hold of its file", () => {
@@ -579,31 +575,63 @@ describe("sync errors: a 429 on the media statistics", () => {
 });
 
 describe("sync errors: auth and identity", () => {
-  it("auth holds the page until new credentials and alerts at once", () => {
-    const decision = onOutcome(input("auth", { httpStatus: 401 }));
+  it("auth holds the page until an identity proof after the refusal, records the refusal as the latest, and alerts at once", () => {
+    const decision = onOutcome(input("auth", { httpStatus: 401, attempt: { id: 42, sentAt: at(-300) } }));
     expect(decision.pageHold).toEqual({
       action: "set",
       kind: "auth",
       until: "infinity",
       step: 0,
-      detail: { status: 401, credentialsGeneration: "gen-1" },
+      detail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 42, failedAt: at(-300).toISOString() },
     });
     expect(decision.alerts).toEqual([{ subKey: "page_stopped", detail: "auth" }]);
   });
 
-  it("an identity mismatch holds the page, quarantines the work, and raises alerts 1 and 2", () => {
-    const decision = onOutcome(input("identity_mismatch"));
-    expect(decision.pageHold).toMatchObject({ action: "set", kind: "identity_mismatch", until: "infinity" });
+  it("names the digest the refused request carried, else the trusted one; without an attempt the refusal is dated now", () => {
+    expect(onOutcome(input("auth", { httpStatus: 403, requestCredentialsGeneration: "gen-9" })).pageHold).toMatchObject({
+      detail: { status: 403, credentialsGeneration: "gen-9", failedAttemptId: null, failedAt: NOW.toISOString() },
+    });
+  });
+
+  it("a later refusal under the hold replaces the latest refusal (the episode start is the row's, setPageHold)", () => {
+    const held = pageState({
+      holdKind: "auth",
+      holdUntil: INDEFINITE_UNTIL,
+      holdSince: at(-HOUR),
+      holdDetail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 7, failedAt: at(-HOUR).toISOString() },
+    });
+    const decision = onOutcome(input("auth", {
+      httpStatus: 401,
+      page: held,
+      requestCredentialsGeneration: "gen-2",
+      attempt: { id: 9, sentAt: at(-1_000) },
+    }));
+    expect(decision.pageHold).toMatchObject({
+      kind: "auth",
+      detail: { credentialsGeneration: "gen-2", failedAttemptId: 9, failedAt: at(-1_000).toISOString() },
+    });
+  });
+
+  it("an identity mismatch holds the page, records the refusal, quarantines the work, and raises alerts 1 and 2", () => {
+    const decision = onOutcome(input("identity_mismatch", { attempt: { id: 5, sentAt: at(-2_000) } }));
+    expect(decision.pageHold).toEqual({
+      action: "set",
+      kind: "identity_mismatch",
+      until: "infinity",
+      step: 0,
+      detail: { credentialsGeneration: "gen-1", failedAttemptId: 5, failedAt: at(-2_000).toISOString() },
+    });
     expect(decision.work).toEqual({ action: "quarantine", reason: "identity_mismatch" });
     expect(decision.quarantineAttempt).toBe(true);
     expect(decision.alerts.map((a) => a.subKey)).toEqual(["page_stopped", "live_degraded"]);
   });
 
-  it("an auth hold is in force until the credentials generation changes", () => {
-    const held = { holdKind: "auth" as const, holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-1" } };
-    expect(activePageHold({ ...held, credentialsGeneration: "gen-1" }, NOW)).toEqual({ kind: "auth", until: INDEFINITE_UNTIL, timed: null });
-    expect(activePageHold({ ...held, credentialsGeneration: "gen-2" }, NOW)).toBeNull();
-    expect(activePageHold({ ...held, credentialsGeneration: null }, NOW)).not.toBeNull();
+  it("an auth hold is in force whatever digest the engine trusts (the A-verified, B-refused case)", () => {
+    const held = { holdKind: "auth" as const, holdUntil: INDEFINITE_UNTIL, holdSince: at(-MIN), holdDetail: { credentialsGeneration: "gen-B" } };
+    for (const trusted of ["gen-A", "gen-B", null]) {
+      const page = pageState({ ...held, credentialsGeneration: trusted });
+      expect(activeFanslyPageHold(page, NOW)?.credentials?.kind).toBe("auth");
+    }
   });
 });
 
@@ -612,7 +640,7 @@ describe("sync errors: an auth/identity hold and a 429/network hold at once", ()
     holdKind: "auth",
     holdUntil: INDEFINITE_UNTIL,
     holdSince: at(-HOUR),
-    holdDetail: { status: 401, credentialsGeneration: "gen-1", ...detail },
+    holdDetail: { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 3, failedAt: at(-HOUR).toISOString(), ...detail },
   });
   const carried = (kind: "rate_limit" | "network", untilMs: number, detail: Record<string, unknown> = {}) => ({
     [CARRIED_TIMED_HOLD_FIELD]: { kind, until: at(untilMs).toISOString(), detail },
@@ -635,6 +663,8 @@ describe("sync errors: an auth/identity hold and a 429/network hold at once", ()
       detail: {
         status: 401,
         credentialsGeneration: "gen-1",
+        failedAttemptId: 3,
+        failedAt: at(-HOUR).toISOString(),
         [CARRIED_TIMED_HOLD_FIELD]: {
           kind: "rate_limit",
           until: at(90_000).toISOString(),
@@ -646,17 +676,19 @@ describe("sync errors: an auth/identity hold and a 429/network hold at once", ()
     expect(decision.alerts).toEqual([{ subKey: "page_stopped", detail: "rate_limit" }]);
 
     // Written back: nothing — not even a candidate check — before the 429
-    // ends, then the auth hold as before; renewed credentials lift only it.
+    // ends, then the auth hold as before; a moved trusted digest lifts
+    // neither.
     const written = authHeld((decision.pageHold as { detail: Record<string, unknown> }).detail);
-    expect(activePageHold(written, NOW)).toEqual({
+    expect(activeFanslyPageHold(written, NOW)).toMatchObject({
       kind: "auth",
       until: INDEFINITE_UNTIL,
-      timed: { kind: "rate_limit", until: at(90_000) },
+      timed: { kind: "rate_limit", until: at(90_000), carried: true },
     });
-    expect(activePageHold(written, at(90_000))).toEqual({ kind: "auth", until: INDEFINITE_UNTIL, timed: null });
-    expect(activePageHold({ ...written, credentialsGeneration: "renewed" }, at(1_000)))
-      .toEqual({ kind: "rate_limit", until: at(90_000), timed: { kind: "rate_limit", until: at(90_000) } });
-    expect(activePageHold({ ...written, credentialsGeneration: "renewed" }, at(90_000))).toBeNull();
+    expect(activeFanslyPageHold(written, at(90_000))).toMatchObject({ kind: "auth", until: INDEFINITE_UNTIL, timed: null });
+    expect(activeFanslyPageHold(pageState({ ...written, credentialsGeneration: "renewed" }), at(1_000))).toMatchObject({
+      kind: "auth",
+      timed: { kind: "rate_limit" },
+    });
     // An answer under the carried 429 (none is admitted) or after it never
     // clears the auth hold.
     expect(onOutcome(input("ok", { page: written, now: at(91_000) })).pageHold).toEqual({ action: "keep" });
@@ -683,42 +715,19 @@ describe("sync errors: an auth/identity hold and a 429/network hold at once", ()
     expect(again.alerts).toEqual([{ subKey: "page_stopped", detail: "network" }]);
   });
 
-  it("an auth hold taken over a 429 hold in force carries it; the page is held until the later of them ends", () => {
+  it("an auth refusal over a 429 hold in force carries it", () => {
     const rateLimited = pageState({ holdKind: "rate_limit", holdUntil: at(5 * MIN), holdStep: 2, holdDetail: { status: 429 } });
-    const auth = { action: "set" as const, kind: "auth" as const, until: "infinity" as const, step: 2, detail: { credentialsGeneration: "gen-1" } };
-    const combined = combinePageHold(rateLimited, auth, NOW);
-    expect(combined).toEqual({
-      ...auth,
-      detail: { credentialsGeneration: "gen-1", [CARRIED_TIMED_HOLD_FIELD]: { kind: "rate_limit", until: at(5 * MIN).toISOString(), detail: { status: 429 } } },
-    });
-    const written = pageState({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: combined.detail });
-    expect(activePageHold(written, NOW)?.timed).toEqual({ kind: "rate_limit", until: at(5 * MIN) });
-    // An auth hold over an auth hold keeps the carried 429; a 429 hold that
-    // ended is not carried.
-    expect(combinePageHold(written, auth, NOW).detail[CARRIED_TIMED_HOLD_FIELD]).toEqual(combined.detail[CARRIED_TIMED_HOLD_FIELD]);
-    expect(combinePageHold(rateLimited, auth, at(5 * MIN))).toEqual(auth);
-    // The auth decision of `onOutcome` itself carries it.
     expect(onOutcome(input("auth", { httpStatus: 401, page: rateLimited })).pageHold).toMatchObject({
       kind: "auth",
+      step: 2,
       detail: { [CARRIED_TIMED_HOLD_FIELD]: { kind: "rate_limit", until: at(5 * MIN).toISOString() } },
     });
   });
 
-  it("a 429 hold over another one in force keeps the later end; over a lifted auth hold it is the page's own", () => {
-    const network = pageState({ holdKind: "network", holdUntil: at(10 * MIN), holdDetail: { streak: 3 } });
-    const rateLimit = { action: "set" as const, kind: "rate_limit" as const, until: at(2 * MIN), step: 1, detail: { status: 429 } };
-    expect(combinePageHold(network, rateLimit, NOW)).toEqual({ action: "set", kind: "network", until: at(10 * MIN), step: 1, detail: { streak: 3 } });
-    expect(combinePageHold(network, { ...rateLimit, until: at(20 * MIN) }, NOW)).toEqual({ ...rateLimit, until: at(20 * MIN) });
-    // The auth hold names credentials older than the verified ones: history.
-    const lifted = { ...authHeld(carried("rate_limit", 30_000)), credentialsGeneration: "renewed" };
-    expect(combinePageHold(lifted, rateLimit, NOW)).toEqual(rateLimit);
-  });
-
-  it("an auth hold lifted for changed credentials leaves the 429 hold it carried while that is in force", () => {
-    const held = authHeld(carried("rate_limit", 30_000, { status: 429 }));
-    expect(afterCredentialsHold(held, NOW)).toEqual({ action: "set", kind: "rate_limit", until: at(30_000), step: 0, detail: { status: 429 } });
-    expect(afterCredentialsHold(held, at(30_000))).toEqual({ action: "clear", resetStep: false });
-    expect(afterCredentialsHold(authHeld(), NOW)).toEqual({ action: "clear", resetStep: false });
+  it("a 429 under an auth hold whose trusted digest moved still rides beside it (the hold is not history)", () => {
+    const moved = { ...authHeld(carried("rate_limit", 30_000)), credentialsGeneration: "renewed" };
+    const decision = onOutcome(input("rate_limit", { httpStatus: 429, retryAfterMs: 60_000, page: moved }));
+    expect(decision.pageHold).toMatchObject({ kind: "auth", until: "infinity", detail: { [CARRIED_TIMED_HOLD_FIELD]: { kind: "rate_limit", until: at(60_000).toISOString() } } });
   });
 });
 

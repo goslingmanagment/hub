@@ -269,19 +269,32 @@ database knows of (I5). A `live` page is acquired only once the switch imported 
 (`legacy_imported_at`); without it the page waits (`legacy_not_imported`, alert after 2 min) and nothing is sent.
 `sync page mode` moves pages only between `off` and `shadow`.
 
-Credentials (step 3): every live API request carries the digest of the stored session and proxy
-(`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine verified
-(`sync_pages.credentials_generation`, written by an applied `account.verify`) only the identity checks go out
-(`account.verify`, `account.identity`) and the actor asks for one verify. An auth/identity hold names the digest that
-failed: stored credentials that change out of band lift it for one verify; otherwise only an `account.identity`
-check of a candidate session/proxy (the owner's credentials or proxy change, sealed in the work's secret) passes it,
-and storing a matching candidate makes its digest the trusted one, which lifts the hold. The socket's Upgrade
-(`ws.connect`) is checked the same way, and the socket opens only with the digest its admission checked. An auth/identity
-hold and a 429/network hold can both be in force (`hold_detail.timedHold`, `errors.ts` `combinePageHold`): an auth
-hold taken over a 429 hold carries it (the switch's import of a legacy 429 and a legacy auth block), and a candidate
-check's 429 or network failure under an auth hold is carried beside it — the auth hold is never replaced or lifted by
-it. Nothing goes out, not even a candidate check, before the carried hold ends; renewed credentials lift only the
-auth hold. The egress follows the digest (a changed proxy is resolved again before the next request).
+Credentials (step 3; step 3b ruling 5, A3): every live API request carries the digest of the stored session and
+proxy (`credentialsGeneration`, journaled with the attempt). Unless it is the digest the engine trusts
+(`sync_pages.credentials_generation`) only the identity checks go out (`account.verify`, `account.identity`) and the
+actor raises one verify — checks-only is read from the database at every pick, never kept in memory. What a page hold
+is, what it admits and what clears it is ONE pure core, `@agency_hub_core/shared` `fansly-page-holds.ts`, read by the
+actor's gate and pick, the final check inside the admission transaction, the rollback's hand-back (SQL only locks the
+rows and CAS-writes what the core decided), status/why and the alerts. A credentials hold (`auth`,
+`identity_mismatch`) records its LATEST refusal in `hold_detail` (`failedAttemptId`, `failedAt`, the refused digest;
+`hold_since` stays the episode's start) and is in force until the apply of an identity proof — an applied
+`/account/me` of the page's own account — whose request was sent after that refusal; nothing else lifts it, a moved
+trusted digest included. The proof (identity, trusted digest, `identity_checked_at` = its send instant, never
+overwritten by an older one) and the clearing are written in the apply's own transaction, which takes the page row
+FOR NO KEY UPDATE from its start; a failed write leaves the attempt captured/deferred and its stored answer is applied
+again, without a request. Under the hold only an `account.identity` check of a candidate session/proxy (the owner's
+change, sealed in the work's secret, over the stored base its caller read) and — once per digest — the
+`account.verify` of stored credentials other than the refused ones pass: a candidate that matches is stored and
+trusted in one transaction that is a CAS on the exact pair it proved (`saveVerifiedFanslyCredentials`; a changed base
+stores nothing, 409), and the verify of what is stored then lifts the hold; a refusal of that verify makes its digest
+the latest and closes the exception. A candidate proxy comes from the egress resolver (`page_candidate` scope). The
+socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens only with the digest its
+admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
+core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (the switch's import of a legacy
+429 and a legacy auth block), and a candidate check's 429 or network failure under it is carried beside it — the
+credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried
+hold ends; the proof lifts only the credentials hold. The egress follows the digest (a changed proxy is resolved
+again before the next request).
 
 ## Legacy fences (step 3)
 
@@ -329,8 +342,9 @@ engine with its floor past the engine's last send and the end of an engine 429/l
 hold carries), live work
 cancelled but the history works (their requests pause, `rolled_back`), the wrapper's hydration rows settled (the
 state their ended request mirrors, else `expired`), `off` and `requestPageSync(all, recovery)`. An engine
-auth/identity hold refuses (exit 5) unless `--with-auth-hold`: on a live page before anything moves — the page stays
-live, where the owner's credentials renewal runs its identity check under the hold and lifts it; a hold that came in
+auth/identity hold in force by the page-hold core (whatever digest the engine trusts) refuses (exit 5) unless
+`--with-auth-hold`: on a live page before anything moves — the page stays live, where the owner's credentials renewal
+runs its identity check and then the verify of the new stored credentials under the hold, whose proof lifts it; a hold that came in
 while the actor stopped puts a page the rollback took from live back to live; a page in `handover` before the
 rollback stays there (no identity check runs in `handover`). The legacy engine continues from its own marks: nothing of step 3 writes its state
 (J5). Runbook: step-3 design §6.
@@ -359,6 +373,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
 | I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
+| I19 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
@@ -389,7 +404,7 @@ Every open `sync_work` row has one reason from this closed list (`engine/status.
 | `running` | admitted; its request or apply is in progress | the step's completion |
 | `ownership_unconfirmed` | no actor runs the page: no fresh owner heartbeat, mode `off`/`handover`, or the previous owner's stop is not confirmed | the host acquiring the page (safe release, OS proof, container restart, `sync ownership confirm-stopped`) |
 | `paused` | the owner paused the page, its requests, or this resource | the owner |
-| `page_hold` | 429 (until `Retry-After`, else 2 → 4 → 8 → 30 min), 401/403 or identity mismatch (until new credentials), network (after 3 failures: 10 s → 5 min) | the hold's end; new credentials |
+| `page_hold` | 429 (until `Retry-After`, else 2 → 4 → 8 → 30 min), 401/403 or identity mismatch (until an identity proof sent after the latest refusal), network (after 3 failures: 10 s → 5 min) | the hold's end; the verify of renewed credentials |
 | `quarantined` | the answer broke its contract or the cursor stuck; the raw answer is kept | the owner re-applying it from the journal |
 | `blocked_by_vendor` | the subject failed 5 times; probed once a day while demand exists | a successful probe |
 | `subject_breaker` | the subject failed: 1 min → 10 min → 1 h → 6 h → 24 h | the breaker's end, then a success |
@@ -419,7 +434,7 @@ A retry after an error is always a new attempt through the same admission.
 | 429 on the media statistics (`media.offer_stats`) | `rate_limit_media_stats` | `media-stats.walk` only (`resource_holds['media-stats']`): the list's rule and ladder — until `Retry-After`, else 5 s → … → 300 s, reset after 10 min without one; alert 1 only at the 300 s step |
 | any other 429, or a 5xx naming its own `Retry-After` | `rate_limit` | page hold, alert 1 |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
-| 401 / 403 | `auth` | page hold until new credentials, alert 1 |
+| 401 / 403 | `auth` | page hold until an identity proof sent after this refusal (recorded as the latest), alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |
 | transport error, timeout, 408 | `network` | streak; at 3 ⇒ page hold; alert 1 after 10 min |
@@ -429,7 +444,7 @@ An apply that fails (`engine/commit.ts`, `classifyApplyError`) never stops the a
 journal body unreadable) and a transient database error retry without counting; an unexpected error is counted and
 quarantined at the third try; a deterministic one (SQLSTATE class 22/23, contract) is quarantined at once, alert 2.
 Two deterministic errors stop more than their work: an identity error (`PlatformAccountIdentity*Error`) goes through
-`onOutcome` as `identity_mismatch` (page hold until new credentials, alerts 1 and 2), and a wrong transactions writer
+`onOutcome` as `identity_mismatch` (page hold until an identity proof after it, alerts 1 and 2), and a wrong transactions writer
 holds the resource file (30 min → 2 h → 6 h).
 
 ## Alerts, metrics and the shadow report
