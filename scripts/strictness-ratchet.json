@@ -107,7 +107,7 @@
   "tests/sdk.integration.test.ts": 5,
   "tests/sync-handlers.test.ts": 1,
   "tests/sync-orphaned-runs.integration.test.ts": 52,
-  "tests/sync.integration.test.ts": 41,
+  "tests/sync.integration.test.ts": 18,
   "tests/telegram-report.integration.test.ts": 32,
   "tests/transactions-writer-gate.integration.test.ts": 17
 }

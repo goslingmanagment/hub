@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { FANSLY_BULK_SYNC_STREAMS } from "@agency_hub_core/db";
 import {
   evaluateFanslyStreamGate,
-  FANSLY_GATE_CONFIG_KEYS,
   fanslyNewStreamAllowed,
   GATED_FANSLY_STREAMS,
   isPageAllowlisted,
@@ -38,11 +37,8 @@ const cases = [
 ] as const;
 
 describe("Fansly stream gates", () => {
-  it("covers every durable bulk stream exactly once and exposes only its gate config keys", () => {
+  it("covers every durable bulk stream exactly once", () => {
     expect(GATED_FANSLY_STREAMS.map((gate) => gate.stream)).toEqual([...FANSLY_BULK_SYNC_STREAMS]);
-    expect([...FANSLY_GATE_CONFIG_KEYS].sort()).toEqual(
-      [...new Set(cases.flatMap(([, flag, allowlist]) => [flag, allowlist]))].sort(),
-    );
   });
 
   describe.each(cases)("%s", (stream, enabledField, allowlistField, emptyAllows) => {
