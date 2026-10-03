@@ -4,6 +4,7 @@ import { CLIENT_HEALTH_PERF_METRICS } from "@agency_hub_core/contracts";
 
 import {
   CLIENT_HEALTH_MIN_GROUP_SIZE,
+  clientHealthHistogramFits,
   clientHealthP50P95,
   clientHealthPercentile,
 } from "../apps/runtime/src/services/client-health-perf.ts";
@@ -86,5 +87,53 @@ describe("client_health group suppression", () => {
   it("shows p50 and p95 from 20 observations on", () => {
     expect(clientHealthP50P95({ bounds: [10], counts: [20, 0], max: 10 }))
       .toEqual({ p50: 5, p95: 9.5, suppressed: false });
+  });
+});
+
+describe("client_health histogram fit (the intake drops one that does not fit)", () => {
+  /** Bounds [10, 20]: buckets ≤ 10, (10, 20], > 20. */
+  const fits = (counts: number[], sum: number, max: number) => clientHealthHistogramFits({ bounds: [10, 20], counts, sum, max });
+
+  it("takes an empty histogram only with sum 0 and max 0", () => {
+    expect(fits([0, 0, 0], 0, 0)).toBe(true);
+    expect(fits([0, 0, 0], 5, 0)).toBe(false);
+    expect(fits([0, 0, 0], 0, 7)).toBe(false);
+  });
+
+  it("wants max in the highest non-empty bucket", () => {
+    expect(fits([1, 1, 0], 20, 15)).toBe(true);
+    // max above the last bound while the overflow bucket is empty.
+    expect(fits([1, 0, 0], 5, 9999)).toBe(false);
+    // An observation in the overflow bucket, max at or below the last bound.
+    expect(fits([0, 0, 1], 20, 20)).toBe(false);
+    // count > 0 with max 0 above the first bucket.
+    expect(fits([0, 3, 0], 0, 0)).toBe(false);
+    // max inside a lower bucket than the highest non-empty one.
+    expect(fits([1, 1, 0], 10, 9)).toBe(false);
+    // All observations 0 ms: the first bucket, max 0, sum 0.
+    expect(fits([4, 0, 0], 0, 0)).toBe(true);
+  });
+
+  it("wants a sum the buckets and max can hold", () => {
+    // Two observations in (10, 20] and the max, 30, in the overflow: sum lies in (50, 70].
+    expect(fits([0, 2, 1], 65, 30)).toBe(true);
+    expect(fits([0, 2, 1], 51, 30)).toBe(true);
+    expect(fits([0, 2, 1], 71, 30)).toBe(false);
+    expect(fits([0, 2, 1], 49, 30)).toBe(false);
+    expect(fits([0, 2, 1], 1e300, 30)).toBe(false);
+    // The sum holds the max itself.
+    expect(fits([2, 0, 0], 4, 6)).toBe(false);
+  });
+
+  it("takes a histogram built the client's way, floating-point sum included", () => {
+    const { bounds } = CLIENT_HEALTH_PERF_METRICS.handlerMs; // [0.1, 0.5, 1, …]
+    const samples = [0.05, 0.1, 0.3, 0.30000000000000004, 7, 120];
+    const counts: number[] = Array.from({ length: bounds.length + 1 }, () => 0);
+    for (const sample of samples) {
+      const index = bounds.findIndex((bound) => sample <= bound);
+      counts[index === -1 ? bounds.length : index]! += 1;
+    }
+    const sum = samples.reduce((total, sample) => total + sample, 0);
+    expect(clientHealthHistogramFits({ bounds, counts, sum, max: 120 })).toBe(true);
   });
 });

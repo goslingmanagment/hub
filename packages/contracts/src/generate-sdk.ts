@@ -142,7 +142,6 @@ export function buildSdkFiles(input: SdkGenerationInput): Map<string, string> {
     "  CLIENT_HEALTH_CODE_PATTERN,",
     "  CLIENT_HEALTH_INGEST_KIND,",
     "  CLIENT_HEALTH_PERF_METRICS,",
-    "  CLIENT_HEALTH_VERSION_PATTERN,",
     "  clientHealthPerfHistogramSchema,",
     "  clientHealthReportV1Schema,",
     "  type ClientHealthPerfHistogram,",
