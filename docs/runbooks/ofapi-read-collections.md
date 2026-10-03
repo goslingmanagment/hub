@@ -53,6 +53,23 @@ Nothing is applied by deployment.
 - `readLatestOfapiWelcomeTemplate(db, pageId)`
   (`apps/runtime/src/services/ofapi-welcome-template.ts`) returns the newest
   stored template, or null when none was collected. It reads local rows only.
+- No template is a stop, not an empty snapshot. OFAPI documents only the
+  template object (`data` with an `id`), and the desktop's gateway read of
+  this path already refuses anything else. A `data` of `null` or a list stops
+  the run as `contract rejected`; a `4xx` other than `429` stops it with that
+  status. Either way the run parks as `paused` with the raw response retained,
+  and it holds only this category on that page: the next daily read waits.
+  Read the retained response, then use **Завершить неполный проход** (below).
+  If the next run parks the same way, the page has no template the read
+  accepts: turn `account_settings` off for that page and report the response
+  shape. Check the first live capture on each pilot page after the flip.
+- Rollback: an image older than this category does not know
+  `account_settings`. Once the owner has turned it on or run it as a one-off,
+  the newest collection jobs include `account_settings` runs, and the older
+  image's collection page (`GET /api/v1/admin/ofapi/collection`, Settings →
+  Сбор) fails response validation with a `500` until a roll-forward, even if
+  the category was turned off before the rollback. Other categories keep
+  collecting; stored snapshots and device clients are unaffected.
 
 ## Data and recovery
 
