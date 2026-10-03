@@ -67,7 +67,7 @@ const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (1
 
 const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
-  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than the pause setting",
+  [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
   stuck: "🚨 Fansly Sync Engine work stuck (a request or a planned resource without progress)",

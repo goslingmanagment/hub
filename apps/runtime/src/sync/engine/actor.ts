@@ -367,6 +367,9 @@ export class SyncActor {
       await deferForRoute(d, picked.work, until);
       return null;
     }
+    // What the route check just applied, recorded on the attempt: the send
+    // audit judges the route's and the family's gaps by these numbers (I19).
+    const intervals = clocks.intervals(route);
 
     this.#phase("admit");
     if (!shadow && (await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
@@ -396,7 +399,7 @@ export class SyncActor {
     const issuedMono = d.clock.monoNow();
     let admission: AdmissionRecord | null;
     try {
-      admission = await admit(d, picked, plan.request, grant, module, request);
+      admission = await admit(d, picked, plan.request, grant, intervals, module, request);
     } catch (error) {
       if (error instanceof LiveGateClosedError) {
         d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });
