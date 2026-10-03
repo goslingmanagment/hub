@@ -349,9 +349,9 @@ export interface LegacyImport {
   /** Demand the legacy state leaves open (a head debt's catch-up read),
    *  raised through the registry like any follow-up. */
   demands?: readonly DemandSignal[];
-  /** Subject breakers the legacy engine had armed (a quarantined chat): a
-   *  closed row of the key carries them, and the key's next demand inherits
-   *  them (`upsertDemand`). */
+  /** Subject breakers the legacy engine had armed (a quarantined chat),
+   *  merged monotonically into the key's open work, else into a closed row of
+   *  the key that its next demand inherits (`importWorkBreaker`). */
   breakers?: ReadonlyArray<{
     resource: ResourceKey;
     subject: string;
