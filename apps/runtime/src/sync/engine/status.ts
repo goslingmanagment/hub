@@ -1,9 +1,7 @@
+import { activeFanslyPageHold, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
+
 import {
-  activePageHold,
   activeResourceHold,
-  isEndpointRateLimitKind,
-  isIndefinite,
-  type PageHoldKind,
   type ResourceHoldEntry,
   type ResourceHoldKind,
 } from "./errors.ts";
@@ -74,10 +72,10 @@ export interface StatusPage {
   pausedAll: boolean;
   pausedRequests: boolean;
   pausedResources: readonly string[];
-  holdKind: PageHoldKind | null;
+  holdKind: FanslyPageHoldKind | null;
   holdUntil: Date | null;
+  holdSince: Date | null;
   holdDetail: Readonly<Record<string, unknown>>;
-  credentialsGeneration: string | null;
   resourceHolds: Readonly<Record<string, ResourceHoldEntry>>;
   owner: StatusPageOwner;
 }
@@ -97,8 +95,9 @@ export interface RouteAdmissionView {
    *  nothing (the diagnostic); null: it reads. */
   stateError: string | null;
   /** When a key's routes next admit a send (its own and its family's budget,
-   *  a route hold), with the routes still closed; null: open now. */
-  keyOpensAt(resource: string): { at: Date; routes: string[] } | null;
+   *  a route hold), with the routes still closed and those of them a 429's
+   *  (or a 5xx's `Retry-After`) hold keeps closed; null: open now. */
+  keyOpensAt(resource: string): { at: Date; routes: string[]; held: string[] } | null;
 }
 
 export interface WorkExplanation {
@@ -122,9 +121,9 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
  * blocked_by_vendor → subject_breaker → resource_hold → dependency → not_due →
  * pacer → class_share. A key without requests (`http: false`) never waits on
- * the page hold or the pacer (ruling 9): due, it waits for its turn among the
- * steps before the gate (`class_share`). Null for closed work (done,
- * cancelled, superseded): it waits for nothing.
+ * the page hold, the route admission or the pacer (ruling 9): due, it waits
+ * for its turn among the steps before the gate (`class_share`). Null for
+ * closed work (done, cancelled, superseded): it waits for nothing.
  */
 export function explainWork(
   work: StatusWork,
@@ -152,7 +151,7 @@ export function explainWork(
     return { reason: "paused", until: null, detail: { scope: "resource" } };
   }
   const sends = work.http !== false;
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   if (hold !== null && sends) {
     return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
   }
@@ -186,15 +185,19 @@ export function explainWork(
   // the route opens.
   if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { routeBudget: true } };
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
-  if (sends) {
-    // Every route of the key is closed by its budget (or a route hold): the
-    // pick leaves it out until one opens.
-    const routes = runtime.routes?.keyOpensAt(work.resource) ?? null;
-    if (routes !== null && after(routes.at)) {
-      return { reason: "pacer", until: routes.at, detail: { routeBudget: true, routes: routes.routes } };
-    }
-    if (after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
+  // Every route of the key is closed by its budget or a route hold: the
+  // pick leaves it out until one opens.
+  const routes = sends ? runtime.routes?.keyOpensAt(work.resource) ?? null : null;
+  if (routes !== null && after(routes.at)) {
+    return {
+      reason: "pacer",
+      until: routes.at,
+      detail: routes.held.length > 0
+        ? { routeHold: true, routes: routes.routes, held: routes.held }
+        : { routeBudget: true, routes: routes.routes },
+    };
   }
+  if (sends && after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
 }
 
@@ -268,7 +271,7 @@ export interface WsStatusView {
 }
 
 /** One route or family of a page in its status: its budget, its effective
- *  rate, its newest send and when it next admits one. */
+ *  rate, its newest send, its hold and slowdown, and when it next admits one. */
 export interface RouteBudgetStatusView {
   /** A canonical route (`fansly/routes.ts`) or a family (`family:<name>`). */
   name: string;
@@ -280,6 +283,12 @@ export interface RouteBudgetStatusView {
   intervalMs: number;
   lastSendAt: string | null;
   holdUntil: string | null;
+  /** The route's stored state after its 429s (null: none, or a family): the
+   *  ladder step its next 429 takes, its newest 429, and the revision a
+   *  `sync route raise` compares against. */
+  ladderStep: number | null;
+  last429At: string | null;
+  revision: number | null;
   /** Null: open now. */
   opensAt: string | null;
 }
@@ -310,8 +319,8 @@ export interface PageStatus {
   holds: {
     /** `until` is an ISO instant, or "infinity" for an auth / identity hold
      *  that only new credentials lift. */
-    page: { kind: PageHoldKind; until: string; since: string | null } | null;
-    /** `kind`: the file's breaker, or the conversation list's own 429 hold. */
+    page: { kind: FanslyPageHoldKind; until: string; since: string | null } | null;
+    /** `kind`: the file's breaker (a 429 holds a route: `routes`). */
     resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
   breakers: { open: number; blockedByVendor: number };
@@ -325,7 +334,7 @@ export interface PageStatus {
 
 export interface PageStatusInput {
   pageLabel: string | null;
-  page: StatusPage & { holdSince: Date | null; lastSendAt: Date | null };
+  page: StatusPage & { lastSendAt: Date | null };
   /** S as the actor reads it (the live owner key). */
   settingMs: number;
   now: Date;
@@ -348,14 +357,14 @@ export interface PageStatusInput {
 export function buildPageStatus(input: PageStatusInput): PageStatus {
   const { page, now } = input;
   const at = now.getTime();
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   const resources = Object.entries(page.resourceHolds)
     .filter(([, entry]) => new Date(entry.until).getTime() > at)
     .map(([file, entry]) => ({
       file,
       until: new Date(entry.until).toISOString(),
       step: entry.step,
-      kind: isEndpointRateLimitKind(entry.kind) ? entry.kind : "breaker" as const,
+      kind: "breaker" as const,
     }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   let breakersOpen = 0;

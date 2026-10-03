@@ -5,7 +5,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getNotificationIncidentByKey, listSyncPages, type Database } from "@agency_hub_core/db";
 
 import { runGoldenSignalSample, SYNC_ENGINE_METRICS_PROBE } from "../apps/runtime/src/services/golden-signals.ts";
-import { SYNC_ENGINE_PACE_VIOLATION_SUBKEY, syncEngineIncidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
+import {
+  SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
+  syncEngineIncidentKey,
+  syncEngineRouteSubKey,
+} from "../apps/runtime/src/services/notification-incidents.ts";
 import { runOpsWatchdogCheck } from "../apps/runtime/src/services/ops-watchdog.ts";
 import {
   acknowledgeSyncPaceViolations,
@@ -23,8 +27,9 @@ import { quietLogger, setModeDirect, testConfig } from "./helpers/sync-engine-ho
 // The Fansly Sync Engine's alerts and golden signals against a real database
 // (plan §10, design §9.5, §9.6): the evaluator opens and resolves latches of
 // handover/live pages only, alerts 1–3 wait 10 clean minutes (alert 4 none),
-// the pace latch is the owner's to close, alert 5 is the api watchdog's, and
-// the sampler's compact set.
+// a route's 429 is its own latch per page+route (D5), the pace latch is the
+// owner's to close, alert 5 is the api watchdog's, and the sampler's compact
+// set.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -68,8 +73,8 @@ async function pass(instance = evaluator()) {
 
 /** A Fansly page with an open receiver socket, an engine row in `mode` and a
  *  beating owner. */
-async function enginePage(mode: "shadow" | "live" | "handover" | "off", label?: string): Promise<WsCapturePage> {
-  const page = await seedWsCapturePage({ db: db(), pool: testDb!.pool }, { ownRef: OWN, ...(label === undefined ? {} : { label }) });
+async function enginePage(mode: "shadow" | "live" | "handover" | "off", label?: string, ownRef = OWN): Promise<WsCapturePage> {
+  const page = await seedWsCapturePage({ db: db(), pool: testDb!.pool }, { ownRef, ...(label === undefined ? {} : { label }) });
   await setModeDirect(testDb!.pool, page.pageId, mode);
   await testDb!.pool.query("update sync_pages set owner_heartbeat_at = clock_timestamp() where page_id = $1", [page.pageId]);
   return page;
@@ -115,7 +120,7 @@ async function attempt(input: {
 }
 
 describe("the alert evaluator (design §9.6)", () => {
-  it("pages a live page's 429 hold, keeps alert 1 for 10 clean minutes, then resolves it", async (context) => {
+  it("pages a live page's (legacy-imported) 429 hold, keeps alert 1 for 10 clean minutes, then resolves it", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
     await testDb.pool.query(
@@ -127,15 +132,8 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(first.opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "rate_limit" }]);
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit", kind: "fansly_sync_engine" });
 
-    // The hold ended, but a 429 answered 5 min ago: not clean yet.
+    // The hold ended moments ago: the ten clean minutes count from there.
     await testDb.pool.query("update sync_pages set hold_kind = null, hold_until = null, hold_since = null where page_id = $1", [page.pageId]);
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 300, errorClass: "rate_limit" });
-    expect((await pass()).resolved).toEqual([]);
-    expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
-
-    // The 429 is 11 min old, but the hold was seen in force moments ago: the
-    // ten clean minutes count from there.
-    await testDb.pool.query("update sync_attempts set admitted_at = admitted_at - interval '6 minutes' where page_id = $1", [page.pageId]);
     expect((await pass()).resolved).toEqual([]);
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
 
@@ -145,11 +143,67 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "resolved" });
   });
 
-  it("alert 1 opened from the journal alone (the capture path's open lost) resolves 10 min after the 429", async (context) => {
+  it("a route's 429 never stops the page: its own latch per page+route opens, is refreshed (never repeated) and resolves 10 clean minutes after (D5)", async (context) => {
     if (!testDb) return context.skip();
     const page = await enginePage("live");
-    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 9 * 60, errorClass: "rate_limit" });
-    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "rate_limit" }]);
+    const shadow = await enginePage("shadow", "route-shadow", "100000000000000002");
+    const holdRoute = async (pageId: number, route: string, seconds: number) => {
+      await testDb!.pool.query(
+        `update sync_pages set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes',
+                coalesce(resource_holds #> '{route:state,routes}', '{}'::jsonb) || jsonb_build_object($2::text, jsonb_build_object(
+                  'holdUntil', clock_timestamp() + make_interval(secs => $3::double precision), 'ladderStep', 1,
+                  'effectivePerMin', 6, 'policyVersion', null, 'last429AttemptId', 1, 'last429At', clock_timestamp(), 'revision', 1))))
+          where page_id = $1`,
+        [pageId, route, seconds],
+      );
+    };
+    await holdRoute(page.pageId, "messaging.groups", 60);
+    await holdRoute(shadow.pageId, "messaging.groups", 60);
+    // A 429 attempt in the journal is no page stop either.
+    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 1, errorClass: "rate_limit" });
+    const first = await pass();
+    expect(first.opened).toEqual([{ pageId: page.pageId, subKey: "route_limited:messaging.groups", detail: "route_held" }]);
+    const listKey = syncEngineRouteSubKey("messaging.groups");
+    expect(await incident(listKey, page.pageId)).toMatchObject({ status: "open", errorCode: "route_held" });
+    expect(await incident("page_stopped", page.pageId)).toBeNull();
+    // A shadow page's route pages nobody.
+    expect(await incident(listKey, shadow.pageId)).toBeNull();
+
+    // A second 429 on the same route refreshes the one latch; another route has its own.
+    await holdRoute(page.pageId, "messaging.groups", 120);
+    await holdRoute(page.pageId, "media.offer_stats", 60);
+    const second = await pass();
+    expect(second.opened).toEqual([{ pageId: page.pageId, subKey: "route_limited:media.offer_stats", detail: "route_held" }]);
+    expect(await incident(listKey, page.pageId)).toMatchObject({ status: "open" });
+
+    // The holds ended and their 429s are older than the clean window: resolved 10 min after last seen.
+    await testDb.pool.query(
+      `update sync_pages set resource_holds = jsonb_build_object('route:state', jsonb_build_object('version', 1, 'routes', jsonb_build_object(
+              'messaging.groups', jsonb_build_object('holdUntil', clock_timestamp() - interval '1 second', 'ladderStep', 2,
+                'effectivePerMin', 3, 'policyVersion', null, 'last429AttemptId', 2, 'last429At', clock_timestamp() - interval '11 minutes',
+                'revision', 2))))
+        where page_id = $1`,
+      [page.pageId],
+    );
+    expect((await pass()).resolved).toEqual([]);
+    await ageLatch(listKey, page.pageId, SYNC_ALERT_CLEAN_MS);
+    await ageLatch(syncEngineRouteSubKey("media.offer_stats"), page.pageId, SYNC_ALERT_CLEAN_MS);
+    const resolved = await pass();
+    expect(resolved.resolved).toEqual(expect.arrayContaining([
+      { pageId: page.pageId, subKey: "route_limited:messaging.groups" },
+      { pageId: page.pageId, subKey: "route_limited:media.offer_stats" },
+    ]));
+    expect(await incident(listKey, page.pageId)).toMatchObject({ status: "resolved" });
+    // The slowdown stays (the owner raises it); the alert status lists nothing now.
+    const status = await readSyncAlertStatus(db(), { registry, pages: (await listSyncPages(db())).filter((row) => row.pageId === page.pageId) });
+    expect(status.pages[0]!.routes).toEqual([]);
+  });
+
+  it("alert 1 opened from the journal alone (the capture path's open lost) resolves 10 min after the refusal", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await enginePage("live");
+    await attempt({ pageId: page.pageId, shadow: false, sentSecondsAgo: 9 * 60, errorClass: "auth" });
+    expect((await pass()).opened).toEqual([{ pageId: page.pageId, subKey: "page_stopped", detail: "auth" }]);
     // The latch holds as of the answer, not of the pass.
     const latch = await incident("page_stopped", page.pageId);
     const answeredAt = (await query<{ answeredAt: Date }>(
@@ -321,6 +375,12 @@ describe("the alert evaluator (design §9.6)", () => {
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
     await sink.resolve({ subKey: "page_stopped", pageId: page.pageId });
     expect(await incident("page_stopped", page.pageId)).toMatchObject({ status: "open" });
+    // A route's 429 opens the page+route latch; the next one refreshes it.
+    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit", shadow: false });
+    await sink.open({ subKey: "route_limited", pageId: page.pageId, route: "media.offer_stats", detail: "rate_limit", shadow: false });
+    expect(await query("select 1 from notification_incidents where incident_key = $1",
+      [syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("media.offer_stats"), pageId: page.pageId })])).toHaveLength(1);
+    expect(await incident(syncEngineRouteSubKey("media.offer_stats"), page.pageId)).toMatchObject({ status: "open", errorCode: "rate_limit" });
   });
 });
 

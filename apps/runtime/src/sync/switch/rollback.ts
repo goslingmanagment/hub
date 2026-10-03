@@ -8,8 +8,10 @@ import {
   type SyncPageRow,
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
-import { activePageHold } from "../engine/errors.ts";
+import { activeRouteHolds } from "../engine/route-holds.ts";
+import { parseRouteState } from "../engine/route-policy.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
 import { settleEngineManagedHydration } from "../requests/legacy-hydration.ts";
 import {
@@ -19,7 +21,7 @@ import {
   SYNC_ROLLBACK_AUDIT_EVENT,
   type SyncRollbackStep,
 } from "./audit.ts";
-import { SWITCH_EXIT, SwitchRefusedError, type SwitchContext } from "./context.ts";
+import { SWITCH_EXIT, SwitchRefusedError, wholeSeconds, type SwitchContext } from "./context.ts";
 
 // `pnpm cli sync rollback --page P [--with-auth-hold]` (design step 3 §3.5
 // item 7, runbook §6.5): gives a page back to the legacy engine, which
@@ -31,15 +33,27 @@ import { SWITCH_EXIT, SwitchRefusedError, type SwitchContext } from "./context.t
 //     the owner said `--with-auth-hold`, before anything moves: the page stays
 //     live, where the owner's renewal runs its identity check under the hold
 //     (a page in `handover` runs no actor and refuses every credentials route).
+//     Then the page's route holds (a 429's or a 5xx's `Retry-After`, A4 / D6)
+//     are waited out while the page stays live — the engine serves its other
+//     routes meanwhile; one that outlasts `routeHoldWaitMs` (a long
+//     `Retry-After`) exits 6 with nothing moved (no row): run it again later.
 //   1 mode `handover`: the host stops the live actor and its socket
 //     gracefully, writes the safe release and keeps lock 58215 (legacy stays
 //     fenced). A page already in `handover` starts at 2.
 //   2 wait ≤ 60 s for the safe release of the current generation, or a stop
 //     confirmation newer than its acquisition (`sync ownership
 //     confirm-stopped`) — never assumed (J4); exit 3 otherwise.
-//   3 the guard back to the legacy engine: `last_completed_at` moved past the
-//     engine's last send and the end of an engine 429/list/network hold,
-//     `next_u = 0.2` (J2, G20). An auth/identity hold that came in while the
+//   3 the guard back to the legacy engine: first a route hold that came in
+//     before the actor stopped is waited out (nothing is sent in `handover`;
+//     past `routeHoldWaitMs` exit 6, the page stays in handover). Then
+//     `last_completed_at` moved past the engine's last send and the end of a
+//     real page hold (an imported 429 hold, a network hold; the page holds
+//     judged by the shared page-hold core under the row locks) — never a route
+//     hold's, which would stop every endpoint (A4) — `next_u = 0.2` (J2, G20).
+//     After the hand-back the legacy engine runs its own semantics (S, its
+//     page hold on a 429, owner decision №15): the engine's durable route
+//     slowdowns are not carried over (owner decision D6 / №25); they stay on
+//     the page for the engine's next switch. An auth/identity hold that came in while the
 //     actor stopped refuses too (exit 5): nothing was handed back, so a page
 //     this rollback took from `live` goes back to `live` (the renewal needs
 //     it); one that was in `handover` before stays there for
@@ -76,15 +90,51 @@ export function engineOwnerStopped(page: Pick<SyncPageRow, "owner">): boolean {
   return owner.stopConfirmedAt !== null && owner.acquiredAt !== null && owner.stopConfirmedAt.getTime() > owner.acquiredAt.getTime();
 }
 
-/** The engine's auth/identity hold in force on the page (its own rule: one
- *  of credentials older than the verified ones is lifted), or null. */
+/** The engine's credentials hold in force on the page — by the page-hold
+ *  core, the rule the actor admits by and the hand-back refuses by — or null. */
 function authHoldInForce(page: SyncPageRow): string | null {
-  const hold = activePageHold(page, page.dbNow);
-  return hold !== null && (hold.kind === "auth" || hold.kind === "identity_mismatch") ? hold.kind : null;
+  return activeFanslyPageHold(page, page.dbNow)?.credentials?.kind ?? null;
 }
 
-const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update, or `page verify`: the identity "
-  + "check runs under the hold), then run this command again; or rerun with --with-auth-hold on the owner's word";
+type RouteHoldWait =
+  | { kind: "clear" }
+  | { kind: "held"; holds: Array<{ route: string; until: Date }> }
+  | { kind: "unreadable"; diagnostic: string };
+
+/**
+ * Wait (≤ `routeHoldWaitMs`) for the page's route holds to end, by the
+ * database clock: the hand-back never carries a route's hold into the shared
+ * floor (A4), so it happens only once none is in force. A route state this
+ * build cannot read is a refusal (the holds in it are unknown).
+ */
+async function waitForRouteHolds(ctx: SwitchContext, pageId: number, label: string, step: string): Promise<RouteHoldWait> {
+  const deadline = Date.now() + ctx.timing.routeHoldWaitMs;
+  let announced = false;
+  for (;;) {
+    const page = await getSyncPage(ctx.db, pageId);
+    if (page === null) throw new Error(`${label}: the page row is gone`);
+    const read = parseRouteState(page.routeState);
+    if (!read.ok) return { kind: "unreadable", diagnostic: read.diagnostic };
+    const holds = activeRouteHolds(read.state, page.dbNow);
+    if (holds.length === 0) return { kind: "clear" };
+    const remainingMs = holds[0]!.until.getTime() - page.dbNow.getTime();
+    if (Date.now() + remainingMs > deadline) return { kind: "held", holds };
+    if (!announced) {
+      announced = true;
+      ctx.print(`${step} ${label}: waiting ${wholeSeconds(remainingMs)} s for route hold(s) to end before the hand-back: `
+        + routeHoldsLine(holds));
+    }
+    await ctx.sleep(Math.max(1, Math.min(ctx.timing.routeHoldRetryMs, remainingMs)));
+  }
+}
+
+function routeHoldsLine(holds: ReadonlyArray<{ route: string; until: Date }>): string {
+  return holds.map((hold) => `${hold.route} until ${hold.until.toISOString()}`).join(", ");
+}
+
+const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update: its identity check, then the "
+  + "verify of the stored credentials, run under the hold and the verify lifts it), then run this command again; or "
+  + "rerun with --with-auth-hold on the owner's word";
 
 export async function runSyncRollback(ctx: SwitchContext, input: SyncRollbackInput): Promise<SyncRollbackOutcome> {
   const { db } = ctx;
@@ -116,6 +166,20 @@ export async function runSyncRollback(ctx: SwitchContext, input: SyncRollbackInp
   if (heldLive !== null) {
     ctx.print(`${label}: an ${heldLive} hold is in force — ${RENEW_HINT}; the page stays live`);
     return { exitCode: SWITCH_EXIT.authHold, step: "auth_hold", page: label };
+  }
+
+  // 0. The page's route holds end while it stays live (the engine serves its
+  // other routes meanwhile): nothing moves, no row, if one outlasts the wait.
+  if (page.mode === "live") {
+    const waited = await waitForRouteHolds(ctx, page.pageId, label, "0");
+    if (waited.kind !== "clear") {
+      ctx.print(waited.kind === "held"
+        ? `0 ${label}: route hold(s) outlast this run (${routeHoldsLine(waited.holds)}); the page stays live, nothing moved — `
+          + "run this command again after they end"
+        : `0 ${label}: the page's route state is not one this build reads (${waited.diagnostic}); the page stays live, `
+          + "nothing moved");
+      return { exitCode: SWITCH_EXIT.waitsForRouteHolds, step: "route_holds", page: label };
+    }
   }
 
   const capability = input.capabilityFor(page.pageId);
@@ -161,7 +225,21 @@ export async function runSyncRollback(ctx: SwitchContext, input: SyncRollbackInp
   });
   ctx.print(`2 ${label}: generation ${current.owner.generation} ${released ? "released safely" : "confirmed stopped"}`);
 
-  // 3. The guard back to the legacy engine (with the engine's hold floor).
+  // 3. A route hold a request in flight brought in before the actor stopped
+  // ends first (nothing is sent in handover); then the guard goes back to the
+  // legacy engine (with the floor of the page's real holds).
+  const waited = await waitForRouteHolds(ctx, page.pageId, label, "3");
+  if (waited.kind !== "clear") {
+    await audit("route_holds", waited.kind === "held"
+      ? { holds: waited.holds.map((hold) => ({ route: hold.route, until: hold.until.toISOString() })) }
+      : { diagnostic: waited.diagnostic });
+    ctx.print(waited.kind === "held"
+      ? `3 ${label}: route hold(s) outlast this run (${routeHoldsLine(waited.holds)}); the page stays in handover, nothing `
+        + "is sent — run this command again after they end"
+      : `3 ${label}: the page's route state is not one this build reads (${waited.diagnostic}); the page stays in handover, `
+        + "nothing is sent");
+    return { exitCode: SWITCH_EXIT.waitsForRouteHolds, step: "route_holds", page: label };
+  }
   const handed = await handFanslySendGuardBackToLegacy(db, { pageId: page.pageId, allowAuthHold: input.withAuthHold });
   if (handed.kind === "auth_hold") {
     // The hold came in while the live actor stopped (or the page was in

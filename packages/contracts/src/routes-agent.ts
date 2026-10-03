@@ -2252,15 +2252,36 @@ export const agentHistoryRequestSchema = z.object({
     remainingEstimate: agentHistoryCountSchema.nullable(),
   }).strict(),
   /** Always two numbers (plan §4.3): a lower bound and an ESTIMATE. A chat's
-   *  length is unknown in advance, so there is no upper bound. */
+   *  length is unknown in advance, so there is no upper bound. The time is
+   *  what the reads take at the rate the page's budgets leave this request;
+   *  a hold in force is shown apart (`hold`), never in the seconds. */
   eta: z.object({
     lowerBoundSeconds: agentHistoryCountSchema,
     estimateSeconds: agentHistoryCountSchema.nullable(),
     basis: z.literal("estimate"),
-    /** Reads an hour this request gets now. */
+    /** Reads an hour this request gets while it is not held. */
     ratePerHour: z.number().nonnegative(),
-    /** The requests class's share of the page's sends, in percent. */
+    /** The requests class's share of the page's slots, in percent. */
     sharePercent: z.number().int().min(0).max(100),
+    /** The budget that sets the rate: the page's slots (its pause), the
+     *  `/message` route or its family (the chat list, a chat's detail and
+     *  `/message` together). */
+    limitedBy: z.enum(["page", "route", "family"]),
+    /** The route runs slower than its budget on this page since a 429 (it
+     *  rises only by a deliberate step); already in the rate. Null: at its
+     *  budget. */
+    slowdown: z.object({
+      route: z.string(),
+      effectivePerMin: z.number().positive(),
+      currentPerMin: z.number().positive(),
+    }).strict().nullable(),
+    /** A hold in force: nothing is read until it ends — the page's, or the
+     *  `/message` route's own after a 429. `until` null: no known instant
+     *  ends it (new credentials or the operator do). Null: none. */
+    hold: z.object({
+      scope: z.enum(["page", "route"]),
+      until: agentIsoTimestamp.nullable(),
+    }).strict().nullable(),
   }).strict(),
   /** 1-based place among the page's open requests (round robin). */
   queuePosition: z.number().int().positive().nullable(),
@@ -2493,9 +2514,8 @@ export const agentSyncPageStatusSchema = z.object({
       file: z.string(),
       until: agentIsoTimestamp,
       step: agentSyncCountSchema,
-      /** The file's breaker, or an endpoint group's own 429 hold (the
-       *  conversation list's, the media statistics'). */
-      kind: z.enum(["breaker", "rate_limit_list", "rate_limit_media_stats"]),
+      /** The file's breaker (a 429 holds only its route, never a file). */
+      kind: z.enum(["breaker"]),
     }).strict()),
   }).strict(),
   breakers: z.object({ open: agentSyncCountSchema, blockedByVendor: agentSyncCountSchema }).strict(),

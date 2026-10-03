@@ -21,6 +21,7 @@ import {
   requestSyncProbe,
   requeueSyncWork,
 } from "./inspect.ts";
+import { raiseSyncRoute } from "./route-raise.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
 // sync …`. `sync status` stays the legacy sync monitor until step 4, so the
@@ -96,6 +97,23 @@ function parseWorkId(value: string, previous: number[] = []): number[] {
     throw new InvalidArgumentError(`Expected a work id (a positive integer), received "${value}"`);
   }
   return [...previous, parsed];
+}
+
+/** `--to`: a route's rate, requests a minute (a slowdown may be fractional). */
+function parseRatePerMin(value: string): number {
+  const parsed = Number(value);
+  if (!/^\d+(\.\d+)?$/.test(value) || !(Number.isFinite(parsed) && parsed > 0)) {
+    throw new InvalidArgumentError(`Expected a rate in requests a minute (e.g. 8 or 8.5), received "${value}"`);
+  }
+  return parsed;
+}
+
+function parseRevision(value: string): number {
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new InvalidArgumentError(`Expected a route state revision (a whole number), received "${value}"`);
+  }
+  return parsed;
 }
 
 function parseLimit(value: string): number {
@@ -364,6 +382,32 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         deps.print(`${options.page}: ${options.resource} ${queued.created ? "queued as work" : "merged into open work"} ${queued.workId}`
           + `; follow it: sync why --page ${options.page} --resource ${options.resource}`
           + `${options.subject === undefined ? "" : ` --subject ${options.subject}`}`);
+      });
+    });
+
+  const route = sync.command("route").description("Fansly Sync Engine: a page's route after a 429 (step 3b A2)");
+
+  route
+    .command("raise")
+    .description(
+      "raise a page+route's slowdown one step: at most +1/min, never above the route's current budget, against the "
+      + "route state revision the evidence (budgets-calibration.sql) was read at; a hold in force stays (JSON, audited)",
+    )
+    .requiredOption("--page <label>", "the Fansly page")
+    .requiredOption("--route <route>", "the canonical route, e.g. messaging.groups or media.offer_stats")
+    .requiredOption("--to <rate>", "the new rate, requests a minute", parseRatePerMin)
+    .requiredOption("--revision <n>", "the route's revision in the evidence (`sync page status` routes[].revision)", parseRevision)
+    .requiredOption("--evidence <text>", "the report the step rests on (stored with the audit row)")
+    .action(async (options: { page: string; route: string; to: number; revision: number; evidence: string }) => {
+      await withContext(deps, async ({ db }) => {
+        deps.print(json(await raiseSyncRoute(db, {
+          pageLabel: options.page,
+          route: options.route,
+          toPerMin: options.to,
+          revision: options.revision,
+          evidence: options.evidence,
+          actor: cliActor(),
+        })));
       });
     });
 

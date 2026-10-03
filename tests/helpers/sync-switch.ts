@@ -56,6 +56,8 @@ export const SWITCH_TEST_TIMING: SwitchTiming = {
   ownerTimeoutMs: 20_000,
   ownerRetryMs: 100,
   releaseTimeoutMs: 15_000,
+  routeHoldWaitMs: 2_500,
+  routeHoldRetryMs: 50,
   firstPageRequestsDelayMs: 60 * 60_000,
 };
 

@@ -32,10 +32,12 @@ import {
 // (S = 2.5 s, the budget table as shipped), hours at a time. Targets (A1):
 // saturated history ≥ 800 reads/h with the messaging family at 15/min, media
 // ≥ 200/h beside it, a single confirmation ≤ 10 s and a burst of four ≤ 25 s
-// under that load (more is overload, D1), and every budget's §2b bound — at
-// most ⌈W/T⌉ + 1 sends in any window W — with no pair of sends closer than S.
-// The actor's own wiring of the same functions runs against a database in
-// tests/sync-route-budgets.integration.test.ts.
+// under that load (more is overload, D1), a burst of new chats' `.find`s
+// answered by one shared read of the list head ≤ 12 s (plan PR 1-3), and
+// every budget's §2b bound — at most ⌈W/T⌉ + 1 sends in any window W — with
+// no pair of sends closer than S. The actor's own wiring of the same
+// functions runs against a database in tests/sync-route-budgets.integration.test.ts
+// and, for `.find`'s shared read, tests/sync-resources-dm-list.integration.test.ts.
 
 const HOUR_MS = 3_600_000;
 
@@ -88,6 +90,19 @@ interface Item {
   dueAt: number;
   /** The route its step plans (a multi-route key's choice). */
   plan: FanslyWireId;
+  /** A `.find` of a burst (`dm-conversations.find`): whether the list head
+   *  shows its chat, and — once a head read did not — its detail next. */
+  find?: { burst: number; onHead: boolean; detail: boolean };
+}
+
+/** How a `.find` closed: by its own list read, by the shared read of another
+ *  (before the gate, no slot), or by its group detail. */
+interface FindClosure {
+  burst: number;
+  onHead: boolean;
+  dueAt: number;
+  closedAt: number;
+  how: "own_list" | "shared" | "detail";
 }
 
 interface Sent {
@@ -113,12 +128,21 @@ interface SimInput {
   restarts?: number[];
   /** A multi-route key's planned route. */
   planOf?: (key: SimKey, rng: Rng) => FanslyWireId;
+  /** False: every `.find` reads the list head itself (the control). */
+  shareListHead?: boolean;
 }
+
+/** The confirmation of a chat a `.find` found: urgent, due after its
+ *  coalescing quiet window (5 s). */
+const FOUND_CHAT_HEAD_QUIET_MS = 5_000;
 
 /** The actor's slot loop over in-memory queues: what `SyncActor.#lap` does
  *  between `waitForSlot` and the send, with the same scheduler and route
- *  functions. */
-async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits: number; deferrals: number; pending: Item[] }> {
+ *  functions — and, for `.find`, its shared list-head read: before the gate,
+ *  a find whose chat a list head read applied since it was due wrote closes
+ *  with no slot; one a head read admitted since did not show reads its
+ *  detail. */
+async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits: number; deferrals: number; pending: Item[]; finds: FindClosure[] }> {
   const clock = new SimClock();
   const rng = seeded(input.seed);
   const settingMs = input.settingMs ?? 2_500;
@@ -140,6 +164,19 @@ async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits
   let pacer = newPacer(0);
   const latency = input.latencyMs ?? (() => 300);
   const signal = new AbortController().signal;
+  /** The applied list head reads: admitted (sent) and applied. */
+  const listReads: Array<{ admittedAt: number; appliedAt: number }> = [];
+  const finds: FindClosure[] = [];
+  const closeFind = (item: Item, closedAt: number, how: FindClosure["how"]) => {
+    finds.push({ burst: item.find!.burst, onHead: item.find!.onHead, dueAt: item.dueAt, closedAt, how });
+    pending.splice(pending.indexOf(item), 1);
+  };
+  /** A found chat's message is read urgently (the read's apply asks it). */
+  const confirm = (at: number) => {
+    const head: Item = { key: HEAD, dueAt: at + FOUND_CHAT_HEAD_QUIET_MS, plan: "messages.page" };
+    const index = pending.findIndex((item) => item.dueAt > head.dueAt);
+    pending.splice(index < 0 ? pending.length : index, 0, head);
+  };
 
   while (clock.t < endMs) {
     if (restarts.length > 0 && clock.t >= restarts[0]!) {
@@ -147,6 +184,15 @@ async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits
       // I5: the first send of the new owner waits 1.2 × S after the last one.
       const last = sent.at(-1)?.at ?? Number.NEGATIVE_INFINITY;
       pacer = newPacer(Math.max(0, last + Math.ceil(1.2 * settingMs) - clock.t));
+    }
+    // Before the gate (ruling 9): a due `.find` whose chat a list head read
+    // applied since it was due wrote is found; one a head read admitted since
+    // did not show reads its detail next.
+    const sharedFinds = input.shareListHead === false ? [] : pending.filter((candidate) => candidate.find !== undefined && candidate.dueAt <= clock.t);
+    for (const item of sharedFinds) {
+      const applied = listReads.filter((read) => read.appliedAt <= clock.t);
+      if (item.find!.onHead && applied.some((read) => read.appliedAt >= item.dueAt)) closeFind(item, clock.t, "shared");
+      else if (!item.find!.onHead && applied.some((read) => read.admittedAt >= item.dueAt)) item.find!.detail = true;
     }
     const grant = await pacer.waitForSlot(signal);
     const now = clock.t;
@@ -176,7 +222,9 @@ async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits
       continue;
     }
     const item = picked.work;
-    const plan = item.key.operations.length > 1 && input.planOf !== undefined ? input.planOf(item.key, rng) : item.plan;
+    const plan = item.find !== undefined
+      ? (item.find.detail ? "group.detail" : "messaging.groups")
+      : item.key.operations.length > 1 && input.planOf !== undefined ? input.planOf(item.key, rng) : item.plan;
     // The final check of the planned route.
     const route = routeOfWireId(plan);
     if (!clocks.admits(route, clock.wallNow())) {
@@ -192,10 +240,28 @@ async function simulate(input: SimInput): Promise<{ sent: Sent[]; lookaheadWaits
     lastByRoute.set(route, sentAt);
     cyclePos = picked.nextCyclePos;
     const index = pending.indexOf(item);
-    if (index >= 0) pending.splice(index, 1);
     sent.push({ at: sentAt, route, key: item.key.key, workClass: picked.workClass, latencyMs: index >= 0 ? sentAt - item.dueAt : null, settingMs });
+    if (item.find !== undefined) {
+      if (plan === "group.detail") {
+        closeFind(item, clock.t, "detail");
+        confirm(clock.t);
+        continue;
+      }
+      // The find's own read of the list head: applied now, it writes every
+      // chat on the head, so it answers every find open by then — and asks
+      // each found chat's read.
+      listReads.push({ admittedAt: sentAt, appliedAt: clock.t });
+      const found = input.shareListHead === false
+        ? (item.find.onHead ? 1 : 0)
+        : pending.filter((candidate) => candidate.find?.onHead === true && candidate.dueAt <= clock.t).length;
+      for (let k = 0; k < found; k += 1) confirm(clock.t);
+      if (item.find.onHead) closeFind(item, clock.t, "own_list");
+      else item.find.detail = true;
+      continue;
+    }
+    if (index >= 0) pending.splice(index, 1);
   }
-  return { sent, lookaheadWaits, deferrals, pending };
+  return { sent, lookaheadWaits, deferrals, pending, finds };
 }
 
 /** Every budget's strictness on the record: consecutive sends ≥ its interval
@@ -303,6 +369,91 @@ describe("confirmations under history load (A1, D1)", () => {
     // family — ≈ 25 s on average, never past the confirmation SLO (30 s).
     expect(lastOfBurst.reduce((sum, ms) => sum + ms, 0) / bursts).toBeLessThanOrEqual(25_000);
     expect(Math.max(...lastOfBurst)).toBeLessThanOrEqual(30_000);
+    auditBudgets(sent);
+  });
+});
+
+describe("a burst of new chats' .find shares one list head read (plan PR 1-3, A1)", () => {
+  /** `bursts` bursts of `size` new chats each, their frames together; the
+   *  first `hidden` of each are not on the list head. (A frame that comes
+   *  after a list read wrote its chat is no `.find`: the router knows the
+   *  chat then.) Bursts at least `size` × 10 s apart: the burst before has
+   *  had its chats confirmed (each one `/message` read in the urgent turns of
+   *  the family under history, ≈ 8 s) — confirmations still queued are
+   *  urgent work ahead of the next burst (overload, D1). */
+  function findBursts(seed: number, bursts: number, size: number, hidden = 0): Item[] {
+    const rng = seeded(seed);
+    const everyMs = Math.max(120_000, size * 10_000 + 60_000);
+    const arrivals: Item[] = [];
+    for (let b = 0; b < bursts; b += 1) {
+      const dueAt = 30_000 + b * everyMs + Math.floor(rng.next() * 60_000);
+      for (let k = 0; k < size; k += 1) {
+        arrivals.push({ key: FIND, dueAt, plan: "messaging.groups", find: { burst: b, onHead: k >= hidden, detail: false } });
+      }
+    }
+    return arrivals;
+  }
+
+  function byBurst(finds: readonly FindClosure[]): Map<number, FindClosure[]> {
+    const bursts = new Map<number, FindClosure[]>();
+    for (const find of finds) bursts.set(find.burst, [...(bursts.get(find.burst) ?? []), find]);
+    return bursts;
+  }
+
+  /** The messaging family's sends an hour: saturated, whatever its keys. */
+  function familyPerHour(sent: readonly Sent[], hours: number): number {
+    return sent.filter((send) => familyOfRoute(send.route) === "messaging").length / hours;
+  }
+
+  for (const size of [2, 6, 14]) {
+    it(`${size} chats on the head at once, under saturated history and media: every find ≤ 12 s, one list read a burst, no detail (S = 2.5 s)`, async () => {
+      const bursts = size >= 14 ? 30 : 60;
+      const hours = size >= 14 ? 2.8 : 2.1;
+      const { sent, pending, finds } = await simulate({ seed: 30 + size, hours, endless: [HISTORY, MEDIA], arrivals: findBursts(31 + size, bursts, size) });
+      expect(pending.filter((item) => item.find !== undefined)).toEqual([]);
+      expect(finds).toHaveLength(bursts * size);
+      for (const [burst, closed] of byBurst(finds)) {
+        expect(Math.max(...closed.map((find) => find.closedAt - find.dueAt)), `burst ${burst}`).toBeLessThanOrEqual(12_000);
+        // One find read the list; the rest of its burst closed with no slot.
+        expect(closed.filter((find) => find.how === "own_list"), `burst ${burst}`).toHaveLength(1);
+        expect(closed.filter((find) => find.how === "shared"), `burst ${burst}`).toHaveLength(size - 1);
+      }
+      const findSends = sent.filter((send) => send.key === FIND.key);
+      expect(findSends.map((send) => send.route)).toEqual(Array.from({ length: bursts }, () => "messaging.groups"));
+      // The found chats' confirmations went out too, history taking the rest
+      // of the family's budget: the family stays saturated.
+      expect(sent.filter((send) => send.key === HEAD.key)).toHaveLength(bursts * size);
+      expect(familyPerHour(sent, hours)).toBeGreaterThanOrEqual(800);
+      auditBudgets(sent);
+    });
+  }
+
+  it("without the shared read a burst of six would miss the 12 s: one list read each, 5 s apart (the control)", async () => {
+    const bursts = 30;
+    const { finds } = await simulate({ seed: 36, hours: 1.1, endless: [HISTORY, MEDIA], arrivals: findBursts(37, bursts, 6), shareListHead: false });
+    expect(finds.every((find) => find.how === "own_list")).toBe(true);
+    for (const [burst, closed] of byBurst(finds)) {
+      expect(Math.max(...closed.map((find) => find.closedAt - find.dueAt)), `burst ${burst}`).toBeGreaterThan(25_000);
+    }
+  });
+
+  it("chats a head read did not show go to their detail, one each at the messaging family's pace (D1: overload past ≈ 2)", async () => {
+    const bursts = 60;
+    const { sent, pending, finds } = await simulate({ seed: 41, hours: 2.1, endless: [HISTORY, MEDIA], arrivals: findBursts(42, bursts, 6, 2) });
+    expect(pending.filter((item) => item.find !== undefined)).toEqual([]);
+    for (const [burst, closed] of byBurst(finds)) {
+      const onHead = closed.filter((find) => find.onHead);
+      const hidden = closed.filter((find) => !find.onHead);
+      expect(Math.max(...onHead.map((find) => find.closedAt - find.dueAt)), `burst ${burst}`).toBeLessThanOrEqual(12_000);
+      expect(hidden.map((find) => find.how), `burst ${burst}`).toEqual(["detail", "detail"]);
+      // Each detail is one more read of the messaging family (4 s) in the
+      // urgent class's turns, beside the found chats' confirmations: the
+      // second ≈ 14 s after its chat was due on average, 22 s at worst.
+      expect(Math.max(...hidden.map((find) => find.closedAt - find.dueAt)), `burst ${burst}`).toBeLessThanOrEqual(25_000);
+    }
+    const findSends = sent.filter((send) => send.key === FIND.key);
+    expect(findSends.filter((send) => send.route === "messaging.groups")).toHaveLength(bursts);
+    expect(findSends.filter((send) => send.route === "group.detail")).toHaveLength(2 * bursts);
     auditBudgets(sent);
   });
 });

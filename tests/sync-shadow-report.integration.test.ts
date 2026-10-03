@@ -540,7 +540,7 @@ describe("the shadow report (design §3.12)", () => {
       sync: null, unproven: "no fresh sync heartbeat: the process that ran the window is not known", report: REPORT_BUILD,
     });
     expect(window.rules.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.shared-read", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
       "A1.poll-schedule", "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
     ]);
     expect(report.summary).toContain("Coverage: every page in shadow from at least 10 min before the start");
@@ -551,6 +551,64 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary).toContainEqual(expect.stringMatching(/^A2 legacy volume: unexplained: stream:fan_earnings \(7d_rate: .*\), stream:light \(window: legacy 1, shadow 0, ratio 0\.00\), stream:stats_snapshot \(7d_rate: legacy 0, shadow 7\.33\); live-only, not in shadow \(rule A2\.live-only\): sender:media_download 1$/));
     expect(report.verdict.accepted).toBe(false);
     expect(report.summary.at(-1)).toContain("not accepted");
+  });
+
+  it("part A: a burst of new chats one list read answered — the finds closed on it are served at its admission (rule A1.shared-read)", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    // Three new fans' first messages 1 s apart (legacy lists the chats 2 min
+    // later): the first chat's find reads the list 4 s after its frame, the
+    // other two close on that read in shadow (`shared_head_read`).
+    const chats = ["300000000000000071", "300000000000000072", "300000000000000073"];
+    for (const [index, chat] of chats.entries()) {
+      await page.capture(wsCreated(wsMessage({ groupId: chat, senderId: `20000000000000007${index + 1}` })), at(25 * MINUTE + index * 1_000));
+      await seedWsThread({ db: db(), pool: testDb.pool }, {
+        pageId: page.pageId, groupId: chat, fanRef: `20000000000000007${index + 1}`, firstSeenAt: at(27 * MINUTE),
+      });
+    }
+    await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: chats[0]!, at: at(25 * MINUTE + 4_000) });
+    const read = await testDb.pool.query<{ id: string }>(
+      "select id::text from sync_attempts where page_id = $1 and resource = 'dm-conversations.find' and subject = $2",
+      [page.pageId, chats[0]],
+    );
+    const sharedRead = { attemptId: Number(read.rows[0]!.id), resource: "dm-conversations.find", subject: chats[0] };
+    for (const chat of chats.slice(1)) {
+      await testDb.pool.query(
+        `insert into sync_work (page_id, shadow, resource, subject, kind, class, state, closed_at, close_reason, result)
+         values ($1, true, 'dm-conversations.find', $2, 'trigger', 'urgent', 'done', $3, 'shared_head_read', $4::jsonb)`,
+        [page.pageId, chat, at(25 * MINUTE + 4_100), JSON.stringify({ groupId: chat, step: "list", sharedRead })],
+      );
+    }
+    const report = await buildShadowReport(ctx(), {
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: new Date(start.getTime() + 3_600_000) },
+      journal: null,
+      maxListed: 50,
+      reportBuild: REPORT_BUILD,
+    });
+    const window = report.window!;
+    const find = window.demand[0]!.resources.find((entry) => entry.resource === "dm-conversations.find");
+    // One attempt, three chats' frames, two served by its read.
+    expect(find).toMatchObject({
+      class: "urgent", observed: 1, expected: 3, ratio: 1, verdict: "ok",
+      reason: "socket reads 3; 2 served by another key's read (rule A1.shared-read)",
+    });
+    // The steady state counts the one attempt.
+    expect(window.demand[0]!.attempts.urgent).toBe(3);
+    // Every chat read at the shared read's admission: 4, 3 and 2 s after its
+    // frame (and the window's other fan message 6 s after its own).
+    expect(window.livePath.fanMessages).toMatchObject({
+      frames: 4,
+      withoutShadowAdmission: 0,
+      shadowAdmissionLagMs: { p95: 6_000 },
+      meetsTarget: true,
+    });
+    expect(window.rules.map((rule) => rule.id)).toContain("A1.shared-read");
   });
 
   it("part A: the legacy purchase poll is listed with its volume once every order it read is announced; an order only it found leaves it unexplained (rule A2.demand-replaced)", async (context) => {

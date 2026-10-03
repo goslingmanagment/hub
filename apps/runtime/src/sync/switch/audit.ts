@@ -40,6 +40,7 @@ export const SYNC_ROLLBACK_STEPS = [
   "5_off",
   "waiting_stop",
   "auth_hold",
+  "route_holds",
   "done",
 ] as const;
 export type SyncRollbackStep = (typeof SYNC_ROLLBACK_STEPS)[number];

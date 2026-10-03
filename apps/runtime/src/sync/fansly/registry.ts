@@ -224,9 +224,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   },
   {
     // Planned before the HTTP gate too (ruling 9): what its plan settles
-    // without a request (a wait for the page's identity; a closure, once a
-    // list read answered the find) commits there with no slot; its reads
-    // wait for theirs.
+    // without a request (a wait for the page's identity; the local closure
+    // once a list read since its demand answered the find, step 3b) commits
+    // there with no slot; its reads wait for theirs.
     key: "dm-conversations.find", file: "dm-conversations", subject: "thread", kind: "trigger", class: "urgent",
     triggers: ["ws:group_created", "ws:message_unknown_chat", "dependency"],
     coalesce: { quietMs: 0, maxMs: 0, extendOnSignal: false }, slo: { resultMs: 12 * SECOND },
@@ -261,6 +261,9 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     triggers: [
       "ws:message_created", "ws:message_invalid_known_chat", "apply:dm-conversations.ws-down",
       "apply:dm-conversations.find", "ws_gap",
+      // A chat a `.find` is open for, whichever list read (or detail) lists
+      // it: that read answers the find (step 3b, the shared list-head read).
+      "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ],
     coalesce: { quietMs: 5 * SECOND, maxMs: 20 * SECOND, extendOnSignal: true, fast: { quietMs: 2 * SECOND, maxMs: 6 * SECOND } },
     slo: { resultMs: 30 * SECOND },

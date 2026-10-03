@@ -12,9 +12,10 @@ import { textArrayParam, toDate, toRequiredDate } from "./values.ts";
 // `sync_work_runnable`, the receipts' primary key below an id watermark).
 // Live and shadow are separate journals (`shadow`).
 
-/** Attempt error classes that stop a page (alert 1): a 429 of the page, a
- *  refused credential, another account behind the credentials. */
-export const SYNC_PAGE_STOP_ERROR_CLASSES = ["rate_limit", "auth", "identity_mismatch"] as const;
+/** Attempt error classes that stop a page (alert 1): a refused credential,
+ *  another account behind the credentials. A 429 holds only its route (its
+ *  own incident, `route_limited:<route>`). */
+export const SYNC_PAGE_STOP_ERROR_CLASSES = ["auth", "identity_mismatch"] as const;
 
 /** A socket whose receiver has not renewed its connection row for this long
  *  is down (the receiver renews it every few seconds). */
@@ -706,6 +707,42 @@ export async function listSyncAdmissions(
        and a.admitted_at >= ${input.from}::timestamptz
        and a.admitted_at < ${input.to}::timestamptz
      order by a.admitted_at, a.id
+  `);
+  return result.rows.map((row) => ({
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    admittedAt: toRequiredDate(row.admittedAt),
+  }));
+}
+
+/**
+ * The rows of `resources` another key's read answered — a `.find` closed on
+ * the shared list-head read (step 3b), its `result.sharedRead.attemptId` —
+ * at that read's admission in [from, to) (admission order): the read was
+ * theirs, so what they were to read is read with it.
+ */
+export async function listSharedReadAdmissions(
+  db: Database,
+  input: { pageIds: readonly number[]; shadow: boolean; resources: readonly string[]; from: Date; to: Date },
+): Promise<Array<{ pageId: number; resource: string; subject: string; admittedAt: Date }>> {
+  if (input.pageIds.length === 0 || input.resources.length === 0) return [];
+  const result = await db.execute<{ pageId: string; resource: string; subject: string; admittedAt: Date | string }>(sql`
+    select w.page_id::text as "pageId", w.resource, w.subject, a.admitted_at as "admittedAt"
+      from sync_work w
+      join sync_attempts a
+        on a.id = case when (w.result #>> '{sharedRead,attemptId}') ~ '^[0-9]{1,18}$'
+                       then (w.result #>> '{sharedRead,attemptId}')::bigint end
+       and a.page_id = w.page_id
+       and a.shadow = w.shadow
+     where w.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       and w.shadow = ${input.shadow}::boolean
+       and w.resource = any(${textArrayParam(input.resources)})
+       and w.state = 'done'
+       and w.closed_at >= ${input.from}::timestamptz
+       and a.admitted_at >= ${input.from}::timestamptz
+       and a.admitted_at < ${input.to}::timestamptz
+     order by a.admitted_at, w.id
   `);
   return result.rows.map((row) => ({
     pageId: Number(row.pageId),

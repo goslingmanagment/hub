@@ -6,7 +6,8 @@ import { buildSyncSwitchCommandGroup, type SyncSwitchCliDeps } from "../apps/run
 
 // The step-3 switch CLI's wiring (design step 3 §3.5 item 8): the commands and
 // their options parse as the runbook writes them (`sync switch check --page`
-// is the subcommand's own option), every command opens its context only after
+// is the subcommand's own option, repeated or comma-separated for pages
+// switched together — step 3b ruling 13), every command opens its context only after
 // its options parsed, and the main CLI registers the group with the legacy
 // recovery request of the rollback's last step.
 
@@ -43,6 +44,7 @@ describe("sync switch / rollback CLI", () => {
     [["switch", "--page", "lilly-1", "--shadow-report", "/tmp/shadow-report.json"]],
     [["switch", "--page", "lilly-1", "--open-requests"]],
     [["switch", "check", "--page", "lilly-1", "--since", "2026-10-02T10:00:00Z", "--until", "2026-10-02T11:00:00Z", "--out", "/tmp/a.json"]],
+    [["switch", "check", "--page", "ari-1", "--page", "lilly-2,lora-3", "--since", "2026-10-03T10:00:00Z"]],
     [["rollback", "--page", "lilly-1"]],
     [["rollback", "--page", "lilly-1", "--with-auth-hold"]],
   ])("parses %j and opens its context", async (argv) => {
@@ -53,6 +55,8 @@ describe("sync switch / rollback CLI", () => {
 
   it.each([
     [["switch", "check", "--since", "2026-10-02T10:00:00Z"], /--page/],
+    [["switch", "check", "--page", ",", "--since", "2026-10-02T10:00:00Z"], /--page/],
+    [["switch", "check", "--page", "lilly-1"], /--since/],
     [["switch", "check", "--page", "lilly-1", "--since", "yesterday"], /ISO date/],
     [["rollback"], /--page/],
   ])("refuses %j before opening anything", async (argv, message) => {

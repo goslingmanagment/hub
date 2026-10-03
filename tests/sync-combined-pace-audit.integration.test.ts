@@ -100,10 +100,12 @@ describe("the combined pace audit", () => {
     const tail = await listCombinedFanslySendsForPaceAudit(db(), { pageId, since: new Date(Date.now() - 26_000) });
     expect(tail[0]).toMatchObject({ journal: "engine", prevJournal: "legacy:sync_stream", violation: true });
 
-    const acceptance = await checkSwitchAcceptance(db(), { pageId, since });
-    expect(acceptance.checks.find((check) => check.name === "pace_combined")).toMatchObject({
+    const acceptance = await checkSwitchAcceptance(db(), { pageIds: [pageId], since });
+    const page = acceptance.pages[0]!;
+    expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({
       verdict: "fail", detail: { violations: 1, pairs: 3 },
     });
+    expect(page.verdict).toBe("fail");
     expect(acceptance.accepted).toBe(false);
   });
 

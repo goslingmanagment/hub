@@ -7940,9 +7940,11 @@ const baseRouteSchemas = {
     summary: "Update credentials for an existing page",
     description:
       "On a page the Fansly Sync Engine runs (`live`) the candidate session/proxy is checked by the engine's "
-      + "`account.identity` (≤ 30 s) before anything is stored; 409 `fansly_sync_work_queued` (with `statusUrl`) "
-      + "when the check is still queued, 409 `fansly_page_switching` while the page is being switched "
-      + "(nothing was sent and nothing was stored).",
+      + "`account.identity` (≤ 30 s) before anything is stored, then stored and trusted as the exact pair the "
+      + "check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
+      + "`fansly_page_switching` while the page is being switched (nothing was sent and nothing was stored), 409 "
+      + "`fansly_credentials_changed` when the stored credentials changed during the check (nothing was stored). "
+      + "An engine auth hold ends once the engine's verify of the stored new credentials passes.",
     params: pageParamsSchema,
     body: updateCredentialsBodySchema,
     response: {

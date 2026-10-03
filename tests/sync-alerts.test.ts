@@ -5,11 +5,13 @@ import {
   resolveMessageForIncident,
   SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
   syncEngineIncidentKey,
+  syncEngineRouteSubKey,
 } from "../apps/runtime/src/services/notification-incidents.ts";
 import { notificationPagingPolicyFor } from "../apps/runtime/src/services/notification-paging-policy.ts";
 import { parseReportWindow } from "../apps/runtime/src/sync/cli/report.ts";
 import {
   evaluatePageAlerts,
+  evaluateRouteAlerts,
   SYNC_ALERT_CLEAN_MS,
   SYNC_HANDOVER_STUCK_MS,
   SYNC_OWNERSHIP_UNCONFIRMED_MS,
@@ -17,7 +19,7 @@ import {
   syncAlertResolveAfterMs,
   type PageAlertFacts,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
-import { LIST_RATE_LIMIT_LADDER_MS, NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
+import { NETWORK_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
 import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { POLL_JITTER } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -127,6 +129,19 @@ function facts(overrides: {
   };
 }
 
+function routeEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    holdUntil: null,
+    ladderStep: 1,
+    effectivePerMin: null,
+    policyVersion: null,
+    last429AttemptId: null,
+    last429At: null,
+    revision: 1,
+    ...overrides,
+  };
+}
+
 function evaluate(input: PageAlertFacts) {
   return Object.fromEntries(evaluatePageAlerts(input, registry).map((entry) => [entry.subKey, entry.detail]));
 }
@@ -174,43 +189,24 @@ describe("alert rules (design §9.6)", () => {
     expect(evaluate(network(NETWORK_ALERT_AFTER_MS + MINUTE))).toEqual({ page_stopped: "network" });
   });
 
-  it("alert 1: the list's 429 hold pages only at the top of its ladder", () => {
-    const list = (step: number) => facts({
-      page: {
-        resourceHolds: {
-          "dm-conversations": { kind: "rate_limit_list", until: at(MINUTE).toISOString(), step, since: at(-10 * MINUTE).toISOString() },
-        },
-      },
-    });
-    expect(evaluate(list(LIST_RATE_LIMIT_LADDER_MS.length - 1))).toEqual({});
-    expect(evaluate(list(LIST_RATE_LIMIT_LADDER_MS.length))).toEqual({ page_stopped: "rate_limit_list" });
-  });
-
-  it("alert 1: the media statistics' 429 hold pages only at the top of its ladder (owner decision №20)", () => {
-    const stats = (step: number) => facts({
-      page: {
-        resourceHolds: {
-          "media-stats": { kind: "rate_limit_media_stats", until: at(MINUTE).toISOString(), step, since: at(-10 * MINUTE).toISOString() },
-        },
-      },
-    });
-    expect(evaluate(stats(LIST_RATE_LIMIT_LADDER_MS.length - 1))).toEqual({});
-    expect(evaluate(stats(LIST_RATE_LIMIT_LADDER_MS.length))).toEqual({ page_stopped: "rate_limit_media_stats" });
+  it("alert 1: a route held by a 429 never stops the page — it is the route's own incident (D5)", () => {
+    const held = facts({ page: { routeState: { version: 1, routes: { "messaging.groups": routeEntry({ holdUntil: at(300_000).toISOString() }) } } } });
+    expect(evaluate(held)).toEqual({});
   });
 
   it("alert 1: '10 min clean' — a stop answer within the window keeps the alert after its hold ended", () => {
     const answeredAt = at(-SYNC_ALERT_CLEAN_MS + MINUTE);
-    const recent = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: answeredAt } } });
-    expect(evaluate(recent)).toEqual({ page_stopped: "rate_limit" });
+    const recent = facts({ journal: { lastStopAttempt: { errorClass: "auth", at: answeredAt } } });
+    expect(evaluate(recent)).toEqual({ page_stopped: "auth" });
     // It holds as of the answer, not now: the latch resolves 10 min after it.
     expect(evaluatePageAlerts(recent, registry)).toEqual([expect.objectContaining({ subKey: "page_stopped", seenAt: answeredAt })]);
     // A hold in force holds now, whatever the journal says.
     const held = facts({
       page: { holdKind: "rate_limit", holdUntil: at(MINUTE), holdSince: at(-MINUTE) },
-      journal: { lastStopAttempt: { errorClass: "rate_limit", at: answeredAt } },
+      journal: { lastStopAttempt: { errorClass: "auth", at: answeredAt } },
     });
     expect(evaluatePageAlerts(held, registry)).toEqual([expect.objectContaining({ detail: "rate_limit", seenAt: NOW })]);
-    const clean = facts({ journal: { lastStopAttempt: { errorClass: "rate_limit", at: at(-SYNC_ALERT_CLEAN_MS - MINUTE) } } });
+    const clean = facts({ journal: { lastStopAttempt: { errorClass: "auth", at: at(-SYNC_ALERT_CLEAN_MS - MINUTE) } } });
     expect(evaluate(clean)).toEqual({});
   });
 
@@ -280,6 +276,41 @@ describe("alert rules (design §9.6)", () => {
       journal: waiting,
       page: { resourceHolds: { "dm-messages": { until: at(MINUTE).toISOString(), step: 1, since: at(-MINUTE).toISOString() } } },
     }))).toEqual({});
+    // Every route it reads held by a 429: the route's own incident pages, not alert 3.
+    const routeHeld = (until: Date) => ({ version: 1, routes: { "messages.page": routeEntry({ holdUntil: until.toISOString() }) } });
+    expect(evaluate(facts({ journal: waiting, page: { routeState: routeHeld(at(MINUTE)) } }))).toEqual({});
+    expect(evaluate(facts({ journal: waiting, page: { routeState: routeHeld(at(-1)) } }))).toEqual({ freshness: "urgent_waiting" });
+    // A key with another route open is not explained by one held route.
+    const find = { urgentWaiting: [{ resource: "dm-conversations.find", subject: "1", dueAt: at(-3 * MINUTE), waitingReason: null }] };
+    const listHeld = { version: 1, routes: { "messaging.groups": routeEntry({ holdUntil: at(MINUTE).toISOString() }) } };
+    expect(evaluate(facts({ journal: find, page: { routeState: listHeld } }))).toEqual({ freshness: "urgent_waiting" });
+  });
+
+  it("the route incident (D5): held routes, and a 429 within the clean window; an unreadable state is alert 1's", () => {
+    const state = {
+      version: 1,
+      routes: {
+        "messaging.groups": routeEntry({ holdUntil: at(5_000).toISOString(), last429At: at(-1_000).toISOString(), effectivePerMin: 6 }),
+        "media.offer_stats": routeEntry({ holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS + MINUTE).toISOString(), effectivePerMin: 2.5 }),
+        "transactions.page": routeEntry({ holdUntil: at(-1).toISOString(), last429At: at(-SYNC_ALERT_CLEAN_MS - MINUTE).toISOString(), effectivePerMin: 8.5 }),
+        "account.me": routeEntry({ holdUntil: at(MINUTE).toISOString() }),
+      },
+    };
+    expect(evaluateRouteAlerts({ routeState: state }, NOW)).toEqual([
+      {
+        route: "account.me", detail: "route_held", seenAt: NOW, holdUntil: at(MINUTE), last429At: null, effectivePerMin: 15, currentPerMin: 15,
+      },
+      {
+        route: "media.offer_stats", detail: "rate_limit", seenAt: at(-SYNC_ALERT_CLEAN_MS + MINUTE), holdUntil: null,
+        last429At: at(-SYNC_ALERT_CLEAN_MS + MINUTE), effectivePerMin: 2.5, currentPerMin: 5,
+      },
+      {
+        route: "messaging.groups", detail: "route_held", seenAt: NOW, holdUntil: at(5_000), last429At: at(-1_000), effectivePerMin: 6, currentPerMin: 12,
+      },
+    ]);
+    expect(evaluateRouteAlerts({ routeState: null }, NOW)).toEqual([]);
+    expect(evaluateRouteAlerts({ routeState: { version: 99, routes: {} } }, NOW)).toEqual([]);
+    expect(evaluate(facts({ page: { routeState: { version: 99, routes: {} } } }))).toEqual({ page_stopped: "route_state_unreadable" });
   });
 
   it("alert 4: a stalled request, a poll past its SLO, an incomplete ledger", () => {
@@ -313,15 +344,17 @@ describe("alert rules (design §9.6)", () => {
 });
 
 describe("the incident kind fansly_sync_engine", () => {
-  it("keys one latch per page and alert, the pace violation apart, alert 5 global", () => {
+  it("keys one latch per page and alert, the pace violation apart, one per page+route, alert 5 global", () => {
     expect(syncEngineIncidentKey({ subKey: "page_stopped", pageId: 7 })).toBe("fansly_sync_engine:7:page_stopped");
+    expect(syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("messaging.groups"), pageId: 7 }))
+      .toBe("fansly_sync_engine:7:route_limited:messaging.groups");
     expect(syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId: 7 }))
       .toBe("fansly_sync_engine:7:page_stopped:pace_violation");
     expect(syncEngineIncidentKey({ subKey: "process", pageId: null })).toBe("fansly_sync_engine:global:process");
   });
 
   it("opens and resolves under one title per alert", () => {
-    const titles = ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process"]
+    const titles = ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process", "route_limited:messages.page"]
       .map((subKey) => incidentTitleForKind({ kind: "fansly_sync_engine", subKey }));
     expect(new Set(titles).size).toBe(titles.length);
     expect(titles.every((title) => title.startsWith("Fansly Sync Engine"))).toBe(true);
@@ -330,10 +363,16 @@ describe("the incident kind fansly_sync_engine", () => {
       .toBe("✅ Resolved\nFansly Sync Engine pace violation acknowledged by the owner: lilly-1 (fansly)");
     expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: "process", pageLabel: null, platform: null }))
       .toBe("✅ Resolved\nFansly Sync Engine heartbeat back");
+    // Every route's latch reads the same title; an empty route is no route latch.
+    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:media.offer_stats" }))
+      .toBe(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:messages.page" }));
+    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:" })).toBe("Fansly Sync Engine alert");
+    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: "route_limited:media.offer_stats", pageLabel: "lilly-1", platform: "fansly" }))
+      .toBe("✅ Resolved\nFansly Sync Engine route open again (10 min clean; its slowdown stays until raised): lilly-1 (fansly)");
   });
 
   it("pages every alert at once", () => {
-    for (const subKey of ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process"]) {
+    for (const subKey of ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process", "route_limited:messages.page"]) {
       expect(notificationPagingPolicyFor("fansly_sync_engine", subKey)).toMatchObject({ openHoldMs: 0, flap: null });
     }
   });
@@ -571,7 +610,7 @@ function lilly2(options: { reconcileAt?: number; insurance?: KeyRun[]; withoutRu
 describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", () => {
   it("names every rule it applies, the plan's band kept as the ceiling and a floor with its exception", () => {
     expect(SHADOW_WINDOW_RULES.map((rule) => rule.id)).toEqual([
-      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
+      "A1.rate", "A1.rate-assumed", "A1.ceiling", "A1.ceiling-demand", "A1.shared-read", "A1.floor", "A1.floor-scheduled", "A1.floor-queue", "A1.floor-idle",
       "A1.poll-schedule",
       "A2.rate", "A2.legacy-regime", "A2.live-only", "A2.demand-replaced",
     ]);
@@ -808,6 +847,38 @@ describe("shadow report A1 in runs and at rates (design §3.12, rules A1.*)", ()
     const unexplained = judge({ "dm-messages.head": { class: "urgent", attempts: 101 } }, null);
     expect(head(unexplained)).toMatchObject({ expected: null, verdict: "not_modelled" });
     expect(unexplained).toMatchObject({ ceilingSteadyState: 101, socketDemand: { reads: 0 }, ceiling: "over", passes: false });
+  });
+
+  it("rule A1.shared-read: finds another key's list read served count beside the attempts against their frames, never in the steady state", () => {
+    // A quiet page (below the band: every row must be at its expectation)
+    // with only the new chats' finds switched on.
+    const page = shadowPage("ari-1", Object.fromEntries(FANSLY_RESOURCE_SPECS
+      .filter((entry) => entry.key !== "dm-conversations.find")
+      .map((entry) => [entry.key, { enabled: false }])));
+    const judge = (attempts: number, served: number | null) => demandOfPage(page, {
+      window: WINDOW,
+      observed: new Map([["dm-conversations.find", { class: "urgent", attempts }]]),
+      ...(served === null ? {} : { served: new Map([["dm-conversations.find", served]]) }),
+      reads: new Map([["dm-conversations.find", { reads: 6, dueLagsMs: [] }]]),
+      facts: { runs: new Map(), placements: new Map(), firstShadowMs: T("2026-10-02T10:05:00Z") },
+      counterparts: NO_GAPS,
+    });
+    const find = (demand: ReturnType<typeof judge>) => demand.resources.find((row) => row.resource === "dm-conversations.find")!;
+    // Six new chats at once: one list read, five finds closed on it.
+    const shared = judge(1, 5);
+    expect(find(shared)).toMatchObject({
+      observed: 1, expected: 6, ratio: 1, verdict: "ok",
+      reason: "socket reads 6; 5 served by another key's read (rule A1.shared-read)",
+    });
+    expect(shared).toMatchObject({
+      steadyState: 1,
+      socketDemand: { reads: 1, resources: [{ resource: "dm-conversations.find", observed: 1, expected: 6, demand: 1, overExpectation: 0 }] },
+      floor: { below: true, holds: true, outside: [] },
+      passes: true,
+    });
+    // By its attempts alone the row would read a sixth of its expectation.
+    expect(find(judge(1, null))).toMatchObject({ observed: 1, expected: 6, verdict: "outside" });
+    expect(judge(1, null)).toMatchObject({ floor: { below: true, holds: false }, passes: false });
   });
 
   it("a single-request poll's run is its one request; every other poll's run is its consecutive steps", () => {

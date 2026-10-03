@@ -73,16 +73,16 @@ export interface EngineResourceSpec {
   /** False only for entries applied from the socket (no request). Such an
    *  entry's every step runs before the HTTP gate (`beforeGateKeys`). */
   http: boolean;
-  /** Its plan may settle a step without a request — a closure, a wait — and
-   *  decides so read-only and cheaply: the actor plans its due work before
-   *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
-   *  step there; a plan that asks for a request is left for its slot. */
-  planBeforeGate?: true;
   /** Every wire route its steps may send: the route admission leaves the key
    *  out of a pick while all of them are closed (`engine/route-policy.ts`).
    *  Absent or empty (a probe whose route is the owner's, a write without a
    *  request): only the planned request's route is checked. */
   operations?: readonly FanslyWireId[];
+  /** Its plan may settle a step without a request — a closure, a wait — and
+   *  decides so read-only and cheaply: the actor plans its due work before
+   *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
+   *  step there; a plan that asks for a request is left for its slot. */
+  planBeforeGate?: true;
   /** Never runs in shadow (socket connect, media download, repair). */
   liveOnly?: boolean;
   /** `sync_attempts.evidence`: the request parameters are coverage evidence
@@ -296,9 +296,11 @@ export interface ApplyResult<C = unknown> {
   /** Outcomes worth counting that are not work (a refused empty snapshot, a
    *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
   counters?: Readonly<Record<string, number>>;
-  /** The account the page's credentials answered for (`/account/me`):
-   *  `sync_pages.identity_account_id`, written by the engine right after the
-   *  apply commits (the page row is the actor's, never a resource's). */
+  /** The account the page's credentials answered for (`/account/me` only,
+   *  `IDENTITY_PROOF_OPERATIONS`): the engine writes the identity proof —
+   *  `sync_pages.identity_account_id` and the trusted digest — and clears a
+   *  credentials hold it answers, in this apply's transaction (the page row
+   *  is the actor's, never a resource's). */
   pageIdentity?: { accountId: string };
 }
 
