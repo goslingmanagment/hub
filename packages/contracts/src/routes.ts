@@ -35,6 +35,8 @@ import { agentKeyAdminRouteSchemas } from "./routes-agent-keys.ts";
 // The Fansly Sync Engine's owner routes (history requests). Owner-session, no
 // agent envelope, so a sibling module for the same reason as the keys above.
 import { syncRouteSchemas } from "./routes-sync.ts";
+// The chat extension's routes (client bootstrap and what follows); same spread.
+import { clientRouteSchemas } from "./routes-client.ts";
 // House primitives shared with the sibling route modules (see primitives.ts).
 import {
   businessDate,
@@ -8279,13 +8281,15 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof ofapiActionRouteSchemas
   & typeof agentRouteSchemas
   & typeof agentKeyAdminRouteSchemas
-  & typeof syncRouteSchemas;
+  & typeof syncRouteSchemas
+  & typeof clientRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
   ...agentRouteSchemas,
   ...agentKeyAdminRouteSchemas,
   ...syncRouteSchemas,
+  ...clientRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
