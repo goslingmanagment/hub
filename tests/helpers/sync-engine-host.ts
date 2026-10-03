@@ -288,6 +288,16 @@ export interface TestActorOptions {
    *  ones, as `main.ts` wires them; null: none). */
   onThreadChainChanged?: ThreadChainChangedHook | null;
   onWorkClosed?: WorkClosedHook | null;
+  /** The route budgets' time scale (default 0: no route budget — the test
+   *  pause is 30 ms; `routeTestScale(settingMs)` keeps the production
+   *  ratios). */
+  routeTimeScale?: number;
+}
+
+/** The route time scale that keeps the production ratio of the route budgets
+ *  to the owner's pause (S = 2 500 ms) at a test pause of `settingMs`. */
+export function routeTestScale(settingMs: number): number {
+  return settingMs / 2_500;
 }
 
 /** Acquire the page and build an actor on it with a small test setting. */
@@ -335,6 +345,7 @@ export async function makeTestActor(options: TestActorOptions): Promise<{
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.onThreadChainChanged === null ? {} : { onThreadChainChanged: options.onThreadChainChanged ?? onHistoryThreadChainChanged }),
     ...(options.onWorkClosed === null ? {} : { onWorkClosed: options.onWorkClosed ?? onHistoryWorkClosed }),
+    routeTimeScale: options.routeTimeScale ?? 0,
   };
   return {
     actor: new SyncActor(deps),

@@ -656,13 +656,14 @@ export async function commitNoHttp(
 }
 
 /**
- * A request an endpoint group's spacing puts off (owner decision №20): nothing
- * is admitted or sent, the slot stays open for other work, and the row is due
- * again when the spacing ends (`waiting_reason = 'pacer'`: it waits for its
- * endpoint's pace, not for its schedule). A demand bump pulls it forward; its
- * next plan meets the same spacing.
+ * A request whose route its budget or hold keeps closed (step 3b, plan PR
+ * 1-1: the final check of the planned route): nothing is admitted or sent,
+ * the slot stays open for other work, and the row is due again when the route
+ * opens (`waiting_reason = 'pacer'`: it waits for its route's pace, not for
+ * its schedule). A demand bump pulls it forward; its next plan meets the same
+ * clocks.
  */
-export async function deferForEndpointSpacing(d: CommitDeps, work: SyncWorkRow, until: Date): Promise<void> {
+export async function deferForRoute(d: CommitDeps, work: SyncWorkRow, until: Date): Promise<void> {
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     await settleWork(tx, {

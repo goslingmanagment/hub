@@ -56,7 +56,8 @@ export interface ResourceSpec extends EngineResourceSpec {
   minIntervalMs?: number;
   proof: ProofKind;
   walk: WalkKind;
-  /** Every wire route its steps send; empty for socket, CDN and no-HTTP work. */
+  /** Every wire route its steps send (the route admission's pick-time
+   *  check); empty for socket frames, no-HTTP work and the owner's probe. */
   operations: readonly FanslyWireId[];
   /** The observation kinds this entry replays for the shadow report (one
    *  owner per kind, design §3.12 B5). */

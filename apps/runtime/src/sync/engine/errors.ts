@@ -84,9 +84,8 @@ export const LIST_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set([
  * walk read `/it/moie/statsnew` at the page pace, ≈ 22 a minute): per-media
  * statistics are read like the conversation list (№14). A 429 on this route
  * holds only the keys that read it — `resource_holds['media-stats']` with kind
- * `rate_limit_media_stats`, the list's ladder — never the page; and two
- * requests on it are at least `MEDIA_STATS_SPACING_MS` apart on one page, on
- * top of the page pause S.
+ * `rate_limit_media_stats`, the list's ladder — never the page. Its pace is
+ * the route's budget (`fansly/routes.ts`, 5/min).
  */
 export const MEDIA_STATS_RATE_LIMIT_ROUTE = "media.offer_stats";
 /** The `resource_holds` entry the media-stats hold lives in. */
@@ -94,8 +93,6 @@ export const MEDIA_STATS_RATE_LIMIT_FILE = "media-stats";
 /** The keys a media-stats hold stops: every key that reads the route (pinned
  *  against the registry by tests/sync-registry-coverage.test.ts). */
 export const MEDIA_STATS_RATE_LIMIT_HELD_KEYS: ReadonlySet<string> = new Set(["media-stats.walk"]);
-/** One request on the media-stats route per this long per page, at most. */
-export const MEDIA_STATS_SPACING_MS = 5_000;
 
 /** The kind of an endpoint group's own 429 hold, and its error class. */
 export type EndpointRateLimitKind = SyncEndpointHoldKind;
@@ -104,10 +101,8 @@ export type EndpointRateLimitKind = SyncEndpointHoldKind;
  * An endpoint group with a quota of its own (owner decisions №14, №20): a 429
  * on any of its routes holds only its keys (until `Retry-After`, else
  * `LIST_RATE_LIMIT_LADDER_MS` by consecutive 429s of the group), in its own
- * `resource_holds` entry; with `spacingMs`, the engine admits a request on its
- * routes no sooner than that after the page's previous one there (the
- * attempt journal is the clock: demand bumps, a restarted walk and a process
- * restart all read it).
+ * `resource_holds` entry. How often its routes are read is their route
+ * budget's (`fansly/routes.ts`, `engine/route-policy.ts`).
  */
 export interface EndpointRateGroup {
   kind: EndpointRateLimitKind;
@@ -117,9 +112,6 @@ export interface EndpointRateGroup {
   file: string;
   /** The keys its hold stops. */
   heldKeys: ReadonlySet<string>;
-  /** The engine's spacing of two requests on its routes per page; null: none
-   *  (the list's is `repair.ws-gap`'s own, owner decision №14 unchanged). */
-  spacingMs: number | null;
 }
 
 export const LIST_RATE_GROUP: EndpointRateGroup = {
@@ -127,7 +119,6 @@ export const LIST_RATE_GROUP: EndpointRateGroup = {
   routes: new Set([LIST_RATE_LIMIT_ROUTE]),
   file: LIST_RATE_LIMIT_FILE,
   heldKeys: LIST_RATE_LIMIT_HELD_KEYS,
-  spacingMs: null,
 };
 
 export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
@@ -135,7 +126,6 @@ export const MEDIA_STATS_RATE_GROUP: EndpointRateGroup = {
   routes: new Set([MEDIA_STATS_RATE_LIMIT_ROUTE]),
   file: MEDIA_STATS_RATE_LIMIT_FILE,
   heldKeys: MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
-  spacingMs: MEDIA_STATS_SPACING_MS,
 };
 
 export const ENDPOINT_RATE_GROUPS: readonly EndpointRateGroup[] = [LIST_RATE_GROUP, MEDIA_STATS_RATE_GROUP];
