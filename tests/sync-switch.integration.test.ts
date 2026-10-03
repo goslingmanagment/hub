@@ -13,8 +13,10 @@ import {
   listCombinedFanslySendsForPaceAudit,
   type Database,
 } from "@agency_hub_core/db";
+import { createLogger } from "@agency_hub_core/shared";
 
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
+import { incidentKey, notifySyncChunkFailureIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { HistoryRequestsUnavailableError, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import { SYNC_ROLLBACK_AUDIT_EVENT, SYNC_SWITCH_RED_LINES_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
@@ -57,7 +59,8 @@ import {
 // stand-in legacy sender that takes the real step-1 guard for every request.
 // Pinned at the origin: no legacy request after the guard flipped, the
 // engine's first request ≥ 1.2 × S after the legacy one, 0 pairs closer than
-// S over both journals; the flip waits for a legacy request in flight and
+// S over both journals, a legacy stream's latch open before the switch closed
+// (`engine_owned`); the flip waits for a legacy request in flight and
 // never takes a closed guard; a phase that times out puts the page back in
 // shadow with the guard back; a switch killed after any phase ends in the
 // same place when run again; the first page opens its requests an hour
@@ -208,9 +211,21 @@ describe("sync switch", () => {
     const startedAt = new Date();
     const legacy = legacySender(r, page.pageId);
     await until(async () => legacy.sent >= 3, 15_000, "legacy sends");
+    // A legacy stream's latch open before the switch (production incident 41).
+    await notifySyncChunkFailureIncident({ db: db(), config: r.config, logger: createLogger("silent") }, {
+      platformAccountId: page.pageId, pageLabel: page.pageLabel, platform: "fansly", stream: "dm_conversations", runId: 0,
+      hasProxy: false, previousConsecutiveFailures: 2, errorSummary: "Fansly request failed (500)", occurredAt: new Date(),
+    });
+    const streamLatch = incidentKey({ kind: "stream_failed_threshold", platformAccountId: page.pageId, stream: "dm_conversations" });
+    const latchOf = async () => (await testDb!.pool.query<{ status: string; resolution: string | null }>(
+      "select status, metadata ->> 'resolution' as resolution from notification_incidents where incident_key = $1", [streamLatch],
+    )).rows[0];
+    expect(await latchOf()).toEqual({ status: "open", resolution: null });
 
     const outcome = await switchOf(r, page.pageLabel);
     expect(outcome).toEqual({ exitCode: 0, phase: "done", page: page.pageLabel });
+    // Closed at the transition: only the legacy executor's recovery resolved it.
+    expect(await latchOf()).toEqual({ status: "resolved", resolution: "engine_owned" });
     expect(await phases(page.pageId)).toEqual([
       "start", "A_handover", "A_guard_handed", "B_stopped", "R_rebuilt", "I_imported", "C_live", "C_owner", "C_requests", "done",
     ]);
