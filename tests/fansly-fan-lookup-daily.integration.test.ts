@@ -20,11 +20,9 @@ import {
 import type { FanslyAccount } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import {
-  lookupHydratedFans,
-  upsertHydratedFansForPage,
-} from "../apps/runtime/src/services/sync/fan-hydration.ts";
+import { lookupHydratedFans } from "../apps/runtime/src/services/sync/fan-hydration.ts";
 import { probeFanslyAccountResolution } from "../apps/runtime/src/services/sync/fansly-account-probe.ts";
+import { upsertHydratedFansForPage } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

@@ -190,15 +190,14 @@ import {
   windowWasHonoured,
   type BackfillWindowGuard,
 } from "./fansly-stats.ts";
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../sync/fansly/lib/lane.ts";
 import {
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
-  fanslyUtcDayKey,
   isSubjectScopedFanslyFailure,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,
-  writeFanslyLaneCoverage,
 } from "./fansly-lane.ts";
 import { evaluateFanslyStreamGate } from "./fansly-stream-gate.ts";
 import { summarizeCheckpoint } from "./observability.ts";

@@ -6,13 +6,10 @@ import {
 } from "@agency_hub_core/fansly";
 import { calculateGrossMillsFromNet, millsFromInteger } from "@agency_hub_core/shared";
 
-import type { TopSpendersCursorState, TopSpendersCursorWindow } from "./cursor-state.ts";
-
-// The money rules both Fansly engines apply (transactions, top spenders): the
-// legacy chunk handlers (transactions.ts, executor-handlers.ts) and the Sync
-// Engine's resources (sync/fansly/resources/transactions.ts, top-spenders.ts).
-// Pure; moved here from those files unchanged, so the two engines cannot drift
-// while both run (step 2 shadow, step 3 per page).
+// The money rules of the Sync Engine's resources (resources/transactions.ts,
+// top-spenders.ts). Pure. The legacy chunk handlers (transactions.ts,
+// executor-handlers.ts) import them from here until step 4 deletes them; the
+// OnlyFans top-spenders handler keeps the window rules and the cursor below.
 
 // ── transactions ────────────────────────────────────────────────────────────
 
@@ -134,6 +131,101 @@ export const TOP_SPENDERS_PROVIDER_CAP = 100;
 export const TOP_SPENDERS_STEADY_STATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const TOP_SPENDERS_WINDOW_DAY_MS = 24 * 60 * 60 * 1000;
 export const TOP_SPENDERS_WINDOW_WEEK_MS = 7 * TOP_SPENDERS_WINDOW_DAY_MS;
+
+export type TopSpendersCursorWindow = {
+  kind: "month" | "week" | "day";
+  monthKey: string;
+  startedAt: string;
+  endedAt: string;
+};
+
+export type TopSpendersCursorState = {
+  version: 1;
+  mode: "bootstrap" | "steady_state";
+  accountCreatedAt: string;
+  totalMonths: number;
+  completedMonths: number;
+  pendingWindows: TopSpendersCursorWindow[];
+  lastWindowStartedAt: string | null;
+  lastWindowEndedAt: string | null;
+};
+
+function asRecord(value: unknown) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asNullableString(value: unknown) {
+  return value === null || typeof value === "string" ? value : null;
+}
+
+export function parseTopSpendersCursorState(value: unknown): TopSpendersCursorState | null {
+  const state = asRecord(value);
+  if (!state || asNumber(state.version) !== 1) {
+    return null;
+  }
+
+  const mode = state.mode === "bootstrap" || state.mode === "steady_state"
+    ? state.mode
+    : null;
+  const accountCreatedAt = asNullableString(state.accountCreatedAt);
+  const totalMonths = asNumber(state.totalMonths);
+  const completedMonths = asNumber(state.completedMonths);
+  const lastWindowStartedAt = asNullableString(state.lastWindowStartedAt);
+  const lastWindowEndedAt = asNullableString(state.lastWindowEndedAt);
+  const rawPendingWindows = Array.isArray(state.pendingWindows) ? state.pendingWindows : null;
+
+  if (
+    mode === null ||
+    !accountCreatedAt ||
+    totalMonths === null ||
+    completedMonths === null ||
+    lastWindowStartedAt === undefined ||
+    lastWindowEndedAt === undefined ||
+    rawPendingWindows === null
+  ) {
+    return null;
+  }
+
+  const pendingWindows = rawPendingWindows.flatMap((window) => {
+    const record = asRecord(window);
+    if (!record) {
+      return [];
+    }
+
+    const kind = record.kind === "month" || record.kind === "week" || record.kind === "day"
+      ? record.kind
+      : null;
+    const monthKey = asNullableString(record.monthKey);
+    const startedAt = asNullableString(record.startedAt);
+    const endedAt = asNullableString(record.endedAt);
+    if (!kind || !monthKey || !startedAt || !endedAt) {
+      return [];
+    }
+
+    return [{ kind, monthKey, startedAt, endedAt } satisfies TopSpendersCursorWindow];
+  });
+
+  if (pendingWindows.length !== rawPendingWindows.length) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    mode,
+    accountCreatedAt,
+    totalMonths,
+    completedMonths,
+    pendingWindows,
+    lastWindowStartedAt,
+    lastWindowEndedAt,
+  };
+}
 
 export function buildUtcMonthKey(date: Date) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;

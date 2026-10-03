@@ -29,7 +29,7 @@ import {
   vaultMediaRows,
   type VaultAlbumWalkState,
 } from "../../../services/sync/fansly-catalog.ts";
-import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../lib/lane.ts";
 import { observeVaultWalkPage, vaultWalkIsComplete, type VaultWalkProof } from "../../../services/sync/vault-walk-proof.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import {

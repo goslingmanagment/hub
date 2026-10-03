@@ -11,17 +11,20 @@ import {
   SUBSCRIBERS_MAX_WALK_RESTARTS,
   SUBSCRIBERS_WALK_RESTART_DELAY_MS,
   uniqueFollowerIds,
-} from "./audience-rules.ts";
+} from "../../sync/fansly/lib/audience-rules.ts";
 import { readFollowersReconcileCompletion } from "./followers-reconcile-completion.ts";
 import {
   buildTopSpendersBootstrapState,
   buildUtcMonthKey,
   computeCompletedTopSpenderMonths,
+  parseTopSpendersCursorState,
   partitionTopSpenderItems,
   splitTopSpendersWindow,
   TOP_SPENDERS_STEADY_STATE_WINDOW_MS,
-} from "./money-rules.ts";
-import { followersReconcileDecision } from "./followers-reconcile-decision.ts";
+  type TopSpendersCursorState,
+  type TopSpendersCursorWindow,
+} from "../../sync/fansly/lib/money-rules.ts";
+import { followersReconcileDecision } from "../../sync/fansly/lib/followers-reconcile-decision.ts";
 import { FOLLOWERS_RECONCILE_FLOOR_DEFERRAL, followersReconcileFloor } from "./followers-reconcile-floor.ts";
 import {
   aggregateTransactionTopSpenders,
@@ -134,13 +137,10 @@ import {
   parseFollowersCursorState,
   parseFollowersReconcileCursorState,
   parseSubscribersCursorState,
-  parseTopSpendersCursorState,
   type DmMessagesCursorState,
   type FollowersCursorState,
   type FollowersReconcileCursorState,
   type SubscribersCursorState,
-  type TopSpendersCursorState,
-  type TopSpendersCursorWindow,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
 import {
@@ -168,10 +168,18 @@ import {
   spreadFanslyContinuation,
 } from "./fansly-lane.ts";
 import {
-  assertFanslyPurchaseHistoryTargetKindsConsistent,
   classifyFanslyPurchaseHistoryCapture,
-  classifyFanslyPurchaseHistoryCaptures,
   extractFanslyPurchaseHistoryTargets,
+  fanslyPurchaseHistoryTargetKey,
+  parseFanslyPurchaseHistoryCursorState,
+  type FanslyPurchaseHistoryCaptureClassification,
+  type FanslyPurchaseHistoryCursorStateV5,
+  type FanslyPurchaseHistoryPendingTarget,
+  type FanslyPurchaseHistoryTarget,
+} from "../../sync/fansly/lib/purchase-history.ts";
+import {
+  assertFanslyPurchaseHistoryTargetKindsConsistent,
+  classifyFanslyPurchaseHistoryCaptures,
   classifyFanslyPurchaseHistoryProbe,
   deriveFanslyPurchaseHistoryRejectionStreaks,
   extractFanslyPurchaseHistoryTargetsFromTransactions,
@@ -181,15 +189,9 @@ import {
   FANSLY_PURCHASE_HISTORY_PROOF_WITNESS_LIMIT,
   FANSLY_PURCHASE_HISTORY_REJECTION_PROOF_THRESHOLD,
   FANSLY_PURCHASE_HISTORY_RESULT_LIMIT,
-  fanslyPurchaseHistoryTargetKey,
   fanslyPurchaseHistoryTargetRejection,
   isServedStatus,
-  parseFanslyPurchaseHistoryCursorState,
   rejectedFanslyPurchaseHistoryPayload,
-  type FanslyPurchaseHistoryCaptureClassification,
-  type FanslyPurchaseHistoryCursorStateV5,
-  type FanslyPurchaseHistoryPendingTarget,
-  type FanslyPurchaseHistoryTarget,
 } from "./fansly-purchase-history.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import {
@@ -212,7 +214,8 @@ import {
   resolveDmConversationCoverageStatus,
 } from "./fansly-dm-messages.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
-import { lookupHydratedFans, upsertHydratedFansForPage, type HydrationCaptureContext } from "./fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../../sync/fansly/lib/fan-hydration.ts";
+import { lookupHydratedFans, type HydrationCaptureContext } from "./fan-hydration.ts";
 import { syncTransactions } from "./transactions.ts";
 import {
   FanslyPurchaseHistoryContractError,
@@ -220,7 +223,7 @@ import {
 } from "./errors.ts";
 import {
   followersReconcileDeactivationLimit,
-} from "./followers-reconcile-safety.ts";
+} from "../../sync/fansly/lib/followers-reconcile-safety.ts";
 
 // Kept exported from here for the modules and the platform registry that
 // already import them from this file; both now live in executor-types.ts so a

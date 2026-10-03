@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   FOLLOWERS_RECONCILE_FLOOR_DEFERRAL,
-  FOLLOWERS_RECONCILE_MIN_INTERVAL_MS,
   followersReconcileFloor,
   followersReconcileFloorWaitUntil,
   followersReconcileQueuedSince,
 } from "../apps/runtime/src/services/sync/followers-reconcile-floor.ts";
+import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../apps/runtime/src/sync/fansly/lib/audience-rules.ts";
 
 const NOW = new Date("2026-09-30T12:00:00.000Z");
 const HOUR_MS = 60 * 60 * 1000;

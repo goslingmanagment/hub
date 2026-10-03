@@ -91,12 +91,14 @@ import { composeRequestObservers } from "./chunk-budget.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handlers.ts";
 import {
   classifyFanslyResponse,
+  fanslyUtcDayKey,
+  type FanslyResponseClass,
+} from "../../sync/fansly/lib/lane.ts";
+import {
   createFanslyLaneCoverageWriter,
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
-  fanslyUtcDayKey,
   FanslyLaneInvalidResponseError,
-  type FanslyResponseClass,
   nextFanslyUtcDayStart,
   rollFanslyUtcDay,
   spreadFanslyContinuation,

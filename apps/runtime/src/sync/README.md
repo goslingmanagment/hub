@@ -37,7 +37,9 @@ sync/
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
                              page's socket (`source.ts`)
-    lib/                     chain rules, walk helpers
+    lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history and lane
+                             rules the resources use (step 4 moved them here: the legacy executor imports them from
+                             here until it is deleted, the OnlyFans top spenders keeps the window rules)
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
   report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
                              journal), the fingerprint the switch checks

@@ -28,8 +28,8 @@ import {
   SUBSCRIBERS_EMPTY_SNAPSHOT_MAX_RETIREMENTS,
   SUBSCRIBERS_MAX_WALK_RESTARTS,
   SUBSCRIBERS_WALK_RESTART_DELAY_MS,
-} from "../../../services/sync/audience-rules.ts";
-import { upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
+} from "../lib/audience-rules.ts";
+import { upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

@@ -16,7 +16,7 @@ import { FANSLY_ACCOUNT_LOOKUP_BATCH_SIZE } from "@agency_hub_core/fansly";
 import { CAPTURE_COVERAGE_PLANES, getDescriptor } from "@agency_hub_core/shared";
 
 import { REPLIES_FULL_PAGE_THRESHOLD } from "../../../services/canonicalize/fansly-comments.ts";
-import { writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   classifyPostRepliesResponse,
   nextRepliesCursor,

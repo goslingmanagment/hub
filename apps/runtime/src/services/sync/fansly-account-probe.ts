@@ -16,7 +16,7 @@ import { readFanslyAccountProbe, recordFanslyAccountProbe } from "@agency_hub_co
 import { FANSLY_MAPPER_VERSION } from "@agency_hub_core/fansly";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS } from "./fan-hydration.ts";
+import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS } from "../../sync/fansly/lib/fan-hydration.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 
 export type FanslyAccountResolution = "resolved" | "unresolved" | "unknown";

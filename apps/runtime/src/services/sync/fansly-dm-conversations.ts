@@ -85,7 +85,7 @@ import {
   resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
 import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
-import { upsertHydratedFansForPage } from "./fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../../sync/fansly/lib/fan-hydration.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
 import {
   breaksLegacyUnchangedPage,

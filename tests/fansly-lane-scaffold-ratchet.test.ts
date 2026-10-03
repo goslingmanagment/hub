@@ -61,11 +61,16 @@ describe("Fansly lane scaffold ratchet", () => {
       "fansly-catalog.ts",
       "fansly-post-replies.ts",
       "fansly-payouts.ts",
-      "fansly-purchase-history.ts",
     ]) {
       expect(syncSource(file), `${file} must use the shared response classifier`)
         .toContain("classifyFanslyResponse");
     }
+    // The purchase-history page classifier moved to the engine's lib, which
+    // both engines import it from.
+    expect(
+      readFileSync(join(ROOT, "apps/runtime/src/sync/fansly/lib/purchase-history.ts"), "utf8"),
+      "purchase-history must use the shared response classifier",
+    ).toContain("classifyFanslyResponse");
   });
 
   it("keeps purchase-history journal and checkpoint work on the same scaffold", () => {

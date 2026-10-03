@@ -12,7 +12,7 @@ import {
   startEarningsWindow,
   type EarningsWindowWalk,
 } from "../../../services/sync/fansly-earnings-window.ts";
-import { writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   advanceBroadcastWalk,
   BACKFILL_EMPTY_STREAK_LIMIT,

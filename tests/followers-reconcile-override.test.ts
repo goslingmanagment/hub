@@ -31,7 +31,7 @@ import {
 } from "../apps/runtime/src/services/followers-reconcile-override.ts";
 import {
   followersReconcileCandidateSha256,
-} from "../apps/runtime/src/services/sync/followers-reconcile-safety.ts";
+} from "../apps/runtime/src/sync/fansly/lib/followers-reconcile-safety.ts";
 
 const BLOCKED_AT = "2026-08-30T00:10:00.000Z";
 const SWEEP_STARTED_AT = "2026-08-29T22:00:00.000Z";

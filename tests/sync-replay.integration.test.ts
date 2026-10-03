@@ -19,8 +19,8 @@ import { familyForObservation } from "../apps/runtime/src/services/canonicalize/
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { runFanslyPayoutsProjection } from "../apps/runtime/src/services/projections/fansly-payouts.ts";
 import { runMediaPlaneProjection } from "../apps/runtime/src/services/projections/media-plane.ts";
-import { buildFanEarningsReceipt } from "../apps/runtime/src/services/sync/fan-earnings-receipt.ts";
-import { mapFanslyTransactionItem } from "../apps/runtime/src/services/sync/money-rules.ts";
+import { buildFanEarningsReceipt } from "../apps/runtime/src/sync/fansly/lib/fan-earnings-receipt.ts";
+import { mapFanslyTransactionItem } from "../apps/runtime/src/sync/fansly/lib/money-rules.ts";
 import { canonicalizeObservationInTransaction } from "../apps/runtime/src/sync/engine/canonicalize.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
