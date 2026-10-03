@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -7,6 +8,7 @@ import {
   CLIENT_TOKEN_PROFILES,
   authIssueDeviceTokenWithPasswordBodySchema,
   authIssueDeviceTokenWithPasswordResponseSchema,
+  clientTokenAllowlistApplies,
   isClientTokenProfile,
   operationsOutsideClientTokenProfile,
   routeSchemas,
@@ -16,14 +18,13 @@ import {
 import { clientAiFeatureFlag } from "../apps/runtime/src/services/client-ai-switch.ts";
 import {
   CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE,
-  clientTokenAllowlistApplies,
   clientTokenIngestKinds,
   clientTokenIngestProducer,
   clientTokenRouteRefusal,
 } from "../apps/runtime/src/services/client-token-profile.ts";
 import type { AuthPrincipal, HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { ForbiddenError } from "../apps/runtime/src/services/errors.ts";
-import { INGEST_KIND_ALLOWLIST } from "../apps/runtime/src/services/ingest-observations.ts";
+import { INGEST_KIND_ALLOWLIST, ingestProducerForClientVersion } from "../apps/runtime/src/services/ingest-observations.ts";
 import { kernelOperations } from "../packages/sdk/src/operations.ts";
 
 // chat-extension H-3: the narrow device token's allowlist. The integration
@@ -34,6 +35,16 @@ const EXTENSION = CLIENT_TOKEN_PROFILES["chat-extension"];
 const operations: readonly string[] = EXTENSION.operations;
 const schemas = routeSchemas as unknown as Record<string, { auth?: RouteAuthPolicy }>;
 const paths = kernelOperations as unknown as Record<string, { method: string; path: string }>;
+
+// The migration's number is retaken at the last rebase (hub-pr-plan §3.0 rule
+// 10), so the tests find it by name.
+const MIGRATIONS_DIR = "packages/db/migrations";
+function profileMigration(): string {
+  const found = readdirSync(MIGRATIONS_DIR).filter((file) => file.endsWith("_device_token_client_profile.sql"));
+  expect(found).toHaveLength(1);
+  return found[0]!;
+}
+const profileMigrationSql = () => readFileSync(`${MIGRATIONS_DIR}/${profileMigration()}`, "utf8");
 
 function principal(overrides: Partial<HumanAuthPrincipal> = {}): HumanAuthPrincipal {
   return {
@@ -90,6 +101,42 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     expect(operationsOutsideClientTokenProfile("chat-extension", ["me", "clientBootstrap"])).toEqual([]);
     expect(operationsOutsideClientTokenProfile("chat-extension", ["me", "pages", "aiPersonasList"]))
       .toEqual(["pages", "aiPersonasList"]);
+    // The sign-in and health take no principal: no token is checked there.
+    expect(operationsOutsideClientTokenProfile("chat-extension", ["authIssueDeviceTokenWithPassword", "health"]))
+      .toEqual([]);
+    expect(operationsOutsideClientTokenProfile("chat-extension", ["noSuchRoute"])).toEqual(["noSuchRoute"]);
+  });
+
+  // Critic 2 on H-1a: a registered chat-extension SDK must call nothing its
+  // narrow token is refused, and the compat suite must sign it in narrow, or a
+  // key missing from the list shows up first in prod. H-1a's registry
+  // (apps/runtime/src/services/client-sdk-registry.ts) is not on this PR's
+  // base; this arms itself the moment both are on main, in either merge order,
+  // and fails the PR that lands second until the check holds. (H-1a's own
+  // laneFor already refuses a chat-extension row that has no compat lane.)
+  it("holds every registered chat-extension SDK inside the list, run with a narrow token", async () => {
+    const registryFile = resolve("apps/runtime/src/services/client-sdk-registry.ts");
+    if (!existsSync(registryFile)) return;
+    const { CLIENT_SDK_REGISTRY } = await import(registryFile) as {
+      CLIENT_SDK_REGISTRY: ReadonlyArray<{
+        bundleSha256: string;
+        clients: ReadonlyArray<{ name: string }>;
+        operations: readonly string[];
+      }>;
+    };
+    expect(Array.isArray(CLIENT_SDK_REGISTRY)).toBe(true);
+    const rows = CLIENT_SDK_REGISTRY.filter((row) => row.clients.some((client) => client.name === "chat-extension"));
+    for (const row of rows) {
+      expect(operationsOutsideClientTokenProfile("chat-extension", row.operations), row.bundleSha256).toEqual([]);
+    }
+    if (rows.length > 0) {
+      const compat = ["tests/client-sdk-compat.integration.test.ts", "tests/helpers/client-sdk-compat.ts"]
+        .filter((file) => existsSync(file))
+        .map((file) => readFileSync(file, "utf8"))
+        .join("\n");
+      expect(compat, "the compat suite signs chat-extension rows in with client: \"chat-extension\"")
+        .toMatch(/client:\s*["']chat-extension["']/);
+    }
   });
 
   it("is the one profile name, as the sign-in body and the database spell it", () => {
@@ -98,7 +145,7 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     for (const value of ["desktop", "toString", "constructor", "", null, undefined, 1]) {
       expect(isClientTokenProfile(value), String(value)).toBe(false);
     }
-    const sql = readFileSync("packages/db/migrations/0236_device_token_client_profile.sql", "utf8");
+    const sql = profileMigrationSql();
     const check = /client_profile in \(([^)]*)\)/.exec(sql)?.[1];
     expect(check?.split(",").map((value) => value.trim().replace(/^'|'$/g, ""))).toEqual([...CLIENT_TOKEN_PROFILE_NAMES]);
   });
@@ -165,12 +212,27 @@ describe("the route guard", () => {
 });
 
 describe("the narrow token's capture producer", () => {
-  it("is the profile's, with the version from the header or unknown", () => {
+  const long = "9".repeat(65);
+
+  it("is the profile's, with the version from the header as sent, or unknown", () => {
     expect(clientTokenIngestProducer("chat-extension", "chat-extension/1.4.2")).toBe("chat-extension@1.4.2");
     expect(clientTokenIngestProducer("chat-extension", "chat-extension/0.1.0-dev")).toBe("chat-extension@0.1.0-dev");
-    for (const header of [null, "", "chat-extension/", "chat-extension/ ", "desktop/0.1.64", "harvest-0.1.64", "2.7.1",
-      `chat-extension/${"9".repeat(65)}`]) {
+    expect(clientTokenIngestProducer("chat-extension", "chat-extension/ 1.2.3")).toBe("chat-extension@ 1.2.3");
+    expect(clientTokenIngestProducer("chat-extension", `chat-extension/${long}`)).toBe(`chat-extension@${long}`);
+    for (const header of [null, "", "chat-extension/", "chat-extension", "desktop/0.1.64", "harvest-0.1.64", "2.7.1",
+      "x-chat-extension/1.0.0"]) {
       expect(clientTokenIngestProducer("chat-extension", header), String(header)).toBe("chat-extension@unknown");
+    }
+  });
+
+  // H-12a (client/ingest-producer-chat-extension) gives a FULL token's
+  // chat-extension/<v> header the same stamp. Before it lands the header lane
+  // still says desktop@<header>; from then on, in either merge order, the two
+  // lanes must agree on every such header or one client's facts split in two.
+  it("matches the header lane's chat-extension stamp once H-12a is on the base", () => {
+    for (const header of ["chat-extension/1.4.2", "chat-extension/0.1.0-dev", "chat-extension/ 1.2.3", `chat-extension/${long}`]) {
+      expect([`desktop@${header}`, clientTokenIngestProducer("chat-extension", header)], header)
+        .toContain(ingestProducerForClientVersion(header));
     }
   });
 });
@@ -186,9 +248,9 @@ describe("the narrow token's AI switch", () => {
   });
 });
 
-describe("migration 0236 and the SDK surface", () => {
+describe("the client-profile migration and the SDK surface", () => {
   it("adds the column, its check and the immutability trigger, nothing else", () => {
-    const sql = readFileSync("packages/db/migrations/0236_device_token_client_profile.sql", "utf8")
+    const sql = profileMigrationSql()
       .split("\n")
       .filter((line) => !line.trimStart().startsWith("--"))
       .join("\n")
@@ -204,7 +266,7 @@ describe("migration 0236 and the SDK surface", () => {
   it("is rollback-compatible", () => {
     const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
-      .toContain('"0236_device_token_client_profile.sql"');
+      .toContain(`"${profileMigration()}"`);
   });
 
   it("re-exports the profiles from the generated @kernel/sdk", () => {

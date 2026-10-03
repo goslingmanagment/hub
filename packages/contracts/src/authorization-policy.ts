@@ -1,4 +1,4 @@
-import { CLIENT_TOKEN_PROFILES, clientTokenProfileAllows } from "./client-token-scopes.ts";
+import { CLIENT_TOKEN_PROFILES, clientTokenAllowlistApplies, clientTokenProfileAllows } from "./client-token-scopes.ts";
 import type { RouteAuthPolicy } from "./routes.ts";
 
 // Kernel Stage 19: the generated authorization-policy document. Rendered by
@@ -27,13 +27,10 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "any": "any authenticated principal except an agent key",
 };
 
-/** Kinds that take no principal: a narrow token's allowlist does not apply to them. */
-const NO_PRINCIPAL_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac", "pending-device-token"]);
-
 /** The narrow-token column: "yes" on the profile's list, "no" (403) off it,
  *  "—" where the route takes no principal at all. */
 function clientTokenCell(row: AuthorizationPolicyRow): string {
-  if (!row.auth || NO_PRINCIPAL_KINDS.has(row.auth.kind)) {
+  if (!row.auth || !clientTokenAllowlistApplies(row.auth)) {
     return "—";
   }
   return clientTokenProfileAllows("chat-extension", row.routeKey) ? "yes" : "no";
