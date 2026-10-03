@@ -342,6 +342,19 @@ describe("AI feature service pilot (Stage 30)", () => {
     expect(withoutCapability.statusCode, withoutCapability.body).toBe(200);
     expect(aiFrames(withoutCapability.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
 
+    // H-4a: other advertised capabilities never imply the echo, and an
+    // oversized header is ignored (200, no frame), never a 400.
+    for (const header of ["context-v1, split-all-v1", `debug-input-v1,${" ".repeat(256)}`]) {
+      const otherCapabilities = await apiServer!.inject({
+        method: "POST",
+        url: "/api/v1/ai/features/fast-reply",
+        headers: { authorization: `Bearer ${chatterKey}`, "x-kernel-ai-capabilities": header },
+        payload: { ...payload, clientRequestId: randomUUID() },
+      });
+      expect(otherCapabilities.statusCode, otherCapabilities.body).toBe(200);
+      expect(aiFrames(otherCapabilities.body).some((frame) => frame.type === "debug_input_v1")).toBe(false);
+    }
+
     const echoed = await apiServer!.inject({
       method: "POST",
       url: "/api/v1/ai/features/fast-reply",

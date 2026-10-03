@@ -89,6 +89,25 @@ Core emits SSE frames with event name `ai` and JSON data matching the exported f
 The stream is the only successful response body. Core must not buffer a full provider response and
 return it as JSON on success.
 
+### Feature-lane capability header
+
+`POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
+`x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
+`packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`). A token is
+compatibility negotiation ("this client understands the matching frame or field"), never
+authorization.
+
+- Server: parsed once per request by `parseAiStreamCapabilities` — one string of at most 256
+  characters, split on commas, trimmed, case-sensitive, unknown tokens dropped. A longer or repeated
+  header counts as empty. The header is not declared in the route schema, so a malformed value is
+  ignored instead of failing with 400.
+- Today only `debug-input-v1` changes the stream: the `debug_input_v1` frame, still behind the
+  `chatMuseAiPromptDebugEchoEnabled` kill-switch. The other tokens are reserved for the frames and
+  fields that will read them; until then they change nothing.
+- SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
+  deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
+  so existing callers put exactly the same bytes on the wire as before.
+
 ## Authorization
 
 Core must resolve `pageLabel` through the authenticated chatter's current page assignments before
