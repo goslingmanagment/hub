@@ -1,11 +1,15 @@
 # Error-handling canon
 
 This is the single canonical error-handling reference for the Agency Hub family:
-the core kernel, the ChatGoose Firefox extension, and the ChatGoose Desktop
-Electron application. It records the currently implemented contract and the
+the core kernel, the ChatGoose Firefox extension (`fansly-chat`), the ChatGoose
+Desktop Electron application (`onlyfans-chat`), and the ChatSpace extension
+(`chat-extension`). It records the currently implemented contract and the
 family law from core Decisions #154/#182/#183/#184, extension Decisions
-E38/E57/E58, and desktop Decision D25. Change this document in the same family
-change as any behavior recorded here; do not maintain client-side copies.
+E38/E57/E58, and desktop Decision D25; the `chat-extension` columns follow its
+frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
+Appendix A) and its hub→CG map (`packages/contracts/src/hub/error-map.ts`).
+Change this document in the same family change as any behavior recorded here;
+do not maintain client-side copies.
 
 ## 1. The law
 
@@ -48,6 +52,8 @@ change as any behavior recorded here; do not maintain client-side copies.
 | Core AI SSE generation | An error frame terminates the stream; core does not restart the generation. | A chatter may explicitly start a new generation only when the card's recovery permits it. |
 | Firefox extension AI generation | No SSE error code is auto-retried. A generic pre-stream `service_unavailable` failure gets exactly one transparent retry after 5 seconds, and only before the first output chunk. | Manual retry after the mapped card; a provider-rate countdown is display only. |
 | Desktop AI generation | No automatic generation retry. EOF without `done` fails closed. | Manual action after the mapped card; a provider-rate deadline is display only. |
+| chat-extension AI generation | No SSE error code is auto-retried. A structured HTTP 503 `service_unavailable` on the AI stream before the first output frame gets exactly one transparent retry after 5 seconds ("Сервис недоступен, повтор через 5 с…"); never after an output frame and never for a send. EOF without `done` fails closed as `CG-STREAM-TRUNCATED`. | Manual retry after the mapped card; a provider-rate `retryAfterMs` is kept as an absolute display deadline only. |
+| chat-extension hub calls (non-AI) | No transport failure (network, timeout, contract, truncation) is repeated automatically. A rejected cursor (`cursor_invalid`, `cursor_window_mismatch`) is read again once from the first page, without a toast. H-5 `generation_not_ready` repeats only the idempotent link write, never the generation: 5 s, 15 s, 60 s, then every 3 min up to 30 min while the tab is open, then `CG-RECAP-SAVE`. A claim `dispatch` that fails in transport ends its attempt held: no ticket, so no command was enqueued. | The chatter's next click; only a new click makes a new send attempt. |
 | Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; neither client owns them. |
 | OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
 | Voice synthesis | One paid provider dispatch. A timeout, transport failure, or ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
@@ -81,18 +87,18 @@ incident column, `global` means the singleton latch
 `ai_provider_failed:<pageId>:proxy`. A page incident requires a non-null
 `pageId`.
 
-| Wire code | Static wire message | Meaning and failure phase | `retryAfterMs` | Default recovery disposition | Incident policy | Firefox extension mapping | Desktop mapping |
-|---|---|---|---|---|---|---|---|
-| `provider_billing` | `AI provider billing requires attention` | Anthropic HTTP 400 `invalid_request_error` whose provider message exactly matches the production low-credit signature; `provider_response`. Near matches remain generic. | Always `null`. | Do not retry until an operator restores provider credit. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_billing` / `CG-HUB-12` | `CG-HUB-04` |
-| `provider_auth` | `AI provider authentication failed` | Structured provider authentication/permission evidence or HTTP 401/403; `provider_response`. | Always `null`. | Do not retry until an operator repairs the server-side provider credential or permission. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_auth` / `CG-HUB-13` | `CG-HUB-05` |
-| `provider_rate_limited` | `AI provider rate limit reached` | Structured provider rate-limit evidence or HTTP 429; `provider_response`. | Parsed from `Retry-After` seconds or HTTP date when valid, otherwise `null`; this is the only code that can carry a value. | No automatic retry; wait until the displayed deadline, then retry manually if needed. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_rate_limited` / `CG-HUB-14` | `CG-HUB-06` |
-| `provider_unavailable` | `AI provider is temporarily unavailable` | Structured provider unavailable/overload evidence, HTTP 529, or any provider 5xx; `provider_response`. | Always `null`. | No automatic retry; retry manually later and escalate a continuing outage. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_unavailable` / `CG-HUB-15` | `CG-HUB-07` |
-| `provider_proxy_unreachable` | `AI gateway could not reach the page's egress proxy` | Named/code-based connect failure in the cause chain, or an explicit connect-phase failure; `connect`. | Always `null`. | Do not retry until the page's egress route is restored. | `ai_provider_failed`; `page/proxy`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | `CG-HUB-08` |
-| `provider_stream_failed` | `AI gateway provider stream failed` | Generic provider/transport failure. A supplied `provider_response` phase or status-bearing unclassified response is `provider_response`; a failure after output starts, a stream-phase hint, or an otherwise statusless fallback is `stream`. | Always `null`. | Do not blind-retry; inspect the provider path and retry manually only after judgment. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `provider_output_empty` | `AI gateway provider completed without usable output` | Provider termination produced no non-whitespace output after stronger terminal-integrity checks; `stream`. | Always `null`. | Discard the unusable result; a later regeneration is manual. | `ai_provider_failed`; `page/provider`; threshold 3. | `ai_output_unusable` / `CG-API-06` | Provider fallback: `CG-HUB-10` |
-| `provider_usage_missing` | `AI gateway provider ended without usage metadata` | Output exists but the terminal provider stream supplied no usage metadata; `stream`. | Always `null`. | Discard as an incomplete terminal; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `provider_stream_incomplete` | `AI gateway provider stream ended without a terminal stop reason` | Output and usage exist, but no `done`/terminal stop reason exists; `stream`. | Always `null`. | Discard the partial result; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` |
-| `coach_output_too_long` | `AI gateway output exceeded the coach transport ceiling` | Coach output crossed the 64,000-character transport ceiling; `stream`. The crossing delta is emitted, then this error, with no `done`. | Always `null`. | Change or narrow the request before a new manual generation; retrying the same request is not recovery. | `ai_provider_failed`; `page/provider`; threshold 3. | Non-provider fallback: `hub_request_failed` / `CG-HUB-07` | Non-provider fallback: `CG-HUB-02` |
+| Wire code | Static wire message | Meaning and failure phase | `retryAfterMs` | Default recovery disposition | Incident policy | Firefox extension mapping | Desktop mapping | chat-extension mapping |
+|---|---|---|---|---|---|---|---|---|
+| `provider_billing` | `AI provider billing requires attention` | Anthropic HTTP 400 `invalid_request_error` whose provider message exactly matches the production low-credit signature; `provider_response`. Near matches remain generic. | Always `null`. | Do not retry until an operator restores provider credit. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_billing` / `CG-HUB-12` | `CG-HUB-04` | `CG-PROVIDER-BILLING` |
+| `provider_auth` | `AI provider authentication failed` | Structured provider authentication/permission evidence or HTTP 401/403; `provider_response`. | Always `null`. | Do not retry until an operator repairs the server-side provider credential or permission. | `ai_provider_billing`; `global`; immediate on first failure. | `hub_provider_auth` / `CG-HUB-13` | `CG-HUB-05` | `CG-PROVIDER-AUTH` |
+| `provider_rate_limited` | `AI provider rate limit reached` | Structured provider rate-limit evidence or HTTP 429; `provider_response`. | Parsed from `Retry-After` seconds or HTTP date when valid, otherwise `null`; this is the only code that can carry a value. | No automatic retry; wait until the displayed deadline, then retry manually if needed. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_rate_limited` / `CG-HUB-14` | `CG-HUB-06` | `CG-PROVIDER-RATE-LIMIT`; `retryAfterMs` kept as an absolute display deadline |
+| `provider_unavailable` | `AI provider is temporarily unavailable` | Structured provider unavailable/overload evidence, HTTP 529, or any provider 5xx; `provider_response`. | Always `null`. | No automatic retry; retry manually later and escalate a continuing outage. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_unavailable` / `CG-HUB-15` | `CG-HUB-07` | `CG-PROVIDER-UNAVAILABLE` |
+| `provider_proxy_unreachable` | `AI gateway could not reach the page's egress proxy` | Named/code-based connect failure in the cause chain, or an explicit connect-phase failure; `connect`. | Always `null`. | Do not retry until the page's egress route is restored. | `ai_provider_failed`; `page/proxy`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | `CG-HUB-08` | `CG-PROVIDER-PROXY` |
+| `provider_stream_failed` | `AI gateway provider stream failed` | Generic provider/transport failure. A supplied `provider_response` phase or status-bearing unclassified response is `provider_response`; a failure after output starts, a stream-phase hint, or an otherwise statusless fallback is `stream`. | Always `null`. | Do not blind-retry; inspect the provider path and retry manually only after judgment. | `ai_provider_failed`; `page/provider`; threshold 3. | `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-STREAM` |
+| `provider_output_empty` | `AI gateway provider completed without usable output` | Provider termination produced no non-whitespace output after stronger terminal-integrity checks; `stream`. | Always `null`. | Discard the unusable result; a later regeneration is manual. | `ai_provider_failed`; `page/provider`; threshold 3. | `ai_output_unusable` / `CG-API-06` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-EMPTY` |
+| `provider_usage_missing` | `AI gateway provider ended without usage metadata` | Output exists but the terminal provider stream supplied no usage metadata; `stream`. | Always `null`. | Discard as an incomplete terminal; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-USAGE-MISSING` |
+| `provider_stream_incomplete` | `AI gateway provider stream ended without a terminal stop reason` | Output and usage exist, but no `done`/terminal stop reason exists; `stream`. | Always `null`. | Discard the partial result; investigate before repeated manual generation. | `ai_provider_failed`; `page/provider`; threshold 3. | Provider fallback: `hub_provider_failed` / `CG-HUB-10` | Provider fallback: `CG-HUB-10` | `CG-PROVIDER-INCOMPLETE` |
+| `coach_output_too_long` | `AI gateway output exceeded the coach transport ceiling` | Coach output crossed the 64,000-character transport ceiling; `stream`. The crossing delta is emitted, then this error, with no `done`. | Always `null`. | Change or narrow the request before a new manual generation; retrying the same request is not recovery. | `ai_provider_failed`; `page/provider`; threshold 3. | Non-provider fallback: `hub_request_failed` / `CG-HUB-07` | Non-provider fallback: `CG-HUB-02` | `CG-OUTPUT-COACH-LIMIT` |
 
 Classifier precedence is structural: stream-phase hint; typed
 authentication/permission, rate-limit, then unavailable/overload evidence;
@@ -107,11 +113,116 @@ Unknown-code behavior is mandatory rollback safety:
   other unknown codes → `hub_request_failed` / `CG-HUB-07`.
 - Desktop: unknown `provider*` → `CG-HUB-10`; other unknown codes →
   `CG-HUB-02`.
+- chat-extension: unknown `provider*` → `CG-PROVIDER-UNKNOWN`; other unknown
+  codes → `CG-HUB-UNKNOWN` (kept apart in diagnostics).
 - A transport EOF without an explicit error frame and without `done` is a
   client-observed truncation, not a kernel wire code: Firefox uses
-  `hub_stream_truncated` / `CG-HUB-16`; Desktop uses `CG-HUB-09`.
-- Both clients preserve a non-null `retryAfterMs` as an absolute display
-  deadline. Neither schedules an SSE generation retry from it.
+  `hub_stream_truncated` / `CG-HUB-16`; Desktop uses `CG-HUB-09`;
+  chat-extension uses `CG-STREAM-TRUNCATED`.
+- Every client preserves a non-null `retryAfterMs` as an absolute display
+  deadline. None schedules an SSE generation retry from it.
+
+### chat-extension: HTTP errors and transport failures
+
+§3 below is the core's `AppError` registry and carries no client columns. The
+chat-extension reads every non-SSE hub failure by the ordered rules below
+(`HUB_HTTP_ERROR_RULES`): the first matching row wins, so route- and
+fact-dependent rows come before the general row of the same code, and status
+fallbacks and the catch-all come last. A rule matches on the machine `error`
+code, the optional machine `reason`, the HTTP status, the route class and one
+fact of the call; it never parses message text.
+
+Route classes: **sign-in** (password sign-in that issues the device token),
+**sign-out**, **account** (health, me, client bootstrap, persona catalog),
+**ai-stream** (the AI feature stream), **page** (page-scoped reads, the
+client's own page routes included), **claim** (fan claim and claim status,
+H-7b), **recap-profile** (dossier from a generation, H-5), **ingest**
+(observations). Facts: *stale sign-in* (the call carried an older token or
+sign-in epoch than the current one), *page not granted* (the page is not in the
+current bootstrap), *fan lookup* (a lookup of one fan: dossier, fan card),
+*before first frame* (AI stream, no output frame yet), *dispatch* (claim action
+`dispatch`).
+
+Codes and reasons marked † are not emitted by core yet. They arrive with the
+chat-extension hub changes planned in `chat-extension` `docs/hub-pr-plan.md`, and
+each lands its §3 row in the change that introduces it; the client mapping is
+frozen ahead of them.
+
+| # | `error` | `reason` | Route class / fact | chat-extension code | Client action |
+|---:|---|---|---|---|---|
+| 1 | any | any | stale sign-in | — | Ignore: nothing changes, nothing is shown (the client's AU-014). |
+| 2 | `unauthorized` | `token_revoked` | any | `CG-AUTH-REVOKED` | Wipe the sign-in. |
+| 3 | `unauthorized` | `token_expired` | any | `CG-AUTH-EXPIRED` | Wipe the sign-in. |
+| 4 | `unauthorized` | any other | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
+| 5 | `unauthorized` | none or any other | any | `CG-AUTH-REJECTED` | Show; a 401 without a known reason never wipes the sign-in. |
+| 6 | `forbidden` | any | any | `CG-HUB-FORBIDDEN` | Show; a 403 never wipes the sign-in. |
+| 7 | `rate_limit_exceeded` | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 8 | any (status 5xx) | any | sign-in | `CG-LOGIN-UNAVAILABLE` | Show. |
+| 9 | `rate_limit_exceeded` | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 10 | `preview_send_rate_limited` † | any | claim | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 11 | `quota_denied` | any | any | `CG-QUOTA-DAILY` | Show with the deadline at the next 00:00 UTC. |
+| 12 | `service_unavailable` | any | ai-stream, before first frame | `CG-HUB-UNAVAILABLE` | One transparent retry after 5 s (§1). |
+| 13 | `service_unavailable` | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 14 | `internal_error` | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 15 | `unknown_ai_feature` | any | any | `CG-HUB-CAPABILITY` | Show. |
+| 16 | `persona_definition_changed` | any | any | `CG-PERSONA-CHANGED` | Drop the result, refresh the persona catalog, show. |
+| 17 | `gate_draft_required` | any | any | `CG-GATE-DRAFT` | Show. |
+| 18 | `gate_min_messages` | any | any | `CG-GATE-HISTORY` | Show. |
+| 19 | `gate_hi_greeting_limit` | any | any | `CG-GATE-HI` | Show. |
+| 20 | `gate_ping_active` | any | any | `CG-GATE-PING` | Show. |
+| 21 | `context_conflict` † | any | any | `CG-CONTEXT-CONFLICT` | Show. |
+| 22 | `client_feature_disabled` † | `binding_missing` † | any | `CG-BINDING-MISSING` | Refresh bootstrap, show. |
+| 23 | `client_feature_disabled` † | `client_outdated` † | any | `CG-HUB-OUTDATED` | Refresh bootstrap, show. |
+| 24 | `client_feature_disabled` † | any other | claim, dispatch | `CG-SEND-OFF` | Refresh bootstrap, show. |
+| 25 | `client_feature_disabled` † | any other | any | `CG-FEATURE-DISABLED` | Refresh bootstrap, show. |
+| 26 | `bad_request` | `cursor_invalid` † | any | `CG-HUB-REQUEST` | Read again once from the first page, no toast. |
+| 27 | `bad_request` | `cursor_window_mismatch` † | any | `CG-HUB-REQUEST` | Read again once from the first page, no toast. |
+| 28 | `bad_request` | `live_text_not_allowed` † | any | `CG-HUB-REQUEST` | Show. |
+| 29 | `bad_request` | `capability_required` † | any | `CG-HUB-REQUEST` | Show. |
+| 30 | `generation_not_ready` † | any | recap-profile | `CG-RECAP-SAVE` | Repeat the idempotent link write on the §1 schedule; the code only when it runs out. |
+| 31 | `generation_not_eligible` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 32 | `claim_busy` † | any | any | `CG-CLAIM-BUSY` | Show. |
+| 33 | `greeting_done` † | any | any | `CG-CLAIM-BUSY` | Show (the fan is already greeted: a sub-case of busy). |
+| 34 | `claim_expired` † | any | any | `CG-CLAIM-EXPIRED` | Show. |
+| 35 | `custody_held` † | any | any | `CG-SEND-UNCERTAIN` | Show (an unresolved send to this fan, the desktop's included). |
+| 36 | `part_already_sent` † | any | claim | `CG-SEND-PART` | Read the claim status, no toast. |
+| 37 | `generation_mismatch` † | any | any | `CG-CONTEXT-CHANGED` | Show. |
+| 38 | `attempt_conflict` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 39 | `custody_not_owned` † | any | any | `CG-HUB-REQUEST` | Show. |
+| 40 | `conflict` | any | claim | `CG-CLAIM-BUSY` | Show. |
+| 41 | `conflict` | any | any | `CG-HUB-REQUEST` | Show. |
+| 42 | `not_found` | any | recap-profile | `CG-HUB-REQUEST` | Show: not this user's, page's or fan's generation, rejected for good. |
+| 43 | `not_found` | any | page or claim, page not granted | `CG-BINDING-NOT-GRANTED` | Show. |
+| 44 | `not_found` | any | page, fan lookup | — | Empty: the lookup answers null, nothing is shown. |
+| 45 | `not_found` | any | any | `CG-HUB-REQUEST` | Show. |
+| 46 | `bad_request` | any | any | `CG-HUB-REQUEST` | Show. |
+| 47 | unknown (status 400) | any | any | `CG-HUB-REQUEST` | Show. |
+| 48 | unknown (status 401) | any | sign-in | `CG-LOGIN-CREDENTIALS` | Show. |
+| 49 | unknown (status 401) | any | any | `CG-AUTH-REJECTED` | Show; never wipes the sign-in. |
+| 50 | unknown (status 403) | any | any | `CG-HUB-FORBIDDEN` | Show. |
+| 51 | unknown (status 429) | any | sign-in | `CG-LOGIN-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 52 | unknown (status 429) | any | any | `CG-HUB-RATE-LIMIT` | Show with an absolute deadline from `retryAfterMs` / `Retry-After`. |
+| 53 | unknown (status 5xx) | any | any | `CG-HUB-UNAVAILABLE` | Show. |
+| 54 | anything else | any | any | `CG-HUB-UNKNOWN` | Show; kept apart in diagnostics. |
+
+Rows 47–53 read a code no earlier row matched by its status alone: 400, 401,
+403, 429 and 5xx. Any other status falls to row 54, so a §3 code without a row
+here reads by its status (`voice_script_invalid`, 400 → `CG-HUB-REQUEST`) or
+as `CG-HUB-UNKNOWN` (`proxy_missing`, 409). A known code that comes with an
+unexpected status is still read by its code. Every deadline is fixed once as an
+absolute time.
+
+Failures that carry no hub error code:
+
+| Failure | chat-extension code |
+|---|---|
+| Network: no connection | `CG-NETWORK`; on sign-in `CG-LOGIN-UNAVAILABLE` |
+| Timeout: the client's own deadline (sign-in 20 s) | `CG-HUB-TIMEOUT`; on sign-in `CG-LOGIN-TIMEOUT` |
+| Contract: a response or frame failed its schema, an undeclared status, an unknown frame type | `CG-HUB-REQUEST` |
+| Truncated: SSE EOF without `done` and without an error frame | `CG-STREAM-TRUNCATED` |
+| Aborted: the client cancelled | none; the operation ends cancelled |
+
+None of them is repeated automatically (§1).
 
 ## 3. HTTP AppError registry
 
@@ -359,9 +470,11 @@ An additive class in the existing error frame requires one family change:
 6. Choose and test an explicit incident policy: kind, latch scope/cause bucket,
    threshold, streak effect, and resolve rule—or deliberately `none`. Incident
    failure must remain log-and-continue after terminal persistence.
-7. Add explicit presentation mappings and registry entries in both clients,
-   while retaining tests for the namespace-based unknown-code fallback and
-   terminal EOF behavior.
+7. Add explicit presentation mappings and registry entries in every client
+   (fansly-chat, onlyfans-chat, chat-extension), while retaining tests for the
+   namespace-based unknown-code fallback and terminal EOF behavior. A new HTTP
+   `AppError` code that a chat-extension route can return also gets its row in
+   the §2 chat-extension HTTP table; without one it falls to the status rows.
 8. Add or update the row in this registry and update any affected retry,
    ledger, incident, outbox, or boundary section in the same change.
 
@@ -370,9 +483,10 @@ Changing the discriminated frame union does. A new frame `type`, a
 required/renamed/retyped field, or a closed-enum change requires:
 
 1. core contract/schema and generated OpenAPI/SDK changes;
-2. vendored SDK updates in both clients;
+2. vendored SDK updates in every client (fansly-chat, onlyfans-chat,
+   chat-extension);
 3. client readers capable of the new shape before core can emit it; and
-4. an explicit rollout/rollback gate across all three repositories.
+4. an explicit rollout/rollback gate across core and every client repository.
 
 Removing or repurposing a code and changing an established retry disposition
 are also coordinated family changes even when the TypeScript schema hash would
