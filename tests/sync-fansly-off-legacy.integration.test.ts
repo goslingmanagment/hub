@@ -217,6 +217,8 @@ describe("Fansly off the legacy executor (step 4, S4-10)", () => {
     const before = await legacySnapshot(fansly);
     expect(before.states.length).toBeGreaterThan(3);
     expect((await rowsOf(pages.onlyfans.pageId))).toEqual([]);
+    // A Fansly page born live (S4-05) has no legacy rows, and gets none.
+    const born = await seedSyncPage({ db: app.db, pool: pool() }, { label: "ari-2", mode: "live", guard: "fansly_sync_engine" });
 
     // The planner, twice, the second time with every slot due.
     const { boss, woken } = recordingBoss();
@@ -225,10 +227,11 @@ describe("Fansly off the legacy executor (step 4, S4-10)", () => {
     expect(woken.length).toBeGreaterThan(0);
     expect(new Set(woken)).toEqual(new Set([pages.onlyfans.pageId]));
     expect((await rowsOf(pages.onlyfans.pageId)).length).toBeGreaterThan(0);
+    expect(await rowsOf(born.pageId)).toEqual([]);
 
     // A stray wake-up of the executor for a Fansly page seeds, leases and
     // writes nothing.
-    for (const pageId of fansly) {
+    for (const pageId of [...fansly, born.pageId]) {
       expect(await executeNextSyncPageChunk(app, pageId)).toMatchObject({ kind: "idle", stream: null, runId: null });
     }
 
@@ -254,7 +257,8 @@ describe("Fansly off the legacy executor (step 4, S4-10)", () => {
     }
     const triggerAll = await owner("POST", "/api/v1/admin/sync/trigger-all");
     expect(triggerAll.statusCode).toBe(202);
-    expect(triggerAll.json()).toEqual({ accepted: true, pagesQueued: 2 });
+    // The two live pages through the engine, the OnlyFans page through legacy.
+    expect(triggerAll.json()).toEqual({ accepted: true, pagesQueued: 3 });
     for (const action of ["trigger", "pause", "resume", "reset"] as const) {
       for (const block of BLOCKS) {
         const engine = await owner("POST", `/api/v1/admin/sync/blocks/${action}`, { pageLabel: pages.live.label, block });
@@ -277,6 +281,7 @@ describe("Fansly off the legacy executor (step 4, S4-10)", () => {
     expect(new Set((await rowsOf(pages.onlyfans.pageId)).map((row) => row.status))).toEqual(new Set(["paused"]));
 
     expect(await legacySnapshot(fansly)).toEqual(before);
+    expect(await rowsOf(born.pageId)).toEqual([]);
     // No legacy run was ever opened for a Fansly page.
     expect((await pool().query(
       "select count(*)::int as n from sync_runs where page_id = any($1::bigint[])",
