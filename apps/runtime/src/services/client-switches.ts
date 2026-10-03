@@ -1,10 +1,11 @@
 import type { ClientFeatureFlagName, ClientReceiptProfile } from "@agency_hub_core/contracts";
-import { listClientBootstrapPages, type ClientBootstrapPageRow } from "@agency_hub_core/db";
+import { getConfigOverrides, listClientBootstrapPages, type ClientBootstrapPageRow } from "@agency_hub_core/db";
 import {
   parseChatExtensionFeatures,
   parseChatExtensionHostBindings,
   parseChatExtensionMinVersion,
   parseChatExtensionReceiptProfiles,
+  validateConfigOverride,
   type AppConfig,
   type ChatExtensionParseResult,
 } from "@agency_hub_core/shared";
@@ -18,7 +19,7 @@ import {
   evaluateClientFeature,
   type ClientFeatureSettings,
 } from "./client-features.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
+import { applyEffectiveOverrides } from "./effective-config.ts";
 import { ClientFeatureDisabledError } from "./errors.ts";
 
 /**
@@ -31,17 +32,22 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * must go further and read the switch inside its own transaction.
  */
 
+/** The owner's five switches of the chat extension. */
+export const CLIENT_SWITCH_KEYS = [
+  "chatExtensionEnabled",
+  "chatExtensionFeatures",
+  "chatExtensionMinVersion",
+  "chatExtensionHostBindings",
+  "chatExtensionPreviewSendReceiptProfiles",
+] as const;
+
 /**
  * The settings whose change moves the bootstrap's `configRevision`. The three
  * keys later PRs add are listed already, so the revision means the same thing
  * from the first client on; a key that does not exist yet has no audit row.
  */
 export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
-  "chatExtensionEnabled",
-  "chatExtensionFeatures",
-  "chatExtensionMinVersion",
-  "chatExtensionHostBindings",
-  "chatExtensionPreviewSendReceiptProfiles",
+  ...CLIENT_SWITCH_KEYS,
   "aiLiveTextContextMode",
   "aiTranscriptDeepMaxRows",
   "chatExtensionHealthIngestEnabled",
@@ -65,36 +71,57 @@ export interface ClientSwitchProblem {
   error: string;
 }
 
-type ClientSwitchConfig = Pick<
-  AppConfig,
-  | "chatExtensionEnabled"
-  | "chatExtensionFeatures"
-  | "chatExtensionMinVersion"
-  | "chatExtensionHostBindings"
-  | "chatExtensionPreviewSendReceiptProfiles"
->;
+type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number]>;
+
+/**
+ * The stored overrides of the five switches that no longer validate. Pure.
+ *
+ * The write refuses a value that does not parse, but a row can still go bad
+ * later: a hand-written SQL fix, or a parser a later PR makes stricter. The
+ * live overlay (effective-config.ts) skips such a row silently and serves the
+ * environment value in its place, which for a switch is failing OPEN: a
+ * broken stored minimum would drop back to `0.0.0` and admit every outdated
+ * client again. So the switches look at the stored rows themselves.
+ */
+export function storedClientSwitchProblems(
+  overrides: ReadonlyMap<string, { value: unknown }>,
+): ClientSwitchProblem[] {
+  return CLIENT_SWITCH_KEYS.flatMap((key) => {
+    const override = overrides.get(key);
+    if (override === undefined) {
+      return [];
+    }
+    const validated = validateConfigOverride(key, override.value);
+    return validated.ok ? [] : [{ key, error: `the stored override is refused: ${validated.error}` }];
+  });
+}
 
 /**
  * The switches from an effective config. Pure.
  *
- * A written override cannot be broken (the write rejects a value that does not
- * parse, and the live overlay skips one that no longer validates), so a
- * problem here is a bad environment value. It fails closed: the extension is
- * switched off as a whole, the unreadable key takes its resting value, and the
- * problem is returned for the caller to log.
+ * Fails closed on every switch it cannot read: a stored override that no
+ * longer validates (`stored`, from storedClientSwitchProblems) or an
+ * environment value that does not parse. The extension is then switched off as
+ * a whole, the unreadable key takes its resting value (never the value the
+ * broken one would have hidden), and the problems are returned for the caller
+ * to log.
  */
-export function readClientSwitches(config: ClientSwitchConfig): {
+export function readClientSwitches(
+  config: Partial<ClientSwitchConfig>,
+  stored: readonly ClientSwitchProblem[] = [],
+): {
   switches: ClientSwitches;
   problems: ClientSwitchProblem[];
 } {
-  const problems: ClientSwitchProblem[] = [];
+  const problems: ClientSwitchProblem[] = [...stored];
+  const unreadable = new Set(stored.map((problem) => problem.key));
   function read<T>(
     key: keyof ClientSwitchConfig,
     resting: T,
     parse: (text: string) => ChatExtensionParseResult<T>,
   ): T {
     const raw = config[key];
-    if (typeof raw !== "string") {
+    if (unreadable.has(key) || typeof raw !== "string") {
       return resting;
     }
     const parsed = parse(raw.trim());
@@ -133,10 +160,13 @@ const loggedProblems = new Set<string>();
 const LOGGED_PROBLEMS_MAX = 100;
 
 /** The switches as a process reads them right now: the effective config (the
- *  owner's live overrides over the environment), parsed. */
+ *  owner's live overrides over the environment, as loadEffectiveConfig builds
+ *  it from the same single read), parsed, with every stored switch that no
+ *  longer validates counted as unreadable. */
 export async function loadClientSwitches(app: AppContext): Promise<ClientSwitches> {
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  const { switches, problems } = readClientSwitches(effective);
+  const overrides = await getConfigOverrides(app.db);
+  const effective = applyEffectiveOverrides(app.config, overrides);
+  const { switches, problems } = readClientSwitches(effective, storedClientSwitchProblems(overrides));
   for (const problem of problems) {
     const fingerprint = `${problem.key}\u0000${problem.error}`;
     if (loggedProblems.has(fingerprint) || loggedProblems.size >= LOGGED_PROBLEMS_MAX) {

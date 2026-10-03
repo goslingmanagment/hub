@@ -16,6 +16,7 @@ import {
   clientVersionRefusal,
   evaluateClientFeature,
   evaluateClientPageFeatures,
+  hostBindingFitsPlatform,
   type ClientFeaturePage,
   type ClientFeatureSettings,
 } from "../apps/runtime/src/services/client-features.ts";
@@ -23,6 +24,7 @@ import { CLIENT_BOOTSTRAP_LIMITS } from "../apps/runtime/src/services/client-lim
 import {
   CLIENT_BOOTSTRAP_CONFIG_KEYS,
   readClientSwitches,
+  storedClientSwitchProblems,
 } from "../apps/runtime/src/services/client-switches.ts";
 
 const OF_PAGE: ClientFeaturePage = { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" };
@@ -89,6 +91,19 @@ describe("chat-extension feature evaluation", () => {
     // A binding to another page does not help this one.
     expect(coach({ ...on, hostBindings: { "onlymonster:36410": "lora-of" } }))
       .toEqual({ available: false, reason: "binding_missing" });
+    // Nor does a binding from a host whose accounts are not OnlyFans accounts.
+    expect(coach({ ...on, hostBindings: { "otherhost:36410": "nova-of" } }))
+      .toEqual({ available: false, reason: "binding_missing" });
+  });
+
+  it("a host binding fits only a page of a platform the host holds accounts of", () => {
+    expect(hostBindingFitsPlatform("onlymonster:36408", "onlyfans")).toBe(true);
+    // An OnlyMonster account is an OnlyFans account, never a Fansly page.
+    expect(hostBindingFitsPlatform("onlymonster:36408", "fansly")).toBe(false);
+    // A host the hub does not know binds nothing, prototype names included.
+    for (const host of ["otherhost:1", "constructor:1", "__proto__:1", "toString:1"]) {
+      expect(hostBindingFitsPlatform(host, "onlyfans"), host).toBe(false);
+    }
   });
 
   it("a page's own value wins over \"*\" both ways; unknown names are ignored", () => {
@@ -239,6 +254,45 @@ describe("chat-extension switches from the effective config", () => {
       expect(evaluateClientFeature({ settings: switches.settings, page: OF_PAGE, flag: "coach", served: [] }), key)
         .toEqual({ available: false, reason: "disabled" });
     }
+  });
+
+  it("a stored override that no longer validates turns the extension off, never falls back to the environment", () => {
+    const overrides = new Map<string, { value: unknown }>([
+      ["chatExtensionEnabled", { value: true }],
+      // Written past the write check (a hand-made SQL fix, a stricter parser later).
+      ["chatExtensionMinVersion", { value: "1.4" }],
+      // Another subsystem's broken row is not the switches' concern.
+      ["transactionLookbackDays", { value: "fourteen" }],
+    ]);
+    const stored = storedClientSwitchProblems(overrides);
+    expect(stored).toEqual([{ key: "chatExtensionMinVersion", error: expect.stringMatching(/^the stored override is refused: chatExtensionMinVersion: the value must read MAJOR\.MINOR\.PATCH/) }]);
+
+    // The live overlay skipped the bad row, so the effective config carries a
+    // readable environment minimum: it must not be served in its place.
+    const { switches, problems } = readClientSwitches({
+      chatExtensionEnabled: true,
+      chatExtensionFeatures: JSON.stringify({ "*": { coach: true } }),
+      chatExtensionMinVersion: "1.3.0",
+    }, stored);
+    expect(problems).toEqual(stored);
+    expect(switches.settings.enabled).toBe(false);
+    expect(switches.minVersion).toBe("0.0.0");
+    expect(evaluateClientFeature({ settings: switches.settings, page: OF_PAGE, flag: "coach", served: [] }))
+      .toEqual({ available: false, reason: "disabled" });
+
+    // A broken stored master switch cannot let the environment's `true` through either.
+    const master = storedClientSwitchProblems(new Map([["chatExtensionEnabled", { value: "yes" }]]));
+    expect(master.map((problem) => problem.key)).toEqual(["chatExtensionEnabled"]);
+    expect(readClientSwitches({ chatExtensionEnabled: true }, master).switches.settings.enabled).toBe(false);
+
+    // Every valid stored switch is no problem.
+    expect(storedClientSwitchProblems(new Map<string, { value: unknown }>([
+      ["chatExtensionEnabled", { value: false }],
+      ["chatExtensionFeatures", { value: "{}" }],
+      ["chatExtensionMinVersion", { value: "1.4.0" }],
+      ["chatExtensionHostBindings", { value: "{\"onlymonster:36408\": \"lora-vip-of\"}" }],
+      ["chatExtensionPreviewSendReceiptProfiles", { value: "[]" }],
+    ]))).toEqual([]);
   });
 
   it("the bootstrap revision covers the five switches and the three settings later PRs add", () => {

@@ -55,7 +55,9 @@ The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
 the owner switches it on (the audited `chatExtension*` settings). Its
 `bindingsByHost` keeps an owner host binding only when it points at one of
-those pages, so a binding never reveals a page the caller is not granted. A
+those pages, so a binding never reveals a page the caller is not granted, and
+only when the host holds accounts of that page's platform (an OnlyMonster
+account binds an OnlyFans page, never a Fansly one). A
 live agent key is refused with 403 even on a page it is granted. Its row is
 held by `client-bootstrap.integration`: every cell of it, plus the agent key,
 in both auth-policy modes; the switches and bindings by

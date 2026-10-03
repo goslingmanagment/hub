@@ -56,6 +56,15 @@ export async function listClientBootstrapPages(
  * An audit id, not `config_settings.version`: clearing an override deletes its
  * row, so the next write starts the version again at 1 and a client would miss
  * the change. Audit ids only grow.
+ *
+ * A change HINT for the client's cache, not a total order of changes. Ids are
+ * taken when a row is inserted, not when its transaction commits: of two
+ * concurrent writes the later id can commit first, and the earlier one then
+ * lands without moving the maximum. A change made only in the environment
+ * writes no audit row at all. Either reaches the client at its cache TTL; the
+ * switches themselves are always served in full and enforced on the server.
+ * Never decide an action by comparing revisions (a `flags_stale` check, H-7b):
+ * read the switch rows under FOR SHARE in the deciding transaction.
  */
 export async function getClientConfigRevision(db: Database, keys: readonly string[]): Promise<number> {
   if (keys.length === 0) {
