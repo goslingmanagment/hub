@@ -124,8 +124,10 @@ describe("computePingSummary", () => {
   });
 
   it("counts every message the model did not send as the fan's, as generation does", () => {
-    // Archive rows whose sender role is system or unknown are not sent by the
-    // model; the loaders map only isSentByMe, so they read as the fan.
+    // The helper's half only: rows built here with isSentByMe false (what a
+    // system or unknown sender role carries in the archive) read as the fan.
+    // That the real loaders turn those sender roles into isSentByMe false is
+    // asserted against the database in client-ping-summary.integration.test.ts.
     const old = NOW_MS - 12 * DAY_MS;
     const notByModel = [
       row({ atMs: old - 2 * DAY_MS, isSentByMe: false, text: "system: subscription renewed" }),
@@ -152,6 +154,7 @@ describe("computePingSummary", () => {
       seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0;
       return seed / 0x1_0000_0000;
     };
+    let boundaryRounds = 0;
     for (let round = 0; round < 500; round += 1) {
       const count = Math.floor(random() * 8);
       const rows: OfapiChatMessage[] = [];
@@ -168,10 +171,20 @@ describe("computePingSummary", () => {
                 : row({ atMs, isSentByMe: false, isTip: true, tipAmount: 5 }),
         );
       }
-      // Also land exactly on the boundary for the newest fan text.
-      const nowMs = round % 10 === 0 && rows.length > 0 ? Date.parse(rows[0]!.createdAt) + PING_ACTIVE_WINDOW_MS : NOW_MS;
       const messages = normalizeTranscriptMessages(rows);
+      // Every tenth round lands exactly on the 5-day boundary of the fan
+      // text that decides the segment, and the next one a millisecond past it.
+      const decidingFanTextAtMs = analyzePingSegment(messages, NOW_MS).latestFanTextAtMs;
+      const boundaryOffsetMs = round % 10 === 0 ? 0 : round % 10 === 1 ? 1 : null;
+      const nowMs = decidingFanTextAtMs !== null && boundaryOffsetMs !== null
+        ? decidingFanTextAtMs + PING_ACTIVE_WINDOW_MS + boundaryOffsetMs
+        : NOW_MS;
       expect(generationValues(messages, nowMs)).toEqual(inlineGenerationValues(messages, nowMs));
+      if (decidingFanTextAtMs !== null && boundaryOffsetMs !== null) {
+        expect(computePingSummary(messages, nowMs).segment === "active").toBe(boundaryOffsetMs === 0);
+        boundaryRounds += 1;
+      }
     }
+    expect(boundaryRounds).toBeGreaterThan(50);
   });
 });
