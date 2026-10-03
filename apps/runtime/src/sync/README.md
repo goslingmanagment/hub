@@ -351,9 +351,22 @@ fence), head-debt catch-ups —, one urgent head read per chat with an unconfirm
 auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a
 new owner generation within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are
 open, the page's hydration requests become history requests (`switch_migration`). A or B timing out reverts to
-`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync
-switch check --page P --since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor
-refusals, nothing stuck, the SLOs, volume, restarts, open incidents).
+`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page.
+
+`pnpm cli sync switch check --page P [--page Q …] --since <iso>` is the live-hour acceptance of the pages switched
+together (step 3b ruling 13, A6): each page over [T_i, T* + 1 h), T_i = the later of `--since` and its live instant, T*
+= the last one. The rules (`switch/acceptance-rules.ts`): pace over both journals, the handover boundary, every send
+within its route's and family's budget (⌈W/T⌉ + 1 per 60 s and 300 s, halved after a 429 of the page+route), per
+(page, canonical route) at most one 429 with its hold kept and its recovery seen, no 401/403 and no page hold (from
+the journal, the page row, or an alert 1 `page_stopped` episode seen in the window, resolved ones included — a 429 that
+held the whole page shows there after its hold is cleared), the first media request ≤ 60 s after live, nothing stuck,
+the SLOs over the whole window (route holds and the unfinished tail included; fewer than 10 samples: count and max), no
+open incident but a route's own (D5 `route_limited:<route>`, told by its key whatever its code). A page is `fail`,
+`inconclusive` (the window still open, a 429's recovery unproven, a small sample), `owner_review` (429s on two or more
+routes), `accepted_with_route_429` or `pass`; exit 0 every page accepted, 1 a page failed, 2 otherwise.
+`switch/step3-accept.sql` is the same acceptance in psql for the runbook (its route table and numbers pinned to the
+code by tests/sync-switch-acceptance-sql.test.ts, both run on the shared fixtures of
+tests/sync-switch-acceptance.integration.test.ts).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
