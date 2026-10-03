@@ -26,6 +26,7 @@ import {
   composeFanslySendCheck,
   createOneShotSendCheck,
   findFanslySendRefusal,
+  safeFanslyAnswerHeaders,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRequest,
@@ -155,6 +156,8 @@ export class FakeFanslyServer {
   /** The status of the next Upgrades (101 accepts; 0 drops the connection
    *  without an answer). */
   upgradeStatus: (index: number) => number = () => 101;
+  /** The headers of a refused Upgrade's answer (`Retry-After`, a cookie). */
+  upgradeHeaders: (index: number) => Record<string, string> = () => ({});
   readonly #server: Server;
   readonly #sockets = new Set<Socket>();
   #routes: FakeRoute[] = [];
@@ -270,7 +273,8 @@ export class FakeFanslyServer {
       socket.end("HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n");
       return;
     }
-    const status = this.upgradeStatus(this.arrivals.filter((item) => item.upgrade).length - 1);
+    const index = this.arrivals.filter((item) => item.upgrade).length - 1;
+    const status = this.upgradeStatus(index);
     if (status === 0) {
       arrival.status = 0;
       socket.destroy();
@@ -278,7 +282,8 @@ export class FakeFanslyServer {
     }
     if (status !== 101) {
       arrival.status = status;
-      socket.end(`HTTP/1.1 ${status} Refused\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`);
+      const extra = Object.entries(this.upgradeHeaders(index)).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+      socket.end(`HTTP/1.1 ${status} Refused\r\ncontent-length: 0\r\nconnection: close\r\n${extra}\r\n`);
       return;
     }
     arrival.status = 101;
@@ -836,8 +841,9 @@ export class HarnessSocket implements LivePageSocket {
 }
 
 /** One HTTP Upgrade (the WebSocket handshake): the request completes at 101
- *  or at the status the origin answered instead; the socket is closed at once
- *  (its frames are not requests). */
+ *  or at the status the origin answered instead, with the answer's safe
+ *  headers as the production lease carries them (`bindFanslyUpgradeLease`);
+ *  the socket is closed at once (its frames are not requests). */
 async function sendUpgrade(
   dispatcher: PageDispatcher,
   url: string,
@@ -848,14 +854,17 @@ async function sendUpgrade(
   const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const target = new URL(url);
   let status: number | null = null;
+  let answerHeaders: Record<string, string> = {};
   const observed = dispatcher.compose((dispatch) => (options, handler) => dispatch(options, {
     onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),
     onRequestUpgrade(controller, statusCode, headers, socket) {
       status = statusCode;
+      answerHeaders = safeFanslyAnswerHeaders(headers);
       handler.onRequestUpgrade?.(controller, statusCode, headers, socket);
     },
     onResponseStart(controller, statusCode, headers, statusMessage) {
       status = statusCode;
+      answerHeaders = safeFanslyAnswerHeaders(headers);
       handler.onResponseStart?.(controller, statusCode, headers, statusMessage);
     },
     onResponseData: (controller, chunk) => handler.onResponseData?.(controller, chunk),
@@ -865,7 +874,7 @@ async function sendUpgrade(
   const response = (code: number): TransportOutcome => ({
     kind: "response",
     status: code,
-    headers: {},
+    headers: answerHeaders,
     bodyText: "",
     bodyBytes: 0,
     sendMark: gate.sent ? "request_start" : "completion_fallback",

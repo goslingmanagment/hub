@@ -75,8 +75,36 @@ export interface FanslySendLease {
    *  request: the check closes over THIS lease (an AsyncLocalStorage read inside
    *  `onRequestStart` can see a previous request's context). */
   bind(dispatcher: Dispatcher): Dispatcher;
-  /** Write the completion. Idempotent; resolves once it is durable. */
-  complete(input: { outcome: FanslySendCompletionOutcome; httpStatus?: number | null }): Promise<void>;
+  /** Write the completion. Idempotent; resolves once it is durable. `headers`
+   *  are the answer's safe headers (`safeFanslyAnswerHeaders`), for a holder
+   *  that classifies the answer (the Sync Engine's Upgrade lease); a guard that
+   *  journals the send keeps the status only. */
+  complete(input: {
+    outcome: FanslySendCompletionOutcome;
+    httpStatus?: number | null;
+    headers?: Readonly<Record<string, string>>;
+  }): Promise<void>;
+}
+
+/** The headers of an answer a lease completion may carry: those the Sync
+ *  Engine's classifier reads about the provider's pace (the `Retry-After` of a
+ *  429 or of a 5xx). Nothing else of an answer — a cookie, the socket's accept
+ *  key — goes past the transport callback that saw it. */
+export const FANSLY_SAFE_ANSWER_HEADERS: ReadonlySet<string> = new Set(["retry-after"]);
+
+/** The safe headers of an answer (`FANSLY_SAFE_ANSWER_HEADERS`) by lower-case
+ *  name; a repeated header is joined as the wire layer joins a REST answer's. */
+export function safeFanslyAnswerHeaders(
+  headers: Readonly<Record<string, string | readonly string[] | undefined>> | null | undefined,
+): Record<string, string> {
+  const safe: Record<string, string> = {};
+  if (headers === null || headers === undefined) return safe;
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase();
+    if (value === undefined || !FANSLY_SAFE_ANSWER_HEADERS.has(key)) continue;
+    safe[key] = typeof value === "string" ? value : value.join(", ");
+  }
+  return safe;
 }
 
 export interface FanslySendGuard {
