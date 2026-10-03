@@ -34,8 +34,8 @@ import {
 // hook's demand) reaches the hot table, the event ledger and the archive in
 // one `local` step of the actor — no request, before the HTTP gate, so no page
 // hold or pacer slot delays it (step 3b ruling 9) — under the erasure fence, and
-// the stored window of the thread is recomputed by the engine's own writer
-// (head and chain untouched). Sticky against a late create frame and a later
+// the stored window of the thread is recounted from the archive by the
+// engine's own writer (step 4, S4-08; head and chain untouched). Sticky against a late create frame and a later
 // REST copy; an erasure-fenced fan gets nothing written; on a page the engine
 // does not own the hook routes nothing.
 
@@ -76,7 +76,8 @@ interface Stored {
   at: [Date, Date, Date];
 }
 
-/** A live page with one bound chat of three stored messages and the legacy
+/** A live page with one bound chat of three stored messages — in the hot
+ *  table and in the archive, as the engine's DM apply writes them — and the
  *  window over them; the head is the newest. */
 async function seedLivePage(mode: "live" | "off" | "shadow" = "live", label?: string): Promise<Stored> {
   const handles = { db: db(), pool: testDb!.pool };
@@ -99,6 +100,14 @@ async function seedLivePage(mode: "live" | "off" | "shadow" = "live", label?: st
     inReplyToMessageId: null,
     inReplyToRootMessageId: null,
   })));
+  for (const [index, id] of ids.entries()) {
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id, sender_role,
+         is_sent_by_me, occurred_at, text_plain)
+       values ($1, 'fansly', $2, $3, $4, $5, $6, $7, $8)`,
+      [page.pageId, GROUP, id, FAN, roles[index], roles[index] === "model", at[index], `message ${id}`],
+    );
+  }
   await testDb!.pool.query(
     `update page_dm_threads
         set stored_message_count = 3, newest_stored_message_id = $2, oldest_stored_message_id = $3,
@@ -223,11 +232,11 @@ describe("dm-live.deletions on a live page", () => {
     expect(await deletedEvents(page.pageId)).toEqual([
       { message_ref: ids[2], dedup_key: `msg-deleted:fansly:${ids[2]}`, observation_id: String(observationId) },
     ]);
-    // Tombstone-first: the archive had no row of the message.
-    expect(await archiveRow(page.pageId, ids[2])).toMatchObject({ content_pending: true });
+    // The archive's copy is tombstoned, its content kept.
+    expect(await archiveRow(page.pageId, ids[2])).toMatchObject({ content_pending: false, text_plain: `message ${ids[2]}` });
     expect((await archiveRow(page.pageId, ids[2]))!.deleted_at).not.toBeNull();
-    // The stored window without the deleted fan message; the head is the
-    // list's, the chain is not touched.
+    // The stored window, recounted from the archive, without the deleted fan
+    // message; the head is the list's, the chain is not touched.
     const after = await threadWindow(threadId);
     expect(after).toEqual({
       ...before,
@@ -290,6 +299,27 @@ describe("dm-live.deletions on a live page", () => {
     expect(metrics.get("sync_apply_effect")).toBeGreaterThan(0);
   }, 60_000);
 
+  it("a message the archive does not hold yet: a tombstone-first stub, and the window that never counted it stays", async (context) => {
+    if (!testDb) return context.skip();
+    const { page, threadId } = await seedLivePage();
+    const inFlight = String(910_000_000_000_100_004n);
+    await upsertPageDmMessages(db(), [{
+      conversationId: threadId, platformAccountId: page.pageId, platformMessageId: inFlight, senderPlatformUserId: FAN,
+      senderRole: "fan", createdAt: new Date(), content: "in flight", totalTipAmountCents: 0,
+      inReplyToMessageId: null, inReplyToRootMessageId: null,
+    }]);
+    const before = await threadWindow(threadId);
+    await deleteFrame(page, inFlight);
+    const metrics = new RecordingMetrics();
+    await runDeletions(page.pageId, metrics);
+    // The hot copy is marked; the archive gets the stub carrying the tombstone
+    // (a later REST copy hydrates it and keeps the mark).
+    expect((await hotRow(page.pageId, inFlight))!.deleted_at).not.toBeNull();
+    expect(await archiveRow(page.pageId, inFlight)).toMatchObject({ content_pending: true, text_plain: "" });
+    expect((await archiveRow(page.pageId, inFlight))!.deleted_at).not.toBeNull();
+    expect(await threadWindow(threadId)).toEqual(before);
+  }, 60_000);
+
   it("an erasure-fenced fan: nothing is written, the work closes", async (context) => {
     if (!testDb) return context.skip();
     const { page, threadId, ids } = await seedLivePage();
@@ -306,7 +336,7 @@ describe("dm-live.deletions on a live page", () => {
     expect(await work(page.pageId)).toMatchObject({ state: "done" });
     expect((await hotRow(page.pageId, ids[0]))!.deleted_at).toBeNull();
     expect(await deletedEvents(page.pageId)).toEqual([]);
-    expect(await archiveRow(page.pageId, ids[0])).toBeNull();
+    expect((await archiveRow(page.pageId, ids[0]))!.deleted_at).toBeNull();
     expect(await threadWindow(threadId)).toEqual(before);
   }, 60_000);
 
