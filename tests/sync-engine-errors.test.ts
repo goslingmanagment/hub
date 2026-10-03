@@ -18,7 +18,6 @@ import {
   listRateLimitHold,
   listRateLimitStep,
   MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
-  MEDIA_STATS_SPACING_MS,
   NETWORK_ALERT_AFTER_MS,
   NETWORK_FAILURES_TO_PAUSE,
   NETWORK_PAUSE_LADDER_MS,
@@ -496,8 +495,7 @@ describe("sync errors: a 429 on the media statistics", () => {
     // A 5xx naming its deadline is still the page's pace.
     expect(classifyWireOutcome(answer(503, "", { "retry-after": "30" }), statsSpec, statsParams as never, { now: NOW }).errorClass)
       .toBe("rate_limit");
-    expect(endpointRateGroupOfRoute("media.offer_stats")).toMatchObject({ spacingMs: MEDIA_STATS_SPACING_MS, file: "media-stats" });
-    expect(MEDIA_STATS_SPACING_MS).toBe(5_000);
+    expect(endpointRateGroupOfRoute("media.offer_stats")).toMatchObject({ kind: "rate_limit_media_stats", file: "media-stats" });
   });
 
   it("holds only the media-stats walk, never the page: Retry-After, else 5 → 10 → … → 300 s", () => {

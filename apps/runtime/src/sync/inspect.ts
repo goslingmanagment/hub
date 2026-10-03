@@ -9,6 +9,7 @@ import {
   latestClosedWorkForKey,
   listSendsForPaceAudit,
   listSyncPages,
+  readRouteJournal,
   readSyncPageWsStatus,
   requeueQuarantinedWork,
   setPagePause,
@@ -32,6 +33,13 @@ import type { AppConfig } from "@agency_hub_core/shared";
 import { loadEffectiveConfig } from "../services/effective-config.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
+import {
+  parseRouteState,
+  routeAdmissionView,
+  routeJournalLookbackMs,
+  RouteClocks,
+  routeStatusView,
+} from "./engine/route-policy.ts";
 import { FANSLY_RESOURCE_SPECS, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
@@ -40,6 +48,8 @@ import {
   estimateSlotOpensAt,
   explainWork,
   type PageStatus,
+  type RouteAdmissionView,
+  type RouteStatusView,
   type StatusPage,
   type StatusWork,
   type WorkExplanation,
@@ -107,6 +117,31 @@ function statusWork(work: SyncWorkRow): StatusWork {
   };
 }
 
+/** The page's route clocks as the actor would read them now: the journal it
+ *  runs (and the legacy send log on an engine-owned page). */
+async function readPageRoutes(
+  db: Database,
+  page: SyncPageRow,
+  now: Date,
+): Promise<{ status: RouteStatusView; admission: RouteAdmissionView }> {
+  const read = parseRouteState(page.routeState);
+  let clocks: RouteClocks | null = null;
+  if (read.ok) {
+    const sends = await readRouteJournal(db, {
+      pageId: page.pageId,
+      shadow: statusJournalIsShadow(page),
+      withinMs: routeJournalLookbackMs(read.state),
+      legacy: !statusJournalIsShadow(page),
+    });
+    clocks = new RouteClocks({ sends, state: read.state });
+  }
+  const stateError = read.ok ? null : read.diagnostic;
+  return {
+    status: routeStatusView(clocks, stateError, now),
+    admission: routeAdmissionView(clocks, stateError, FANSLY_RESOURCE_SPECS, now),
+  };
+}
+
 /** S as the actor reads it (the live owner key, I4). */
 export async function readPauseSettingMs(db: Database, rawConfig: AppConfig): Promise<number> {
   return (await loadEffectiveConfig(db, rawConfig)).fanslyDefaultDelayMs;
@@ -150,6 +185,7 @@ export async function readSyncPageStatus(
   const requests = shadow ? [] : await pageRequestProgress({ db, rawConfig }, page.pageId);
   // The socket is the engine's to report once it owns the page.
   const ws = shadow ? null : await readSyncPageWsStatus(db, { pageId: page.pageId, decodeWindowMs: SYNC_DECODE_DEBT_WINDOW_MS });
+  const routes = await readPageRoutes(db, page, now);
   const status = buildPageStatus({
     pageLabel: page.pageLabel,
     page: { ...statusPage(page), holdSince: page.holdSince, lastSendAt: page.lastSendAt },
@@ -157,7 +193,9 @@ export async function readSyncPageStatus(
     now,
     runtime: {
       slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
+      routes: routes.admission,
     },
+    routes: routes.status,
     works: works.map(statusWork),
     sends: {
       lastHour,
@@ -216,6 +254,7 @@ async function workWhys(
 ): Promise<WorkWhy[]> {
   const runtime = {
     slotOpensAt: estimateSlotOpensAt({ lastSendAt: page.lastSendAt, lastCompletedAt: page.lastCompletedAt, settingMs }),
+    routes: (await readPageRoutes(db, page, now)).admission,
   };
   const attempts = await getSyncAttemptSummaries(
     db,

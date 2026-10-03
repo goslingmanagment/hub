@@ -72,6 +72,11 @@ export interface EngineResourceSpec {
   slo?: SloSpec;
   /** False only for entries applied from the socket (no request). */
   http: boolean;
+  /** Every wire route its steps may send: the route admission leaves the key
+   *  out of a pick while all of them are closed (`engine/route-policy.ts`).
+   *  Absent or empty (a probe whose route is the owner's, a write without a
+   *  request): only the planned request's route is checked. */
+  operations?: readonly FanslyWireId[];
   /** Never runs in shadow (socket connect, media download, repair). */
   liveOnly?: boolean;
   /** `sync_attempts.evidence`: the request parameters are coverage evidence

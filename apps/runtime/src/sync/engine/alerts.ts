@@ -37,6 +37,7 @@ import {
 } from "./errors.ts";
 import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
+import { parseRouteState } from "./route-policy.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6). Alert 5 (the
 // `sync` process is silent) is the api watchdog's: a process cannot report
@@ -121,7 +122,8 @@ export interface SyncAlertCondition {
 /** Everything one page's evaluation reads. */
 export interface PageAlertFacts {
   page: Pick<SyncPageRow, "pageId" | "mode" | "modeChangedAt" | "holdKind" | "holdUntil" | "holdSince" | "holdDetail"
-    | "resourceHolds" | "pausedAll" | "pausedRequests" | "pausedResources" | "registryOverrides" | "owner">;
+    | "resourceHolds" | "pausedAll" | "pausedRequests" | "pausedResources" | "registryOverrides" | "owner">
+    & Partial<Pick<SyncPageRow, "routeState">>;
   journal: SyncJournalAlertFacts;
   live: SyncLivePathFacts;
   money: { count: number; oldestReceivedAt: Date } | null;
@@ -190,6 +192,10 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
     const groupSince = sustainedGroupHold(page, group, now);
     if (groupSince !== null) stopped.push({ detail: group.kind, since: groupSince });
   }
+  // A route state this build cannot read keeps the page's admission closed
+  // (`engine/route-policy.ts`).
+  const routeState = parseRouteState(page.routeState);
+  if (!routeState.ok) stopped.push({ detail: "route_state_unreadable", since: null, context: { diagnostic: routeState.diagnostic } });
   if (holdInForce && page.holdKind === "network") {
     const networkSince = dateOf(page.holdDetail.networkSince) ?? page.holdSince;
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });

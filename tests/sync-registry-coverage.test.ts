@@ -149,9 +149,10 @@ describe("the Fansly registry table", () => {
     expect(byKey("dm-conversations.find").operations).toEqual([LIST_RATE_LIMIT_ROUTE, "group.detail"]);
   });
 
-  it("a media-stats 429 holds, and the 5 s spacing paces, exactly the keys that read the media-stats endpoint (owner decision №20)", () => {
+  it("a media-stats 429 holds exactly the keys that read the media-stats endpoint (owner decision №20)", () => {
     // Every wire route on the endpoint is in the group: whatever key reads
-    // `/it/moie/statsnew`, the group's hold and spacing cover it.
+    // `/it/moie/statsnew`, the group's hold covers it (its pace is the
+    // route's budget, tests/sync-route-policy.test.ts).
     const onEndpoint = Object.values(FANSLY_WIRE_SPECS)
       .filter((spec) => spec.endpointTemplate === FANSLY_WIRE_SPECS[MEDIA_STATS_RATE_LIMIT_ROUTE].endpointTemplate)
       .map((spec) => spec.id)
@@ -168,11 +169,11 @@ describe("the Fansly registry table", () => {
     for (const key of readers) {
       expect(byKey(key).operations.every((operation) => MEDIA_STATS_RATE_GROUP.routes.has(operation)), key).toBe(true);
     }
-    // The groups: the list keeps owner decision №14 as it was (its spacing
-    // is `repair.ws-gap`'s own cursor), the media statistics are spaced 5 s.
-    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file, group.spacingMs])).toEqual([
-      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations", null],
-      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats", 5_000],
+    // The groups: the list's (owner decision №14) and the media
+    // statistics' (№20).
+    expect(ENDPOINT_RATE_GROUPS.map((group) => [group.kind, [...group.routes], group.file])).toEqual([
+      ["rate_limit_list", [LIST_RATE_LIMIT_ROUTE], "dm-conversations"],
+      ["rate_limit_media_stats", ["media.offer_stats"], "media-stats"],
     ]);
     // No two groups share a route or a hold entry.
     const routes = ENDPOINT_RATE_GROUPS.flatMap((group) => [...group.routes]);
