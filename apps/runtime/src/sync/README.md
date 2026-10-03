@@ -25,7 +25,7 @@ sync/
     resource.ts              the resource contract (plan / apply / shadow) and the rules every entry shares
     host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
-    actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
+    actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
@@ -83,6 +83,15 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+Steps that need no request do not wait for the HTTP gate (step 3b, ruling 9; `stepBeforeGate` in `engine/actor.ts`).
+On every lap, after the due applies and before the page hold and the pacer, the actor plans the due work of the keys
+without HTTP (`dm-live.deletions`) and of the keys that plan before the gate by choice (`planBeforeGate`:
+`dm-conversations.find`, which a list read may already have answered) — at most 10 rows a lap, the keys without HTTP
+first, under the same fences: the owner generation and mode, the erasure fence the entry takes; the owner's pause of
+the page and of a key still stops them. A `local` plan, a closure, a wait or a quarantine commits there; a plan that
+asks for a request is left for its slot. Nothing is admitted or paced and the cycle does not move; "why waiting"
+never shows a key without HTTP as held by the page or the pacer.
 
 ## History requests
 
@@ -180,11 +189,11 @@ decoder plus new chats, money, subscriptions and payouts) and one routing table 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
 broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; on a live page it is a
-`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, picked at a
-slot like any work but admitting nothing): the page's hot rows of the message are marked (sticky), one deliverable
-`message.deleted` is appended and the archive tombstoned from it (tombstone-first, sticky against a later REST copy),
-and the stored window of every touched thread is recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays
-the conversation list's, the chain is untouched.
+`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
+the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
+rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
+from it (tombstone-first, sticky against a later REST copy), and the stored window of every touched thread is
+recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
 page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
@@ -295,8 +304,9 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 reconcile's window drift pass. The legacy processes ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS
 supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector files
 its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM stream wake; a deletion keeps its
-`mutation_debt` receipt, so a frame captured before the switch is still marked), the AI describer downloads nothing
-itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
+`mutation_debt` receipt whatever the frame's receive time, so a frame captured before the switch is still marked, and so
+is one whose `dm-live.deletions` work a phase-B revert or a rollback cancelled before the engine applied it), the AI
+describer downloads nothing itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
 `scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
 command to use instead — except the `/account/me` levers (page verify, credentials, proxy, `fansly:ws-policy`), which
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
@@ -314,14 +324,15 @@ Phases: **A** mode `handover` (the legacy engine is fenced, the shadow actor rel
 lock) and the guard row handed to the engine once no legacy request is in flight; **B** the legacy stop confirmed
 (`switch/legacy-stop.ts`: no running lease, open run, open HTTP attempt, open guarded send, socket lock holder or
 active thread backfill; the guard handed); **R** the final incremental chain rebuild; **I** the legacy import
-(`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers, head-debt
-catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or auth block carried,
-the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a new owner generation
-within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are open, the page's
-hydration requests become history requests (`switch_migration`). A or B timing out reverts to `shadow` (exit 2); no
-live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync switch check --page P
---since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor refusals, nothing
-stuck, the SLOs, volume, restarts, open incidents).
+(`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers (merged
+into the key's open work, else a closed carrier the next work inherits; a `handover` receipt waits for the import's
+fence), head-debt catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or
+auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a
+new owner generation within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are
+open, the page's hydration requests become history requests (`switch_migration`). A or B timing out reverts to
+`shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page; `sync
+switch check --page P --since T0` prints the acceptance checks (pace over both journals, the handover boundary, vendor
+refusals, nothing stuck, the SLOs, volume, restarts, open incidents).
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy

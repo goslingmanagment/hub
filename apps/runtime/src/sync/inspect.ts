@@ -40,7 +40,7 @@ import {
   RouteClocks,
   routeStatusView,
 } from "./engine/route-policy.ts";
-import { FANSLY_RESOURCE_SPECS, type ResourceSpec } from "./fansly/registry.ts";
+import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
 import {
@@ -114,6 +114,7 @@ function statusWork(work: SyncWorkRow): StatusWork {
     blockedByVendorAt: work.blockedByVendorAt,
     waitingReason: work.waitingReason,
     waitingUntil: work.waitingUntil,
+    http: fanslyResourceSpec(work.resource)?.http !== false,
   };
 }
 

@@ -4,7 +4,9 @@ import {
   appendDomainEventsInTransaction,
   applyMessageEventsToArchive,
   DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
+  getSyncPage,
   listDomainEventsByDedupKeys,
+  setPageHold,
   upsertDemand,
   upsertPageDmMessages,
   type Database,
@@ -30,7 +32,8 @@ import {
 // `dm-live.deletions` on a live page (step-3 design §3.3 item 4, G5, E6, E7):
 // a socket deletion acked by the step-1 apply (overlay mark + the post-ack
 // hook's demand) reaches the hot table, the event ledger and the archive in
-// one `local` step of the actor — no request — under the erasure fence, and
+// one `local` step of the actor — no request, before the HTTP gate, so no page
+// hold or pacer slot delays it (step 3b ruling 9) — under the erasure fence, and
 // the stored window of the thread is recomputed by the engine's own writer
 // (head and chain untouched). Sticky against a late create frame and a later
 // REST copy; an erasure-fenced fan gets nothing written; on a page the engine
@@ -132,9 +135,16 @@ async function work(pageId: number, subject = GROUP) {
   return result.rows[0] ?? null;
 }
 
-async function runDeletions(pageId: number, metrics = new RecordingMetrics(), subject = GROUP): Promise<ScriptedLiveTransport> {
+async function runDeletions(
+  pageId: number,
+  metrics = new RecordingMetrics(),
+  subject = GROUP,
+  options: { floorDelayMs?: number } = {},
+): Promise<ScriptedLiveTransport> {
   const transport = new ScriptedLiveTransport();
-  const made = await makeTestActor({ db: db(), pageId, mode: "live", registry: deletionsRegistry(), transport, metrics, ownRef: OWN });
+  const made = await makeTestActor({
+    db: db(), pageId, mode: "live", registry: deletionsRegistry(), transport, metrics, ownRef: OWN, ...options,
+  });
   await runActorUntil(made, async () => (await work(pageId, subject))?.state === "done", 20_000, "the deletions carried");
   return transport;
 }
@@ -330,6 +340,43 @@ describe("dm-live.deletions on a live page", () => {
     );
     expect(events.rows).toEqual([{ conversation_ref: null }]);
   }, 60_000);
+
+  it.each([
+    ["auth", "infinity"],
+    ["identity_mismatch", "infinity"],
+    ["rate_limit", 120_000],
+    ["network", 60_000],
+  ] as const)("a %s page hold delays requests only: the deletion is carried under it, and the hold stays (ruling 9)", async (kind, forMs) => {
+    if (!testDb) return;
+    const { page, threadId, ids } = await seedLivePage("live", `ws-hold-${kind.replace("_", "-")}`);
+    await deleteFrame(page, ids[2]);
+    await setPageHold(db(), {
+      pageId: page.pageId,
+      kind,
+      until: forMs === "infinity" ? "infinity" : new Date(Date.now() + forMs),
+      step: 1,
+      detail: {},
+    });
+    const metrics = new RecordingMetrics();
+    const transport = await runDeletions(page.pageId, metrics);
+    expect(transport.hits).toEqual([]);
+    expect(await work(page.pageId)).toMatchObject({ state: "done", close_reason: "ws_deletions_applied" });
+    expect((await hotRow(page.pageId, ids[2]))!.deleted_at).not.toBeNull();
+    expect((await deletedEvents(page.pageId)).map((event) => event.message_ref)).toEqual([ids[2]]);
+    expect((await archiveRow(page.pageId, ids[2]))!.deleted_at).not.toBeNull();
+    expect(await threadWindow(threadId)).toMatchObject({ stored_message_count: 2, newest_stored_message_id: ids[1] });
+    expect(metrics.get("sync_steps_before_gate")).toBe(1);
+    expect((await getSyncPage(db(), page.pageId))!.holdKind).toBe(kind);
+  }, 30_000);
+
+  it("the pacer's closed slot does not delay it: carried while the takeover floor keeps the first request a minute away", async (context) => {
+    if (!testDb) return context.skip();
+    const { page, ids } = await seedLivePage("live", "ws-pacer");
+    await deleteFrame(page, ids[0]);
+    const transport = await runDeletions(page.pageId, new RecordingMetrics(), GROUP, { floorDelayMs: 60_000 });
+    expect(transport.hits).toEqual([]);
+    expect((await hotRow(page.pageId, ids[0]))!.deleted_at).not.toBeNull();
+  }, 30_000);
 
   it.each(["off", "shadow"] as const)("an %s page: the post-ack hook routes nothing and no store is marked", async (mode) => {
     if (!testDb) return;

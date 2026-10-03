@@ -17,8 +17,9 @@ import type { ApplyResult, LocalApplyInput, ResourceModule } from "../../engine/
 // 4): the socket said a message was deleted. The overlay's sticky mark is
 // already written by the step-1 apply in the transaction that acked the frame;
 // this work carries the deletion to the hot table and the archive WITHOUT a
-// request, a slot after the ack — outside the ack transaction so the lock
-// order holds (hot tables before `domain_event_seq`).
+// request, on the actor's next lap after the ack — before its HTTP gate, so no
+// page hold or pacer slot delays it (ruling 9) — outside the ack transaction
+// so the lock order holds (hot tables before `domain_event_seq`).
 //
 // Shadow (step 2): the router creates the work from real deletion frames so
 // the shadow report sees the demand, and the step closes at once — a shadow

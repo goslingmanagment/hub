@@ -158,6 +158,38 @@ describe("sync status: why a work row waits", () => {
     expect(reason(work())).toBe("class_share");
   });
 
+  it("a key without requests never waits on the page hold or the pacer: it steps before the gate (ruling 9)", () => {
+    const deletion = (overrides: Partial<StatusWork> = {}) =>
+      work({ resource: "dm-live.deletions", class: "urgent", http: false, ...overrides });
+    const closed = { slotOpensAt: at(1_500) };
+    for (const held of [
+      page({ holdKind: "rate_limit", holdUntil: at(120_000) }),
+      page({ holdKind: "network", holdUntil: at(30_000) }),
+      page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-1" } }),
+    ]) {
+      expect(explainWork(deletion(), held, closed, NOW)).toEqual({ reason: "class_share", until: null, detail: { class: "urgent" } });
+      // A busy erasure fence is what it waits for, not the hold.
+      expect(explainWork(deletion({ waitingReason: "dependency", dueAt: at(1_000) }), held, closed, NOW))
+        .toMatchObject({ reason: "dependency", until: at(1_000) });
+      // The owner's pauses still stop it; a key that sends still waits on the hold.
+      expect(explainWork(deletion(), { ...held, pausedAll: true }, closed, NOW)).toMatchObject({ reason: "paused" });
+      expect(reason(deletion(), { ...held, pausedResources: ["dm-live.deletions"] }, closed)).toBe("paused");
+      expect(reason(work({ http: true }), held, closed)).toBe("page_hold");
+    }
+    expect(reason(deletion({ state: "quarantined" }), page({ holdKind: "network", holdUntil: at(30_000) }))).toBe("quarantined");
+    // Nor on the route admission: a route state this build cannot read, or
+    // closed routes, delay the requests only.
+    const routesClosed: RuntimeSnapshot = {
+      slotOpensAt: null,
+      routes: { stateError: "route_state_version:9", keyOpensAt: () => ({ at: at(30_000), routes: ["messaging.groups"] }) },
+    };
+    expect(reason(deletion(), page(), routesClosed)).toBe("class_share");
+    expect(reason(work({ http: true }), page(), routesClosed)).toBe("page_hold");
+    const budgetClosed: RuntimeSnapshot = { ...routesClosed, routes: { ...routesClosed.routes!, stateError: null } };
+    expect(reason(deletion(), page(), budgetClosed)).toBe("class_share");
+    expect(reason(work({ http: true }), page(), budgetClosed)).toBe("pacer");
+  });
+
   it("closed work waits for nothing", () => {
     for (const state of ["done", "cancelled", "superseded"] as const) {
       expect(explainWork(work({ state }), page(), OPEN_SLOT, NOW)).toBeNull();
