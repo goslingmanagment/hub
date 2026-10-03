@@ -20,6 +20,8 @@ import {
   route429Check,
   route429Outcomes,
   routeBudgetsCheck,
+  routeSlowdowns,
+  slowedIntervalMs,
   type AcceptanceCheck,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
@@ -29,8 +31,9 @@ import {
 // The live-hour acceptance's rules (step 3b ruling 13, A1 §2b, A6), pure:
 // the window shared by pages switched together, the pace and the route
 // budgets (the send audit's: tests/sync-send-audit.test.ts has its rules),
-// the 429s per page+route, 401/403, page holds, the first media request, the
-// SLO sample rules and the page verdict.
+// the slowdown a route owes after a 429 on the intervals its admissions
+// recorded, the 429s per page+route, 401/403, page holds, the first media
+// request, the SLO sample rules and the page verdict.
 
 const T0 = Date.parse("2026-10-03T10:00:00.000Z");
 const at = (seconds: number) => new Date(T0 + seconds * 1_000);
@@ -90,15 +93,18 @@ describe("canonical routes of the journals", () => {
   });
 });
 
-/** One recorded engine send of the send audit, `seconds` after T0. */
+/** One recorded engine send of the send audit, `seconds` after T0: admitted
+ *  50 ms before it, answered 300 ms after. */
 function audited(seconds: number, operation: string, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow {
   ref += 1;
   return {
     journal: "engine",
+    shadow: false,
     source: null,
     ref,
     operation,
     ownerGeneration: 1n,
+    admittedAt: at(seconds - 0.05),
     sentAt: at(seconds),
     countedAt: at(seconds),
     settingMs: 2_500,
@@ -106,8 +112,15 @@ function audited(seconds: number, operation: string, overrides: Partial<FanslySe
     gapPrevMs: null,
     routeIntervalMs: 4_000,
     familyIntervalMs: null,
+    httpStatus: 200,
+    completedAt: at(seconds + 0.3),
     ...overrides,
   };
+}
+
+/** `count` audited sends of `operation` every `everySeconds` from `fromSeconds`. */
+function auditedStream(operation: string, fromSeconds: number, everySeconds: number, count: number, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow[] {
+  return Array.from({ length: count }, (_, index) => audited(fromSeconds + index * everySeconds, operation, overrides));
 }
 
 describe("the pace and the route budgets: the send audit's verdicts", () => {
@@ -126,7 +139,7 @@ describe("the pace and the route budgets: the send audit's verdicts", () => {
     const check = routeBudgetsCheck(sends, window());
     expect(check).toMatchObject({ name: "route_budgets", verdict: "fail", detail: { pairs: 14, violations: 14, inconclusive: 0 } });
     expect(check.detail.scopes).toEqual([expect.objectContaining({ kind: "route", scope: "notifications.page", sends: 15, violations: 14 })]);
-    expect(routeBudgetsCheck(sends.map((send, index) => ({ ...send, countedAt: at(100 + index * 4) })), window()).verdict).toBe("pass");
+    expect(routeBudgetsCheck(auditedStream("notifications.page", 100, 4, 15), window()).verdict).toBe("pass");
   });
 
   it("route_budgets: an attempt admitted before the intervals were recorded is inconclusive, never a pass", () => {
@@ -138,6 +151,84 @@ describe("the pace and the route budgets: the send audit's verdicts", () => {
     const sends = [audited(-10, "notifications.page"), audited(-8, "notifications.page"), audited(10, "notifications.page")];
     expect(routeBudgetsCheck(sends, window())).toMatchObject({ verdict: "pass", detail: { pairs: 1 } });
     expect(paceCombinedCheck(sends, window())).toMatchObject({ verdict: "pass", detail: { pairs: 1 } });
+  });
+
+  it("pace_combined: one owner's pair whose recorded sends contradict its pacer's gap is inconclusive, never a pass", () => {
+    const sends = [audited(10, "notifications.page"), audited(12.6, "notifications.page", { gapPrevMs: 2_750 })];
+    expect(paceCombinedCheck(sends, window())).toMatchObject({
+      verdict: "inconclusive",
+      detail: { pairs: 0, violations: 0, inconclusive: 1, firstInconclusive: [expect.objectContaining({ open: "clocks_disagree", gapMs: 2_750, wallGapMs: 2_600 })] },
+    });
+  });
+});
+
+describe("the slowdown after a 429 (A2), on the intervals the admissions recorded", () => {
+  it("halves the rate from the interval the 429'd attempt recorded, never below ⅛ of the ceiling", () => {
+    // 15/min → 7.5/min; the media statistics 5 → 2.5 → 1.5/min (⅛ of the 12/min ceiling) and no lower.
+    expect(slowedIntervalMs("messages.page", 4_000)).toBe(7_999);
+    expect(slowedIntervalMs("media.offer_stats", 12_000)).toBe(23_999);
+    expect(slowedIntervalMs("media.offer_stats", 24_000)).toBe(40_000);
+    expect(slowedIntervalMs("media.offer_stats", 40_000)).toBe(40_000);
+    // Two round-ups of a rate that is no whole number of milliseconds differ by one: 7/min is 8 572 ms, 3.5/min 17 143.
+    expect(slowedIntervalMs("messages.page", 8_572)).toBe(17_143);
+  });
+
+  it("fails a route that kept its full rate after its 429: each later admission recorded the unslowed interval", () => {
+    // Twelve media reads 20 s apart, each within the 12 s it recorded: the
+    // interval audit alone passes them. The first one was answered 429.
+    const sends = auditedStream("media.offer_stats", 100, 20, 12, { routeIntervalMs: 12_000 });
+    sends[0] = { ...sends[0]!, httpStatus: 429 };
+    const check = routeBudgetsCheck(sends, window());
+    expect(check).toMatchObject({
+      verdict: "fail",
+      detail: { pairs: 11, violations: 11, inconclusive: 0, first: [], slowdown: { rateLimited: 1, admissions: 11, violations: 11, inconclusive: 0 } },
+    });
+    expect((check.detail.slowdown as { first: unknown[] }).first[0]).toMatchObject({
+      route: "media.offer_stats", ref: sends[1]!.ref, intervalMs: 12_000, requiredMs: 23_999, after: { journal: "engine", ref: sends[0]!.ref },
+    });
+    // The same hour without the 429 passes: the rule is the 429's.
+    expect(routeBudgetsCheck(sends.map((send) => ({ ...send, httpStatus: 200 })), window())).toMatchObject({ verdict: "pass", detail: { violations: 0 } });
+  });
+
+  it("passes the admissions that recorded the halved interval and kept it; the sends before the 429 owe nothing", () => {
+    const before = auditedStream("media.offer_stats", 100, 12, 5, { routeIntervalMs: 12_000 });
+    const limited = audited(160, "media.offer_stats", { routeIntervalMs: 12_000, httpStatus: 429 });
+    const after = auditedStream("media.offer_stats", 190, 24, 10, { routeIntervalMs: 24_000 });
+    const check = routeBudgetsCheck([...before, limited, ...after], window());
+    expect(check).toMatchObject({ verdict: "pass", detail: { violations: 0, inconclusive: 0, slowdown: { rateLimited: 1, admissions: 10, violations: 0 } } });
+    // Recorded halved, sent faster: the pairs fail, the slowdown itself was applied.
+    const fast = auditedStream("media.offer_stats", 190, 20, 10, { routeIntervalMs: 24_000 });
+    expect(routeBudgetsCheck([...before, limited, ...fast], window())).toMatchObject({
+      verdict: "fail", detail: { violations: 9, slowdown: { violations: 0 } },
+    });
+    // Another route owes nothing for it.
+    const other = auditedStream("notifications.page", 200, 4, 10);
+    expect(routeSlowdowns([limited, ...other], window())).toMatchObject({ rateLimited: 1, admissions: 0, violations: [] });
+  });
+
+  it("judges an admission by the 429s answered before it was admitted, each from its own recorded interval", () => {
+    const first = audited(100, "messages.page", { httpStatus: 429 });
+    // Admitted before the answer came (99.95 s < 100.3 s) it owes nothing; none is.
+    const second = audited(200, "messages.page", { routeIntervalMs: 8_000, httpStatus: 429 });
+    // After two 429s: a quarter of the rate (16 s); 8 s is the first one's only.
+    const audit = routeSlowdowns([first, second, audited(300, "messages.page", { routeIntervalMs: 8_000 }), audited(400, "messages.page", { routeIntervalMs: 16_000 })], window());
+    expect(audit).toMatchObject({ rateLimited: 2, admissions: 3 });
+    expect(audit.violations).toEqual([expect.objectContaining({ intervalMs: 8_000, requiredMs: 15_999, after: expect.objectContaining({ ref: second.ref }) })]);
+    // A 429 answered before the window is not the window's.
+    expect(routeSlowdowns([audited(-100, "messages.page", { httpStatus: 429 }), audited(10, "messages.page")], window()).rateLimited).toBe(0);
+  });
+
+  it("is inconclusive, never a pass, without the recorded numbers: a 429'd attempt or an admission before 0237, a legacy 429", () => {
+    const limited = audited(100, "messages.page", { routeIntervalMs: null, httpStatus: 429 });
+    const later = audited(200, "messages.page", { routeIntervalMs: 8_000, familyIntervalMs: 4_000 });
+    expect(routeSlowdowns([limited, later], window())).toMatchObject({
+      admissions: 0, violations: [], inconclusive: [expect.objectContaining({ ref: later.ref, requiredMs: null })],
+    });
+    const unrecorded = routeSlowdowns([audited(100, "messages.page", { httpStatus: 429 }), audited(200, "messages.page", { routeIntervalMs: null })], window());
+    expect(unrecorded).toMatchObject({ violations: [], inconclusive: [expect.objectContaining({ intervalMs: null, requiredMs: 7_999 })] });
+    const legacy = audited(100, "messages", { journal: "legacy", source: "sync_stream", ownerGeneration: null, routeIntervalMs: null, httpStatus: 429 });
+    const check = routeBudgetsCheck([legacy, later], window());
+    expect(check).toMatchObject({ verdict: "inconclusive", detail: { violations: 0, inconclusive: 1, slowdown: { rateLimited: 1, inconclusive: 1 } } });
   });
 });
 

@@ -5,6 +5,7 @@ import {
   listSyncAdmissions,
   listSyncRunAttempts,
   listSyncWorkOpenAt,
+  readFanslySendAudit,
   readFirstShadowAdmissions,
   readLedgerTransactionsCreatedAt,
   readLegacyMessageArrivals,
@@ -21,6 +22,7 @@ import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
 import { quantileOf } from "../engine/metrics.ts";
 import { JITTER_MAX } from "../engine/pacer.ts";
+import { auditPagePace } from "../engine/send-audit.ts";
 import type { SettingsSource } from "../engine/ports.ts";
 import {
   effectiveCadence,
@@ -46,7 +48,8 @@ import { checkPurchaseAnnouncements, purchaseAnnouncementNote, type PurchaseAnno
 // pages in shadow. A1 demand against a computed expectation, A2 the legacy
 // engine's volume of the same hour explained through the registry's coverage
 // matrix, A3 the live-path decisions (socket frame → shadow admission vs the
-// legacy arrival), A4 the pacer's self-check. Reads only. Where the design's
+// legacy arrival), A4 the pacer's self-check (the send audit's I1 over the
+// shadow journal, `engine/send-audit.ts`). Reads only. Where the design's
 // wording needed a rule to be measurable, the rule is named
 // (`SHADOW_WINDOW_RULES`) and printed with every report.
 
@@ -1578,7 +1581,14 @@ export interface ShadowWindowReport {
   demand: PageDemand[];
   legacy: LegacyVolumeRow[];
   livePath: { fanMessages: LiveDecision; transactions: LiveDecision; unreadableReceipts: number; offline: OfflineDecisions | null };
-  pacer: { pages: Array<{ page: string; sends: number; minGapMs: number | null; violations: number }>; violations: number };
+  /** A4, per page and in all: the pairs of simulated sends closer than the
+   *  later one's own pause, and the pairs the audit could not judge (never a
+   *  pass). */
+  pacer: {
+    pages: Array<{ page: string; sends: number; minGapMs: number | null; violations: number; inconclusive: number }>;
+    violations: number;
+    inconclusive: number;
+  };
   verdict: { covered: boolean; a1: boolean; a2: boolean; a3: boolean | null; a4: boolean };
 }
 
@@ -2543,18 +2553,30 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
     ? await offlineDecisions(db, { pageIds, to: start, ...resolve })
     : null;
 
-  // A4: the pacer's self-check over the shadow journal.
+  // A4: the pacer's self-check over the shadow journal — the send audit's I1,
+  // the checker the alert evaluator and the live acceptance run: every pair
+  // of adjacent simulated sends against the later one's own pause S × (1 + u)
+  // (the setting alone passes a gap inside the jitter), on the recorded
+  // instants and, one owner's pair, on its pacer's monotonic gap too. A pair
+  // it cannot judge never passes.
   const pace = await readSyncJournalMetrics(db, { pageIds, shadow: true, since: start, until: end });
-  const pacerPages = input.pages.map((page) => {
+  const pacerPages: ShadowWindowReport["pacer"]["pages"] = [];
+  for (const page of input.pages) {
     const row = pace.find((entry) => entry.pageId === page.pageId);
-    return {
+    const audit = auditPagePace(
+      await readFanslySendAudit(db, { pageId: page.pageId, since: start, until: end, shadow: true }),
+      { start, until: end },
+    );
+    pacerPages.push({
       page: page.pageLabel ?? String(page.pageId),
       sends: (row?.sends.urgent ?? 0) + (row?.sends.requests ?? 0) + (row?.sends.planned ?? 0),
       minGapMs: row?.minGapMs ?? null,
-      violations: row?.paceViolations ?? 0,
-    };
-  });
+      violations: audit.violations.length,
+      inconclusive: audit.inconclusive.length,
+    });
+  }
   const violations = pacerPages.reduce((total, row) => total + row.violations, 0);
+  const paceInconclusive = pacerPages.reduce((total, row) => total + row.inconclusive, 0);
 
   const decisions = [fanMessages.meetsTarget, transactions.meetsTarget].filter((value): value is boolean => value !== null);
   return {
@@ -2564,13 +2586,13 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
     demand: demand.map((page) => ({ ...page, outside: page.outside.slice(0, input.maxListed) })),
     legacy: legacy.rows,
     livePath: { fanMessages, transactions, unreadableReceipts: frames.unreadable, offline },
-    pacer: { pages: pacerPages, violations },
+    pacer: { pages: pacerPages, violations, inconclusive: paceInconclusive },
     verdict: {
       covered: coverage.every((page) => page.covered),
       a1: demand.every((page) => page.passes),
       a2: legacy.rows.every((row) => row.explained),
       a3: decisions.length === 0 ? null : decisions.every(Boolean),
-      a4: violations === 0,
+      a4: violations === 0 && paceInconclusive === 0,
     },
   };
 }

@@ -432,14 +432,16 @@ together (step 3b ruling 13, A6): each page over [T_i, T* + 1 h), T_i = the late
 = the last one. The rules (`switch/acceptance-rules.ts`): the send audit's pace over both journals (every pair of
 adjacent sends ≥ the later one's own pause), the handover boundary, the send audit's route budgets (every pair of
 adjacent sends of a route and of a family ≥ the interval the later one was admitted under, no recorded interval below
-its ceiling's; Alerts, below), per
+its ceiling's; Alerts, below) and, after a 429 of a page+route, every later admission on it recording at least the
+slowed interval (A2 on the recorded numbers: twice the interval the 429'd attempt recorded, never beyond ⅛ of the
+ceiling's rate — a route that kept its full rate fails, and so does a `sync route raise` inside the hour), per
 (page, canonical route) at most one 429 with its hold kept and its recovery seen, no 401/403 and no page hold (from
 the journal, the page row, or an alert 1 `page_stopped` episode seen in the window, resolved ones included — a 429 that
 held the whole page shows there after its hold is cleared), the first media request ≤ 60 s after live, nothing stuck,
 the SLOs over the whole window (route holds and the unfinished tail included; fewer than 10 samples: count and max), no
 open incident but a route's own (D5 `route_limited:<route>`, told by its key whatever its code). A page is `fail`,
-`inconclusive` (the window still open, a 429's recovery unproven, a small sample, a pair without its recorded pause
-or interval), `owner_review` (429s on two or more routes), `accepted_with_route_429` or `pass`; exit 0 every page
+`inconclusive` (the window still open, a 429's recovery unproven, a small sample, a pair the send audit could not
+judge), `owner_review` (429s on two or more routes), `accepted_with_route_429` or `pass`; exit 0 every page
 accepted, 1 a page failed, 2 otherwise. The report is JSON on stdout (`--out` keeps a copy): the runbook reads it
 there. Its fixtures: tests/sync-switch-acceptance.integration.test.ts.
 
@@ -666,16 +668,24 @@ journal's new live sends, so a violation the capture path could not report still
 **send audit** (`engine/send-audit.ts`), the one checker `sync switch check` and the shadow report run too. It judges
 the recorded sends by what each admission recorded it applied, never by a copy of the policy:
 - I1: every pair of adjacent sends of the page (both journals) ≥ the later one's own pause `S × (1 + u)`
-  (`pause_ms`). The gap is monotonic when both are one owner's (`gap_prev_ms`), else the recorded wall clocks' with a
-  2 ms tolerance;
-- I19: every pair of adjacent sends of one route, and of one family, whose later one is an engine admission ≥ the
-  interval that admission recorded. An unknown outcome counts at its upper bound and a send provably never made does
+  (`pause_ms`), by two tests. The recorded instants (`sent_at`) with a 2 ms tolerance: closer than the setting itself
+  they fail whatever the pacer measured. And, when both sends are one owner's, its pacer's monotonic gap
+  (`gap_prev_ms`), exactly — the pacer refuses a send on that same number, so alone it proves nothing about a pacer
+  that remembers the wrong previous send. Where the monotonic gap keeps the pause and the recorded instants do not,
+  the pair is `inconclusive` (`clocks_disagree`). The capture's own alert judges its send by the same rule;
+- I19: every engine admission against the newest send its route's clock, and its family's, counted before it — the
+  adjacent pair of a route and of a family — ≥ the interval that admission recorded. A send provably never made does
   not count, as at the admission;
+- a send whose instant was never recorded (in flight, or left by a killed process): as the earlier send of a pair it
+  counts at its upper bound (admission + 15 s), as the admission and the takeover floor count it; as the later one it
+  is judged at its admission, the earliest it can have left — proven there it passes, else it is `inconclusive`
+  (`send_not_recorded`), never judged at the upper bound and never dropped;
 - independently, no recorded interval is below the interval of the route's (family's) ceiling.
 
 A violation (`pace_violation`, `route_interval_violation`, `route_interval_below_ceiling`) opens the pace latch. A
-pair whose later send recorded no pause or interval (an attempt before 0237) is `inconclusive`: it pages nobody and
-never passes an acceptance. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
+pair it cannot judge (no recorded pause or interval — an attempt before 0237 —, a send never recorded that its
+admission does not prove, two clocks that disagree) is `inconclusive`: it pages nobody and never passes an
+acceptance. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
 never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
 process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
 restart. `pnpm cli sync alerts status` shows what holds per page.
@@ -700,7 +710,8 @@ senders listed apart; legacy's scheduled purchase poll listed apart once every o
 engine hears of — a PPV ledger row or a socket order frame — since `purchases.targets` runs on demand only and its
 live demand, the transactions apply's new sales, names no target in shadow), the live-path decisions (a fan message or a new ledger
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
-the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
+the hour is too quiet), the pacer's self-check (A4: the send audit's I1 over the shadow journal — every pair of
+simulated sends ≥ the later one's own pause, a pair it cannot judge never passes); part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. Besides the frozen A1–A4 rules part A runs
 two checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — the send

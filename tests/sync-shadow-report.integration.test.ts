@@ -273,14 +273,15 @@ describe("the shadow report (design §3.12)", () => {
 
     // The vault walk asks one album page twice in its run: a circle. Its next
     // album's page asked again after a restart closed the first ask unsent is
-    // the same step resumed.
+    // the same step resumed — once the route opens again: its clock counts
+    // the unsent ask at its upper bound (admission + 15 s), then an interval.
     const vault = await shadowWorkRow(page.pageId, "catalog.vault");
     const vaultPage = (before: string, album = "a1") => ({ albumId: album, before });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE), workId: vault, params: vaultPage("shadow-1") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 10_000), workId: vault, params: vaultPage("shadow-2") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(30 * MINUTE + 20_000), workId: vault, params: vaultPage("shadow-1") });
     await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE), workId: vault, params: vaultPage("0", "a2"), sent: false });
-    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE + 10_000), workId: vault, params: vaultPage("0", "a2") });
+    await shadowAttempt(page.pageId, { resource: "catalog.vault", workClass: "planned", at: at(31 * MINUTE + 20_000), workId: vault, params: vaultPage("0", "a2") });
     // Not circles: a reconcile's /account/me before and after its walk (no
     // position), a poll's run re-reading its head, two catch-ups of one chat.
     const reconcile = await shadowWorkRow(page.pageId, "followers.reconcile");
@@ -1457,6 +1458,47 @@ describe("the shadow report (design §3.12)", () => {
     ], { from: "user" })).rejects.toThrow(
       "lilly-2 is live: the shadow report judges only the pages in shadow, the switch candidates (live — judged by `sync switch check`)",
     );
+  });
+
+  it("A4 is the send audit's I1: a shadow pair inside the jitter — over the setting, short of its own pause — fails the pacer's self-check", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    const build = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: at(60 * MINUTE) },
+      journal: null,
+      maxListed: 50,
+    });
+    const clean = await build();
+    expect(clean.window!.pacer).toMatchObject({ violations: 0, inconclusive: 0 });
+    expect(clean.verdict.a4).toBe(true);
+
+    // S = 2 500, u = 0.1: the pause is 2 750, the two simulated sends 2 600 ms
+    // apart — the arena's counterexample, which `gap < setting` passed. An
+    // attempt a restart closed unsent between them simulated no send.
+    await shadowAttempt(page.pageId, { resource: "notifications.forward", workClass: "planned", at: at(52 * MINUTE) });
+    await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(52 * MINUTE + 1_000), sent: false });
+    await shadowAttempt(page.pageId, { resource: "transactions.head", workClass: "urgent", at: at(52 * MINUTE + 2_600) });
+    const later = `page_id = ${page.pageId} and shadow and admitted_at = '${at(52 * MINUTE + 2_600).toISOString()}'`;
+    await testDb.pool.query(`update sync_attempts set setting_ms = 2500, jitter_u = 0.1, pause_ms = 2750 where ${later}`);
+    const inside = await build();
+    expect(inside.window!.pacer).toMatchObject({ violations: 1, inconclusive: 0, pages: [{ page: "lilly-1", violations: 1, inconclusive: 0 }] });
+    expect(inside.verdict).toMatchObject({ a4: false, accepted: false });
+    expect(inside.summary).toContain("A4 pacer: 1 shadow pairs closer than the later send's pause");
+
+    // The pacer's own monotonic gap says it kept the pause, the recorded
+    // instants say it did not: not judged, and never a pass.
+    await testDb.pool.query(`update sync_attempts set gap_prev_ms = 2750 where ${later}`);
+    const disagree = await build();
+    expect(disagree.window!.pacer).toMatchObject({ violations: 0, inconclusive: 1 });
+    expect(disagree.verdict).toMatchObject({ a4: false, accepted: false });
+    expect(disagree.summary).toContain("A4 pacer: 0 shadow pairs closer than the later send's pause; 1 not judged (inconclusive)");
   });
 
   it("the CLI: `sync shadow report --part a` and `sync alerts ack`", async (context) => {

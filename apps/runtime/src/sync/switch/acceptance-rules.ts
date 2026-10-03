@@ -3,14 +3,16 @@ import { SYNC_SEND_WINDOW_MS, type FanslySendAuditRow } from "@agency_hub_core/d
 import { incidentKey, syncEngineIncidentKey } from "../../services/notification-incidents.ts";
 import { SYNC_ALERT_CLEAN_MS } from "../engine/alerts.ts";
 import { NETWORK_FAILURES_TO_PAUSE } from "../engine/errors.ts";
-import { auditPagePace, auditRouteIntervals, type SendAuditWindow } from "../engine/send-audit.ts";
-import { routeOfEngineOperation, routeOfLegacyOperation } from "../fansly/routes.ts";
+import { auditPagePace, auditRouteIntervals, sendAuditJournalOf, sendAuditRouteOf, type SendAuditWindow } from "../engine/send-audit.ts";
+import { intervalMsOf, routeBudget, routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "../fansly/routes.ts";
 
 // The rules of the live-hour acceptance of switched pages (step 3b ruling 13,
 // A1 §2b, A6; owner decisions №18, №21–№26), pure. `switch/acceptance.ts`
 // (`pnpm cli sync switch check`, JSON on stdout for the runbook) reads the
 // journals and judges with these; the pace and the route budgets are the send
-// audit's (`engine/send-audit.ts`), the same checker the alert evaluator runs.
+// audit's (`engine/send-audit.ts`), the same checker the alert evaluator runs,
+// and the slowdown a route owes after a 429 (A2) is judged here on the same
+// recorded numbers.
 //
 // Window: each page is judged over [T_i, T* + 1 h), T_i = the later of the
 // owner's `since` and the instant the page became live, T* = max(T_i) over
@@ -34,6 +36,9 @@ export const ACCEPTANCE_RULES = {
   /** A 429 without `Retry-After` holds its route at least the ladder's first
    *  step (owner decision №14); a valid `Retry-After` wins. */
   firstHoldMs: 5_000,
+  /** Each 429 halves the page+route rate, never below ⅛ of its ceiling (A2, D3). */
+  slowdownFactor: 0.5,
+  slowdownFloorShare: 0.125,
   /** Consecutive network failures that hold the page (`engine/errors.ts`). */
   networkFailuresToHold: NETWORK_FAILURES_TO_PAUSE,
   /** Alert 1's latch resolves only after its stop has stayed clear this long
@@ -209,7 +214,10 @@ function roundTo(value: number | null, digits = 0): number | null {
  * I1 over both journals (`pace_combined`, step-3 §3.5 item 2, G4, E12): every
  * pair of adjacent sends of the page whose later send lies in the window,
  * against that send's own pause S × (1 + u) — a pair straddling the handover
- * included. A pair whose later send recorded no pause is `inconclusive`.
+ * included — on the recorded instants and, one owner's pair, on its pacer's
+ * monotonic gap too. A pair whose later send recorded no pause, whose two
+ * clocks disagree, or whose later send was never recorded and is not proven by
+ * its admission is `inconclusive`.
  */
 export function paceCombinedCheck(sends: readonly FanslySendAuditRow[], window: AcceptanceWindow): AcceptanceCheck {
   const audit = auditPagePace(sends, auditWindow(window));
@@ -217,11 +225,14 @@ export function paceCombinedCheck(sends: readonly FanslySendAuditRow[], window: 
     journal: entry.journal,
     ref: entry.ref,
     sentAt: entry.sentAt.toISOString(),
+    judgedAt: entry.judgedAt,
     prevJournal: entry.prevJournal,
     prevRef: entry.prevRef,
     gapMs: roundTo(entry.gapMs, 1),
     clock: entry.clock,
+    wallGapMs: roundTo(entry.wallGapMs, 1),
     pauseMs: entry.pauseMs,
+    ...(entry.open === null ? {} : { open: entry.open }),
   });
   return {
     name: "pace_combined",
@@ -239,40 +250,169 @@ export function paceCombinedCheck(sends: readonly FanslySendAuditRow[], window: 
   };
 }
 
+/** A2 on the recorded numbers: the shortest interval an admission may record
+ *  after a 429 of its page+route whose attempt was admitted under
+ *  `recordedMs` — half the rate (twice the interval, less the millisecond two
+ *  round-ups of it can differ by: ⌈2x⌉ ≥ 2⌈x⌉ − 1), never below ⅛ of the
+ *  route's ceiling. */
+export function slowedIntervalMs(route: FanslyRoute, recordedMs: number): number {
+  const floorMs = intervalMsOf(routeBudget(route).ceilingPerMin * ACCEPTANCE_RULES.slowdownFloorShare);
+  return Math.min(Math.ceil(recordedMs / ACCEPTANCE_RULES.slowdownFactor) - 1, floorMs);
+}
+
+/** One engine admission after a 429 of its page+route, against the slowdown
+ *  that 429 owes (A2). */
+export interface SlowdownAdmission {
+  route: string;
+  ref: number;
+  admittedAt: Date;
+  /** The interval it recorded; null: none (an attempt before 0237). */
+  intervalMs: number | null;
+  /** The shortest interval the 429s before it allow; null: none of their
+   *  attempts recorded the interval it was admitted under. */
+  requiredMs: number | null;
+  /** The newest 429 before it. */
+  after: { journal: string; ref: number; at: Date };
+}
+
+export interface SlowdownAudit {
+  /** 429s of the window on a route this build knows. */
+  rateLimited: number;
+  /** Admissions after one, judged against the slowed interval. */
+  admissions: number;
+  /** Admitted under an interval shorter than the slowed one. */
+  violations: SlowdownAdmission[];
+  /** Not judged: no interval on the admission, or on a 429'd attempt before it. */
+  inconclusive: SlowdownAdmission[];
+}
+
+/** When a row's outcome was known: completion, else send, else admission. */
+function doneAtOf(row: FanslySendAuditRow): Date {
+  return row.completedAt ?? row.sentAt ?? row.admittedAt;
+}
+
 /**
- * I19 (`route_budgets`, §2b): every pair of adjacent sends of one canonical
- * route, and of one family, whose later send is an engine admission in the
- * window, against the interval that admission recorded — an unknown outcome
- * at its upper bound, a send provably never made not at all; a send before
- * T_i (the legacy engine's, an earlier build's) is the predecessor of the
- * first one, as the admission counted it. And no recorded interval below its
- * ceiling's. A pair without its recorded interval (an attempt before 0237), or
- * a send this build places on no route, is `inconclusive`.
+ * The slowdown after a 429 (A2: each 429 halves the page+route's rate, never
+ * below ⅛ of its ceiling), on the numbers the admissions recorded: every
+ * engine admission of a route after a 429 of the window on it — whichever
+ * journal's — records an interval no shorter than `slowedIntervalMs` of the
+ * interval that 429's attempt was admitted under. The interval audit alone
+ * cannot see a build that keeps the full rate after a 429: such an admission
+ * records the unslowed interval and keeps it. A 429'd attempt that recorded no
+ * interval (the legacy engine's, one before 0237) leaves the admissions after
+ * it `inconclusive`, as does an admission without its own. Strict as the
+ * acceptance hour is: a deliberate `sync route raise` inside the window reads
+ * as a violation too.
+ */
+export function routeSlowdowns(sends: readonly FanslySendAuditRow[], window: AcceptanceWindow): SlowdownAudit {
+  const byRoute = new Map<FanslyRoute, FanslySendAuditRow[]>();
+  for (const row of sends) {
+    const route = sendAuditRouteOf(row);
+    if (route === null) continue;
+    const list = byRoute.get(route) ?? [];
+    list.push(row);
+    byRoute.set(route, list);
+  }
+  const audit: SlowdownAudit = { rateLimited: 0, admissions: 0, violations: [], inconclusive: [] };
+  for (const [route, rows] of byRoute) {
+    const limits = rows
+      .filter((row) => row.httpStatus === 429 && inWindow(doneAtOf(row), window))
+      .sort((a, b) => doneAtOf(a).getTime() - doneAtOf(b).getTime() || a.ref - b.ref);
+    audit.rateLimited += limits.length;
+    if (limits.length === 0) continue;
+    for (const row of rows) {
+      if (row.journal !== "engine" || row.admittedAt.getTime() >= window.observedUntil.getTime()) continue;
+      const before = limits.filter((limit) => limit !== row && doneAtOf(limit).getTime() < row.admittedAt.getTime());
+      if (before.length === 0) continue;
+      let requiredMs: number | null = null;
+      let unknownBasis = false;
+      for (const limit of before) {
+        if (limit.journal === "engine" && limit.routeIntervalMs !== null) {
+          requiredMs = Math.max(requiredMs ?? 0, slowedIntervalMs(route, limit.routeIntervalMs));
+        } else {
+          unknownBasis = true;
+        }
+      }
+      const newest = before[before.length - 1]!;
+      const admission: SlowdownAdmission = {
+        route,
+        ref: row.ref,
+        admittedAt: row.admittedAt,
+        intervalMs: row.routeIntervalMs,
+        requiredMs,
+        after: { journal: sendAuditJournalOf(newest), ref: newest.ref, at: doneAtOf(newest) },
+      };
+      if (row.routeIntervalMs !== null && requiredMs !== null && row.routeIntervalMs < requiredMs) {
+        audit.admissions += 1;
+        audit.violations.push(admission);
+      } else if (row.routeIntervalMs === null || unknownBasis) {
+        audit.inconclusive.push(admission);
+      } else {
+        audit.admissions += 1;
+      }
+    }
+  }
+  const byTime = (a: SlowdownAdmission, b: SlowdownAdmission) => a.admittedAt.getTime() - b.admittedAt.getTime() || a.ref - b.ref;
+  audit.violations.sort(byTime);
+  audit.inconclusive.sort(byTime);
+  return audit;
+}
+
+/**
+ * I19 (`route_budgets`, §2b): every engine admission of the window against
+ * the newest send its route's clock, and its family's, counted before it —
+ * the adjacent pair — and the interval it recorded; an unknown outcome at its
+ * upper bound as the earlier send and at its admission as the later one, a
+ * send provably never made not at all; a send before T_i (the legacy
+ * engine's, an earlier build's) is the predecessor of the first one, as the
+ * admission counted it. No recorded interval below its ceiling's. And after a
+ * 429 of a route, no admission on it under less than the slowed interval
+ * (`routeSlowdowns`, A2). A pair or an admission without its recorded
+ * interval (an attempt before 0237), a send never recorded that its admission
+ * does not prove, or a send this build places on no route, is `inconclusive`.
  */
 export function routeBudgetsCheck(sends: readonly FanslySendAuditRow[], window: AcceptanceWindow): AcceptanceCheck {
   const audit = auditRouteIntervals(sends, auditWindow(window));
+  const slowdown = routeSlowdowns(sends, window);
   const pair = (entry: (typeof audit.violations)[number]) => ({
     kind: entry.kind,
     scope: entry.scope,
     journal: entry.journal,
     ref: entry.ref,
     at: entry.at.toISOString(),
+    judgedAt: entry.judgedAt,
     prevJournal: entry.prevJournal,
     prevRef: entry.prevRef,
     gapMs: roundTo(entry.gapMs, 1),
     intervalMs: entry.intervalMs,
+    ...(entry.open === null ? {} : { open: entry.open }),
+  });
+  const admission = (entry: SlowdownAdmission) => ({
+    ...entry,
+    admittedAt: entry.admittedAt.toISOString(),
+    after: { ...entry.after, at: entry.after.at.toISOString() },
   });
   return {
     name: "route_budgets",
-    verdict: audit.verdict,
+    verdict: audit.verdict === "fail" || slowdown.violations.length > 0
+      ? "fail"
+      : audit.verdict === "inconclusive" || slowdown.inconclusive.length > 0 ? "inconclusive" : "pass",
     detail: {
       pairs: audit.pairs,
-      violations: audit.violations.length + audit.ceiling.length,
-      inconclusive: audit.inconclusive.length,
+      violations: audit.violations.length + audit.ceiling.length + slowdown.violations.length,
+      inconclusive: audit.inconclusive.length + slowdown.inconclusive.length,
       first: audit.violations.slice(0, 5).map(pair),
       belowCeiling: audit.ceiling.slice(0, 5).map((entry) => ({ ...entry, at: entry.at.toISOString() })),
       firstInconclusive: audit.inconclusive.slice(0, 5).map(pair),
       unplaced: audit.unplaced,
+      slowdown: {
+        rateLimited: slowdown.rateLimited,
+        admissions: slowdown.admissions,
+        violations: slowdown.violations.length,
+        inconclusive: slowdown.inconclusive.length,
+        first: slowdown.violations.slice(0, 5).map(admission),
+        firstInconclusive: slowdown.inconclusive.slice(0, 5).map(admission),
+      },
       scopes: audit.scopes.map((entry) => ({
         kind: entry.kind,
         scope: entry.scope,

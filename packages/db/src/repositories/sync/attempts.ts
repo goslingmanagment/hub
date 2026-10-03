@@ -763,6 +763,9 @@ export const SYNC_SEND_AUDIT_LOOKBACK_MS = 10 * 60_000;
  *  legacy send log. */
 export interface FanslySendAuditRow {
   journal: "engine" | "legacy";
+  /** The shadow journal's: its sends are simulated, so an attempt without a
+   *  send instant simulated none (the takeover floor never counts it). */
+  shadow: boolean;
   /** `fansly_send_log.source` of a legacy row; null for the engine. */
   source: string | null;
   /** The row's id in its journal. */
@@ -771,6 +774,9 @@ export interface FanslySendAuditRow {
   operation: string;
   /** The engine attempt's owner generation; null for a legacy row. */
   ownerGeneration: bigint | null;
+  /** The admission (`admitted_at`; a legacy row's capture): no byte of the
+   *  request left before it — the lower bound of a send never recorded. */
+  admittedAt: Date;
   /** The recorded actual send instant (`sent_at`); null: none recorded. */
   sentAt: Date | null;
   /** Where the route clocks count it (`readRouteJournal`): the recorded send,
@@ -788,6 +794,10 @@ export interface FanslySendAuditRow {
    *  legacy row. */
   routeIntervalMs: number | null;
   familyIntervalMs: number | null;
+  /** The answer's status and when the outcome was recorded (a 429 slows its
+   *  route for every admission after it). */
+  httpStatus: number | null;
+  completedAt: Date | null;
 }
 
 /**
@@ -795,8 +805,9 @@ export interface FanslySendAuditRow {
  * switch check`, the shadow report): every row of a page's engine journal
  * (`shadow` picks the shadow one) and — with `legacy` — of the step-1 legacy
  * send log admitted (captured) in [since − `lookbackMs`, until), with what
- * the audit compares: the recorded send instant and its upper bound, the
- * pause and the route and family intervals each admission applied. Two short
+ * the audit compares: the admission, the recorded send instant and its upper
+ * bound, the pause and the route and family intervals each admission applied,
+ * the answer's status. Two short
  * range scans (`sync_attempts_page_admitted`, `fansly_send_log_page_captured_idx`);
  * the rules are the audit's (`apps/runtime/src/sync/engine/send-audit.ts`).
  */
@@ -818,6 +829,7 @@ export async function readFanslySendAudit(
     ref: string;
     operation: string;
     ownerGeneration: string | null;
+    admittedAt: Date | string;
     sentAt: Date | string | null;
     countedAt: Date | string | null;
     settingMs: number | string | null;
@@ -825,23 +837,27 @@ export async function readFanslySendAudit(
     gapPrevMs: number | string | null;
     routeIntervalMs: number | string | null;
     familyIntervalMs: number | string | null;
+    httpStatus: number | string | null;
+    completedAt: Date | string | null;
   }>(sql`
     select 'engine'::text as journal, null::text as source, a.id::text as ref, a.operation,
-           a.owner_generation::text as "ownerGeneration", a.sent_at as "sentAt",
+           a.owner_generation::text as "ownerGeneration", a.admitted_at as "admittedAt", a.sent_at as "sentAt",
            case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow')
                 then coalesce(a.sent_at, a.admitted_at + ${sendWindow}) end as "countedAt",
            a.setting_ms as "settingMs", a.pause_ms as "pauseMs", a.gap_prev_ms as "gapPrevMs",
-           a.route_interval_ms as "routeIntervalMs", a.family_interval_ms as "familyIntervalMs"
+           a.route_interval_ms as "routeIntervalMs", a.family_interval_ms as "familyIntervalMs",
+           a.http_status as "httpStatus", a.completed_at as "completedAt"
       from sync_attempts a
      where a.page_id = ${input.pageId}
        and a.shadow = ${shadow}::boolean
        and a.admitted_at >= ${from}
        and a.admitted_at < ${until}
     union all
-    select 'legacy'::text, l.source, l.id::text, l.operation, null::text, l.sent_at,
+    select 'legacy'::text, l.source, l.id::text, l.operation, null::text, l.captured_at, l.sent_at,
            case when l.sent_at is not null or l.outcome is distinct from 'aborted_before_send'
                 then coalesce(l.sent_at, l.completed_at, l.lease_until, l.captured_at + ${sendWindow}) end,
-           l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer
+           l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer,
+           l.http_status, l.completed_at
       from fansly_send_log l
      where ${legacy}::boolean
        and l.page_id = ${input.pageId}
@@ -851,10 +867,12 @@ export async function readFanslySendAudit(
   const num = (value: number | string | null): number | null => (value === null ? null : Number(value));
   return result.rows.map((row) => ({
     journal: row.journal,
+    shadow,
     source: row.source,
     ref: Number(row.ref),
     operation: row.operation,
     ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
+    admittedAt: toRequiredDate(row.admittedAt),
     sentAt: toDate(row.sentAt),
     countedAt: toDate(row.countedAt),
     settingMs: num(row.settingMs),
@@ -862,6 +880,8 @@ export async function readFanslySendAudit(
     gapPrevMs: num(row.gapPrevMs),
     routeIntervalMs: num(row.routeIntervalMs),
     familyIntervalMs: num(row.familyIntervalMs),
+    httpStatus: num(row.httpStatus),
+    completedAt: toDate(row.completedAt),
   }));
 }
 

@@ -460,7 +460,8 @@ function summaryOf(
       lines.push(`A3 offline decisions over ${offline.receipts} receipts of the previous 24 h: `
         + offline.byResource.map((row) => `${row.resource} ${row.reads} reads / ${row.signals} signals`).join("; "));
     }
-    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the setting`);
+    lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the later send's pause`
+      + `${window.pacer.inconclusive === 0 ? "" : `; ${window.pacer.inconclusive} not judged (inconclusive)`}`);
   }
   if (routes !== null) lines.push(...routeCheckLines(routes));
   for (const row of media ?? []) {

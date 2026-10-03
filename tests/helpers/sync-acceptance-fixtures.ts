@@ -15,7 +15,9 @@ import type { AcceptanceCheckName, CheckVerdict, PageVerdict } from "../../apps/
 // rotating over four routes well inside their budgets, each attempt recording
 // the pause and the route and family intervals its admission applied (as the
 // runtime does), the first media request 17 s after live, ten-plus samples of
-// every latency SLO — and its scenario changes only what it is about.
+// every latency SLO — and its scenario changes only what it is about. A 429
+// (`rateLimit`) leaves what the engine leaves: the admissions of its route
+// after it record the halved rate.
 
 /** What an admission on `route` records at the table's `current` rates. */
 export function currentIntervals(route: FanslyRoute): RouteAdmissionIntervals {
@@ -69,6 +71,11 @@ export interface SeededPage {
   liveAt: Date;
   /** Change the engine attempt of `slot`. */
   setSlot(slot: number, columns: Record<string, string | number | null>): Promise<void>;
+  /** The attempt of `slot` answered 429, and the slowdown the engine applies
+   *  for it (A2): every later admission of its route records twice the
+   *  interval that attempt was admitted under, never more than ⅛ of the
+   *  ceiling's rate gives. */
+  rateLimit(slot: number, columns?: Record<string, string | number | null>): Promise<void>;
   slotOf(operation: (typeof ROTATION)[number]["operation"], fromSlot: number): number;
 }
 
@@ -118,6 +125,25 @@ async function setSlot(pool: Pool, pageId: number, liveAt: Date, slot: number, c
   if (result.rowCount !== 1) throw new Error(`No attempt in slot ${slot} of page ${pageId}`);
 }
 
+async function rateLimit(
+  pool: Pool,
+  pageId: number,
+  liveAt: Date,
+  slot: number,
+  columns: Record<string, string | number | null> = {},
+): Promise<void> {
+  await setSlot(pool, pageId, liveAt, slot, { http_status: 429, error_class: "rate_limit", ...columns });
+  const route = ROTATION[slot % ROTATION.length]!.operation;
+  await pool.query(
+    `update sync_attempts a
+        set route_interval_ms = least(2 * limited.route_interval_ms, $4::int)
+       from sync_attempts limited
+      where limited.page_id = $1 and limited.admitted_at = $2::timestamptz + make_interval(secs => $3::double precision)
+        and a.page_id = limited.page_id and a.operation = limited.operation and a.admitted_at > limited.admitted_at`,
+    [pageId, liveAt, slotAt(slot), intervalMsOf(routeBudget(route).ceilingPerMin / 8)],
+  );
+}
+
 export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
   {
     // A clean hour. The handover's page stop (a legacy 429 hold imported at
@@ -143,7 +169,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedRoutes: { "messages.page": "recovered" },
     async apply(page) {
       const slot = page.slotOf("messages.page", 200);
-      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await page.rateLimit(slot, { retry_after_ms: null });
       await engineLatch(page, "route_limited:messages.page", "route_held", [{ openedS: slotAt(slot) + 0.4, resolvedS: null, lastSeenS: slotAt(slot) + 6 }]);
     },
   },
@@ -157,7 +183,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedRoutes: { "messages.page": "recovered" },
     async apply(page) {
       const slot = page.slotOf("messages.page", 200);
-      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit", retry_after_ms: null });
+      await page.rateLimit(slot, { retry_after_ms: null });
       await engineLatch(page, "page_stopped", "rate_limit", [{ openedS: slotAt(slot) + 0.4, resolvedS: slotAt(slot) + 665 }]);
     },
   },
@@ -182,8 +208,8 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "fail" },
     expectedRoutes: { "messages.page": "repeated" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", 200), { http_status: 429, error_class: "rate_limit" });
-      await page.setSlot(page.slotOf("messages.page", 400), { http_status: 429, error_class: "rate_limit", resource: "dm-messages.head" });
+      await page.rateLimit(page.slotOf("messages.page", 200));
+      await page.rateLimit(page.slotOf("messages.page", 400), { resource: "dm-messages.head" });
     },
   },
   {
@@ -193,8 +219,8 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "pass", route_budgets: "pass" },
     expectedRoutes: { "messages.page": "recovered", "group.detail": "recovered" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", 200), { http_status: 429, error_class: "rate_limit", retry_after_ms: 10_000 });
-      await page.setSlot(page.slotOf("group.detail", 300), { http_status: 429, error_class: "rate_limit" });
+      await page.rateLimit(page.slotOf("messages.page", 200), { retry_after_ms: 10_000 });
+      await page.rateLimit(page.slotOf("group.detail", 300));
     },
   },
   {
@@ -225,7 +251,7 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     expectedChecks: { route_429: "inconclusive" },
     expectedRoutes: { "messages.page": "unproven" },
     async apply(page) {
-      await page.setSlot(page.slotOf("messages.page", SENDS - 4), { http_status: 429, error_class: "rate_limit" });
+      await page.rateLimit(page.slotOf("messages.page", SENDS - 4));
     },
   },
   {
@@ -269,20 +295,28 @@ export const ACCEPTANCE_SCENARIOS: readonly AcceptanceScenario[] = [
     },
   },
   {
-    // One media 429, recovered; the admissions after it recorded the halved
-    // rate (2.5/min: 24 s), but the route went on every 20 s.
+    // One media 429, recovered, but the route kept its full rate after it:
+    // the admissions after the 429 still recorded the unslowed 12 s (5/min)
+    // where the halved 2.5/min is 24 s. Every pair keeps the interval its
+    // admission recorded — only the slowdown rule (A2) sees it.
     label: "acc-slowdown",
+    expected: "fail",
+    expectedChecks: { route_budgets: "fail", pace_combined: "pass", route_429: "pass" },
+    expectedRoutes: { "media.offer_stats": "recovered" },
+    async apply(page) {
+      await page.setSlot(page.slotOf("media.offer_stats", 200), { http_status: 429, error_class: "rate_limit" });
+    },
+  },
+  {
+    // The same 429 with the slowdown applied — the admissions after it
+    // recorded the halved rate (2.5/min: 24 s) — but the route went on every
+    // 20 s: each pair closer than the interval it was admitted under.
+    label: "acc-slowdown-gap",
     expected: "fail",
     expectedChecks: { route_budgets: "fail", route_429: "pass" },
     expectedRoutes: { "media.offer_stats": "recovered" },
     async apply(page) {
-      const slot = page.slotOf("media.offer_stats", 200);
-      await page.setSlot(slot, { http_status: 429, error_class: "rate_limit" });
-      await page.pool.query(
-        `update sync_attempts set route_interval_ms = 24000
-          where page_id = $1 and operation = 'media.offer_stats' and admitted_at > $2::timestamptz + make_interval(secs => $3::double precision)`,
-        [page.pageId, page.liveAt, slotAt(slot)],
-      );
+      await page.rateLimit(page.slotOf("media.offer_stats", 200));
     },
   },
   {
@@ -414,6 +448,7 @@ export async function seedAcceptanceScenarios(db: Database, pool: Pool): Promise
       label: scenario.label,
       liveAt,
       setSlot: (slot, columns) => setSlot(pool, pageId, liveAt, slot, columns),
+      rateLimit: (slot, columns) => rateLimit(pool, pageId, liveAt, slot, columns),
       slotOf,
     });
     pages.push({ ...scenario, pageId });

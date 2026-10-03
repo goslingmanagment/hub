@@ -6,6 +6,7 @@ import {
   auditPagePace,
   auditRouteIntervals,
   intervalGapViolates,
+  judgePaceGap,
   paceGapViolates,
   SEND_AUDIT_CLOCK_TOLERANCE_MS,
   sendAuditJournalOf,
@@ -16,25 +17,29 @@ import { FAMILY_BUDGETS, intervalMsOf, routeBudget } from "../apps/runtime/src/s
 
 // The send audit (invariants I1 and I19; arena 3b-review G1), pure: the one
 // checker of the alert evaluator, `sync switch check` and the shadow report.
-// I1 by each send's own recorded pause, I19 by each admission's recorded
-// route and family intervals over adjacent pairs — with the arena's two
-// counterexamples the earlier checks passed — and the independent ceiling
-// bound.
+// I1 by each send's own recorded pause — on the recorded instants and, one
+// owner's pair, on its pacer's monotonic gap too — I19 by each admission's
+// recorded route and family intervals over adjacent pairs — with the arena's
+// two counterexamples the earlier checks passed — the independent ceiling
+// bound, and a send whose instant was never recorded: at its upper bound as
+// the earlier send of a pair, at its admission as the later one.
 
 const T0 = Date.parse("2026-10-03T10:00:00.000Z");
 const at = (seconds: number) => new Date(T0 + seconds * 1_000);
 const WINDOW: SendAuditWindow = { start: at(0), until: at(3_600) };
 
 let ref = 0;
-/** A recorded engine send `seconds` after T0. */
+/** A recorded engine send `seconds` after T0, admitted 50 ms before it. */
 function engine(seconds: number, operation: string, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow {
   ref += 1;
   return {
     journal: "engine",
+    shadow: false,
     source: null,
     ref,
     operation,
     ownerGeneration: 1n,
+    admittedAt: at(seconds - 0.05),
     sentAt: at(seconds),
     countedAt: at(seconds),
     settingMs: 2_500,
@@ -42,8 +47,19 @@ function engine(seconds: number, operation: string, overrides: Partial<FanslySen
     gapPrevMs: null,
     routeIntervalMs: 4_000,
     familyIntervalMs: null,
+    httpStatus: 200,
+    completedAt: at(seconds + 0.3),
     ...overrides,
   };
+}
+
+/** An engine attempt admitted `seconds` after T0 whose send instant was never
+ *  recorded (in flight, or left by a killed process): it may have gone out
+ *  anywhere up to its admission + the 15 s send window. */
+function unrecorded(seconds: number, operation: string, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow {
+  return engine(seconds, operation, {
+    admittedAt: at(seconds), sentAt: null, countedAt: at(seconds + 15), httpStatus: null, completedAt: null, ...overrides,
+  });
 }
 
 /** A legacy send log row `seconds` after T0. */
@@ -79,7 +95,7 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
   it("measures one owner's pair on the monotonic clock it recorded, exactly; another owner's on the wall clocks, with the tolerance", () => {
     // The wall clocks say 2.8 s, the pacer's monotonic clock 2 600 ms: the monotonic gap is the send's.
     const mono = [engine(10, "notifications.page"), engine(12.8, "notifications.page", { pauseMs: 2_750, gapPrevMs: 2_600 })];
-    expect(auditPagePace(mono, WINDOW).violations).toEqual([expect.objectContaining({ gapMs: 2_600, clock: "monotonic" })]);
+    expect(auditPagePace(mono, WINDOW).violations).toEqual([expect.objectContaining({ gapMs: 2_600, clock: "monotonic", wallGapMs: 2_800 })]);
     // One millisecond short on the monotonic clock fails; on the wall clocks it is within the tolerance.
     expect(auditPagePace([mono[0]!, { ...mono[1]!, gapPrevMs: 2_749 }], WINDOW).verdict).toBe("fail");
     const otherOwner = { ...mono[1]!, ownerGeneration: 2n, gapPrevMs: null };
@@ -92,6 +108,41 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(paceGapViolates(2_750 - SEND_AUDIT_CLOCK_TOLERANCE_MS, "wall", 2_750)).toBe(false);
   });
 
+  it("the arena's counterexample as ONE owner journals it: the pacer's own gap says 2 750, the recorded sends are 2 600 ms apart — never a pass", () => {
+    // The pacer refuses a send on the same number it then records, so
+    // `gap_prev_ms` is never short of the pause while the pacer remembers the
+    // right previous send; the recorded instants are the independent witness.
+    const pair = [engine(10, "notifications.page"), engine(12.6, "notifications.page", { pauseMs: 2_750, gapPrevMs: 2_750 })];
+    const audit = auditPagePace(pair, WINDOW);
+    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
+    expect(audit.inconclusive).toEqual([expect.objectContaining({
+      ref: pair[1]!.ref, open: "clocks_disagree", clock: "monotonic", gapMs: 2_750, wallGapMs: 2_600, pauseMs: 2_750,
+    })]);
+    // Within the clock tolerance the two clocks agree: a pass, on the monotonic gap.
+    expect(auditPagePace([pair[0]!, { ...pair[1]!, sentAt: at(12.749) }], WINDOW))
+      .toMatchObject({ verdict: "pass", pairs: 1, minGapMs: 2_750, minMarginMs: 0 });
+  });
+
+  it("one owner's sends closer than the setting itself on the recorded clocks fail, whatever its pacer recorded (the rule before the pause was known)", () => {
+    // A pacer that remembers a stale previous send: 1 000 / 1 750 / 1 000 ms
+    // apart on `sent_at`, each recording a monotonic gap of 2 750.
+    const stale = { pauseMs: 2_750, gapPrevMs: 2_750 };
+    const rows = [
+      engine(10, "notifications.page"), engine(11, "transactions.page", stale),
+      engine(12.75, "notifications.page", stale), engine(13.75, "transactions.page", stale),
+    ];
+    const audit = auditPagePace(rows, WINDOW);
+    expect(audit).toMatchObject({ verdict: "fail", pairs: 3, inconclusive: [], minGapMs: 1_000 });
+    expect(audit.violations.map((pair) => [pair.gapMs, pair.clock])).toEqual([[1_000, "wall"], [1_750, "wall"], [1_000, "wall"]]);
+    // The one rule, as the capture applies it to the send it just made.
+    expect(judgePaceGap({ monoGapMs: 2_750, wallGapMs: 1_000, pauseMs: 2_750, settingMs: 2_500 })).toEqual({ verdict: "fail", clock: "wall", gapMs: 1_000 });
+    expect(judgePaceGap({ monoGapMs: 2_750, wallGapMs: 2_600, pauseMs: 2_750, settingMs: 2_500 })).toMatchObject({ verdict: "clocks_disagree" });
+    expect(judgePaceGap({ monoGapMs: 2_600, wallGapMs: 2_800, pauseMs: 2_750, settingMs: 2_500 })).toEqual({ verdict: "fail", clock: "monotonic", gapMs: 2_600 });
+    expect(judgePaceGap({ monoGapMs: null, wallGapMs: 2_600, pauseMs: 2_750, settingMs: 2_500 })).toEqual({ verdict: "fail", clock: "wall", gapMs: 2_600 });
+    expect(judgePaceGap({ monoGapMs: 2_751, wallGapMs: 2_750, pauseMs: 2_750, settingMs: 2_500 })).toEqual({ verdict: "pass", clock: "monotonic", gapMs: 2_751 });
+    expect(judgePaceGap({ monoGapMs: null, wallGapMs: null, pauseMs: 2_750, settingMs: 2_500 })).toBeNull();
+  });
+
   it("judges a pair straddling the handover across the journals, and a legacy send by its own recorded pause", () => {
     const rows = [legacy(10, "messages", { pauseMs: 2_400 }), engine(12.2, "messages.page", { pauseMs: 2_500, gapPrevMs: null })];
     const audit = auditPagePace(rows, WINDOW);
@@ -101,11 +152,43 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(auditPagePace([engine(10, "messages.page"), legacy(12.3, "messages", { pauseMs: 2_400 })], WINDOW).verdict).toBe("fail");
   });
 
-  it("a pair whose later send recorded no pause is inconclusive, never a pass; sends never recorded are not pairs", () => {
+  it("a pair whose later send recorded no pause is inconclusive, never a pass; a send provably never made is no pair", () => {
     const rows = [engine(10, "notifications.page"), legacy(20, "messages", { pauseMs: null })];
-    expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "inconclusive", pairs: 0, inconclusive: [expect.objectContaining({ pauseMs: null })] });
+    expect(auditPagePace(rows, WINDOW)).toMatchObject({
+      verdict: "inconclusive", pairs: 0, inconclusive: [expect.objectContaining({ pauseMs: null, open: "no_pause" })],
+    });
     const unsent = engine(11, "notifications.page", { sentAt: null, countedAt: null });
     expect(auditPagePace([engine(10, "notifications.page"), unsent, engine(13, "notifications.page")], WINDOW)).toMatchObject({ verdict: "pass", pairs: 1 });
+  });
+
+  it("a send never recorded is not dropped: judged at its admission as the later send, counted at its upper bound as the earlier one", () => {
+    // A kill -9 with a request in flight: admitted 3 s after the previous
+    // send (≥ its pause), its send never marked. Whenever it left, it left
+    // after its admission: the pair is proven.
+    const left = unrecorded(13, "notifications.page", { pauseMs: 2_750 });
+    const before = engine(10, "transactions.page");
+    const proven = auditPagePace([before, left], WINDOW);
+    expect(proven).toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
+    // Admitted 1 s after the previous send: only its send instant could tell,
+    // and nobody recorded it — inconclusive, where it used to vanish.
+    const early = auditPagePace([before, unrecorded(11, "notifications.page", { pauseMs: 2_750 })], WINDOW);
+    expect(early).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
+    expect(early.inconclusive).toEqual([expect.objectContaining({ open: "send_not_recorded", judgedAt: "admission", wallGapMs: 1_000, pauseMs: 2_750 })]);
+    // The next owner's first send: the takeover floor counts the unknown one
+    // at its upper bound (13 + 15 = 28 s), so 29 s is too close and 31 s is not.
+    const takeover = (seconds: number) => engine(seconds, "transactions.page", { ownerGeneration: 2n, pauseMs: 2_750 });
+    const close = auditPagePace([before, left, takeover(29)], WINDOW);
+    expect(close.violations).toEqual([expect.objectContaining({ prevRef: left.ref, gapMs: 1_000, clock: "wall", judgedAt: "send" })]);
+    expect(auditPagePace([before, left, takeover(31)], WINDOW)).toMatchObject({ verdict: "pass", pairs: 2 });
+    // Without it the pair would silently be (previous recorded send → next send): 19 s, a pass.
+    expect(auditPagePace([before, takeover(29)], WINDOW).verdict).toBe("pass");
+  });
+
+  it("the shadow journal's sends are simulated: an attempt without an instant simulated none", () => {
+    const shadow = { shadow: true };
+    const closed = unrecorded(11, "notifications.page", shadow);
+    const rows = [engine(10, "notifications.page", shadow), closed, engine(13, "notifications.page", shadow)];
+    expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
   });
 
   it("judges the later sends of the window only; an earlier one is the first one's predecessor", () => {
@@ -157,12 +240,51 @@ describe("I19: every pair of adjacent sends of a route and of a family ≥ the i
 
   it("counts an unknown outcome at its upper bound and a send provably never made not at all, as the admission does", () => {
     // Admitted at 100, never marked: it counts at 115 (admission + the send window).
-    const unknown = engine(115, "notifications.page", { sentAt: null });
+    const unknown = unrecorded(100, "notifications.page");
     expect(auditRouteIntervals([engine(90, "notifications.page"), unknown, engine(117, "notifications.page")], WINDOW).violations)
-      .toEqual([expect.objectContaining({ prevRef: unknown.ref, gapMs: 2_000 })]);
+      .toEqual([expect.objectContaining({ prevRef: unknown.ref, gapMs: 2_000, judgedAt: "send" })]);
+    expect(auditRouteIntervals([engine(90, "notifications.page"), unknown, engine(119, "notifications.page")], WINDOW))
+      .toMatchObject({ verdict: "pass", pairs: 2 });
     const neverSent = engine(100, "notifications.page", { sentAt: null, countedAt: null });
     expect(auditRouteIntervals([engine(90, "notifications.page"), neverSent, engine(95, "notifications.page")], WINDOW))
       .toMatchObject({ verdict: "pass", pairs: 1 });
+  });
+
+  it("judges a later send that was never recorded at its admission, never at its upper bound", () => {
+    // The previous send at 100 s; the next attempt admitted 1 s later on a 4 s
+    // route, its send never marked. At its upper bound (116 s) no interval up
+    // to 15 s could fail it — a judged pass it never earned. Its admission
+    // came before the route opened; when it left, nobody recorded.
+    const early = unrecorded(101, "notifications.page");
+    const audit = auditRouteIntervals([engine(100, "notifications.page"), early], WINDOW);
+    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
+    expect(audit.inconclusive).toEqual([expect.objectContaining({
+      ref: early.ref, open: "send_not_recorded", judgedAt: "admission", at: at(101), prevAt: at(100), gapMs: 1_000, intervalMs: 4_000,
+    })]);
+    expect(audit.scopes).toEqual([expect.objectContaining({ scope: "notifications.page", sends: 2, pairs: 0, inconclusive: 1 })]);
+    // Admitted once the route was open: proven, whenever it left.
+    expect(auditRouteIntervals([engine(100, "notifications.page"), unrecorded(104, "notifications.page")], WINDOW))
+      .toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
+    // The family's pair the same way.
+    const family = { routeIntervalMs: 4_000, familyIntervalMs: 4_000 };
+    expect(auditRouteIntervals([engine(100, "messages.page", family), unrecorded(102, "group.detail", family)], WINDOW).inconclusive)
+      .toEqual([expect.objectContaining({ kind: "family", scope: "messaging", open: "send_not_recorded", gapMs: 2_000 })]);
+  });
+
+  it("holds an admission to the route's clock as it read it: an unknown send before it counts at its upper bound even when the next one was sent inside it", () => {
+    // Admitted at 100 and never marked (counted at 115); the next send of the
+    // route went out at 113 — inside the unknown one's window, 2 s before the
+    // clock it had to wait an interval after. The earlier send (90 s) is not
+    // its predecessor, nor is the unknown one judged against a send admitted
+    // after it.
+    const unknown = unrecorded(100, "notifications.page");
+    const inside = engine(113, "notifications.page");
+    const audit = auditRouteIntervals([engine(90, "notifications.page"), unknown, inside], WINDOW);
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: inside.ref, prevRef: unknown.ref, prevAt: at(115), gapMs: -2_000 })]);
+    expect(audit).toMatchObject({ pairs: 2, inconclusive: [] });
+    // A legacy send after the unknown one's admission (a hand-back) is no predecessor of it either.
+    const handedBack = auditRouteIntervals([engine(90, "notifications.page"), unknown, legacy(105, "notifications_page")], WINDOW);
+    expect(handedBack).toMatchObject({ verdict: "pass", pairs: 1, violations: [] });
   });
 
   it("takes a legacy send as the predecessor the admission counted, and leaves a legacy later send to the legacy policy", () => {
@@ -188,7 +310,7 @@ describe("I19: every pair of adjacent sends of a route and of a family ≥ the i
   it("a pair without its recorded interval (an attempt before 0237) is inconclusive, never a pass", () => {
     const old = stream("notifications.page", 100, 2.8, 3, { routeIntervalMs: null });
     expect(auditRouteIntervals(old, WINDOW)).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
-    expect(auditRouteIntervals(old, WINDOW).inconclusive).toHaveLength(2);
+    expect(auditRouteIntervals(old, WINDOW).inconclusive.map((pair) => pair.open)).toEqual(["no_interval", "no_interval"]);
     // A family route whose admission recorded no family interval: the family pair is unknown.
     const drift = stream("messages.page", 100, 5, 2, { familyIntervalMs: null });
     expect(auditRouteIntervals(drift, WINDOW)).toMatchObject({

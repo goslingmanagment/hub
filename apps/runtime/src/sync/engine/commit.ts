@@ -105,7 +105,7 @@ import {
   type WorkOutcome,
 } from "./resource.ts";
 import { parseRouteState, ROUTE_STATE_VERSION, type RouteAdmissionIntervals } from "./route-policy.ts";
-import { paceGapViolates } from "./send-audit.ts";
+import { judgePaceGap, paceGapViolates } from "./send-audit.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The transactions of one step (plan §8, design §3.7). Each runs as ONE short
@@ -1166,13 +1166,19 @@ export async function capture(
   }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4, I1): this send against the page's
-  // previous send — this pacer's on the monotonic clock, else the recorded one
-  // of ANY owner on the wall clocks — short of its own pause opens alert 1
-  // (the evaluator's send audit re-reads it by the same rule).
-  const paceGap = armed.gapPrevMs !== null
-    ? { ms: armed.gapPrevMs, clock: "monotonic" as const }
-    : committed.paceGapMs === null ? null : { ms: committed.paceGapMs, clock: "wall" as const };
-  if (paceGap !== null && paceGapViolates(paceGap.ms, paceGap.clock, armed.pauseMs)) {
+  // previous send by both clocks — this pacer's monotonic gap against its own
+  // pause, and the recorded instants of ANY owner (`paceGapMs`) as the
+  // independent test: closer than the setting whatever the pacer measured,
+  // short of the pause when no monotonic gap vouches for the pair. A
+  // violation opens alert 1 (the evaluator's send audit re-reads the journal
+  // by the same rule, and reports the pairs whose clocks disagree).
+  const pace = judgePaceGap({
+    monoGapMs: armed.gapPrevMs,
+    wallGapMs: committed.paceGapMs,
+    pauseMs: armed.pauseMs,
+    settingMs: armed.settingMs,
+  });
+  if (pace?.verdict === "fail") {
     alerts.push({ subKey: "page_stopped", detail: "pace_violation" });
     d.metrics.increment("sync_pace_violations", { pageId: d.pageId });
   }

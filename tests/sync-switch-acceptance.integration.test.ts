@@ -9,7 +9,7 @@ import { seedAcceptanceScenarios, type SeededAcceptance } from "./helpers/sync-a
 
 // The live-hour acceptance (step 3b ruling 13, A6; plan PR 1-11) on its
 // shared fixtures: `pnpm cli sync switch check` (switch/acceptance.ts) judges
-// fourteen pages of one shared window — each after a stretch of legacy reads
+// fifteen pages of one shared window — each after a stretch of legacy reads
 // denser than the budgets, which are not the window's — page by page, check
 // by check and route by route: a clean hour after a handover stop that ended
 // before live (pass), one route 429 with its route incident open (recovered:
@@ -20,9 +20,10 @@ import { seedAcceptanceScenarios, type SeededAcceptance } from "./helpers/sync-a
 // (fail), a page hold the journal alone still shows (fail), a late 429 whose
 // recovery is unproven (inconclusive), an open work's age in the SLO tail
 // (fail), a small sample (inconclusive), a route closer than its recorded
-// interval (fail), a route faster than the halved interval its admissions
-// recorded after a 429 (fail), and the arena's 15 sends 2.8 s apart on a 4 s
-// route that no window count catches (fail).
+// interval (fail), a route at full rate after its 429 — its admissions still
+// recording the unslowed interval (fail), a route faster than the halved
+// interval its admissions recorded after a 429 (fail), and the arena's 15
+// sends 2.8 s apart on a 4 s route that no window count catches (fail).
 
 let testDb: StartedTestDatabase | null = null;
 let seeded: SeededAcceptance | null = null;
@@ -61,7 +62,7 @@ describe("the live-hour acceptance on its shared fixtures", () => {
 
   it.for([
     "acc-clean", "acc-route-429", "acc-page-429", "acc-stop-history", "acc-same-route", "acc-two-routes", "acc-auth-403",
-    "acc-page-hold", "acc-late-429", "acc-slo-tail", "acc-small-sample", "acc-budget", "acc-slowdown", "acc-route-gap",
+    "acc-page-hold", "acc-late-429", "acc-slo-tail", "acc-small-sample", "acc-budget", "acc-slowdown", "acc-slowdown-gap", "acc-route-gap",
   ])("%s: the scenario's verdict, check by check", (label, context) => {
     if (!seeded) return context.skip();
     const scenario = seeded.pages.find((page) => page.label === label)!;
@@ -95,10 +96,26 @@ describe("the live-hour acceptance on its shared fixtures", () => {
     expect((budget.first as Array<Record<string, unknown>>)[0]).toMatchObject({
       kind: "route", scope: "media.offer_stats", journal: "engine", gapMs: 5_000, intervalMs: 12_000,
     });
-    // After the 429, the halved interval the admissions recorded: every 20 s is short of 24 s.
+    // At full rate after its 429: every pair keeps the 12 s its admission
+    // recorded, and each of the 128 media admissions after the 429 owes 24 s.
     const slowdown = runtimePage("acc-slowdown").checks.find((check) => check.name === "route_budgets")!.detail;
-    expect((slowdown.first as Array<Record<string, unknown>>)[0]).toMatchObject({
+    expect(slowdown).toMatchObject({
+      violations: 128, inconclusive: 0, first: [], belowCeiling: [],
+      slowdown: { rateLimited: 1, admissions: 128, violations: 128, inconclusive: 0 },
+    });
+    expect((slowdown.slowdown as { first: Array<Record<string, unknown>> }).first[0]).toMatchObject({
+      route: "media.offer_stats", intervalMs: 12_000, requiredMs: 23_999, after: expect.objectContaining({ journal: "engine" }),
+    });
+    // The slowdown applied — the halved interval the admissions recorded —
+    // and not kept: every 20 s is short of 24 s.
+    const slowdownGap = runtimePage("acc-slowdown-gap").checks.find((check) => check.name === "route_budgets")!.detail;
+    expect(slowdownGap).toMatchObject({ violations: 128, slowdown: { rateLimited: 1, admissions: 128, violations: 0, inconclusive: 0 } });
+    expect((slowdownGap.first as Array<Record<string, unknown>>)[0]).toMatchObject({
       kind: "route", scope: "media.offer_stats", gapMs: 20_000, intervalMs: 24_000,
+    });
+    // A recovered 429 whose route was slowed and kept its interval: accepted.
+    expect(runtimePage("acc-route-429").checks.find((check) => check.name === "route_budgets")!.detail).toMatchObject({
+      violations: 0, inconclusive: 0, slowdown: { rateLimited: 1, violations: 0, inconclusive: 0 },
     });
     // The arena's counterexample: 14 pairs 2.8 s apart on a 4 s route; the page's pace held.
     const gap = runtimePage("acc-route-gap").checks;

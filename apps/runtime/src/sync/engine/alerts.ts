@@ -53,14 +53,14 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // path's partial view. Alert 1's pace violation has its own latch
 // (`page_stopped:pace_violation`), resolved only by the owner (`pnpm cli sync
 // alerts ack`): the send audit (`engine/send-audit.ts`) opens it for two sends
-// of a page closer than the later one's pause (I1) and for two sends of a
-// route or family closer than the interval the later one was admitted under,
-// or an interval below its ceiling's (I19). A 429 holds one route of a page,
-// never the page: its incident
-// is the route's own (`route_limited:<route>`, step 3b D5) — opened by the
-// capture on the route's first 429, refreshed (never repeated) by the next
-// ones and by the evaluator while the route is held, resolved 10 clean
-// minutes after.
+// of a page closer than the later one's pause (I1: on the recorded instants,
+// and one owner's pair on its pacer's monotonic gap too) and for two sends of
+// a route or family closer than the interval the later one was admitted
+// under, or an interval below its ceiling's (I19). A 429 holds one route of a
+// page, never the page: its incident is the route's own
+// (`route_limited:<route>`, step 3b D5) — opened by the capture on the route's
+// first 429, refreshed (never repeated) by the next ones and by the evaluator
+// while the route is held, resolved 10 clean minutes after.
 //
 // Pages: `handover` and `live` page the owner. A `shadow` page's alerts are
 // metrics only (D14): the golden-signal sampler counts them
@@ -631,7 +631,9 @@ export class SyncAlertEvaluator {
    *  pair straddling the handover or a rollback is seen too (step-3 §3.5
    *  item 2, G4, E12). Every violation opens (refreshes) the permanent pace
    *  latch as of its send; an acknowledged one never reopens it. A pair it
-   *  cannot judge (an attempt admitted before 0237) pages nobody. */
+   *  cannot judge (an attempt admitted before 0237, two clocks that disagree,
+   *  a send never recorded that its admission does not prove) pages nobody:
+   *  it is counted, and no acceptance passes on it. */
   async #auditSends(page: SyncPageRow): Promise<{ pace: number; intervals: number; inconclusive: number }> {
     // From the last pass (with an overlap), never further back than the first
     // pass reads (a page back in the engine after a while starts there).
@@ -662,6 +664,7 @@ export class SyncAlertEvaluator {
         previousRef: pair.prevRef,
         gapMs: Math.round(pair.gapMs * 10) / 10,
         clock: pair.clock,
+        wallGapMs: Math.round(pair.wallGapMs * 10) / 10,
         pauseMs: pair.pauseMs,
       });
     }
