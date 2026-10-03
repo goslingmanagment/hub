@@ -2,11 +2,15 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import * as contracts from "@agency_hub_core/contracts";
 import {
+  CLIENT_FEATURE_UNAVAILABLE_REASONS,
   clientBootstrapResponseSchema,
   clientFanRefSchema,
   routeSchemas,
 } from "@agency_hub_core/contracts";
+
+import * as sdk from "../packages/sdk/src/index.ts";
 
 // The bootstrap is parsed by SDKs frozen inside shipped clients. Every growing
 // vocabulary on it is an open string (chat-extension hub plan §4.0, critic 14):
@@ -115,6 +119,28 @@ describe("client bootstrap contract", () => {
     expect(route.querystring).toBeUndefined();
     expect(route.params).toBeUndefined();
     expect(Object.keys(route.response).sort()).toEqual(["200", "401", "403"]);
+  });
+
+  it("lists client_outdated among the reasons from the first vendored SDK on", () => {
+    // Answered by the server-side feature check (H-2b/H-3, critic 6), never by
+    // the bootstrap; listed now so no shipped client meets it as unknown.
+    expect(CLIENT_FEATURE_UNAVAILABLE_REASONS).toContain("client_outdated");
+  });
+
+  it("re-exports the known-value constants from the generated SDK (the client cannot reach contracts)", () => {
+    // A client vendors @kernel/sdk only; §4.0 has it narrow open tokens with
+    // these constants, and its R01 fixture copy is compared against them.
+    for (const name of [
+      "CLIENT_FEATURE_FLAG_NAMES",
+      "CLIENT_FEATURE_UNAVAILABLE_REASONS",
+      "CLIENT_HUB_CAPABILITY_NAMES",
+      "CLIENT_KNOWN_PLATFORMS",
+      "CLIENT_KNOWN_ROLES",
+      "CLIENT_NUMERIC_ID_PATTERN",
+    ] as const) {
+      expect(sdk[name], name).toBeDefined();
+      expect(sdk[name], name).toBe(contracts[name]);
+    }
   });
 
   it("keeps routes-client.ts free of routes.ts (routes.ts imports it: a cycle)", async () => {

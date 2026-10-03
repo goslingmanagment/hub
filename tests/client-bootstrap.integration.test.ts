@@ -5,13 +5,20 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   CLIENT_FEATURE_FLAG_NAMES,
   clientBootstrapResponseSchema,
+  errorResponseSchema,
   type ClientBootstrapResponse,
 } from "@agency_hub_core/contracts";
-import { createModel, createOnlyFansPage, createFanslyPage, deletePageByLabel } from "@agency_hub_core/db";
+import { createModel, createOnlyFansPage, createFanslyPage, deletePageByLabel, insertAgentKey } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import {
+  AGENT_KEY_TOKEN_PREFIX,
+  assignPageToUser,
+  createUserAccount,
+  setUserPassword,
+} from "../apps/runtime/src/services/auth.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
@@ -26,16 +33,25 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-const OWNER_PASSWORD = "owner-secret";
+const PASSWORDS = { owner: "owner-secret", lead: "lead-secret", chatter: "chatter-secret" } as const;
 const AUDIT = { source: "cli" } as const;
+/** A live Agent Read Plane key, granted lora-of: its refusal is about the principal kind, not a page. */
+const AGENT_KEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}clientbootstrap0000`;
+
+type ApiServer = Awaited<ReturnType<typeof buildApiServer>>;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
+/** authPolicyEnforcement "log" (the test default): the handler's own guards answer. */
+let server: ApiServer | null = null;
+/** authPolicyEnforcement "enforce": the declared policy answers before the handler. */
+let enforceServer: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerToken = "";
+let leadToken = "";
 let chatterToken = "";
 let chatterId = 0;
+let leadId = 0;
 let ownerId = 0;
 const pageIds: Record<string, number> = {};
 
@@ -43,8 +59,19 @@ const everyFeature = (reason: string) => Object.fromEntries(
   CLIENT_FEATURE_FLAG_NAMES.map((flag) => [flag, { available: false, reason }]),
 );
 
-async function bootstrap(headers: Record<string, string>) {
-  return server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers });
+async function bootstrap(headers: Record<string, string>, via: ApiServer = server!) {
+  return via.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers });
+}
+
+async function loginCookie(username: keyof typeof PASSWORDS): Promise<string> {
+  const login = await server!.inject({
+    method: "POST",
+    url: "/api/v1/auth/login",
+    payload: { username, password: PASSWORDS[username] },
+  });
+  expect(login.statusCode, login.body).toBe(200);
+  const header = login.headers["set-cookie"];
+  return (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
 }
 
 async function bootstrapAs(token: string): Promise<ClientBootstrapResponse> {
@@ -65,10 +92,15 @@ describe("GET /api/v1/client/bootstrap", () => {
     }
     await resetIntegrationDatabase(testDb.pool);
     app = createTestAppContext(testDb);
-    await createUserAccount(app, { username: "owner", role: "owner", password: OWNER_PASSWORD }, AUDIT);
+    await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
+    await createUserAccount(app, { username: "lead", role: "team_lead", password: PASSWORDS.lead }, AUDIT);
     await createUserAccount(app, { username: "chatter", role: "chatter" }, AUDIT);
     ownerId = await fixtureUserId(app, "owner");
+    leadId = await fixtureUserId(app, "lead");
     chatterId = await fixtureUserId(app, "chatter");
+    // A chatter is created without a password and sets one later; it ends every
+    // sign-in, so it comes before the device tokens below.
+    await setUserPassword(app, { userId: chatterId, password: PASSWORDS.chatter }, AUDIT);
 
     const lora = await createModel(app.db, { slug: "lora", name: "Lora" });
     const mia = await createModel(app.db, { slug: "mia", name: "Mia" });
@@ -102,13 +134,30 @@ describe("GET /api/v1/client/bootstrap", () => {
     for (const label of ["lora-of", "lora-fansly", "lora-old-of"]) {
       await assignPageToUser(app, { userId: chatterId, pageLabel: label }, AUDIT);
     }
+    for (const label of ["lora-vip-of", "mia-of", "lora-old-of"]) {
+      await assignPageToUser(app, { userId: leadId, pageLabel: label }, AUDIT);
+    }
     await deletePageByLabel(app.db, "lora-old-of");
 
     ownerToken = (await issueDeviceTokenForUserId(app, { userId: ownerId, label: "owner client" })).token;
+    leadToken = (await issueDeviceTokenForUserId(app, { userId: leadId, label: "lead client" })).token;
     chatterToken = (await issueDeviceTokenForUserId(app, { userId: chatterId, label: "chatter client" })).token;
+    await insertAgentKey(app.db, {
+      name: "client-bootstrap-probe",
+      keyPrefix: AGENT_KEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+      keyDigest: sha256Hex(AGENT_KEY_TOKEN),
+      capabilities: ["read:messages"],
+      pageIds: [pageIds["lora-of"]!],
+      dailyRequestBudget: 5000,
+      dailyRowBudget: 500_000,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      createdBy: null,
+    });
 
     server = await buildApiServer(app);
     await server.ready();
+    enforceServer = await buildApiServer(createTestAppContext(testDb, { authPolicyEnforcement: "enforce" }));
+    await enforceServer.ready();
     trap = await armNoOutboundTrap(testDb);
   });
 
@@ -117,6 +166,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     trap = null;
     await server?.close();
     server = null;
+    await enforceServer?.close();
+    enforceServer = null;
   });
 
   afterAll(async () => {
@@ -195,26 +246,58 @@ describe("GET /api/v1/client/bootstrap", () => {
     await trap!.assertNoOutbound();
   });
 
-  it("a cookie session is refused with 403, a missing or unknown bearer with 401", async (context) => {
+  it("a team lead's device token lists only its active assigned pages", async (context) => {
     if (!server) return context.skip();
 
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "owner", password: OWNER_PASSWORD },
-    });
-    expect(login.statusCode, login.body).toBe(200);
-    const header = login.headers["set-cookie"];
-    const cookie = (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
+    const body = await bootstrapAs(leadToken);
 
-    const bySession = await bootstrap({ cookie });
-    expect(bySession.statusCode, bySession.body).toBe(403);
+    expect(body.identity).toEqual({ userId: leadId, username: "lead", role: "team_lead", tokenClient: null });
+    // Assigned: lora-vip-of, mia-of and the tombstoned lora-old-of.
+    expect(body.pages.map((page) => page.pageLabel)).toEqual(["lora-vip-of", "mia-of"]);
+    for (const page of body.pages) {
+      expect(page.features, page.pageLabel).toEqual(everyFeature("disabled"));
+    }
 
-    const anonymous = await bootstrap({});
-    expect(anonymous.statusCode, anonymous.body).toBe(401);
+    await trap!.assertNoOutbound();
+  });
 
-    const unknown = await bootstrap({ authorization: "Bearer agency_hub_device_not-a-real-token" });
-    expect(unknown.statusCode, unknown.body).toBe(401);
+  it("holds the rights-matrix row in both auth-policy modes: device tokens only, agent keys refused", async (context) => {
+    if (!server || !enforceServer) return context.skip();
+
+    const cookies = {
+      owner: await loginCookie("owner"),
+      lead: await loginCookie("lead"),
+      chatter: await loginCookie("chatter"),
+    };
+    const cases: Array<{ who: string; headers: Record<string, string>; status: number }> = [
+      { who: "anonymous", headers: {}, status: 401 },
+      { who: "unknown bearer", headers: { authorization: "Bearer agency_hub_device_not-a-real-token" }, status: 401 },
+      { who: "owner cookie", headers: { cookie: cookies.owner }, status: 403 },
+      { who: "team_lead cookie", headers: { cookie: cookies.lead }, status: 403 },
+      { who: "chatter cookie", headers: { cookie: cookies.chatter }, status: 403 },
+      // Live and granted lora-of: refused by kind, so it never sees the page list.
+      { who: "agent key", headers: { authorization: `Bearer ${AGENT_KEY_TOKEN}` }, status: 403 },
+      { who: "owner device token", headers: { authorization: `Bearer ${ownerToken}` }, status: 200 },
+      { who: "team_lead device token", headers: { authorization: `Bearer ${leadToken}` }, status: 200 },
+      { who: "chatter device token", headers: { authorization: `Bearer ${chatterToken}` }, status: 200 },
+    ];
+
+    for (const [mode, via] of [["log", server], ["enforce", enforceServer]] as const) {
+      for (const testCase of cases) {
+        const label = `${mode} mode, ${testCase.who}`;
+        const response = await bootstrap(testCase.headers, via);
+        expect(response.statusCode, `${label}: ${response.body}`).toBe(testCase.status);
+        if (testCase.status === 200) {
+          clientBootstrapResponseSchema.parse(response.json());
+          continue;
+        }
+        // Every refusal is the declared error body, so the SDK raises a typed error.
+        const error = errorResponseSchema.safeParse(response.json());
+        expect(error.success, `${label}: ${response.body}`).toBe(true);
+        expect(error.data?.statusCode, label).toBe(testCase.status);
+        expect(error.data?.error, label).toBe(testCase.status === 401 ? "unauthorized" : "forbidden");
+      }
+    }
 
     await trap!.assertNoOutbound();
   });
