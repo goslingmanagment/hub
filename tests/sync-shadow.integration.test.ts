@@ -106,6 +106,7 @@ describe("a page in shadow", () => {
       metrics,
       pause: { readSettingMs: async () => SETTING_MS },
       pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+      routeTimeScale: 0,
       shadowLatency: () => fixedShadowLatency(40),
       liveTransportFactory: async () => {
         liveTransports += 1;

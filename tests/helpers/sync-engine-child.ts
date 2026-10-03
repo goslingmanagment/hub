@@ -54,6 +54,7 @@ async function runHost(): Promise<void> {
     probe,
     pause: { readSettingMs: async () => settingMs },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+    routeTimeScale: 0,
     shadowLatency: () => fixedShadowLatency(50),
     modeLoopIntervalMs: 250,
   });

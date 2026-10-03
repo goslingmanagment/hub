@@ -319,6 +319,7 @@ describe("the shadow WS feed (design §6.4)", () => {
       metrics,
       pause: { readSettingMs: async () => 100 },
       pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+      routeTimeScale: 0,
       shadowLatency: () => fixedShadowLatency(10),
       shadowFeed: createFanslyShadowWsFeed(),
       liveTransportFactory: async () => {

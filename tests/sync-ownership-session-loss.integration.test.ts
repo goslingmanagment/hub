@@ -74,6 +74,7 @@ function hostOptions(overrides: Partial<SyncHostOptions>): SyncHostOptions {
     registry: pollRegistry(),
     pause: { readSettingMs: async () => SETTING_MS },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+    routeTimeScale: 0,
     modeLoopIntervalMs: 200,
     ...overrides,
   };
