@@ -391,6 +391,16 @@ on a `live` page go through the engine (`services/sync-engine-account.ts`: `acco
 reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query, so leaving to `off`
 restores the legacy engine with no other action.
 
+A legacy stream's incident (`stream_failed_threshold:<page>:<stream>`) resolves only through the legacy executor's own
+chunk recovery, which never comes on an engine page. The switch's phase C and every live takeover of the host close the
+page's open ones (`resolveLegacyStreamIncidentsOfEnginePage`, `services/notification-incidents.ts`): the ordinary
+resolve with its recovery tombstone, `metadata.resolution = 'engine_owned'`, and the paging sweep's resolve message
+naming that reason; idempotent, so a page switched before it has its own closed on its next takeover. Only a `live`
+page (a switch reverted from `handover` gives the streams back to the legacy engine). While the engine owns the page a
+legacy chunk failure opens no legacy incident; after a rollback to `off` the stream's next legacy failure opens it
+again (its streak stays on the legacy row, J5). The engine's own incidents (`fansly_sync_engine`) and OnlyFans pages
+are not touched.
+
 ## Switch and rollback (step 3)
 
 `pnpm cli sync switch --page P --shadow-report <path> [--dry-run]` moves one page to the live engine (the report: an
@@ -411,8 +421,9 @@ active thread backfill; the guard handed); **R** the final incremental chain reb
 (`switch/import.ts`: shadow work superseded, every module's `importLegacy` — cursors, carried DM breakers (merged
 into the key's open work, else a closed carrier the next work inherits; a `handover` receipt waits for the import's
 fence), head-debt catch-ups —, one urgent head read per chat with an unconfirmed overlay row, a legacy 429 hold or
-auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, a
-new owner generation within 2 min, history requests open (+1 h on the first page ever switched); **H** once they are
+auth block carried, the 0231 marking, the takeover `account.verify`, `legacy_imported_at` last); **C** mode `live`, the
+page's legacy stream incidents closed (Legacy fences, above), a new owner generation within 2 min, history requests
+open (+1 h on the first page ever switched); **H** once they are
 open, the page's hydration requests become history requests (`switch_migration`). A or B timing out reverts to
 `shadow` (exit 2); no live owner after C is exit 4. `sync switch --open-requests` runs H on the first page.
 

@@ -13,6 +13,7 @@ import {
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
 
+import { resolveLegacyStreamIncidentsOfEnginePage } from "../../services/notification-incidents.ts";
 import { rebuildPageChains } from "../fansly/lib/chain-rebuild.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
@@ -48,9 +49,11 @@ import { checkSwitchPreconditions, redLinesLine, type RedLinesAcceptance } from 
 //      cancelled, `shadow`, exit 2.
 //   R  the final incremental chain rebuild from the journal (§8.2).
 //   I  the legacy import (`importLegacyState`), `legacy_imported_at` last.
-//   C  mode `live`: the host takes a new owner generation (its first send
-//      ≥ 1.2 × S after the legacy completion, `paceFloorFromDb`); then the
-//      page's history requests open (+1 h on the first page ever switched).
+//   C  mode `live`: the page's legacy stream incidents are closed
+//      (`engine_owned`: only the legacy executor's recovery resolved them);
+//      the host takes a new owner generation (its first send ≥ 1.2 × S after
+//      the legacy completion, `paceFloorFromDb`); then the page's history
+//      requests open (+1 h on the first page ever switched).
 //   H  once requests are open: the page's open hydration requests become
 //      history requests (`switch_migration`), their legacy rows `expired`.
 
@@ -363,6 +366,14 @@ async function finishLive(
   generationAtC: bigint | null,
 ): Promise<SyncSwitchOutcome> {
   const { db } = ctx;
+  // The page is the engine's now: the legacy stream latches only the legacy
+  // executor's recovery resolved are closed (`engine_owned`), before the wait
+  // for the owner — a page left live without one runs no legacy stream either.
+  // The host closes them again on every live takeover (idempotent).
+  const closed = await resolveLegacyStreamIncidentsOfEnginePage(ctx, { pageId, pageLabel: label });
+  if (closed.length > 0) {
+    ctx.print(`C ${label}: ${closed.length} legacy stream incident(s) closed (${closed.join(", ")}) — the page is owned by the Fansly Sync Engine`);
+  }
   const deadline = Date.now() + ctx.timing.ownerTimeoutMs;
   let page = await getSyncPage(db, pageId);
   for (;;) {
