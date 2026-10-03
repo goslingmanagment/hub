@@ -234,7 +234,7 @@ describe("ws.connect on a live page", () => {
     expect(r.server.arrivals).toHaveLength(sent);
   }, 60_000);
 
-  it("a 429 at the handshake holds the page rate_limit with alert 1 — the work waits for the hold, not the reconnect ladder", async (context) => {
+  it("a 429 at the handshake holds the Upgrade's route with its incident — the work waits for the route, not the reconnect ladder; REST goes on", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const { pageId } = r.page;
@@ -242,10 +242,17 @@ describe("ws.connect on a live page", () => {
     r.server.upgradeStatus = () => 429;
     await demand(pageId, HARNESS_KEY.ws, "");
     await startHost(r, { seed: 85, alerts });
-    await until(async () => (await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind = 'rate_limit'", [pageId])) === 1,
-      30_000, "the rate-limit hold");
-    expect(await wsWork(pageId)).toEqual([{ subject: "", state: "open", close_reason: null, waiting_reason: "page_hold" }]);
-    expect(alerts.opened.map((alert) => [alert.subKey, alert.detail])).toContainEqual(["page_stopped", "rate_limit"]);
+    await until(async () => (await scalar(
+      "select count(*)::int as n from sync_pages where page_id = $1 and resource_holds #> '{route:state,routes,ws.upgrade,holdUntil}' is not null",
+      [pageId])) === 1, 30_000, "the Upgrade route's hold");
+    expect(await scalar("select count(*)::int as n from sync_pages where page_id = $1 and hold_kind is not null", [pageId])).toBe(0);
+    expect(await wsWork(pageId)).toEqual([{ subject: "", state: "open", close_reason: null, waiting_reason: null }]);
+    expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
+      .toEqual([["ws.upgrade", "rate_limit"]]);
+    expect(alerts.opened.filter((alert) => alert.subKey === "page_stopped")).toEqual([]);
+    // The page's REST reads go on while the Upgrade waits.
+    await demand(pageId, HARNESS_KEY.urgent, "beside");
+    await until(async () => r.server.arrivals.some((arrival) => !arrival.upgrade), 20_000, "a REST read beside the held Upgrade");
     expect(r.server.arrivals.filter((arrival) => arrival.upgrade).map((arrival) => arrival.status)).toEqual([429]);
   }, 60_000);
 

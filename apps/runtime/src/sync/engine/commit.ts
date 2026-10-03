@@ -15,7 +15,6 @@ import {
   insertAdmission,
   insertAuditEvent,
   insertObservation,
-  lastRateLimitAt,
   listUnfinishedAttempts,
   lockAttemptForApply,
   lockOwnedPage,
@@ -39,6 +38,7 @@ import {
   settleAttemptWithoutCapture,
   settleWork,
   skipAttemptApply,
+  writeSyncRouteState,
   SYNC_APPLY_ERROR_PAYLOAD_UNAVAILABLE,
   tryAcquireDmArchiveWriterFenceLock,
   upsertDemands,
@@ -72,13 +72,13 @@ import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../ser
 import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../services/sync/fansly-cdn-tokens.ts";
 import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
+import { routeOfWireId } from "../fansly/routes.ts";
 import {
   classifyWireOutcome,
   escalateResourceHold,
   IDENTITY_CHECK_KEY,
   identityCandidateOf,
   onOutcome,
-  RATE_LIMIT_LADDER_RESET_MS,
   RESOURCE_BREAKER_WINDOW_MS,
   RESOURCE_HOLD_EXEMPT_KEYS,
   resourceFileOf,
@@ -88,7 +88,7 @@ import {
   type ResourceHoldEntry,
   VERIFY_KEY,
 } from "./errors.ts";
-import { FLOOR_LOOKBACK_MS, type Admission, type SlotGrant } from "./pacer.ts";
+import type { Admission, SlotGrant } from "./pacer.ts";
 import type { AlertSink, Clock, Metrics, Rng, SecretBox, SettingsSource } from "./ports.ts";
 import {
   demandToUpsert,
@@ -104,6 +104,7 @@ import {
   type StepPlan,
   type WorkOutcome,
 } from "./resource.ts";
+import { parseRouteState, ROUTE_STATE_VERSION } from "./route-policy.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The transactions of one step (plan §8, design §3.7). Each runs as ONE short
@@ -303,11 +304,6 @@ const DEFERRED_RETRY_LADDER: ReadonlyArray<{ ageBelowMs: number; retryInMs: numb
 const DEFERRED_RETRY_CAP_MS = 60_000;
 /** A journaled body unreadable for longer than this is quarantined. */
 export const PAYLOAD_UNAVAILABLE_QUARANTINE_MS = 600_000;
-/** How far back the capture looks for the page's newest 429 (by admission):
- *  the [A8] decay hour plus FLOOR_LOOKBACK_MS, which is far longer than an
- *  admission → completion span (send window + request timeout) and covers
- *  app/DB clock skew. An older 429 has already reset the ladder. */
-export const RATE_LIMIT_LOOKBACK_MS = RATE_LIMIT_LADDER_RESET_MS + FLOOR_LOOKBACK_MS;
 
 function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => body(tx as unknown as Database));
@@ -1080,6 +1076,10 @@ export async function capture(
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
     const file = resourceFileOf(admission.work.resource);
+    // The route state as of this transaction (the page row is locked): a 429
+    // holds and slows the route the request went out on.
+    const routeState = parseRouteState(page.routeState);
+    const route = routeOfWireId(admission.request.spec);
     const decided = onOutcome({
       errorClass: classified.errorClass,
       now,
@@ -1088,11 +1088,16 @@ export async function capture(
       httpStatus: classified.httpStatus,
       retryAfterMs: classified.retryAfterMs,
       page: pageErrorState(page),
-      // The newest 429 matters only while the 429 ladder is above step 0
-      // (`rateLimitStep`); the steady state reads nothing.
-      lastRateLimitAt: page.holdStep > 0
-        ? await lastRateLimitAt(tx, { pageId: d.pageId, withinMs: RATE_LIMIT_LOOKBACK_MS, excludeAttemptId: admission.attemptId })
-        : null,
+      ...(routeState.ok
+        ? {
+          route: {
+            route,
+            entry: routeState.state.routes[route] ?? null,
+            attemptId: admission.attemptId,
+            jitter: () => d.rng.next(),
+          },
+        }
+        : {}),
       subjectState: {
         failureCount: admission.work.failureCount,
         breakerUntil: admission.work.breakerUntil,
@@ -1129,11 +1134,24 @@ export async function capture(
   });
 
   if (committed.decision === null) return { applyNow: false, inMemory: null };
-  if (committed.decision.errorClass === "rate_limit_list") {
-    d.metrics.increment("sync_list_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
-  }
-  if (committed.decision.errorClass === "rate_limit_media_stats") {
-    d.metrics.increment("sync_media_stats_rate_limited", { pageId: d.pageId, resource: admission.work.resource });
+  const routeHold = committed.decision.routeHold;
+  if (routeHold.action === "set") {
+    d.metrics.increment("sync_route_held", {
+      pageId: d.pageId,
+      route: routeHold.route,
+      status: classified.httpStatus ?? 0,
+      resource: admission.work.resource,
+    });
+    d.logger.warn({
+      pageId: d.pageId,
+      route: routeHold.route,
+      status: classified.httpStatus,
+      retryAfterMs: classified.retryAfterMs,
+      holdUntil: routeHold.holdUntil.toISOString(),
+      effectivePerMin: routeHold.entry.effectivePerMin,
+      ladderStep: routeHold.entry.ladderStep,
+      attemptId: admission.attemptId,
+    }, "Fansly sync: a route is held (only that route waits)");
   }
   const alerts = [...committed.decision.alerts];
   // "Проверка, а не вера" (plan §2.4): this send against the page's previous
@@ -1183,18 +1201,31 @@ async function writeOutcomeDecision(
   if (decision.networkFailureStreak !== null) {
     await setNetworkFailureStreak(tx, { ...fenced, streak: decision.networkFailureStreak });
   }
-  const resourceHold = decision.resourceHold;
-  if (resourceHold.action === "set") {
-    await setResourceHold(tx, {
+  const routeHold = decision.routeHold;
+  if (routeHold.action === "set") {
+    const { entry } = routeHold;
+    const written = await writeSyncRouteState(tx, {
       ...fenced,
-      file: resourceHold.file,
-      hold: {
-        until: resourceHold.until,
-        step: resourceHold.step,
-        ...(resourceHold.kind === undefined ? {} : { kind: resourceHold.kind }),
-        ...(resourceHold.lastRateLimitAt === undefined ? {} : { lastRateLimitAt: resourceHold.lastRateLimitAt }),
+      version: ROUTE_STATE_VERSION,
+      route: routeHold.route,
+      expectRevision: routeHold.expectRevision,
+      entry: {
+        holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
+        ladderStep: entry.ladderStep,
+        effectivePerMin: entry.effectivePerMin,
+        policyVersion: entry.policyVersion,
+        last429AttemptId: entry.last429AttemptId,
+        last429At: entry.last429At === null ? null : new Date(entry.last429At),
       },
     });
+    // The state was read under this transaction's page lock: another writer
+    // in between is a bug, never a race to paper over — the commit retries
+    // from a fresh read.
+    if (written.kind === "stale") throw new Error(`route state of ${routeHold.route} changed under the page lock`);
+  }
+  const resourceHold = decision.resourceHold;
+  if (resourceHold.action === "set") {
+    await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: { until: resourceHold.until, step: resourceHold.step } });
   } else if (resourceHold.action === "clear") {
     await setResourceHold(tx, { ...fenced, file: resourceHold.file, hold: null });
   }
@@ -1709,8 +1740,6 @@ async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown
         httpStatus: attempt.httpStatus,
         retryAfterMs: null,
         page: pageErrorState(page),
-        // Read only by the 429 ladder.
-        lastRateLimitAt: null,
         subjectState: {
           failureCount: work?.failureCount ?? 0,
           breakerUntil: work?.breakerUntil ?? null,
@@ -1816,11 +1845,13 @@ export async function openAlerts(
   context: Record<string, unknown> = {},
 ): Promise<void> {
   for (const alert of alerts) {
-    d.metrics.increment("sync_alerts", { subKey: alert.subKey, detail: alert.detail, shadow: d.mode === "shadow" });
+    const route = alert.subKey === "route_limited" ? { route: alert.route } : {};
+    d.metrics.increment("sync_alerts", { subKey: alert.subKey, detail: alert.detail, shadow: d.mode === "shadow", ...route });
     try {
       await d.alerts.open({
         subKey: alert.subKey,
         pageId: d.pageId,
+        ...route,
         detail: alert.detail,
         shadow: d.mode === "shadow",
         context,

@@ -143,7 +143,7 @@ describe("sync status: the page status on the wire", () => {
         ...statusPage({
           holdKind: "auth",
           holdUntil: INDEFINITE_UNTIL,
-          resourceHolds: { "dm-conversations": { until: at(60_000).toISOString(), step: 1, since: at(-1_000).toISOString(), kind: "rate_limit_list" } },
+          resourceHolds: { "dm-conversations": { until: at(60_000).toISOString(), step: 1, since: at(-1_000).toISOString() } },
         }),
         holdSince: at(-60_000),
         lastSendAt: at(-2_000),
@@ -167,7 +167,7 @@ describe("sync status: the page status on the wire", () => {
     expect(agentSyncPageStatusSchema.parse(wire)).toEqual(wire);
     expect(wire.holds.page).toEqual({ kind: "auth", until: "infinity", since: at(-60_000).toISOString() });
     expect(wire.holds.resources).toEqual([
-      { file: "dm-conversations", until: at(60_000).toISOString(), step: 1, kind: "rate_limit_list" },
+      { file: "dm-conversations", until: at(60_000).toISOString(), step: 1, kind: "breaker" },
     ]);
     expect(wire.owner).toMatchObject({ generation: "3", running: true });
     expect(wire.quarantined).toBe(1);

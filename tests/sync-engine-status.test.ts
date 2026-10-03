@@ -184,7 +184,7 @@ describe("sync status: why a work row waits", () => {
     // closed routes, delay the requests only.
     const routesClosed: RuntimeSnapshot = {
       slotOpensAt: null,
-      routes: { stateError: "route_state_version:9", keyOpensAt: () => ({ at: at(30_000), routes: ["messaging.groups"] }) },
+      routes: { stateError: "route_state_version:9", keyOpensAt: () => ({ at: at(30_000), routes: ["messaging.groups"], held: [] }) },
     };
     expect(reason(deletion(), page(), routesClosed)).toBe("class_share");
     expect(reason(work({ http: true }), page(), routesClosed)).toBe("page_hold");

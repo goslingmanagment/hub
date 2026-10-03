@@ -2,7 +2,6 @@ import { activeFanslyPageHold, isIndefinite, type FanslyPageHoldKind } from "@ag
 
 import {
   activeResourceHold,
-  isEndpointRateLimitKind,
   type ResourceHoldEntry,
   type ResourceHoldKind,
 } from "./errors.ts";
@@ -96,8 +95,9 @@ export interface RouteAdmissionView {
    *  nothing (the diagnostic); null: it reads. */
   stateError: string | null;
   /** When a key's routes next admit a send (its own and its family's budget,
-   *  a route hold), with the routes still closed; null: open now. */
-  keyOpensAt(resource: string): { at: Date; routes: string[] } | null;
+   *  a route hold), with the routes still closed and those of them a 429's
+   *  (or a 5xx's `Retry-After`) hold keeps closed; null: open now. */
+  keyOpensAt(resource: string): { at: Date; routes: string[]; held: string[] } | null;
 }
 
 export interface WorkExplanation {
@@ -185,11 +185,17 @@ export function explainWork(
   // the route opens.
   if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { routeBudget: true } };
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
-  // Every route of the key is closed by its budget (or a route hold): the
+  // Every route of the key is closed by its budget or a route hold: the
   // pick leaves it out until one opens.
   const routes = sends ? runtime.routes?.keyOpensAt(work.resource) ?? null : null;
   if (routes !== null && after(routes.at)) {
-    return { reason: "pacer", until: routes.at, detail: { routeBudget: true, routes: routes.routes } };
+    return {
+      reason: "pacer",
+      until: routes.at,
+      detail: routes.held.length > 0
+        ? { routeHold: true, routes: routes.routes, held: routes.held }
+        : { routeBudget: true, routes: routes.routes },
+    };
   }
   if (sends && after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
@@ -265,7 +271,7 @@ export interface WsStatusView {
 }
 
 /** One route or family of a page in its status: its budget, its effective
- *  rate, its newest send and when it next admits one. */
+ *  rate, its newest send, its hold and slowdown, and when it next admits one. */
 export interface RouteBudgetStatusView {
   /** A canonical route (`fansly/routes.ts`) or a family (`family:<name>`). */
   name: string;
@@ -277,6 +283,12 @@ export interface RouteBudgetStatusView {
   intervalMs: number;
   lastSendAt: string | null;
   holdUntil: string | null;
+  /** The route's stored state after its 429s (null: none, or a family): the
+   *  ladder step its next 429 takes, its newest 429, and the revision a
+   *  `sync route raise` compares against. */
+  ladderStep: number | null;
+  last429At: string | null;
+  revision: number | null;
   /** Null: open now. */
   opensAt: string | null;
 }
@@ -308,7 +320,7 @@ export interface PageStatus {
     /** `until` is an ISO instant, or "infinity" for an auth / identity hold
      *  that only new credentials lift. */
     page: { kind: FanslyPageHoldKind; until: string; since: string | null } | null;
-    /** `kind`: the file's breaker, or the conversation list's own 429 hold. */
+    /** `kind`: the file's breaker (a 429 holds a route: `routes`). */
     resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
   breakers: { open: number; blockedByVendor: number };
@@ -352,7 +364,7 @@ export function buildPageStatus(input: PageStatusInput): PageStatus {
       file,
       until: new Date(entry.until).toISOString(),
       step: entry.step,
-      kind: isEndpointRateLimitKind(entry.kind) ? entry.kind : "breaker" as const,
+      kind: "breaker" as const,
     }))
     .sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   let breakersOpen = 0;

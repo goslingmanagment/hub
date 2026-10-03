@@ -46,8 +46,6 @@ import { routeOfWireId } from "../fansly/routes.ts";
 import {
   activeResourceHold,
   CREDENTIALS_CHECK_KEYS,
-  endpointRateGroupOfKind,
-  isEndpointRateLimitKind,
   isResourceHoldExempt,
   resourceFileOf,
   type ResourceHoldEntry,
@@ -731,10 +729,9 @@ export async function stepBeforeGate(d: ActorDeps, page: SyncPageRow, stop: Abor
  * keys, keys switched off for the page, live-only keys in shadow, and the
  * files under a live resource hold — except a key a hold never stops
  * (`dm-messages.head`): its file's other known keys are listed one by one.
- * An endpoint group's own 429 hold stops only the group's keys (the keys that
- * can only read the list, `LIST_RATE_LIMIT_HELD_KEYS`; the media-stats walk),
- * whatever their file. The
- * owner's requests pause leaves the whole requests class out.
+ * The owner's requests pause leaves the whole requests class out. (A route
+ * hold leaves out the keys all of whose routes it closes:
+ * `withRouteExclusions`.)
  */
 export interface PickExclusions {
   excludeResources: string[];
@@ -763,13 +760,6 @@ export function pickExclusions(
   const holds = page.resourceHolds as Record<string, ResourceHoldEntry>;
   for (const [file, entry] of Object.entries(holds)) {
     if (!(new Date(entry.until).getTime() > now.getTime())) continue;
-    if (isEndpointRateLimitKind(entry.kind)) {
-      const group = endpointRateGroupOfKind(entry.kind);
-      for (const spec of registry.specs) {
-        if (group.heldKeys.has(spec.key)) resources.add(spec.key);
-      }
-      continue;
-    }
     const fileKeys = registry.specs.filter((spec) => resourceFileOf(spec.key) === file);
     if (fileKeys.some((spec) => isResourceHoldExempt(spec.key))) {
       for (const spec of fileKeys) {

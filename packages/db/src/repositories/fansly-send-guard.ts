@@ -619,7 +619,10 @@ export type HandFanslySendGuardBackToLegacyResult =
  * 5) — and the flip is a CAS on what was read: still the engine's, the page
  * in `handover` and released. The legacy floor `last_completed_at` moves
  * past the engine's last send and the end of a timed page hold in force (the
- * page's own 429/network hold, or the one a credentials hold carries).
+ * page's own 429/network hold, or the one a credentials hold carries) and,
+ * through `next_u`, 1.2 × S — never a route hold's end, which would stop
+ * every endpoint of the page (A4): the rollback waits for the page's route
+ * holds to end before it gets here.
  */
 export async function handFanslySendGuardBackToLegacy(
   db: Database,
@@ -683,11 +686,7 @@ export async function handFanslySendGuardBackToLegacy(
                sp.last_completed_at,
                sp.last_send_at,
                clock_timestamp(),
-               ${timedEnd}::timestamptz,
-               (select max((h.value ->> 'until')::timestamptz)
-                  from jsonb_each(sp.resource_holds) h
-                 where h.value ->> 'kind' in ('rate_limit_list', 'rate_limit_media_stats')
-                   and (h.value ->> 'until')::timestamptz > clock_timestamp()))
+               ${timedEnd}::timestamptz)
         from sync_pages sp
        where g.page_id = ${input.pageId}
          and sp.page_id = g.page_id

@@ -106497,9 +106497,7 @@
                                     "kind": {
                                       "type": "string",
                                       "enum": [
-                                        "breaker",
-                                        "rate_limit_list",
-                                        "rate_limit_media_stats"
+                                        "breaker"
                                       ]
                                     }
                                   },
@@ -152483,9 +152481,7 @@
                                     "kind": {
                                       "type": "string",
                                       "enum": [
-                                        "breaker",
-                                        "rate_limit_list",
-                                        "rate_limit_media_stats"
+                                        "breaker"
                                       ]
                                     }
                                   },

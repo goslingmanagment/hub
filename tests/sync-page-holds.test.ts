@@ -222,7 +222,6 @@ function refusal(state: PageErrorState, attempt: { id: number; sentAt: Date }, d
     httpStatus: 401,
     retryAfterMs: null,
     page: state,
-    lastRateLimitAt: null,
     subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
     subjectQueue: false,
     recentFailedSubjects: 0,

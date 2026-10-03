@@ -45,9 +45,25 @@ export type SyncEngineAlertSubKey = (typeof SYNC_ENGINE_ALERT_SUBKEYS)[number];
  * for a 429 must not overwrite it, and that latch resolves by itself once the
  * page is clean), resolved only by the owner (`pnpm cli sync alerts ack`). */
 export const SYNC_ENGINE_PACE_VIOLATION_SUBKEY = "page_stopped:pace_violation";
-export type SyncEngineIncidentSubKey = SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY;
+/** Step 3b D5 / owner decision №23: a 429 (or a 5xx naming its `Retry-After`)
+ * holds one route of a page — its own latch per page+route, opened on the
+ * route's first 429 and refreshed, never repeated, by the next ones; resolved
+ * 10 clean minutes after its hold ends (the route keeps running slowed until
+ * the owner raises it). */
+export const SYNC_ENGINE_ROUTE_SUBKEY_PREFIX = "route_limited:";
+export type SyncEngineRouteSubKey = `${typeof SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${string}`;
+export type SyncEngineIncidentSubKey = SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY | SyncEngineRouteSubKey;
 
-const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineIncidentSubKey, string> = {
+/** The latch subKey of one route's incident. */
+export function syncEngineRouteSubKey(route: string): SyncEngineRouteSubKey {
+  return `${SYNC_ENGINE_ROUTE_SUBKEY_PREFIX}${route}`;
+}
+
+const SYNC_ENGINE_ROUTE_OPEN_TITLE = "🚨 Fansly Sync Engine route held: a 429 stops one endpoint of a page "
+  + "(the rest runs; the endpoint then runs at half rate until raised)";
+const SYNC_ENGINE_ROUTE_RESOLVE_DETAIL = "Fansly Sync Engine route open again (10 min clean; its slowdown stays until raised)";
+
+const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than the pause setting",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
@@ -56,7 +72,7 @@ const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineIncidentSubKey, string> = {
   process: "🚨 Fansly Sync Engine process silent — no sync heartbeat for 2 min while a page is in the engine",
 };
 
-const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineIncidentSubKey, string> = {
+const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineAlertSubKey | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY, string> = {
   page_stopped: "Fansly Sync Engine page running again (10 min clean)",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
   live_degraded: "Fansly Sync Engine live path healthy again",
@@ -65,10 +81,15 @@ const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineIncidentSubKey, string> = {
   process: "Fansly Sync Engine heartbeat back",
 };
 
-function syncEngineSubKey(subKey: string | null | undefined): SyncEngineIncidentSubKey | null {
+function syncEngineSubKey(subKey: string | null | undefined): keyof typeof SYNC_ENGINE_OPEN_TITLES | null {
   return subKey !== null && subKey !== undefined && Object.hasOwn(SYNC_ENGINE_OPEN_TITLES, subKey)
-    ? subKey as SyncEngineIncidentSubKey
+    ? subKey as keyof typeof SYNC_ENGINE_OPEN_TITLES
     : null;
+}
+
+function isSyncEngineRouteSubKey(subKey: string | null | undefined): subKey is SyncEngineRouteSubKey {
+  return subKey !== null && subKey !== undefined && subKey.startsWith(SYNC_ENGINE_ROUTE_SUBKEY_PREFIX)
+    && subKey.length > SYNC_ENGINE_ROUTE_SUBKEY_PREFIX.length;
 }
 
 /** What a producer needs: the database and somewhere to say that an open or
@@ -149,6 +170,7 @@ function openTitleForIncident(
   // The engine's alerts: one kind, a title per alert — the owner acts on the
   // first line.
   if (input.kind === "fansly_sync_engine") {
+    if (isSyncEngineRouteSubKey(input.subKey)) return SYNC_ENGINE_ROUTE_OPEN_TITLE;
     const subKey = syncEngineSubKey(input.subKey);
     return subKey === null ? "🚨 Fansly Sync Engine alert" : SYNC_ENGINE_OPEN_TITLES[subKey];
   }
@@ -310,6 +332,7 @@ function resolveDetailForIncident(
       }
       return "Fansly sync chunks starting again";
     case "fansly_sync_engine": {
+      if (isSyncEngineRouteSubKey(input.subKey)) return SYNC_ENGINE_ROUTE_RESOLVE_DETAIL;
       const subKey = syncEngineSubKey(input.subKey);
       return subKey === null ? "Fansly Sync Engine alert cleared" : SYNC_ENGINE_RESOLVE_DETAILS[subKey];
     }

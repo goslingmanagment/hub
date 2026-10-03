@@ -88,9 +88,10 @@ export interface FanslySendLease {
 
 /** The headers of an answer a lease completion may carry: those the Sync
  *  Engine's classifier reads about the provider's pace (the `Retry-After` of a
- *  429 or of a 5xx). Nothing else of an answer — a cookie, the socket's accept
- *  key — goes past the transport callback that saw it. */
-export const FANSLY_SAFE_ANSWER_HEADERS: ReadonlySet<string> = new Set(["retry-after"]);
+ *  429 or of a 5xx, and the answer's `Date`, against which an HTTP-date
+ *  `Retry-After` is measured too). Nothing else of an answer — a cookie, the
+ *  socket's accept key — goes past the transport callback that saw it. */
+export const FANSLY_SAFE_ANSWER_HEADERS: ReadonlySet<string> = new Set(["retry-after", "date"]);
 
 /** The safe headers of an answer (`FANSLY_SAFE_ANSWER_HEADERS`) by lower-case
  *  name; a repeated header is joined as the wire layer joins a REST answer's. */

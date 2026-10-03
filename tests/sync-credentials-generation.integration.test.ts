@@ -282,7 +282,7 @@ describe("the credentials generation of a live page", () => {
     expect(await verifyAttempts(r.page.pageId)).toBe(1);
   }, 60_000);
 
-  it("a candidate identity check's 429 under an auth hold keeps the auth hold: nothing goes out before the 429 ends, the stored session's read waits for the renewal", async (context) => {
+  it("a candidate identity check's 429 under an auth hold holds its route, keeps the auth hold: no identity check before the 429 ends, the stored session's read waits for the renewal", async (context) => {
     if (!testDb) return context.skip();
     let throttled = 0;
     const r = await rig([(request) => {
@@ -298,14 +298,17 @@ describe("the credentials generation of a live page", () => {
     const fresh = { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
     const checked = runFanslyIdentityCheck(appContext(), page, { session: fresh });
 
-    // The 429 is carried beside the auth hold: neither replaced nor lifted.
-    await until(async () => (await getSyncPage(db(), r.page.pageId))!.holdDetail.timedHold !== undefined, 15_000, "the candidate's 429");
+    // The 429 holds the identity route (`account.me`); the auth hold is
+    // neither replaced nor lifted, and carries nothing beside itself.
+    const routeHold = async () => ((await getSyncPage(db(), r.page.pageId))!.routeState as {
+      routes?: Record<string, { holdUntil: string | null }>;
+    } | null)?.routes?.["account.me"]?.holdUntil ?? null;
+    await until(async () => (await routeHold()) !== null, 15_000, "the candidate's 429");
     const held = (await getSyncPage(db(), r.page.pageId))!;
     expect(held.holdKind).toBe("auth");
     expect(held.holdDetail.credentialsGeneration).toBe(failed);
-    const carried = held.holdDetail.timedHold as { kind: string; until: string };
-    expect(carried.kind).toBe("rate_limit");
-    const holdEnd = new Date(carried.until).getTime();
+    expect(held.holdDetail.timedHold).toBeUndefined();
+    const holdEnd = new Date((await routeHold())!).getTime();
 
     // The check runs again only after the 429 ended, and passes.
     expect(await checked).toMatchObject({ matches: true });

@@ -27,7 +27,8 @@ import { runSyncSwitch, runSyncSwitchOpenRequests } from "../switch/switch.ts";
 // Exit codes: 0 done; 2 the switch reverted to shadow (A or B timed out);
 // 3 the rollback (or a revert) waits for a stop confirmation; 4 C timed out
 // (the page is live with the guard handed and no owner); 5 the rollback
-// refused under an auth hold; 1 refused or failed.
+// refused under an auth hold; 6 the rollback waits for the page's route holds
+// to end; 1 refused or failed.
 
 export interface SyncSwitchCliDeps {
   openContext(): Promise<Pick<SyncContext, "db" | "rawConfig" | "logger" | "close">>;
@@ -161,7 +162,7 @@ export function registerSyncSwitchCommands(
     .command("rollback")
     .description(
       "step 3: give a live (or switching) page back to the legacy engine (resumable; "
-      + "exit 3 waits for a stop confirmation, 5 refused under an auth hold)",
+      + "exit 3 waits for a stop confirmation, 5 refused under an auth hold, 6 waits for the page's route holds to end)",
     )
     .requiredOption("--page <label>", "the Fansly page")
     .option("--with-auth-hold", "roll back although an auth/identity hold is in force (the owner's word)", false)
