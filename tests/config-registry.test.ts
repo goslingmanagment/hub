@@ -191,8 +191,6 @@ describe("config registry", () => {
     "agentObservationsEnabled",
     "agentSearchBackend",
     "agentHydrationMode",
-    "agentHydrationAutoApproveMode",
-    "agentHydrationAutoDailyCallBudget",
     "agentExportPolicyValue",
     "fanslyReplayMode",
     "retentionTieringEnabled",

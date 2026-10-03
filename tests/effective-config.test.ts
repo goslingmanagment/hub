@@ -235,6 +235,11 @@ describe("LIVE_CONFIG_KEYS", () => {
     ]) {
       expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
     }
-    expect(LIVE_CONFIG_KEYS.size).toBe(90);
+    // Step 4 (S4-15): retired with the hydration auto-approve policy.
+    for (const key of ["agentHydrationAutoApproveMode", "agentHydrationAutoDailyCallBudget"]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.has("agentHydrationMode")).toBe(true);
+    expect(LIVE_CONFIG_KEYS.size).toBe(88);
   });
 });

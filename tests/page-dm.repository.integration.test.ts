@@ -10,16 +10,12 @@ import {
   createModel,
   deletePageDmMessageByPlatformMessageId,
   excludePageDmConversationMessageSync,
-  finalizePageDmConversationMessageSync,
-  getConversationSyncHealth,
-  getPageDmMessageIdsAtOrBefore,
   getPageDmSyncCoverage,
   getPageConversationPreview,
   getPageConversationMessages,
   listPageDmThreadIdsByGeneration,
   listPageDmThreadIdsStampedWithGeneration,
   maxPageDmThreadGeneration,
-  recordConversationSyncFailure,
   refreshPageDmConversationWindow,
   upsertFans,
   upsertPageDmConversation,
@@ -105,6 +101,43 @@ async function readThreadState(testDb: StartedTestDatabase, platformAccountId: n
       isVisible: row.is_visible,
     },
   ]));
+}
+
+/** A legacy per-thread breaker row as the retired Fansly DM lanes left it
+ *  (their writer is gone since step 4, S4-15; the rows stay as records). */
+async function seedBreakerRow(
+  testDb: StartedTestDatabase,
+  input: { conversationId: number; platformAccountId: number; failureCount?: number },
+) {
+  await testDb.pool.query(
+    `insert into page_dm_message_sync_health (conversation_id, platform_account_id, failure_count, error_class,
+            last_error, last_attempt_at, next_retry_at, quarantine_until, updated_at)
+     values ($1, $2, $3, 'fansly_500', 'error getting group messages', now(), now() + interval '5 minutes',
+            case when $3 >= 4 then now() + interval '6 hours' end, now())
+     on conflict (conversation_id) do update set
+       failure_count = excluded.failure_count, error_class = excluded.error_class, last_error = excluded.last_error,
+       last_attempt_at = excluded.last_attempt_at, next_retry_at = excluded.next_retry_at,
+       quarantine_until = excluded.quarantine_until, updated_at = excluded.updated_at`,
+    [input.conversationId, input.platformAccountId, input.failureCount ?? 1],
+  );
+}
+
+async function readBreakerRow(testDb: StartedTestDatabase, conversationId: number) {
+  const { rows } = await testDb.pool.query<{
+    failureCount: number;
+    errorClass: string | null;
+    lastError: string | null;
+    nextRetryAt: Date | null;
+    quarantineUntil: Date | null;
+    preferredPageLimit: number | null;
+  }>(
+    `select failure_count as "failureCount", error_class as "errorClass", last_error as "lastError",
+            next_retry_at as "nextRetryAt", quarantine_until as "quarantineUntil",
+            preferred_page_limit as "preferredPageLimit"
+     from page_dm_message_sync_health where conversation_id = $1`,
+    [conversationId],
+  );
+  return rows[0] ?? null;
 }
 
 describe("page DM repository integration", () => {
@@ -252,6 +285,7 @@ describe("page DM repository integration", () => {
       lastMessagePreview: `message ${messageCount}`,
       lastFanMessageAt: new Date("2026-03-17T14:10:00.000Z"),
       lastModelMessageAt: null,
+      messageCoverageStatus: "complete",
       isVisible: true,
       lastSeenGeneration: 1,
       metadata: {},
@@ -274,10 +308,9 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    await finalizePageDmConversationMessageSync(testDb.db, {
+    await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
-      messageCoverageStatus: "complete",
-      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
+      enforceRetention: true,
     });
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -312,7 +345,7 @@ describe("page DM repository integration", () => {
     expect(newestFirst?.messages[0]?.tipAmountCents).toBe(500);
   });
 
-  it("keeps every stored message when enforceRetention is false (Stage 1 stand-down)", async (context) => {
+  it("keeps every stored message when the window recompute does not enforce retention (Stage 1 stand-down)", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -368,16 +401,7 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    const finalized = await finalizePageDmConversationMessageSync(testDb.db, {
-      conversationId: conversation.id,
-      messageCoverageStatus: "complete",
-      headReadAt: new Date("2026-03-17T13:30:00.000Z"),
-      enforceRetention: false,
-    });
-    expect(finalized.deletedCount).toBe(0);
-    expect(finalized.summary.storedMessageCount).toBe(messageCount);
-
-    // The live-ingest recompute without enforceRetention must not prune either.
+    // The live-ingest recompute without enforceRetention must not prune.
     const refreshed = await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
     });
@@ -566,10 +590,9 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    await finalizePageDmConversationMessageSync(testDb.db, {
+    await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
-      messageCoverageStatus: "partial_window",
-      headReadAt: new Date("2026-03-18T09:00:00.000Z"),
+      enforceRetention: true,
     });
 
     const storedMessages = await testDb.pool.query<{
@@ -593,64 +616,7 @@ describe("page DM repository integration", () => {
     expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
   });
 
-  it("moves last_message_sync_at only for a head read, and never backwards", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "page-dm-head-read");
-    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "fan-head-read" }]);
-    if (!fan) throw new Error("test setup: fan creation failed");
-    const headReadAt = new Date("2026-09-22T00:11:00.000Z");
-    const thread = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "head-read", 1), fanId: fan.id, lastMessageSyncAt: headReadAt,
-    });
-    const fresh = await upsertPageDmConversation(testDb.db, {
-      ...generationThreadInput(page.id, "head-read-fresh", 1), fanId: fan.id,
-    });
-    if (!thread || !fresh) throw new Error("test setup: thread creation failed");
-    const finalize = async (conversationId: number, at: Date | null) => (await finalizePageDmConversationMessageSync(
-      testDb!.db, { conversationId, messageCoverageStatus: "complete", headReadAt: at, enforceRetention: false },
-    )).conversation?.lastMessageSyncAt;
-
-    // A history walk or a summary repair leaves the watermark alone.
-    expect(await finalize(thread.id, null)).toEqual(headReadAt);
-    expect(await finalize(fresh.id, null)).toBeNull();
-    // An older head read cannot hide a head a newer read already certified.
-    expect(await finalize(thread.id, new Date("2026-09-20T00:00:00.000Z"))).toEqual(headReadAt);
-    const later = new Date("2026-09-28T02:07:00.000Z");
-    expect(await finalize(thread.id, later)).toEqual(later);
-    expect(await finalize(fresh.id, headReadAt)).toEqual(headReadAt);
-  });
-
-  it("counts only stored rows at or below the recorded boundary as known ground", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await createGenerationPage(testDb, "page-dm-known-ground");
-    const thread = await upsertPageDmConversation(testDb.db, generationThreadInput(page.id, "known-ground", 1));
-    if (!thread) throw new Error("test setup: thread creation failed");
-    const at = (second: number) => new Date(Date.UTC(2026, 8, 20, 0, 0, second));
-    await upsertPageDmMessages(testDb.db, [["m-1", 1], ["m-2", 2], ["m-3", 2], ["m-4", 3]].map(([id, second]) => ({
-      conversationId: thread.id, platformAccountId: page.id, platformMessageId: id as string,
-      senderPlatformUserId: "fan", senderRole: "fan" as const, createdAt: at(second as number),
-      content: "body", totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
-    })));
-    const knownGround = async (boundaryMessageId: string) => [...await getPageDmMessageIdsAtOrBefore(testDb!.db, {
-      conversationId: thread.id, platformMessageIds: ["m-1", "m-2", "m-3", "m-4", "unstored"], boundaryMessageId,
-    })].sort();
-
-    // Same created_at breaks the tie on the id, as the window summary does.
-    expect(await knownGround("m-2")).toEqual(["m-1", "m-2"]);
-    expect(await knownGround("m-3")).toEqual(["m-1", "m-2", "m-3"]);
-    // An unstored boundary cannot place anything above it: every stored id counts.
-    expect(await knownGround("unstored")).toEqual(["m-1", "m-2", "m-3", "m-4"]);
-  });
-
-  it("backs a failing thread off 5/10/20 minutes up to 6h, quarantines it on the 4th failure, and clears it", async (context) => {
+  it("clears a legacy breaker row's failures on a successful read and keeps its learned page limit", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -663,38 +629,26 @@ describe("page DM repository integration", () => {
       ...generationThreadInput(page.id, "breaker", 1), fanId: fan.id,
     });
     if (!thread) throw new Error("test setup: thread creation failed");
-    const now = new Date("2026-03-20T12:00:00.000Z");
-    const minutes = (value: number) => new Date(now.getTime() + value * 60_000);
-    const fail = () => recordConversationSyncFailure(testDb!.db, {
-      conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
-      errorMessage: "error getting group messages", now,
-    });
 
-    expect(await fail()).toEqual({ failureCount: 1, nextRetryAt: minutes(5), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 2, nextRetryAt: minutes(10), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 3, nextRetryAt: minutes(20), quarantineUntil: null });
-    expect(await fail()).toEqual({ failureCount: 4, nextRetryAt: minutes(40), quarantineUntil: minutes(360) });
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
+    await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id, failureCount: 4 });
+    expect(await readBreakerRow(testDb, thread.id)).toMatchObject({
       failureCount: 4, errorClass: "fansly_500", lastError: "error getting group messages",
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] }))
       .toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
-    // The backoff holds at the 6h cap; 5min * 2^35 once overflowed interval
-    // and rolled the 36th write back.
-    for (let failureCount = 5; failureCount < 40; failureCount += 1) await fail();
-    expect(await fail()).toEqual({ failureCount: 40, nextRetryAt: minutes(360), quarantineUntil: minutes(360) });
 
+    // The Fansly Sync Engine's DM read clears the row when nothing sticky is left.
     await clearConversationSyncHealth(testDb.db, thread.id);
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toBeNull();
+    expect(await readBreakerRow(testDb, thread.id)).toBeNull();
 
     // A learned page limit (0087) outlives the failure bookkeeping.
-    await fail();
+    await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id });
     await testDb.pool.query(
       "update page_dm_message_sync_health set preferred_page_limit = 5 where conversation_id = $1", [thread.id],
     );
     await clearConversationSyncHealth(testDb.db, thread.id);
-    expect(await getConversationSyncHealth(testDb.db, thread.id)).toMatchObject({
-      failureCount: 0, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
+    expect(await readBreakerRow(testDb, thread.id)).toMatchObject({
+      failureCount: 0, errorClass: null, lastError: null, nextRetryAt: null, quarantineUntil: null, preferredPageLimit: 5,
     });
     expect(await countConversationSyncFailuresByAccount(testDb.db, { platformAccountIds: [page.id] })).toEqual([]);
   });
@@ -717,10 +671,7 @@ describe("page DM repository integration", () => {
       });
       if (!thread) throw new Error("test setup: thread creation failed");
       threads.set(group, thread.id);
-      await recordConversationSyncFailure(testDb.db, {
-        conversationId: thread.id, platformAccountId: page.id, errorClass: "fansly_500",
-        errorMessage: "error getting group messages",
-      });
+      await seedBreakerRow(testDb, { conversationId: thread.id, platformAccountId: page.id });
     }
     const debt = () => countConversationSyncFailuresByAccount(testDb!.db, { platformAccountIds: [page.id] });
     expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 4 }]);
@@ -737,7 +688,7 @@ describe("page DM repository integration", () => {
 
     // Before, every such row kept the page's /health/sync degraded for good.
     expect(await debt()).toEqual([{ platformAccountId: page.id, failingConversationCount: 1 }]);
-    expect(await getConversationSyncHealth(testDb.db, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
+    expect(await readBreakerRow(testDb, threads.get("hidden")!)).toMatchObject({ failureCount: 1 });
     await clearConversationSyncHealth(testDb.db, threads.get("live")!);
     expect(await debt()).toEqual([]);
     // A thread that returns to the lane carries its failures again.

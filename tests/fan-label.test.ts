@@ -4,7 +4,6 @@ import {
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
   getFanslyDmMessageSyncExcludedReason,
-  isFanslyDmMessageSyncExcluded,
   resolveFanLabel,
   resolveFanLabelForScope,
 } from "@agency_hub_core/shared";
@@ -144,6 +143,5 @@ describe("Fansly dm message exclusion helpers", () => {
     expect(getFanslyDmMessageSyncExcludedReason(metadata)).toBe(
       FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
     );
-    expect(isFanslyDmMessageSyncExcluded(metadata)).toBe(true);
   });
 });

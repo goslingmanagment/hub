@@ -3,7 +3,6 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resolveDmConversationCoverageStatus } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 import { normalizeDmTipAmountCents } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
 import { normalizeFanslyTimestamp } from "../apps/runtime/src/sync/fansly/lib/timestamp.ts";
@@ -186,31 +185,6 @@ describe("Fansly DM fixtures", () => {
     expect(normalizeFanslyTimestamp(1_772_616_871).toISOString()).toBe("2026-03-04T09:34:31.000Z");
     expect(normalizeFanslyTimestamp(1_772_616_871_000).toISOString()).toBe("2026-03-04T09:34:31.000Z");
     expect(normalizeFanslyTimestamp(1_000_000_000_000).toISOString()).toBe("2001-09-09T01:46:40.000Z");
-  });
-
-  it.each([
-    // [mode, existing, overlap, exhausted, cap, verdict without debt, verdict with debt]
-    ["backfill", "pending_backfill", false, true, false, "complete", "partial_window"],
-    ["backfill", "pending_backfill", true, false, false, "complete", "partial_window"],
-    ["backfill", "pending_backfill", false, false, true, "partial_window", "partial_window"],
-    ["backfill", "pending_backfill", false, false, false, "pending_backfill", "pending_backfill"],
-    ["deep_backfill", "partial_window", false, true, false, "complete", "partial_window"],
-    ["deep_backfill", "partial_window", false, false, false, "partial_window", "partial_window"],
-    ["incremental", "complete", true, false, false, "complete", "partial_window"],
-    ["incremental", "partial_window", true, false, false, "partial_window", "partial_window"],
-    // Never pending_backfill: that would re-offer the thread at priority 1 forever.
-    ["incremental", "pending_backfill", true, false, false, "pending_backfill", "pending_backfill"],
-    // A head walk that reaches the provider's end has read the whole history.
-    ["incremental", "pending_backfill", false, true, false, "complete", "partial_window"],
-    ["incremental", "pending_backfill", true, true, false, "complete", "partial_window"],
-    ["incremental", "partial_window", false, true, false, "partial_window", "partial_window"],
-  ] as const)("coverage verdict for %s over %s (overlap %s, exhausted %s, cap %s) never claims complete with normalization debt", (
-    currentMode, existingStatus, overlapFound, providerHistoryExhausted, hitWindowCap, clean, withDebt,
-  ) => {
-    const input = { currentMode, existingStatus, overlapFound, providerHistoryExhausted, hitWindowCap };
-    expect(resolveDmConversationCoverageStatus(input)).toBe(clean);
-    expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: false })).toBe(clean);
-    expect(resolveDmConversationCoverageStatus({ ...input, normalizationDebt: true })).toBe(withDebt);
   });
 
   it("normalizes provider DM tip units into stored cents", () => {

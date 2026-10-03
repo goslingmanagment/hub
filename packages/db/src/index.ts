@@ -178,7 +178,6 @@ export * from "./repositories/sync/observability.ts";
 export * from "./repositories/sync/legacy-streams.ts";
 export * from "./repositories/sync/legacy-import.ts";
 export * from "./repositories/sync/subject-queue.ts";
-export * from "./repositories/projection-debt.ts";
 export * from "./repositories/spenders.ts";
 export * from "./repositories/sync-context.ts";
 export * from "./repositories/sync.ts";

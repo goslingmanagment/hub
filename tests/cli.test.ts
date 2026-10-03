@@ -59,8 +59,6 @@ const cliMocks = vi.hoisted(() => {
     findPageByLabel: vi.fn(),
     findUserById: vi.fn(),
     findUserByUsername: vi.fn(),
-    getPageDmConversationById: vi.fn(),
-    getPageDmMessageRetentionLimit: vi.fn(),
     handleSuccessfulPageVerificationRecovery: vi.fn(),
     insertDeliveryAttempt: vi.fn(),
     listPages: vi.fn(),
@@ -92,8 +90,6 @@ vi.mock("@agency_hub_core/db", async (importOriginal) => {
     findPageByLabel: cliMocks.findPageByLabel,
     findUserById: cliMocks.findUserById,
     findUserByUsername: cliMocks.findUserByUsername,
-    getPageDmConversationById: cliMocks.getPageDmConversationById,
-    getPageDmMessageRetentionLimit: cliMocks.getPageDmMessageRetentionLimit,
     insertDeliveryAttempt: cliMocks.insertDeliveryAttempt,
     listHarvestTransactionResidue: cliMocks.listHarvestTransactionResidue,
   };
@@ -127,7 +123,6 @@ vi.mock("../apps/runtime/src/services/fansly-page-alias-backfill.ts", () => ({
 vi.mock("../apps/runtime/src/services/sync-engine-guard.ts", async (importOriginal) => ({
   ...await importOriginal<typeof SyncEngineGuardModule>(),
   assertLegacyOwnsFanslyPage: async () => undefined,
-  assertLegacyOwnsFanslyPageId: async () => undefined,
   assertLegacyOwnsFanslyPageLabels: async () => undefined,
 }));
 
@@ -166,7 +161,6 @@ vi.mock("../apps/runtime/src/services/sync.ts", async () => {
 
 import { buildProgram, replayWindowMonths } from "../apps/runtime/src/cli.ts";
 import { SYNC_PLANNER_QUEUE } from "../apps/runtime/src/services/sync-queue.ts";
-import { TARGETED_THREAD_BACKFILL_QUEUE } from "../apps/runtime/src/services/sync/targeted-thread-backfill.ts";
 import {
   renderStatusDetail,
   renderWatchEventLine,
@@ -268,13 +262,6 @@ describe("CLI parsing", () => {
       credentials: null,
       proxy: null,
     });
-    cliMocks.getPageDmConversationById.mockResolvedValue({
-      id: 2065,
-      platformAccountId: 44,
-      storedMessageCount: 5,
-    });
-    cliMocks.getPageDmMessageRetentionLimit.mockReset();
-    cliMocks.getPageDmMessageRetentionLimit.mockResolvedValue(1000);
     cliMocks.listPages.mockResolvedValue([]);
     cliMocks.countHarvestObservations.mockResolvedValue(0);
     cliMocks.listHarvestTransactionResidue.mockResolvedValue({ total: 0, sample: [] });
@@ -972,201 +959,14 @@ describe("CLI parsing", () => {
     expect(logSpy).toHaveBeenCalledWith("sync.planner is already queued or active");
   });
 
-  it("queues a targeted thread backfill and prints the job as JSON", async () => {
-    cliMocks.bossBehavior.sendResult = "thread-job-1";
-    // Past the cap, but the flag lifts it for this run: the preflight passes.
-    cliMocks.getPageDmConversationById.mockResolvedValue({
-      id: 2065,
-      platformAccountId: 44,
-      storedMessageCount: 1027,
-    });
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  it("has no `dm backfill-thread` command: old Fansly history is the engine's history request (step 4, S4-15)", () => {
     const program = buildProgram();
+    const names = program.commands.map((command) => command.name());
 
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "2065",
-      "--ignore-retention-limit",
-    ], { from: "user" });
-
-    const boss = cliMocks.bossInstances[0];
-    const app = await cliMocks.createAppContext.mock.results[0]?.value;
-    expect(boss).toBeDefined();
-    expect(boss?.start).toHaveBeenCalledTimes(1);
-    // The queue is created with the singleton-per-thread policy before the send.
-    expect(boss?.createQueue).toHaveBeenCalledWith(
-      TARGETED_THREAD_BACKFILL_QUEUE,
-      expect.objectContaining({ policy: "exclusive", retryLimit: 0 }),
-    );
-    expect(boss?.send).toHaveBeenCalledWith(
-      TARGETED_THREAD_BACKFILL_QUEUE,
-      { threadId: 2065, ignoreRetentionLimit: true },
-      expect.objectContaining({ singletonKey: "44", retryLimit: 0 }),
-    );
-    expect(boss?.stop).toHaveBeenCalledTimes(1);
-    expect(app?.close).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ jobId: "thread-job-1", threadId: 2065 }));
-  });
-
-  it("exits non-zero when the page already has a targeted backfill queued or running", async () => {
-    cliMocks.bossBehavior.sendResult = null;
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "2065",
-    ], { from: "user" });
-
-    expect(cliMocks.bossInstances[0]?.send).toHaveBeenCalledWith(
-      TARGETED_THREAD_BACKFILL_QUEUE,
-      { threadId: 2065, ignoreRetentionLimit: false },
-      expect.objectContaining({ singletonKey: "44" }),
-    );
-    expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ jobId: null, threadId: 2065 }));
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("another targeted backfill for this page is queued or running"),
-    );
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("refuses before queueing when the thread is at its retention limit and the flag is absent", async () => {
-    // Prod, 28.09: threads 1807/1903 stored 1,027 and 1,352 messages against
-    // the spender cap of 1,000; the queued jobs were refused in the worker
-    // with no request and nobody saw it.
-    cliMocks.getPageDmConversationById.mockResolvedValue({
-      id: 1807,
-      platformAccountId: 2,
-      storedMessageCount: 1027,
-    });
-    cliMocks.getPageDmMessageRetentionLimit.mockResolvedValue(1000);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "1807",
-    ], { from: "user" });
-
-    expect(cliMocks.getPageDmMessageRetentionLimit).toHaveBeenCalledWith(expect.anything(), 1807);
-    // Nothing was queued: the worker would only refuse it.
-    expect(cliMocks.bossInstances).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--ignore-retention-limit"));
-    expect(process.exitCode).toBe(1);
-    const app = await cliMocks.createAppContext.mock.results[0]?.value;
-    expect(app?.close).toHaveBeenCalledTimes(1);
-  });
-
-  function jobStatusDb(rows: Array<Record<string, unknown>>) {
-    // One row per poll; the last one repeats.
-    const execute = vi.fn(async () => ({ rows: [rows.length > 1 ? rows.shift() : rows[0]] }));
-    const base = {
-      config: { databaseUrl: "postgres://postgres:postgres@127.0.0.1:5432/testdb" },
-      db: { execute },
-      close: vi.fn(async () => {}),
-    };
-    cliMocks.createAppContext.mockResolvedValue(base);
-    return execute;
-  }
-
-  const recordedResult = {
-    outcome: "completed",
-    threadId: 2065,
-    platformAccountId: 44,
-    syncRunId: 901,
-    requests: 1,
-    insertedMessages: 3,
-    journaledMessages: 3,
-    overlapFound: false,
-    providerHistoryExhausted: true,
-    storedMessageCountBefore: 5,
-    oldestStoredMessageIdBefore: "a10",
-    messageCoverageStatus: "complete",
-    retentionLimit: 1000,
-    projectionDebtRecorded: false,
-  };
-
-  it("--wait prints the job's recorded outcome and exits zero when it completed", async () => {
-    cliMocks.bossBehavior.sendResult = "thread-job-2";
-    const execute = jobStatusDb([{
-      state: "completed",
-      output: recordedResult,
-      startedOn: new Date("2026-09-28T20:30:00.000Z"),
-      completedOn: new Date("2026-09-28T20:30:01.500Z"),
-    }]);
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "2065",
-      "--wait",
-    ], { from: "user" });
-
-    expect(execute).toHaveBeenCalled();
-    const printed = logSpy.mock.calls.map((call) => String(call[0]));
-    expect(printed).toContain(JSON.stringify({ jobId: "thread-job-2", threadId: 2065 }));
-    expect(printed.some((line) => line.includes("thread-job-2") && line.includes("completed"))).toBe(true);
-    expect(printed).toContain(JSON.stringify(recordedResult));
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("--wait exits non-zero when the run was refused", async () => {
-    cliMocks.bossBehavior.sendResult = "thread-job-3";
-    jobStatusDb([{
-      state: "completed",
-      output: { ...recordedResult, outcome: "page_busy", requests: 0, insertedMessages: 0 },
-      startedOn: new Date(),
-      completedOn: new Date(),
-    }]);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "2065",
-      "--wait",
-      "30",
-    ], { from: "user" });
-
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("page_busy"));
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("--wait exits non-zero with the recorded error when the job failed", async () => {
-    cliMocks.bossBehavior.sendResult = "thread-job-4";
-    jobStatusDb([{
-      state: "failed",
-      output: { name: "FanslyApiError", message: "Fansly returned 500" },
-      startedOn: new Date(),
-      completedOn: new Date(),
-    }]);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "dm",
-      "backfill-thread",
-      "--thread",
-      "2065",
-      "--wait",
-    ], { from: "user" });
-
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Fansly returned 500"));
-    expect(process.exitCode).toBe(1);
+    expect(names).not.toContain("dm");
+    const sync = program.commands.find((command) => command.name() === "sync");
+    const history = sync?.commands.find((command) => command.name() === "history");
+    expect(history?.commands.map((command) => command.name())).toContain("request");
   });
 
   it("sends a Telegram test message when configured", async () => {

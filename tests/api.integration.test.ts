@@ -13,7 +13,6 @@ import {
   ensurePageSyncStates,
   setPageOfapiAccountId,
   findUserByUsername,
-  finalizePageDmConversationMessageSync,
   finishSyncRequestAttempt,
   finishSyncRun,
   getNotificationIncidentByKey,
@@ -29,6 +28,7 @@ import {
   rebuildFollowerRollups,
   rebuildRevenueRollups,
   rebuildSubscriberRollups,
+  refreshPageDmConversationWindow,
   storeFanslySession,
   pageSyncCursors as pageSyncCursorRows,
   syncRateLimits,
@@ -555,6 +555,23 @@ function createAutoSyncFanslyAdapter(input: {
   } as AppContext["adapter"];
 }
 
+/** The stored summary of a thread whose messages are all read: the window
+ *  recounted from the stored rows, coverage `complete`, and the head-read
+ *  watermark. (The legacy sync's closing write, gone since step 4 S4-15; the
+ *  Fansly Sync Engine writes the same columns from the archive.) */
+async function settleCompleteThreadSummary(
+  testDb: StartedTestDatabase,
+  input: { conversationId: number; headReadAt: Date },
+) {
+  await refreshPageDmConversationWindow(testDb.db, { conversationId: input.conversationId });
+  await testDb.pool.query(
+    `update page_dm_threads
+        set message_coverage_status = 'complete', message_backfill_complete = true, last_message_sync_at = $2
+      where id = $1`,
+    [input.conversationId, input.headReadAt],
+  );
+}
+
 async function seedConversationApiFixture(input: {
   testDb: StartedTestDatabase;
   pageId: number;
@@ -648,9 +665,8 @@ async function seedConversationApiFixture(input: {
     },
   ]);
 
-  await finalizePageDmConversationMessageSync(input.testDb.db, {
+  await settleCompleteThreadSummary(input.testDb, {
     conversationId: conversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: new Date("2026-03-17T11:45:00.000Z"),
   });
 
@@ -946,9 +962,8 @@ async function seedSyncMonitorScenario(
       inReplyToRootMessageId: null,
     },
   ]);
-  await finalizePageDmConversationMessageSync(testDb.db, {
+  await settleCompleteThreadSummary(testDb, {
     conversationId: completedConversation.id,
-    messageCoverageStatus: "complete",
     headReadAt: completedSyncAt,
   });
 

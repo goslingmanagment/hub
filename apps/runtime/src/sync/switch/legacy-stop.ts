@@ -2,8 +2,6 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "@agency_hub_core/db";
 
-import { TARGETED_THREAD_BACKFILL_QUEUE } from "../../services/sync/targeted-thread-backfill.ts";
-
 // Switch phase B (design step 3 §3.5 item 7, §11.1 B, J3): is the legacy
 // engine of a page really stopped? One read-only statement over every place a
 // legacy request of the page could still be in flight. Lease expiry alone is
@@ -12,6 +10,11 @@ import { TARGETED_THREAD_BACKFILL_QUEUE } from "../../services/sync/targeted-thr
 
 /** The `(58213, pageId)` advisory lock of the page's socket (step 1). */
 export const FANSLY_WS_OWNERSHIP_LOCK_NAMESPACE = 58_213;
+
+/** The legacy targeted thread backfill's pg-boss queue. Nothing sends to it or
+ *  works it since step 4 (S4-15); an older image's job may still be active
+ *  during a deploy, so the check reads it until the switch goes (S4-21). */
+const LEGACY_THREAD_BACKFILL_QUEUE = "sync.thread.backfill";
 
 export interface LegacyStopEvidence {
   /** `page_sync_states` rows running under an unexpired lease. */
@@ -63,7 +66,7 @@ export async function readLegacyStopEvidence(db: Database, pageId: number): Prom
   const backfills = boss.rows[0]?.present === true
     ? sql`(select count(*)::int from pgboss.job j
              join page_dm_threads t on t.id = (j.data ->> 'threadId')::bigint
-            where j.name = ${TARGETED_THREAD_BACKFILL_QUEUE} and j.state = 'active'
+            where j.name = ${LEGACY_THREAD_BACKFILL_QUEUE} and j.state = 'active'
               and t.platform_account_id = ${pageId})`
     : sql`0`;
   const result = await db.execute<{

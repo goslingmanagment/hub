@@ -16,7 +16,6 @@ import {
   getFanslySyncLiveness,
   insertAgentKey,
   isFanslyPageEngineOwned,
-  listAutoApprovableAgentHydrationRequests,
   listDispatchableAgentHydrationRequests,
   listDispatchingAgentHydrationRequests,
   listEngineOwnedFanslyPages,
@@ -30,9 +29,6 @@ import {
   startSyncRun,
   upsertFanPages,
   upsertFans,
-  upsertPageDmConversation,
-  upsertPageDmMessages,
-  appendDomainEvents,
   type SyncPageMode,
 } from "@agency_hub_core/db";
 
@@ -52,7 +48,6 @@ import { applyFanslyWsPolicyRepair } from "../apps/runtime/src/services/fansly-w
 import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
-import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
   FANSLY_PAGE_ON_SYNC_ENGINE_CODE,
   FanslyPageOnSyncEngineError,
@@ -326,37 +321,25 @@ describe("(d) agent hydration", () => {
     return Number(result.rows[0]!.id);
   }
 
-  it("neither dispatches nor auto-approves a request of a page the engine owns", async () => {
+  it("dispatches no request of a page the engine owns", async () => {
     const pages = await seedFencePages();
     const keyId = await seedKey([pages.handover.id, pages.live.id, pages.off.id, pages.shadow.id, pages.onlyfans.id]);
     const approved: Record<string, number> = {};
-    const requested: Record<string, number> = {};
     for (const [name, page] of Object.entries({
       handover: pages.handover, live: pages.live, off: pages.off, shadow: pages.shadow,
     })) {
       approved[name] = await seedRequest({ keyId, pageId: page.id, state: "approved" });
-      requested[name] = await seedRequest({ keyId, pageId: page.id, state: "requested" });
     }
     approved.onlyfans = await seedRequest({ keyId, pageId: pages.onlyfans.id, state: "approved" });
 
-    const dispatchable = await listDispatchableAgentHydrationRequests(db().db, { limit: 50 });
-    expect(dispatchable.map((row) => row.id).sort((a, b) => a - b))
+    const dispatchable = async () => (await listDispatchableAgentHydrationRequests(db().db, { limit: 50 }))
+      .map((row) => row.id).sort((a, b) => a - b);
+    expect(await dispatchable())
       .toEqual([approved.off!, approved.shadow!, approved.onlyfans!].sort((a, b) => a - b));
 
-    // Auto-approval: the policy approves one request per page at a time, so
-    // the pages' approved rows go first.
-    await db().pool.query("delete from agent_hydration_requests where state = 'approved'");
-    const candidates = await listAutoApprovableAgentHydrationRequests(db().db, {
-      limit: 50, utcDayStart: new Date(Date.now() - DAY_MS),
-    });
-    expect(candidates.map((row) => row.id).sort((a, b) => a - b))
-      .toEqual([requested.off!, requested.shadow!].sort((a, b) => a - b));
-
-    // Back to `off`: both lists see the page again.
+    // Back to `off`: the list sees the page again.
     await setMode(pages.live.id, "off");
-    expect((await listAutoApprovableAgentHydrationRequests(db().db, {
-      limit: 50, utcDayStart: new Date(Date.now() - DAY_MS),
-    })).map((row) => row.id)).toContain(requested.live!);
+    expect(await dispatchable()).toContain(approved.live!);
   });
 
   it("leaves the engine's rows to the engine: no expiry, no reconcile, no stuck sweep", async () => {
@@ -387,8 +370,8 @@ describe("(d) agent hydration", () => {
     await db().pool.query("delete from agent_hydration_requests where id = any($1::bigint[])",
       [[legacyDispatching, legacyRequested]]);
     const app = createTestAppContext(db());
-    expect(await reconcileAgentHydrationDispatches(app, {} as never)).toBe(0);
-    expect(await sweepStuckAgentHydration(app, {} as never)).toBe(0);
+    expect(await reconcileAgentHydrationDispatches(app)).toBe(0);
+    expect(await sweepStuckAgentHydration(app)).toBe(0);
     const rows = await db().pool.query(
       "select id::int as id, state from agent_hydration_requests order by id",
     );
@@ -567,42 +550,6 @@ describe("(e) the legacy WS supervisor", () => {
     }
   });
 });
-
-// ── a stored DM thread, for the CLI fences below ─────────────────────────────
-
-const GROUP = "100";
-const FAN = "111";
-
-async function seedThread(app: ReturnType<typeof createTestAppContext>, pageId: number, base: Date) {
-  const [fan] = await upsertFans(app.db, [{ platform: "fansly", platformUserId: FAN }]);
-  const thread = await upsertPageDmConversation(app.db, {
-    platformAccountId: pageId, fanId: fan!.id, platformConversationId: GROUP,
-    partnerPlatformUserId: FAN, partnerUsername: null, partnerDisplayName: null,
-    conversationFlags: 0, unreadCount: 0, subscriptionTierId: null,
-    lastMessageId: "150", lastUnreadMessageId: null, lastMessageAt: new Date(base.getTime() + 60_000),
-    lastMessageSenderId: FAN, lastMessageSenderRole: "fan", lastMessagePreview: "second",
-    messageCoverageStatus: "complete", newestStoredMessageId: "150", oldestStoredMessageId: "149",
-    storedMessageCount: 2, lastMessageSyncAt: new Date(base.getTime() + 120_000), isVisible: true,
-    lastSeenGeneration: 1, metadata: {},
-  });
-  if (!thread) throw new Error("thread missing");
-  const message = (id: string, offsetMs: number, content: string) => ({
-    conversationId: thread.id, platformAccountId: pageId, platformMessageId: id,
-    senderPlatformUserId: FAN, senderRole: "fan" as const, createdAt: new Date(base.getTime() + offsetMs),
-    content, totalTipAmountCents: 0, inReplyToMessageId: null, inReplyToRootMessageId: null,
-  });
-  await upsertPageDmMessages(app.db, [message("149", 0, "first"), message("150", 60_000, "second")]);
-  const event = (ref: string, occurredAt: Date, text: string) => ({
-    type: "message.received", occurredAt, fanIdentityRef: FAN, conversationRef: GROUP, messageRef: ref,
-    transactionRef: null, data: { text, tipAmountMills: 0, isTip: false }, schemaVersion: 1,
-    observationId: 1, dedupKey: `msg:received:${ref}`,
-  });
-  await appendDomainEvents(app.db, pageId, [
-    event("149", base, "first"), event("150", new Date(base.getTime() + 60_000), "second"),
-  ]);
-  await runMessageArchiveProjection(app, { accountId: pageId });
-  return thread;
-}
 
 // ── (g) the /account/me levers, the probes, the scripts ─────────────────────
 
@@ -805,33 +752,24 @@ describe("(g) the runtime CLI", () => {
     return program;
   }
 
-  it.each(ENGINE_MODES)("`page verify` refuses a page being switched and `dm backfill-thread` refuses a %s page", async (mode) => {
+  it("`page verify` refuses a page being switched", async () => {
     const getAccountMe = vi.fn(async () => { throw new Error("must not send"); });
     const app = createTestAppContext(db(), { adapter: { getAccountMe } as unknown as AppContext["adapter"] });
     const page = await seedPage(app, "fence-cli");
-    await setMode(page.id, mode);
-    const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
-    const expected = expect.objectContaining({ code: FANSLY_PAGE_ON_SYNC_ENGINE_CODE, statusCode: 409 });
+    await setMode(page.id, "handover");
     try {
-      if (mode === "handover") {
-        // S3-05: a live page's verify is the engine's (sync-account-routing).
-        const verify = await loadCliProgram(app);
-        await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
-          .rejects.toThrow(expect.objectContaining({ code: "fansly_page_switching", statusCode: 409 }));
-      }
-      const backfill = await loadCliProgram(app);
-      await expect(backfill.parseAsync(["dm", "backfill-thread", "--thread", String(thread.id)], { from: "user" }))
-        .rejects.toThrow(expected);
+      // S3-05: a live page's verify is the engine's (sync-account-routing).
+      const verify = await loadCliProgram(app);
+      await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
+        .rejects.toThrow(expect.objectContaining({ code: "fansly_page_switching", statusCode: 409 }));
     } finally {
       vi.doUnmock("../apps/runtime/src/bootstrap.ts");
       vi.resetModules();
     }
     expect(getAccountMe).not.toHaveBeenCalled();
-    // Refused before the queue was even opened.
-    expect((await db().pool.query("select to_regclass('pgboss.job') is null as absent")).rows[0].absent).toBe(true);
   });
 
-  it("`page verify` and `dm backfill-thread` serve a shadow page as before (J8)", async () => {
+  it("`page verify` serves a shadow page as before (J8)", async () => {
     const getAccountMe = vi.fn(async () => { throw new Error("adapter reached"); });
     const app = createTestAppContext(db(), {
       adapter: { getAccountMe } as unknown as AppContext["adapter"], databaseUrl: db().connectionString,
@@ -839,23 +777,14 @@ describe("(g) the runtime CLI", () => {
     const page = await seedPage(app, "fence-cli-shadow");
     await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
     await setMode(page.id, "shadow");
-    const thread = await seedThread(app, page.id, new Date(Date.now() - 3_600_000));
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const verify = await loadCliProgram(app);
       await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
         .rejects.toThrow("adapter reached");
       expect(getAccountMe).toHaveBeenCalledOnce();
-      const backfill = await loadCliProgram(app);
-      await backfill.parseAsync(["dm", "backfill-thread", "--thread", String(thread.id)], { from: "user" });
     } finally {
-      log.mockRestore();
       vi.doUnmock("../apps/runtime/src/bootstrap.ts");
       vi.resetModules();
     }
-    // The job was queued for the worker, as before the fences.
-    expect((await db().pool.query(
-      "select count(*)::int as n from pgboss.job where data->>'threadId' = $1", [String(thread.id)],
-    )).rows[0].n).toBe(1);
   });
 });

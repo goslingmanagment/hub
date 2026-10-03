@@ -100,7 +100,6 @@ function createTelemetry() {
     recordPhaseStarted: vi.fn(async () => {}),
     recordCheckpointLoaded: vi.fn(async () => {}),
     recordCheckpointAdvanced: vi.fn(async () => {}),
-    recordDmMessagesChunkSummary: vi.fn(async () => {}),
     addNote: vi.fn(async () => {}),
     addAnomaly: vi.fn(async () => {}),
     getRequestObserver: vi.fn(() => null),
