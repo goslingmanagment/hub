@@ -87,12 +87,10 @@ export interface AiMediaAttachmentsEvent {
 
 /**
  * One canonical `message.attachments_observed` event → fan media candidates
- * (idempotent upsert). Shared by the minutely projector and the Fansly fast
- * lane, which applies the events of its own fresh read at once; the
- * projector replays the same events later without effect. 'deferred' means a
- * running erasure holds the fence: stop and try again later.
+ * (idempotent upsert); a replay of the same event has no effect. 'deferred'
+ * means a running erasure holds the fence: stop and try again later.
  */
-export async function applyAiMediaAttachmentsEvent(
+async function applyAiMediaAttachmentsEvent(
   app: ProjectorApp,
   input: {
     pageId: number;

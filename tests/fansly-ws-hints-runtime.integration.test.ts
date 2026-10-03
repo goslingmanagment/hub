@@ -45,7 +45,6 @@ async function fixture(routeInitial = true) {
   await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
   const generation = await readProbeGeneration(app.db, page.label);
   Object.assign(app.config, {
-    fanslyWsCaptureEnabled: true, fanslyWsCapturePageAllowlist: page.label,
     fanslyWsHintsEnabled: true, fanslyWsHintsPageAllowlist: page.label,
     fanslyWsHintsTypeAllowlist: "message_created,group_created",
     fanslyWsHintsPolicies: JSON.stringify({ [page.label]: {
@@ -393,7 +392,6 @@ describe("B1 REST execution and rollback", () => {
       await f.owned(() => fanslyDmMessagesChunk(f.app, f.input() as never));
       expect((await db.pool.query("select count(*)::int n from page_dm_messages")).rows[0].n).toBe(51);
       expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_attempts")).rows[0].n).toBe(1);
-      expect(f.app.config.fanslyWsCaptureEnabled).toBe(true);
       expect(f.app.config.fanslyWsHintsEnabled).toBe(true);
     } finally { vi.useRealTimers(); }
   });

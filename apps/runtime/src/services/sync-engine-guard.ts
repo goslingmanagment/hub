@@ -3,12 +3,11 @@ import { findPageById, findPageByLabel, isFanslyPageEngineOwned, type Database }
 import { AppError } from "./errors.ts";
 
 // Step-3 design §3.1 items 10–11 (S3-01): the legacy senders outside the
-// schedulers — the owner's `/account/me` routes and CLIs, the probes, the
-// alias backfill, the binding preflight and the probe-socket scripts — refuse
-// a page the Fansly Sync Engine owns (`handover`/`live`) before they resolve
-// an egress or touch the page's send guard. The step-1 guard row stays the
-// catch-all at the wire; this is the refusal with a reason and a hint.
-// `off` and `shadow` pages pass (J8).
+// schedulers — the owner's `/account/me` routes and CLIs, the probes and the
+// alias backfill — refuse a page the Fansly Sync Engine owns
+// (`handover`/`live`) before they resolve an egress or touch the page's send
+// guard. The step-1 guard row stays the catch-all at the wire; this is the
+// refusal with a reason and a hint. `off` and `shadow` pages pass (J8).
 
 export const FANSLY_PAGE_ON_SYNC_ENGINE_CODE = "fansly_page_on_sync_engine";
 
@@ -28,8 +27,6 @@ export const SYNC_ENGINE_HINTS = {
   aliasBackfill: (label: string) =>
     `fan profiles of an engine page are the engine's: \`pnpm cli sync work enqueue --page ${label}`
     + " --resource fan-profiles.alias-backfill`",
-  socket: (label: string) =>
-    `the page's socket belongs to the engine; see \`pnpm cli sync page status --page ${label}\``,
 } as const;
 
 export class FanslyPageOnSyncEngineError extends AppError {

@@ -107,18 +107,23 @@ describe("the legacy send log's operations", () => {
       if (match[2] !== undefined) found.add(match[2]);
     }
     const captures = execFileSync("grep", ["-rhoE", String.raw`operation: "[a-z_]+", requestTimeoutMs|acquire\(\{ operation: "[a-z_]+"|^\s+operation: "[a-z_]+",$`,
-      "apps/runtime/src/services/egress", "apps/runtime/src/services/fansly-ws", "scripts/fansly-ws"], { encoding: "utf8" });
+      "apps/runtime/src/services/egress", "apps/runtime/src/services/fansly-ws"], { encoding: "utf8" });
     for (const match of captures.matchAll(/operation: "([a-z_]+)"/g)) found.add(match[1]!);
     return [...found].sort();
   }
 
-  it("maps every operation the legacy code writes, and no other", () => {
+  /** Operations whose writers are deleted but whose rows the send log keeps:
+   *  the legacy socket connect and the W0 socket probes (step 4, S4-12). */
+  const RETIRED_OPERATIONS = ["ws_connect", "ws_probe"];
+
+  it("maps every operation the legacy code writes or the send log keeps from a deleted writer, and no other", () => {
     const inCode = operationsInCode();
     // The scan sees the adapter's lanes and every direct capture.
-    for (const operation of ["messages", "messaging_groups", "media_offer_stats", "broadcast_stats_deleted_probe", "media_download", "ws_connect", "ws_probe", "account_me"]) {
+    for (const operation of ["messages", "messaging_groups", "media_offer_stats", "broadcast_stats_deleted_probe", "media_download", "account_me"]) {
       expect(inCode, operation).toContain(operation);
     }
-    expect(Object.keys(FANSLY_LEGACY_OPERATION_ROUTES).sort()).toEqual(inCode);
+    for (const operation of RETIRED_OPERATIONS) expect(inCode, operation).not.toContain(operation);
+    expect(Object.keys(FANSLY_LEGACY_OPERATION_ROUTES).sort()).toEqual([...inCode, ...RETIRED_OPERATIONS].sort());
     for (const route of Object.values(FANSLY_LEGACY_OPERATION_ROUTES)) expect(FANSLY_ROUTES.has(route), route).toBe(true);
   });
 

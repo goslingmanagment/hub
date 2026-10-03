@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +13,6 @@ import {
   ensurePageSyncStates,
   ensureSyncPage,
   FANSLY_SYNC_ENGINE_HYDRATION_LANE,
-  getFanslyFastLanePageSyncGate,
   getFanslySyncLiveness,
   getProjectionWatermark,
   insertAgentKey,
@@ -24,7 +22,6 @@ import {
   listDispatchingAgentHydrationRequests,
   listEngineOwnedFanslyPages,
   listExpirableAgentHydrationRequests,
-  listPendingFanslyWsLiveReceipts,
   listRunnablePageSync,
   listStuckAgentHydrationDispatches,
   markPageSyncEnqueued,
@@ -51,13 +48,10 @@ import {
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
-import * as socketTransport from "../apps/runtime/src/services/egress/fansly-receiver-socket.ts";
 import { runFanslyEndpointProbe } from "../apps/runtime/src/services/fansly-endpoint-probe.ts";
 import { backfillFanslyPageAliases } from "../apps/runtime/src/services/fansly-page-alias-backfill.ts";
 import { runFanslyReplayProbe } from "../apps/runtime/src/services/fansly-replay-probe.ts";
 import { reconcileRecentFanslyWsDeletions } from "../apps/runtime/src/services/fansly-ws-deletions.ts";
-import { applyFanslyWsPolicyRepair } from "../apps/runtime/src/services/fansly-ws-policy-repair.ts";
-import { startFanslyWsWorker, type FanslyWsWorkerTiming } from "../apps/runtime/src/services/fansly-ws/worker.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import {
@@ -65,11 +59,7 @@ import {
   runFanslyWsHintProjection,
 } from "../apps/runtime/src/services/projections/fansly-ws-hints.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
-import {
-  FANSLY_PAGE_ON_SYNC_ENGINE_CODE,
-  FanslyPageOnSyncEngineError,
-} from "../apps/runtime/src/services/sync-engine-guard.ts";
-import { engineOwnedRefusalLine, refuseEngineOwnedPage } from "../scripts/fansly-ws/engine-owned.ts";
+import { FANSLY_PAGE_ON_SYNC_ENGINE_CODE } from "../apps/runtime/src/services/sync-engine-guard.ts";
 import {
   resetIntegrationDatabase,
   seedFanslyPage,
@@ -269,30 +259,6 @@ describe("(b) the sync_silent deadman", () => {
   });
 });
 
-describe("(c) the AI fast lane's page gate", () => {
-  it("holds a page the engine owns and no other", async () => {
-    const pages = await seedFencePages();
-    const now = new Date();
-    for (const page of [pages.handover, pages.live, pages.off, pages.shadow]) {
-      await ensurePageSyncStates(db().db, { pageId: page.id, now });
-      await db().pool.query(
-        `update page_sync_states set status = 'idle', blocker_kind = null, blocker_code = null,
-                blocker_message = null, blocked_at = null, retry_at = null, retry_kind = null
-          where page_id = $1`,
-        [page.id],
-      );
-    }
-    for (const page of [pages.handover, pages.live]) {
-      expect(await getFanslyFastLanePageSyncGate(db().db, { pageId: page.id, now }))
-        .toEqual({ cooldown: false, held: true });
-    }
-    for (const page of [pages.off, pages.shadow]) {
-      expect(await getFanslyFastLanePageSyncGate(db().db, { pageId: page.id, now }))
-        .toEqual({ cooldown: false, held: false });
-    }
-  });
-});
-
 describe("(d) agent hydration", () => {
   const DAY_MS = 86_400_000;
   const hex = (char: string) => char.repeat(64);
@@ -408,175 +374,6 @@ describe("(d) agent hydration", () => {
       { id: engineDispatching, state: "dispatching" },
       { id: engineRequested, state: "requested" },
     ]);
-  });
-});
-
-// ── (e) the legacy WS supervisor ────────────────────────────────────────────
-
-// Production timing scaled down 10x, as tests/fansly-b0.integration.test.ts.
-const scaled: FanslyWsWorkerTiming = {
-  configPollMs: 1_000, configStaleMs: 2_000, pagePauseMs: 1_000, backoffBaseMs: 150,
-  authTimeoutMs: 1_000, checkMs: 500, guardStaleMs: 1_500, pingMs: 2_000, pongTimeoutMs: 3_000,
-  drainMs: 2_000, applyDrainMs: 1_500,
-};
-
-function frame(fan: string) {
-  return JSON.stringify({ t: 10001, d: JSON.stringify([
-    { t: 10000, d: JSON.stringify({ serviceId: 5, event: JSON.stringify({ type: 1, data: { accountId: fan } }) }) },
-  ]) });
-}
-
-async function wsLockHolders(pageId: number): Promise<number> {
-  const result = await db().pool.query<{ n: number }>(
-    `select count(*)::int as n from pg_locks
-      where locktype = 'advisory' and classid = 58213 and objid = $1 and objsubid = 2 and granted
-        and database = (select oid from pg_database where datname = current_database())`,
-    [pageId],
-  );
-  return result.rows[0]!.n;
-}
-
-async function wsFixture(label: string) {
-  const app = createTestAppContext(db(), { databaseUrl: db().connectionString });
-  const page = await seedPage(app, label);
-  await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
-  await db().pool.query("update pages set external_page_id = '999' where id = $1", [page.id]);
-  await setMode(page.id, "off");
-  app.config.fanslyWsCaptureEnabled = true;
-  app.config.fanslyWsCapturePageAllowlist = page.label;
-  const stops: ReturnType<typeof vi.fn>[] = [];
-  let active: EventTarget | null = null;
-  const open = vi.spyOn(socketTransport, "openFanslyReceiverSocket").mockImplementation(() => {
-    const stop = vi.fn();
-    stops.push(stop);
-    const socket = Object.assign(new EventTarget(), { send: vi.fn((data: string) => {
-      if (data === "p") socket.dispatchEvent(new MessageEvent("message", { data: '{"t":2,"d":"{}"}' }));
-    }) });
-    active = socket;
-    queueMicrotask(() => {
-      socket.dispatchEvent(new Event("open"));
-      socket.dispatchEvent(new MessageEvent("message", { data: '{"t":1,"d":"{}"}' }));
-      socket.dispatchEvent(new MessageEvent("message", { data: frame("123") }));
-    });
-    return { socket, stop } as unknown as ReturnType<typeof socketTransport.openFanslyReceiverSocket>;
-  });
-  const observations = async () => (await db().pool.query<{ n: number }>(
-    "select count(*)::int as n from observations where source = 'fansly_ws'",
-  )).rows[0]!.n;
-  return { app, page, open, stops, observations, deliver: (raw: string) => active!.dispatchEvent(new MessageEvent("message", { data: raw })) };
-}
-
-describe("(e) the legacy WS supervisor", () => {
-  it("drops a page entering handover within one poll: frames drained, lock released, row closed", async () => {
-    const f = await wsFixture("fence-ws");
-    const worker = startFanslyWsWorker(f.app, { timing: scaled });
-    try {
-      await vi.waitFor(async () => expect(await f.observations()).toBe(1), { timeout: 10_000 });
-      await vi.waitFor(async () => expect((await db().pool.query(
-        "select count(*)::int as n from fansly_ws_connections where verified_at is not null",
-      )).rows[0].n).toBe(1), { timeout: 5_000 });
-      expect(await wsLockHolders(f.page.id)).toBe(1);
-
-      // A frame already received when the switch fences the page.
-      f.deliver(frame("456"));
-      const changedAt = Date.now();
-      await setMode(f.page.id, "handover");
-      await vi.waitFor(() => expect(f.stops[0]).toHaveBeenCalledOnce(), { timeout: 10_000 });
-      // One poll, as the step-1 live-off bound (tests/fansly-b0.integration.test.ts).
-      expect(Date.now() - changedAt).toBeLessThan(scaled.configPollMs + scaled.configStaleMs + scaled.checkMs);
-
-      await vi.waitFor(async () => expect((await db().pool.query(
-        "select stop_reason, closed_at is not null as closed from fansly_ws_connections where page_id = $1",
-        [f.page.id],
-      )).rows).toEqual([{ stop_reason: "disabled", closed: true }]), { timeout: 10_000 });
-      await vi.waitFor(async () => expect(await wsLockHolders(f.page.id)).toBe(0), { timeout: 10_000 });
-      // Both frames were captured and applied before the attempt closed.
-      expect(await f.observations()).toBe(2);
-      expect(await listPendingFanslyWsLiveReceipts(f.app.db, { limit: 10, pageId: f.page.id })).toEqual([]);
-
-      // The supervisor does not come back while the engine owns the page.
-      await sleep(2 * scaled.configPollMs + 200);
-      expect(f.open).toHaveBeenCalledOnce();
-      expect(await wsLockHolders(f.page.id)).toBe(0);
-
-      // Leaving to `off` restores it with no other action.
-      await setMode(f.page.id, "off");
-      await vi.waitFor(() => expect(f.open).toHaveBeenCalledTimes(2), { timeout: 10_000 });
-    } finally {
-      await worker.stop();
-      f.open.mockRestore();
-    }
-  });
-
-  it("keeps a shadow page's socket across polls, as before (J8)", async () => {
-    const f = await wsFixture("fence-ws-shadow");
-    await setMode(f.page.id, "shadow");
-    const worker = startFanslyWsWorker(f.app, { timing: scaled });
-    try {
-      await vi.waitFor(async () => expect(await f.observations()).toBe(1), { timeout: 10_000 });
-      await vi.waitFor(async () => expect((await db().pool.query(
-        "select count(*)::int as n from fansly_ws_connections where verified_at is not null",
-      )).rows[0].n).toBe(1), { timeout: 5_000 });
-      // Several polls later the supervisor still holds the page: one socket,
-      // never stopped, the lock held, the row open, frames still captured.
-      await sleep(2 * scaled.configPollMs + 200);
-      f.deliver(frame("456"));
-      await vi.waitFor(async () => expect(await f.observations()).toBe(2), { timeout: 5_000 });
-      expect(f.open).toHaveBeenCalledOnce();
-      expect(f.stops[0]).not.toHaveBeenCalled();
-      expect(await wsLockHolders(f.page.id)).toBe(1);
-      expect((await db().pool.query(
-        "select closed_at is null as open from fansly_ws_connections where page_id = $1", [f.page.id],
-      )).rows).toEqual([{ open: true }]);
-    } finally {
-      await worker.stop();
-      f.open.mockRestore();
-    }
-  });
-
-  it("never opens the socket of a page the engine already owns", async () => {
-    const f = await wsFixture("fence-ws-live");
-    await setMode(f.page.id, "live");
-    const worker = startFanslyWsWorker(f.app, { timing: scaled });
-    try {
-      await sleep(2 * scaled.configPollMs + 200);
-      expect(f.open).not.toHaveBeenCalled();
-      expect(await wsLockHolders(f.page.id)).toBe(0);
-      expect((await db().pool.query("select count(*)::int as n from fansly_ws_connections")).rows[0].n).toBe(0);
-    } finally {
-      await worker.stop();
-      f.open.mockRestore();
-    }
-  });
-
-  it("waits off the reconnect ladder, without a failure of its own, while the guard row is the engine's", async () => {
-    const f = await wsFixture("fence-ws-guard");
-    await db().pool.query(
-      "insert into fansly_page_send_guards (page_id, last_completed_at, next_u) values ($1, now() - interval '1 hour', 0) on conflict (page_id) do nothing",
-      [f.page.id],
-    );
-    await db().pool.query(
-      "update fansly_page_send_guards set owner_engine = 'fansly_sync_engine', engine_switched_at = now() where page_id = $1",
-      [f.page.id],
-    );
-    const warn = vi.spyOn(f.app.logger, "warn");
-    const worker = startFanslyWsWorker(f.app, { timing: scaled });
-    try {
-      await vi.waitFor(
-        () => expect(f.app.fanslySendGuards!.counters.engineOwnedRefusals).toBeGreaterThanOrEqual(2),
-        { timeout: 10_000 },
-      );
-      expect(f.open).not.toHaveBeenCalled();
-      // Only the guard's own refusal is logged; the supervisor reports no
-      // failure of its own.
-      expect(new Set(warn.mock.calls.map((call) => call[1])))
-        .toEqual(new Set(["Fansly page is owned by the Fansly Sync Engine; the legacy sender stops"]));
-      expect((await db().pool.query("select count(*)::int as n from fansly_ws_connections")).rows[0].n).toBe(0);
-    } finally {
-      await worker.stop();
-      f.open.mockRestore();
-      warn.mockRestore();
-    }
   });
 });
 
@@ -906,11 +703,6 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       .rejects.toThrow(refusal(f.page.label, "handover"));
     await expect(runFanslyReplayProbe(f.app, { pageLabels: [f.page.label], dryRun: true }))
       .rejects.toThrow(refusal(f.page.label, "handover"));
-    await expect(applyFanslyWsPolicyRepair(f.app, {
-      id: randomUUID(), pageLabel: f.page.label, pageId: f.page.id, nativeAccountId: "999",
-      fromGeneration: "a".repeat(64), toGeneration: "b".repeat(64), fingerprint: "c".repeat(64),
-      policyVersion: 0, expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    })).rejects.toThrow(switching);
     expect(f.adapter.verifySession).not.toHaveBeenCalled();
     expect(f.adapter.getAccountsByIdsPage).not.toHaveBeenCalled();
     expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
@@ -924,19 +716,6 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
       totalPages: 0, pages: [], skippedEngineOwnedPages: [f.page.label],
     });
     expect(f.adapter.getAccountsByIdsPage).not.toHaveBeenCalled();
-  });
-
-  it("the operator scripts refuse with a one-line reason", async () => {
-    const f = await engineFixture("live", "lilly-1");
-    const failure = await refuseEngineOwnedPage(f.app.db, "lilly-1").catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(FanslyPageOnSyncEngineError);
-    expect(engineOwnedRefusalLine(failure)).toBe(
-      "Page lilly-1 is on the Fansly Sync Engine (mode live): the legacy engine sends nothing for it; "
-        + "the page's socket belongs to the engine; see `pnpm cli sync page status --page lilly-1`\n",
-    );
-    expect(engineOwnedRefusalLine(new Error("provider text"))).toBeNull();
-    await setMode(f.page.id, "shadow");
-    await expect(refuseEngineOwnedPage(f.app.db, "lilly-1")).resolves.toBeUndefined();
   });
 
   it("the AI describer's CDN download is refused before an egress is resolved", async () => {
@@ -997,8 +776,6 @@ describe("(g) the legacy levers refuse an engine page with a 409 and send nothin
     await expect(backfillFanslyPageAliases(app, {})).rejects.toThrow("adapter reached");
     await expect(backfillFanslyPageAliases(app, { pageLabels: [page.label] })).rejects.toThrow("adapter reached");
     expect(adapter.getAccountsByIdsPage).toHaveBeenCalledTimes(2);
-
-    await expect(refuseEngineOwnedPage(app.db, page.label)).resolves.toBeUndefined();
   });
 });
 
