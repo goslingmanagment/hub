@@ -3,9 +3,7 @@ import { mapFanslySubscriptionStatus, type FanslyFollower, type FanslySubscriber
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 // The audience rules of the Sync Engine's resources (resources/subscribers.ts,
-// followers.ts): subscribers, followers, followers reconcile. Pure. The legacy
-// chunk handlers (executor-handlers.ts, followers-reconcile-floor.ts) import
-// them from here until step 4 deletes them.
+// followers.ts): subscribers, followers, followers reconcile. Pure.
 
 /** Restarts of a subscribers walk (total changed, partial result, offset
  *  duplicates) before the walk is withheld. */

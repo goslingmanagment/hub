@@ -105,7 +105,6 @@
   "tests/page-sync-lease-fencing.integration.test.ts": 62,
   "tests/sdk-runtime.test.ts": 12,
   "tests/sdk.integration.test.ts": 5,
-  "tests/sync-handlers.test.ts": 1,
   "tests/sync-orphaned-runs.integration.test.ts": 52,
   "tests/sync.integration.test.ts": 18,
   "tests/telegram-report.integration.test.ts": 32,

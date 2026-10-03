@@ -350,31 +350,28 @@ describe("capture-shape mapper versions", () => {
   });
 });
 
-describe("the three journaling call sites", () => {
+describe("the journaling call sites", () => {
   it("pass the endpoint's capture-shape version, and pass page.raw through the trim", () => {
     // [A20] is an ALLOWLIST, not a removal: the trim stays and its kept-field
-    // set grew. So what a call site must do is (a) hand `page.raw` to the trim
-    // and (b) stamp the per-endpoint capture-shape version, so replay tooling
-    // can tell a pre-[A20] 4-field body from a widened 18-field one.
-    const source = readFileSync(
-      path.resolve("apps/runtime/src/services/sync/executor-handlers.ts"),
+    // set grew. So what a call site must do is (a) hand the served body to the
+    // trim and (b) stamp the per-endpoint capture-shape version, so replay
+    // tooling can tell a pre-[A20] 4-field body from a widened 18-field one.
+    // The follower lanes are the Sync Engine's (the legacy `followers` and
+    // `followers_reconcile` handlers are deleted since step 4, S4-17): both of
+    // its follower resources journal the `followers` kind through one trim.
+    const engineSource = readFileSync(
+      path.resolve("apps/runtime/src/sync/fansly/capture.ts"),
       "utf8",
     );
-    // The dm_conversations sweep moved to its own module; the follower lanes
-    // stayed. Both call sites are still pinned, just in the files that hold
-    // them now.
     const conversationSource = readFileSync(
       path.resolve("apps/runtime/src/services/sync/fansly-dm-conversations.ts"),
       "utf8",
     );
-    const follower = [...source.matchAll(
-      /responsePayload: captureFanslyFollowerPayload\(page\.raw, page\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
+    const follower = [...engineSource.matchAll(
+      /body: captureFanslyFollowerPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
     )];
-    // Two follower lanes: `followers` (incremental) and `followers_reconcile`.
-    expect(follower).toHaveLength(2);
-    for (const match of follower) {
-      expect(match[1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
-    }
+    expect(follower).toHaveLength(1);
+    expect(follower[0]![1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
     const groups = [...conversationSource.matchAll(
       /responsePayload: capturedPayload,\s*\n\s*mapperVersion: (\w+),/g,
     )];
@@ -386,11 +383,9 @@ describe("the three journaling call sites", () => {
 
     // …and the shared constant is NOT bumped for these lanes: it is read by
     // every Fansly writer, so bumping it would re-label unrelated captures.
-    for (const lane of [source, conversationSource]) {
-      expect(lane).not.toMatch(
-        /trimFansly(Follower|MessagingGroups)Payload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
-      );
-    }
+    expect(conversationSource).not.toMatch(
+      /trimFanslyMessagingGroupsPayload\(page\.raw\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
+    );
   });
 });
 

@@ -864,10 +864,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    if (!boss) {
-      throw new ServiceUnavailableError("Job queue not available");
-    }
-    const result = await resetFollowersReconcileStream(appContext, boss, request.body);
+    const result = await resetFollowersReconcileStream(appContext, request.body);
     await recordAudit(appContext, {
       ...auditCtx(principal),
       eventType: "admin.followers_reconcile_reset",

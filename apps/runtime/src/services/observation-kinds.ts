@@ -67,7 +67,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "fan_earnings_stats", source: "pull", writer: "services/sync/fan-earnings-capture.ts" },
   { kind: "fan_earnings_monthly", source: "pull", writer: "services/sync/fan-earnings-capture.ts" },
   { kind: "fans_active", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "followers", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  { kind: "followers", source: "pull", writer: "sync/fansly/capture.ts" },
   { kind: "group_detail", source: "pull", writer: "services/sync/fansly-dm-conversations.ts" },
   { kind: "post_tips", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "posts", source: "pull", writer: "services/sync/executor-handlers.ts" },
@@ -77,7 +77,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // it never forks a completed target chain; canonicalized by the same family.
   { kind: "purchase_history_contract_probe", source: "pull", writer: "services/sync/executor-handlers.ts" },
   { kind: "purchase_history_contract_storm", source: "pull", writer: "services/sync/executor-handlers.ts" },
-  { kind: "subscribers", source: "pull", writer: "services/sync/executor-handlers.ts" },
+  { kind: "subscribers", source: "pull", writer: "sync/fansly/capture.ts" },
   // ── WP-F1: the `stats_snapshot` lane (services/sync/fansly-stats.ts) ──────
   // Every one is claimed by the `fansly-stats` family. `media_offer_stats` was
   // registered here by F1 with the PARSER but no writer, so the kind would be

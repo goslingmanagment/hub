@@ -77,8 +77,6 @@ describe("config registry", () => {
   const LIVE_KEYS = [
     // Decision 349: the public invite/reset link kill switch.
     "accountLinksEnabled",
-    "fanslyFollowersSettlementReuseEnabled",
-    "fanslyFollowersSettlementReusePageAllowlist",
     "fanslyDmBoundedEnabled",
     "fanslyDmBoundedPageAllowlist",
     "fanslyDmBoundedPolicies",

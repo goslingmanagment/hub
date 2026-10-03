@@ -443,7 +443,7 @@ describe("sync blocks service", () => {
     await expect(resumeSyncBlock({ db } as never, boss as never, { ...input, block: "messages_history" }))
       .rejects.toThrow(refused);
     await expect(resetSyncBlock({ db } as never, boss as never, { ...input, block: "financials" })).rejects.toThrow(refused);
-    await expect(resetFollowersReconcileStream({ db } as never, boss as never, input)).rejects.toThrow(refused);
+    await expect(resetFollowersReconcileStream({ db } as never, input)).rejects.toThrow(refused);
 
     for (const writer of [
       dbMocks.ensurePageSyncStates,
