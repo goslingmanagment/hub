@@ -10,22 +10,41 @@ import {
   uuidV5,
 } from "../apps/runtime/src/sync/requests/legacy-hydration.ts";
 import { wholeSeconds } from "../apps/runtime/src/sync/switch/context.ts";
+import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import { judgeBuildIdentity, shadowReportCheck } from "../apps/runtime/src/sync/switch/preconditions.ts";
 import { engineOwnerStopped } from "../apps/runtime/src/sync/switch/rollback.ts";
 
 // The step-3 switch's pure rules (design step 3 §3.5 items 7, 10, 13): the
 // build identity both sides must share (G13), the shadow report's verdict
-// for the page (A3), when an engine owner counts as stopped for a rollback
+// for the page (A3) of the build and route policy being switched to (step 3b
+// ruling 12: its fingerprint), when an engine owner counts as stopped for a rollback
 // (J4), the legacy hydration conversion's idempotency key and boundary (A4),
 // and what a wrapper row reads as (S2 §7.5). The database half of the
 // preconditions runs in tests/sync-switch.integration.test.ts.
 
 const NOW = new Date("2026-10-02T12:00:00.000Z");
+const BUILD = "abc123";
+/** What the switching build runs. */
+const EXPECTED = { syncBuild: BUILD, policyHash: ROUTE_POLICY_HASH };
+
+function fingerprint(overrides: Record<string, unknown> = {}) {
+  return {
+    version: SHADOW_FINGERPRINT_VERSION,
+    build: { sync: BUILD, unproven: null, report: BUILD },
+    policyHash: ROUTE_POLICY_HASH,
+    registryHash: "f".repeat(64),
+    setting: { effectiveMs: 2_500, windowMs: [2_500] },
+    pages: [],
+    ...overrides,
+  };
+}
 
 function report(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     generatedAt: NOW.toISOString(),
     pages: [{ page: "lilly-1", mode: "shadow" }, { page: "ari-1", mode: "shadow" }],
+    fingerprint: fingerprint(),
     window: { window: { start: "2026-10-02T10:00:00.000Z", end: "2026-10-02T11:00:00.000Z" } },
     verdict: { accepted: true },
     ...overrides,
@@ -63,9 +82,13 @@ describe("the build identity (G13)", () => {
   });
 });
 
-describe("the shadow report (A3: one report-wide verdict)", () => {
-  it("passes an accepted report that lists the page in shadow and whose window ended within 24 h", () => {
-    expect(shadowReportCheck(report(), "lilly-1", NOW)).toMatchObject({ ok: true });
+describe("the shadow report (A3: one report-wide verdict; step 3b ruling 12: its fingerprint)", () => {
+  it("passes an accepted report of this build and route policy that lists the page in shadow and whose window ended within 24 h", () => {
+    expect(shadowReportCheck(report(), "lilly-1", NOW, EXPECTED)).toEqual({
+      name: "shadow_report",
+      ok: true,
+      detail: `accepted; window ended 2026-10-02T11:00:00.000Z; build ${BUILD}, route policy ${ROUTE_POLICY_HASH.slice(0, 12)}, S 2500 ms in the window`,
+    });
   });
 
   it.each([
@@ -76,8 +99,23 @@ describe("the shadow report (A3: one report-wide verdict)", () => {
     ["page not shadow", report({ pages: [{ page: "lilly-1", mode: "off" }] }), "as off, not shadow"],
     ["no window", report({ window: null }), "has no window"],
     ["stale window", report({ window: { window: { start: "2026-09-30T10:00:00.000Z", end: "2026-09-30T11:00:00.000Z" } } }), "(> 24 h)"],
+    // An accepted, fresh report of an older build: no fingerprint at all.
+    ["a report without a fingerprint", report({ fingerprint: undefined }), "carries no fingerprint"],
+    ["a fingerprint of another kind", report({ fingerprint: fingerprint({ version: 2 }) }), "carries no fingerprint"],
+    ["a window no single build is proven for", report({ fingerprint: fingerprint({ build: { sync: null, unproven: "sync heartbeats of 2 builds (a, b)", report: BUILD } }) }),
+      "proves no single sync build through its window (sync heartbeats of 2 builds (a, b))"],
+    ["the hour of another build", report({ fingerprint: fingerprint({ build: { sync: "old999", unproven: null, report: "old999" } }) }),
+      "the shadow window ran build old999, sync runs abc123"],
+    ["the hour of another route policy", report({ fingerprint: fingerprint({ policyHash: "0".repeat(64) }) }),
+      `ran route policy 000000000000, this build ${ROUTE_POLICY_HASH.slice(0, 12)}`],
   ])("refuses %s", (_name, text, detail) => {
-    expect(shadowReportCheck(text, "lilly-1", NOW)).toMatchObject({ ok: false, detail: expect.stringContaining(detail) });
+    expect(shadowReportCheck(text, "lilly-1", NOW, EXPECTED)).toMatchObject({ ok: false, detail: expect.stringContaining(detail) });
+  });
+
+  it("refuses every report while the switching sync build is unknown", () => {
+    expect(shadowReportCheck(report(), "lilly-1", NOW, { syncBuild: null, policyHash: ROUTE_POLICY_HASH })).toMatchObject({
+      ok: false, detail: expect.stringContaining("sync runs an unknown build"),
+    });
   });
 });
 

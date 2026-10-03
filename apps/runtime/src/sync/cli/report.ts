@@ -6,6 +6,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { listSyncPages } from "@agency_hub_core/db";
 
 import { fanslyWsLivePayloadResolver } from "../../services/fansly-ws/live-apply.ts";
+import { runtimeImageTag } from "../../services/runtime-heartbeat.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
 import { acknowledgeSyncPaceViolations, readSyncAlertStatus } from "../engine/alerts.ts";
 import { createEffectiveConfigSettingsSource } from "../engine/ports.ts";
@@ -28,6 +29,9 @@ export interface SyncReportCliDeps {
   print(line: string): void;
   writeFile(path: string, text: string): Promise<void>;
   now(): Date;
+  /** This build's identity, as its heartbeat reports it (the report's
+   *  fingerprint names the build that wrote it). */
+  buildSha(): string | null;
 }
 
 const defaultDeps: SyncReportCliDeps = {
@@ -35,6 +39,7 @@ const defaultDeps: SyncReportCliDeps = {
   print: (line) => console.log(line),
   writeFile: (path, text) => writeFile(path, text, "utf8"),
   now: () => new Date(),
+  buildSha: runtimeImageTag,
 };
 
 const HOUR_MS = 3_600_000;
@@ -111,8 +116,10 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
     .command("report")
     .description(
       "Read-only: the shadow acceptance report (design §3.12) — part A over the live window (demand vs estimate, "
-        + "legacy volume, live-path decisions, pacer), part B over the past journal (resource replay ≥ 99.9 %, "
-        + "chain rebuild and end-of-history check, ETA backtest); part B not between 00:00 and 05:00 UTC unless forced",
+        + "legacy volume, live-path decisions, pacer, route budgets, walks per route, the media model), part B over the "
+        + "past journal (resource replay ≥ 99.9 %, chain rebuild and end-of-history check, ETA backtest), and the "
+        + "fingerprint the switch checks (build, route policy, registry and tiers, S: run it right after the window); "
+        + "part B not between 00:00 and 05:00 UTC unless forced",
     )
     .option(
       "--window <start/end>",
@@ -176,6 +183,7 @@ export function registerSyncReportCommands(sync: Command, deps: SyncReportCliDep
           maxListed: options.maxListed,
           resolvePayload: fanslyWsLivePayloadResolver(ctx),
           settings: createEffectiveConfigSettingsSource(ctx.db, ctx.rawConfig),
+          reportBuild: deps.buildSha(),
         });
         const text = json(report);
         if (options.out !== undefined) await deps.writeFile(options.out, `${text}\n`);

@@ -18,6 +18,7 @@ import {
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   QUEUE_SUBJECT_BREAKER,
+  shadowPassNumber,
   shadowPassWaitUntil,
 } from "../apps/runtime/src/sync/fansly/lib/subject-queue.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -164,10 +165,10 @@ describe("the shadow pass of a subject-queue walk", () => {
 
   it("steps through the due subjects by keyset and rests at the end of the pass", () => {
     const first = advanceShadowPass({ pass: EMPTY_SHADOW_PASS, now: NOW, recheckMs, taken: [{ keyset: "k1" }, { keyset: "k2" }], limit: 2 });
-    expect(first).toEqual({ pass: { after: "k2", startedAt: NOW.toISOString(), ended: false }, nextDueAt: NOW });
+    expect(first).toEqual({ pass: { after: "k2", startedAt: NOW.toISOString(), ended: false, number: 1 }, nextDueAt: NOW });
     const later = new Date(NOW.getTime() + 60_000);
     const last = advanceShadowPass({ pass: first.pass, now: later, recheckMs, taken: [{ keyset: "k3" }], limit: 2 });
-    expect(last.pass).toEqual({ after: null, startedAt: NOW.toISOString(), ended: true });
+    expect(last.pass).toEqual({ after: null, startedAt: NOW.toISOString(), ended: true, number: 1 });
     // The next pass starts one re-check period after this one started.
     expect(last.nextDueAt).toEqual(new Date(NOW.getTime() + recheckMs));
     expect(currentShadowPass(last.pass, later, recheckMs).ended).toBe(true);
@@ -176,13 +177,33 @@ describe("the shadow pass of a subject-queue walk", () => {
 
   it("waits a whole period when no pass is running, and never waits into the past", () => {
     expect(shadowPassWaitUntil(EMPTY_SHADOW_PASS, NOW, recheckMs)).toEqual(new Date(NOW.getTime() + recheckMs));
-    const stale = { after: null, startedAt: new Date(NOW.getTime() - 2 * recheckMs).toISOString(), ended: true };
+    const stale = { after: null, startedAt: new Date(NOW.getTime() - 2 * recheckMs).toISOString(), ended: true, number: 1 };
     expect(shadowPassWaitUntil(stale, NOW, recheckMs).getTime()).toBeGreaterThan(NOW.getTime());
   });
 
-  it("parses a pass without a start as no pass", () => {
+  it("numbers the passes: a step names the current pass, or the next one it begins", () => {
+    const first = advanceShadowPass({ pass: EMPTY_SHADOW_PASS, now: NOW, recheckMs, taken: [{ keyset: "k1" }], limit: 1 }).pass;
+    expect(shadowPassNumber(EMPTY_SHADOW_PASS, NOW, recheckMs)).toBe(1);
+    const later = new Date(NOW.getTime() + 60_000);
+    expect(shadowPassNumber(first, later, recheckMs)).toBe(1);
+    // A visit picked in the pass and finished after its period: the next
+    // pass goes on after the visit's subject.
+    const expired = new Date(NOW.getTime() + recheckMs);
+    expect(shadowPassNumber(first, expired, recheckMs)).toBe(2);
+    expect(advanceShadowPass({ pass: first, now: expired, recheckMs, taken: [{ keyset: "k2" }], limit: 1 }).pass)
+      .toEqual({ after: "k2", startedAt: expired.toISOString(), ended: false, number: 2 });
+    // The next pass from the head names 2 until a step stores it: a walk that
+    // never stores its pass names the same one again and again.
+    expect(shadowPassNumber(first, new Date(expired.getTime() + 1), recheckMs)).toBe(2);
+  });
+
+  it("parses a pass without a start as no pass, and one an older build began as unnumbered", () => {
     expect(parseShadowPass({ after: "k" })).toEqual(EMPTY_SHADOW_PASS);
-    expect(parseShadowPass({ after: "k", startedAt: NOW.toISOString(), ended: false })).toEqual({ after: "k", startedAt: NOW.toISOString(), ended: false });
+    expect(parseShadowPass({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 3 }))
+      .toEqual({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 3 });
+    const older = parseShadowPass({ after: "k", startedAt: NOW.toISOString(), ended: false });
+    expect(older).toEqual({ after: "k", startedAt: NOW.toISOString(), ended: false, number: 0 });
+    expect(shadowPassNumber(older, new Date(NOW.getTime() + recheckMs), recheckMs)).toBe(1);
   });
 
   it("the queue breaker climbs the engine's subject ladder", () => {

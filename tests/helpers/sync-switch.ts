@@ -15,6 +15,8 @@ import { resolveEgress } from "../../apps/runtime/src/services/egress/resolver.t
 import { createFanslySendGuards, isFanslyPageOwnedBySyncEngineError } from "../../apps/runtime/src/services/fansly-send-guard/index.ts";
 import { createEngineRegistry, type EngineRegistry } from "../../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
+import { ROUTE_POLICY_HASH } from "../../apps/runtime/src/sync/fansly/routes.ts";
+import { SHADOW_FINGERPRINT_VERSION } from "../../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import type { SwitchContext, SwitchTiming } from "../../apps/runtime/src/sync/switch/context.ts";
 import { silentFanslySendGuardLogger } from "./fansly-send-guard.ts";
 import { fanslyJson, harnessRegistry, seedHarnessPage, type FakeRoute, type HarnessHandles, type HarnessPage } from "./sync-engine.ts";
@@ -100,11 +102,19 @@ export async function beatSync(pool: Pool, imageTag: string | null): Promise<voi
   );
 }
 
-/** An accepted `sync shadow report` that lists the pages in shadow. */
-export function acceptedShadowReport(labels: readonly string[], endedAt = new Date()): string {
+/** An accepted `sync shadow report` that lists the pages in shadow; its hour
+ *  ran on `build` (the rig's sync build unless named) and this build's route
+ *  policy. */
+export function acceptedShadowReport(labels: readonly string[], endedAt = new Date(), build = SWITCH_TEST_BUILD): string {
   return JSON.stringify({
     generatedAt: endedAt.toISOString(),
     pages: labels.map((page) => ({ page, mode: "shadow" })),
+    fingerprint: {
+      version: SHADOW_FINGERPRINT_VERSION,
+      build: { sync: build, unproven: null, report: build },
+      policyHash: ROUTE_POLICY_HASH,
+      setting: { effectiveMs: 2_000, windowMs: [2_000] },
+    },
     window: { window: { start: new Date(endedAt.getTime() - 3_600_000).toISOString(), end: endedAt.toISOString() } },
     verdict: { accepted: true },
   });

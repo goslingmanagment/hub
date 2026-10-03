@@ -836,6 +836,19 @@ describe("shadow", () => {
       [pageId],
     );
     expect(replyRequests.rows.map((row) => row.path)).toEqual([1, 2, 3, 4, 5].map((index) => `/post/${P(index)}/replies`));
+    // Each step names its pass besides its subjects (the next pass asks them
+    // again: the shadow report's endless-walk check tells the two apart).
+    const positions = await testDb.pool.query<{ resource: string; position: unknown; ids: string[] | null }>(
+      `select resource, request -> 'position' as position, request -> 'params' -> 'ids' as ids from sync_attempts
+        where page_id = $1 and resource in ('posts.engagement', 'post-replies.walk') order by resource, id`,
+      [pageId],
+    );
+    const batch = positions.rows.at(-1)!.ids!;
+    expect(batch).toHaveLength(5);
+    expect(positions.rows.map(({ resource, position }) => ({ resource, position }))).toEqual([
+      ...[1, 2, 3, 4, 5].map((index) => ({ resource: "post-replies.walk", position: { pass: 1, postId: P(index) } })),
+      { resource: "posts.engagement", position: { pass: 1, ids: batch } },
+    ]);
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and not shadow", [pageId])).toBe(0);
     const after = await tableCounts(testDb.pool);
     // Every work row it moved already stood there (polls and standing walks;

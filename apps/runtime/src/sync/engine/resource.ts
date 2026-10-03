@@ -139,6 +139,18 @@ export interface RequestPlan<I extends FanslyWireId = FanslyWireId> {
    * read-only plan took is the one the step folds its answer into.
    */
   step?: unknown;
+  /**
+   * A shadow step's place in its walk when its parameters cannot name it: a
+   * window cut at the step's clock (a media visit's window, the fan earnings
+   * roster's whole history up to now) names the subject and the step instead,
+   * and a subject-queue walk names its shadow pass (each pass re-reads the
+   * subjects an earlier one read: shadow records no visit). Never sent and
+   * never read back by the resource; journaled with the attempt
+   * (`sync_attempts.request.position`), where the shadow report's
+   * endless-walk check (`report/shadow-routes.ts`) takes it for the request's
+   * identity in place of its parameters.
+   */
+  position?: unknown;
 }
 
 /** A demand for work (a follow-up of an apply, a router signal, an owner

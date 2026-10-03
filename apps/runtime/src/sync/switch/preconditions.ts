@@ -13,6 +13,8 @@ import {
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { syncEngineIncidentKey } from "../../services/notification-incidents.ts";
 import { inLegacyNightWindow } from "../fansly/lib/chain-rebuild.ts";
+import { ROUTE_POLICY_HASH } from "../fansly/routes.ts";
+import { judgeShadowFingerprint, type ShadowFingerprintExpectation } from "../report/shadow-fingerprint.ts";
 import { isUnfinishedRollback, readLatestSwitchAudit } from "./audit.ts";
 import { wholeSeconds, type SwitchContext } from "./context.ts";
 
@@ -39,6 +41,7 @@ interface ShadowReportFile {
   pages?: Array<{ page?: unknown; mode?: unknown }>;
   window?: { window?: { start?: unknown; end?: unknown } } | null;
   verdict?: { accepted?: unknown };
+  fingerprint?: unknown;
 }
 
 function check(name: string, ok: boolean, detail: string): SwitchCheck {
@@ -64,7 +67,8 @@ export function judgeBuildIdentity(
     : check("build_identity", false, `sync runs ${sync.imageTag}, this CLI ${own}`);
 }
 
-async function buildIdentityCheck(ctx: SwitchContext): Promise<SwitchCheck> {
+/** The build check, and the build `sync` runs (its newest heartbeat's). */
+async function buildIdentityCheck(ctx: SwitchContext): Promise<{ check: SwitchCheck; syncBuild: string | null }> {
   const result = await ctx.db.execute<{ imageTag: string | null; ageMs: number | string }>(sql`
     select image_tag as "imageTag",
            extract(epoch from clock_timestamp() - last_seen_at) * 1000 as "ageMs"
@@ -74,11 +78,24 @@ async function buildIdentityCheck(ctx: SwitchContext): Promise<SwitchCheck> {
      limit 1
   `);
   const row = result.rows[0];
-  return judgeBuildIdentity(row === undefined ? null : { imageTag: row.imageTag, ageMs: Number(row.ageMs) }, ctx.buildSha);
+  return {
+    check: judgeBuildIdentity(row === undefined ? null : { imageTag: row.imageTag, ageMs: Number(row.ageMs) }, ctx.buildSha),
+    syncBuild: row?.imageTag ?? null,
+  };
 }
 
-/** The shadow report's verdict for the page (S2-13: one report-wide verdict). */
-export function shadowReportCheck(text: string | null, pageLabel: string, now: Date): SwitchCheck {
+/**
+ * The shadow report's verdict for the page (S2-13: one report-wide verdict),
+ * of the build and route policy being switched to (step 3b ruling 12: its
+ * fingerprint; an accepted report of another build proves nothing about this
+ * one, however fresh).
+ */
+export function shadowReportCheck(
+  text: string | null,
+  pageLabel: string,
+  now: Date,
+  expected: ShadowFingerprintExpectation,
+): SwitchCheck {
   if (text === null) return check("shadow_report", false, "no shadow report (--shadow-report <path>)");
   let report: ShadowReportFile;
   try {
@@ -99,7 +116,9 @@ export function shadowReportCheck(text: string | null, pageLabel: string, now: D
   if (ageMs > SWITCH_REPORT_MAX_AGE_MS) {
     return check("shadow_report", false, `the shadow report's window ended ${Math.round(ageMs / 3_600_000)} h ago (> 24 h)`);
   }
-  return check("shadow_report", true, `accepted; window ended ${endAt.toISOString()}`);
+  const fingerprint = judgeShadowFingerprint(report.fingerprint, expected);
+  if (!fingerprint.ok) return check("shadow_report", false, fingerprint.detail);
+  return check("shadow_report", true, `accepted; window ended ${endAt.toISOString()}; ${fingerprint.detail}`);
 }
 
 /**
@@ -116,7 +135,8 @@ export async function checkSwitchPreconditions(
   const now = page.dbNow;
   const checks: SwitchCheck[] = [];
 
-  checks.push(await buildIdentityCheck(ctx));
+  const build = await buildIdentityCheck(ctx);
+  checks.push(build.check);
   checks.push(check("live_loop", ctx.liveLoopEnabled, ctx.liveLoopEnabled
     ? "this build runs a live loop"
     : "this build has no live loop (LIVE_LOOP_ENABLED = false)"));
@@ -133,7 +153,7 @@ export async function checkSwitchPreconditions(
   if (input.shadowReportPath !== null) {
     reportText = await ctx.readFile(input.shadowReportPath).catch(() => null);
   }
-  checks.push(shadowReportCheck(reportText, label, now));
+  checks.push(shadowReportCheck(reportText, label, now, { syncBuild: build.syncBuild, policyHash: ROUTE_POLICY_HASH }));
 
   const rebuild = await getLatestCompletedChainRebuild(db, page.pageId);
   checks.push(check("chain_rebuild", rebuild !== null, rebuild === null

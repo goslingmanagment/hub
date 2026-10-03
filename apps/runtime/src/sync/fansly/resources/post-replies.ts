@@ -46,6 +46,7 @@ import {
   EMPTY_SHADOW_PASS,
   parseShadowPass,
   recordQueueSubjectFailures,
+  shadowPassNumber,
   shadowPassWaitUntil,
   standingRecheckAt,
   type ShadowPass,
@@ -289,7 +290,12 @@ const walkModule: ResourceModule = {
       const until = ctx.shadow ? shadowPassWaitUntil(pass, ctx.now, POST_REPLIES_RECHECK_MS) : standingRecheckAt(ctx.now, POST_REPLIES_RECHECK_MS);
       return { kind: "wait", reason: "not_due", until };
     }
-    return { kind: "request", request: repliesRequest(next.subjectRef, null) };
+    const request = repliesRequest(next.subjectRef, null);
+    if (!ctx.shadow) return { kind: "request", request };
+    // The next shadow pass asks the posts again (shadow records no visit): a
+    // shadow step names its pass besides the post (`RequestPlan.position`).
+    const passNumber = shadowPassNumber(cursor.shadow, ctx.now, POST_REPLIES_RECHECK_MS);
+    return { kind: "request", request: { ...request, position: { pass: passNumber, postId: next.subjectRef } } };
   },
 
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
