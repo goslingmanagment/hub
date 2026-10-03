@@ -214,6 +214,7 @@ What the script does:
 - obtains a per-run candidate by local full build, verified dist-only overlay, or immutable GHCR digest pull
 - builds each dist-only image as the clean full image plus one four-layer dashboard/runtime/database/migrations artifact overlay
 - streams a locally built image to the remote host with `docker load`
+- before anything on the host is quiesced, migrated, synced or promoted, asks the candidate and the running image for the client SDKs they register (`startup.js print-compatible-client-sdks`: contract hashes and registry builds) and refuses a candidate that drops one the running image registers; a running image that predates that print mode is skipped with a log line; the owner approves a deliberate retirement for one run with `--drop-client-sdk <sha256>`, repeated once per value the refusal names (no environment equivalent)
 - syncs release files into `/opt/agency-hub` by default
 - by default verifies that PostgreSQL and shared Compose infrastructure are unchanged, then recreates `api worker scheduler` and, once the API is healthy (startup migrations done), the Fansly Sync Engine's `sync` container on its own, so the old engine keeps running through the migrations; `--recreate-scope stack` explicitly restores whole-stack recreation for infrastructure updates
 - verifies `/api/v1/health`, worker, scheduler and sync container health, running image labels, `/api/v1/health/sync`, and same-origin dashboard delivery at `/login`
