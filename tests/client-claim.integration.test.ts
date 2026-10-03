@@ -8,7 +8,6 @@ import {
   createModel,
   createOnlyFansPage,
   createUser,
-  readClientClaimSummaries,
   readClientFanClaimStatus,
   readDesktopFollowerOutreach,
   resolveClientSendCustody,
@@ -20,9 +19,10 @@ import { executeErasure, planErasure } from "../apps/runtime/src/services/erasur
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
 // hub-pr-plan H-7a: the chat-extension lease and custody repository on a real
-// Postgres — races under the advisory locks, repeats, parts, the desktop
-// outbox's greeting predicate (critic 1), the per-user rate lock and the
-// instance-bound reports (critic 12), and erasure.
+// Postgres — races under the advisory locks, keys reused across fans, repeats,
+// parts, the manual resolve, the desktop outbox's greeting predicate (critic
+// 1), the per-user rate lock and the instance-bound reports (critic 12), and
+// erasure.
 
 let harness: StartedTestDatabase;
 let pageId: number;
@@ -151,6 +151,32 @@ describe("greeting send custody", () => {
     })).toEqual({ ok: false, code: "not_found", view: null });
   });
 
+  it("refuses a not-sent resolve that carries a message id, so the real send's later proof still counts", async () => {
+    const fanRef = nextFan();
+    const leaseToken = randomUUID();
+    await claim(fanRef, me, I1, leaseToken);
+    const attemptId = randomUUID();
+    await dispatch(fanRef, { attemptId, leaseToken });
+    expect(await resolveClientSendCustody(harness.db, {
+      pageId, attemptId, resolverUserId: owner, outcome: "not_sent", platformMessageId: "7101", note: "pasted by mistake",
+    })).toMatchObject({ ok: false, code: "invalid_request" });
+    expect(await custodyRow(attemptId)).toMatchObject({ state: "dispatching", platform_message_id: null });
+    // The table refuses the contradiction too.
+    await expect(harness.pool.query(
+      `update client_send_custody set state = 'resolved_not_sent', platform_message_id = '7101', resolved_at = now(),
+         resolved_by_user_id = $2, resolution_note = 'x' where attempt_id = $1`,
+      [attemptId, owner],
+    )).rejects.toMatchObject({ code: "23514", constraint: "client_send_custody_message_state_check" });
+    expect((await resolveClientSendCustody(harness.db, {
+      pageId, attemptId, resolverUserId: owner, outcome: "not_sent", platformMessageId: null, note: "not in the chat",
+    })).ok).toBe(true);
+    // The composer then proves 7101 was this greeting's first part: recorded, and the fan is greeted.
+    expect(await act({
+      action: "registerNativeSend", pageId, fanRef, userId: me, attemptId: randomUUID(), instanceId: I1, purpose: "greeting",
+      group: GROUP, partIndex: 0, platformMessageId: "7101",
+    })).toMatchObject({ ok: true, view: { greeting: { state: "confirmed", source: "native-register", messageRef: "7101" } } });
+  });
+
   it("sends three parts of one greeting; the first confirmation fences everyone else", async () => {
     const fanRef = nextFan();
     const leaseToken = randomUUID();
@@ -202,11 +228,88 @@ describe("registerNativeSend", () => {
     });
     expect(await register(randomUUID())).toMatchObject({ ok: true, view: { greeting: { state: "confirmed", source: "native-register" } } });
     expect((await register(randomUUID())).ok).toBe(true);
+    // The same message reported as another part contradicts the record.
+    expect(await act({
+      action: "registerNativeSend", pageId, fanRef, userId: me, attemptId: randomUUID(), instanceId: I1, purpose: "greeting",
+      group: GROUP, partIndex: 1, platformMessageId: "8001",
+    })).toMatchObject({ ok: false, code: "attempt_conflict" });
     const { rows } = await harness.pool.query("select attempt_id::text, state, origin from client_send_custody where fan_ref = $1 order by created_at", [fanRef]);
     expect(rows).toEqual([
       { attempt_id: held, state: "dispatching", origin: "preview-send" },
       { attempt_id: expect.any(String), state: "sent", origin: "native-register" },
     ]);
+  });
+});
+
+describe("keys unique beyond one fan: a lease token, an attempt id, a page's message id", () => {
+  // The fan lock orders nothing across fans. Hold the other fan's row
+  // uncommitted so the request's insert waits on it and meets it at commit:
+  // the request must refuse as designed, never surface the unique violation.
+  const raceAgainst = async <T>(table: string, insert: [text: string, values: unknown[]], run: () => Promise<T>) => {
+    const client = await harness.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(...insert);
+      const pending = run();
+      pending.catch(() => undefined);
+      for (let tries = 0; ; tries += 1) {
+        const { rows } = await harness.pool.query(
+          `select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock' and query like $1`,
+          [`insert into ${table}%`],
+        );
+        if (rows[0].n > 0) break;
+        if (tries > 400) throw new Error(`the request's insert into ${table} never waited on the held row`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      await client.query("commit");
+      return await pending;
+    } finally {
+      client.release();
+    }
+  };
+  const hash = () => createHash("sha256").update(randomUUID()).digest();
+
+  it("a lease token taken on another fan in the meantime is claim_expired", async () => {
+    const [fanA, fanB, token] = [nextFan(), nextFan(), randomUUID()];
+    const result = await raceAgainst("client_fan_leases", [
+      `insert into client_fan_leases (lease_id, page_id, fan_ref, user_id, instance_id, state, expires_at)
+       values ($1, $2, $3, $4, $5, 'active', now() + interval '2 minutes')`,
+      [token, pageId, fanA, other, I2],
+    ], () => claim(fanB, me, I1, token));
+    expect(result).toMatchObject({ ok: false, code: "claim_expired", view: { lease: { state: "none" } } });
+    const { rows } = await harness.pool.query("select fan_ref from client_fan_leases where lease_id = $1", [token]);
+    expect(rows).toEqual([{ fan_ref: fanA }]);
+  });
+
+  it("an attempt id taken on another fan in the meantime is an attempt conflict", async () => {
+    const [fanA, fanB, attemptId] = [nextFan(), nextFan(), randomUUID()];
+    const result = await raceAgainst("client_send_custody", [
+      `insert into client_send_custody (attempt_id, page_id, fan_ref, user_id, instance_id, purpose, origin, generation_ref,
+         variant, part_count, part_index, text_revision, request_hash, state, ticket_hash, ticket_expires_at)
+       values ($1, $2, $3, $4, $5, 'preview-reply', 'preview-send', 'gen-x', 0, 1, 0, 1, $6, 'dispatching', $7,
+         now() + interval '10 seconds')`,
+      [attemptId, pageId, fanA, other, I2, hash(), hash()],
+    ], () => dispatch(fanB, { attemptId, purpose: "preview-reply" }));
+    expect(result).toMatchObject({ ok: false, code: "attempt_conflict", view: { custody: null } });
+    expect((await harness.pool.query("select fan_ref from client_send_custody where attempt_id = $1", [attemptId])).rows)
+      .toEqual([{ fan_ref: fanA }]);
+  });
+
+  it("a message id recorded on another fan in the meantime is an attempt conflict", async () => {
+    const [fanA, fanB] = [nextFan(), nextFan()];
+    const result = await raceAgainst("client_send_custody", [
+      `insert into client_send_custody (attempt_id, page_id, fan_ref, user_id, instance_id, purpose, origin, generation_ref,
+         variant, part_count, part_index, request_hash, state, platform_message_id)
+       values ($1, $2, $3, $4, $5, 'greeting', 'native-register', 'gen-x', 0, 1, 0, $6, 'sent', '7301')`,
+      [randomUUID(), pageId, fanA, other, I2, hash()],
+    ], () => act({
+      action: "registerNativeSend", pageId, fanRef: fanB, userId: me, attemptId: randomUUID(), instanceId: I1,
+      purpose: "greeting", group: GROUP, partIndex: 0, platformMessageId: "7301",
+    }));
+    expect(result).toMatchObject({ ok: false, code: "attempt_conflict", view: { greeting: { state: "none" } } });
+    expect((await harness.pool.query("select fan_ref from client_send_custody where platform_message_id = '7301'")).rows)
+      .toEqual([{ fan_ref: fanA }]);
   });
 });
 
@@ -295,22 +398,42 @@ describe("desktop new-follower greetings (critic 1)", () => {
     }
   });
 
-  it("blocks a greeting the desktop sent or may have sent, in the fan view and the list summary", async () => {
+  it("blocks a greeting the desktop sent or may have sent, in the fan view and on dispatch", async () => {
     for (const [state, attempts, verifier, holds] of cases) {
       const label = `${state}/${attempts}/${JSON.stringify(verifier)}`;
       const fanRef = nextFan();
       await insertCommand(fanRef, state, attempts, verifier);
       const leaseToken = randomUUID();
       await claim(fanRef, me, I1, leaseToken);
-      const summary = (await readClientClaimSummaries(harness.db, { pageId, fanRefs: [fanRef], userId: me, instanceId: I1 })).get(fanRef);
-      expect.soft(summary, label).toMatchObject(state === "confirmed"
-        ? { greeting: "confirmed", greetingSource: "desktop-outbox", desktopOutreachHeld: false, lease: "owned" }
-        : { greeting: "none", desktopOutreachHeld: holds, lease: "owned" });
+      const view = await readClientFanClaimStatus(harness.db, { pageId, fanRef, userId: me, instanceId: I1, leaseToken });
+      expect.soft(view, label).toMatchObject(state === "confirmed"
+        ? { greeting: { state: "confirmed", source: "desktop-outbox" }, desktopOutreachHeld: false, lease: { state: "owned" } }
+        : { greeting: { state: "none" }, desktopOutreachHeld: holds, lease: { state: "owned" } });
       const expected = !holds ? { ok: true } : state === "confirmed"
         ? { ok: false, code: "greeting_done", view: { greeting: { state: "confirmed", source: "desktop-outbox", messageRef: "9001" } } }
         : { ok: false, code: "custody_held" };
       expect.soft(await dispatch(fanRef, { leaseToken }), label).toMatchObject(expected);
     }
+  });
+});
+
+describe("the claim GET", () => {
+  it("reads every table from one read-only snapshot", async () => {
+    const seen: unknown[] = [];
+    const spy = new Proxy(harness.db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") return Reflect.get(target, property, receiver);
+        return (run: Parameters<typeof target.transaction>[0], config?: Parameters<typeof target.transaction>[1]) => {
+          seen.push(config);
+          return target.transaction(run, config);
+        };
+      },
+    });
+    const fanRef = nextFan();
+    await claim(fanRef);
+    expect((await readClientFanClaimStatus(spy, { pageId, fanRef, userId: me, instanceId: I1, leaseToken: null })).lease)
+      .toMatchObject({ state: "owned" });
+    expect(seen).toEqual([{ isolationLevel: "repeatable read", accessMode: "read only" }]);
   });
 });
 

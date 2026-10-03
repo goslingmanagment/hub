@@ -188,6 +188,13 @@ const sameGroup = (row: ClientCustodyRow, group: ClientClaimGroup) =>
 const isPartOf = (row: { pageId: number; fanRef: string }, key: { pageId: number; fanRef: string }) =>
   row.pageId === key.pageId && row.fanRef === key.fanRef;
 
+/** The row already records this send: same fan, purpose and part, counted as sent. */
+const recordsSend = (
+  row: ClientCustodyRow,
+  send: { pageId: number; fanRef: string; purpose: ClientClaimPurpose; group: ClientClaimGroup; partIndex: number },
+) => isPartOf(row, send) && (row.state === "sent" || row.state === "resolved_sent") && row.purpose === send.purpose
+  && sameGroup(row, send.group) && row.partIndex === send.partIndex;
+
 /** failed releases custody: only proof the native queue never took the part. */
 export function isAcceptedFailureEvidence(reason: ClientSendFailureReason, httpStatus: number | null): boolean {
   if (reason === "not_enqueued") return httpStatus === null;
@@ -327,8 +334,10 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
     }
     case "registerNativeSend": {
       if (request.partIndex >= request.group.partCount) return reject("invalid_request");
-      // Idempotent per page and message: the send is recorded once, by whoever came first.
-      if (snapshot.messageOwner) return isPartOf(snapshot.messageOwner, request) ? apply() : reject("attempt_conflict");
+      // Idempotent per page and message: the send is recorded once, by whoever came first. Only
+      // a record of this very part is a repeat; any other owner of the id contradicts the proof,
+      // and answering ok would drop the send (and with it the greeting) unrecorded.
+      if (snapshot.messageOwner) return recordsSend(snapshot.messageOwner, request) ? apply() : reject("attempt_conflict");
       if (snapshot.attempt) return snapshot.attempt.requestHash === request.requestHash ? apply() : reject("attempt_conflict");
       const part = snapshot.groupParts.find((row) => sameGroup(row, request.group) && row.partIndex === request.partIndex);
       // Never touches another attempt's custody: a held part stays held.
@@ -351,6 +360,9 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       );
     }
     case "resolve": {
+      // A message id is evidence of a send: with not_sent it contradicts the outcome, and
+      // kept on the row it would take the page's id slot from the real send's later proof.
+      if (request.outcome === "not_sent" && request.platformMessageId !== null) return reject("invalid_request");
       const attempt = snapshot.attempt;
       if (!attempt || !isPartOf(attempt, request)) return reject("not_found");
       if (attempt.state === "resolved_sent" || attempt.state === "resolved_not_sent") {

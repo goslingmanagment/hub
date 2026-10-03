@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { insertAuditEvent } from "./auth.ts";
+import { insertAuditEvent, isUniqueViolation } from "./auth.ts";
 import {
   CLIENT_PREVIEW_SEND_RATE_WINDOW_MS,
   decideClaimTransition,
@@ -27,7 +27,8 @@ import {
 // takes 'client-user-send:<user>' (always user, then fan) so its rate count
 // cannot race the user's dispatch to another fan. The rules themselves are
 // the pure decideClaimTransition (client-claim-transition.ts). No route calls
-// this yet (H-7b).
+// this yet: H-7b serves the action and the status (mapping the view to its
+// wire shape), H-7c reads the list's claim column from the same tables.
 
 /**
  * The predicate of `ofapi_commands_follower_outreach_uniq` (0195, schema.ts),
@@ -341,8 +342,32 @@ async function lockFan(db: Database, pageId: number, fanRef: string): Promise<vo
   await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`client-fan:${pageId}:${fanRef}`}, 0))`);
 }
 
+/**
+ * Keys unique beyond one fan: a lease token, an attempt id, a page's message
+ * id. The fan lock does not order two fans' requests that reuse one, so both
+ * can decide on a snapshot without the other's row, and the later insert
+ * meets the earlier row only at its commit, as a unique violation. That
+ * transaction rolled back whole (no ticket left it); deciding once more reads
+ * the committed row and refuses as designed: claim_expired or claim_busy,
+ * attempt_conflict. Every other unique key is per fan, so the lock orders it.
+ */
+const CROSS_FAN_UNIQUE_KEYS = ["client_fan_leases_pkey", "client_send_custody_pkey", "client_send_custody_message"];
+
 async function runLocked(db: Database, request: ClientClaimRequest, options: ApplyClientClaimOptions): Promise<ClientClaimResult> {
   validate(request);
+  try {
+    return await runLockedOnce(db, request, options);
+  } catch (error) {
+    if (!CROSS_FAN_UNIQUE_KEYS.some((key) => isUniqueViolation(error, key))) throw error;
+    return runLockedOnce(db, request, options);
+  }
+}
+
+async function runLockedOnce(
+  db: Database,
+  request: ClientClaimRequest,
+  options: ApplyClientClaimOptions,
+): Promise<ClientClaimResult> {
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     if (request.action === "dispatch") {
@@ -399,7 +424,12 @@ export async function resolveClientSendCustody(db: Database, input: {
   }, {});
 }
 
-/** The claim GET: no lock, no writes; a dead lease reads as expired to its holder and as none to others. */
+/**
+ * The claim GET: no lock, no writes; a dead lease reads as expired to its
+ * holder and as none to others. One read-only snapshot for every table, so a
+ * send confirmed between two reads cannot show the fan as free (greeting not
+ * yet confirmed, custody already gone).
+ */
 export async function readClientFanClaimStatus(db: Database, input: {
   pageId: number;
   fanRef: string;
@@ -410,72 +440,13 @@ export async function readClientFanClaimStatus(db: Database, input: {
   assertShape(OF_ID.test(input.fanRef), "fanRef");
   if (input.instanceId !== null) assertShape(UUID.test(input.instanceId), "instanceId");
   if (input.leaseToken !== null) assertShape(UUID.test(input.leaseToken), "leaseToken");
-  const snapshot = await loadSnapshot(db, input.pageId, input.fanRef, {
-    leaseToken: input.leaseToken, attemptId: null, platformMessageId: null, requestGroup: null, rateUserId: null,
-  });
+  const snapshot = await db.transaction(
+    (transaction) => loadSnapshot(transaction as unknown as Database, input.pageId, input.fanRef, {
+      leaseToken: input.leaseToken, attemptId: null, platformMessageId: null, requestGroup: null, rateUserId: null,
+    }),
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
   return deriveClientClaimView(snapshot, {
     userId: input.userId, instanceId: input.instanceId, leaseToken: input.leaseToken, attemptId: null,
   });
-}
-
-export interface ClientClaimSummary {
-  greeting: "none" | "confirmed";
-  greetingSource: ClientFanClaimView["greeting"]["source"];
-  lease: ClientFanClaimView["lease"]["state"];
-  heldBy: ClientFanClaimView["lease"]["heldBy"];
-  custody: NonNullable<ClientFanClaimView["custody"]>["state"] | null;
-  desktopOutreachHeld: boolean;
-}
-
-/**
- * The claim column of a list of fans (H-7c "Новые"): the same rules as the
- * single-fan view, desktop greetings included, read in four queries.
- */
-export async function readClientClaimSummaries(db: Database, input: {
-  pageId: number;
-  fanRefs: readonly string[];
-  userId: number;
-  instanceId: string | null;
-}): Promise<Map<string, ClientClaimSummary>> {
-  const fanRefs = [...new Set(input.fanRefs)];
-  if (fanRefs.length === 0) return new Map();
-  for (const fanRef of fanRefs) assertShape(OF_ID.test(fanRef), "fanRef");
-  const now = new Date((await db.execute<{ now: Date }>(sql`select clock_timestamp() as now`)).rows[0]!.now);
-  const leases = (await db.execute<{
-    lease_id: string; fan_ref: string; user_id: bigint; instance_id: string; expires_at: Date;
-  }>(sql`
-    select lease_id::text, fan_ref, user_id, instance_id::text, expires_at from client_fan_leases
-    where page_id = ${input.pageId} and fan_ref = any(${sql.param(fanRefs)}::text[]) and state = 'active'`)).rows;
-  const greetings = (await db.execute<{ fan_ref: string; confirmed_at: Date; first_message_ref: string | null; source: ClientGreetingRow["source"] }>(sql`
-    select fan_ref, confirmed_at, first_message_ref, source from client_greetings
-    where page_id = ${input.pageId} and fan_ref = any(${sql.param(fanRefs)}::text[])`)).rows;
-  const open = (await db.execute<CustodyDbRow>(sql`
-    select ${CUSTODY_COLUMNS} from client_send_custody
-    where page_id = ${input.pageId} and fan_ref = any(${sql.param(fanRefs)}::text[]) and state = 'dispatching'`)).rows.map(custodyRow);
-  const desktop = await readDesktopFollowerOutreach(db, input.pageId, fanRefs);
-  const summaries = new Map<string, ClientClaimSummary>();
-  for (const fanRef of fanRefs) {
-    const lease = leases.find((row) => row.fan_ref === fanRef);
-    const greeting = greetings.find((row) => row.fan_ref === fanRef);
-    const view = deriveClientClaimView({
-      pageId: input.pageId, fanRef, now,
-      activeLease: lease ? {
-        leaseId: lease.lease_id, pageId: input.pageId, fanRef, userId: Number(lease.user_id),
-        instanceId: lease.instance_id, state: "active", expiresAt: new Date(lease.expires_at),
-      } : null,
-      requestedLease: null,
-      greeting: greeting ? {
-        ownerUserId: null, generationRef: null, variant: null, partCount: null,
-        confirmedAt: new Date(greeting.confirmed_at), firstMessageRef: greeting.first_message_ref, source: greeting.source,
-      } : null,
-      desktop: desktop.get(fanRef) ?? null,
-      openCustody: open.find((row) => row.fanRef === fanRef) ?? null,
-      attempt: null, messageOwner: null, group: null, groupParts: [], recentPreviewSends: 0,
-    }, { userId: input.userId, instanceId: input.instanceId, leaseToken: null, attemptId: null });
-    summaries.set(fanRef, {
-      greeting: view.greeting.state, greetingSource: view.greeting.source, lease: view.lease.state,
-      heldBy: view.lease.heldBy, custody: view.custody?.state ?? null, desktopOutreachHeld: view.desktopOutreachHeld,
-    });
-  }
-  return summaries;
 }
