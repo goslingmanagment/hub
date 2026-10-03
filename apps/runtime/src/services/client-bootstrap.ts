@@ -7,6 +7,7 @@ import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   clientBootstrapFlags,
   evaluateClientPageFeatures,
+  hostBindingFitsPlatform,
   type ClientFeatureSettings,
 } from "./client-features.ts";
 import { CLIENT_BOOTSTRAP_LIMITS } from "./client-limits.ts";
@@ -53,15 +54,17 @@ function toBootstrapPage(
 
 /** The owner's host bindings as page ids, kept only for the caller's own
  *  active pages: a binding to a page that is missing, inactive or not granted
- *  is dropped, so the bootstrap never reveals that someone else's page exists. */
+ *  is dropped, so the bootstrap never reveals that someone else's page exists.
+ *  A binding whose host does not hold accounts of the page's platform (an
+ *  OnlyMonster account bound to a Fansly page) is dropped too. */
 function bindingsForCaller(
   hostBindings: Readonly<Record<string, string>>,
   rows: readonly ClientBootstrapPageRow[],
 ): Record<string, number> {
-  const pageIdByLabel = new Map(rows.map((row) => [row.label, row.id]));
+  const pageByLabel = new Map(rows.map((row) => [row.label, row]));
   return Object.fromEntries(Object.entries(hostBindings).flatMap(([host, label]) => {
-    const pageId = pageIdByLabel.get(label);
-    return pageId === undefined ? [] : [[host, pageId] as const];
+    const page = pageByLabel.get(label);
+    return page === undefined || !hostBindingFitsPlatform(host, page.platform) ? [] : [[host, page.id] as const];
   }));
 }
 

@@ -228,6 +228,8 @@ describe("owner switches of the chat extension", () => {
         // Assigned to the chatter but tombstoned, and a page that never existed.
         "onlymonster:1": "lora-old-of",
         "onlymonster:2": "ghost-of",
+        // The chatter's own page, but an OnlyMonster account is an OnlyFans account.
+        "onlymonster:3": "lora-fansly",
       }),
       chatExtensionPreviewSendReceiptProfiles: JSON.stringify([PROFILE]),
     };
@@ -379,6 +381,49 @@ describe("owner switches of the chat extension", () => {
     expect((await probe(chatterToken, "lora-of", "coach", current)).statusCode).toBe(200);
     await patchOk([{ key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true }, "lora-of": { coach: false } }) }]);
     await expectRefused(await probe(chatterToken, "lora-of", "coach", current), "flag_off");
+
+    await trap!.assertNoOutbound();
+  });
+
+  it("a stored override that no longer validates turns the extension off and is logged once", async (context) => {
+    if (!server || !testDb) return context.skip();
+
+    await patchOk([
+      { key: "chatExtensionEnabled", value: true },
+      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { coach: true } }) },
+      { key: "chatExtensionMinVersion", value: "1.2.0" },
+    ]);
+    expect((await probe(chatterToken, "lora-of", "coach", "chat-extension/1.2.0")).statusCode).toBe(200);
+    await expectRefused(await probe(chatterToken, "lora-of", "coach", "chat-extension/1.1.0"), "client_outdated");
+
+    // Past the write check: a hand-made SQL fix (or a parser a later PR makes
+    // stricter). The live overlay skips the row, so the environment's 0.0.0
+    // would admit every outdated client again; instead everything goes off.
+    const errors = vi.spyOn(app.logger!, "error");
+    const updated = await testDb.pool.query(
+      `update config_settings set value = '"1.4"'::jsonb where key = 'chatExtensionMinVersion'`,
+    );
+    expect(updated.rowCount).toBe(1);
+
+    for (let request = 0; request < 2; request += 1) {
+      const body = await bootstrapAs(chatterToken);
+      expect(Object.values(body.flags).every((on) => on === false)).toBe(true);
+      expect(body.minVersion).toBe("0.0.0");
+      expect(body.pages.find((page) => page.pageLabel === "lora-of")?.features).toEqual(everyFeature("disabled"));
+      for (const version of ["chat-extension/1.2.0", "chat-extension/1.1.0"]) {
+        await expectRefused(await probe(chatterToken, "lora-of", "coach", version), "disabled");
+      }
+    }
+    const logged = errors.mock.calls.filter(([, message]) => typeof message === "string" && message.startsWith("chat-extension switch unreadable"));
+    expect(logged).toHaveLength(1);
+    expect(logged[0]![0]).toMatchObject({
+      key: "chatExtensionMinVersion",
+      error: expect.stringMatching(/^the stored override is refused: /),
+    });
+
+    // The owner's next valid write puts the extension back.
+    await patchOk([{ key: "chatExtensionMinVersion", value: "1.2.0" }]);
+    expect((await probe(chatterToken, "lora-of", "coach", "chat-extension/1.2.0")).statusCode).toBe(200);
 
     await trap!.assertNoOutbound();
   });

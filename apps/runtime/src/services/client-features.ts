@@ -58,6 +58,24 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   previewSend: { platforms: ONLYFANS, capabilities: ["preview-send-custody-v1"] },
 };
 
+/**
+ * The host apps the extension runs over, by the prefix of a host account
+ * (`onlymonster:36408`), with the platforms of the accounts each one holds: an
+ * OnlyMonster account is an OnlyFans account. An owner's host binding counts
+ * only toward a page of one of those platforms, and a host the hub does not
+ * know binds nothing.
+ */
+const CLIENT_HOST_PLATFORMS: ReadonlyMap<string, readonly Platform[]> = new Map([
+  ["onlymonster", ONLYFANS],
+]);
+
+/** Whether the owner's binding of this host account can point at a page of
+ *  this platform. The bootstrap's `bindingsByHost` keeps only such bindings. */
+export function hostBindingFitsPlatform(hostAccount: string, platform: Platform): boolean {
+  const [host = ""] = hostAccount.split(":", 1);
+  return CLIENT_HOST_PLATFORMS.get(host)?.includes(platform) ?? false;
+}
+
 /** The owner's switches, as the evaluation reads them. */
 export interface ClientFeatureSettings {
   /** The master switch: off = every feature off on every page. */
@@ -96,9 +114,11 @@ function flagValue(settings: ClientFeatureSettings, scope: string, flag: ClientF
 }
 
 /** The extension can bind a host account to the page: by the page's platform
- *  account id, or by an explicit owner binding. */
+ *  account id, or by an explicit owner binding from a host of the page's platform. */
 function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boolean {
-  return page.platformAccountId !== null || Object.values(settings.hostBindings).includes(page.label);
+  return page.platformAccountId !== null || Object.entries(settings.hostBindings).some(
+    ([hostAccount, label]) => label === page.label && hostBindingFitsPlatform(hostAccount, page.platform),
+  );
 }
 
 /**
