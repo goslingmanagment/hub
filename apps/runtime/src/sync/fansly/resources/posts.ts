@@ -18,7 +18,7 @@ import {
   fanslyPublishedAt,
   inspectFanslyPostTipsScope,
   parsePostsCursorState,
-} from "../../../services/sync/posts.ts";
+} from "../lib/posts-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

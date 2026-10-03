@@ -5,7 +5,7 @@ import { createDmShadowState, parseDmShadowState, type DmShadowState }
   from "../apps/runtime/src/services/sync/dm-shadow-state.ts";
 import { advanceDmShadow, type DmShadowConversation }
   from "../apps/runtime/src/services/sync/dm-shadow.ts";
-import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/services/sync/shared.ts";
+import { trimFanslyMessagingGroupsPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 
 const payload = { data: [{ groupId: "g", lastMessageId: "m" }] };
 const pointers = (body: { data: Array<{ groupId: string; lastMessageId: string | null }> } = payload) => createDmShadowWitnessPointers({ observationId: 123,

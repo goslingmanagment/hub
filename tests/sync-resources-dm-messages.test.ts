@@ -4,12 +4,10 @@ import type * as DbModule from "@agency_hub_core/db";
 import type { SyncWorkRow } from "@agency_hub_core/db";
 import type { FanslyMessage } from "@agency_hub_core/fansly";
 
-import {
-  normalizeFanslyDmMessagePage,
-  normalizeFanslyDmMessages,
-} from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
+import { normalizeFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { demandToUpsert } from "../apps/runtime/src/sync/engine/resource.ts";
 import { emptyChain, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
+import { normalizeFanslyDmMessages } from "../apps/runtime/src/sync/fansly/lib/dm-normalize.ts";
 import { createFanslyRegistry, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   DM_HEAD_NOT_FOUND_RETRY_MS,

@@ -18,13 +18,17 @@ set -euo pipefail
 #      graceful exit and only then starts the new one: no overlap.
 #   3. Control (the assumption itself): with sync listed in the same `up` as
 #      the api, Compose stops the old sync before the new api is healthy.
-#   4. Rollback to release files without a sync service (`up -d
-#      --remove-orphans --force-recreate --no-build`, no service list) removes
-#      the sync container after a graceful stop.
+#   4. The app-scope rollback (the forward recreate's services plus sync)
+#      replaces every app container and leaves PostgreSQL running untouched.
+#   5. The app-scope rollback to release files without a sync service (the
+#      same list without sync) removes the sync container after a graceful
+#      stop, and still leaves PostgreSQL untouched.
+#   6. Control (why the rollback lists services): with no service list,
+#      --force-recreate replaces PostgreSQL too.
 #
-# Exit 0 when 1, 2 and 4 hold; 3 is reported either way (if it does not hold,
-# the separate step is merely unnecessary, never unsafe). Needs a local Docker
-# daemon and the image locally; it touches nothing but its own project.
+# Exit 0 when 1, 2, 4 and 5 hold; 3 and 6 are reported either way. Needs a
+# local Docker daemon and the image locally; it touches nothing but its own
+# project.
 #
 #   scripts/check-compose-recreate-order.sh [image]   (default node:22-bookworm-slim)
 
@@ -41,7 +45,8 @@ FAILURES=0
 # The deploy's commands, verbatim (scripts/deploy-production.sh).
 APP_RECREATE=(up -d --remove-orphans --force-recreate --no-build api worker scheduler)
 SYNC_RECREATE=(up -d --no-deps --force-recreate --no-build sync)
-ROLLBACK_RECREATE=(up -d --remove-orphans --force-recreate --no-build)
+# App scope; the rollback adds sync when the restored release defines it.
+ROLLBACK_RECREATE=(up -d --remove-orphans --force-recreate --no-build api worker scheduler)
 
 compose() {
   docker compose --progress quiet --project-name "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -199,6 +204,9 @@ note "Compose: $(docker compose version --short) / Docker Engine $(docker versio
 note "Stand-in api migrates for ${MIGRATE_MS} ms; stand-in sync drains for ${DRAIN_MS} ms after SIGTERM"
 
 compose up -d --pull never
+postgres_1="$(service_container postgres)"
+postgres_1_host="$(container_hostname "$postgres_1")"
+postgres_1_started="$(docker inspect -f '{{.State.StartedAt}}' "$postgres_1")"
 sync_1="$(service_container sync)"
 sync_1_host="$(container_hostname "$sync_1")"
 sync_1_started="$(docker inspect -f '{{.State.StartedAt}}' "$sync_1")"
@@ -246,17 +254,46 @@ else
   verdict INFO "3. A3 not observed: with sync in the same 'up', the old sync got SIGTERM at ${term_2:-never}, the new api was ready at ${api_3_ready:-never}"
 fi
 
-# 4. Rollback to release files that have no sync service.
+# postgres_untouched -> true while the first PostgreSQL container still runs,
+# never restarted and never sent SIGTERM.
+postgres_untouched() {
+  [[ "$(service_container postgres)" == "$postgres_1" \
+    && "$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$postgres_1")" == "true ${postgres_1_started}" \
+    && -z "$(event_ms postgres term "$postgres_1_host")" ]]
+}
+
+# 4. App-scope rollback with release files that define sync.
+api_4_before="$(service_container api)"
+sync_4_before="$(service_container sync)"
+compose "${ROLLBACK_RECREATE[@]}" sync
+refresh_events
+if postgres_untouched \
+  && [[ "$(service_container api)" != "$api_4_before" && "$(service_container sync)" != "$sync_4_before" ]]; then
+  verdict PASS "4. '${ROLLBACK_RECREATE[*]} sync' replaced the api and sync containers and left PostgreSQL ${postgres_1_host} running untouched"
+else
+  verdict FAIL "4. '${ROLLBACK_RECREATE[*]} sync' touched PostgreSQL (now $(service_container postgres)) or left an app container in place"
+fi
+
+# 5. App-scope rollback to release files that have no sync service.
 sync_3_host="$(container_hostname "$(service_container sync)")"
 docker compose --progress quiet --project-name "$PROJECT" -f "$OLD_COMPOSE_FILE" "${ROLLBACK_RECREATE[@]}"
 refresh_events
 remaining="$(docker ps -a -q --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.service=sync")"
 term_3="$(event_ms sync term "$sync_3_host")"
 exit_3="$(event_ms sync exit "$sync_3_host")"
-if [[ -z "$remaining" && -n "$term_3" && -n "$exit_3" ]]; then
-  verdict PASS "4. '${ROLLBACK_RECREATE[*]}' with release files without sync removed the sync container ${sync_3_host} after SIGTERM and a $((exit_3 - term_3)) ms drain"
+if [[ -z "$remaining" && -n "$term_3" && -n "$exit_3" ]] && postgres_untouched; then
+  verdict PASS "5. '${ROLLBACK_RECREATE[*]}' with release files without sync removed the sync container ${sync_3_host} after SIGTERM and a $((exit_3 - term_3)) ms drain; PostgreSQL ${postgres_1_host} still untouched"
 else
-  verdict FAIL "4. rollback left a sync container (${remaining:-none}) or stopped it without SIGTERM (term=${term_3:-none} exit=${exit_3:-none})"
+  verdict FAIL "5. rollback left a sync container (${remaining:-none}), stopped it without SIGTERM (term=${term_3:-none} exit=${exit_3:-none}) or touched PostgreSQL"
+fi
+
+# 6. Control: the same rollback with no service list.
+docker compose --progress quiet --project-name "$PROJECT" -f "$OLD_COMPOSE_FILE" up -d --remove-orphans --force-recreate --no-build
+refresh_events
+if postgres_untouched; then
+  verdict INFO "6. With no service list, --force-recreate left PostgreSQL untouched on this Compose"
+else
+  verdict INFO "6. Confirmed: with no service list, --force-recreate stopped and replaced PostgreSQL ${postgres_1_host}"
 fi
 
 note "Timeline (ms from the first event):"

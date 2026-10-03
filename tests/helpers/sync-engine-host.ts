@@ -15,6 +15,10 @@ import { buildFanslyWireUrl, type FanslyWireOutcome, type FanslyWireRequest } fr
 import { loadConfig, type AppConfig } from "@agency_hub_core/shared";
 import type { Pool } from "pg";
 
+import {
+  createDefaultFanslySendOsProbe,
+  type FanslySendOsProbe,
+} from "../../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { SyncActor, type ActorDeps } from "../../apps/runtime/src/sync/engine/actor.ts";
 import type {
   CaptureCodec,
@@ -126,6 +130,24 @@ export function testConfig(connectionString: string): AppConfig {
     APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     LOG_LEVEL: "silent",
   }, { loadDotEnv: false });
+}
+
+/** A container's id; its first 12 hex digits are its hostname (Docker's
+ *  default), which is what lets the OS proof judge an earlier run of it. */
+export const TEST_CONTAINER_ID = `a1b2c3d4e5f6${"0".repeat(52)}`;
+
+/** The OS probe of a process that runs as one run of the test container:
+ *  its hostname and container id, the given pid namespace, no boot id. Two
+ *  probes with different namespaces are two runs of the same container (a
+ *  restart: `pid_namespace_replaced`). */
+export function containerRunProbe(pidNamespace: string): FanslySendOsProbe {
+  return {
+    ...createDefaultFanslySendOsProbe(),
+    hostname: () => TEST_CONTAINER_ID.slice(0, 12),
+    containerId: () => TEST_CONTAINER_ID,
+    pidNamespace: () => pidNamespace,
+    bootId: () => null,
+  };
 }
 
 export function testOwner(overrides: Partial<FanslySendHolderIdentity> = {}): FanslySendHolderIdentity {

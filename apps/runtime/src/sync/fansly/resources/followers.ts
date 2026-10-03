@@ -34,13 +34,13 @@ import {
   expectedFollowersReconcileTerminalPageCount,
   findUnmappedFollowerIds,
   FOLLOWERS_RECONCILE_MAX_SNAPSHOT_RESTARTS,
+  FOLLOWERS_RECONCILE_MIN_INTERVAL_MS,
   FOLLOWERS_RECONCILE_RETRY_DELAY_MS,
   uniqueFollowerIds,
-} from "../../../services/sync/audience-rules.ts";
-import { upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
-import { followersReconcileDecision } from "../../../services/sync/followers-reconcile-decision.ts";
-import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../../../services/sync/followers-reconcile-floor.ts";
-import { followersReconcileDeactivationLimit } from "../../../services/sync/followers-reconcile-safety.ts";
+} from "../lib/audience-rules.ts";
+import { upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
+import { followersReconcileDecision } from "../lib/followers-reconcile-decision.ts";
+import { followersReconcileDeactivationLimit } from "../lib/followers-reconcile-safety.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

@@ -409,15 +409,22 @@ describe("admin credential verification", () => {
     vi.clearAllMocks();
   });
 
+  // The Fansly check's own path (journal, the candidate proxy, the answers) is
+  // in tests/sync-onboard-live.integration.test.ts. Here: the refusals that
+  // come before it — no database (`db` is an empty stub) and no adapter.
+  const adapterUnused = new Proxy({}, {
+    get(_target, property) {
+      if (typeof property !== "string" || property === "then") return undefined;
+      throw new Error(`the legacy Fansly adapter was used (${property})`);
+    },
+  }) as AppContext["adapter"];
+
   it.each([
     ["missing", undefined],
     ["null", null],
-  ])("returns 400 for a %s Fansly proxy before adapter dispatch", async (_label, proxy) => {
+  ])("returns 400 for a %s Fansly proxy before anything is sent", async (_label, proxy) => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    const verifySession = vi.fn();
-    const server = await buildApiServer(createRouteTestContext({
-      adapter: { verifySession } as unknown as AppContext["adapter"],
-    }));
+    const server = await buildApiServer(createRouteTestContext({ adapter: adapterUnused }));
 
     try {
       const response = await server.inject({
@@ -436,7 +443,6 @@ describe("admin credential verification", () => {
       });
 
       expect(response.statusCode).toBe(400);
-      expect(verifySession).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }
@@ -444,10 +450,7 @@ describe("admin credential verification", () => {
 
   it("rejects private proxy targets before verifying credentials", async () => {
     routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    const verifySession = vi.fn();
-    const server = await buildApiServer(createRouteTestContext({
-      adapter: { verifySession } as unknown as AppContext["adapter"],
-    }));
+    const server = await buildApiServer(createRouteTestContext({ adapter: adapterUnused }));
 
     try {
       const response = await server.inject({
@@ -469,69 +472,6 @@ describe("admin credential verification", () => {
 
       expect(response.statusCode).toBe(400);
       expect(JSON.stringify(response.json())).toContain("Proxy host");
-      expect(verifySession).not.toHaveBeenCalled();
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("passes egress key and shared rate limiter into Fansly credential verification", async () => {
-    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    let verificationContext: Record<string, unknown> | null = null;
-    const server = await buildApiServer(createRouteTestContext({
-      syncSharedRateLimitEnabled: true,
-      adapter: {
-        async verifySession(contextInput: Record<string, unknown>) {
-          verificationContext = contextInput;
-          return {
-            parsed: {
-              account: {
-                id: "fansly-acct",
-                username: "lora",
-                displayName: "Lora",
-                followCount: 0,
-                subscriberCount: 0,
-              },
-            },
-            raw: null,
-          };
-        },
-      } as unknown as AppContext["adapter"],
-    }));
-
-    try {
-      const response = await server.inject({
-        method: "POST",
-        url: "/api/v1/admin/credentials/verify",
-        headers: {
-          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
-        },
-        payload: {
-          platform: "fansly",
-          session: {
-            authorization: "fansly-token",
-          },
-          proxy: {
-            url: "socks5://proxy.example:1080",
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({
-        valid: true,
-        platform: "fansly",
-        username: "lora",
-        displayName: "Lora",
-      });
-      expect(verificationContext).toMatchObject({
-        egressKey: "socks5://proxy.example:1080",
-      });
-      // The check rides its no-page send guard (journaled, owner decision №4)
-      // and nothing else: the endpoint pauses' shared limiter is gone (§2.3).
-      const context = verificationContext as Record<string, unknown> | null;
-      expect(typeof (context?.sendGuard as { acquire?: unknown } | undefined)?.acquire).toBe("function");
-      expect(context).not.toHaveProperty("rateLimitWaiter");
     } finally {
       await server.close();
     }

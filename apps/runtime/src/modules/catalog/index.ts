@@ -22,7 +22,6 @@ import {
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
-  buildProxyEgressKey,
   createProxyRequestDispatcher,
   normalizeProxyConfig,
   redactSensitiveText,
@@ -53,10 +52,10 @@ import {
   listModelSummaries,
   listPageSummaries,
 } from "../../services/reporting.ts";
-import { fanslyUnpacedSendGuard } from "../../services/fansly-send-guard/index.ts";
 import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
+import { checkFanslyIdentityWithoutPage } from "../../sync/fansly/identity-without-page.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Catalog module (target §6.1): models, pages, credentials, proxies,
@@ -336,18 +335,22 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireOwner(principal);
     const body = request.body;
     if (body.platform === "fansly") {
+      // Step 4 S4-05: the page is born live on the Fansly Sync Engine, whose
+      // host adopts it on its next pass; no legacy sync is queued for it.
       await onboardFanslyPage(appContext, {
         modelSlug: body.modelSlug,
         label: body.label,
         session: body.session,
         proxy: body.proxy,
+        by: `api:${principal.user.username}`,
       });
-      const syncQueueState = await queueInitialOnboardingSync(body.label, request.log);
       const page = await getPageSummary(appContext, body.label);
       return {
         page: serializeAssignedPage(page),
         verified: true,
-        ...syncQueueState,
+        syncQueued: true,
+        syncWarning: null,
+        syncRetry: null,
       };
     } else {
       await onboardOnlyFansPage(appContext, {
@@ -418,21 +421,19 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const body = request.body;
     try {
       if (body.platform === "fansly") {
-        const proxy = normalizeProxyConfig(body.proxy);
-        await assertAllowedProxyTarget(proxy);
-        const egressKey = buildProxyEgressKey(proxy);
-        const result = await appContext.adapter.verifySession({
+        // The create-page check: no page yet, so the no-page identity check
+        // (step 4 S4-05) — journaled, unpaced (owner decision №4), through
+        // the proxy the page will get.
+        const { account } = await checkFanslyIdentityWithoutPage(appContext, {
           session: body.session,
-          proxy,
-          egressKey,
-          // No page: journaled, paced against no page (owner decision №4).
-          sendGuard: fanslyUnpacedSendGuard(appContext, "credentials_verify"),
+          proxy: body.proxy,
+          source: "credentials_verify",
         });
         return {
           valid: true as const,
           platform: "fansly" as const,
-          username: result.parsed.account.username,
-          displayName: result.parsed.account.displayName,
+          username: account.username,
+          displayName: account.displayName,
         };
       } else {
         // Stage 18: OnlyMonster retired — "verifying" an OnlyFans identity

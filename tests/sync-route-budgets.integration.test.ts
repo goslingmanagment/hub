@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, upsertDemand, type Database } from "@agency_hub_core/db";
+import { getSyncPage, paceFloorFromDb, upsertDemand, type Database } from "@agency_hub_core/db";
 import type { FanslyWireId } from "@agency_hub_core/fansly";
 
+import { TAKEOVER_FACTOR } from "../apps/runtime/src/sync/engine/pacer.ts";
 import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FAMILY_BUDGETS, intervalMsOf, routeBudget, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { explainSyncWork, readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
@@ -116,17 +117,26 @@ async function demand(pageId: number, reg: EngineRegistry, resource: string, sha
   await upsertDemand(db(), { pageId, shadow, resource, subject: "", kind: spec.kind, class: spec.class, demand: { reasons: ["test"] } });
 }
 
+/** The test pause S (the harness default). */
+const TEST_PAUSE_MS = 30;
+
 interface Attempt {
   id: number;
   resource: string;
   operation: FanslyRoute;
   sent_at: Date;
   class: string;
+  generation: string;
+  setting_ms: number;
+  pause_ms: number;
+  gap_prev_ms: number | null;
 }
 
 async function sends(pageId: number, shadow = false): Promise<Attempt[]> {
   const result = await testDb!.pool.query<Attempt>(
-    `select id::int as id, resource, operation, sent_at, class from sync_attempts
+    `select id::int as id, resource, operation, sent_at, class, owner_generation::text as generation,
+            setting_ms, pause_ms, gap_prev_ms
+       from sync_attempts
       where page_id = $1 and shadow = $2 and sent_at is not null order by sent_at, id`,
     [pageId, shadow],
   );
@@ -146,6 +156,31 @@ function expectBudget(all: readonly Attempt[], routes: readonly FanslyRoute[], i
   return times.length;
 }
 
+/**
+ * The page's pace on its journal, as the engine guarantees it: within one
+ * owner generation (I1) each send is at least its own S × (1 + u)
+ * (`pause_ms`) after the previous one, on the monotonic clock the pacer keeps
+ * it on (`gap_prev_ms`, measured at the actual send); across a takeover (I5)
+ * the new owner's first send is at least 1.2 × S after the previous owner's
+ * last recorded send. Returns the number of takeovers.
+ */
+function expectPagePace(all: readonly Attempt[]): number {
+  let takeovers = 0;
+  for (let i = 1; i < all.length; i += 1) {
+    const previous = all[i - 1]!;
+    const next = all[i]!;
+    if (next.generation === previous.generation) {
+      expect(next.gap_prev_ms, `page gap ${i}: the pacer's own gap`).not.toBeNull();
+      expect(next.gap_prev_ms!, `page gap ${i}`).toBeGreaterThanOrEqual(next.pause_ms);
+    } else {
+      takeovers += 1;
+      expect(next.sent_at.getTime() - previous.sent_at.getTime(), `page gap ${i} (takeover)`)
+        .toBeGreaterThanOrEqual(next.setting_ms * TAKEOVER_FACTOR);
+    }
+  }
+  return takeovers;
+}
+
 async function runUntil(
   pageId: number,
   reg: EngineRegistry,
@@ -154,9 +189,12 @@ async function runUntil(
   timeoutMs = 30_000,
 ): Promise<void> {
   const mode = options.mode ?? "live";
+  // Each run takes the page over as the host does (I5, `engine/host.ts`): its
+  // first send waits the floor the database computes from every earlier one.
+  const settingMs = options.settingMs ?? TEST_PAUSE_MS;
+  const floorDelayMs = await paceFloorFromDb(db(), { pageId, settingMs });
   const { actor, stop, abort } = await makeTestActor({
-    db: db(), pageId, mode, registry: reg, routeTimeScale: options.scale,
-    ...(options.settingMs === undefined ? {} : { settingMs: options.settingMs }),
+    db: db(), pageId, mode, registry: reg, routeTimeScale: options.scale, settingMs, floorDelayMs,
     ...(options.metrics === undefined ? {} : { metrics: options.metrics }),
     ...(mode === "live" ? { transport: options.transport ?? routeTransport() } : {}),
   });
@@ -196,7 +234,8 @@ describe("route budgets on the journal", () => {
       for (const key of ["msg.read", "list.read", "polls.read", "media.read"]) await demand(pageId, reg, key, mode === "shadow");
       const enough = (n: number) => async () => (await sends(pageId, mode === "shadow")).length >= n;
       await runUntil(pageId, reg, { mode, scale: SCALE }, enough(20));
-      // The actor restarts: its route clocks come from the journal.
+      // The actor restarts — a new owner generation: its route clocks come
+      // from the journal, its first send waits the takeover floor.
       await runUntil(pageId, reg, { mode, scale: SCALE }, enough(40));
 
       const all = await sends(pageId, mode === "shadow");
@@ -209,10 +248,9 @@ describe("route budgets on the journal", () => {
       expect(list).toBeGreaterThanOrEqual(4);
       expect(polls).toBeGreaterThanOrEqual(8);
       expect(family - list).toBeGreaterThanOrEqual(4);
-      // Never two sends of the page closer than the test pause.
-      for (let i = 1; i < all.length; i += 1) {
-        expect(all[i]!.sent_at.getTime() - all[i - 1]!.sent_at.getTime(), `page gap ${i}`).toBeGreaterThanOrEqual(30);
-      }
+      // Never two sends of the page closer than the pacer's S × (1 + u), nor
+      // the restart's first send closer than 1.2 × S to the last one before it.
+      expect(expectPagePace(all)).toBe(1);
     }, 90_000);
   }
 });

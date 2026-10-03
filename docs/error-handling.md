@@ -389,7 +389,7 @@ are withheld, and identity conflicts survive the JSON projection. This control-p
 evidence is restricted in tiering and refused by Agent Read.
 
 Fansly pull capture strips one-off CloudFront signing tokens before journaling
-(owner decision 2026-09-29, `services/sync/fansly-cdn-tokens.ts`): for the
+(owner decision 2026-09-29, `sync/fansly/lib/cdn-tokens.ts`): for the
 named kinds only, `Policy`, `Signature`, `Key-Pair-Id` and `Expires` leave
 `locations[].metadata` and a `locations[].location` string that is entirely one
 signed https URL on a Fansly CDN host (`cdn<N>.fansly.com`), in the catalog
@@ -403,7 +403,7 @@ read and would defeat content-address dedup. The allowlist fails closed, and
 describer downloads from their signed URLs. Earlier captures stay verbatim.
 
 Pull capture never fails on an unpaired UTF-16 surrogate in a provider body
-(production 2026-09-30, `services/sync/journal-lone-surrogates.ts`). json and
+(production 2026-09-30, `sync/fansly/lib/journal-lone-surrogates.ts`). json and
 jsonb refuse one (22P02, "Unicode low surrogate must follow a high
 surrogate"), so a body that holds one is journaled as a copy with each
 replaced by U+FFFD, in the catalog object and both inline bodies alike, for

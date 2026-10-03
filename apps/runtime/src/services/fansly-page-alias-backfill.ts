@@ -4,7 +4,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
 import { resolvePageContext } from "./page-context.ts";
 import { assertLegacyOwnsFanslyPageLabels, SYNC_ENGINE_HINTS } from "./sync-engine-guard.ts";
-import { upsertHydratedFansForPageDetailed } from "./sync/fan-hydration.ts";
+import { upsertHydratedFansForPageDetailed } from "../sync/fansly/lib/fan-hydration.ts";
 
 export interface FanslyPageAliasBackfillPageSummary {
   pageId: number;

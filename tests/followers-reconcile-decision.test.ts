@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { followersReconcileDecision } from "../apps/runtime/src/services/sync/followers-reconcile-decision.ts";
+import { followersReconcileDecision } from "../apps/runtime/src/sync/fansly/lib/followers-reconcile-decision.ts";
 
 const BASE = {
   activeFollowerCount: 1,

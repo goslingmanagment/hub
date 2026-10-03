@@ -14,7 +14,7 @@
 //
 // 1. THE JOURNAL IS TRIMMED. `followers` and `dm_conversations` are journaled
 //    through trimFanslyFollowerPayload / trimFanslyMessagingGroupsPayload
-//    (services/sync/shared.ts) — the latter runs redactFanslyMessageLike,
+//    (sync/fansly/lib/capture-trims.ts) — the latter runs redactFanslyMessageLike,
 //    which DROPS message content entirely. These canonicalizers read the
 //    TRIMMED shape and nothing else: a field the redactor removes does not
 //    exist for us, and inventing one would be a fabricated fact. (`subscribers`

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { newVaultWalkProof, observeVaultWalkPage, parseVaultWalkProof, vaultWalkIsComplete } from "../apps/runtime/src/services/sync/vault-walk-proof.ts";
+import {
+  newVaultWalkProof,
+  observeVaultWalkPage,
+  parseVaultWalkProof,
+  vaultWalkIsComplete,
+} from "../apps/runtime/src/sync/fansly/lib/vault-walk-proof.ts";
 
 describe("full vault walk evidence", () => {
   const album = { itemCount: 2, lastItemRef: "member-2" };

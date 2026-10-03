@@ -16,12 +16,12 @@ import {
   type FanslyTransactionsPageContract,
 } from "@agency_hub_core/fansly";
 
-import { upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
 import {
   findTransactionPageOverlap,
   inWindowItemsAfterOlder,
   mapFanslyTransactionItem,
-} from "../../../services/sync/money-rules.ts";
+} from "../lib/money-rules.ts";
 import { WrongTransactionsWriterError } from "../../../services/transactions-writer-gate.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
