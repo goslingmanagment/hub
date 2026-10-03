@@ -499,10 +499,12 @@ export interface HarnessPage {
 /**
  * A Fansly page as the switch would leave it: encrypted session, the page
  * proxy (`proxyUrl`, or none), its engine row in `mode`, the step-1 guard row
- * handed to the engine for a live page, the legacy import stamped, history
- * requests open, and — with a proxy — the stored credentials verified by the
- * engine (`credentials_generation`, as the takeover `account.verify` leaves
- * it; S3-05: the live transport sends nothing else before it).
+ * handed to the engine for a live page (`engine_switched_at` at the page's
+ * `mode_changed_at`: phase A stamps it before the page goes live), the legacy
+ * import stamped, history requests open, and — with a proxy — the stored
+ * credentials verified by the engine (`credentials_generation`, as the
+ * takeover `account.verify` leaves it; S3-05: the live transport sends
+ * nothing else before it).
  */
 export async function seedHarnessPage(
   handles: HarnessHandles,
@@ -529,7 +531,12 @@ export async function seedHarnessPage(
   );
   if (options.mode === "live") {
     await ensureFanslyPageSendGuard(handles.db, pageId);
-    await handles.pool.query("update fansly_page_send_guards set owner_engine = 'fansly_sync_engine' where page_id = $1", [pageId]);
+    await handles.pool.query(
+      `update fansly_page_send_guards g set owner_engine = 'fansly_sync_engine', engine_switched_at = sp.mode_changed_at
+         from sync_pages sp
+        where g.page_id = $1 and sp.page_id = g.page_id`,
+      [pageId],
+    );
     if (options.proxyUrl !== undefined && options.proxyUrl !== null) await stampVerifiedCredentials(handles, { pageId, pageLabel });
   }
   return { pageId, pageLabel };

@@ -44,8 +44,13 @@ import { acceptedShadowReport, seedSwitchPage, switchContext, switchRegistry, te
 // canonicalization, the projector, the minutely message-archive sweep, the
 // real switch, rollback and erasure — and judge the marks where readers see
 // them: `page_dm_messages` AND `message_archive`, not only the overlay.
-// A projector that skipped frames received after `engine_switched_at` (the
-// withdrawn ruling 7) fails the first group.
+// Every frame is received on an engine-owned guard after its
+// `engine_switched_at` (`deletionFrame` asserts it): stamped by the real
+// phase A, or on a live page by its fixture, as the switch leaves it. A
+// projector that skipped such frames while the engine owns the page (the
+// withdrawn ruling 7) fails each case that projects before the guard is handed
+// back: the revert projected in handover, the rollback projected before it,
+// both repeat cases and the erasure of a projected frame.
 //
 //   - a deletion the legacy socket received after A, canonicalized late, and
 //     a phase-B revert before the engine's local apply;
@@ -155,9 +160,14 @@ async function legacyReceiverHolding(pageId: number): Promise<void> {
 
 // ── the chain ───────────────────────────────────────────────────────────────
 
-/** A deletion frame of DELETED captured by the page's socket and acked by the
- *  step-1 apply with the production post-ack hook (I18). */
-async function deletionFrame(capture: WsCapturePage["capture"], receivedAt: Date): Promise<number> {
+/** A deletion frame of DELETED captured by the page's socket after the guard
+ *  was handed to the engine, and acked by the step-1 apply with the production
+ *  post-ack hook (I18). */
+async function deletionFrame(pageId: number, capture: WsCapturePage["capture"], receivedAt: Date): Promise<number> {
+  const guard = await guardOf(pageId);
+  expect(guard.owner_engine).toBe("fansly_sync_engine");
+  expect(guard.engine_switched_at).toBeInstanceOf(Date);
+  expect(receivedAt.getTime()).toBeGreaterThan(guard.engine_switched_at!.getTime());
   const observationId = await capture(wsDeleted(DELETED, GROUP), receivedAt);
   expect((await applyFanslyWsLive(app(), observationId))?.status).toBe("applied");
   return observationId;
@@ -270,18 +280,17 @@ describe("a switch reverted in phase B before the engine applied the deletion", 
       await seedChat(page.pageId);
       const capture = await openWsCapture(handles(), { pageId: page.pageId, ownRef: HARNESS_OWN_REF });
       await legacyReceiverHolding(page.pageId);
-      const late: Array<{ receivedAt: Date; switchedAt: Date }> = [];
+      const late: Date[] = [];
       const lines: string[] = [];
       const outcome = await runSyncSwitch(switchContext({ db: db(), config: config(), report: acceptedShadowReport([label]), lines }, {
         // Phase B waits for the receiver; meanwhile, once A handed the guard:
         sleep: async (ms) => {
           const guard = await guardOf(page.pageId);
           if (late.length === 0 && guard.owner_engine === "fansly_sync_engine") {
-            const switchedAt = guard.engine_switched_at!;
             // The receiver still captures: a deletion received after A, acked
             // in handover, where the post-ack hook raises live work.
-            const receivedAt = new Date(Math.max(Date.now(), switchedAt.getTime() + 1));
-            await deletionFrame(capture, receivedAt);
+            const receivedAt = new Date(Math.max(Date.now(), guard.engine_switched_at!.getTime() + 1));
+            await deletionFrame(page.pageId, capture, receivedAt);
             expect(await deletionWork(page.pageId)).toEqual([{ state: "open", close_reason: null }]);
             if (projected === "in handover") {
               await canonicalize(page.pageId);
@@ -289,7 +298,7 @@ describe("a switch reverted in phase B before the engine applied the deletion", 
             }
             // The shadow owner released the page when it left shadow.
             await owner.release();
-            late.push({ receivedAt, switchedAt });
+            late.push(receivedAt);
           }
           await sleep(ms);
         },
@@ -305,8 +314,7 @@ describe("a switch reverted in phase B before the engine applied the deletion", 
       expect(lines.some((line) => line.includes("ws_lock_holders=1"))).toBe(true);
       expect((await getSyncPage(db(), page.pageId))!.mode).toBe("shadow");
       expect(late).toHaveLength(1);
-      const { receivedAt, switchedAt } = late[0]!;
-      expect(receivedAt.getTime()).toBeGreaterThan(switchedAt.getTime());
+      const receivedAt = late[0]!;
       // The revert cancelled the engine's deletion before its local apply:
       // only the overlay knows the message is gone.
       expect(await deletionWork(page.pageId)).toEqual([{ state: "cancelled", close_reason: "switch_reverted" }]);
@@ -330,7 +338,7 @@ describe("a rollback while the engine's deletion is pending", () => {
     async (projected) => {
       const live = await livePage(`rollback-${projected}`);
       const receivedAt = new Date(Date.now() - 5_000);
-      await deletionFrame(live.capture, receivedAt);
+      await deletionFrame(live.page.pageId, live.capture, receivedAt);
       expect(await deletionWork(live.page.pageId)).toEqual([{ state: "open", close_reason: null }]);
       if (projected === "before") {
         await canonicalize(live.page.pageId);
@@ -362,7 +370,7 @@ describe("a deletion delivered twice on a live page", () => {
       const pageId = live.page.pageId;
       const firstAt = new Date(Date.now() - 20_000);
       const secondAt = new Date(firstAt.getTime() + 10_000);
-      await deletionFrame(live.capture, firstAt);
+      await deletionFrame(pageId, live.capture, firstAt);
       // The same deletion again (a reconnect's replay): its own observation,
       // ack and event; the overlay mark stays the first.
       expect(await applyFanslyWsLive(app(), await live.capture(wsDeleted(DELETED, GROUP), secondAt))).not.toBeNull();
@@ -400,7 +408,7 @@ describe("an erasure while the deletion debt waits for its drain", () => {
     async (stage) => {
       const live = await livePage(`erasure-${stage}`);
       const pageId = live.page.pageId;
-      await deletionFrame(live.capture, new Date(Date.now() - 5_000));
+      await deletionFrame(pageId, live.capture, new Date(Date.now() - 5_000));
       await canonicalize(pageId);
       if (stage === "projected") {
         await project(pageId);
