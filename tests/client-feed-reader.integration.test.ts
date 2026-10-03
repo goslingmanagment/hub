@@ -21,13 +21,14 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
-import { armNoOutboundTrap, type NoOutboundTrap } from "./helpers/no-outbound-trap.ts";
+import { armNoOutboundTrap, type NoOutboundTrap } from "./helpers/no-outbound.ts";
 
 // H-9b: the chat extension's archive feed reader. Database only; newest first
 // by (event time, guarded-numeric id, id); tombstones are rows flagged
-// `deleted`, stubs never show; a walk is bounded by the snapshot it started on.
-// The union source is the AI union's own CTE chain, so the feed's live rows
-// are exactly a generation's rows.
+// `deleted`, stubs never show; a walk is bounded by the snapshot it started on
+// against inserts (not against in-place changes to a row's key: see the
+// "not frozen" case). The union source is the AI union's own CTE chain, so the
+// feed's live rows are exactly a generation's rows.
 
 let testDb: StartedTestDatabase | null = null;
 let trap: NoOutboundTrap | null = null;
@@ -357,7 +358,71 @@ describe("conversation feed reader (H-9b)", () => {
     expect(all.rows.map((row) => row.messageRef)).toEqual(["6", "5", "4", "3", "2", "1", "50"]);
   });
 
-  it.for(["archive", "union"] as const)("%s: 3200 messages by 100 — no hole, no duplicate — while messages arrive and get deleted", { timeout: 120_000 }, async (source, context) => {
+  it.for(["archive", "union"] as const)("%s: an in-place change to a row's time mid-walk is not frozen — a served row can repeat, an unserved one is skipped until the next walk", async (source, context) => {
+    if (!testDb) return context.skip();
+    const page = await seedPage();
+    for (let index = 1; index <= 6; index += 1) {
+      await insertArchiveRow({ pageId: page.id, ref: String(index), occurredAt: at(index) });
+    }
+    if (source === "union") {
+      // "3" in both stores: the archive copy wins (material) until a REST
+      // re-observation of the dm copy, whose time is newer.
+      await db().pool.query(
+        "update message_archive set material_observed_at = $2 where account_id = $1 and message_ref = '3'",
+        [page.id, at(0)],
+      );
+      await insertDmRow({ pageId: page.id, ref: "3", createdAt: at(20), text: "rest copy" });
+    }
+    const snapshot = await readConversationFeedSnapshot(testDb.db, { pageId: page.id });
+
+    const { rows } = await walk({
+      source,
+      pageId: page.id,
+      snapshot,
+      pageSize: 2,
+      between: async (pageIndex) => {
+        if (pageIndex !== 1) return;
+        // The cursor is at "5". Stand-ins for the superseding-head repair,
+        // which rewrites occurred_at on the existing row and keeps its id:
+        // "2" (not served yet) moves newer than the cursor, "6" (served)
+        // moves older than it.
+        await db().pool.query(
+          "update message_archive set occurred_at = $3 where account_id = $1 and message_ref = $2",
+          [page.id, "2", at(10)],
+        );
+        await db().pool.query(
+          "update message_archive set occurred_at = $3 where account_id = $1 and message_ref = $2",
+          [page.id, "6", at(0)],
+        );
+        if (source === "union") {
+          await db().pool.query(
+            `update dm_message_archive set rest_material_observed_at = now(), rest_platform_changed_at = now()
+             where platform_account_id = $1 and platform_message_id = '3'`,
+            [page.id],
+          );
+        }
+      },
+    });
+
+    const refs = rows.map((row) => row.messageRef);
+    expect(refs).toEqual(source === "union" ? ["6", "5", "4", "1", "6"] : ["6", "5", "4", "3", "1", "6"]);
+    // What the caller does with it: drop a repeated messageRef. The skipped
+    // rows are what a walk cannot promise.
+    const kept = refs.filter((ref, index) => refs.indexOf(ref) === index);
+    const skipped = source === "union" ? ["2", "3"] : ["2"];
+    expect(new Set(kept)).toEqual(new Set(["1", "2", "3", "4", "5", "6"].filter((ref) => !skipped.includes(ref))));
+
+    // The next walk from the head serves every message once, in its new place.
+    const fresh = await readConversationFeedSnapshot(testDb.db, { pageId: page.id });
+    const next = await walk({ source, pageId: page.id, snapshot: fresh, pageSize: 2 });
+    expect(next.rows.map((row) => row.messageRef))
+      .toEqual(source === "union" ? ["3", "2", "5", "4", "1", "6"] : ["2", "5", "4", "3", "1", "6"]);
+    if (source === "union") {
+      expect(next.rows[0]!.textPlain).toBe("rest copy");
+    }
+  });
+
+  it.for(["archive", "union"] as const)("%s: 3200 messages by 100 — no hole, no duplicate — while messages arrive and get deleted (inserts and deletions only)", { timeout: 120_000 }, async (source, context) => {
     if (!testDb) return context.skip();
     const page = await seedPage();
     const total = 3200;

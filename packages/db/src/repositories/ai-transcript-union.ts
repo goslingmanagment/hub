@@ -59,9 +59,13 @@ export interface AiTranscriptUnionInput {
 
 export interface AiTranscriptUnionCteOptions {
   /**
-   * Snapshot bounds (the feed): rows inserted after the snapshot — a higher
-   * row id in either store — stay outside the walk. Rows updated in place
-   * (a deletion, an edit) keep their id and stay inside it.
+   * Snapshot bounds (the feed) on the two content arms: a row whose id is
+   * above the bound in its store stays outside the walk. Tombstone sources
+   * (cross-source dm deletions, the hot table) are not bounded, so a deletion
+   * recorded after the snapshot still flags its row. Rows updated in place
+   * keep their id and stay inside the walk, including updates that change
+   * their time or which copy wins (conversation-feed.ts says what that costs
+   * a walk).
    */
   bounds?: { archiveMaxId: number; dmMaxId: number };
   /**

@@ -29,10 +29,6 @@ import { expect } from "vitest";
  *
  * `assertNoOutbound()` checks all of it; `restore()` undoes the trap and is safe
  * to call twice.
- *
- * The bootstrap PR carries the same helper as `tests/helpers/no-outbound.ts`
- * (same API). Two files so neither PR conflicts with the other; once both are
- * in, one import moves and this copy goes.
  */
 
 const COUNTED_TABLES = [
