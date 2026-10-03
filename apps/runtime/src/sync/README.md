@@ -293,8 +293,9 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 reconcile's window drift pass. The legacy processes ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS
 supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector files
 its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM stream wake; a deletion keeps its
-`mutation_debt` receipt, so a frame captured before the switch is still marked), the AI describer downloads nothing
-itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
+`mutation_debt` receipt whatever the frame's receive time, so a frame captured before the switch is still marked, and so
+is one whose `dm-live.deletions` work a phase-B revert or a rollback cancelled before the engine applied it), the AI
+describer downloads nothing itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
 `scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
 command to use instead — except the `/account/me` levers (page verify, credentials, proxy, `fansly:ws-policy`), which
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,

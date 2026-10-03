@@ -39,18 +39,23 @@ export async function seedWsCapturePage(
   const pageId = page!.id;
   await handles.pool.query("update pages set external_page_id = $2 where id = $1", [pageId, input.ownRef]);
   await ensureSyncPage(handles.db, { pageId });
+  return { pageId, label, ownRef: input.ownRef, capture: await openWsCapture(handles, { pageId, ownRef: input.ownRef }) };
+}
+
+/** An open receiver connection of an existing page: its frames captured
+ *  through the real B0 capture, as the legacy receiver (or the engine's
+ *  socket, which shares it) would. */
+export async function openWsCapture(
+  handles: { db: Database },
+  input: { pageId: number; ownRef: string },
+): Promise<WsCapturePage["capture"]> {
   const connectionId = randomUUID();
-  await beginFanslyWsConnection(handles.db, { id: connectionId, pageId, generation: GENERATION });
+  await beginFanslyWsConnection(handles.db, { id: connectionId, pageId: input.pageId, generation: GENERATION });
   let ordinal = 0;
-  return {
-    pageId,
-    label,
-    ownRef: input.ownRef,
-    capture: (frame, receivedAt = new Date()) => captureFanslyWsFrame(handles.db, {
-      connectionId, pageId, generation: GENERATION, accountRef: input.ownRef,
-      ordinal: ++ordinal, frame, receivedAt, validate: async () => undefined,
-    }),
-  };
+  return (frame, receivedAt = new Date()) => captureFanslyWsFrame(handles.db, {
+    connectionId, pageId: input.pageId, generation: GENERATION, accountRef: input.ownRef,
+    ordinal: ++ordinal, frame, receivedAt, validate: async () => undefined,
+  });
 }
 
 /** A DM thread of the page; bound threads get a fan row. */

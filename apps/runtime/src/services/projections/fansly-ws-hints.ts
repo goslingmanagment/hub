@@ -39,8 +39,14 @@ const DRAIN_WAKE_INTERVAL_MS = 5 * 60_000;
  * marks on every page (item 12), and a frame the legacy socket captured
  * before the switch can reach this projector only after it. That frame was
  * acked in shadow, where `dm-live.deletions` writes nothing, so without the
- * receipt its deletion would never be marked. The mode is read per event,
- * in the event's transaction, and again before the wake. */
+ * receipt its deletion would never be marked. A frame acked in `handover` or
+ * `live` needs it too, whatever its receive time: a phase-B revert and a
+ * rollback cancel the `dm-live.deletions` work its ack raised
+ * (`cancelLiveWorkForRollback`), so before the engine's local apply the
+ * receipt is the only debt that survives either way back (step 3b, A5;
+ * tests/sync-ws-hints-pre-switch.integration.test.ts). The projector goes
+ * only after a drain check over the captured observations (step 4). The mode
+ * is read per event, in the event's transaction, and again before the wake. */
 export async function runFanslyWsHintProjection(
   app: Pick<AppContext, "db" | "logger"> & Partial<Pick<AppContext, "config">>,
   input?: { accountId?: number | null },

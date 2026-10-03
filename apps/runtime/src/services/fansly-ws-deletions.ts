@@ -32,8 +32,9 @@
 // hint projector keeps filing `mutation_debt` receipts on those pages, so a
 // deletion frame the legacy socket captured before the switch (acked in
 // shadow, where the engine writes nothing) is marked even when its receipt is
-// filed after the switch, and a switch reverted in phase B still gets its
-// handover hour's deletions. They never write a thread's stored window there:
+// filed after the switch, and a switch reverted in phase B or a rollback still
+// gets the deletions whose engine work it cancelled before the engine applied
+// them. They never write a thread's stored window there:
 // on those pages the window is the engine's
 // (`syncLegacyThreadSummaryAfterDeletion`, I9).
 //
