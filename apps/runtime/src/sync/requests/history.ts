@@ -51,11 +51,11 @@ import {
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import { getFanslyDmMessageSyncExcludedReason, type AppConfig } from "@agency_hub_core/shared";
+import { activeFanslyPageHold, getFanslyDmMessageSyncExcludedReason, type AppConfig } from "@agency_hub_core/shared";
 
 import { recordAudit } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { activePageHold, type ResourceHoldEntry } from "../engine/errors.ts";
+import { type ResourceHoldEntry } from "../engine/errors.ts";
 import {
   estimateSlotOpensAt,
   explainWork,
@@ -893,8 +893,8 @@ function statusPageOf(page: SyncPageRow): StatusPage {
     pausedResources: page.pausedResources,
     holdKind: page.holdKind,
     holdUntil: page.holdUntil,
+    holdSince: page.holdSince,
     holdDetail: page.holdDetail,
-    credentialsGeneration: page.credentialsGeneration,
     resourceHolds: page.resourceHolds as Record<string, ResourceHoldEntry>,
     owner: page.owner,
   };
@@ -924,7 +924,7 @@ function requestWaiting(page: SyncPageRow | null, now: Date): { reason: WaitingR
   if (page.pausedAll || page.pausedRequests) return { reason: "paused", until: null };
   const status = statusPageOf(page);
   if (page.mode !== "live" || !ownerRunning(status, now)) return { reason: "ownership_unconfirmed", until: null };
-  const hold = activePageHold(status, now);
+  const hold = activeFanslyPageHold(status, now);
   if (hold !== null) return { reason: "page_hold", until: hold.until };
   return null;
 }

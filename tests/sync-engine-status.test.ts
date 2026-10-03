@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { INDEFINITE_UNTIL } from "../apps/runtime/src/sync/engine/errors.ts";
+import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
+
 import {
   buildPageStatus,
   estimateSlotOpensAt,
@@ -29,8 +30,8 @@ function page(overrides: Partial<StatusPage> = {}): StatusPage {
     pausedResources: [],
     holdKind: null,
     holdUntil: null,
+    holdSince: null,
     holdDetail: {},
-    credentialsGeneration: "gen-1",
     resourceHolds: {},
     owner: {
       generation: 3n,
@@ -123,8 +124,10 @@ describe("sync status: why a work row waits", () => {
     const held = page({ holdKind: "rate_limit", holdUntil: at(120_000) });
     expect(explainWork(work(), held, OPEN_SLOT, NOW)).toEqual({ reason: "page_hold", until: at(120_000), detail: { kind: "rate_limit" } });
     expect(reason(work(), page({ holdKind: "rate_limit", holdUntil: at(-1) }))).toBe("class_share");
-    expect(reason(work(), page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-0" } })))
-      .toBe("class_share");
+    // A credentials hold is in force until an identity proof clears it,
+    // whatever digest the engine trusts since (ruling 5).
+    expect(explainWork(work(), page({ holdKind: "auth", holdUntil: INDEFINITE_UNTIL, holdDetail: { credentialsGeneration: "gen-0" } }), OPEN_SLOT, NOW))
+      .toEqual({ reason: "page_hold", until: INDEFINITE_UNTIL, detail: { kind: "auth" } });
   });
 
   it("then quarantined, blocked_by_vendor, subject_breaker, resource_hold, in that order", () => {

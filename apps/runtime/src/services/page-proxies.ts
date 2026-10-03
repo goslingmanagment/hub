@@ -1,4 +1,4 @@
-import { findPageByLabel, type Database } from "@agency_hub_core/db";
+import { findPageByLabel } from "@agency_hub_core/db";
 import {
   buildProxyEgressKey,
   normalizeProxyConfig,
@@ -10,7 +10,7 @@ import { BadRequestError, NotFoundError } from "./errors.ts";
 import { removeProxy, resolvePageContext, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
-import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, trustStoredFanslyCredentials } from "./sync-engine-account.ts";
+import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
 
 export async function setPageProxy(
   app: AppContext,
@@ -45,14 +45,12 @@ export async function setPageProxy(
   }
 
   if (route === "engine") {
-    await checkFanslyIdentityThroughEngine(app, pageContext.page, { proxy: normalizedProxy });
-    // Stored and trusted together: the new digest (the proxy is part of it)
-    // is the engine's from now on.
-    await app.db.transaction(async (raw) => {
-      const tx = raw as unknown as Database;
+    const verified = await checkFanslyIdentityThroughEngine(app, pageContext.page, { proxy: normalizedProxy });
+    // Stored and trusted together, a CAS on the session the check rode with:
+    // the new digest (the proxy is part of it) is the engine's from now on.
+    await saveVerifiedFanslyCredentials(app, pageContext.page, verified, async (tx) => {
       await saveProxy({ config: app.config, db: tx }, pageContext.page.id, normalizedProxy,
         preservesStoredProxyRoute ? { rateLimitScopeKey: proxyEgressKey } : {});
-      await trustStoredFanslyCredentials(tx, pageContext.page);
     });
     return;
   }

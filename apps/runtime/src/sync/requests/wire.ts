@@ -1,7 +1,7 @@
 import type { AgentHistoryItem, AgentHistoryRequest, AgentSyncPageStatus, AgentSyncWork } from "@agency_hub_core/contracts";
 import type { HistoryInputKind } from "@agency_hub_core/db";
+import { isIndefinite } from "@agency_hub_core/shared";
 
-import { isIndefinite } from "../engine/errors.ts";
 import type { PageStatus } from "../engine/status.ts";
 import type { WorkWhy } from "../inspect.ts";
 import type { HistoryItemView, HistoryRequestView } from "./history.ts";

@@ -284,9 +284,11 @@ export interface ApplyResult<C = unknown> {
   /** Outcomes worth counting that are not work (a refused empty snapshot, a
    *  restarted walk, …): `sync_apply_effect{resource, effect}` after commit. */
   counters?: Readonly<Record<string, number>>;
-  /** The account the page's credentials answered for (`/account/me`):
-   *  `sync_pages.identity_account_id`, written by the engine right after the
-   *  apply commits (the page row is the actor's, never a resource's). */
+  /** The account the page's credentials answered for (`/account/me` only,
+   *  `IDENTITY_PROOF_OPERATIONS`): the engine writes the identity proof —
+   *  `sync_pages.identity_account_id` and the trusted digest — and clears a
+   *  credentials hold it answers, in this apply's transaction (the page row
+   *  is the actor's, never a resource's). */
   pageIdentity?: { accountId: string };
 }
 

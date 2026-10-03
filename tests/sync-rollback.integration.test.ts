@@ -344,14 +344,16 @@ describe("sync rollback", () => {
     expect(await steps(page.pageId)).toEqual([]);
     expect(r.lines.some((line) => line.includes("renew the credentials through the engine"))).toBe(true);
 
-    // The renewal's identity check runs under the hold (the page is live) and
-    // the trusted digest lifts it: the rollback then proceeds without a flag.
+    // The renewal's identity check runs under the hold (the page is live),
+    // then the engine's verify of the stored new credentials (A3), whose
+    // proof lifts it: the rollback then proceeds without a flag.
     const app = createTestAppContext(testDb, { fanslySendGuardSettingMs: S });
     const renewed = await updatePageCredentials(app, page.pageLabel, {
       platform: "fansly",
       session: { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" },
     });
     expect(renewed).toMatchObject({ updated: true, verified: true });
+    await until(async () => (await getSyncPage(db(), page.pageId))!.holdKind === null, 15_000, "the verify's proof lifting the hold");
     expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
     expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
     expect(await steps(page.pageId)).toEqual(["start", "1_handover", "2_released", "3_guard_handed", "4_work_closed", "5_off", "done"]);
@@ -403,15 +405,18 @@ describe("sync rollback", () => {
     expect(r.server.arrivals.length).toBe(arrivals);
   }, 120_000);
 
-  it("an auth hold of credentials older than the verified ones does not refuse (the engine's own rule)", async (context) => {
+  it("an auth hold refuses whatever digest the engine verified before it (A verified, B refused): the rule the actor admits by", async (context) => {
     if (!testDb) return context.skip();
     const r = await livePage("rollback-h", 28);
     const { page } = r;
     await rollbackKilledAfter(r, "1");
     await until(async () => released(page.pageId), 15_000, "the live actor's release");
-    // The row still names the failed digest; the engine verified another since.
+    // The row names the refused digest; the engine trusts the one it verified
+    // before: the refusal is newer, so the hold is in force.
     await holdAuth(page.pageId, "e".repeat(64));
-    expect(await rollback(r)).toMatchObject({ exitCode: 0, step: "done" });
+    expect(await rollback(r)).toMatchObject({ exitCode: 5, step: "auth_hold" });
+    expect((await guardOf(page.pageId)).owner_engine).toBe("fansly_sync_engine");
+    expect(await rollback(r, { withAuthHold: true })).toMatchObject({ exitCode: 0, step: "done" });
     expect((await guardOf(page.pageId)).owner_engine).toBe("legacy");
   }, 120_000);
 
