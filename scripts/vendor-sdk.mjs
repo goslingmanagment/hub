@@ -114,6 +114,8 @@ for (const file of [
   "routes-agent-keys.ts",
   // The Fansly Sync Engine's owner routes; routes.ts spreads them in too.
   "routes-sync.ts",
+  // The chat extension's routes; routes.ts spreads them in too.
+  "routes-client.ts",
   "routes-ofapi-vendor.ts",
   "ofapi-vendor-usage.ts",
   "routes-ofapi-collection.ts",
