@@ -687,34 +687,6 @@ export async function recordPostRepliesWalkVisit(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
-/**
- * Record a walk that did NOT produce an answer.
- *
- * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
- * moving it would retire the post from the never-walked band on the strength of
- * an error. What moves is the failure counter, which is what a later operator
- * reads to tell "this post is unreachable" from "we have not got to it yet".
- */
-export async function recordPostRepliesWalkFailure(
-  db: Database,
-  input: { pageId: number; subjectRef: string; nextDueAt: Date },
-): Promise<{ applied: boolean }> {
-  const result = await db.execute(sql`
-    insert into subject_refresh_state (
-      page_id, plane, subject_ref, refresh_class, next_due_at, consecutive_failures
-    ) values (
-      ${input.pageId}, 'post_replies', ${input.subjectRef}, 'fresh',
-      ${input.nextDueAt}, 1
-    )
-    on conflict (page_id, plane, subject_ref) do update set
-      next_due_at = excluded.next_due_at,
-      consecutive_failures = subject_refresh_state.consecutive_failures + 1,
-      updated_at = now()
-    returning page_id
-  `);
-  return { applied: (result.rowCount ?? 0) > 0 };
-}
-
 /** Coverage arithmetic for the lane's progress block: how many roots the queue
  *  holds, how many have ever been walked, and how many are waiting on a dirty
  *  signal. `rootsKnown` counts the QUEUE, not `creator_posts`, so a seeding that
@@ -1080,45 +1052,6 @@ export async function recordPostEngagementRefreshFailures(
   return { applied: result.rowCount ?? 0 };
 }
 
-/** Coverage arithmetic for the phase's progress block. `postsKnown` counts
- *  `creator_posts` so a seeding that has not finished reads as incomplete
- *  rather than as complete-and-small. */
-export async function countPostEngagementRefreshProgress(
-  db: Database,
-  pageId: number,
-): Promise<{
-  subjectsKnown: number;
-  subjectsRefreshed: number;
-  subjectsDirty: number;
-  postsKnown: number;
-}> {
-  const result = await db.execute<{
-    subjects: string;
-    refreshed: string;
-    dirty: string;
-    posts: string;
-  }>(sql`
-    select
-      (select count(*)::text from subject_refresh_state s
-        where s.page_id = ${pageId} and s.plane = 'post_engagement') as subjects,
-      (select count(*)::text from subject_refresh_state s
-        where s.page_id = ${pageId} and s.plane = 'post_engagement'
-          and s.last_visited_at is not null) as refreshed,
-      (select count(*)::text from subject_refresh_state s
-        where s.page_id = ${pageId} and s.plane = 'post_engagement'
-          and s.dirty_reason is not null) as dirty,
-      (select count(*)::text from creator_posts p
-        where p.account_id = ${pageId} and p.platform = 'fansly') as posts
-  `);
-  const row = result.rows[0];
-  return {
-    subjectsKnown: Number(row?.subjects ?? 0),
-    subjectsRefreshed: Number(row?.refreshed ?? 0),
-    subjectsDirty: Number(row?.dirty ?? 0),
-    postsKnown: Number(row?.posts ?? 0),
-  };
-}
-
 // ── the media_stats refresh queue (WP-F4) ────────────────────────────────────
 //
 // SAME TABLE, FOURTH PLANE, and the one with the widest fan-out: one row per
@@ -1132,24 +1065,9 @@ export async function countPostEngagementRefreshProgress(
 // consumer those marks were waiting for, and the FIRST priority band below is
 // exactly them.
 //
-// The tier boundaries are CONSTANTS, not config keys, and deliberately so:
-// they describe how a media item's traffic decays with its age, which is a
-// property of the platform rather than a knob an operator should be turning.
-// TWO numbers are tunable and only two — the daily call budget, which decides
-// how much of the decay the lane can afford, and the long-tail cycle, which A6
-// explicitly asks to be a tunable rather than a constant.
+// The age tiers are the Fansly Sync Engine's (owner decision №6, from its
+// registry): every query below takes them as `tiers` (`MediaStatsTiers`).
 
-/** Fresh: published (or first seen) within 30 days — re-read DAILY. */
-export const MEDIA_STATS_FRESH_DAYS = 30;
-/** Mid: 31–180 days — re-read WEEKLY. */
-export const MEDIA_STATS_MID_DAYS = 180;
-export const MEDIA_STATS_FRESH_INTERVAL_DAYS = 1;
-export const MEDIA_STATS_MID_INTERVAL_DAYS = 7;
-/** The DEFAULT long-tail cycle. The live value is
- *  `fanslyMediaStatsLongTailCycleDays` and every query below takes it as an
- *  argument — a stored cadence would freeze each row at whatever the cycle was
- *  when it was last visited. */
-export const MEDIA_STATS_DEFAULT_LONG_TAIL_CYCLE_DAYS = 30;
 /** How far back each tier's steady refresh reads: the lane's trailing windows
  *  (`steadyWindows`), stated here because the queue orders by them. A split
  *  long tail reads 3 × 31 = 93 days, never less than these 90. */
@@ -1189,34 +1107,6 @@ function mediaStatsWindowEdge(tier: SQL, now: Date): SQL {
  * and those are classed FRESH for 30 days from first sight.
  */
 export type MediaStatsPublicationBasis = "platform" | "first_seen";
-
-/** The tier an item sits in, from its publication age. Exported because the
- *  handler needs it to compute the next due date after a visit, and because a
- *  boundary that lives in two places drifts. */
-export function mediaStatsTier(
-  publicationAt: Date | null,
-  now: Date,
-): MediaStatsTier {
-  if (publicationAt === null) {
-    // No date at all ⇒ treat it as fresh rather than inventing an age.
-    return "fresh";
-  }
-  const ageDays = (now.getTime() - publicationAt.getTime()) / DAY_MS;
-  if (ageDays <= MEDIA_STATS_FRESH_DAYS) return "fresh";
-  if (ageDays <= MEDIA_STATS_MID_DAYS) return "mid";
-  return "long_tail";
-}
-
-export function mediaStatsIntervalDays(
-  tier: MediaStatsTier,
-  longTailCycleDays: number,
-): number {
-  return tier === "fresh"
-    ? MEDIA_STATS_FRESH_INTERVAL_DAYS
-    : tier === "mid"
-      ? MEDIA_STATS_MID_INTERVAL_DAYS
-      : Math.max(1, longTailCycleDays);
-}
 
 /**
  * Seed one bounded batch of media rows from `creator_media`.
@@ -1447,9 +1337,8 @@ export interface MediaStatsRefreshCandidate {
 /**
  * The age tiers of the media-stats queue: an item published within
  * `freshDays` is due `freshEveryMs` after its last visit, within `midDays`
- * `midEveryMs`, older `oldEveryMs`. The default is the legacy lane's code
- * values (30 d daily, 180 d weekly, the long-tail cycle); the Fansly Sync
- * Engine passes the owner's decision №6 (30 d daily, 90 d weekly, monthly).
+ * `midEveryMs`, older `oldEveryMs`. The Fansly Sync Engine passes the page's
+ * own (owner decision №6: 30 d daily, 90 d weekly, monthly).
  */
 export interface MediaStatsTiers {
   freshDays: number;
@@ -1457,17 +1346,6 @@ export interface MediaStatsTiers {
   freshEveryMs: number;
   midEveryMs: number;
   oldEveryMs: number;
-}
-
-/** The legacy lane's tiers at a long-tail cycle (`fanslyMediaStatsLongTailCycleDays`). */
-export function legacyMediaStatsTiers(longTailCycleDays: number): MediaStatsTiers {
-  return {
-    freshDays: MEDIA_STATS_FRESH_DAYS,
-    midDays: MEDIA_STATS_MID_DAYS,
-    freshEveryMs: MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS,
-    midEveryMs: MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS,
-    oldEveryMs: Math.max(1, longTailCycleDays) * DAY_MS,
-  };
 }
 
 /**
@@ -1507,9 +1385,9 @@ export function legacyMediaStatsTiers(longTailCycleDays: number): MediaStatsTier
  *
  * SUCCESS DUE-NESS IS COMPUTED FROM THE AGE AND `last_visited_at` AGAINST `now`,
  * not read from `next_due_at`. Same reasoning as the two post planes: the tier an
- * item belongs to changes as the item AGES and the long-tail cycle is a LIVE
- * config key, so a stored due date freezes each row's cadence at the tier and
- * the cycle in force when it was last visited. The column is still maintained —
+ * item belongs to changes as the item AGES and the tiers are a per-page registry
+ * value, so a stored due date freezes each row's cadence at the tier and the
+ * intervals in force when it was last visited. The column is still maintained —
  * it is the shared table's contract and what its partial index covers — and the
  * DIRTY path is read through `dirty_reason`, which no cutoff can suppress.
  *
@@ -1523,12 +1401,10 @@ export function legacyMediaStatsTiers(longTailCycleDays: number): MediaStatsTier
  * column name in ORDER BY resolves to a SELECT alias, a trap that has shipped
  * twice in this tree.
  *
- * Two optional inputs, for the Fansly Sync Engine (design §4.3, §5.18), both
- * absent on the legacy lane's call, which then selects exactly what it always
- * did: `tiers` replaces the age tiers and their intervals (`longTailCycleDays`
- * is then not read), and `after` returns only the items that sort after that
- * keyset, in the same order — the shadow walk's pass over the due items
- * without writing the queue.
+ * `tiers` are the page's age tiers and their intervals (design §4.3, §5.18);
+ * `after`, optional, returns only the items that sort after that keyset, in the
+ * same order — the shadow walk's pass over the due items without writing the
+ * queue.
  */
 export async function listMediaStatsRefreshChunk(
   db: Database,
@@ -1536,12 +1412,11 @@ export async function listMediaStatsRefreshChunk(
     pageId: number;
     limit: number;
     now: Date;
-    longTailCycleDays: number;
-    tiers?: MediaStatsTiers;
+    tiers: MediaStatsTiers;
     after?: SubjectQueueKeyset | null;
   },
 ): Promise<MediaStatsRefreshCandidate[]> {
-  const tiers = input.tiers ?? legacyMediaStatsTiers(input.longTailCycleDays);
+  const { tiers } = input;
   if (
     !(tiers.freshDays > 0 && tiers.midDays >= tiers.freshDays)
     || ![tiers.freshEveryMs, tiers.midEveryMs, tiers.oldEveryMs].every((ms) => Number.isFinite(ms) && ms > 0)
@@ -1743,10 +1618,10 @@ export async function recordMediaStatsBackfillProgress(
  * a cursor that forgot them re-read the same history on every admission
  * (production 2026-09: one backfill window re-read 32 times). So the cursor moves.
  *
- * NOTHING ELSE DOES. `consecutive_failures` and `next_due_at` are the backoff
- * `recordMediaStatsFailure` has just written; `last_visited_at` stays put
- * because a failed look is not a look; `dirty_reason` stays because a purchase
- * signal survives a failed fetch.
+ * NOTHING ELSE DOES. `consecutive_failures` and `next_due_at` are the item's
+ * breaker (`recordSubjectQueueFailures`); `last_visited_at` stays put because a
+ * failed look is not a look; `dirty_reason` stays because a purchase signal
+ * survives a failed fetch.
  */
 export async function recordMediaStatsBackfillCursor(
   db: Database,
@@ -1817,32 +1692,6 @@ export async function recordMediaStatsVisit(
   return { applied: (result.rowCount ?? 0) > 0 };
 }
 
-/**
- * Record a look that did NOT produce an answer.
- *
- * `last_visited_at` deliberately does NOT move: a failed look is not a look, and
- * moving it would retire the item from the never-visited band on the strength of
- * an error. What moves is the failure counter — the number an operator reads to
- * tell "this media is unreachable" from "we have not got to it yet" — and
- * `next_due_at`, which is the backoff the chunk query enforces. The dirty mark
- * stays, so a purchase signal survives a failed fetch.
- */
-export async function recordMediaStatsFailure(
-  db: Database,
-  input: { pageId: number; subjectRef: string; nextDueAt: Date },
-): Promise<{ applied: boolean }> {
-  const result = await db.execute(sql`
-    update subject_refresh_state s
-       set next_due_at = ${input.nextDueAt},
-           consecutive_failures = s.consecutive_failures + 1,
-           updated_at = now()
-     where s.page_id = ${input.pageId}
-       and s.plane = 'media_stats'
-       and s.subject_ref = ${input.subjectRef}
-  `);
-  return { applied: (result.rowCount ?? 0) > 0 };
-}
-
 export interface MediaStatsRefreshProgress {
   /** M — the queue size, which is what the cadence is sized against. */
   queueSize: number;
@@ -1881,16 +1730,14 @@ export interface MediaStatsRefreshProgress {
  * query does — not read from `refresh_class`, which is only ever the tier of the
  * LAST visit and is `dirty` for anything WP-F2 marked. `dueNow` applies the
  * chunk query's failure backoff too: an item the lane will not touch today is
- * not due today. `tiers` is the chunk query's input of the same name: absent
- * (the legacy lane), the legacy code tiers at `longTailCycleDays`; the Fansly
- * Sync Engine passes the page's own (owner decision №6), so its census is the
- * queue its walk reads.
+ * not due today. `tiers` is the chunk query's input of the same name, the
+ * page's own (owner decision №6), so the census is the queue its walk reads.
  */
 export async function countMediaStatsRefreshProgress(
   db: Database,
-  input: { pageId: number; now: Date; longTailCycleDays: number; tiers?: MediaStatsTiers },
+  input: { pageId: number; now: Date; tiers: MediaStatsTiers },
 ): Promise<MediaStatsRefreshProgress> {
-  const tiers = input.tiers ?? legacyMediaStatsTiers(input.longTailCycleDays);
+  const { tiers } = input;
   const freshFrom = new Date(input.now.getTime() - tiers.freshDays * DAY_MS);
   const midFrom = new Date(input.now.getTime() - tiers.midDays * DAY_MS);
   const freshDue = new Date(input.now.getTime() - tiers.freshEveryMs);

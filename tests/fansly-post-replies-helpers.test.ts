@@ -1,10 +1,8 @@
-// WP-F5 — the reply-page walk's pure helpers. No database: the queue, paging,
-// coverage and attempt invariants that need one stay in
-// fansly-post-replies-lane.integration.test.ts.
+// WP-F5 — the reply-page walk's pure rules (`sync/fansly/lib/post-replies-rules.ts`),
+// which the engine's post-replies resource reads. No database.
 
 import { describe, expect, it } from "vitest";
 
-import { hasAccountSidecar, replyAuthorRefs } from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
 import {
   nextRepliesCursor,
   p99PostsLength,
@@ -27,23 +25,6 @@ describe("WP-F5 reply-page helpers", () => {
     expect(nextRepliesCursor([{ id: "a" }, { id: "b" }])).toBe("b");
     expect(nextRepliesCursor([])).toBeNull();
     expect(nextRepliesCursor([{ mediaOfferId: "x" }])).toBeNull();
-  });
-
-  it("de-duplicates author refs in order", () => {
-    expect(replyAuthorRefs([
-      { accountId: "a" },
-      { accountId: "b" },
-      { accountId: "a" },
-      {},
-    ])).toEqual(["a", "b"]);
-  });
-
-  it("knows whether the sidecar was populated", () => {
-    expect(hasAccountSidecar({ accounts: [{ id: "a" }] })).toBe(true);
-    // EMPTY in 2 of 5 live responses — the fact that makes the hydration
-    // fallback mandatory rather than an optimization.
-    expect(hasAccountSidecar({ accounts: [] })).toBe(false);
-    expect(hasAccountSidecar({})).toBe(false);
   });
 
   it("computes p99 by nearest rank, and null on no samples", () => {

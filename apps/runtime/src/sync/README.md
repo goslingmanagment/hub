@@ -12,6 +12,12 @@ onboarding checks its session through its own proxy without a page (one journale
 with `page_id` null — owner decision №4) and creates the page, its credentials, the proven identity, the trusted
 credentials digest, its `live` row and its engine-owned guard row in one transaction (`createLiveSyncPage`); the host
 adopts it on its next pass and its first request goes ≥ 1.2 × S later (I5). The legacy engine never runs it.
+Since step 4 S4-10 the legacy page-sync executor serves no Fansly page at all (I21): Fansly declares no legacy stream,
+so the legacy planner and executor seed, schedule, wake and lease OnlyFans pages only, the app-level `requestPageSync`
+(`services/sync-control.ts`, behind the API, the CLI and the levers) refuses a Fansly page with 409
+`legacy_sync_retired`, the owner's trigger scopes of a Fansly page resolve straight to the registry keys
+(`services/sync-engine-levers.ts` `FANSLY_ENGINE_SCOPE_STREAMS`), and `sync rollback` refuses. Nothing writes a Fansly
+page's legacy rows (`page_sync_states`) any more; they are left as they are until S4-21 parks them.
 
 ## Map
 
@@ -51,7 +57,7 @@ sync/
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
   report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
                              journal), the fingerprint the switch checks
-  switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
+  switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback` (retired at step 4),
                              `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
   parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
@@ -99,7 +105,7 @@ A plan is read-only, so a decision it takes that the apply must fold into — a 
 proof header, the floors a history walk crossed without a request — travels with the request (`RequestPlan.step`,
 stored as `sync_attempts.request.step`) and comes back to the apply, the shadow estimate and a re-apply from the
 journal. A media visit is a pure procedure replayed over the answers it has (`fansly/resources/media-stats.ts`), so
-one visit of the legacy lane becomes one window per step with the same windows in the same order. A visit in flight
+one visit becomes one window per step, its windows in the order the visit asks for them. A visit in flight
 across a deploy that changed a visit rule no longer replays: it is abandoned (the next due item starts afresh, the
 item it served backs off on its queue-row ladder), never a failed plan or a quarantined walk.
 
@@ -179,6 +185,8 @@ equal by `tests/sync-legacy-streams.test.ts`). `off`/`shadow` pages are untouche
 | Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode`; each legacy stream from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block); a refused credential reads `credentials_invalid` on the connection block |
 | Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates as on a legacy page and closes the row done |
+| Insights coverage (`/api/v1/pages/:pageLabel/stats/coverage`) | an `engine` block (mode, and per legacy stream its keys, last applied, next due, paused, why the earliest waits, quarantine / vendor block, largest failure count) in place of the legacy lanes' gates, budgets and progress (step 4 S4-18); `null` when the engine does not own the page |
+| Top spenders `source` (`/api/v1/pages/:pageLabel/top-spenders`) | `fan_earnings` from `fan-earnings.roster`'s live work: `ramped` unless the owner paused it (`flag_off`, as for a page the engine does not own), its last applied read, its largest failure count |
 | Dataset `sync_streams` | rows from the live work per legacy stream: `failed` (quarantined / vendor-blocked) > `paused` > `running` > `ok`; success = the newest applied read (a page-level key's at any age, a thread / target / fan key's within 24 h); failure = a standing one (an active row whose last outcome failed); every lookup bounded per key, never by the journal's length |
 
 A quarantine records why in `sync_work.result.quarantine` (`{reason, detail, attemptId, at}`: an `ApplyQuarantine`
@@ -384,8 +392,8 @@ command to use instead — except the `/account/me` levers (page verify, credent
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,
 ≤ 30 s, else 409 `fansly_sync_work_queued` with the work's status link) and answer 409 `fansly_page_switching` in
 `handover`. Hydration rows the engine serves (`execution_lane = 'fansly_sync_engine'`) are never expired,
-reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query, so leaving to `off`
-restores the legacy engine with no other action.
+reconciled or swept by the legacy cycle. `shadow` fences nothing, and every check is per query. Leaving to `off` no
+longer restores the legacy engine since step 4 S4-10: the legacy executor serves no Fansly page whatever its mode (I21).
 
 ## Switch and rollback (step 3)
 
@@ -427,7 +435,10 @@ routes), `accepted_with_route_429` or `pass`; exit 0 every page accepted, 1 a pa
 code by tests/sync-switch-acceptance-sql.test.ts, both run on the shared fixtures of
 tests/sync-switch-acceptance.integration.test.ts).
 
-`pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
+`pnpm cli sync rollback --page P` is **retired at step 4** (S4-10): it refuses before it opens anything, because the
+legacy executor serves no Fansly page to hand one back to; recovery is a fix forward, or a revert of S4-10 (whose image
+runs the rollback below again; the rows S4-10 leaves stay recoverable until S4-21 parks them). Until step 4 it gave
+the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
 engine with its floor past the engine's last send and the end of a real page hold (a legacy 429 hold the switch
 imported, a network hold; also one an auth hold carries) — never a route hold's: the page's route holds are waited
@@ -484,6 +495,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
+| I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and `sync rollback` refuses. | `platforms/registry.ts` (`legacyExecutorPlatforms`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`) |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
 takeover floor)`; `u` is drawn once per send and kept across re-waits; a waiting pacer re-reads `S` at least every
@@ -600,7 +612,7 @@ the pause S every route of a page has a strict budget of its own (owner decision
 - **Incident** (D5, owner decision №23): one latch per page+route (`route_limited:<route>`), opened by the capture on
   the route's first 429, refreshed — never repeated — by the next ones and by the evaluator while the route is held,
   resolved 10 clean minutes after; urgent work behind a route hold is no alert 3.
-- **Rollback** (A4, D6): the hand-back waits for the page's route holds to end (≤ 6.5 min; a longer `Retry-After`
+- **Rollback** (A4, D6; the command is retired at step 4 S4-10): the hand-back waits for the page's route holds to end (≤ 6.5 min; a longer `Retry-After`
   exits 6, run it again), while the engine keeps serving the page's other routes; the shared send-guard floor carries
   only the sender boundary, the real page holds and 1.2 × S. After the hand-back the legacy engine runs its own
   semantics (S, its page hold on a 429); the engine's route slowdowns are not carried over.

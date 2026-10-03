@@ -1,6 +1,5 @@
 import { vi } from "vitest";
 
-import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
   createFanslyPage,
   createModel,
@@ -10,20 +9,6 @@ import {
 
 import { SyncChunkBudget } from "../../apps/runtime/src/services/sync/chunk-budget.ts";
 import type { StartedTestDatabase } from "./db.ts";
-
-export function fanslyLaneAppStub(input: {
-  database: StartedTestDatabase;
-  adapter: unknown;
-  config: Record<string, unknown>;
-  logger?: unknown;
-}) {
-  return {
-    db: input.database.db,
-    adapter: input.adapter,
-    logger: input.logger ?? { info: () => {}, warn: () => {}, error: () => {} },
-    config: input.config,
-  } as never;
-}
 
 export async function seedFanslyLanePage(
   database: StartedTestDatabase,
@@ -96,40 +81,4 @@ export function fanslyLaneInput(input: {
     syncRunId: input.syncRunId,
     now: input.now,
   };
-}
-
-/** Model physical retries the same way the adapter does: clip them to the
- * durable allowance and fail the logical request if its successful attempt
- * would have crossed the cap. */
-export async function observeFanslyLaneAttempts(
-  context: {
-    requestObserver?: { onRequestEvent: (event: unknown) => Promise<void> } | null;
-    remainingAttempts?: (() => number) | null;
-  },
-  input: {
-    attempts: number;
-    operation: string;
-    endpointTemplate: string;
-    requestId: string;
-    onAttempt?: () => void;
-  },
-) {
-  const permitted = Math.min(
-    input.attempts,
-    Math.max(0, context.remainingAttempts?.() ?? input.attempts),
-  );
-  for (let attempt = 1; attempt <= permitted; attempt += 1) {
-    input.onAttempt?.();
-    await context.requestObserver?.onRequestEvent({
-      requestId: input.requestId,
-      state: "started",
-      operation: input.operation,
-      endpointTemplate: input.endpointTemplate,
-      method: "GET",
-      attemptNumber: attempt,
-    });
-  }
-  if (permitted < input.attempts) {
-    throw new FanslyApiError("retry allowance exhausted", 503);
-  }
 }

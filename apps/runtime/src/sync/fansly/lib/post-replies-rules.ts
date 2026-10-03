@@ -3,9 +3,7 @@ import { classifyFanslyResponse } from "./lane.ts";
 // The post-replies rules of the Sync Engine's `post-replies.*` resources
 // (resources/post-replies.ts): the `post_replies` cursor (the route's
 // pagination discovery, the author lookups it remembers, the page-size
-// samples) and the reads of a served reply page. Pure. The legacy
-// `post_replies` lane (fansly-post-replies.ts) imports them from here until
-// step 4 deletes it.
+// samples) and the reads of a served reply page. Pure.
 
 /**
  * How many looked-up author refs the cursor remembers.
@@ -15,12 +13,12 @@ import { classifyFanslyResponse } from "./lane.ts";
  * checkpoint small; eviction means a re-lookup of an old author much later,
  * which costs one call out of a hundred and captures the identity again.
  */
-export const HYDRATED_AUTHOR_MEMORY = 1_000;
+const HYDRATED_AUTHOR_MEMORY = 1_000;
 
 /** Page-size samples kept for the `p99PostsLength` progress figure. The plan
  *  asks for the p99 of `posts.length` to be MEASURED before the cap is raised;
  *  this is where the measurement comes from. */
-export const POSTS_LENGTH_SAMPLE_LIMIT = 200;
+const POSTS_LENGTH_SAMPLE_LIMIT = 200;
 
 // ── cursor state ─────────────────────────────────────────────────────────────
 

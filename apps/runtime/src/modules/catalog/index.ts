@@ -54,6 +54,7 @@ import {
 } from "../../services/reporting.ts";
 import { refreshPageMetadata } from "../../services/sync/shared.ts";
 import { requestPageSync } from "../../services/sync-control.ts";
+import { isLegacyExecutorPlatform } from "../../platforms/registry.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
 import { checkFanslyIdentityWithoutPage } from "../../sync/fansly/identity-without-page.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -106,7 +107,7 @@ function serializeAssignedPage(page: {
 }
 
 // The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
-// Mirrors isPageAllowlisted in services/sync/fansly-stream-gate.ts (its
+// Mirrors isPageAllowlisted in @agency_hub_core/shared (its
 // canonical home) — kept a local copy so the two never drift on the
 // empty-means-none rule.
 function parseVoiceAllowlist(csv: string | undefined): Set<string> {
@@ -397,11 +398,15 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     try {
       const deleted = await deletePageByLabel(appContext.db, request.params.pageLabel);
       // The planner/lease queries exclude tombstoned pages; pausing here also
-      // stops in-flight leases and keeps the sync states legibly parked.
-      await pausePageSync(appContext.db, {
-        pageId: deleted.id,
-        streams: getSyncStreamsForPlatform(deleted.platform),
-      });
+      // stops in-flight leases and keeps the sync states legibly parked. A
+      // Fansly page's legacy rows are left as they are: the legacy executor
+      // serves no Fansly page (step 4 S4-10), so none of them is leased.
+      if (isLegacyExecutorPlatform(deleted.platform)) {
+        await pausePageSync(appContext.db, {
+          pageId: deleted.id,
+          streams: getSyncStreamsForPlatform(deleted.platform),
+        });
+      }
       await recordAudit(appContext, {
         ...auditCtx(principal),
         eventType: "admin.page_soft_delete",

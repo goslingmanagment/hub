@@ -86,8 +86,8 @@ import { fanslyResourceSpec } from "../registry.ts";
 // and engagement projectors seed and dirty (design §4.3): dirty (a purchase,
 // the daily top-50 mark) → by tier → within a tier the window edge, never
 // visited newest first, then the oldest visit. The tiers are the owner's
-// (≤ 30 d daily, 31–90 d weekly, older monthly, D19), passed to the legacy
-// chunk query as its optional `tiers` input.
+// (≤ 30 d daily, 31–90 d weekly, older monthly, D19), passed to the chunk
+// query as its `tiers` input.
 //
 // One VISIT of one item is the legacy lane's visit, every rule kept — the
 // first-sight backfill in 31-day windows newest first down to the item's
@@ -177,8 +177,6 @@ export function pickDueMedia(
     pageId: input.pageId,
     limit: input.limit,
     now: input.now,
-    // Not read: the owner's tiers carry the long-tail interval.
-    longTailCycleDays: 30,
     tiers: input.tiers,
     ...(input.after === null ? {} : { after: input.after }),
   });
@@ -823,7 +821,7 @@ export function shadowVisitWindows(candidate: MediaStatsRefreshCandidate, mode: 
  *  over the queue under the page's tiers, the per-look evidence being the
  *  journal. */
 async function writeQueueCoverage(tx: Database, input: { pageId: number; now: Date; mode: LongTailWindowMode; tiers: MediaStatsTiers }) {
-  const progress = await countMediaStatsRefreshProgress(tx, { pageId: input.pageId, now: input.now, longTailCycleDays: 30, tiers: input.tiers });
+  const progress = await countMediaStatsRefreshProgress(tx, { pageId: input.pageId, now: input.now, tiers: input.tiers });
   const everyItemVisited = progress.queueSize > 0 && progress.neverVisited === 0 && progress.backfillComplete >= progress.queueSize;
   const status: CaptureCoverageStatus = progress.queueSize === 0
     ? "not_started"

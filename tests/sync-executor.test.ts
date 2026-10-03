@@ -73,6 +73,12 @@ vi.mock("@agency_hub_core/db", async () => {
   };
 });
 vi.mock("../apps/runtime/src/services/sync/executor-handlers.ts", () => handlerMocks);
+// The real registry assembles its pull maps from the handlers mocked above;
+// the executor reads only the legacy-executor platform set from it (pinned in
+// tests/platform-registry.test.ts).
+vi.mock("../apps/runtime/src/platforms/registry.ts", () => ({
+  legacyExecutorPlatforms: () => ["onlyfans"],
+}));
 vi.mock("../apps/runtime/src/services/sync/shared.ts", async () => {
   const actual = await vi.importActual<typeof SyncSharedModule>(
     "../apps/runtime/src/services/sync/shared.ts",
@@ -433,7 +439,12 @@ describe("sync executor", () => {
       }),
     });
 
-    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55 });
+    // Seeding and the lease cover only the legacy executor's platforms (S4-10).
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55, platforms: ["onlyfans"] });
+    expect(dbMocks.acquirePageSyncLease).toHaveBeenCalledWith({}, expect.objectContaining({
+      pageId: 55,
+      platforms: ["onlyfans"],
+    }));
     expect(dbMocks.yieldPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
       stream: "followers",
