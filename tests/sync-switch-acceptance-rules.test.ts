@@ -1,24 +1,25 @@
 import { describe, expect, it } from "vitest";
 
+import type { FanslySendAuditRow } from "@agency_hub_core/db";
+
 import { acceptanceExitCode } from "../apps/runtime/src/sync/switch/acceptance.ts";
 import {
   acceptanceIncidentKeys,
   acceptanceRouteOf,
   acceptanceWindows,
   authRefusalsCheck,
-  budgetBound,
   judgedByRouteRule,
   latencyCheck,
   mediaStartCheck,
   mismatchCheck,
+  paceCombinedCheck,
   pageHoldCheck,
   pageStopSeenUntil,
   pageVerdict,
   percentileCont,
   route429Check,
   route429Outcomes,
-  routeBudgetViolations,
-  slowedRatePerMin,
+  routeBudgetsCheck,
   type AcceptanceCheck,
   type AcceptanceJournalRow,
   type AcceptanceWindow,
@@ -26,11 +27,10 @@ import {
 } from "../apps/runtime/src/sync/switch/acceptance-rules.ts";
 
 // The live-hour acceptance's rules (step 3b ruling 13, A1 §2b, A6), pure:
-// the window shared by pages switched together, the budgets of each send,
+// the window shared by pages switched together, the pace and the route
+// budgets (the send audit's: tests/sync-send-audit.test.ts has its rules),
 // the 429s per page+route, 401/403, page holds, the first media request, the
-// SLO sample rules and the page verdict. step3-accept.sql implements the
-// same (tests/sync-switch-acceptance-sql.test.ts pins its numbers; the shared
-// fixtures run both).
+// SLO sample rules and the page verdict.
 
 const T0 = Date.parse("2026-10-03T10:00:00.000Z");
 const at = (seconds: number) => new Date(T0 + seconds * 1_000);
@@ -55,11 +55,6 @@ function send(seconds: number, operation: string, overrides: Partial<AcceptanceJ
     errorClass: null,
     ...overrides,
   };
-}
-
-/** `count` sends of `operation` every `everySeconds` from `fromSeconds`. */
-function stream(operation: string, fromSeconds: number, everySeconds: number, count: number): AcceptanceJournalRow[] {
-  return Array.from({ length: count }, (_, index) => send(fromSeconds + index * everySeconds, operation));
 }
 
 describe("the shared window", () => {
@@ -95,77 +90,54 @@ describe("canonical routes of the journals", () => {
   });
 });
 
-describe("route budgets (§2b: ⌈W/T⌉ + 1 per window W ending at each send)", () => {
-  it("bounds each budget by its interval", () => {
-    expect(budgetBound(15, 60_000)).toBe(16);
-    expect(budgetBound(15, 300_000)).toBe(76);
-    expect(budgetBound(12, 60_000)).toBe(13);
-    expect(budgetBound(5, 60_000)).toBe(6);
-    expect(budgetBound(17, 60_000)).toBe(18);
-    expect(slowedRatePerMin("messages.page", 1)).toBe(7.5);
-    expect(budgetBound(7.5, 60_000)).toBe(9);
-    // The media statistics: 5 → 2.5 → 1.5 (⅛ of the 12/min ceiling) and no lower.
-    expect(slowedRatePerMin("media.offer_stats", 1)).toBe(2.5);
-    expect(slowedRatePerMin("media.offer_stats", 2)).toBe(1.5);
-    expect(slowedRatePerMin("media.offer_stats", 4)).toBe(1.5);
+/** One recorded engine send of the send audit, `seconds` after T0. */
+function audited(seconds: number, operation: string, overrides: Partial<FanslySendAuditRow> = {}): FanslySendAuditRow {
+  ref += 1;
+  return {
+    journal: "engine",
+    source: null,
+    ref,
+    operation,
+    ownerGeneration: 1n,
+    sentAt: at(seconds),
+    countedAt: at(seconds),
+    settingMs: 2_500,
+    pauseMs: 2_750,
+    gapPrevMs: null,
+    routeIntervalMs: 4_000,
+    familyIntervalMs: null,
+    ...overrides,
+  };
+}
+
+describe("the pace and the route budgets: the send audit's verdicts", () => {
+  it("pace_combined: a pair short of the later send's own pause fails, though not of the setting", () => {
+    const check = paceCombinedCheck([audited(10, "notifications.page"), audited(12.6, "notifications.page")], window());
+    expect(check).toMatchObject({
+      name: "pace_combined",
+      verdict: "fail",
+      detail: { pairs: 1, violations: 1, inconclusive: 0, firstViolations: [expect.objectContaining({ gapMs: 2_600, pauseMs: 2_750, clock: "wall" })] },
+    });
+    expect(paceCombinedCheck([audited(10, "notifications.page"), audited(12.75, "notifications.page")], window()).verdict).toBe("pass");
   });
 
-  it("passes a route sent at exactly its interval for the hour", () => {
-    expect(routeBudgetViolations(stream("messages.page", 0, 4, 900), window())).toEqual([]);
-    expect(routeBudgetViolations(stream("media.offer_stats", 0, 12, 300), window())).toEqual([]);
+  it("route_budgets: 15 sends 2.8 s apart on a 4 s route fail, though no 60 s span holds more than ⌈60/4⌉ + 1", () => {
+    const sends = Array.from({ length: 15 }, (_, index) => audited(100 + index * 2.8, "notifications.page"));
+    const check = routeBudgetsCheck(sends, window());
+    expect(check).toMatchObject({ name: "route_budgets", verdict: "fail", detail: { pairs: 14, violations: 14, inconclusive: 0 } });
+    expect(check.detail.scopes).toEqual([expect.objectContaining({ kind: "route", scope: "notifications.page", sends: 15, violations: 14 })]);
+    expect(routeBudgetsCheck(sends.map((send, index) => ({ ...send, countedAt: at(100 + index * 4) })), window()).verdict).toBe("pass");
   });
 
-  it("fails a route sent faster than its budget, and a family over its shared one", () => {
-    const fast = routeBudgetViolations(stream("media.offer_stats", 0, 5, 30), window());
-    expect(fast[0]).toMatchObject({ kind: "route", scope: "media.offer_stats", windowMs: 60_000, sends: 7, bound: 6 });
-    // /message and group detail each at 10/min — together 20/min, over the messaging family's 15.
-    const family = routeBudgetViolations([...stream("messages.page", 0, 6, 60), ...stream("group.detail", 3, 6, 60)], window());
-    expect(family.length).toBeGreaterThan(0);
-    expect(family.every((entry) => entry.kind === "family" && entry.scope === "messaging")).toBe(true);
+  it("route_budgets: an attempt admitted before the intervals were recorded is inconclusive, never a pass", () => {
+    const sends = [audited(100, "notifications.page"), audited(110, "notifications.page", { routeIntervalMs: null })];
+    expect(routeBudgetsCheck(sends, window())).toMatchObject({ verdict: "inconclusive", detail: { pairs: 0, inconclusive: 1 } });
   });
 
-  it("counts an attempt whose send instant was never recorded at its upper bound, and one never sent not at all", () => {
-    // Five media reads 12 s apart, then two more within the minute: the
-    // seventh is one too many — when the sixth (an unknown outcome at its
-    // upper bound) counts, and only then.
-    const base = stream("media.offer_stats", 0, 12, 5);
-    const unknown = send(50, "media.offer_stats", { outcome: "unknown", httpStatus: null });
-    expect(routeBudgetViolations([...base, unknown, send(55, "media.offer_stats")], window()))
-      .toEqual([expect.objectContaining({ kind: "route", windowMs: 60_000, sends: 7, bound: 6, at: at(55) })]);
-    const neverSent = send(50, "media.offer_stats", { at: null, outcome: "aborted_before_send", httpStatus: null });
-    expect(routeBudgetViolations([...base, neverSent, send(55, "media.offer_stats")], window())).toEqual([]);
-  });
-
-  it("judges the sends after a route's 429 at its halved rate, counting from the 429 on", () => {
-    // /message at 15/min until a 429 at 120 s, then at 10/min: over 7.5/min.
-    const rows = [
-      ...stream("messages.page", 0, 4, 30),
-      send(120, "messages.page", { httpStatus: 429 }),
-      ...stream("messages.page", 126, 6, 40),
-    ];
-    const violations = routeBudgetViolations(rows, window());
-    expect(violations.length).toBeGreaterThan(0);
-    expect(violations.every((entry) => entry.kind === "slowdown" && entry.scope === "messages.page")).toBe(true);
-    // At 7.5/min after the 429 (8 s): within the halved budget, the full-rate sends before it never count against it.
-    const halved = [...stream("messages.page", 0, 4, 30), send(120, "messages.page", { httpStatus: 429 }), ...stream("messages.page", 126, 8, 30)];
-    expect(routeBudgetViolations(halved, window())).toEqual([]);
-  });
-
-  it("counts only the budget's own sends, from T_i on: what was sent before T_i was paced by another policy", () => {
-    // The legacy engine read /message every 2.5 s until 145 s before T_i (and
-    // an earlier build the media statistics every 5 s until T_i); the engine
-    // then keeps each route's interval from the last of them.
-    const before = [
-      ...Array.from({ length: 62 }, (_, index) => send(-300 + index * 2.5, "messages", { journal: "legacy" })),
-      ...stream("media.offer_stats", -300, 5, 60),
-    ];
-    const after = [...stream("messages.page", 0, 4, 100), ...stream("media.offer_stats", 12, 12, 30)];
-    expect(routeBudgetViolations([...before, ...after], window())).toEqual([]);
-    // A route over its budget inside the window still fails, judged at its window sends only.
-    const dense = [...before, ...stream("media.offer_stats", 0, 5, 20)];
-    const violations = routeBudgetViolations(dense, window());
-    expect(violations).not.toEqual([]);
-    expect(violations.every((entry) => entry.at.getTime() >= T0 && entry.scope === "media.offer_stats")).toBe(true);
+  it("judges only the window's later sends: a pair ending before T_i is context", () => {
+    const sends = [audited(-10, "notifications.page"), audited(-8, "notifications.page"), audited(10, "notifications.page")];
+    expect(routeBudgetsCheck(sends, window())).toMatchObject({ verdict: "pass", detail: { pairs: 1 } });
+    expect(paceCombinedCheck(sends, window())).toMatchObject({ verdict: "pass", detail: { pairs: 1 } });
   });
 });
 

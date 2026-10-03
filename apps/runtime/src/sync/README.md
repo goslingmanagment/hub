@@ -33,6 +33,7 @@ sync/
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
+    send-audit.ts            the send audit (I1, I19): the one checker of the evaluator, `sync switch check`, the shadow report
     watchdog.ts              the stall watchdog: a step, pass or beat stuck for 120 s ends the process (exit 70)
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
@@ -417,18 +418,19 @@ open, the page's hydration requests become history requests (`switch_migration`)
 
 `pnpm cli sync switch check --page P [--page Q …] --since <iso>` is the live-hour acceptance of the pages switched
 together (step 3b ruling 13, A6): each page over [T_i, T* + 1 h), T_i = the later of `--since` and its live instant, T*
-= the last one. The rules (`switch/acceptance-rules.ts`): pace over both journals, the handover boundary, every send
-within its route's and family's budget (⌈W/T⌉ + 1 per 60 s and 300 s, halved after a 429 of the page+route), per
+= the last one. The rules (`switch/acceptance-rules.ts`): the send audit's pace over both journals (every pair of
+adjacent sends ≥ the later one's own pause), the handover boundary, the send audit's route budgets (every pair of
+adjacent sends of a route and of a family ≥ the interval the later one was admitted under, no recorded interval below
+its ceiling's; Alerts, below), per
 (page, canonical route) at most one 429 with its hold kept and its recovery seen, no 401/403 and no page hold (from
 the journal, the page row, or an alert 1 `page_stopped` episode seen in the window, resolved ones included — a 429 that
 held the whole page shows there after its hold is cleared), the first media request ≤ 60 s after live, nothing stuck,
 the SLOs over the whole window (route holds and the unfinished tail included; fewer than 10 samples: count and max), no
 open incident but a route's own (D5 `route_limited:<route>`, told by its key whatever its code). A page is `fail`,
-`inconclusive` (the window still open, a 429's recovery unproven, a small sample), `owner_review` (429s on two or more
-routes), `accepted_with_route_429` or `pass`; exit 0 every page accepted, 1 a page failed, 2 otherwise.
-`switch/step3-accept.sql` is the same acceptance in psql for the runbook (its route table and numbers pinned to the
-code by tests/sync-switch-acceptance-sql.test.ts, both run on the shared fixtures of
-tests/sync-switch-acceptance.integration.test.ts).
+`inconclusive` (the window still open, a 429's recovery unproven, a small sample, a pair without its recorded pause
+or interval), `owner_review` (429s on two or more routes), `accepted_with_route_429` or `pass`; exit 0 every page
+accepted, 1 a page failed, 2 otherwise. The report is JSON on stdout (`--out` keeps a copy): the runbook reads it
+there. Its fixtures: tests/sync-switch-acceptance.integration.test.ts.
 
 `pnpm cli sync rollback --page P [--with-auth-hold]` gives the page back: `handover` (the live actor and its socket
 stop and release), the release (or `sync ownership confirm-stopped`, exit 3 otherwise), the guard back to the legacy
@@ -596,7 +598,9 @@ the pause S every route of a page has a strict budget of its own (owner decision
   group's detail, `/message`) 15/min, earnings (`/account/wallets/earnings/*`) 17/min. `current` moves only by a
   calibration PR, +1/min a step, on evidence. `ROUTE_POLICY_HASH` names the table.
 - **Strict admission** (`engine/route-policy.ts`): a route (and its family) admits its next send no sooner than one
-  interval of its effective rate after its previous ACTUAL send — no burst, an idle hour earns nothing. The clocks
+  interval of its effective rate after its previous ACTUAL send — no burst, an idle hour earns nothing. The admission
+  records the two intervals it applied on the attempt (`route_interval_ms`, `family_interval_ms`, 0237), as it
+  records its pause: the send audit judges by them (Alerts, below). The clocks
   are read from the journal at every slot (`readRouteJournal`): the page's own journal (a shadow page its shadow
   one, so the shadow report sees the budgets live pages keep), and on a live page the legacy send log too (what the
   legacy engine sent before the switch). A send whose instant is unknown counts at its upper bound (admission +
@@ -647,7 +651,20 @@ condition from the database every 30 s and is the only path that resolves one, s
 view. Alerts 1–3 resolve after their condition has stayed false for 10 minutes since the latch last saw it (alert 4 as
 soon as progress resumes), so a condition that comes and goes keeps one standing page. A pace violation has its own
 latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
-journal's new live sends, so a violation the capture path could not report still opens it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
+journal's new live sends, so a violation the capture path could not report still opens it. That re-read is the
+**send audit** (`engine/send-audit.ts`), the one checker `sync switch check` and the shadow report run too. It judges
+the recorded sends by what each admission recorded it applied, never by a copy of the policy:
+- I1: every pair of adjacent sends of the page (both journals) ≥ the later one's own pause `S × (1 + u)`
+  (`pause_ms`). The gap is monotonic when both are one owner's (`gap_prev_ms`), else the recorded wall clocks' with a
+  2 ms tolerance;
+- I19: every pair of adjacent sends of one route, and of one family, whose later one is an engine admission ≥ the
+  interval that admission recorded. An unknown outcome counts at its upper bound and a send provably never made does
+  not count, as at the admission;
+- independently, no recorded interval is below the interval of the route's (family's) ceiling.
+
+A violation (`pace_violation`, `route_interval_violation`, `route_interval_below_ceiling`) opens the pace latch. A
+pair whose later send recorded no pause or interval (an attempt before 0237) is `inconclusive`: it pages nobody and
+never passes an acceptance. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
 never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
 process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
 restart. `pnpm cli sync alerts status` shows what holds per page.
@@ -675,9 +692,10 @@ row on the socket → the shadow admission vs the legacy arrival; an offline rep
 the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
 counterexamples listed, no empty-page soundness hit) and the ETA backtest. Besides the frozen A1–A4 rules part A runs
-two SQL checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — every
-route and family of `fansly/routes.ts` at most ⌈W / T⌉ + 1 sends in every 60 s and 300 s span (T: its `current`
-interval; a send this build places on no route fails) — and the **walks per route** — no run of a non-poll key asks a
+two checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — the send
+audit's I19 over the shadow journal, every pair of a route's and a family's sends ≥ the interval its later send was
+admitted under (a send this build places on no route fails, a pair without its recorded interval never passes; the
+counts of ⌈W / T⌉ + 1 per 60 s and 300 s span are printed beside them as diagnostics) — and the **walks per route** — no run of a non-poll key asks a
 route from the same position twice: its parameters, or the place a shadow step names when they cannot
 (`RequestPlan.position`: a media window, cut at the step's clock, names its pass, item and window number; the fan
 earnings roster its subject; a subject-queue walk its pass, so the next pass is not a repeat). It prints the **media

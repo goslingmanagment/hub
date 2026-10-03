@@ -1,26 +1,16 @@
-import { SYNC_SEND_WINDOW_MS } from "@agency_hub_core/db";
+import { SYNC_SEND_WINDOW_MS, type FanslySendAuditRow } from "@agency_hub_core/db";
 
 import { incidentKey, syncEngineIncidentKey } from "../../services/notification-incidents.ts";
 import { SYNC_ALERT_CLEAN_MS } from "../engine/alerts.ts";
 import { NETWORK_FAILURES_TO_PAUSE } from "../engine/errors.ts";
-import {
-  FAMILY_BUDGETS,
-  familyOfRoute,
-  intervalMsOf,
-  isFanslyRoute,
-  routeBudget,
-  routeOfEngineOperation,
-  routeOfLegacyOperation,
-  type FanslyRoute,
-} from "../fansly/routes.ts";
+import { auditPagePace, auditRouteIntervals, type SendAuditWindow } from "../engine/send-audit.ts";
+import { routeOfEngineOperation, routeOfLegacyOperation } from "../fansly/routes.ts";
 
 // The rules of the live-hour acceptance of switched pages (step 3b ruling 13,
 // A1 §2b, A6; owner decisions №18, №21–№26), pure. `switch/acceptance.ts`
-// (`pnpm cli sync switch check`) reads the journals and judges with these;
-// `step3-accept.sql` (psql, read-only, beside this file) implements the same
-// rules in SQL — its numbers, route table and legacy operation map are pinned
-// to these by tests/sync-switch-acceptance-sql.test.ts, and the shared
-// fixtures of tests/sync-switch-acceptance.integration.test.ts run both.
+// (`pnpm cli sync switch check`, JSON on stdout for the runbook) reads the
+// journals and judges with these; the pace and the route budgets are the send
+// audit's (`engine/send-audit.ts`), the same checker the alert evaluator runs.
 //
 // Window: each page is judged over [T_i, T* + 1 h), T_i = the later of the
 // owner's `since` and the instant the page became live, T* = max(T_i) over
@@ -32,7 +22,7 @@ import {
 // whose route was not seen to recover, a sample under 10, an open window:
 // `inconclusive`, never a pass for lack of data.
 
-/** Every number of the acceptance (the same `\set` values in step3-accept.sql). */
+/** Every number of the acceptance. */
 export const ACCEPTANCE_RULES = {
   /** The shared hour after the last page went live (№18, ruling 13). */
   windowMs: 60 * 60_000,
@@ -41,16 +31,9 @@ export const ACCEPTANCE_RULES = {
   minSamples: 10,
   /** The first media-statistics request after live (ruling 13). */
   mediaStartMs: 60_000,
-  /** §2b: per send, the sends of its route (family) within each window W
-   *  ending at it are at most ⌈W / T⌉ + 1, T = the budget's interval (A1). */
-  budgetWindowsMs: [60_000, 300_000] as readonly number[],
-  budgetSlackSends: 1,
   /** A 429 without `Retry-After` holds its route at least the ladder's first
    *  step (owner decision №14); a valid `Retry-After` wins. */
   firstHoldMs: 5_000,
-  /** Each 429 halves the page+route rate, never below ⅛ of its ceiling (A2, D3). */
-  slowdownFactor: 0.5,
-  slowdownFloorShare: 0.125,
   /** Consecutive network failures that hold the page (`engine/errors.ts`). */
   networkFailuresToHold: NETWORK_FAILURES_TO_PAUSE,
   /** Alert 1's latch resolves only after its stop has stayed clear this long
@@ -188,34 +171,6 @@ function compareRows(a: { ms: number; journal: string; ref: number }, b: { ms: n
   return a.ms - b.ms || (a.journal < b.journal ? -1 : a.journal > b.journal ? 1 : 0) || a.ref - b.ref;
 }
 
-/** First index of `sorted` (ascending) whose value is > `value`. */
-function upperBound(sorted: readonly number[], value: number): number {
-  let lo = 0;
-  let hi = sorted.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (sorted[mid]! <= value) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}
-
-/** Sends within (t − W, t] in an ascending list of instants. */
-function countWithin(sorted: readonly number[], t: number, windowMs: number): number {
-  return upperBound(sorted, t) - upperBound(sorted, t - windowMs);
-}
-
-/** The interval budget a send is judged under: ⌈W / T⌉ + slack. */
-export function budgetBound(perMin: number, windowMs: number): number {
-  return Math.ceil(windowMs / intervalMsOf(perMin)) + ACCEPTANCE_RULES.budgetSlackSends;
-}
-
-/** A route's rate after `k` of its 429s (A2: halved each time, ≥ ⅛ ceiling). */
-export function slowedRatePerMin(route: FanslyRoute, k: number): number {
-  const budget = routeBudget(route);
-  return Math.max(budget.currentPerMin * ACCEPTANCE_RULES.slowdownFactor ** k, budget.ceilingPerMin * ACCEPTANCE_RULES.slowdownFloorShare);
-}
-
 /** One window 429 of a page+route. */
 interface Rate429 {
   route: string;
@@ -238,84 +193,98 @@ function window429s(rows: readonly AcceptanceJournalRow[], window: AcceptanceWin
   return byRoute;
 }
 
-export interface BudgetViolation {
-  kind: "route" | "family" | "slowdown";
-  /** The route, or the family. */
-  scope: string;
-  windowMs: number;
-  sends: number;
-  bound: number;
-  at: Date;
-  journal: AcceptanceJournalRow["journal"];
-  ref: number;
+/** The send audit's window of an acceptance window: the later sends of
+ *  [T_i, min(end, now)). */
+function auditWindow(window: AcceptanceWindow): SendAuditWindow {
+  return { start: window.start, until: window.observedUntil };
+}
+
+function roundTo(value: number | null, digits = 0): number | null {
+  if (value === null) return null;
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
 }
 
 /**
- * §2b (A1): every send of the window on a budgeted route, judged against its
- * route's and its family's `current` budget, and — after a 429 of its
- * page+route in the window — against the halved rate, counting only the
- * sends since that 429. An unknown outcome counts at its upper bound. Only
- * the budget's own admissions count — the sends from T_i on: what the legacy
- * engine (or an earlier build) sent before T_i was paced by another policy,
- * and the admission spaces its first send of a route one interval after the
- * last of them, never by how many there were (opus r1 §2.H "допуски
- * бюджета").
+ * I1 over both journals (`pace_combined`, step-3 §3.5 item 2, G4, E12): every
+ * pair of adjacent sends of the page whose later send lies in the window,
+ * against that send's own pause S × (1 + u) — a pair straddling the handover
+ * included. A pair whose later send recorded no pause is `inconclusive`.
  */
-export function routeBudgetViolations(rows: readonly AcceptanceJournalRow[], window: AcceptanceWindow): BudgetViolation[] {
-  const rate429 = window429s(rows, window);
-  interface Send { row: AcceptanceJournalRow; route: FanslyRoute; ms: number; k: number }
-  const sends: Send[] = [];
-  for (const row of rows) {
-    if (row.at === null || row.at.getTime() < window.start.getTime()) continue;
-    const route = acceptanceRouteOf(row.journal, row.operation);
-    if (!isFanslyRoute(route)) continue;
-    const ms = row.at.getTime();
-    const k = (rate429.get(route) ?? []).filter((entry) => entry.ms < ms).length;
-    sends.push({ row, route, ms, k });
-  }
-  const instants = (keyOf: (send: Send) => string | null): Map<string, number[]> => {
-    const groups = new Map<string, number[]>();
-    for (const send of sends) {
-      const key = keyOf(send);
-      if (key === null) continue;
-      const list = groups.get(key) ?? [];
-      list.push(send.ms);
-      groups.set(key, list);
-    }
-    for (const list of groups.values()) list.sort((a, b) => a - b);
-    return groups;
+export function paceCombinedCheck(sends: readonly FanslySendAuditRow[], window: AcceptanceWindow): AcceptanceCheck {
+  const audit = auditPagePace(sends, auditWindow(window));
+  const pair = (entry: (typeof audit.violations)[number]) => ({
+    journal: entry.journal,
+    ref: entry.ref,
+    sentAt: entry.sentAt.toISOString(),
+    prevJournal: entry.prevJournal,
+    prevRef: entry.prevRef,
+    gapMs: roundTo(entry.gapMs, 1),
+    clock: entry.clock,
+    pauseMs: entry.pauseMs,
+  });
+  return {
+    name: "pace_combined",
+    verdict: audit.verdict,
+    detail: {
+      pairs: audit.pairs,
+      violations: audit.violations.length,
+      inconclusive: audit.inconclusive.length,
+      minGapMs: roundTo(audit.minGapMs),
+      minCrossJournalGapMs: roundTo(audit.minCrossJournalGapMs),
+      minMarginMs: roundTo(audit.minMarginMs, 1),
+      firstViolations: audit.violations.slice(0, 5).map(pair),
+      firstInconclusive: audit.inconclusive.slice(0, 5).map(pair),
+    },
   };
-  const byRoute = instants((send) => send.route);
-  const byFamily = instants((send) => familyOfRoute(send.route));
-  const bySegment = instants((send) => `${send.route}#${send.k}`);
+}
 
-  const violations: BudgetViolation[] = [];
-  for (const send of sends) {
-    if (!inWindow(send.row.at!, window)) continue;
-    const family = familyOfRoute(send.route);
-    const judged: Array<{ kind: BudgetViolation["kind"]; scope: string; list: number[]; perMin: number }> = [
-      { kind: "route", scope: send.route, list: byRoute.get(send.route)!, perMin: routeBudget(send.route).currentPerMin },
-    ];
-    if (family !== null) {
-      judged.push({ kind: "family", scope: family, list: byFamily.get(family)!, perMin: FAMILY_BUDGETS[family].currentPerMin });
-    }
-    if (send.k > 0) {
-      judged.push({ kind: "slowdown", scope: send.route, list: bySegment.get(`${send.route}#${send.k}`)!, perMin: slowedRatePerMin(send.route, send.k) });
-    }
-    for (const entry of judged) {
-      for (const windowMs of ACCEPTANCE_RULES.budgetWindowsMs) {
-        const count = countWithin(entry.list, send.ms, windowMs);
-        const bound = budgetBound(entry.perMin, windowMs);
-        if (count > bound) {
-          violations.push({ kind: entry.kind, scope: entry.scope, windowMs, sends: count, bound, at: send.row.at!, journal: send.row.journal, ref: send.row.ref });
-        }
-      }
-    }
-  }
-  const kinds = ["family", "route", "slowdown"];
-  violations.sort((a, b) => compareRows({ ms: a.at.getTime(), journal: a.journal, ref: a.ref }, { ms: b.at.getTime(), journal: b.journal, ref: b.ref })
-    || kinds.indexOf(a.kind) - kinds.indexOf(b.kind) || a.windowMs - b.windowMs);
-  return violations;
+/**
+ * I19 (`route_budgets`, §2b): every pair of adjacent sends of one canonical
+ * route, and of one family, whose later send is an engine admission in the
+ * window, against the interval that admission recorded — an unknown outcome
+ * at its upper bound, a send provably never made not at all; a send before
+ * T_i (the legacy engine's, an earlier build's) is the predecessor of the
+ * first one, as the admission counted it. And no recorded interval below its
+ * ceiling's. A pair without its recorded interval (an attempt before 0237), or
+ * a send this build places on no route, is `inconclusive`.
+ */
+export function routeBudgetsCheck(sends: readonly FanslySendAuditRow[], window: AcceptanceWindow): AcceptanceCheck {
+  const audit = auditRouteIntervals(sends, auditWindow(window));
+  const pair = (entry: (typeof audit.violations)[number]) => ({
+    kind: entry.kind,
+    scope: entry.scope,
+    journal: entry.journal,
+    ref: entry.ref,
+    at: entry.at.toISOString(),
+    prevJournal: entry.prevJournal,
+    prevRef: entry.prevRef,
+    gapMs: roundTo(entry.gapMs, 1),
+    intervalMs: entry.intervalMs,
+  });
+  return {
+    name: "route_budgets",
+    verdict: audit.verdict,
+    detail: {
+      pairs: audit.pairs,
+      violations: audit.violations.length + audit.ceiling.length,
+      inconclusive: audit.inconclusive.length,
+      first: audit.violations.slice(0, 5).map(pair),
+      belowCeiling: audit.ceiling.slice(0, 5).map((entry) => ({ ...entry, at: entry.at.toISOString() })),
+      firstInconclusive: audit.inconclusive.slice(0, 5).map(pair),
+      unplaced: audit.unplaced,
+      scopes: audit.scopes.map((entry) => ({
+        kind: entry.kind,
+        scope: entry.scope,
+        sends: entry.sends,
+        pairs: entry.pairs,
+        violations: entry.violations,
+        inconclusive: entry.inconclusive,
+        minGapMs: roundTo(entry.minGapMs),
+        minMarginMs: roundTo(entry.minMarginMs, 1),
+      })),
+    },
+  };
 }
 
 /** What one page+route's 429s of the window came to (A6). */

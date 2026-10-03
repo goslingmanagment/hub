@@ -3,9 +3,9 @@ import { sql } from "drizzle-orm";
 import {
   getNotificationIncidentByKey,
   insertAuditEvent,
-  listCombinedFanslySendsForPaceAudit,
   listNotificationIncidents,
   listSyncPages,
+  readFanslySendAudit,
   readSyncJournalAlertFacts,
   readSyncLivePathFacts,
   SYNC_ALERTS_ACK_AUDIT_EVENT,
@@ -35,6 +35,7 @@ import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
 import { effectiveRatePerMin, parseRouteState, type RouteState } from "./route-policy.ts";
+import { auditPagePace, auditRouteIntervals } from "./send-audit.ts";
 import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6). Alert 5 (the
@@ -51,7 +52,11 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 // evaluator is the only one that resolves, so a latch never flips on one
 // path's partial view. Alert 1's pace violation has its own latch
 // (`page_stopped:pace_violation`), resolved only by the owner (`pnpm cli sync
-// alerts ack`). A 429 holds one route of a page, never the page: its incident
+// alerts ack`): the send audit (`engine/send-audit.ts`) opens it for two sends
+// of a page closer than the later one's pause (I1) and for two sends of a
+// route or family closer than the interval the later one was admitted under,
+// or an interval below its ceiling's (I19). A 429 holds one route of a page,
+// never the page: its incident
 // is the route's own (`route_limited:<route>`, step 3b D5) — opened by the
 // capture on the route's first 429, refreshed (never repeated) by the next
 // ones and by the evaluator while the route is held, resolved 10 clean
@@ -91,10 +96,11 @@ export const SYNC_URGENT_WAIT_MS = 2 * 60_000;
 export const SYNC_REQUEST_STALL_MS = 30 * 60_000;
 /** Alert 4: a poll without its own SLO is stale after this many periods. */
 export const SYNC_STALE_PERIODS = 3;
-/** The pace backstop re-reads this much of the journal before its last pass
- *  (a send captured after a pass with an earlier send instant). */
+/** The send audit re-reads this much of the journal before its last pass (a
+ *  send captured after a pass with an earlier send instant; an unknown send
+ *  counted at its upper bound). */
 const PACE_AUDIT_OVERLAP_MS = 60_000;
-/** The pace backstop's first pass reads this far back (and no pass further). */
+/** The send audit's first pass reads this far back (and no pass further). */
 const PACE_AUDIT_FIRST_LOOKBACK_MS = 60 * 60_000;
 
 /** The page alerts (1–4). */
@@ -460,7 +466,13 @@ export interface SyncAlertPassResult {
   pages: number;
   opened: Array<{ pageId: number; subKey: SyncEngineIncidentSubKey; detail: string }>;
   resolved: Array<{ pageId: number; subKey: SyncEngineIncidentSubKey }>;
+  /** I1: pairs of the page's sends closer than the later one's pause. */
   paceViolations: number;
+  /** I19: pairs of a route's (or family's) sends closer than the interval the
+   *  later one was admitted under, and intervals below their ceiling's. */
+  routeIntervalViolations: number;
+  /** Pairs the audit could not judge (no recorded pause or interval). */
+  inconclusivePairs: number;
 }
 
 export interface SyncAlertEvaluatorOptions {
@@ -528,7 +540,9 @@ export class SyncAlertEvaluator {
   async #evaluate(pass: StallTracker): Promise<SyncAlertPassResult> {
     const { db } = this.#o;
     const pages = await listSyncPages(db);
-    const result: SyncAlertPassResult = { pages: pages.length, opened: [], resolved: [], paceViolations: 0 };
+    const result: SyncAlertPassResult = {
+      pages: pages.length, opened: [], resolved: [], paceViolations: 0, routeIntervalViolations: 0, inconclusivePairs: 0,
+    };
     // Open latches by key, with the last instant their condition was seen.
     const open = new Map((await listNotificationIncidents(db, { status: "open" }))
       .filter((incident) => incident.kind === "fansly_sync_engine")
@@ -569,7 +583,12 @@ export class SyncAlertEvaluator {
         }
       }
       await this.#evaluateRoutes(page, open, result);
-      if (pagesOwnerAlerts(page)) result.paceViolations += await this.#auditPace(page);
+      if (pagesOwnerAlerts(page)) {
+        const audited = await this.#auditSends(page);
+        result.paceViolations += audited.pace;
+        result.routeIntervalViolations += audited.intervals;
+        result.inconclusivePairs += audited.inconclusive;
+      }
     }
     if (result.opened.length > 0 || result.resolved.length > 0) {
       this.#o.logger.info({ opened: result.opened, resolved: result.resolved }, "Fansly sync alerts: latches changed");
@@ -607,11 +626,13 @@ export class SyncAlertEvaluator {
     }
   }
 
-  /** The pace backstop: the page's sends since the last pass over BOTH
+  /** The send audit (I1, I19): the page's sends since the last pass over BOTH
    *  journals — the engine's live attempts and the legacy send log — so a
    *  pair straddling the handover or a rollback is seen too (step-3 §3.5
-   *  item 2, G4, E12). */
-  async #auditPace(page: SyncPageRow): Promise<number> {
+   *  item 2, G4, E12). Every violation opens (refreshes) the permanent pace
+   *  latch as of its send; an acknowledged one never reopens it. A pair it
+   *  cannot judge (an attempt admitted before 0237) pages nobody. */
+  async #auditSends(page: SyncPageRow): Promise<{ pace: number; intervals: number; inconclusive: number }> {
     // From the last pass (with an overlap), never further back than the first
     // pass reads (a page back in the engine after a while starts there).
     const last = this.#paceAuditedTo.get(page.pageId);
@@ -619,26 +640,56 @@ export class SyncAlertEvaluator {
       page.dbNow.getTime() - PACE_AUDIT_FIRST_LOOKBACK_MS,
       last === undefined ? Number.NEGATIVE_INFINITY : last.getTime() - PACE_AUDIT_OVERLAP_MS,
     ));
-    const sends = await listCombinedFanslySendsForPaceAudit(this.#o.db, { pageId: page.pageId, since });
-    const violations = sends.filter((send) => send.violation);
-    for (const send of violations) {
+    const rows = await readFanslySendAudit(this.#o.db, { pageId: page.pageId, since });
+    const window = { start: since, until: null };
+    const pace = auditPagePace(rows, window);
+    const intervals = auditRouteIntervals(rows, window);
+    const latch = async (detail: string, at: Date, context: Record<string, unknown>) => {
       await notifySyncEngineIncident(this.#app, {
         subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
         pageId: page.pageId,
         pageLabel: page.pageLabel,
-        detail: "pace_violation",
-        errorSummary: summaryOf("pace_violation", send.sentAt, {
-          journal: send.journal,
-          ref: send.ref,
-          previous: send.prevJournal,
-          gapMs: Math.round(send.gapMs!),
-          settingMs: send.settingMs,
-        }),
-        occurredAt: send.sentAt,
+        detail,
+        errorSummary: summaryOf(detail, at, context),
+        occurredAt: at,
+      });
+    };
+    for (const pair of pace.violations) {
+      await latch("pace_violation", pair.sentAt, {
+        journal: pair.journal,
+        ref: pair.ref,
+        previous: pair.prevJournal,
+        previousRef: pair.prevRef,
+        gapMs: Math.round(pair.gapMs * 10) / 10,
+        clock: pair.clock,
+        pauseMs: pair.pauseMs,
+      });
+    }
+    for (const pair of intervals.violations) {
+      await latch("route_interval_violation", pair.at, {
+        [pair.kind]: pair.scope,
+        journal: pair.journal,
+        ref: pair.ref,
+        previous: pair.prevJournal,
+        previousRef: pair.prevRef,
+        gapMs: Math.round(pair.gapMs),
+        intervalMs: pair.intervalMs,
+      });
+    }
+    for (const breach of intervals.ceiling) {
+      await latch("route_interval_below_ceiling", breach.at, {
+        [breach.kind]: breach.scope,
+        ref: breach.ref,
+        intervalMs: breach.intervalMs,
+        ceilingIntervalMs: breach.ceilingIntervalMs,
       });
     }
     this.#paceAuditedTo.set(page.pageId, page.dbNow);
-    return violations.length;
+    return {
+      pace: pace.violations.length,
+      intervals: intervals.violations.length + intervals.ceiling.length,
+      inconclusive: pace.inconclusive.length + intervals.inconclusive.length,
+    };
   }
 }
 

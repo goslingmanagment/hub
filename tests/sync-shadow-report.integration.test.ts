@@ -24,13 +24,14 @@ import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from 
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
 import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
-import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { ROUTE_POLICY_HASH, routeOfEngineOperation } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { FANSLY_REGISTRY_HASH, SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
 import { checkChains } from "../apps/runtime/src/sync/report/shadow-journal.ts";
 import { ScanGovernor } from "../apps/runtime/src/sync/fansly/lib/chain-rebuild.ts";
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { currentIntervals } from "./helpers/sync-acceptance-fixtures.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
 import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 import { WS_ORDER_NODE } from "../apps/runtime/src/sync/fansly/ws/decode.ts";
@@ -104,13 +105,18 @@ async function shadowAttempt(
   const request = input.params === undefined
     ? {}
     : { spec: operation, params: input.params, ...(input.position === undefined ? {} : { position: input.position }) };
+  // What the admission records: its route's and its family's intervals.
+  const route = routeOfEngineOperation(operation);
+  const intervals = route === null ? { routeIntervalMs: null, familyIntervalMs: null } : currentIntervals(route);
   await testDb!.pool.query(
     `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                                admitted_at, sent_at, send_mark, operation, request, outcome, apply_state)
+                                admitted_at, sent_at, send_mark, operation, request, outcome, apply_state,
+                                route_interval_ms, family_interval_ms)
      values ($1, true, $6, $2, $3, $4, $9, 2000, 0, 2000, $5,
-             case when $10::boolean then $5::timestamptz + interval '50 milliseconds' end, 'shadow', $7, $8::jsonb, 'shadow', 'skipped')`,
+             case when $10::boolean then $5::timestamptz + interval '50 milliseconds' end, 'shadow', $7, $8::jsonb, 'shadow', 'skipped',
+             $11, $12)`,
     [pageId, input.resource, input.subject ?? "", input.workClass, input.at, input.workId ?? null, operation, JSON.stringify(request),
-      input.generation ?? 1, input.sent ?? true],
+      input.generation ?? 1, input.sent ?? true, intervals.routeIntervalMs, intervals.familyIntervalMs],
   );
 }
 
@@ -220,13 +226,13 @@ describe("the shadow report (design §3.12)", () => {
     );
     await shadowAttempt(page.pageId, { resource: "account.poll", workClass: "planned", at: at(-15 * MINUTE) });
 
-    // The conversation list: 14 finds 4 s apart, one more in a minute than
-    // its 12/min allow.
+    // The conversation list: 14 finds 4 s apart, each pair closer than its
+    // 12/min's 5 s (the span count sees one too many in a minute).
     for (let i = 0; i < 14; i += 1) {
       await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: `chat-${i}`, at: at(5 * MINUTE + i * 4_000) });
     }
     // Chat details and heads 2.5 s apart: each route within its own 15/min,
-    // the messaging family over its combined 15/min.
+    // each pair of the messaging family closer than its combined 15/min.
     for (let i = 0; i < 18; i += 1) {
       const resource = i % 2 === 0 ? "dm-conversations.detail" : "dm-messages.head";
       await shadowAttempt(page.pageId, { resource, workClass: i % 2 === 0 ? "planned" : "urgent", subject: `chat-${i}`, at: at(20 * MINUTE + i * 2_500) });
@@ -302,17 +308,20 @@ describe("the shadow report (design §3.12)", () => {
     const report = await build();
     const { budgets, walks } = report.routes!;
     const budget = (name: string) => budgets.rows.find((row) => row.budget === name);
+    // The send audit's pairs (each against the interval its later send was
+    // admitted under); the span counts beside them are diagnostics.
     expect(budget("messaging.groups")).toEqual({
       page: "lilly-1", budget: "messaging.groups", perMin: 12, intervalMs: 5_000, sends: 14, minGapMs: 4_000,
-      max60s: 14, bound60s: 13, max300s: 14, bound300s: 61, violations: 1, firstViolationAt: new Date(at(5 * MINUTE + 13 * 4_000).getTime() + 50),
+      max60s: 14, bound60s: 13, max300s: 14, bound300s: 61, violations: 13, firstViolationAt: new Date(at(5 * MINUTE + 4_000).getTime() + 50),
+      inconclusive: 0,
     });
     expect(budget("group.detail")).toMatchObject({ sends: 9, minGapMs: 5_000, violations: 0 });
     expect(budget("messages.page")).toMatchObject({ sends: 9 + 2, violations: 0 });
-    expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 2 });
+    expect(budget("family:messaging")).toMatchObject({ sends: 14 + 18 + 2, minGapMs: 2_500, max60s: 18, bound60s: 16, violations: 17, inconclusive: 0 });
     expect(budget("media.offer_stats")).toMatchObject({ sends: 5, minGapMs: 12_000, max60s: 4, bound60s: 6, violations: 0 });
     expect(budget("earnings.stats_accounts")).toMatchObject({ sends: 3, minGapMs: 30_000, violations: 0 });
     expect(budgets.unplaced).toEqual([{ page: "lilly-1", operation: "retired.route", sends: 1 }]);
-    expect(budgets.violations).toBe(1 + 2 + 1);
+    expect(budgets).toMatchObject({ violations: 13 + 17 + 1, inconclusive: 0 });
     // The media walk, the roster, the vault walk, the reconcile and the two
     // catch-ups.
     expect(walks).toEqual({
@@ -350,7 +359,7 @@ describe("the shadow report (design §3.12)", () => {
     expect(report.summary[0]).toBe(`Fingerprint: sync build build-sync (report written by ${REPORT_BUILD}); route policy ${ROUTE_POLICY_HASH.slice(0, 12)}, `
       + `registry ${FANSLY_REGISTRY_HASH.slice(0, 12)}; S ${report.fingerprint.setting.effectiveMs} ms now, 2000 ms in the window`);
     expect(report.summary).toContainEqual(expect.stringMatching(
-      /^Route budgets in shadow: 4 violation\(s\): lilly-1 family:messaging 2 send\(s\) over \(max 18\/16 in 60 s, .*lilly-1 messaging\.groups 1 send\(s\) over .*; sends this build places on no route: lilly-1 retired\.route 1$/,
+      /^Route budgets in shadow: 31 violation\(s\): lilly-1 family:messaging 17 send\(s\) closer than their recorded interval \(shortest gap 2500 ms of 4000; max 18\/16 in 60 s, .*lilly-1 messaging\.groups 13 send\(s\) closer than their recorded interval .*; sends this build places on no route: lilly-1 retired\.route 1$/,
     ));
     expect(report.summary).toContainEqual(expect.stringMatching(new RegExp(
       "^Walks per route: ENDLESS — 3 repeated request\\(s\\): "
@@ -406,9 +415,10 @@ describe("the shadow report (design §3.12)", () => {
       pageId: page.pageId, groupId: fresh, fanRef: "200000000000000007", firstSeenAt: at(27 * MINUTE),
     });
     await shadowAttempt(page.pageId, { resource: "dm-conversations.find", workClass: "urgent", subject: fresh, at: at(25 * MINUTE + 4_000) });
-    // The daily stats: one snapshot sequence of 11 requests, 3 s apart.
+    // The daily stats: one snapshot sequence of 11 requests, 4 s apart (one
+    // route at its 15/min).
     for (let i = 0; i < 11; i += 1) {
-      await shadowAttempt(page.pageId, { resource: "stats.daily", workClass: "planned", at: at(15 * MINUTE + i * 3_000) });
+      await shadowAttempt(page.pageId, { resource: "stats.daily", workClass: "planned", at: at(15 * MINUTE + i * 4_000) });
     }
     // The hourly followers head: its run done 4.5 min before the window, none in it.
     await shadowAttempt(page.pageId, { resource: "followers.head", workClass: "planned", at: at(-4.5 * MINUTE) });

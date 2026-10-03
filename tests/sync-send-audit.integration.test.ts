@@ -1,0 +1,238 @@
+import { randomUUID } from "node:crypto";
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  createFanslyPage,
+  createModel,
+  ensureSyncPage,
+  getNotificationIncidentByKey,
+  readFanslySendAudit,
+  type Database,
+} from "@agency_hub_core/db";
+
+import { SYNC_ENGINE_PACE_VIOLATION_SUBKEY, syncEngineIncidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
+import { SyncAlertEvaluator } from "../apps/runtime/src/sync/engine/alerts.ts";
+import { auditPagePace, auditRouteIntervals } from "../apps/runtime/src/sync/engine/send-audit.ts";
+import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
+import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
+import { checkSwitchAcceptance } from "../apps/runtime/src/sync/switch/acceptance.ts";
+import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { currentIntervals } from "./helpers/sync-acceptance-fixtures.ts";
+import { quietLogger, setModeDirect } from "./helpers/sync-engine-host.ts";
+
+// The send audit on recorded rows (I1, I19; arena 3b-review G1): one read of
+// both journals (`readFanslySendAudit`) judged by one checker — the alert
+// evaluator latches what it finds on a `handover`/`live` page (the permanent
+// pace latch), `sync switch check` reports it. I1 by each send's own recorded
+// pause, I19 by each admission's recorded route and family intervals; a pair
+// straddling the handover is in neither engine's own audit and is in this
+// one; a history without the recorded intervals pages nobody and passes no
+// acceptance.
+
+const S = 2_000;
+
+let testDb: StartedTestDatabase | null = null;
+
+beforeAll(async () => {
+  testDb = await startIntegrationTestDatabase();
+}, 120_000);
+
+afterAll(async () => {
+  await testDb?.stop();
+});
+
+beforeEach(async () => {
+  if (testDb) await resetIntegrationDatabase(testDb.pool);
+});
+
+function db(): Database {
+  return testDb!.db as unknown as Database;
+}
+
+async function seedPage(label: string): Promise<number> {
+  const model = await createModel(db(), { slug: `model-${label}`, name: label });
+  const page = await createFanslyPage(db(), { modelId: model!.id, label });
+  await ensureSyncPage(db(), { pageId: page!.id });
+  return page!.id;
+}
+
+/** A page live since 10 minutes ago, so its acceptance window holds the
+ *  sends of the last minutes. */
+async function livePage(label: string): Promise<number> {
+  const pageId = await seedPage(label);
+  await setModeDirect(testDb!.pool, pageId, "live");
+  await testDb!.pool.query("update sync_pages set mode_changed_at = clock_timestamp() - interval '10 minutes' where page_id = $1", [pageId]);
+  return pageId;
+}
+
+function evaluator(): SyncAlertEvaluator {
+  return new SyncAlertEvaluator({ db: db(), logger: quietLogger, registry: createFanslyRegistry() });
+}
+
+async function paceLatch(pageId: number) {
+  return getNotificationIncidentByKey(db(), syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId }));
+}
+
+/** A legacy send `secondsAgo` before now (DB clock), with its guard's pause. */
+async function legacySend(pageId: number, secondsAgo: number): Promise<void> {
+  await testDb!.pool.query(
+    `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
+                                  setting_ms, jitter_u, pause_ms, captured_at, sent_at, completed_at, outcome)
+     values ($1, $2, 'sync_stream', 'messages', 'worker-1', 1, 'worker', $3, $4, 0, $4,
+             clock_timestamp() - make_interval(secs => $5::double precision + 0.05),
+             clock_timestamp() - make_interval(secs => $5::double precision),
+             clock_timestamp() - make_interval(secs => $5::double precision - 0.2), 'response')`,
+    [pageId, randomUUID(), randomUUID(), S, secondsAgo],
+  );
+}
+
+interface EngineSend {
+  secondsAgo: number;
+  operation: FanslyRoute;
+  generation?: number;
+  settingMs?: number;
+  pauseMs?: number;
+  gapPrevMs?: number | null;
+  /** Default: what an admission records at the table's rates; null: an
+   *  attempt admitted before 0237. */
+  routeIntervalMs?: number | null;
+  familyIntervalMs?: number | null;
+  /** `unknown`: admitted `secondsAgo` before now, its send never marked. */
+  outcome?: "response" | "unknown";
+}
+
+/** A live engine attempt as the actor journals it. */
+async function engineSend(pageId: number, input: EngineSend): Promise<void> {
+  const intervals = currentIntervals(input.operation);
+  const unknown = input.outcome === "unknown";
+  await testDb!.pool.query(
+    `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                admitted_at, sent_at, send_mark, gap_prev_ms, operation, request, outcome,
+                                route_interval_ms, family_interval_ms)
+     values ($1, false, 'test.resource', '', 'urgent', $2, $3, 0, $4,
+             clock_timestamp() - make_interval(secs => $5::double precision + case when $6::boolean then 0 else 0.1 end),
+             case when $6::boolean then null else clock_timestamp() - make_interval(secs => $5::double precision) end,
+             case when $6::boolean then null else 'request_start' end, $7, $8, '{}'::jsonb, $9, $10, $11)`,
+    [
+      pageId, input.generation ?? 1, input.settingMs ?? S, input.pauseMs ?? input.settingMs ?? S, input.secondsAgo, unknown,
+      input.gapPrevMs ?? null, input.operation, unknown ? "unknown" : "response",
+      input.routeIntervalMs === undefined ? intervals.routeIntervalMs : input.routeIntervalMs,
+      input.familyIntervalMs === undefined ? intervals.familyIntervalMs : input.familyIntervalMs,
+    ],
+  );
+}
+
+/** The arena's I19 counterexample: 15 sends 2.8 s apart on a 4 s route,
+ *  each ≥ the page's pause. */
+async function routeBurst(pageId: number, fromSecondsAgo: number, extra: Partial<EngineSend> = {}): Promise<void> {
+  for (let i = 0; i < 15; i += 1) {
+    await engineSend(pageId, { secondsAgo: fromSecondsAgo - i * 2.8, operation: "notifications.page", settingMs: 2_500, pauseMs: 2_500, ...extra });
+  }
+}
+
+describe("the send audit on recorded rows", () => {
+  it("reads both journals in send order and finds the cross-journal pair 1.9 s apart at S = 2 s, and only it", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("audit-page");
+    const since = new Date(Date.now() - 60_000);
+    await legacySend(pageId, 30);
+    await legacySend(pageId, 27.5);
+    // The handover: the engine's first send 1.9 s after the legacy last one.
+    await engineSend(pageId, { secondsAgo: 25.6, operation: "notifications.page" });
+    await engineSend(pageId, { secondsAgo: 23, operation: "transactions.page" });
+
+    const rows = await readFanslySendAudit(db(), { pageId, since });
+    expect(rows.map((row) => [row.journal, row.source, row.pauseMs])).toEqual(expect.arrayContaining([
+      ["legacy", "sync_stream", S], ["engine", null, S],
+    ]));
+    const pace = auditPagePace(rows, { start: since, until: null });
+    expect(pace).toMatchObject({ verdict: "fail", pairs: 3, inconclusive: [] });
+    expect(pace.violations).toEqual([expect.objectContaining({ journal: "engine", prevJournal: "legacy:sync_stream", clock: "wall", pauseMs: S })]);
+    expect(pace.violations[0]!.gapMs).toBeGreaterThan(1_850);
+    expect(pace.violations[0]!.gapMs).toBeLessThan(1_950);
+    // The window's first send keeps its predecessor from the look-back.
+    const tailSince = new Date(Date.now() - 26_000);
+    const tail = auditPagePace(await readFanslySendAudit(db(), { pageId, since: tailSince }), { start: tailSince, until: null });
+    expect(tail.violations).toEqual([expect.objectContaining({ journal: "engine", prevJournal: "legacy:sync_stream" })]);
+
+    const acceptance = await checkSwitchAcceptance(db(), { pageIds: [pageId], since });
+    const page = acceptance.pages[0]!;
+    expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({
+      verdict: "fail", detail: { violations: 1, pairs: 3, inconclusive: 0 },
+    });
+    expect(page.verdict).toBe("fail");
+    expect(acceptance.accepted).toBe(false);
+  });
+
+  it("the evaluator latches I1 by the send's own pause and I19 by its recorded interval; a shadow page pages nobody", async (context) => {
+    if (!testDb) return context.skip();
+    const live = await livePage("audit-live");
+    const shadow = await seedPage("audit-shadow");
+    await setModeDirect(testDb.pool, shadow, "shadow");
+    for (const pageId of [live, shadow]) {
+      // S = 2 500, u = 0.1: the pause is 2 750, the gap 2 600 — over the setting, short of the pause.
+      await engineSend(pageId, { secondsAgo: 120, operation: "media.offer_stats", settingMs: 2_500, pauseMs: 2_750 });
+      await engineSend(pageId, { secondsAgo: 117.4, operation: "transactions.page", settingMs: 2_500, pauseMs: 2_750, generation: 2 });
+      await routeBurst(pageId, 60);
+    }
+    const result = await evaluator().runOnce();
+    expect(result).toMatchObject({ paceViolations: 1, routeIntervalViolations: 14, inconclusivePairs: 0 });
+    const latch = await paceLatch(live);
+    expect(latch).toMatchObject({ status: "open" });
+    expect(latch?.errorSummary).toContain("notifications.page");
+    expect(latch?.errorSummary).toContain("\"intervalMs\":4000");
+    expect(await paceLatch(shadow)).toBeNull();
+
+    // The same rows through the acceptance: both checks fail, by the same audit.
+    const since = new Date(Date.now() - 180_000);
+    const page = (await checkSwitchAcceptance(db(), { pageIds: [live], since })).pages[0]!;
+    expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({
+      verdict: "fail", detail: { violations: 1, firstViolations: [expect.objectContaining({ pauseMs: 2_750, clock: "wall" })] },
+    });
+    expect(page.checks.find((check) => check.name === "route_budgets")).toMatchObject({
+      verdict: "fail", detail: { violations: 14, pairs: 14, inconclusive: 0 },
+    });
+  });
+
+  it("a history admitted before the intervals were recorded pages nobody and passes no acceptance", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await livePage("audit-before");
+    await routeBurst(pageId, 60, { routeIntervalMs: null, familyIntervalMs: null });
+    const result = await evaluator().runOnce();
+    expect(result).toMatchObject({ paceViolations: 0, routeIntervalViolations: 0, inconclusivePairs: 14 });
+    expect(await paceLatch(pageId)).toBeNull();
+    const page = (await checkSwitchAcceptance(db(), { pageIds: [pageId], since: new Date(Date.now() - 120_000) })).pages[0]!;
+    expect(page.checks.find((check) => check.name === "route_budgets")).toMatchObject({
+      verdict: "inconclusive", detail: { violations: 0, pairs: 0, inconclusive: 14 },
+    });
+    expect(page.checks.find((check) => check.name === "pace_combined")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("latches an interval below its ceiling's whatever the gaps, and counts an unknown outcome at its upper bound", async (context) => {
+    if (!testDb) return context.skip();
+    const ceiling = await livePage("audit-ceiling");
+    const unknown = await livePage("audit-unknown");
+    // 3.5 s apart under a recorded 3 500 ms: every pair keeps it, but the
+    // route's ceiling (15/min) is 4 000 ms.
+    for (const secondsAgo of [60, 56.5, 53]) {
+      await engineSend(ceiling, { secondsAgo, operation: "notifications.page", routeIntervalMs: 3_500 });
+    }
+    // Admitted 60 s ago and never marked: it counts at its admission + 15 s,
+    // so a send of its route 2 s after that is too close.
+    await engineSend(unknown, { secondsAgo: 70, operation: "notifications.page" });
+    await engineSend(unknown, { secondsAgo: 60, operation: "notifications.page", outcome: "unknown" });
+    await engineSend(unknown, { secondsAgo: 43, operation: "notifications.page" });
+    const rows = await readFanslySendAudit(db(), { pageId: unknown, since: new Date(Date.now() - 120_000) });
+    expect(rows.filter((row) => row.sentAt === null).map((row) => row.countedAt !== null)).toEqual([true]);
+    const audited = auditRouteIntervals(rows, { start: new Date(Date.now() - 120_000), until: null });
+    expect(audited.violations).toEqual([expect.objectContaining({ kind: "route", scope: "notifications.page", intervalMs: 4_000 })]);
+    expect(audited.violations[0]!.gapMs).toBeGreaterThan(1_900);
+    expect(audited.violations[0]!.gapMs).toBeLessThan(2_100);
+
+    const result = await evaluator().runOnce();
+    expect(result).toMatchObject({ paceViolations: 0, routeIntervalViolations: 3 + 1 });
+    expect(await paceLatch(ceiling)).toMatchObject({ status: "open", errorCode: "route_interval_below_ceiling" });
+    expect(await paceLatch(unknown)).toMatchObject({ status: "open", errorCode: "route_interval_violation" });
+  });
+});

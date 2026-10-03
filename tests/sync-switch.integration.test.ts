@@ -10,12 +10,13 @@ import {
   getSyncPage,
   insertAgentKey,
   insertAuditEvent,
-  listCombinedFanslySendsForPaceAudit,
+  readFanslySendAudit,
   type Database,
 } from "@agency_hub_core/db";
 
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
+import { auditPagePace } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { HistoryRequestsUnavailableError, submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import { SYNC_ROLLBACK_AUDIT_EVENT, SYNC_SWITCH_RED_LINES_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
 import { SwitchRefusedError } from "../apps/runtime/src/sync/switch/context.ts";
@@ -231,10 +232,13 @@ describe("sync switch", () => {
     expect(legacyArrivals.at(-1)!.mono).toBeLessThan(engineArrivals[0]!.mono);
     expect(engineArrivals[0]!.mono - legacyArrivals.at(-1)!.mono).toBeGreaterThanOrEqual(1.2 * S);
     expect(gaps(r.server.arrivals).filter((gap) => gap < S)).toEqual([]);
-    const combined = await listCombinedFanslySendsForPaceAudit(db(), { pageId: page.pageId, since: startedAt });
-    expect(combined.some((send) => send.journal === "legacy:sync_stream")).toBe(true);
-    expect(combined.some((send) => send.journal === "engine")).toBe(true);
-    expect(combined.filter((send) => send.violation)).toEqual([]);
+    // The send audit over both journals: every pair ≥ the later send's own pause (I1).
+    const combined = await readFanslySendAudit(db(), { pageId: page.pageId, since: startedAt });
+    const sentSince = combined.filter((send) => send.sentAt !== null && send.sentAt.getTime() >= startedAt.getTime());
+    expect(sentSince.some((send) => send.journal === "legacy" && send.source === "sync_stream")).toBe(true);
+    expect(sentSince.some((send) => send.journal === "engine")).toBe(true);
+    const pace = auditPagePace(combined, { start: startedAt, until: null });
+    expect(pace).toMatchObject({ verdict: "pass", violations: [], inconclusive: [] });
 
     const row = (await getSyncPage(db(), page.pageId))!;
     expect(row.mode).toBe("live");

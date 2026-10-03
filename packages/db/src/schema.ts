@@ -1065,6 +1065,9 @@ export const syncAttempts = pgTable(
     applyRetryAt: timestamp("apply_retry_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
     evidence: boolean("evidence").notNull().default(false),
+    // 0237 (I19): the route's and its family's intervals the admission applied.
+    routeIntervalMs: integer("route_interval_ms"),
+    familyIntervalMs: integer("family_interval_ms"),
   },
   (table) => ({
     pageAdmittedIdx: index("sync_attempts_page_admitted").on(table.pageId, table.admittedAt.desc()),

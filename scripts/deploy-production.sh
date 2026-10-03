@@ -580,6 +580,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # recounts them from page_dm_messages after a socket deletion, so it runs
   # unchanged after a rollback (it still writes page_dm_messages).
   "0236_fansly_thread_summary_from_archive.sql"
+  # Route intervals on the attempt (I19 audit): two nullable columns on
+  # sync_attempts without a default (catalog-only). The previous image never
+  # names them (it inserts attempts by named columns), so it runs unchanged
+  # after a rollback; its attempts carry no interval and the audit reads their
+  # pairs as inconclusive.
+  "0237_sync_attempt_route_intervals.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

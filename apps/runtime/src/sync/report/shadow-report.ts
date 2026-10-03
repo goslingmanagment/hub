@@ -187,7 +187,7 @@ export interface ShadowReport {
   /** What the hour ran on (build, route policy, registry and tiers, S). */
   fingerprint: ShadowReportFingerprint;
   window: ShadowWindowReport | null;
-  /** Part A's two SQL checks over the shadow journal. */
+  /** Part A's two checks over the shadow journal (the route budgets: the send audit). */
   routes: ShadowRouteChecks | null;
   media: ShadowMediaModelRow[] | null;
   journal: {
@@ -334,7 +334,7 @@ function verdictOf(
     a2: window?.verdict.a2 ?? null,
     a3: window?.verdict.a3 ?? null,
     a4: window?.verdict.a4 ?? null,
-    budgets: routes === null ? null : routes.budgets.violations === 0,
+    budgets: routes === null ? null : routes.budgets.violations === 0 && routes.budgets.inconclusive === 0,
     walks: routes === null ? null : routes.walks.repeats === 0,
     build: fingerprint.build.sync !== null,
     b5,

@@ -217,6 +217,13 @@ export interface InsertAdmissionInput {
   request: unknown;
   /** Coverage evidence (registry); a shadow attempt never is. */
   evidence: boolean;
+  /** The interval its route admitted it under (the route's effective rate,
+   *  I19); null: none applied (an admission that recorded none reads as
+   *  `inconclusive` in the audit, never as a pass). */
+  routeIntervalMs?: number | null;
+  /** The interval of the route's family it was admitted under; null: the
+   *  route has no family. */
+  familyIntervalMs?: number | null;
 }
 
 /**
@@ -252,14 +259,15 @@ export async function insertAdmission(
     ), attempt as (
       insert into sync_attempts (
         page_id, shadow, work_id, resource, subject, class, slot, owner_generation, demand_revision,
-        setting_ms, jitter_u, pause_ms, operation, request, evidence
+        setting_ms, jitter_u, pause_ms, operation, request, evidence, route_interval_ms, family_interval_ms
       )
       select page.page_id, ${input.shadow}::boolean, ${input.workId}::bigint, ${input.resource}::text,
              ${input.subject}::text, ${input.class}::text, ${input.slot}::smallint,
              ${generationParam(input.generation)}, ${input.demandRevision}::bigint,
              ${input.settingMs}::integer, ${input.jitterU}::double precision, ${input.pauseMs}::integer,
              ${input.operation}::text, ${jsonParam(input.request)},
-             ${input.evidence}::boolean and not ${input.shadow}::boolean
+             ${input.evidence}::boolean and not ${input.shadow}::boolean,
+             ${boundedInt(input.routeIntervalMs)}::integer, ${boundedInt(input.familyIntervalMs)}::integer
         from page
       returning id, admitted_at
     ), work as (
@@ -331,7 +339,7 @@ export interface CaptureAttemptResult {
   /** `sync_pages.last_send_at` before this capture (any owner). */
   previousSendAt: Date | null;
   /** This send minus the previous recorded send of the page, ms; the caller
-   *  compares it with the attempt's setting (alert 1 `pace_violation`). */
+   *  compares it with the attempt's pause (alert 1 `pace_violation`). */
   paceGapMs: number | null;
 }
 
@@ -744,92 +752,117 @@ export async function listSendsForPaceAudit(
   }));
 }
 
-/** One send of a page in the combined journal of both engines. */
-export interface CombinedFanslySend {
-  /** `engine` (a live `sync_attempts` row) or `legacy:<source>` (a
-   *  `fansly_send_log` row of the step-1 guard). */
-  journal: string;
+/** How far before its window the send audit reads the journals, so the
+ *  window's first send of the page, of each route and of each family finds
+ *  its predecessor: far above the longest pause (`FANSLY_PAUSE_MAX_MS` = 60 s
+ *  × 1.2) and the longest route interval (⅛ of the lowest ceiling: 40 s). */
+export const SYNC_SEND_AUDIT_LOOKBACK_MS = 10 * 60_000;
+
+/** One row of a page's send journals as the send audit reads it: a live (or,
+ *  for the shadow report, a shadow) engine attempt, or a send of the step-1
+ *  legacy send log. */
+export interface FanslySendAuditRow {
+  journal: "engine" | "legacy";
+  /** `fansly_send_log.source` of a legacy row; null for the engine. */
+  source: string | null;
   /** The row's id in its journal. */
-  ref: string;
-  sentAt: Date;
-  settingMs: number;
-  prevJournal: string | null;
-  prevSentAt: Date | null;
-  /** Milliseconds since the previous send of EITHER journal (null: none). */
-  gapMs: number | null;
-  /** Closer than the setting in force for this send. */
-  violation: boolean;
+  ref: number;
+  /** A wire id (`engine`) or the legacy adapter's operation (`legacy`). */
+  operation: string;
+  /** The engine attempt's owner generation; null for a legacy row. */
+  ownerGeneration: bigint | null;
+  /** The recorded actual send instant (`sent_at`); null: none recorded. */
+  sentAt: Date | null;
+  /** Where the route clocks count it (`readRouteJournal`): the recorded send,
+   *  else — a send that may have gone out — its upper bound (admission + the
+   *  send window; a legacy capture's completion or lease end). Null: it
+   *  provably never went out (refused before sending, or a failure that never
+   *  reached `onRequestStart`). */
+  countedAt: Date | null;
+  settingMs: number | null;
+  /** The pause the admission (or the legacy capture) applied: S × (1 + u). */
+  pauseMs: number | null;
+  /** The engine's monotonic gap to its pacer's previous actual send. */
+  gapPrevMs: number | null;
+  /** The intervals the admission applied (0237); null before it, and for a
+   *  legacy row. */
+  routeIntervalMs: number | null;
+  familyIntervalMs: number | null;
 }
 
 /**
- * Every send of a page from BOTH journals — live engine attempts and the
- * step-1 legacy send log — in `sent_at` order, each with the gap to the
- * previous send of either journal and the setting in force for the later one
- * (step-3 design §3.5 item 2, G4, E12). The only place a pair of sends
- * straddling the handover (or a rollback) is visible; used by `sync switch
- * check`, the engine's alert evaluator on `handover`/`live` pages and the
- * tests. The 10-minute look-back gives the window's first send its
- * predecessor; rows before `since` are context only.
+ * The send audit's read (invariants I1 and I19; the alert evaluator, `sync
+ * switch check`, the shadow report): every row of a page's engine journal
+ * (`shadow` picks the shadow one) and — with `legacy` — of the step-1 legacy
+ * send log admitted (captured) in [since − `lookbackMs`, until), with what
+ * the audit compares: the recorded send instant and its upper bound, the
+ * pause and the route and family intervals each admission applied. Two short
+ * range scans (`sync_attempts_page_admitted`, `fansly_send_log_page_captured_idx`);
+ * the rules are the audit's (`apps/runtime/src/sync/engine/send-audit.ts`).
  */
-export async function listCombinedFanslySendsForPaceAudit(
+export async function readFanslySendAudit(
   db: Database,
-  input: { pageId: number; since: Date; until?: Date | null },
-): Promise<CombinedFanslySend[]> {
+  input: { pageId: number; since: Date; until?: Date | null; shadow?: boolean; legacy?: boolean; lookbackMs?: number },
+): Promise<FanslySendAuditRow[]> {
+  const shadow = input.shadow === true;
+  const legacy = (input.legacy ?? !shadow) && !shadow;
+  const lookbackMs = Math.max(0, input.lookbackMs ?? SYNC_SEND_AUDIT_LOOKBACK_MS);
   const until = input.until === undefined || input.until === null
     ? sql`'infinity'::timestamptz`
     : sql`${input.until}::timestamptz`;
+  const from = sql`${input.since}::timestamptz - ${lookbackMs}::double precision * interval '1 millisecond'`;
+  const sendWindow = sql`${SYNC_SEND_WINDOW_MS}::double precision * interval '1 millisecond'`;
   const result = await db.execute<{
-    journal: string;
+    journal: "engine" | "legacy";
+    source: string | null;
     ref: string;
-    sentAt: Date | string;
-    settingMs: number | string;
-    prevJournal: string | null;
-    prevSentAt: Date | string | null;
-    gapMs: number | string | null;
+    operation: string;
+    ownerGeneration: string | null;
+    sentAt: Date | string | null;
+    countedAt: Date | string | null;
+    settingMs: number | string | null;
+    pauseMs: number | string | null;
+    gapPrevMs: number | string | null;
+    routeIntervalMs: number | string | null;
+    familyIntervalMs: number | string | null;
   }>(sql`
-    with sends as (
-      select 'engine'::text as journal, a.id::text as ref, a.sent_at, a.setting_ms
-        from sync_attempts a
-       where a.page_id = ${input.pageId}
-         and not a.shadow
-         and a.sent_at is not null
-         and a.sent_at >= ${input.since}::timestamptz - interval '10 minutes'
-         and a.sent_at < ${until}
-      union all
-      select 'legacy:' || l.source, l.id::text, l.sent_at, l.setting_ms
-        from fansly_send_log l
-       where l.page_id = ${input.pageId}
-         and l.sent_at is not null
-         and l.sent_at >= ${input.since}::timestamptz - interval '10 minutes'
-         and l.sent_at < ${until}
-    ), ordered as (
-      select journal, ref, sent_at, setting_ms,
-             lag(journal) over w as prev_journal,
-             lag(sent_at) over w as prev_sent_at,
-             extract(epoch from (sent_at - lag(sent_at) over w)) * 1000 as gap_ms
-        from sends
-      window w as (order by sent_at, journal, ref)
-    )
-    select journal, ref, sent_at as "sentAt", setting_ms as "settingMs",
-           prev_journal as "prevJournal", prev_sent_at as "prevSentAt", gap_ms as "gapMs"
-      from ordered
-     where sent_at >= ${input.since}::timestamptz
-     order by sent_at, journal, ref
+    select 'engine'::text as journal, null::text as source, a.id::text as ref, a.operation,
+           a.owner_generation::text as "ownerGeneration", a.sent_at as "sentAt",
+           case when a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow')
+                then coalesce(a.sent_at, a.admitted_at + ${sendWindow}) end as "countedAt",
+           a.setting_ms as "settingMs", a.pause_ms as "pauseMs", a.gap_prev_ms as "gapPrevMs",
+           a.route_interval_ms as "routeIntervalMs", a.family_interval_ms as "familyIntervalMs"
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.shadow = ${shadow}::boolean
+       and a.admitted_at >= ${from}
+       and a.admitted_at < ${until}
+    union all
+    select 'legacy'::text, l.source, l.id::text, l.operation, null::text, l.sent_at,
+           case when l.sent_at is not null or l.outcome is distinct from 'aborted_before_send'
+                then coalesce(l.sent_at, l.completed_at, l.lease_until, l.captured_at + ${sendWindow}) end,
+           l.setting_ms, l.pause_ms, null::double precision, null::integer, null::integer
+      from fansly_send_log l
+     where ${legacy}::boolean
+       and l.page_id = ${input.pageId}
+       and l.captured_at >= ${from}
+       and l.captured_at < ${until}
   `);
-  return result.rows.map((row) => {
-    const settingMs = Number(row.settingMs);
-    const gapMs = row.gapMs === null ? null : Number(row.gapMs);
-    return {
-      journal: row.journal,
-      ref: row.ref,
-      sentAt: toRequiredDate(row.sentAt),
-      settingMs,
-      prevJournal: row.prevJournal,
-      prevSentAt: toDate(row.prevSentAt),
-      gapMs,
-      violation: gapMs !== null && gapMs < settingMs,
-    };
-  });
+  const num = (value: number | string | null): number | null => (value === null ? null : Number(value));
+  return result.rows.map((row) => ({
+    journal: row.journal,
+    source: row.source,
+    ref: Number(row.ref),
+    operation: row.operation,
+    ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
+    sentAt: toDate(row.sentAt),
+    countedAt: toDate(row.countedAt),
+    settingMs: num(row.settingMs),
+    pauseMs: num(row.pauseMs),
+    gapPrevMs: num(row.gapPrevMs),
+    routeIntervalMs: num(row.routeIntervalMs),
+    familyIntervalMs: num(row.familyIntervalMs),
+  }));
 }
 
 /**
