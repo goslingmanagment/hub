@@ -52,6 +52,10 @@ export interface StatusWork {
   blockedByVendorAt: Date | null;
   waitingReason: WaitingReason | null;
   waitingUntil: Date | null;
+  /** False: the key makes no request (`http: false`), so its steps run
+   *  before the HTTP gate (ruling 9) — no page hold and no pacer slot stops
+   *  it. Absent: a key that sends. */
+  http?: boolean;
 }
 
 export interface StatusPageOwner {
@@ -104,8 +108,10 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
  * Why `work` is not being served now (design §3.9). Precedence, first match
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
  * blocked_by_vendor → subject_breaker → resource_hold → dependency → not_due →
- * pacer → class_share. Null for closed work (done, cancelled, superseded):
- * it waits for nothing.
+ * pacer → class_share. A key without requests (`http: false`) never waits on
+ * the page hold or the pacer (ruling 9): due, it waits for its turn among the
+ * steps before the gate (`class_share`). Null for closed work (done,
+ * cancelled, superseded): it waits for nothing.
  */
 export function explainWork(
   work: StatusWork,
@@ -132,8 +138,9 @@ export function explainWork(
   if (page.pausedResources.includes(work.resource)) {
     return { reason: "paused", until: null, detail: { scope: "resource" } };
   }
+  const sends = work.http !== false;
   const hold = activePageHold(page, now);
-  if (hold !== null) {
+  if (hold !== null && sends) {
     return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
   }
   if (work.state === "quarantined") return { reason: "quarantined", until: null, detail: {} };
@@ -161,7 +168,7 @@ export function explainWork(
   // An endpoint group's spacing (owner decision №20): due again when it ends.
   if (work.waitingReason === "pacer" && after(work.dueAt)) return { reason: "pacer", until: work.dueAt, detail: { spacing: true } };
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
-  if (after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
+  if (sends && after(runtime.slotOpensAt)) return { reason: "pacer", until: runtime.slotOpensAt, detail: {} };
   return { reason: "class_share", until: null, detail: { class: work.class } };
 }
 

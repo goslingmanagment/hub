@@ -11,7 +11,7 @@ import {
   MEDIA_STATS_RATE_LIMIT_HELD_KEYS,
   MEDIA_STATS_RATE_LIMIT_ROUTE,
 } from "../apps/runtime/src/sync/engine/errors.ts";
-import { NOT_IMPLEMENTED_RECHECK_MS } from "../apps/runtime/src/sync/engine/resource.ts";
+import { beforeGateKeys, NOT_IMPLEMENTED_RECHECK_MS, plansBeforeGate } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   createFanslyRegistry,
   FANSLY_LEGACY_UNMAPPED,
@@ -226,6 +226,21 @@ describe("the Fansly registry table", () => {
       expect(spec.fence, spec.key).toBe("dm_archive");
     }
     expect(keys((spec) => !spec.http)).toEqual(["dm-live.deletions"]);
+  });
+
+  it("ruling 9: the keys whose due work is planned before the HTTP gate — those without HTTP first", () => {
+    const registry = createFanslyRegistry();
+    const page = { pausedResources: [] as string[], registryOverrides: {} };
+    expect(FANSLY_RESOURCE_SPECS.filter((spec) => spec.planBeforeGate === true).map((spec) => spec.key)).toEqual(["dm-conversations.find"]);
+    for (const shadow of [false, true]) {
+      expect(beforeGateKeys(registry, page, shadow)).toEqual(["dm-live.deletions", "dm-conversations.find"]);
+    }
+    // The owner's pause and switch of a key hold there as in every pick.
+    expect(beforeGateKeys(registry, { ...page, pausedResources: ["dm-conversations.find"] }, false)).toEqual(["dm-live.deletions"]);
+    expect(beforeGateKeys(registry, { ...page, registryOverrides: { "dm-live.deletions": { enabled: false } } }, false))
+      .toEqual(["dm-conversations.find"]);
+    // Never a history read (I12): those wait for a request and their slot.
+    expect(FANSLY_RESOURCE_SPECS.filter(plansBeforeGate).every((spec) => spec.class !== "requests")).toBe(true);
   });
 
   it("the owner's frequencies (decision №5, №6) and the stated-empty bound on account.poll", () => {

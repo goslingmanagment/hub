@@ -6,6 +6,7 @@ import {
   lockOwnedPage,
   nextOpenWorkDueAt,
   OwnershipLostError,
+  pickBeforeGateWork,
   pickHoldExemptIdentity,
   pickPlanned,
   pickRequests,
@@ -61,11 +62,13 @@ import {
   type Wake,
 } from "./ports.ts";
 import {
+  beforeGateKeys,
   pollsFor,
   resourceDisabled,
   runsIn,
   WAIT_RECHECK_MS,
   type EngineRegistry,
+  type PlanContext,
   type ResourceModule,
   type ShadowResult,
   type StepPlan,
@@ -78,7 +81,10 @@ import type { PageTransport } from "./shadow.ts";
 // finish before the slot wait of step k+1 (I2 by construction; both take
 // ≪ 100 ms against a pause ≥ 2 s). The actor is the page's only sender while it
 // runs; whatever it learns about the world it reads from the database on every
-// lap, so a lost NOTIFY costs at most a second.
+// lap, so a lost NOTIFY costs at most a second. Steps that need no request
+// (a deletion carried to the hot table, a closure) run before the HTTP gate
+// on every lap (ruling 9, `stepBeforeGate`): a page hold or the pacer delays
+// requests only.
 //
 // It leaves its loop when it is told to stop (shutdown, mode change), when its
 // ownership is gone (the lock session ended, or a commit met a foreign
@@ -101,6 +107,10 @@ export const COMMIT_ATTEMPTS = 3;
 export const FAILURE_BACKOFF_MS = 1_000;
 /** A live page whose gates are closed re-checks this often (I17). */
 export const LIVE_GATE_RECHECK_MS = 5_000;
+/** Due works planned before the HTTP gate per lap (ruling 9): a burst beyond
+ *  it goes on next lap, so a step that leaves its work due at once (an
+ *  overflowed deletion batch) never keeps the page from its requests. */
+export const STEPS_BEFORE_GATE_PER_LAP = 10;
 
 /** Routes the page's captured WS receipts into shadow demand, once per lap
  *  (design §3.12, S2-10); the only writer of `ws_router_cursor`. */
@@ -143,8 +153,7 @@ type Gate =
   /** `exemptIdentity`: an auth/identity hold is in force; only a candidate
    *  identity check may take the slot (E16). */
   | { open: true; page: SyncPageRow; exemptIdentity: boolean }
-  | { open: false; waitMs: number }
-  | { open: false; exit: ActorExit };
+  | { open: false; waitMs: number };
 
 function isAbort(error: unknown, signal: AbortSignal): boolean {
   return signal.aborted && (error === signal.reason || (error instanceof Error && error.name === "AbortError"));
@@ -216,9 +225,16 @@ export class SyncActor {
     }
     if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) await this.#ensurePolls();
 
-    const gate = await this.#gate();
+    const owned = await getSyncPage(d.db, d.pageId);
+    if (owned === null) return { kind: "mode_changed", mode: null };
+    const lost = this.#ownershipExit(owned);
+    if (lost !== null) return lost;
+    // Ruling 9: what needs no request is not the HTTP gate's to stop — no
+    // page hold, no pacer slot; the owner's pause of the page still stops it.
+    if (!owned.pausedAll) await stepBeforeGate(d, owned, signals.stop);
+
+    const gate = await this.#gate(owned);
     if (!gate.open) {
-      if ("exit" in gate) return gate.exit;
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
     }
@@ -255,23 +271,16 @@ export class SyncActor {
     const module = await d.registry.module(picked.work.resource);
     let plan: StepPlan;
     try {
-      plan = await module.plan(picked.work, {
-        db: d.db,
-        pageId: d.pageId,
-        shadow,
-        now,
-        page,
-        registry: d.registry,
-        ...(d.settings === undefined ? {} : { settings: d.settings }),
-        ...(shadow || d.socket === undefined ? {} : { socket: d.socket() }),
-      });
+      plan = await module.plan(picked.work, planContextOf(d, page, now));
     } catch (error) {
       await deferAfterPlanError(d, picked.work, error);
       return null;
     }
     if (plan.kind === "local") {
-      // A write without a request (design §3.3 item 3): picked at a slot like
-      // any work, but nothing is admitted or sent, so the slot stays open.
+      // A write without a request (design §3.3 item 3) of a key that plans at
+      // its slot (a walk's stamp between its reads), or of one the bounded
+      // step before the gate did not reach this lap: nothing is admitted or
+      // sent, so the slot stays open.
       await applyLocal(d, picked.work, module);
       return null;
     }
@@ -438,12 +447,19 @@ export class SyncActor {
     return remainingMs > 0 ? new Date(now.getTime() + remainingMs) : null;
   }
 
-  async #gate(): Promise<Gate> {
+  /** Why this actor may not step the page at all (null: it may): another
+   *  generation owns it, or it left this actor's mode. */
+  #ownershipExit(page: SyncPageRow): ActorExit | null {
     const d = this.#d;
-    const page = await getSyncPage(d.db, d.pageId);
-    if (page === null) return { open: false, exit: { kind: "mode_changed", mode: null } };
-    if (page.owner.generation !== d.generation) return { open: false, exit: { kind: "ownership_lost", foreign: true } };
-    if (page.mode !== d.mode) return { open: false, exit: { kind: "mode_changed", mode: page.mode } };
+    if (page.owner.generation !== d.generation) return { kind: "ownership_lost", foreign: true };
+    if (page.mode !== d.mode) return { kind: "mode_changed", mode: page.mode };
+    return null;
+  }
+
+  /** The HTTP gate of a page this actor owns: the owner's pause, then the
+   *  page hold. */
+  async #gate(page: SyncPageRow): Promise<Gate> {
+    const d = this.#d;
     if (page.pausedAll) return { open: false, waitMs: ACTOR_IDLE_WAIT_MS };
     const now = d.clock.wallNow();
     const hold = activePageHold(page, now);
@@ -582,6 +598,61 @@ export class SyncActor {
   async #sleep(ms: number, signal: AbortSignal): Promise<void> {
     await this.#d.clock.sleep(ms, signal).catch(() => undefined);
   }
+}
+
+/** What a plan reads: the page as the step sees it, the live settings and,
+ *  on a live page whose process runs one, its socket owner. */
+function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext {
+  const shadow = d.mode === "shadow";
+  return {
+    db: d.db,
+    pageId: d.pageId,
+    shadow,
+    now,
+    page,
+    registry: d.registry,
+    ...(d.settings === undefined ? {} : { settings: d.settings }),
+    ...(shadow || d.socket === undefined ? {} : { socket: d.socket() }),
+  };
+}
+
+/**
+ * Ruling 9 (step 3b): the steps that need no request run before the page's
+ * HTTP gate, so a page hold (auth, identity, 429, network) or the pacer's
+ * pause delays only requests — never a socket deletion carried to the hot
+ * table and the archive, nor a closure that needs no read. The due work of
+ * the keys that plan here (`beforeGateKeys`: those without HTTP first), at
+ * most `STEPS_BEFORE_GATE_PER_LAP` rows a lap, is planned on `page` (read
+ * this lap, owned by this generation and mode, not paused): a `local` plan
+ * commits through `applyLocal` (the generation fence, the erasure fence its
+ * entry declares, live only), a closure, a wait or a quarantine through
+ * `commitNoHttp` (the generation fence); a plan that asks for a request is
+ * left as it is for its slot. Nothing is admitted, sent or paced, and the
+ * cycle does not move. Returns the steps committed.
+ */
+export async function stepBeforeGate(d: ActorDeps, page: SyncPageRow, stop: AbortSignal): Promise<number> {
+  const shadow = d.mode === "shadow";
+  const resources = beforeGateKeys(d.registry, page, shadow);
+  if (resources.length === 0) return 0;
+  const works = await pickBeforeGateWork(d.db, { pageId: d.pageId, shadow, resources, limit: STEPS_BEFORE_GATE_PER_LAP });
+  let committed = 0;
+  for (const work of works) {
+    if (stop.aborted) break;
+    const module = await d.registry.module(work.resource);
+    let plan: StepPlan;
+    try {
+      plan = await module.plan(work, planContextOf(d, page, d.clock.wallNow()));
+    } catch (error) {
+      await deferAfterPlanError(d, work, error);
+      continue;
+    }
+    if (plan.kind === "request") continue;
+    if (plan.kind === "local") await applyLocal(d, work, module);
+    else await commitNoHttp(d, work, plan);
+    committed += 1;
+    d.metrics.increment("sync_steps_before_gate", { resource: work.resource, plan: plan.kind, shadow });
+  }
+  return committed;
 }
 
 /**

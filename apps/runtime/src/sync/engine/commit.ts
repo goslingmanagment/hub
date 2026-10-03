@@ -605,8 +605,8 @@ export async function settleShadow(
 // ── no-HTTP outcomes ────────────────────────────────────────────────────────
 
 /** A plan that needs no request and writes nothing of its own: done, wait,
- *  quarantine (design §3.5). The slot is not consumed. A `local` plan is
- *  `applyLocal`'s. */
+ *  quarantine (design §3.5) — at a slot, or before the HTTP gate (ruling 9).
+ *  No slot is consumed. A `local` plan is `applyLocal`'s. */
 export async function commitNoHttp(
   d: CommitDeps,
   work: SyncWorkRow,
@@ -698,9 +698,10 @@ export type LocalOutcome = "applied" | "fence_busy" | "nothing" | ApplyErrorKind
  * the work waits a second on `dependency`) → the module's `applyLocal` → the
  * work row (`settleWork`, I11 against the revision the plan read) → its
  * follow-ups → the work-closed hook (lock order of §3.7). Nothing is admitted
- * or sent, so the slot the pick waited for stays open. A failing write rolls
- * back whole and is classified like an apply error: retried (deferred,
- * transient, other) or quarantined (deterministic).
+ * or sent: before the HTTP gate (ruling 9) no hold or slot is waited for, at a
+ * slot the slot stays open. A failing write rolls back whole and is classified
+ * like an apply error: retried (deferred, transient, other) or quarantined
+ * (deterministic).
  */
 export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<LocalOutcome> {
   try {
