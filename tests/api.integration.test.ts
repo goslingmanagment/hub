@@ -57,7 +57,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import * as effectiveConfigModule from "../apps/runtime/src/services/effective-config.ts";
 import type { VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { startSyncPageExecutor } from "../apps/runtime/src/services/sync/executor.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
@@ -265,6 +264,23 @@ async function loginOwnerCookie(server: Awaited<ReturnType<typeof buildApiServer
   });
 
   return sessionCookieFrom(login);
+}
+
+/** The OFAPI vendor's account list for an OnlyFans onboarding: one
+ *  connected, identity-verified account. */
+function createOnboardingOfapi(input: { accountId: string; username: string; displayName: string }): AppContext["ofapi"] {
+  return {
+    async listAccounts() {
+      return [{
+        id: input.accountId,
+        username: input.username,
+        displayName: input.displayName,
+        onlyfansName: input.username,
+        onlyfansUserId: `${input.accountId}-user`,
+        avatarUrl: null,
+      }];
+    },
+  } as unknown as AppContext["ofapi"];
 }
 
 function createAutoSyncFanslyAdapter(input: {
@@ -704,20 +720,6 @@ async function seedConversationApiFixture(input: {
     reactivationFan,
     conversation,
   };
-}
-
-async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 5_000) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    if (await check()) {
-      return;
-    }
-
-    await sleep(100);
-  }
-
-  throw new Error(`Condition was not met within ${timeoutMs}ms`);
 }
 
 async function setSyncRunTimes(
@@ -6617,10 +6619,12 @@ describe("api integration", () => {
       statusCode: 404,
     });
 
+    // Onboarding's own typed conflict; the Fansly variant (whose identity
+    // check needs a Fansly origin) is in tests/sync-onboard-live.integration.test.ts.
     await server.close();
     const appContext = createTestAppContext(testDb, {
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-duplicate-page",
+      ofapi: createOnboardingOfapi({
+        accountId: "acct_duplicate_page",
         username: "duplicate_page_user",
         displayName: "Duplicate Page User",
       }),
@@ -6643,15 +6647,10 @@ describe("api integration", () => {
       url: "/api/v1/admin/pages",
       headers: { cookie: refreshedCookie },
       payload: {
-        platform: "fansly",
+        platform: "onlyfans",
         modelSlug: "lana-model",
         label: "lana",
-        session: {
-          authorization: "token",
-        },
-        proxy: {
-          url: "socks5://proxy-duplicate.example:1080",
-        },
+        username: "duplicate_page_user",
       },
     });
 
@@ -6704,22 +6703,24 @@ describe("api integration", () => {
     });
   });
 
-  it("auto-queues and processes an initial full sync after page creation [sync-critical]", async (context) => {
+  it("queues the initial legacy sync after an OnlyFans page is created [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
     }
 
+    // A Fansly page is born live on the Fansly Sync Engine and queues nothing
+    // (step 4 S4-05, tests/sync-onboard-live.integration.test.ts); an
+    // OnlyFans page still starts on the legacy executor.
     const activeTestDb = testDb;
     await server.close();
     const appContext = createTestAppContext(activeTestDb, {
       databaseUrl: activeTestDb.connectionString,
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-auto-sync",
+      ofapi: createOnboardingOfapi({
+        accountId: "acct_auto_sync",
         username: "auto_sync_user",
         displayName: "Auto Sync User",
       }),
-      syncSharedRateLimitEnabled: true,
     });
     server = await buildApiServer(appContext);
     await server.ready();
@@ -6727,114 +6728,53 @@ describe("api integration", () => {
     workerBoss = new PgBoss({ connectionString: activeTestDb.connectionString });
     await workerBoss.start();
     await ensureSyncQueues(workerBoss);
-    const abortController = new AbortController();
-    const executorPromise = startSyncPageExecutor(appContext, workerBoss, {
-      signal: abortController.signal,
+
+    const login = await server.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: {
+        username: "dima",
+        password: "owner-secret",
+      },
+    });
+    const cookie = sessionCookieFrom(login);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/pages",
+      headers: { cookie },
+      payload: {
+        platform: "onlyfans",
+        modelSlug: "lana-model",
+        label: "auto-sync-page",
+        username: "auto_sync_user",
+      },
     });
 
-    try {
-      const login = await server.inject({
-        method: "POST",
-        url: "/api/v1/auth/login",
-        payload: {
-          username: "dima",
-          password: "owner-secret",
-        },
-      });
-      const cookie = sessionCookieFrom(login);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      page: {
+        label: "auto-sync-page",
+        platform: "onlyfans",
+        username: "auto_sync_user",
+      },
+      verified: true,
+      syncQueued: true,
+      syncWarning: null,
+      syncRetry: null,
+    });
 
-      const response = await server.inject({
-        method: "POST",
-        url: "/api/v1/admin/pages",
-        headers: { cookie },
-        payload: {
-          platform: "fansly",
-          modelSlug: "lana-model",
-          label: "auto-sync-page",
-          session: {
-            authorization: "token",
-          },
-          // W3.1 (decision #124): the auto-queued sync resolves the page
-          // context, which fails closed proxyless.
-          proxy: {
-            url: "socks5://proxy-auto-sync.example",
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({
-        page: {
-          label: "auto-sync-page",
-          platform: "fansly",
-          username: "auto_sync_user",
-        },
-        verified: true,
-        syncQueued: true,
-        syncWarning: null,
-        syncRetry: null,
-      });
-
-      // Both ramp flags are off in this runtime (tests/helpers/runtime.ts), so
-      // fan_earnings and purchase_history reach the gate and issue no requests
-      // at all. The OLD expectation here was that ALL TEN streams finish
-      // "success", and that expectation WAS the bug: a gated stream reporting a
-      // successful sync is exactly what let lora-1's feed sit dead for 13 days
-      // (2026-07-17 to 2026-07-31) with every instrument reading healthy.
-      const expectedRunStatusByStream = new Map<string, string>([
-        ["light", "success"],
-        ["followers", "success"],
-        ["transactions", "success"],
-        ["subscribers", "success"],
-        ["followers_reconcile", "success"],
-        ["dm_conversations", "success"],
-        ["dm_messages", "success"],
-        ["top_spenders", "success"],
-        ["fan_earnings", "skipped"],
-        ["purchase_history", "skipped"],
-      ]);
-      const expectedStreams = [...expectedRunStatusByStream.keys()];
-
-      await waitForCondition(async () => {
-        const rows = await activeTestDb.pool.query<{
-          stream: string;
-          status: string;
-        }>(`
-          select sr.stream,
-                 case when sr.outcome = 'succeeded' then 'success' else sr.outcome::text end as status
-          from sync_runs sr
-          join pages pa on pa.id = sr.page_id
-          where pa.label = 'auto-sync-page'
-          order by sr.stream asc
-        `);
-
-        return rows.rows.length === expectedStreams.length
-          && rows.rows.every((row) => expectedRunStatusByStream.get(row.stream) === row.status);
-      }, 15_000);
-
-      const syncRunRows = await activeTestDb.pool.query<{
-        stream: string;
-        status: string;
-        trigger: string;
-      }>(`
-        select sr.stream,
-               case when sr.outcome = 'succeeded' then 'success' else sr.outcome::text end as status,
-               coalesce(sr.source::text, 'scheduled') as trigger
-        from sync_runs sr
-        join pages pa on pa.id = sr.page_id
-        where pa.label = 'auto-sync-page'
-        order by sr.stream asc
-      `);
-
-      expect(syncRunRows.rows.map((row) => row.stream).sort()).toEqual([...expectedStreams].sort());
-      expect(new Map(syncRunRows.rows.map((row) => [row.stream, row.status])))
-        .toEqual(expectedRunStatusByStream);
-      expect(syncRunRows.rows.every((row) => row.trigger === "onboarding")).toBe(true);
-    } finally {
-      abortController.abort();
-      await executorPromise;
-    }
-  }, 20_000);
+    const requested = await activeTestDb.pool.query<{ stream: string; request_source: string | null }>(`
+      select st.stream::text as stream, st.request_source::text as request_source
+      from page_sync_states st
+      join pages pa on pa.id = st.page_id
+      where pa.label = 'auto-sync-page'
+        and st.request_seq > st.applied_seq
+      order by st.stream
+    `);
+    expect(requested.rows.length).toBeGreaterThan(0);
+    expect(requested.rows.every((row) => row.request_source === "onboarding")).toBe(true);
+  });
 
   it("returns page creation success with a retry path when the initial sync cannot be queued [sync-critical]", async (context) => {
     if (!testDb || !server) {
@@ -6846,8 +6786,8 @@ describe("api integration", () => {
     await server.close();
     const appContext = createTestAppContext(activeTestDb, {
       databaseUrl: activeTestDb.connectionString,
-      adapter: createAutoSyncFanslyAdapter({
-        accountId: "acct-enqueue-fail",
+      ofapi: createOnboardingOfapi({
+        accountId: "acct_enqueue_fail",
         username: "enqueue_fail_user",
         displayName: "Enqueue Fail User",
       }),
@@ -6872,15 +6812,10 @@ describe("api integration", () => {
       url: "/api/v1/admin/pages",
       headers: { cookie },
       payload: {
-        platform: "fansly",
+        platform: "onlyfans",
         modelSlug: "lana-model",
         label: "enqueue-fail-page",
-        session: {
-          authorization: "token",
-        },
-        proxy: {
-          url: "socks5://proxy-enqueue-fail.example:1080",
-        },
+        username: "enqueue_fail_user",
       },
     });
 
@@ -6888,7 +6823,7 @@ describe("api integration", () => {
     expect(response.json()).toMatchObject({
       page: {
         label: "enqueue-fail-page",
-        platform: "fansly",
+        platform: "onlyfans",
         username: "enqueue_fail_user",
       },
       verified: true,
@@ -6919,15 +6854,10 @@ describe("api integration", () => {
       url: "/api/v1/admin/pages",
       headers: { cookie },
       payload: {
-        platform: "fansly",
+        platform: "onlyfans",
         modelSlug: "lana-model",
         label: "enqueue-fail-page",
-        session: {
-          authorization: "token",
-        },
-        proxy: {
-          url: "socks5://proxy-enqueue-fail.example:1080",
-        },
+        username: "enqueue_fail_user",
       },
     });
 

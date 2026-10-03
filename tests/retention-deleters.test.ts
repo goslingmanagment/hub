@@ -74,10 +74,12 @@ import { describe, expect, it } from "vitest";
 const SANCTIONED_DELETER_FILES = [
   // Sync Engine host (design §3.6): Map/Set.delete forget in-memory page slots,
   // held advisory locks, wake waiters, cached resource modules and the owner's
-  // paused-key set before it is written whole. No SQL deletion.
+  // paused-key set before it is written whole; the stall watchdog's Set.delete
+  // stops watching a finished step (step 4, 4-3). No SQL deletion.
   "apps/runtime/src/sync/engine/host-ports.ts",
   "apps/runtime/src/sync/engine/host.ts",
   "apps/runtime/src/sync/engine/resource.ts",
+  "apps/runtime/src/sync/engine/watchdog.ts",
   "apps/runtime/src/sync/inspect.ts",
   // B0: Map.delete releases an in-memory supervisor handle only. No SQL deletion.
   "apps/runtime/src/services/fansly-ws/worker.ts",

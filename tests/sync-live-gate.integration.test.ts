@@ -31,7 +31,8 @@ import {
 
 // I17: no live sender without the step-3 switch. Independent gates — the
 // constant (true since S3-05, a host can still be built without a live loop),
-// the page mode (reachable only through the switch), the step-1 guard row
+// the page mode (reachable only through the switch; a new page is born live by
+// onboarding, tests/sync-onboard-live.integration.test.ts), the step-1 guard row
 // handed to the engine, and the switch's legacy import (J3) — each shown to
 // hold on its own.
 

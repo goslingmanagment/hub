@@ -26,7 +26,7 @@ export const AGENT_OBSERVATION_PAYLOAD_ALLOWLIST: ReadonlySet<string> = new Set(
   // RE-JUSTIFIED for [A20] (WP-F0(a)), because the widening this justification
   // was written before does NOT invalidate it — checked, not assumed:
   // `aggregationData.groups[].lastMessage` still goes through
-  // `redactFanslyMessageLike` (sync/shared.ts), which drops `content` and
+  // `redactFanslyMessageLike` (sync/fansly/lib/capture-trims.ts), which drops `content` and
   // empties attachments/embeds/interactions/likes BEFORE the journal. That is
   // the content this line means, and it is still gone.
   // What [A20] added to this body is fan-ACCOUNT state — followsYou,

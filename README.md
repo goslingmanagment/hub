@@ -125,10 +125,11 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
   node apps/runtime/dist/cli.js page add fansly \
   --model lora \
   --label lora-main \
-  --session-file /run/secrets/lora-main.session.json
+  --session-file /run/secrets/lora-main.session.json \
+  --proxy-url http://proxy.example:8080
 ```
 
-The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler.
+The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler. The session is checked through the page's proxy before anything is stored, and the page is created live on the Fansly Sync Engine: the `sync` service adopts it within seconds (no legacy sync is queued).
 
 OnlyFans via OFAPI:
 

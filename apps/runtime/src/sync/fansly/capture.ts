@@ -7,7 +7,7 @@
 // for the same response, because the canonicalizer families, replay, the agent
 // scrub and the AI describer read observations by kind and expect exactly that
 // shape. So this file invents no transform: it applies, in the legacy order,
-// the existing pure ones (services/sync/shared.ts persistRawPayload and the
+// the existing pure ones (the legacy capture seam `persistRawPayload` and the
 // lanes that call it):
 //
 //   1. the lane's [A20] trim for the kinds that have one (follower and
@@ -17,7 +17,7 @@
 //      request PATH, and an empty reply page could not otherwise say which
 //      post it is about — and a `post_tips` answer that escapes its requested
 //      posts or receiver as `{quarantine: "fansly_post_tips_scope_v1",
-//      requestedTargetIds, response}` (posts.ts `inspectFanslyPostTipsScope`);
+//      requestedTargetIds, response}` (lib/posts-rules.ts `inspectFanslyPostTipsScope`);
 //   3. the CDN signing-token strip for the kinds it names (never `dm_messages`
 //      or `purchase_history*`: the AI describer downloads from those URLs);
 //   4. the lone-surrogate replacement json/jsonb need.
@@ -38,17 +38,8 @@ import type { RequestPlan } from "../engine/resource.ts";
 import { FANSLY_CATALOG_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-catalog.ts";
 import { FANSLY_PAYOUTS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-payouts.ts";
 import { FANSLY_STATS_CANONICALIZED_KINDS } from "../../services/canonicalize/fansly-stats.ts";
-import {
-  FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
-  fanslyCdnTokenStripApplies,
-  stripFanslySignedCdnTokens,
-} from "../../services/sync/fansly-cdn-tokens.ts";
-import { FANSLY_STATS_MAPPER_VERSION } from "../../services/sync/fansly-stats.ts";
-import { inspectFanslyPostTipsScope } from "../../services/sync/posts.ts";
-import {
-  JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
-  replaceJournalLoneSurrogates,
-} from "../../services/sync/journal-lone-surrogates.ts";
+import { FANSLY_STATS_MAPPER_VERSION } from "./lib/stats-rules.ts";
+import { inspectFanslyPostTipsScope } from "./lib/posts-rules.ts";
 import {
   captureFanslyFollowerPayload,
   captureFanslyMessagingGroupsPayload,
@@ -61,7 +52,16 @@ import {
   trimFanslyCatalogPayload,
   trimFanslyNotificationsPayload,
   trimFanslyPostRepliesPayload,
-} from "../../services/sync/shared.ts";
+} from "./lib/capture-trims.ts";
+import {
+  FANSLY_CDN_TOKENS_STRIPPED_MAPPER_SUFFIX,
+  fanslyCdnTokenStripApplies,
+  stripFanslySignedCdnTokens,
+} from "./lib/cdn-tokens.ts";
+import {
+  JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
+  replaceJournalLoneSurrogates,
+} from "./lib/journal-lone-surrogates.ts";
 
 /** The part of a wire spec this needs: the observation kind it journals
  *  under (`FanslyWireSpec.kind`). */

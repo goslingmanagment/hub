@@ -4,11 +4,11 @@ import {
   advanceEarningsWindow,
   parseEarningsWindow,
   startEarningsWindow,
-} from "../apps/runtime/src/services/sync/fansly-earnings-window.ts";
+} from "../apps/runtime/src/sync/fansly/lib/earnings-window.ts";
 import {
   emptyFanslyStatsCursorState,
   parseFanslyStatsCursorState,
-} from "../apps/runtime/src/services/sync/fansly-stats.ts";
+} from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
 
 const DAY = 86_400_000;
 const START = Date.UTC(2026, 7, 1);

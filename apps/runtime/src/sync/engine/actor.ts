@@ -81,6 +81,7 @@ import {
 } from "./route-policy.ts";
 import { CYCLE, isPickWait, pick, type ClassWorkSource, type PickWait, type WorkClass } from "./scheduler.ts";
 import type { PageTransport } from "./shadow.ts";
+import type { StallTracker } from "./watchdog.ts";
 
 // One page's actor (plan §3, §8; design §3.5): recover → loop (plan → admit →
 // send → capture → apply). Strictly sequential: capture and apply of step k
@@ -137,6 +138,11 @@ export interface ActorDeps extends CommitDeps {
   /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
    *  host passes it through from its own test option, `main.ts` never. */
   routeTimeScale?: number;
+  /** The stall watchdog's tracker of this actor (`engine/watchdog.ts`): every
+   *  phase of a lap moves it, so only a step that never settles goes stale.
+   *  Each wait between two marks is bounded far below the stall bound (the
+   *  pacer's ≤ 1.2 × S, a wake ≤ 1 s, a request ≤ 20 s). */
+  stall?: StallTracker;
 }
 
 export type ActorExit =
@@ -156,6 +162,26 @@ export interface ActorSignals {
 }
 
 type Committed<T> = { ok: true; value: T } | { ok: false; exit: ActorExit };
+
+/** Where an actor is, as the stall watchdog reports it. */
+export type ActorPhase =
+  | "recover"
+  | "applies"
+  | "shadow_feed"
+  | "polls"
+  | "before_gate"
+  | "gate"
+  | "idle"
+  | "slot"
+  | "pick"
+  | "lookahead"
+  | "plan"
+  | "admit"
+  | "send"
+  | "commit"
+  | "commit_retry"
+  | "apply"
+  | "backoff";
 
 function exitOf(committed: Committed<unknown>): ActorExit | null {
   return committed.ok ? null : committed.exit;
@@ -192,6 +218,7 @@ export class SyncActor {
    *  a send keeps failing. A `SyncCrashFault` (tests) rejects. */
   async run(signals: ActorSignals): Promise<ActorExit> {
     const d = this.#d;
+    this.#phase("recover");
     try {
       await recoverUnfinished(d);
     } catch (error) {
@@ -212,6 +239,7 @@ export class SyncActor {
         // Nothing was admitted on this path: log, back off, go on.
         d.metrics.increment("sync_actor_errors", { error: errorName(error) });
         d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: lap failed before an admission");
+        this.#phase("backoff");
         await this.#sleep(FAILURE_BACKOFF_MS, signals.stop);
       }
     }
@@ -220,8 +248,10 @@ export class SyncActor {
   async #lap(signals: ActorSignals): Promise<ActorExit | null> {
     const d = this.#d;
     const shadow = d.mode === "shadow";
+    this.#phase("applies");
     await drainDueApplies(d, APPLIES_PER_LAP);
     if (shadow && d.shadowFeed !== undefined) {
+      this.#phase("shadow_feed");
       try {
         await d.shadowFeed(d);
       } catch (error) {
@@ -229,23 +259,32 @@ export class SyncActor {
         d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync shadow: the WS demand feed failed");
       }
     }
-    if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) await this.#ensurePolls();
+    if (d.clock.monoNow() - this.#lastPollsMono >= POLL_ROWS_EVERY_MS) {
+      this.#phase("polls");
+      await this.#ensurePolls();
+    }
 
+    this.#phase("gate");
     const owned = await getSyncPage(d.db, d.pageId);
     if (owned === null) return { kind: "mode_changed", mode: null };
     const lost = this.#ownershipExit(owned);
     if (lost !== null) return lost;
     // Ruling 9: what needs no request is not the HTTP gate's to stop — no
     // page hold, no pacer slot; the owner's pause of the page still stops it.
-    if (!owned.pausedAll) await stepBeforeGate(d, owned, signals.stop);
+    if (!owned.pausedAll) {
+      this.#phase("before_gate");
+      await stepBeforeGate(d, owned, signals.stop);
+    }
 
     const gate = await this.#gate(owned);
     if (!gate.open) {
+      this.#phase("idle");
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
     }
 
     let grant: SlotGrant;
+    this.#phase("slot");
     try {
       grant = await d.pacer.waitForSlot(signals.stop);
     } catch (error) {
@@ -255,6 +294,7 @@ export class SyncActor {
     if (signals.stop.aborted) return { kind: "stopped" };
     // The work is chosen at the slot: re-read the page (cycle pointer, pauses,
     // holds, route state) and the route clocks now, not before the wait.
+    this.#phase("pick");
     const page = await getSyncPage(d.db, d.pageId);
     if (page === null) return { kind: "mode_changed", mode: null };
     const routeState = this.#routeState(page);
@@ -278,6 +318,7 @@ export class SyncActor {
       // The short look-ahead: the slot waits for the class whose turn it is
       // (nothing is reserved; a wake picks again).
       d.metrics.increment("sync_route_lookahead_waits", { workClass: picked.workClass, shadow });
+      this.#phase("lookahead");
       await d.wake.wait(d.pageId, Math.max(0, picked.waitUntil.getTime() - now.getTime()), signals.stop);
       return null;
     }
@@ -289,10 +330,12 @@ export class SyncActor {
       const idleExclusions = withRouteExclusions(exclusions, d.registry, clocks, now);
       const due = await nextOpenWorkDueAt(d.db, { pageId: d.pageId, shadow, ...idleExclusions });
       const untilDue = due === null ? ACTOR_IDLE_WAIT_MS : due.getTime() - now.getTime();
+      this.#phase("idle");
       await d.wake.wait(d.pageId, Math.max(0, Math.min(untilDue, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
     }
 
+    this.#phase("plan");
     const module = await d.registry.module(picked.work.resource);
     let plan: StepPlan;
     try {
@@ -325,6 +368,7 @@ export class SyncActor {
       return null;
     }
 
+    this.#phase("admit");
     if (!shadow && (await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
       // A slow lock session is not a lost one: skip this admission (nothing
       // was written) unless the lock is provably gone.
@@ -373,8 +417,10 @@ export class SyncActor {
     await this.#fault("after_admit");
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
+    this.#phase("send");
     const outcome = await this.#send(request, armed, signals.abort);
     d.pacer.complete(armed, outcome);
+    this.#phase("commit");
     await this.#fault("after_send");
     return this.#commitOutcome(admission, armed, outcome, module, page);
   }
@@ -438,6 +484,7 @@ export class SyncActor {
     if (d.mode !== "live") throw new Error("a live outcome on a shadow page");
     const captured = await this.#committed(() => capture(d, admission, armed, outcome, module));
     if (!captured.ok) return captured.exit;
+    this.#phase("apply");
     await this.#fault("after_capture");
     if (captured.value.applyNow) {
       await apply(d, { attemptId: admission.attemptId, operation: admission.request.spec }, captured.value.inMemory);
@@ -452,6 +499,7 @@ export class SyncActor {
     const d = this.#d;
     let last: unknown = null;
     for (let attempt = 1; attempt <= COMMIT_ATTEMPTS; attempt += 1) {
+      this.#phase(attempt === 1 ? "commit" : "commit_retry");
       try {
         return { ok: true, value: await commit() };
       } catch (error) {
@@ -657,6 +705,11 @@ export class SyncActor {
       await ensurePollRows(tx, { pageId: d.pageId, shadow, polls: pollsFor(d.registry, page, shadow) });
     });
     this.#lastPollsMono = d.clock.monoNow();
+  }
+
+  /** The watchdog's mark: the actor moved on to `phase`. */
+  #phase(phase: ActorPhase): void {
+    this.#d.stall?.progress(phase);
   }
 
   async #fault(point: SyncFaultPoint): Promise<void> {

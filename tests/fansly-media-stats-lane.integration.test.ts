@@ -15,12 +15,12 @@ import {
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
+import { fanslyMediaStatsChunk } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import {
   emptyFanslyMediaStatsCursorState,
-  fanslyMediaStatsChunk,
   parseFanslyMediaStatsCursorState,
   parseMediaBackfillCursor,
-} from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+} from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

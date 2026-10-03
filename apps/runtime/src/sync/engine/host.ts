@@ -58,6 +58,7 @@ import {
 } from "./ports.ts";
 import { demandToUpsert, type DemandSignal, type EngineRegistry } from "./resource.ts";
 import { createLegacyShadowLatency, ShadowTransport, type PageTransport, type ShadowLatencySource } from "./shadow.ts";
+import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
 // The host (plan §2.4, §8; design §3.6): pages ↔ actors. It owns the process's
 // lock session and LISTEN client, watches `sync_pages.mode` every 2 s, takes a
@@ -71,11 +72,14 @@ import { createLegacyShadowLatency, ShadowTransport, type PageTransport, type Sh
 //   1. `LIVE_LOOP_ENABLED` below (true since the switch PR, S3-05: the build
 //      can run a live loop at all);
 //   2. a page reaches `live` only through the switch CLI's capability
-//      (`setSyncPageMode`; `sync page mode` moves only off ↔ shadow);
+//      (`setSyncPageMode`; `sync page mode` moves only off ↔ shadow) — or is
+//      born live by onboarding (`createLiveSyncPage`, step 4 S4-05: a new
+//      page with nothing of the legacy engine);
 //   3. every live admission needs the step-1 guard row handed to the engine
 //      (`owner_engine = 'fansly_sync_engine'`, checked in `lockOwnedPage`);
 //   4. a live loop starts only after the switch imported the legacy state
-//      (`sync_pages.legacy_imported_at`, J3): a `live` page without it waits
+//      (`sync_pages.legacy_imported_at`, J3; a page born live has none and is
+//      stamped at birth): a `live` page without it waits
 //      (`legacy_not_imported`, alert after 2 min) and nothing is sent.
 // The live transport (`fansly/transport.ts`) is built in one place only: the
 // live branch below. A live page also gets its WebSocket source
@@ -144,6 +148,10 @@ export interface SyncHostOptions {
   canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
+  /** The process's stall watchdog (`engine/watchdog.ts`): it watches the
+   *  host's start, every pass of the mode loop, and every actor from its
+   *  start to the end of its exit. */
+  watchdog?: StallTracking;
   modeLoopIntervalMs?: number;
   /** TESTS ONLY: override `LIVE_LOOP_ENABLED` (a host without a live loop,
    *  tests/sync-live-gate.integration.test.ts). `main.ts` never passes it
@@ -186,6 +194,8 @@ interface PageSlot {
   generation: bigint;
   actor: SyncActor;
   transport: PageTransport;
+  /** The watchdog's tracker of the actor, done once its exit is through. */
+  stall: StallTracker;
   /** A live page's WebSocket (design §3.3, J6); none in shadow — the legacy
    *  receiver owns a shadow page's socket. */
   ws: FanslyWsSource | null;
@@ -259,9 +269,14 @@ export class SyncEngineHost {
   }
 
   async start(): Promise<void> {
-    const created = await ensureFanslySyncPages(this.#o.db, { createdBy: "sync:host" });
-    if (created > 0) this.#o.logger.info({ created }, "Fansly sync: page rows created");
-    await this.#wake.start?.();
+    const boot = this.#o.watchdog?.track({ component: "host" }, "start") ?? noStallTracker;
+    try {
+      const created = await ensureFanslySyncPages(this.#o.db, { createdBy: "sync:host" });
+      if (created > 0) this.#o.logger.info({ created }, "Fansly sync: page rows created");
+      await this.#wake.start?.();
+    } finally {
+      boot.done();
+    }
     await this.#runTick();
     this.#timer = setInterval(() => void this.#runTick(), this.#o.modeLoopIntervalMs ?? MODE_LOOP_INTERVAL_MS);
   }
@@ -320,24 +335,33 @@ export class SyncEngineHost {
 
   #runTick(): Promise<void> {
     if (this.#stopping !== null) return Promise.resolve();
-    this.#tick ??= this.#modeLoop()
-      .catch((error: unknown) => {
-        this.#o.logger.warn({ err: errorName(error) }, "Fansly sync host: mode loop pass failed");
-      })
-      .finally(() => {
-        this.#tick = null;
-      });
+    if (this.#tick === null) {
+      // A pass that never ends holds every later one (`??=`): the watchdog
+      // sees it, the passes themselves never would.
+      const pass = this.#o.watchdog?.track({ component: "host" }, "release") ?? noStallTracker;
+      this.#tick = this.#modeLoop(pass)
+        .catch((error: unknown) => {
+          this.#o.logger.warn({ err: errorName(error) }, "Fansly sync host: mode loop pass failed");
+        })
+        .finally(() => {
+          pass.done();
+          this.#tick = null;
+        });
+    }
     return this.#tick;
   }
 
-  async #modeLoop(): Promise<void> {
+  async #modeLoop(pass: StallTracker): Promise<void> {
     for (const [pageId, generation] of [...this.#pendingRelease]) {
       if (!this.#slots.has(pageId) && (await this.#release(pageId, generation))) this.#pendingRelease.delete(pageId);
     }
+    pass.progress("session");
     const session = await this.#ensureSession();
+    pass.progress("list_pages");
     const pages = await listSyncPages(this.#o.db);
     for (const page of pages) {
       if (this.#stopping !== null) return;
+      pass.progress("page");
       const slot = this.#slots.get(page.pageId);
       const desired = this.#desiredRun(page);
       if (slot !== undefined) {
@@ -514,12 +538,14 @@ export class SyncEngineHost {
       return;
     }
 
+    const stall = this.#o.watchdog?.track({ component: "actor", pageId, generation }, "recover") ?? noStallTracker;
     const actor = new SyncActor({
       db,
       pageId,
       ownRef,
       generation,
       mode,
+      stall,
       registry: this.#o.registry,
       clock: this.#clock,
       rng: this.#rng,
@@ -548,6 +574,7 @@ export class SyncEngineHost {
       generation,
       actor,
       transport,
+      stall,
       ws,
       stop,
       abort,
@@ -648,6 +675,17 @@ export class SyncEngineHost {
   }
 
   async #onActorExit(slot: PageSlot, exit: ActorExit, session: PgOwnershipSession): Promise<void> {
+    // Still watched: a socket stop or a release that never ends would keep
+    // the page from any owner.
+    slot.stall.progress("exit");
+    try {
+      await this.#endSlot(slot, exit, session);
+    } finally {
+      slot.stall.done();
+    }
+  }
+
+  async #endSlot(slot: PageSlot, exit: ActorExit, session: PgOwnershipSession): Promise<void> {
     clearInterval(slot.heartbeat);
     // J6: the socket is closed and its lock session ended BEFORE the safe
     // release (bounded; a lost ownership does not drain).

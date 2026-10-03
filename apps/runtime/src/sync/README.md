@@ -7,13 +7,17 @@ physical request of the page passes one pacer, one queue (`sync_work`), one jour
 The engine lands in steps: step 2 runs it in **shadow** next to the legacy engine (it plans, paces and journals, but
 never sends); step 3 switches pages one by one (`pnpm cli sync switch`, below); step 4 deletes the legacy code. A page
 sends as the engine only after the switch made it `live`, handed it the step-1 guard row and imported the legacy
-state; `sync page mode` moves pages only `off ↔ shadow` (I17).
+state; `sync page mode` moves pages only `off ↔ shadow` (I17). Since step 4 a new Fansly page is born `live`:
+onboarding checks its session through its own proxy without a page (one journaled `/account/me`, `fansly_send_log`
+with `page_id` null — owner decision №4) and creates the page, its credentials, the proven identity, the trusted
+credentials digest, its `live` row and its engine-owned guard row in one transaction (`createLiveSyncPage`); the host
+adopts it on its next pass and its first request goes ≥ 1.2 × S later (I5). The legacy engine never runs it.
 
 ## Map
 
 ```
 sync/
-  main.ts, context.ts        the `sync` runtime role: context, heartbeat, host, signals
+  main.ts, context.ts        the `sync` runtime role: context (pool timeouts), watchdog, heartbeat, host, signals
   cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync work …`, `sync ownership …`) and its reads
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
@@ -29,15 +33,21 @@ sync/
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
+    watchdog.ts              the stall watchdog: a step, pass or beat stuck for 120 s ends the process (exit 70)
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
+    identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
                              page's socket (`source.ts`)
-    lib/                     chain rules, walk helpers
+    lib/                     chain rules, walk helpers; the money, audience, fan-hydration, purchase-history, stats,
+                             media-stats, notifications, payouts, post-replies, catalog, posts and lane rules the
+                             resources use (step 4 moved them here: the legacy executor imports them from here until
+                             it is deleted, the OnlyFans top spenders keeps the window rules and the OnlyFans posts
+                             stream the posts cursor)
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
   report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
                              journal), the fingerprint the switch checks
@@ -322,13 +332,39 @@ the latest and closes the exception. One verify per digest, under a hold or in c
 credentials no longer stored (its `identity_mismatch`, a contract violation) is closed as `superseded` in the
 transaction that raises the verify of the stored ones (audit `sync.credentials_verify_superseded`); one quarantined
 for the stored digest stays, for the owner's requeue. A candidate proxy comes from the egress resolver
-(`page_candidate` scope). The socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens
-only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
+(`page_candidate` scope); the check of a session that belongs to no page yet rides `fansly_candidate`
+(`fansly/identity-without-page.ts`). The socket's Upgrade (`ws.connect`) is checked like an API request, and the
+socket opens only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
 core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (the switch's import of a legacy
 429 and a legacy auth block), and a candidate check's network failure under it is carried beside it (its 429 holds only its route) — the
 credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried
 hold ends; the proof lifts only the credentials hold. The egress follows the digest (a changed proxy is resolved
 again before the next request).
+
+## The process: pool timeouts, stall watchdog, shutdown (step 4, 4-3)
+
+The `sync` process's pool runs with `SYNC_POOL_TIMEOUTS` (`context.ts`): a checkout waits at most 30 s, a statement
+runs at most 60 s, a lock wait 30 s, an idle transaction 60 s; the boot log line `Sync pool timeouts in force` shows
+what Postgres reports. A hung database call is therefore an error the engine handles: a lap that failed before an
+admission backs off 1 s; a commit after a send is retried 3 times, then the actor fails and the host restarts it 5 s
+later. The CLI's contexts run without them; the lock session and the LISTEN client keep their own 5 s bounds.
+
+What is left is a promise that never settles. The stall watchdog (`engine/watchdog.ts`, a look every 5 s) watches
+every actor (each phase of a lap, its recovery, its commit retries, its exit), the host's start and every pass of its
+mode loop, every heartbeat beat and every alert pass. One that has not moved for 120 s — the longest legitimate phase
+is ≈ 72 s: a slot wait of 1.2 × S at the largest S, a 20 s request, a 60 s statement — ends the process: one JSON
+line on stderr (`component`, `pageId`, `generation`, `phase`, `ageMs`), a best-effort `process` incident (`stalled`,
+alert 5's latch) through a client of its own within 2 s, then `process.exit(70)`. Never a SIGKILL to itself (node is
+PID 1 in its container, where that is a no-op) and never a graceful stop. A beat or a pass that fails (the database
+down) is not a stall. Docker restarts the container (`restart: unless-stopped`, no `init:`), and nothing changes in
+ownership: the locks go with the process and no safe release is written; the restarted container takes its pages
+back by `pid_namespace_replaced`, its first send waits ≥ 1.2 × S after every send the database knows (I5), the
+attempt left in flight is closed `unknown`, and the socket's repair reads from 60 s before its gap. A block of the
+event loop itself is not covered.
+
+The watchdog stops when `runtime.stop()` begins. SIGTERM ends the process 40 s after the signal at the latest
+(`SYNC_SHUTDOWN_CAP_MS`, inside the 45 s stop grace); a page whose release did not finish by then waits for the OS
+proof of the next start.
 
 ## Legacy fences (step 3)
 
@@ -437,7 +473,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
-| I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
+| I17 | No live sender without the step-3 switch or onboarding: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it for an existing page; a new page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint), the guard row owned by the engine, and the legacy import (stamped at birth for a new page) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` + `repositories/sync/pages.ts` `createLiveSyncPage` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
@@ -577,7 +613,8 @@ soon as progress resumes), so a condition that comes and goes keeps one standing
 latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
 journal's new live sends, so a violation the capture path could not report still opens it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
 never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
-process cannot report its own death. `pnpm cli sync alerts status` shows what holds per page.
+process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
+restart. `pnpm cli sync alerts status` shows what holds per page.
 
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families

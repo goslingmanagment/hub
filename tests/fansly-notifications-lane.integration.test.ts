@@ -19,8 +19,8 @@ import {
   backfillAttemptCeiling,
   fanslyNotificationsChunk,
   FORWARD_HEAD_RESERVED_ATTEMPTS,
-  parseFanslyNotificationsCursorState,
 } from "../apps/runtime/src/services/sync/fansly-notifications.ts";
+import { parseFanslyNotificationsCursorState } from "../apps/runtime/src/sync/fansly/lib/notifications-rules.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
