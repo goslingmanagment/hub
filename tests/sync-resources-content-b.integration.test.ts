@@ -257,8 +257,11 @@ describe("catalog.fixed", () => {
     const { pageId } = await seedPage("live");
     const registry = await quietRegistry(pageId, false);
     await makeDue(pageId, false, "catalog.fixed");
+    // Until the album walk has looked too: it runs in the slot after the
+    // hydration's (an actor lap later), so stopping at the hydration races it.
     const { hits, requests } = await drive(pageId, "live", registry, catalogAnswer, async () =>
-      (await attempts(pageId, "catalog.fixed")) === 6 && (await workRow(pageId, "catalog.hydrate"))?.state === "done");
+      (await attempts(pageId, "catalog.fixed")) === 6 && (await workRow(pageId, "catalog.hydrate"))?.state === "done"
+        && (await workRow(pageId, "catalog.vault"))?.waiting_reason === "not_due");
 
     expect(hits).toEqual(["vault.albums", "uservault.albums", "subscriptions.tiers", "subscriptions.giftcodes", "message.automated", "account.walls"]);
     expect(query(requests[1]!, "accountId")).toBe(OWN_ID);

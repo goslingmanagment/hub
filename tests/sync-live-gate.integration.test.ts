@@ -76,6 +76,7 @@ function hostOptions(overrides: Partial<SyncHostOptions>): SyncHostOptions {
     registry: liveRegistry(),
     pause: { readSettingMs: async () => 50 },
     pacerFactory: (deps) => createPacer({ ...deps, minSettingMs: 1 }),
+    routeTimeScale: 0,
     modeLoopIntervalMs: 200,
     ...overrides,
   };
@@ -227,7 +228,7 @@ describe("I17: source pins", () => {
 
   it("the production runtime passes none of the host's test-only options", () => {
     const main = read("apps/runtime/src/sync/main.ts");
-    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "liveSocket", "faults", "minSettingMs"]) {
+    for (const option of ["liveLoopEnabled", "pacerFactory", "liveTransportFactory", "wsSourceOverrides", "liveSocket", "faults", "minSettingMs", "routeTimeScale"]) {
       expect(main).not.toContain(option);
     }
   });
