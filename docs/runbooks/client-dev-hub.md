@@ -133,7 +133,18 @@ The seed exits with `Refused: …` and writes nothing when:
   it;
 - the database already holds a page the seed did not create — what an SSH
   tunnel to a real hub looks like from here. `--allow-existing-pages` seeds next
-  to them; use it only on your own scratch database.
+  to them; use it only on your own scratch database;
+- `dev-owner` / `dev-chatter` exist with another role or deactivated, or
+  `dev-lora-of` / `dev-lora-vip-of` exist as something other than active
+  OnlyFans pages of the `dev-lora` model.
+
+All of these are read on a bare database connection before the seed builds
+its app context or writes a row. The seed also ignores the vendor keys in
+`.env` (`OFAPI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MEDIA_API_KEY`,
+`OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY`, `TELEGRAM_BOT_TOKEN`): with an OFAPI
+key set, building the app context would already run the OFAPI credential
+preflight. A run that fails for any other reason prints `Failed: …` and may
+have written part of the seed; fix the cause and re-run.
 
 Code: `scripts/dev-seed-client.ts`, `scripts/dev-fake-ai-provider.mjs`. Tests:
 `tests/client-dev-seed-guards.test.ts`, `tests/client-dev-seed.integration.test.ts`.

@@ -1,4 +1,12 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -7,9 +15,12 @@ import { createModel, createOnlyFansPage, getFreshestUsableRecaps } from "@agenc
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { AiGatewayProvider, AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   DEV_SEED_CHATTER_USERNAME,
+  DEV_SEED_DATABASE_HOSTS,
   DEV_SEED_FANS,
+  DEV_SEED_OWNER_USERNAME,
   DEV_SEED_PAGES,
   DevSeedRefusedError,
   seedDevClientHub,
@@ -32,8 +43,12 @@ const SEEDED_TABLES = [
   "audit_events", "observations", "egress_endpoints", "fans", "page_fans",
   "page_subscriptions", "transactions", "fan_spend_daily", "fan_spend_lifetime",
   "revenue_daily", "message_archive", "page_dm_threads", "page_dm_messages",
-  "ai_generation_content", "device_tokens",
+  "ai_generation_content", "device_tokens", "ofapi_credential_preflights",
 ] as const;
+
+const SEED_SCRIPT = fileURLToPath(new URL("../scripts/dev-seed-client.ts", import.meta.url));
+const REPO_ROOT = path.dirname(path.dirname(SEED_SCRIPT));
+const TSX_LOADER = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -126,6 +141,100 @@ describe("dev client seed", () => {
     await seedDevClientHub(app, { allowExistingPages: true });
     expect((await tableCounts()).pages).toBe(3);
   }, INTEGRATION_TEST_TIMEOUT_MS * 2);
+
+  it("refuses users and pages it would take over before it writes anything", async () => {
+    const takeOvers: Array<[string, () => Promise<unknown>, RegExp]> = [
+      ["a chatter name held by an owner", () => createUserAccount(app, {
+        username: DEV_SEED_CHATTER_USERNAME, role: "owner", password: "someone-elses-password",
+      }, { source: "cli" }), /user "dev-chatter" exists as owner; the seed expects an active chatter/],
+      ["a deactivated owner", async () => {
+        const user = await createUserAccount(app, {
+          username: DEV_SEED_OWNER_USERNAME.toUpperCase(), role: "owner", password: "someone-elses-password",
+        }, { source: "cli" });
+        await testDb!.pool.query("update users set disabled_at = now() where id = $1", [user.id]);
+      }, /user "dev-owner" exists as owner \(deactivated\)/],
+      ["a seed page label under another model", async () => {
+        const model = await createModel(app.db, { slug: "lora", name: "Lora" });
+        await createOnlyFansPage(app.db, { modelId: model!.id, label: DEV_SEED_PAGES.vip.label });
+      }, /page "dev-lora-vip-of" exists \(status active, platform onlyfans, model lora\)/],
+      ["a deleted seed page (its label stays taken)", async () => {
+        const model = await createModel(app.db, { slug: "dev-lora", name: "Dev Lora" });
+        const page = await createOnlyFansPage(app.db, { modelId: model!.id, label: DEV_SEED_PAGES.main.label });
+        await testDb!.pool.query("update pages set status = 'deleted', deleted_at = now() where id = $1", [page!.id]);
+      }, /page "dev-lora-of" exists \(status deleted, platform onlyfans, model dev-lora\)/],
+    ];
+    for (const [name, arrange, message] of takeOvers) {
+      await resetIntegrationDatabase(testDb!.pool);
+      await arrange();
+      const before = await tableCounts();
+      const refusal = await seedDevClientHub(app).then(() => null, (error: unknown) => error);
+      expect(refusal, name).toBeInstanceOf(DevSeedRefusedError);
+      expect((refusal as Error).message, name).toMatch(message);
+      // Not a persona, model, page, proxy or user more than before.
+      expect(await tableCounts(), name).toEqual(before);
+      const personas = await testDb!.pool.query<{ count: string }>("select count(*)::text as count from ai_personas");
+      expect(personas.rows[0]!.count, name).toBe("0");
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS * 2);
+
+  it("the CLI refuses before its app context exists and never acts on a vendor key", async () => {
+    const databaseUrl = new URL(testDb!.connectionString);
+    expect(DEV_SEED_DATABASE_HOSTS, "the test database must be one the seed accepts").toContain(databaseUrl.hostname);
+    // Stands in for OFAPI: with OFAPI_API_KEY and OFAPI_EXPECTED_TEAM_SLUG set,
+    // an app context runs the credential preflight (GET /whoami, then a row in
+    // ofapi_credential_preflights) as it is built.
+    const ofapiRequests: string[] = [];
+    const ofapi = createServer((request, response) => {
+      ofapiRequests.push(`${request.method} ${request.url}`);
+      response.writeHead(500).end();
+    });
+    await new Promise<void>((resolve) => ofapi.listen(0, "127.0.0.1", resolve));
+    // A cwd without .env: the child sees only the env below.
+    const cwd = await mkdtemp(path.join(tmpdir(), "dev-seed-client-cli-"));
+    const runCli = (...argv: string[]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn(process.execPath, ["--import", TSX_LOADER, SEED_SCRIPT, ...argv], {
+        cwd,
+        env: {
+          PATH: process.env.PATH,
+          DOTENV_CONFIG_QUIET: "true",
+          TSX_TSCONFIG_PATH: path.join(REPO_ROOT, "tsconfig.json"),
+          DATABASE_URL: databaseUrl.toString(),
+          APP_ENCRYPTION_KEY: Buffer.alloc(32, 3).toString("base64"),
+          OFAPI_API_KEY: "dev-seed-test-ofapi-key",
+          OFAPI_EXPECTED_TEAM_SLUG: "dev-seed-test-team",
+          OFAPI_BASE_URL: `http://127.0.0.1:${(ofapi.address() as AddressInfo).port}/api`,
+          ANTHROPIC_API_KEY: "dev-seed-test-anthropic-key",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on("exit", (code) => resolve({ code, stdout, stderr }));
+    });
+    try {
+      const model = await createModel(app.db, { slug: "lora", name: "Lora" });
+      await createOnlyFansPage(app.db, { modelId: model!.id, label: "lora-of" });
+      const before = await tableCounts();
+
+      const refused = await runCli();
+      expect(refused.code, refused.stderr).toBe(1);
+      expect(refused.stderr).toMatch(/^Refused: the database already holds 1 page\(s\) the dev seed did not create \(lora-of\)/m);
+      expect(await tableCounts()).toEqual(before);
+
+      const seeded = await runCli("--allow-existing-pages");
+      expect(seeded.code, seeded.stderr).toBe(0);
+      expect(seeded.stdout).toContain("Dev client hub seeded.");
+      expect((await tableCounts()).pages).toBe(3);
+
+      expect(ofapiRequests).toEqual([]);
+      expect((await tableCounts()).ofapi_credential_preflights).toBe(0);
+    } finally {
+      await new Promise((resolve) => ofapi.close(resolve));
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS * 3);
 
   it("serves the seeded chatter's sign-in, Spenders and AI context", async () => {
     await seedDevClientHub(app);

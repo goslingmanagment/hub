@@ -17,8 +17,12 @@
 // empty database after the fixtures change.
 //
 // Refuses to run unless DATABASE_URL points at this machine or the dev compose
-// network, NODE_ENV is not production, and the database holds no page the
-// seed did not create (--allow-existing-pages seeds next to them anyway).
+// network, NODE_ENV is not production, the database holds no page the seed
+// did not create (--allow-existing-pages seeds next to them anyway), and the
+// users, model and pages it would update are its own. Every refusal comes
+// before the first write, and the CLI checks the database on a bare
+// connection before it builds the app context. The CLI also blanks the vendor
+// keys .env may carry, so nothing it starts calls OFAPI or an AI provider.
 
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -27,6 +31,7 @@ import { parseArgs } from "node:util";
 import {
   createModel,
   createOnlyFansPage,
+  createPool,
   deleteProxyConfig,
   findAiPersonaByKey,
   findModelBySlug,
@@ -122,6 +127,29 @@ export function assertSeedableDatabase(input: {
       + `(${sample}${input.foreignPageLabels.length > 5 ? ", …" : ""}); it looks like a real hub. `
       + "Pass --allow-existing-pages only if it is your own local scratch database.",
   );
+}
+
+/** Credentials for a service outside this machine. The seed needs none of
+ * them, and createAppContext acts on one as soon as it is set: with
+ * OFAPI_API_KEY it runs the OFAPI credential preflight (a row in
+ * ofapi_credential_preflights, plus GET /whoami when OFAPI_EXPECTED_TEAM_SLUG
+ * is set) before the seed has read anything. */
+export const DEV_SEED_BLANKED_ENV: readonly string[] = [
+  "OFAPI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_MEDIA_API_KEY",
+  "OPENROUTER_API_KEY",
+  "ELEVENLABS_API_KEY",
+  "TELEGRAM_BOT_TOKEN",
+];
+
+/** Blanks DEV_SEED_BLANKED_ENV in `env`, after loadConfig merged .env into
+ * it: dotenv never overrides a variable that is already set, so a later
+ * loadConfig reads them as unset. */
+export function blankVendorCredentials(env: NodeJS.ProcessEnv): void {
+  for (const name of DEV_SEED_BLANKED_ENV) {
+    env[name] = "";
+  }
 }
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -372,13 +400,56 @@ function netOf(gross: Mills): bigint {
   return (gross * 80n) / 100n;
 }
 
-async function listForeignPageLabels(app: AppContext): Promise<string[]> {
-  const ours = Object.values(DEV_SEED_PAGES).map((page) => page.label);
-  const result = await app.pool.query<{ label: string }>(
-    "select label from pages where not (label = any($1::text[])) order by label",
-    [ours],
+type Queryable = Pick<ReturnType<typeof createPool>, "query">;
+
+/** Reads everything the seed could refuse over, before it writes anything:
+ * pages it did not create, and the users and pages it would take over. Those
+ * must be its own (an active owner and chatter, active OnlyFans pages of the
+ * dev-lora model); updating anything else would be seeding over real rows. */
+export async function assertDevSeedTarget(
+  pool: Queryable,
+  options: { allowExistingPages: boolean },
+): Promise<void> {
+  const ours = new Set(Object.values(DEV_SEED_PAGES).map((page) => page.label));
+  const pages = await pool.query<{ label: string; platform: string; status: string; model_slug: string | null }>(
+    `select p.label, p.platform::text as platform, p.status, m.slug as model_slug
+       from pages p
+       left join models m on m.id = p.model_id
+      order by p.label`,
   );
-  return result.rows.map((row) => row.label);
+  assertSeedableDatabase({
+    foreignPageLabels: pages.rows.filter((page) => !ours.has(page.label)).map((page) => page.label),
+    allowExistingPages: options.allowExistingPages,
+  });
+  for (const page of pages.rows.filter((row) => ours.has(row.label))) {
+    if (page.platform !== "onlyfans" || page.status !== "active" || page.model_slug !== DEV_SEED_MODEL.slug) {
+      throw new DevSeedRefusedError(
+        `page "${page.label}" exists (status ${page.status}, platform ${page.platform}, model `
+          + `${page.model_slug ?? "none"}); the seed expects an active onlyfans page of model ${DEV_SEED_MODEL.slug}`,
+      );
+    }
+  }
+
+  const expected = new Map<string, "owner" | "chatter">([
+    [DEV_SEED_OWNER_USERNAME, "owner"],
+    [DEV_SEED_CHATTER_USERNAME, "chatter"],
+  ]);
+  // findUserByUsername's match: case-insensitive, deleted users excluded.
+  const users = await pool.query<{ username: string; role: string; disabled: boolean }>(
+    `select lower(username) as username, role::text as role, disabled_at is not null as disabled
+       from users
+      where lower(username) = any($1::text[]) and deleted_at is null`,
+    [[...expected.keys()]],
+  );
+  for (const user of users.rows) {
+    const role = expected.get(user.username);
+    if (user.role !== role || user.disabled) {
+      throw new DevSeedRefusedError(
+        `user "${user.username}" exists as ${user.role}${user.disabled ? " (deactivated)" : ""}; `
+          + `the seed expects an active ${role ?? "user"}`,
+      );
+    }
+  }
 }
 
 async function ensureUser(
@@ -387,10 +458,12 @@ async function ensureUser(
 ): Promise<{ id: number; password: string | null }> {
   const existing = await findUserByUsername(app.db, input.username);
   if (existing) {
+    // assertDevSeedTarget checked this before the first write; only a change
+    // made while the seed ran gets here, after rows were written.
     if (existing.role !== input.role || existing.disabledAt !== null) {
-      throw new DevSeedRefusedError(
-        `user "${input.username}" exists as ${existing.role}${existing.disabledAt ? " (deactivated)" : ""}; `
-          + `the seed expects an active ${input.role}`,
+      throw new Error(
+        `user "${input.username}" changed while the seed ran (now ${existing.role}`
+          + `${existing.disabledAt ? ", deactivated" : ""}); the rows written before it stay`,
       );
     }
     if (!input.resetPassword) {
@@ -416,8 +489,13 @@ async function ensurePage(app: AppContext, modelId: number, fixture: PageFixture
   const existing = await findPageByLabel(app.db, fixture.label);
   let pageId: number;
   if (existing) {
+    // As in ensureUser: checked before the first write, so this is a change
+    // made while the seed ran.
     if (existing.page.platform !== "onlyfans" || existing.page.modelId !== modelId) {
-      throw new DevSeedRefusedError(`page "${fixture.label}" exists but is not the seed's OnlyFans page of model ${DEV_SEED_MODEL.slug}`);
+      throw new Error(
+        `page "${fixture.label}" changed while the seed ran (no longer an OnlyFans page of model `
+          + `${DEV_SEED_MODEL.slug}); the rows written before it stay`,
+      );
     }
     pageId = existing.page.id;
   } else {
@@ -605,10 +683,7 @@ async function seedMembership(
 }
 
 export async function seedDevClientHub(app: AppContext, options: DevSeedOptions = {}): Promise<DevSeedSummary> {
-  assertSeedableDatabase({
-    foreignPageLabels: await listForeignPageLabels(app),
-    allowExistingPages: options.allowExistingPages === true,
-  });
+  await assertDevSeedTarget(app.pool, { allowExistingPages: options.allowExistingPages === true });
   const now = options.now ?? new Date();
   const aiProxyUrl = options.aiProxyUrl === undefined ? DEV_SEED_DEFAULT_AI_PROXY_URL : options.aiProxyUrl;
 
@@ -814,10 +889,20 @@ async function main(argv: string[]): Promise<void> {
   if (values["no-ai-proxy"] && values["ai-proxy-url"] !== undefined) {
     throw new DevSeedRefusedError("--ai-proxy-url and --no-ai-proxy contradict each other");
   }
-  // loadConfig merges .env into process.env, so both checks below see what
+  // loadConfig merges .env into process.env, so the checks below see what
   // the app context is about to use.
   const config = loadConfig();
   assertLocalDevDatabaseTarget({ databaseUrl: config.databaseUrl, nodeEnv: process.env.NODE_ENV });
+  // The database checks run on a bare connection: building the app context
+  // already acts on the env (see DEV_SEED_BLANKED_ENV), and a refused run
+  // must not have touched anything.
+  const probe = createPool(config.databaseUrl);
+  try {
+    await assertDevSeedTarget(probe, { allowExistingPages: values["allow-existing-pages"] });
+  } finally {
+    await probe.end();
+  }
+  blankVendorCredentials(process.env);
 
   const app = await createAppContext({ processRole: "cli" });
   try {

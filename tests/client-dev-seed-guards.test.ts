@@ -2,13 +2,17 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import { CONFIG_DESCRIPTORS, loadConfig } from "@agency_hub_core/shared";
+
 import {
+  DEV_SEED_BLANKED_ENV,
   DEV_SEED_DATABASE_HOSTS,
   DEV_SEED_FANS,
   DEV_SEED_PAGES,
   DevSeedRefusedError,
   assertLocalDevDatabaseTarget,
   assertSeedableDatabase,
+  blankVendorCredentials,
 } from "../scripts/dev-seed-client.ts";
 
 // The dev seed writes users, pages and money rows. These guards are all that
@@ -79,6 +83,46 @@ describe("dev seed database guard", () => {
     expect(message).toMatch(/holds 6 page\(s\) the dev seed did not create \(lora-of, lora-vip-of, a, b, c, …\)/);
     expect(message).toMatch(/--allow-existing-pages/);
     expect(() => assertSeedableDatabase({ foreignPageLabels: labels, allowExistingPages: true })).not.toThrow();
+  });
+});
+
+describe("dev seed vendor credentials", () => {
+  // Secrets the seed keeps: its own database and encryption key, an inbound
+  // token, a chat id (not a credential), and the service egress proxy, which
+  // nothing uses once the vendor keys are gone.
+  const kept = [
+    "DATABASE_URL", "APP_ENCRYPTION_KEY", "HEALTH_SYNC_MONITORING_TOKEN", "TELEGRAM_CHAT_ID",
+    "SERVICE_EGRESS_PROXY_USERNAME", "SERVICE_EGRESS_PROXY_PASSWORD",
+  ];
+
+  it("blanks every other secret the config knows, so a new vendor key gets a decision here", () => {
+    const secrets = CONFIG_DESCRIPTORS.filter((descriptor) => descriptor.kind === "secret")
+      .map((descriptor) => descriptor.envName);
+    expect([...DEV_SEED_BLANKED_ENV].sort()).toEqual(secrets.filter((name) => !kept.includes(name)).sort());
+  });
+
+  it("leaves the keys unset for the app context's config", () => {
+    const env: NodeJS.ProcessEnv = {
+      DATABASE_URL: local,
+      APP_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+      OFAPI_API_KEY: "ofapi-key",
+      OFAPI_EXPECTED_TEAM_SLUG: "team",
+      ANTHROPIC_API_KEY: "anthropic-key",
+      ANTHROPIC_MEDIA_API_KEY: "anthropic-media-key",
+      OPENROUTER_API_KEY: "openrouter-key",
+      ELEVENLABS_API_KEY: "elevenlabs-key",
+      TELEGRAM_BOT_TOKEN: "telegram-token",
+      TELEGRAM_CHAT_ID: "1",
+    };
+    blankVendorCredentials(env);
+    const config = loadConfig(env, { loadDotEnv: false });
+    expect(config.ofapiApiKey).toBeNull();
+    expect(config.anthropicApiKey).toBeNull();
+    expect(config.anthropicMediaApiKey).toBeNull();
+    expect(config.openrouterApiKey).toBeFalsy();
+    expect(config.elevenLabsApiKey).toBeUndefined();
+    expect(config.telegramBotToken).toBeNull();
+    expect(config.databaseUrl).toBe(local);
   });
 });
 
