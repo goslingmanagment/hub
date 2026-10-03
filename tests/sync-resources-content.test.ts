@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { fanslyWireSpec } from "@agency_hub_core/fansly";
 import { FANSLY_NOTIFICATION_DECLARED_TYPE_CODES, FANSLY_NOTIFICATION_TYPE_GROUPS } from "@agency_hub_core/shared";
 
-import { inspectFanslyPostTipsScope } from "../apps/runtime/src/services/sync/posts.ts";
+import { inspectFanslyPostTipsScope } from "../apps/runtime/src/sync/fansly/lib/posts-rules.ts";
 import { ApplyQuarantine, defaultCaptureCodec } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type RequestPlan, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {

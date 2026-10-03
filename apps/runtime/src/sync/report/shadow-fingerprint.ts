@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 
 import { canonicalJson, type Database, type MediaStatsTiers, type SyncPageRow } from "@agency_hub_core/db";
 
-import type { LongTailWindowMode } from "../../services/sync/fansly-media-stats.ts";
+import type { LongTailWindowMode } from "../fansly/lib/media-stats-rules.ts";
 import type { SettingsSource } from "../engine/ports.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import { mediaStatsOwnerTiers, parseMediaStatsWalkCursor, shadowLongTailMode } from "../fansly/resources/media-stats.ts";

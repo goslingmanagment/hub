@@ -39,13 +39,15 @@ vi.mock("../apps/runtime/src/services/ofapi-capture-jobs.ts", () => ({
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import {
-  FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS,
   fanslyPostsChunk,
   onlyfansPostsChunk,
-  parsePostsCursorState,
   PostsCaptureJobBlockedError,
   PostsCaptureConfigurationError,
 } from "../apps/runtime/src/services/sync/posts.ts";
+import {
+  FANSLY_RECENT_POST_REFRESH_LOOKBACK_DAYS,
+  parsePostsCursorState,
+} from "../apps/runtime/src/sync/fansly/lib/posts-rules.ts";
 
 const FANSLY_NOW = new Date("2026-08-03T12:00:00.000Z");
 

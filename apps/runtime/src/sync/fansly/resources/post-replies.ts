@@ -24,7 +24,7 @@ import {
   parseFanslyPostRepliesCursorState,
   replyRows,
   type RepliesPaginationMode,
-} from "../../../services/sync/fansly-post-replies.ts";
+} from "../lib/post-replies-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

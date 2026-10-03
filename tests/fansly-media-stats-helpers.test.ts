@@ -5,10 +5,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import { estimateMediaStatsCycle } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import {
   answeredFloor,
   countMediaStatBuckets,
-  estimateMediaStatsCycle,
   mediaBackfillFirstMonthProbe,
   mediaStatsWindowIsEmpty,
   parseMediaBackfillCursor,
@@ -18,7 +18,7 @@ import {
   steadyRefreshPlan,
   steadyWindows,
   windowAnsweredBy,
-} from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+} from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import {
   allZeroBody,
   BACKFILL_DONE,
