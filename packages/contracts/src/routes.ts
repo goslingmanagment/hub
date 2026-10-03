@@ -7763,6 +7763,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
@@ -7777,6 +7778,7 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
+      // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
     },
   },
