@@ -41,6 +41,11 @@ Options:
                         Private Desktop legacy-persona export for first enable
   --desktop-diagnostics-receipt <path>
                         Private Desktop diagnostics receipt for first enable
+  --drop-client-sdk <sha256>
+                        Owner-approved: let this candidate drop one client SDK
+                        contract hash or registry build that the running hub
+                        registers. Repeat once per value the gate names. No
+                        environment equivalent: a drop is a per-run decision.
   --image-gc             Enable the post-health-gate cleanup of superseded
                         candidate/rollback/full-base image tags and the
                         builder cache prune. ON by default since Decision
@@ -183,6 +188,7 @@ SSH_PORT="${DEPLOY_SSH_PORT:-}"
 EXTENSION_PERSONA_RECEIPT="${DEPLOY_EXTENSION_PERSONA_RECEIPT:-}"
 DESKTOP_PERSONA_RECEIPT="${DEPLOY_DESKTOP_PERSONA_RECEIPT:-}"
 DESKTOP_DIAGNOSTICS_RECEIPT="${DEPLOY_DESKTOP_DIAGNOSTICS_RECEIPT:-}"
+DROP_CLIENT_SDKS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -271,6 +277,12 @@ while [[ $# -gt 0 ]]; do
     --desktop-diagnostics-receipt)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       DESKTOP_DIAGNOSTICS_RECEIPT="$2"
+      shift 2
+      ;;
+    --drop-client-sdk)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      [[ "$2" =~ ^[a-f0-9]{64}$ ]] || fail "--drop-client-sdk takes a lowercase sha256 (64 hex characters)"
+      DROP_CLIENT_SDKS+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -1963,6 +1975,39 @@ if (present !== (expectedRaw === "true")) {
 NODE
 }
 
+# A candidate keeps serving every client SDK the running hub registers
+# (services/client-sdk-registry.ts: health lists those hashes and released
+# clients gate on them). Both images print their registry; the verifier
+# refuses a dropped hash or build the owner did not name with
+# --drop-client-sdk. A running image that predates the print mode leaves
+# nothing to compare, and the gate says so.
+verify_candidate_client_sdks() {
+  local candidate_sdks
+  local running_sdks
+  local running_error_file="${TEMP_DIR}/running-client-sdks.stderr"
+  local drop
+  local verifier_args=()
+
+  candidate_sdks="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$IMAGE_CANDIDATE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks")" \
+    || fail "Unable to read the candidate's registered client SDKs"
+  verifier_args+=(--candidate "$candidate_sdks")
+  if [[ "${ROLLBACK_IMAGE_AVAILABLE:-0}" != "1" ]]; then
+    log "No running image to compare registered client SDKs with"
+  elif running_sdks="$(run_remote "set -euo pipefail; docker run --rm $(printf '%q' "$ROLLBACK_IMAGE_TAG") node apps/runtime/dist/startup.js print-compatible-client-sdks" 2>"$running_error_file")"; then
+    verifier_args+=(--running "$running_sdks")
+  elif grep -qF 'Unsupported Agency Hub runtime role "print-compatible-client-sdks"' "$running_error_file"; then
+    log "Running image predates print-compatible-client-sdks; skipping the registered client SDK comparison"
+  else
+    cat "$running_error_file" >&2
+    fail "Unable to read the running image's registered client SDKs"
+  fi
+  for drop in "${DROP_CLIENT_SDKS[@]}"; do
+    verifier_args+=(--drop "$drop")
+  done
+  node "$SCRIPT_DIR/verify-client-sdk-retention.mjs" "${verifier_args[@]}" \
+    || fail "Candidate would drop a registered client SDK, or its registry line is unreadable"
+}
+
 run_pre_recreate_safe_migrations() {
   local candidate_compose
   candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
@@ -2023,6 +2068,7 @@ finish_phase candidate
 start_phase candidate-verification
 validate_pull_checkout || fail "Pull checkout changed during candidate preparation"
 verify_candidate_lifecycle_capability
+verify_candidate_client_sdks
 prepare_remote_infrastructure_check
 verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
 finish_phase candidate-verification
