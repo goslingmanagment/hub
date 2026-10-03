@@ -29,7 +29,8 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // (user, clientEventId) at ingest; the projection dedups on its own
 // (generation_ref, lifecycle, occurred_at) unique, and books 'edited' only as
 // the companion of a 'sent'. The frozen payloads of desktop 0.1.64 and Fansly
-// 2.7.1 pin that the old clients still project exactly as before.
+// 2.7.1 pin that the old clients are still journaled verbatim and project
+// exactly as before.
 
 const CHAT_EXTENSION = "chat-extension/0.1.0";
 const DESKTOP = "0.1.64";
@@ -138,8 +139,9 @@ describe("chat-extension ai_acceptance on the capture lane (H-14a)", () => {
       account_id: pageId,
       actor: aliceId,
       idempotency_key: `${aliceId}:${event.clientEventId}`,
-      payload: event.payload,
     });
+    // Exact, not a subset: no key may be added to or rewritten in the payload.
+    expect(row!.payload).toEqual(event.payload);
     expect(row!.observed_at.toISOString()).toBe(event.observedAt);
 
     expect(await runAiAcceptanceProjection(app)).toEqual({ scanned: 1, projected: 2, skippedNoRef: 0 });
@@ -215,6 +217,7 @@ describe("chat-extension ai_acceptance on the capture lane (H-14a)", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("projects the frozen desktop 0.1.64 and Fansly 2.7.1 payloads as before", async () => {
+    const aliceId = await fixtureUserId(app, "alice");
     const desktopRef = randomUUID();
     const fanslyRef = randomUUID();
     // onlyfans-chat v0.1.64 apps/desktop/src/main/hub/acceptance-reporter.ts
@@ -238,23 +241,30 @@ describe("chat-extension ai_acceptance on the capture lane (H-14a)", () => {
       },
     });
 
-    expect((await post(aliceKey, DESKTOP, [
+    const desktopEvents = [
       desktop("shown", "2026-10-03T09:00:00.000Z"),
       desktop("inserted", "2026-10-03T09:00:01.000Z"),
       desktop("sent", "2026-10-03T09:00:02.000Z", { edited: true }),
       desktop("shown", "2026-10-03T09:00:03.000Z", {}, null),
-    ])).json()).toEqual({ accepted: 4, duplicates: 0 });
-    expect((await post(aliceKey, FANSLY, [
+    ];
+    const fanslyEvents = [
       fansly("shown", "2026-10-03T09:00:00.000Z"),
       fansly("copied", "2026-10-03T09:00:01.000Z"),
       fansly("inserted", "2026-10-03T09:00:02.000Z"),
-    ])).json()).toEqual({ accepted: 3, duplicates: 0 });
+    ];
+    expect((await post(aliceKey, DESKTOP, desktopEvents)).json()).toEqual({ accepted: 4, duplicates: 0 });
+    expect((await post(aliceKey, FANSLY, fanslyEvents)).json()).toEqual({ accepted: 3, duplicates: 0 });
 
     const rows = await journal();
     expect(new Set(rows.map((row) => `${row.kind} ${row.producer} ${row.account_id}`))).toEqual(new Set([
       "desktop.ai_acceptance desktop@0.1.64 null",
       "desktop.ai_acceptance desktop@chatgoose-extension/2.7.1 null",
     ]));
+    // The old clients' bodies are journaled exactly as sent too.
+    const payloadByKey = new Map(rows.map((row) => [row.idempotency_key, row.payload]));
+    for (const event of [...desktopEvents, ...fanslyEvents]) {
+      expect(payloadByKey.get(`${aliceId}:${event.clientEventId}`)).toEqual(event.payload);
+    }
 
     expect(await runAiAcceptanceProjection(app)).toEqual({ scanned: 7, projected: 7, skippedNoRef: 1 });
     expect((await projected(desktopRef)).map((row) => row.lifecycle)).toEqual(["shown", "inserted", "edited", "sent"]);
