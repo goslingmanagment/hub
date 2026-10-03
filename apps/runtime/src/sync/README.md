@@ -7,7 +7,11 @@ physical request of the page passes one pacer, one queue (`sync_work`), one jour
 The engine lands in steps: step 2 runs it in **shadow** next to the legacy engine (it plans, paces and journals, but
 never sends); step 3 switches pages one by one (`pnpm cli sync switch`, below); step 4 deletes the legacy code. A page
 sends as the engine only after the switch made it `live`, handed it the step-1 guard row and imported the legacy
-state; `sync page mode` moves pages only `off ↔ shadow` (I17).
+state; `sync page mode` moves pages only `off ↔ shadow` (I17). Since step 4 a new Fansly page is born `live`:
+onboarding checks its session through its own proxy without a page (one journaled `/account/me`, `fansly_send_log`
+with `page_id` null — owner decision №4) and creates the page, its credentials, the proven identity, the trusted
+credentials digest, its `live` row and its engine-owned guard row in one transaction (`createLiveSyncPage`); the host
+adopts it on its next pass and its first request goes ≥ 1.2 × S later (I5). The legacy engine never runs it.
 
 ## Map
 
@@ -34,6 +38,7 @@ sync/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
     routes.ts                every route a request can take, its family and budget; the legacy send log's map
     transport.ts             the live page transport over the wire layer (packages/fansly/src/wire)
+    identity-without-page.ts the no-page `/account/me` of onboarding and the create-page check (unpaced, journaled)
     resources/               one file per resource family
     ws/                      decode, router, the post-ack routing hook (live), the shadow WS feed and a live
                              page's socket (`source.ts`)
@@ -320,8 +325,9 @@ the latest and closes the exception. One verify per digest, under a hold or in c
 credentials no longer stored (its `identity_mismatch`, a contract violation) is closed as `superseded` in the
 transaction that raises the verify of the stored ones (audit `sync.credentials_verify_superseded`); one quarantined
 for the stored digest stays, for the owner's requeue. A candidate proxy comes from the egress resolver
-(`page_candidate` scope). The socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens
-only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
+(`page_candidate` scope); the check of a session that belongs to no page yet rides `fansly_candidate`
+(`fansly/identity-without-page.ts`). The socket's Upgrade (`ws.connect`) is checked like an API request, and the
+socket opens only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
 core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (the switch's import of a legacy
 429 and a legacy auth block), and a candidate check's network failure under it is carried beside it (its 429 holds only its route) — the
 credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried
@@ -418,7 +424,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I14 | Shadow never sends and never writes observations, domain tables, receipts or the overlay; it never owns a socket. | `engine/actor.ts` + `engine/commit.ts` |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
-| I17 | No live sender without the step-3 switch: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it), the legacy guard row handed to the engine, and the legacy import — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` |
+| I17 | No live sender without the step-3 switch or onboarding: `LIVE_LOOP_ENABLED`, mode `live` (only the switch CLI's capability reaches it for an existing page; a new page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint), the guard row owned by the engine, and the legacy import (stamped at birth for a new page) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `cli/switch.ts` + `repositories/sync/pages.ts` `createLiveSyncPage` |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only a candidate check and one verify per changed stored digest pass (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, rollback, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
