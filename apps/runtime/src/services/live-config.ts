@@ -4,10 +4,10 @@
 // rejects, never clamps, a key like the Fansly pause that opts into
 // `outOfRange: 'reject'`), the SAME transition hooks, the SAME cost-warning audit
 // note, the SAME repository writer (config_settings + config_audit_log in one
-// transaction), the SAME `audit_events` row and the SAME ramp-gate wake-up. Only
-// the actor differs: an owner session (`source: 'api'`) or the CLI (`source: 'cli'`,
-// no user). Nothing here decides who may call it — the route checks `requireOwner`,
-// and the CLI needs a shell in the api container (DATABASE_URL and the app key).
+// transaction) and the SAME `audit_events` row. Only the actor differs: an owner
+// session (`source: 'api'`) or the CLI (`source: 'cli'`, no user). Nothing here
+// decides who may call it — the route checks `requireOwner`, and the CLI needs a
+// shell in the api container (DATABASE_URL and the app key).
 
 import { randomUUID } from "node:crypto";
 
@@ -15,13 +15,8 @@ import {
   clearConfigOverride,
   getConfigOverrides,
   listConfigAudit,
-  listFanslyPages,
-  // The row-level writer, distinct from the same-named sync-control service (which
-  // resolves a page by label and enqueues a pg-boss wakeup for a whole scope).
-  requestPageSync as requestPageSyncRows,
   setConfigOverridesAtomic,
   type AtomicConfigPatch,
-  type SyncStream,
 } from "@agency_hub_core/db";
 import {
   collectCostWarnings,
@@ -34,129 +29,8 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { recordAudit, type AuditContext } from "./auth.ts";
-import { applyEffectiveOverrides, LIVE_CONFIG_KEYS, loadEffectiveConfig } from "./effective-config.ts";
+import { applyEffectiveOverrides, LIVE_CONFIG_KEYS } from "./effective-config.ts";
 import { BadRequestError } from "./errors.ts";
-import {
-  evaluateFanslyStreamGate,
-  FANSLY_GATE_CONFIG_KEYS,
-  GATED_FANSLY_STREAMS,
-  type FanslyStreamGateState,
-} from "./sync/fansly-stream-gate.ts";
-
-/** Gate verdict per (page, gated stream) at one instant, plus the pages it was
- *  computed over. Two of these — one from before the config write, one from after
- *  — are what makes the wake-up a TRANSITION detector rather than a "queue
- *  everything currently open" sweep. */
-interface FanslyGateSnapshot {
-  states: Map<string, FanslyStreamGateState>;
-  pages: Array<{ id: number; label: string }>;
-}
-
-function gateStateKey(pageId: number, stream: SyncStream) {
-  return `${pageId}:${stream}`;
-}
-
-async function captureFanslyGateStates(appContext: AppContext): Promise<FanslyGateSnapshot> {
-  const effective = await loadEffectiveConfig(appContext.db, appContext.config);
-  // listFanslyPages is the repository's active-page listing (platform = 'fansly'
-  // and status = 'active'); a tombstoned page must never be woken.
-  const pages = await listFanslyPages(appContext.db);
-  const states = new Map<string, FanslyStreamGateState>();
-  for (const page of pages) {
-    for (const gated of GATED_FANSLY_STREAMS) {
-      states.set(
-        gateStateKey(page.id, gated.stream),
-        evaluateFanslyStreamGate(effective, gated.stream, page.label).state,
-      );
-    }
-  }
-  return { states, pages: pages.map((page) => ({ id: page.id, label: page.label })) };
-}
-
-/** Opening a ramp gate used to change nothing until the stream's next slot, and
- *  fan_earnings runs once a day — so restoring an allowlist entry left the page
- *  frozen for up to 24 more hours (manual "sync all" deliberately skips bulk
- *  streams). Queue the newly allowed streams instead; the planner's minutely tick
- *  dispatches them, so recovery starts within a minute rather than within a day.
- *
- *  ONLY a non-ramped -> ramped transition counts. A gated fan_earnings walk costs
- *  two Fansly calls PER FAN and restarts from cursor 0 once a walk completes, so on
- *  a page the size of lora-1 an unwanted wake-up is ~1400 unscheduled requests
- *  against a platform where the failure mode is a model ban. Closing a gate,
- *  narrowing the allowlist around pages that stay open, or re-writing the same
- *  value therefore must generate no traffic at all. */
-async function requestGatedStreamWakeup(
-  appContext: AppContext,
-  before: FanslyGateSnapshot,
-): Promise<void> {
-  const after = await captureFanslyGateStates(appContext);
-  for (const page of after.pages) {
-    const streams: SyncStream[] = [];
-    for (const gated of GATED_FANSLY_STREAMS) {
-      const key = gateStateKey(page.id, gated.stream);
-      if (after.states.get(key) !== "ramped") continue;
-      // Already open before the write: nothing was lifted, so nothing to catch up on.
-      // A page created between the two snapshots is missing from `before` and so
-      // counts as newly opened and gets queued. That is the traffic-spending
-      // direction, not the safe one; it is accepted because the window is the few
-      // milliseconds inside one request, and a page that young has just been seeded
-      // with its own recovery request anyway.
-      if (before.states.get(key) === "ramped") continue;
-      streams.push(gated.stream);
-    }
-    if (streams.length === 0) continue;
-    // dependencyOptions is deliberately not passed: it only relaxes the OnlyFans
-    // OFAPI DM dependency graph, and every page on this path is Fansly.
-    await requestPageSyncRows(appContext.db, {
-      pageId: page.id,
-      streams,
-      source: "recovery",
-    });
-  }
-}
-
-/** Snapshot the gate BEFORE the config write, but only when the write can move it.
- *  Returns null when there is nothing to compare against, which also switches the
- *  post-write half off. A failure here is logged and downgraded to "no wake-up":
- *  the config write must not depend on it. */
-async function captureGateStatesForConfigChange(
-  appContext: AppContext,
-  changedKeys: readonly string[],
-): Promise<FanslyGateSnapshot | null> {
-  if (!changedKeys.some((key) => FANSLY_GATE_CONFIG_KEYS.has(key))) {
-    return null;
-  }
-  try {
-    return await captureFanslyGateStates(appContext);
-  } catch (error) {
-    appContext.logger.warn(
-      { err: error, changedKeys },
-      "pre-change ramp-gate snapshot failed; skipping the stream wake-up",
-    );
-    return null;
-  }
-}
-
-/** Fire-and-log wrapper for the config handlers. The override is already applied
- *  AND audited by the time this runs, so a failure here must never turn a
- *  successful PATCH/DELETE into an error: the wake-up is a convenience that saves
- *  a day of waiting, not part of the write. */
-async function wakeGatedStreamsAfterConfigChange(
-  appContext: AppContext,
-  before: FanslyGateSnapshot | null,
-): Promise<void> {
-  if (before === null) {
-    return;
-  }
-  try {
-    await requestGatedStreamWakeup(appContext, before);
-  } catch (error) {
-    appContext.logger.warn(
-      { err: error },
-      "ramp-gate stream wake-up failed after a config change; the config change itself stands",
-    );
-  }
-}
 
 /** The live editing path rejects any key that is not wired to the runtime overlay
  *  (`runtimeApply === 'live'`), so an override can never be written for a key the
@@ -264,8 +138,8 @@ export interface LiveConfigActor {
   audit: AuditContext;
 }
 
-/** Validate, write (config_settings + config_audit_log, all-or-nothing), record
- *  `admin.config_update` and wake newly opened gated streams. Rejections surface as
+/** Validate, write (config_settings + config_audit_log, all-or-nothing) and record
+ *  `admin.config_update`. Rejections surface as
  *  BadRequestError; ConfigOverrideVersionConflictError / ConfigOverrideTransitionError
  *  propagate for the caller to map (409 / 400 on the route). */
 export async function applyLiveConfigPatches(
@@ -275,12 +149,6 @@ export async function applyLiveConfigPatches(
   const validatedPatches = validateLiveConfigPatches(input.patches);
   const keys = validatedPatches.map((patch) => patch.key);
   const auditNote = buildLiveConfigAuditNote(keys, input.note);
-
-  // Read the ramp gate BEFORE the write so the wake-up below can queue only the
-  // (page, stream) pairs that actually went from gated to ramped. Null when no
-  // gate key is in this patch. Every key is already validated at this point, so a
-  // rejected patch never reaches here.
-  const gateBefore = await captureGateStatesForConfigChange(app, keys);
 
   // One transaction, all-or-nothing: a conflict on any key rolls back every key.
   const results = await setConfigOverridesAtomic(app.db, {
@@ -297,25 +165,18 @@ export async function applyLiveConfigPatches(
       note: auditNote ?? null,
     },
   });
-  // Lifting a ramp gate (allowlist widened, stream flag flipped on) must not wait
-  // for the stream's next slot — fan_earnings ticks once a day. Never throws.
-  await wakeGatedStreamsAfterConfigChange(app, gateBefore);
   // The live path only ever sends upserts (never a clear), so every result carries a
   // non-null value/version — narrow the atomic writer's (nullable) shape back.
   return results as Array<{ key: string; value: ConfigOverrideValue; version: number }>;
 }
 
 /** Clear an override (revert to the env value), audited in config_audit_log and as
- *  `admin.config_clear`, then wake newly opened gated streams (clearing an allowlist
- *  override is exactly the "restore every page" case). A version conflict propagates. */
+ *  `admin.config_clear`. A version conflict propagates. */
 export async function clearLiveConfigOverride(
   app: AppContext,
   input: { key: string; expectedVersion?: number | undefined; note?: string | undefined; actor: LiveConfigActor },
 ): Promise<void> {
   assertClearableConfigKey(input.key);
-
-  // Same before/after pairing as the patch path — see captureGateStatesForConfigChange.
-  const gateBefore = await captureGateStatesForConfigChange(app, [input.key]);
 
   await clearConfigOverride(app.db, {
     key: input.key,
@@ -329,7 +190,6 @@ export async function clearLiveConfigOverride(
     eventType: "admin.config_clear",
     metadata: { key: input.key, note: input.note ?? null },
   });
-  await wakeGatedStreamsAfterConfigChange(app, gateBefore);
 }
 
 /** The command line hands every value over as a string; turn it into the type the
