@@ -12,14 +12,14 @@ import {
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
-import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
-import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+import { emptyAlbumWalk } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { projectionBehind } from "../apps/runtime/src/sync/fansly/lib/projection-lag.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { mediaStatsOwnerTiers, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
+import { mediaStatsOwnerTiers, runMediaVisit, startMediaVisit } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
 import { statsModule } from "../apps/runtime/src/sync/fansly/resources/stats.ts";
 import { readShadowRouteChecks } from "../apps/runtime/src/sync/report/shadow-routes.ts";
 import { changeSyncRegistryOverride, requestSyncProbe, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
@@ -580,6 +580,20 @@ function windowsOf(requests: FanslyWireRequest[], ref: string) {
     .map((req) => ({ afterMs: Number(query(req, "afterDate")), beforeMs: Number(query(req, "beforeDate")), periodMs: Number(query(req, "period")) }));
 }
 
+/** The page's latest top-media window names `ref` (what the daily mark reads). */
+async function seedTopMedia(pageId: number, ref: string) {
+  await testDb!.pool.query(
+    `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
+                                  content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
+     values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
+    [pageId, ref, "e".repeat(64)],
+  );
+}
+
+function utcDay(at: Date): string {
+  return at.toISOString().slice(0, 10);
+}
+
 describe("media-stats.walk", () => {
   it("visits each due item, one window a step: a first visit walks to the item's creation, a visited item reads its refresh", async (context) => {
     if (!testDb) return context.skip();
@@ -632,12 +646,7 @@ describe("media-stats.walk", () => {
     // A 60-day item read two days ago: not due again for five days by its tier.
     await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2, backfillCursor: BACKFILL_DONE });
     // The page's latest top-media window names it.
-    await testDb.pool.query(
-      `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
-                                    content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
-       values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
-      [pageId, ITEM_MID, "e".repeat(64)],
-    );
+    await seedTopMedia(pageId, ITEM_MID);
     const registry = await quietRegistry(pageId, false);
     await makeDue(pageId, false, "media-stats.walk");
     await setCursor(pageId, "media-stats.walk", { topMarkedDay: new Date(Date.now() - DAY_MS).toISOString().slice(0, 10) });
@@ -661,12 +670,7 @@ describe("media-stats.walk", () => {
     // A 60-day item read two hours ago: not due by its weekly tier, and the
     // mark leaves an item visited within the day alone.
     await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2 / 24, backfillCursor: BACKFILL_DONE });
-    await testDb.pool.query(
-      `insert into stats_top_media (page_id, platform, plane, period_ms, requested_start, requested_end, media_offer_ref, rank,
-                                    content_hash, observed_at, source_event_id, source_observation_id, source_account_seq)
-       values ($1, 'fansly', 'top_media', 86400000, now() - interval '30 days', now() - interval '1 hour', $2, 0, $3, now(), 1, 1, 1)`,
-      [pageId, ITEM_MID, "e".repeat(64)],
-    );
+    await seedTopMedia(pageId, ITEM_MID);
     const before = await mediaRow(pageId, ITEM_MID);
     const registry = await quietRegistry(pageId, false);
     await makeDue(pageId, false, "media-stats.walk");
@@ -679,6 +683,98 @@ describe("media-stats.walk", () => {
     expect(hits).toEqual([]);
     expect(await attempts(pageId, "media-stats.walk", "true")).toBe(0);
     expect(await mediaRow(pageId, ITEM_MID)).toEqual(before);
+  });
+
+  // The plan's `top_media_mark` is the walk's only mark (step 4, S4-07). The
+  // two tests above are the day with nothing (else) due: the guard precedes
+  // the pick. The next two are the days a step's apply used to mark instead —
+  // a visit in flight at midnight, a failed step — on which the mark lands
+  // with the walk's next plan between two visits.
+  it("a visit in flight at midnight is never interrupted by the mark: the plan after its last step marks today's top 50", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    // A long-tail item on a page whose route splits the 90-day window: its
+    // visit asks three 31-day windows.
+    await seedQueueItem(pageId, ITEM_LONG, { ageDays: 400, lastVisitedDaysAgo: 35, backfillCursor: BACKFILL_DONE });
+    // Today's top item, read two days ago: due only once marked.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2, backfillCursor: BACKFILL_DONE });
+    await seedTopMedia(pageId, ITEM_MID);
+    const page = { longTailWindowMode: "split_31", longTailWindowAnnounced: true, longTailProbeFailedDay: null } as const;
+    // The visit began before midnight, after that day's mark, and has its
+    // first answer.
+    const candidates = await listMediaStatsRefreshChunk(db(), {
+      pageId, limit: 10, now: new Date(), longTailCycleDays: 30, tiers: mediaStatsOwnerTiers({ registryOverrides: {} }),
+    });
+    const begun = startMediaVisit(candidates.find((candidate) => candidate.subjectRef === ITEM_LONG)!, page, new Date(Date.now() - 10 * 60_000));
+    const first = runMediaVisit(begun);
+    if (first.kind !== "need") throw new Error("the long-tail visit asks for no window");
+    const answered = { servedAfterMs: first.window.afterMs, servedBeforeMs: first.window.beforeMs, empty: false, buckets: 2, observationId: null };
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    await setCursor(pageId, "media-stats.walk", {
+      ...page,
+      topMarkedDay: utcDay(new Date(Date.now() - DAY_MS)),
+      visit: { ...begun, outcomes: [{ key: first.window.key, ok: answered }] },
+    });
+    // The top item's mark as each remaining window of the visit is asked.
+    const markWhenAsked: Array<string | null> = [];
+    const { requests } = await drive(pageId, "live", registry, mediaAnswer(),
+      async () => ((await mediaRow(pageId, ITEM_MID))?.known_count ?? null) !== null,
+      { onHit: async (req) => {
+        if (query(req, "mediaOfferId") === ITEM_LONG) markWhenAsked.push((await mediaRow(pageId, ITEM_MID))!.dirty_reason);
+      } });
+
+    // The visit's two remaining windows with nothing marked between them;
+    // then the mark (a local step, no request) and the top item read.
+    expect(requests.map((req) => query(req, "mediaOfferId"))).toEqual([ITEM_LONG, ITEM_LONG, ITEM_MID]);
+    expect(markWhenAsked).toEqual([null, null]);
+    expect(await mediaRow(pageId, ITEM_LONG)).toMatchObject({ refresh_class: "long_tail", consecutive_failures: 0 });
+    expect(await mediaRow(pageId, ITEM_MID)).toMatchObject({ dirty_reason: null, consecutive_failures: 0 });
+    expect((await workRow(pageId, "media-stats.walk"))!.cursor).toMatchObject({ topMarkedDay: utcDay(new Date()), visit: null });
+  });
+
+  it("after a failed step the failure's plan comes first: the mark lands with the first plan after an applied step", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("live");
+    await seedQueueItem(pageId, ITEM_GONE, { ageDays: 5 });
+    // Today's top item, read two days ago: due only once marked.
+    await seedQueueItem(pageId, ITEM_MID, { ageDays: 60, lastVisitedDaysAgo: 2, backfillCursor: BACKFILL_DONE });
+    await seedTopMedia(pageId, ITEM_MID);
+    const registry = await quietRegistry(pageId, false);
+    await makeDue(pageId, false, "media-stats.walk");
+    const lastErrorClass = async () => (await testDb!.pool.query<{ last_error_class: string | null }>(
+      "select last_error_class from sync_work where page_id = $1 and resource = 'media-stats.walk' and not shadow and state = 'open'",
+      [pageId],
+    )).rows[0]!.last_error_class;
+    // The day's mark is done; the one due item fails and the walk rests on
+    // the failed step until its re-check.
+    await setCursor(pageId, "media-stats.walk", { topMarkedDay: utcDay(new Date()) });
+    const respond = mediaAnswer({ fail: ITEM_GONE });
+    const failed = await drive(pageId, "live", registry, respond, async () => {
+      const row = await workRow(pageId, "media-stats.walk");
+      return row?.waiting_reason === "not_due" && row.due_at.getTime() - Date.now() > HOUR_MS;
+    });
+    expect(failed.requests.map((req) => query(req, "mediaOfferId"))).toEqual([ITEM_GONE]);
+    expect(await lastErrorClass()).not.toBeNull();
+
+    // Midnight passes, and another item comes due.
+    await setCursor(pageId, "media-stats.walk", { topMarkedDay: utcDay(new Date(Date.now() - DAY_MS)) });
+    await seedQueueItem(pageId, ITEM_FRESH, { ageDays: 10, lastVisitedDaysAgo: 2, backfillCursor: BACKFILL_DONE });
+    await makeDue(pageId, false, "media-stats.walk");
+    const markWhenAsked: Array<string | null> = [];
+    const { requests } = await drive(pageId, "live", registry, respond,
+      async () => ((await mediaRow(pageId, ITEM_MID))?.known_count ?? null) !== null,
+      { onHit: async (req) => {
+        if (query(req, "mediaOfferId") === ITEM_FRESH) markWhenAsked.push((await mediaRow(pageId, ITEM_MID))!.dirty_reason);
+      } });
+
+    // The plan that read the failure picked the next item without marking;
+    // its applied step cleared the error, and the next plan marked.
+    expect(requests.map((req) => query(req, "mediaOfferId"))).toEqual([ITEM_FRESH, ITEM_MID]);
+    expect(markWhenAsked).toEqual([null]);
+    expect(await lastErrorClass()).toBeNull();
+    expect(await mediaRow(pageId, ITEM_MID)).toMatchObject({ dirty_reason: null, consecutive_failures: 0 });
+    expect((await workRow(pageId, "media-stats.walk"))!.cursor.topMarkedDay).toBe(utcDay(new Date()));
   });
 
   it("a failing item breaks only its queue row and the walk moves on", async (context) => {

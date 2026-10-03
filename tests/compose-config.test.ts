@@ -236,6 +236,10 @@ describe("compose config", () => {
     expect(sync).toContain("Date.now() - stat.mtimeMs > 90000");
     expect(sync).not.toMatch(/^\s+(init|volumes|ports):/m);
     expect(main).toContain("export const SYNC_HEARTBEAT_INTERVAL_MS = 30_000;");
+    // Step 4, 4-3: the stall watchdog exits (70) and relies on this restart
+    // policy and on node being PID 1; SIGTERM ends the process at 40 s at the
+    // latest, inside the 45 s grace, so Docker's SIGKILL never comes.
+    expect(main).toContain("export const SYNC_SHUTDOWN_CAP_MS = 40_000;");
   });
 
   it("docker-compose.yml runs the sync role locally after the migrator", async () => {

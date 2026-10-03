@@ -45,7 +45,7 @@ import {
   trimFanslyMessagingGroupsPayload,
   trimFanslyNotificationsPayload,
   trimFanslyPostRepliesPayload,
-} from "../apps/runtime/src/services/sync/shared.ts";
+} from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 
 describe("rejected follower capture", () => {
   it("never presents a missing followers array as a valid empty page", () => {
@@ -412,6 +412,7 @@ describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
   it("nothing in the capture path can defer a lane on a byte budget", () => {
     const captureSources = [
       "apps/runtime/src/services/sync/shared.ts",
+      "apps/runtime/src/sync/fansly/lib/capture-trims.ts",
       "apps/runtime/src/services/sync/executor-handlers.ts",
       "apps/runtime/src/services/sync/fansly-dm-conversations.ts",
       "packages/db/src/repositories/sync.ts",

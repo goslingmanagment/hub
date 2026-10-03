@@ -65,15 +65,16 @@ import {
   type DmConversationSweepState,
 } from "./cursor-state.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
+import { dmRetentionDate, persistRawPayload } from "./shared.ts";
 import {
   captureFanslyMessagingGroupsPayload,
-  dmRetentionDate,
   FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
-  persistRawPayload,
-  normalizeFanslyTimestamp,
-} from "./shared.ts";
+} from "../../sync/fansly/lib/capture-trims.ts";
+import { breaksLegacyUnchangedPage, diffConversationHead } from "../../sync/fansly/lib/dm-head-diff.ts";
+import { resolveDmSenderRole } from "../../sync/fansly/lib/dm-normalize.ts";
+import { truncateDmPreview } from "../../sync/fansly/lib/dm-preview.ts";
+import { normalizeFanslyTimestamp } from "../../sync/fansly/lib/timestamp.ts";
 import { advanceDmShadow, type DmShadowConversation } from "./dm-shadow.ts";
-import { truncateDmPreview } from "./dm-preview.ts";
 import { createDmShadowState } from "./dm-shadow-state.ts";
 import { readDmShadowMaterial } from "./dm-shadow-material.ts";
 import { persistDmShadowReport } from "./dm-shadow-report.ts";
@@ -82,15 +83,10 @@ import {
   assertDmSharedRateLimitEnabled,
   isDmHeadStaleByTime,
   normalizeDmTimestampWithAnomaly,
-  resolveDmSenderRole,
 } from "./fansly-dm-messages.ts";
 import { materializeFanslyDmTipContextsBestEffort } from "./fansly-tip-contexts.ts";
-import { upsertHydratedFansForPage } from "./fan-hydration.ts";
+import { upsertHydratedFansForPage } from "../../sync/fansly/lib/fan-hydration.ts";
 import { probeFanslyAccountResolution } from "./fansly-account-probe.ts";
-import {
-  breaksLegacyUnchangedPage,
-  diffConversationHead,
-} from "./fansly-dm-head-diff.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 
@@ -662,7 +658,7 @@ export async function fanslyDmConversationsChunk(
     const witnessPointer = shadow?.readerWitnesses != null && shadow.stopPage !== null &&
       shadow.readerWitnesses.length < DM_SHADOW_WITNESS_LIMIT
       // The witness hashes the body the observation holds, which is a copy
-      // when unpaired surrogates were replaced (./journal-lone-surrogates.ts).
+      // when unpaired surrogates were replaced (sync/fansly/lib/journal-lone-surrogates.ts).
       ? createDmShadowWitnessPointers({ observationId: listCapture.observationId,
         payload: listCapture.observationPayload as typeof capturedPayload,
         readStartedAtMs: readerReadStartedAtMs, readFinishedAtMs: Date.now() })

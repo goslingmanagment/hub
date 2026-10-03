@@ -138,24 +138,6 @@ type OfapiAudienceCursorState = {
   lastSweepUnverifiedAt: string | null;
 };
 
-type TopSpendersCursorWindow = {
-  kind: "month" | "week" | "day";
-  monthKey: string;
-  startedAt: string;
-  endedAt: string;
-};
-
-type TopSpendersCursorState = {
-  version: 1;
-  mode: "bootstrap" | "steady_state";
-  accountCreatedAt: string;
-  totalMonths: number;
-  completedMonths: number;
-  pendingWindows: TopSpendersCursorWindow[];
-  lastWindowStartedAt: string | null;
-  lastWindowEndedAt: string | null;
-};
-
 // The raw checkpoint-record readers. Exported because a handler that opens a
 // FRESH sweep still has to read a couple of fields straight off the stored
 // record (the parser refused it, so there is no typed state to read them from)
@@ -836,69 +818,6 @@ export function emptyDmMessagesCursorState(): DmMessagesCursorState {
   };
 }
 
-export function parseTopSpendersCursorState(value: unknown): TopSpendersCursorState | null {
-  const state = asRecord(value);
-  if (!state || asNumber(state.version) !== 1) {
-    return null;
-  }
-
-  const mode = state.mode === "bootstrap" || state.mode === "steady_state"
-    ? state.mode
-    : null;
-  const accountCreatedAt = asNullableString(state.accountCreatedAt);
-  const totalMonths = asNumber(state.totalMonths);
-  const completedMonths = asNumber(state.completedMonths);
-  const lastWindowStartedAt = asNullableString(state.lastWindowStartedAt);
-  const lastWindowEndedAt = asNullableString(state.lastWindowEndedAt);
-  const rawPendingWindows = Array.isArray(state.pendingWindows) ? state.pendingWindows : null;
-
-  if (
-    mode === null ||
-    !accountCreatedAt ||
-    totalMonths === null ||
-    completedMonths === null ||
-    lastWindowStartedAt === undefined ||
-    lastWindowEndedAt === undefined ||
-    rawPendingWindows === null
-  ) {
-    return null;
-  }
-
-  const pendingWindows = rawPendingWindows.flatMap((window) => {
-    const record = asRecord(window);
-    if (!record) {
-      return [];
-    }
-
-    const kind = record.kind === "month" || record.kind === "week" || record.kind === "day"
-      ? record.kind
-      : null;
-    const monthKey = asNullableString(record.monthKey);
-    const startedAt = asNullableString(record.startedAt);
-    const endedAt = asNullableString(record.endedAt);
-    if (!kind || !monthKey || !startedAt || !endedAt) {
-      return [];
-    }
-
-    return [{ kind, monthKey, startedAt, endedAt } satisfies TopSpendersCursorWindow];
-  });
-
-  if (pendingWindows.length !== rawPendingWindows.length) {
-    return null;
-  }
-
-  return {
-    version: 1,
-    mode,
-    accountCreatedAt,
-    totalMonths,
-    completedMonths,
-    pendingWindows,
-    lastWindowStartedAt,
-    lastWindowEndedAt,
-  };
-}
-
 export type {
   DmConversationCursorState,
   DmConversationProviderTotalMode,
@@ -911,6 +830,4 @@ export type {
   FollowersReconcileProgressState,
   OfapiDmConversationCursorState,
   SubscribersCursorState,
-  TopSpendersCursorState,
-  TopSpendersCursorWindow,
 };

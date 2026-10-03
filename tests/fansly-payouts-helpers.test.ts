@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { walkContinuationAt } from "../apps/runtime/src/services/sync/fansly-payouts.ts";
 import {
   oldestCreatedAtMs,
   parseFanslyPayoutsCursorState,
@@ -12,8 +13,7 @@ import {
   payoutRequestTotal,
   payoutWalkStopAt,
   settleWalkStop,
-  walkContinuationAt,
-} from "../apps/runtime/src/services/sync/fansly-payouts.ts";
+} from "../apps/runtime/src/sync/fansly/lib/payouts-rules.ts";
 import {
   LIVE_TOTAL,
   NOW,

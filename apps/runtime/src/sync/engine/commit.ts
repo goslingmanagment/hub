@@ -69,9 +69,9 @@ import {
 } from "@agency_hub_core/shared";
 
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "../../services/payload-reader.ts";
-import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../../services/sync/fansly-cdn-tokens.ts";
-import { replaceJournalLoneSurrogates } from "../../services/sync/journal-lone-surrogates.ts";
 import { WrongTransactionsWriterError } from "../../services/transactions-writer-gate.ts";
+import { fanslyCdnTokenStripApplies, stripFanslySignedCdnTokens } from "../fansly/lib/cdn-tokens.ts";
+import { replaceJournalLoneSurrogates } from "../fansly/lib/journal-lone-surrogates.ts";
 import { routeOfWireId } from "../fansly/routes.ts";
 import {
   classifyWireOutcome,

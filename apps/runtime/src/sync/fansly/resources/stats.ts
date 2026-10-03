@@ -11,8 +11,8 @@ import {
   parseEarningsWindow,
   startEarningsWindow,
   type EarningsWindowWalk,
-} from "../../../services/sync/fansly-earnings-window.ts";
-import { writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+} from "../lib/earnings-window.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   advanceBroadcastWalk,
   BACKFILL_EMPTY_STREAK_LIMIT,
@@ -46,7 +46,7 @@ import {
   type BroadcastWalkStop,
   type DailyBackfillState,
   type EarningsBackfillState,
-} from "../../../services/sync/fansly-stats.ts";
+} from "../lib/stats-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import {
   effectivePeriodMs,

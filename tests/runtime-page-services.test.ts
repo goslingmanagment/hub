@@ -81,7 +81,7 @@ vi.mock("../apps/runtime/src/services/live-overlay-read.ts", () => ({
 vi.mock("../apps/runtime/src/services/page-context.ts", () => ({
   resolvePageContext: pageContextMocks.resolvePageContext,
 }));
-vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", () => ({
+vi.mock("../apps/runtime/src/sync/fansly/lib/fan-hydration.ts", () => ({
   upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
   upsertHydratedFansForPageDetailed: fanHydrationMocks.upsertHydratedFansForPageDetailed,
 }));

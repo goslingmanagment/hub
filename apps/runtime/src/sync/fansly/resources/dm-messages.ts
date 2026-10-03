@@ -42,10 +42,6 @@ import { compareFanslySnowflakeIds, getFanslyDmMessageSyncExcludedReason } from 
 
 import { familyForObservation } from "../../../services/canonicalize/index.ts";
 import type { CanonicalEventDraft } from "../../../services/canonicalize/types.ts";
-import { normalizeFanslyDmMessages } from "../../../services/sync/fansly-dm-messages.ts";
-import { materializeFanslyDmTipContexts } from "../../../services/sync/fansly-tip-contexts.ts";
-import { replaceJournalLoneSurrogates } from "../../../services/sync/journal-lone-surrogates.ts";
-import { normalizeFanslyTimestamp } from "../../../services/sync/shared.ts";
 import { canonicalizeObservationInTransaction } from "../../engine/canonicalize.ts";
 import { ApplyDeferred, ApplyQuarantine, FanslyContractViolationError } from "../../engine/commit.ts";
 import type {
@@ -76,6 +72,8 @@ import {
   type Segment,
   type ThreadChain,
 } from "../lib/chain.ts";
+import { normalizeFanslyDmMessages } from "../lib/dm-normalize.ts";
+import { replaceJournalLoneSurrogates } from "../lib/journal-lone-surrogates.ts";
 import { advanceShadowWalk, type ShadowWalkProgress } from "../lib/offset-walk.ts";
 import { readFanslyPageFacts, waitForPageIdentity } from "../lib/page-facts.ts";
 import {
@@ -83,6 +81,8 @@ import {
   LEGACY_UNSTORED_BELOW_WINDOW,
   LEGACY_UNSTORED_DELETED_ON_PLATFORM,
 } from "../lib/replay-rules.ts";
+import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
+import { materializeFanslyDmTipContexts } from "../lib/tip-contexts.ts";
 import { needsHistoryHeadRead } from "../../requests/history-rules.ts";
 import { OWN_MASS_MESSAGE_CONTAINER_TYPE } from "../ws/router.ts";
 import { purchaseTargetFollowups, purchaseTargetSubject, type PurchaseTarget } from "./purchases.ts";

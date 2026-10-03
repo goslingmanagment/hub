@@ -11,7 +11,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { parseFanslyEarningsObservation } from "../../../services/canonicalize/fansly-earnings.ts";
-import { buildFanEarningsReceipt } from "../../../services/sync/fan-earnings-receipt.ts";
+import { buildFanEarningsReceipt } from "../lib/fan-earnings-receipt.ts";
 import { BLOCKED_PROBE_EVERY_MS, SUBJECT_BLOCK_AFTER, SUBJECT_BREAKER_LADDER_MS } from "../../engine/errors.ts";
 import type {
   ApplyInput,

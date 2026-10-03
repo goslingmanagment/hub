@@ -22,11 +22,13 @@ import { createEffectiveConfigSettingsSource, type SettingsSource } from "../app
 import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
-import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
 import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { FANSLY_REGISTRY_HASH, SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";
 import { buildShadowReport, type ShadowReport } from "../apps/runtime/src/sync/report/shadow-report.ts";
+import { checkChains } from "../apps/runtime/src/sync/report/shadow-journal.ts";
+import { ScanGovernor } from "../apps/runtime/src/sync/fansly/lib/chain-rebuild.ts";
 import { ratePeriodMs } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { seedWsCapturePage, seedWsThread, wsCreated, wsMessage, wsTransaction, type WsCapturePage } from "./helpers/fansly-ws-capture.ts";
@@ -39,7 +41,8 @@ import { changedTables, setModeDirect, tableCounts, testConfig } from "./helpers
 // read-only window transaction (demand vs the computed expectation, the legacy
 // volume, socket frame → shadow admission vs the legacy arrival, the pacer),
 // part B's replay mechanics (newest first, since / at least N, a failing or
-// writing replay costs only its own verdict) and the chain and ETA scans.
+// writing replay costs only its own verdict), the chain and ETA scans, and
+// its scope: the pages in shadow alone are judged.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -1360,6 +1363,90 @@ describe("the shadow report (design §3.12)", () => {
       /^Coverage: NOT an acceptance window — lilly-1 mode_changed \(first shadow admission .+\); the window must start once every page has run in shadow for 10 min$/,
     ));
     expect(report.summary.at(-1)).toMatch(/^Verdict: coverage FAIL, .* — not accepted$/);
+  });
+
+  it("judges the pages in shadow alone: a live page is listed as not judged and counts in no part and no verdict", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await shadowPage();
+    const start = new Date(Math.floor((Date.now() - 2 * 3_600_000) / MINUTE) * MINUTE);
+    await seedWindow(page, start);
+    const at = (ms: number) => new Date(start.getTime() + ms);
+    const pacing = { batchRows: 50, sleepMs: 0, maxDurationMs: null, forceWindow: true };
+    const build = async () => buildShadowReport(ctx(), {
+      reportBuild: REPORT_BUILD,
+      settings: liveSettings(),
+      pages: await listSyncPages(db()),
+      registry: createStubRegistry(),
+      window: { start, end: at(60 * MINUTE) },
+      journal: {
+        replaySince: at(-60 * MINUTE),
+        replayMinPerKind: 1,
+        replayMaxPerKind: 1_000,
+        chainsSince: at(-24 * 60 * MINUTE),
+        pacing,
+        expectedCounterexampleRawIds: [],
+      },
+      maxListed: 50,
+    });
+    const alone = await build();
+    expect(alone.verdict).toMatchObject({ covered: true, a3: true, a4: true, b6: true });
+
+    // A second page with an hour of its own and no shadow traffic at all: a
+    // fan message on its socket nobody read in shadow, a legacy poll.
+    const other = await seedWsCapturePage({ db: db(), pool: testDb.pool }, { ownRef: "100000000000000002", label: "lilly-2" });
+    const otherGroup = "300000000000000002";
+    await seedWsThread({ db: db(), pool: testDb.pool }, { pageId: other.pageId, groupId: otherGroup, fanRef: "200000000000000002", firstSeenAt: LISTED_BEFORE() });
+    await other.capture(wsCreated(wsMessage({ groupId: otherGroup, senderId: "200000000000000002" })), at(15 * MINUTE));
+    await legacyRequest(other.pageId, "light", "account.me", at(5 * MINUTE));
+
+    // Judged — were it in shadow — its hour would be red: A1 (no shadow read
+    // of its own) and A3 (its fan message without a shadow read).
+    await setModeDirect(testDb.pool, other.pageId, "shadow");
+    const judgedBoth = await build();
+    expect(judgedBoth.pages).toEqual([{ page: "lilly-1", mode: "shadow" }, { page: "lilly-2", mode: "shadow" }]);
+    expect(judgedBoth.window!.demand.find((row) => row.page === "lilly-2")).toMatchObject({ passes: false });
+    expect(judgedBoth.window!.livePath.fanMessages.withoutShadowAdmission).toBe(1);
+    expect(judgedBoth.verdict).toMatchObject({ a3: false, accepted: false });
+
+    // Live, it is listed and judged nowhere: every part reads the shadow page
+    // alone, and its verdict is the one the shadow page has by itself.
+    await setModeDirect(testDb.pool, other.pageId, "live");
+    const withLive = await build();
+    expect(withLive.pages).toEqual([{ page: "lilly-1", mode: "shadow" }]);
+    expect(withLive.notJudged).toEqual([{ page: "lilly-2", mode: "live", reason: "live — judged by `sync switch check`" }]);
+    expect(withLive.window!.coverage).toEqual(alone.window!.coverage);
+    expect(withLive.window!.demand).toEqual(alone.window!.demand);
+    expect(withLive.window!.legacy).toEqual(alone.window!.legacy);
+    expect(withLive.window!.livePath).toEqual(alone.window!.livePath);
+    expect(withLive.window!.pacer).toEqual(alone.window!.pacer);
+    expect(withLive.routes).toEqual(alone.routes);
+    expect(withLive.media!.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.fingerprint.pages.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.journal!.chains.map((row) => row.page)).toEqual(["lilly-1"]);
+    expect(withLive.journal!.eta).toHaveLength(1);
+    expect(withLive.verdict).toEqual(alone.verdict);
+    // B6 on a live page would be its refused rebuild (the engine owns its chains).
+    const liveChains = await checkChains(ctx(), {
+      pages: [(await getSyncPage(db(), other.pageId))!], since: at(-24 * 60 * MINUTE), pacing, maxListed: 10,
+    }, new ScanGovernor(pacing));
+    expect(liveChains[0]!.rebuild).toEqual({ error: "ChainRebuildRefusedError" });
+    expect(withLive.summary[1]).toBe(
+      "Judged: lilly-1 (in shadow, the switch candidates); not judged, in no verdict: lilly-2 live — judged by `sync switch check`",
+    );
+
+    // `--page` names a switch candidate or nothing.
+    const command = buildSyncReportCommandGroup({
+      openContext: async () => ({ ...ctx(), close: async () => undefined }),
+      print: () => undefined,
+      writeFile: async () => undefined,
+      now: () => new Date(),
+      buildSha: () => REPORT_BUILD,
+    });
+    await expect(command.parseAsync([
+      "shadow", "report", "--part", "a", "--page", "lilly-2", "--window", `${start.toISOString()}/${at(60 * MINUTE).toISOString()}`,
+    ], { from: "user" })).rejects.toThrow(
+      "lilly-2 is live: the shadow report judges only the pages in shadow, the switch candidates (live — judged by `sync switch check`)",
+    );
   });
 
   it("the CLI: `sync shadow report --part a` and `sync alerts ack`", async (context) => {

@@ -6,7 +6,7 @@ import {
 } from "@agency_hub_core/db";
 import { FANSLY_MAPPER_VERSION, FanslyApiError } from "@agency_hub_core/fansly";
 import type { AppContext } from "../../bootstrap.ts";
-import { buildFanEarningsReceipt } from "./fan-earnings-receipt.ts";
+import { buildFanEarningsReceipt } from "../../sync/fansly/lib/fan-earnings-receipt.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const ENDPOINTS = {
