@@ -21,7 +21,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     // A cookie session → 403: the bootstrap is a client's, not the dashboard's.
     requireApiKeyUser(principal);
-    return buildClientBootstrap(appContext.db, {
+    return buildClientBootstrap(appContext, {
       user: principal.user,
       pageIds: pageScopeFor(principal) ?? null,
     });

@@ -215,6 +215,14 @@ describe("config registry", () => {
     // that unlike every other live key here, turning this one back off does not
     // undo the rows written while it was on.
     "captureCasPointerOnlyPages",
+    // Chat extension (hub-pr-plan H-2b): the owner's switches for the third
+    // client, read per request by the bootstrap and the client routes' check.
+    // Every one rests off.
+    "chatExtensionEnabled",
+    "chatExtensionFeatures",
+    "chatExtensionMinVersion",
+    "chatExtensionHostBindings",
+    "chatExtensionPreviewSendReceiptProfiles",
   ];
   const BOOT_KEYS = [
     "ofapiDmProjectionEnabled",
