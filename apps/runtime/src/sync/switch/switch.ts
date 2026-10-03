@@ -170,6 +170,7 @@ export async function runSyncSwitch(ctx: SwitchContext, input: SyncSwitchInput):
       ctx.print(`I ${label}: legacy state imported — ${JSON.stringify({
         modules: report.modules.length,
         breakers: report.breakers,
+        breakersOnOpenWork: report.breakersOnOpenWork,
         demands: report.demands,
         unconfirmedOverlayChats: report.unconfirmedOverlayChats,
         holds: report.holds,
