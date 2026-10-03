@@ -1,3 +1,5 @@
+import type { ProxyConfig } from "@agency_hub_core/shared";
+
 // Kernel Stage 26: the egress seam. Every outbound platform call resolves its
 // transport through ONE resolver — per-account address consistency becomes
 // construction, not convention (platform-safety crown jewel 4). This package
@@ -17,12 +19,16 @@ export type EgressPriorityClass = (typeof EGRESS_PRIORITY_CLASSES)[number];
  * What a caller must present to get a transport:
  * - `page` — platform-account egress: the page's assigned proxy IS the
  *   address identity (Fansly direct-to-platform; OFAPI account-scoped reads).
+ * - `page_candidate` — ONE identity check of a page through a candidate proxy
+ *   the owner is about to assign it (the check runs before the proxy is
+ *   stored); never a fallback after the page proxy failed.
  * - `vendor` — vendor-gateway egress with a RECORDED address policy (the
  *   resolver documents whether traffic proxies per-page or goes
  *   vendor-direct; it is never an accident of a bare fetch).
  */
 export type EgressScope =
   | { kind: "page"; pageId: number }
+  | { kind: "page_candidate"; pageId: number; proxy: ProxyConfig }
   | { kind: "vendor"; vendor: string };
 
 export interface EgressContext<TDispatcher> {
@@ -42,5 +48,12 @@ export type EgressResolver<TDispatcher> = (
 ) => Promise<EgressContext<TDispatcher>>;
 
 export function egressScopeKey(scope: EgressScope) {
-  return scope.kind === "page" ? `page:${scope.pageId}` : `vendor:${scope.vendor}`;
+  switch (scope.kind) {
+    case "page":
+      return `page:${scope.pageId}`;
+    case "page_candidate":
+      return `page-candidate:${scope.pageId}`;
+    case "vendor":
+      return `vendor:${scope.vendor}`;
+  }
 }

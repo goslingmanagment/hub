@@ -1,6 +1,10 @@
-import type { HistoryDepth, HistoryThreadFacts } from "@agency_hub_core/db";
+import type { HistoryDepth, HistoryThreadFacts, SyncRouteUse } from "@agency_hub_core/db";
 import { FANSLY_MESSAGES_PAGE_LIMIT } from "@agency_hub_core/fansly";
 import { fanslySnowflakeToDate } from "@agency_hub_core/shared";
+
+import { JITTER_MAX } from "../engine/pacer.ts";
+import { classOf, CYCLE, type WorkClass } from "../engine/scheduler.ts";
+import { familyOfRoute, routeOfEngineOperation, type FanslyRoute } from "../fansly/routes.ts";
 
 // Estimates of a history request (plan §4.3, design §7.2). The inputs are the
 // thread's columns only — the proven chain (0231), the legacy stored window
@@ -12,19 +16,31 @@ import { fanslySnowflakeToDate } from "@agency_hub_core/shared";
 // knows exists) and an estimate (the unknown part of the chat at the density
 // of the stored window, labelled as an estimate). No upper bound exists for an
 // unknown depth; `latest N` has one with full pages.
+//
+// The time a read takes (step 3b ruling 11, owner decision №24) is set by the
+// tightest of three budgets a history read draws on: the page's slots (one
+// send per pause S × (1 + u)), its route's (`/message`, 15/min — lower after
+// a 429 halved it) and that route's family (messaging: the list, a chat's
+// detail and `/message`, 15/min combined). Each is shared with what the
+// urgent and planned classes send on it — measured on the journal of the
+// last 15 minutes — and the scheduler's cycle shares each budget by its
+// turns, a class that wants less leaving the rest (`requestsCapacity`). No
+// share is raised to a floor: an observed use is never overruled. A hold — the
+// page's, or the route's own after a 429 — stops the reads for its known
+// span; it is shown beside the estimate, never folded into its rate.
 
+/** Every history read is one `/message` page: the route whose budgets pace
+ *  it (the `dm-messages.history` key's only operation, pinned by
+ *  tests/sync-history-eta.test.ts). */
+export const HISTORY_READ_ROUTE: FanslyRoute = "messages.page";
 /** Messages per `/message` page (every engine read uses limit 25). */
 export const HISTORY_READ_PAGE_SIZE = FANSLY_MESSAGES_PAGE_LIMIT;
-/** The mean pause is S × (1 + u), u uniform in [0, 0.2); the ≈ 0.3 s p50
- *  response lies inside the pause. */
-export const ETA_MEAN_PAUSE_FACTOR = 1.1;
-/** The window the requests class's observed share is measured over. */
-export const ETA_SHARE_WINDOW_MS = 15 * 60_000;
-/** Below this many sends in the window the share is the default. */
-export const ETA_SHARE_MIN_SAMPLES = 20;
-export const ETA_DEFAULT_SHARE = 0.8;
-/** The requests class's floor under full contention: 4 of 10 slots (§3.4). */
-export const ETA_MIN_SHARE = 0.4;
+/** The mean pause is S × (1 + u), u uniform in [0, JITTER_MAX); the ≈ 0.3 s
+ *  p50 response lies inside the pause. */
+export const ETA_MEAN_PAUSE_FACTOR = 1 + JITTER_MAX / 2;
+/** The window the other classes' use of the page's slots and budgets is
+ *  measured over. */
+export const ETA_USE_WINDOW_MS = 15 * 60_000;
 /** The stored window's span is at least an hour (a burst of messages within
  *  one minute is not a density of thousands an hour). */
 export const ETA_MIN_DENSITY_SPAN_MS = 3_600_000;
@@ -159,38 +175,139 @@ export function estimateItemReads(input: ItemEtaInput): ItemReadsEstimate {
   }
 }
 
-/** Sends of the page by class over the share window. */
-export interface ClassSends {
-  urgent: number;
-  requests: number;
-  planned: number;
+// ── the rate of a request (step 3b ruling 11) ─────────────────────────────────
+
+/** A class's sends a minute. */
+export type ClassRates = Readonly<Record<WorkClass, number>>;
+
+/** What the page's classes sent a minute over the window on each budget a
+ *  history read draws on. */
+export interface BudgetUse {
+  /** Every send: the page's slots. */
+  page: ClassRates;
+  /** Sends on the history read's route. */
+  route: ClassRates;
+  /** Sends on that route's family (the route included). */
+  family: ClassRates;
+}
+
+const NO_RATES: ClassRates = { urgent: 0, requests: 0, planned: 0 };
+
+/**
+ * The window's journal (`readRouteUse`) as rates a minute. A send of an
+ * operation this build cannot place counts on every budget, as the route
+ * clocks count it (an unknown send consumes budget).
+ */
+export function budgetUseOf(rows: readonly SyncRouteUse[], windowMs: number): BudgetUse {
+  const minutes = Math.max(1, windowMs) / 60_000;
+  const page = { ...NO_RATES };
+  const route = { ...NO_RATES };
+  const family = { ...NO_RATES };
+  const historyFamily = familyOfRoute(HISTORY_READ_ROUTE);
+  for (const row of rows) {
+    const rate = row.sends / minutes;
+    const sent = routeOfEngineOperation(row.operation);
+    page[row.class] += rate;
+    if (sent === null || sent === HISTORY_READ_ROUTE) route[row.class] += rate;
+    if (sent === null || (historyFamily !== null && familyOfRoute(sent) === historyFamily)) family[row.class] += rate;
+  }
+  return { page, route, family };
+}
+
+/** Each class's turns in the scheduler's cycle (U R U R U R U R U P: 5, 4, 1). */
+export const CYCLE_TURNS: Readonly<Record<WorkClass, number>> = (() => {
+  const turns: Record<WorkClass, number> = { urgent: 0, requests: 0, planned: 0 };
+  for (const slot of CYCLE) turns[classOf(slot)] += 1;
+  return turns;
+})();
+
+/** The budget that sets a request's rate. */
+export type EtaLimit = "page" | "route" | "family";
+
+export interface RequestsCapacityInput {
+  /** S, the owner's pause. */
+  settingMs: number;
+  /** The history read route's rate on the page: the table's `current`, or
+   *  the page's slowdown after a 429 when that is lower. */
+  routePerMin: number;
+  /** Its family's rate (null: the route has none). */
+  familyPerMin: number | null;
+  use: BudgetUse;
+}
+
+export interface RequestsCapacity {
+  /** History reads a minute of the requests class (all requests together). */
+  perMin: number;
+  /** Its share of the page's slots, 0..1. */
+  slotShare: number;
+  limitedBy: EtaLimit;
 }
 
 /**
- * The share of the page's slots the requests class gets (design §7.2): 1 when
- * no other class has runnable work now; the default 0.8 below 20 sends in the
- * window; otherwise the observed requests share of the window, never below
- * the class's guaranteed 40 % (an observed share can only understate it — the
- * class may have had nothing to run for part of the window).
+ * What the requests class keeps of one budget of `capacity` sends a minute
+ * beside the other classes. The cycle is a weighted round robin that skips a
+ * class with nothing to send: each class gets its turns' part of the budget
+ * (`CYCLE_TURNS`) unless it wants less, and what it leaves is shared by the
+ * same weights among the rest (water-filling). The requests class wants all
+ * it can get; the urgent and planned classes want what they sent over the
+ * window. Nothing is raised to a floor: a class that took little leaves the
+ * rest, and only a class that wants more than its turns is held to them.
  */
-export function requestsClassShare(input: { sends: ClassSends; otherClassesRunnable: boolean }): number {
-  if (!input.otherClassesRunnable) return 1;
-  const total = input.sends.urgent + input.sends.requests + input.sends.planned;
-  if (total < ETA_SHARE_MIN_SAMPLES) return ETA_DEFAULT_SHARE;
-  return Math.min(1, Math.max(ETA_MIN_SHARE, input.sends.requests / total));
+export function keptByRequests(capacity: number, use: ClassRates): number {
+  let remaining = capacity;
+  let others = (["urgent", "planned"] as const).filter((workClass) => use[workClass] > 0);
+  for (;;) {
+    const turns = CYCLE_TURNS.requests + others.reduce((sum, workClass) => sum + CYCLE_TURNS[workClass], 0);
+    const perTurn = remaining / turns;
+    const content = others.filter((workClass) => use[workClass] <= CYCLE_TURNS[workClass] * perTurn);
+    if (content.length === 0) return CYCLE_TURNS.requests * perTurn;
+    for (const workClass of content) remaining -= use[workClass];
+    others = others.filter((workClass) => !content.includes(workClass));
+  }
+}
+
+/**
+ * The reads a minute the requests class gets on the page now (step 3b
+ * ruling 11) — the tightest of the three budgets a history read draws on:
+ *
+ *   C_page   = 60 000 / (S × 1.1)      the page's slots at the mean pause
+ *   C_route  = the route's rate         (a slowdown after a 429 lowers it)
+ *   C_family = the family's rate
+ *   R_x      = keptByRequests(C_x, what the classes sent on x a minute)
+ *   perMin   = min(R_page, R_route, R_family)
+ *
+ * With the budgets as shipped and S = 2.5 s, a page whose other classes take
+ * ≈ 2 reads a minute of the messaging family gives history ≈ 13/min, ≈ 800
+ * reads an hour (owner decision №24). Holds are not in it: a held page or
+ * route reads nothing until the hold ends.
+ */
+export function requestsCapacity(input: RequestsCapacityInput): RequestsCapacity {
+  const pageSlots = 60_000 / (input.settingMs * ETA_MEAN_PAUSE_FACTOR);
+  const page = keptByRequests(pageSlots, input.use.page);
+  const route = keptByRequests(input.routePerMin, input.use.route);
+  const family = input.familyPerMin === null ? Number.POSITIVE_INFINITY : keptByRequests(input.familyPerMin, input.use.family);
+  const perMin = Math.min(page, route, family);
+  return {
+    perMin,
+    slotShare: page / pageSlots,
+    limitedBy: perMin === page ? "page" : perMin === family ? "family" : "route",
+  };
 }
 
 export interface RequestEta {
   remainingMin: number;
   remainingEstimate: number | null;
-  /** S × 1.1: the mean pause between two sends of the page. */
-  meanPauseMs: number;
+  /** One read of this request every … ms: the class's rate shared round
+   *  robin between the page's k requests. */
+  perReadMs: number;
+  /** The requests class's share of the page's slots. */
   share: number;
+  limitedBy: EtaLimit;
   /** Open requests of the page sharing the class (round robin), ≥ 1. */
   k: number;
   etaMinMs: number;
   etaEstimateMs: number | null;
-  /** Reads an hour this request gets now. */
+  /** Reads an hour this request gets while it is not held. */
   ratePerHour: number;
   /** "Свежие сообщения всех фанов": the first round's head reads. */
   firstRoundMs: number;
@@ -198,33 +315,31 @@ export interface RequestEta {
 
 /**
  * A request's remaining reads and time (design §7.2): the sum over its open
- * fans, at the mean pause, divided between the k requests of the page and
- * the class's share.
+ * fans, at the class's rate (`requestsCapacity`) divided between the page's
+ * k requests.
  */
 export function estimateRequest(input: {
   items: readonly ItemReadsEstimate[];
   unanchoredItems: number;
-  settingMs: number;
-  share: number;
+  capacity: RequestsCapacity;
   k: number;
 }): RequestEta {
   const remainingMin = input.items.reduce((sum, item) => sum + item.readsMin, 0);
   const remainingEstimate = input.items.some((item) => item.readsEstimate === null)
     ? null
     : input.items.reduce((sum, item) => sum + (item.readsEstimate ?? 0), 0);
-  const meanPauseMs = input.settingMs * ETA_MEAN_PAUSE_FACTOR;
   const k = Math.max(1, input.k);
-  const share = Math.min(1, Math.max(ETA_MIN_SHARE, input.share));
-  const perRead = (meanPauseMs * k) / share;
+  const perReadMs = (60_000 * k) / input.capacity.perMin;
   return {
     remainingMin,
     remainingEstimate,
-    meanPauseMs,
-    share,
+    perReadMs,
+    share: input.capacity.slotShare,
+    limitedBy: input.capacity.limitedBy,
     k,
-    etaMinMs: Math.round(remainingMin * perRead),
-    etaEstimateMs: remainingEstimate === null ? null : Math.round(remainingEstimate * perRead),
-    ratePerHour: Math.round((3_600_000 / perRead) * 10) / 10,
-    firstRoundMs: Math.round(input.unanchoredItems * perRead),
+    etaMinMs: Math.round(remainingMin * perReadMs),
+    etaEstimateMs: remainingEstimate === null ? null : Math.round(remainingEstimate * perReadMs),
+    ratePerHour: Math.round((3_600_000 / perReadMs) * 10) / 10,
+    firstRoundMs: Math.round(input.unanchoredItems * perReadMs),
   };
 }

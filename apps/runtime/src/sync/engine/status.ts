@@ -1,8 +1,7 @@
+import { activeFanslyPageHold, isIndefinite, type FanslyPageHoldKind } from "@agency_hub_core/shared";
+
 import {
-  activePageHold,
   activeResourceHold,
-  isIndefinite,
-  type PageHoldKind,
   type ResourceHoldEntry,
   type ResourceHoldKind,
 } from "./errors.ts";
@@ -73,10 +72,10 @@ export interface StatusPage {
   pausedAll: boolean;
   pausedRequests: boolean;
   pausedResources: readonly string[];
-  holdKind: PageHoldKind | null;
+  holdKind: FanslyPageHoldKind | null;
   holdUntil: Date | null;
+  holdSince: Date | null;
   holdDetail: Readonly<Record<string, unknown>>;
-  credentialsGeneration: string | null;
   resourceHolds: Readonly<Record<string, ResourceHoldEntry>>;
   owner: StatusPageOwner;
 }
@@ -122,9 +121,9 @@ export function ownerRunning(page: Pick<StatusPage, "mode" | "owner">, now: Date
  * wins: running → ownership_unconfirmed → paused → page_hold → quarantined →
  * blocked_by_vendor → subject_breaker → resource_hold → dependency → not_due →
  * pacer → class_share. A key without requests (`http: false`) never waits on
- * the page hold or the pacer (ruling 9): due, it waits for its turn among the
- * steps before the gate (`class_share`). Null for closed work (done,
- * cancelled, superseded): it waits for nothing.
+ * the page hold, the route admission or the pacer (ruling 9): due, it waits
+ * for its turn among the steps before the gate (`class_share`). Null for
+ * closed work (done, cancelled, superseded): it waits for nothing.
  */
 export function explainWork(
   work: StatusWork,
@@ -152,13 +151,12 @@ export function explainWork(
     return { reason: "paused", until: null, detail: { scope: "resource" } };
   }
   const sends = work.http !== false;
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   if (hold !== null && sends) {
     return { reason: "page_hold", until: hold.until, detail: { kind: hold.kind } };
   }
   if (sends && runtime.routes !== undefined && runtime.routes.stateError !== null) {
-    // A route state this build cannot read closes the page's admission (a
-    // step without a request still runs before the gate).
+    // A route state this build cannot read closes the page's admission.
     return { reason: "page_hold", until: null, detail: { routeState: runtime.routes.stateError } };
   }
   if (work.state === "quarantined") return { reason: "quarantined", until: null, detail: {} };
@@ -189,7 +187,7 @@ export function explainWork(
   if (after(work.dueAt)) return { reason: "not_due", until: work.dueAt, detail: {} };
   // Every route of the key is closed by its budget or a route hold: the
   // pick leaves it out until one opens.
-  const routes = sends ? (runtime.routes?.keyOpensAt(work.resource) ?? null) : null;
+  const routes = sends ? runtime.routes?.keyOpensAt(work.resource) ?? null : null;
   if (routes !== null && after(routes.at)) {
     return {
       reason: "pacer",
@@ -321,7 +319,7 @@ export interface PageStatus {
   holds: {
     /** `until` is an ISO instant, or "infinity" for an auth / identity hold
      *  that only new credentials lift. */
-    page: { kind: PageHoldKind; until: string; since: string | null } | null;
+    page: { kind: FanslyPageHoldKind; until: string; since: string | null } | null;
     /** `kind`: the file's breaker (a 429 holds a route: `routes`). */
     resources: Array<{ file: string; until: string; step: number; kind: ResourceHoldKind }>;
   };
@@ -336,7 +334,7 @@ export interface PageStatus {
 
 export interface PageStatusInput {
   pageLabel: string | null;
-  page: StatusPage & { holdSince: Date | null; lastSendAt: Date | null };
+  page: StatusPage & { lastSendAt: Date | null };
   /** S as the actor reads it (the live owner key). */
   settingMs: number;
   now: Date;
@@ -359,7 +357,7 @@ export interface PageStatusInput {
 export function buildPageStatus(input: PageStatusInput): PageStatus {
   const { page, now } = input;
   const at = now.getTime();
-  const hold = activePageHold(page, now);
+  const hold = activeFanslyPageHold(page, now);
   const resources = Object.entries(page.resourceHolds)
     .filter(([, entry]) => new Date(entry.until).getTime() > at)
     .map(([file, entry]) => ({

@@ -17,8 +17,9 @@ import {
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
 
+import { combineFanslyPageHold, credentialsFailureDetail, type FanslyPageHoldWrite } from "@agency_hub_core/shared";
+
 import { readFanslyPageGeneration } from "../../services/egress/fansly-probe-context.ts";
-import { combinePageHold, type PageHoldDecision, type ResourceHoldEntry } from "../engine/errors.ts";
 import { demandToUpsert, type DemandSignal, type EngineRegistry, type ResourceModule } from "../engine/resource.ts";
 import { readSwitchStartedAt } from "./audit.ts";
 import type { SwitchContext } from "./context.ts";
@@ -50,23 +51,20 @@ async function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promis
   return db.transaction(async (raw) => body(raw as unknown as Database));
 }
 
-/** One imported page hold, combined with the hold the row holds now (read in
- *  the same transaction, by the database clock): a hold in force is never
- *  overwritten by another kind (I.4). */
-async function writeImportedHold(tx: Database, pageId: number, hold: Extract<PageHoldDecision, { action: "set" }>): Promise<void> {
+/** One imported page hold — `hold` builds it at the import's instant, read in
+ *  the same transaction by the database clock — combined with the hold the
+ *  row holds now (the shared page-hold core's `combineFanslyPageHold`): a hold
+ *  in force is never overwritten by another kind (I.4). The 429 ladder step
+ *  stays the row's. */
+async function writeImportedHold(
+  tx: Database,
+  pageId: number,
+  hold: (importedAt: Date) => FanslyPageHoldWrite,
+): Promise<void> {
   const current = await getSyncPage(tx, pageId);
   if (current === null) throw new Error(`page ${pageId} has no sync_pages row`);
-  const combined = combinePageHold({
-    holdKind: current.holdKind,
-    holdUntil: current.holdUntil,
-    holdSince: current.holdSince,
-    holdStep: current.holdStep,
-    holdDetail: current.holdDetail,
-    networkFailureStreak: current.networkFailureStreak,
-    resourceHolds: current.resourceHolds as Record<string, ResourceHoldEntry>,
-    credentialsGeneration: current.credentialsGeneration,
-  }, hold, current.dbNow);
-  await setPageHold(tx, { pageId, kind: combined.kind, until: combined.until, step: combined.step, detail: combined.detail });
+  const combined = combineFanslyPageHold(current, hold(current.dbNow), current.dbNow);
+  await setPageHold(tx, { pageId, kind: combined.kind, until: combined.until, step: current.holdStep, detail: combined.detail });
 }
 
 /** Demand signals → upserts of the page's live journal (unknown or
@@ -181,35 +179,39 @@ export async function importLegacyState(
   });
 
   // 4. Holds: a legacy 429 hold in force becomes the page's rate_limit hold
-  // (same end); a legacy auth block an auth hold keyed on the stored
-  // credentials that failed — it lifts when the owner's identity-checked
-  // credentials change them, never on a takeover verify of the same session.
-  // Both at once are both kept (`combinePageHold`): the auth hold carries the
-  // 429 hold beside itself — as it does a 429 or network hold the engine
-  // left on the row before a rollback — and the page is held until the later
-  // of them ends. Never a list hold either: that lives in `resource_holds`.
+  // (same end); a legacy auth block an auth hold naming the stored
+  // credentials that failed — the takeover verify of the same session is not
+  // admitted under it; the verify of the owner's renewed credentials is (A3),
+  // and its proof lifts it. Both at once are both kept
+  // (`combineFanslyPageHold`): the auth hold carries the 429 hold beside
+  // itself — as it does a 429 or network hold the engine left on the row
+  // before a rollback — and the page is held until the later of them ends.
+  // Never a list hold either: that lives in `resource_holds`.
   await inTx(db, async (tx) => {
     const providerHold = await readActiveLegacyProviderHold(tx, page.pageId);
     if (providerHold !== null) {
-      await writeImportedHold(tx, page.pageId, {
-        action: "set",
+      await writeImportedHold(tx, page.pageId, () => ({
         kind: "rate_limit",
         until: providerHold.holdUntil,
-        step: page.holdStep,
         detail: { importedFrom: "page_sync_provider_holds", reason: providerHold.reason, stream: providerHold.stream },
-      });
+      }));
       report.holds.rateLimitUntil = providerHold.holdUntil.toISOString();
     }
     const authBlocker = await readLegacyAuthBlocker(tx, page.pageId);
     if (authBlocker !== null && page.pageLabel !== null) {
       const failed = await readFanslyPageGeneration(tx, page.pageLabel).catch(() => null);
-      await writeImportedHold(tx, page.pageId, {
-        action: "set",
+      // No attempt of the engine refused them: the refusal is the import's,
+      // at its instant, so only a proof sent after the import clears it
+      // (ruling 5) — also when an engine credentials hold in force keeps an
+      // earlier episode start (`hold_since`).
+      await writeImportedHold(tx, page.pageId, (importedAt) => ({
         kind: "auth",
         until: "infinity",
-        step: page.holdStep,
-        detail: { importedFrom: "page_sync_states.blocker_kind", streams: authBlocker.streams, credentialsGeneration: failed },
-      });
+        detail: credentialsFailureDetail(
+          { attemptId: null, at: importedAt, digest: failed },
+          { importedFrom: "page_sync_states.blocker_kind", streams: authBlocker.streams },
+        ),
+      }));
       report.holds.auth = true;
     }
   });

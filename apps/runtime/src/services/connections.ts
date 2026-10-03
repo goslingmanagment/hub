@@ -3,7 +3,6 @@ import {
   listVisiblePages,
   findPageByLabel,
   storePlatformCredentials,
-  type Database,
 } from "@agency_hub_core/db";
 import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
 import {
@@ -23,7 +22,7 @@ import { handleSuccessfulPageVerificationRecovery } from "./notification-inciden
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey, saveProxy } from "./page-context.ts";
 import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { fanslyPageSendGuard } from "./fansly-send-guard/index.ts";
-import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, trustStoredFanslyCredentials } from "./sync-engine-account.ts";
+import { checkFanslyIdentityThroughEngine, fanslyAccountRoute, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -330,18 +329,19 @@ export async function updatePageCredentials(
 /**
  * The credentials change of a live engine page (design step 3 §3.5 item 6):
  * the candidate is checked through the page's actor, then stored as the
- * legacy path stores it and trusted by the engine in ONE transaction (the
- * new digest lifts an auth hold of the old one). Nothing is stored when the
- * check does not match.
+ * legacy path stores it and trusted by the engine in ONE transaction that is
+ * a CAS on the pair the check proved (step 3b ruling 5). Nothing is stored
+ * when the check does not match or the stored credentials changed since. An
+ * auth hold of the old credentials ends when the engine's verify of the new
+ * ones passes (A3).
  */
 async function updateEnginePageCredentials(
   app: AppContext,
   page: { id: number; label: string; platform: string },
   candidate: { session: FanslySessionBundle | null; proxy: ProxyConfig | null; rateLimitScopeKey: string | null },
 ) {
-  await checkFanslyIdentityThroughEngine(app, page, { session: candidate.session, proxy: candidate.proxy });
-  await app.db.transaction(async (raw) => {
-    const tx = raw as unknown as Database;
+  const verified = await checkFanslyIdentityThroughEngine(app, page, { session: candidate.session, proxy: candidate.proxy });
+  await saveVerifiedFanslyCredentials(app, page, verified, async (tx) => {
     if (candidate.session !== null) {
       const encrypted = encryptJson(
         { platform: "fansly", session: candidate.session } satisfies StoredPlatformCredentialBundle,
@@ -358,7 +358,6 @@ async function updateEnginePageCredentials(
       await saveProxy({ config: app.config, db: tx }, page.id, candidate.proxy,
         candidate.rateLimitScopeKey === null ? {} : { rateLimitScopeKey: candidate.rateLimitScopeKey });
     }
-    await trustStoredFanslyCredentials(tx, page);
   });
   const recovery = await handleSuccessfulPageVerificationRecovery(app, {
     platformAccountId: page.id,

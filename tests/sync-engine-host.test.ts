@@ -6,7 +6,7 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 import { FANSLY_SEND_HOLDER_ROLES } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../apps/runtime/src/services/transactions-writer-gate.ts";
-import { credentialsVerifiedSince, pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
+import { pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
 import {
   ApplyDeferred,
   applyErrorScope,
@@ -163,20 +163,12 @@ describe("what a pick leaves out", () => {
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 
-  it("unverified credentials: only the identity checks, until the verified digest moved (to the refused one or any other)", () => {
+  it("unverified credentials (checks-only, derived from the database by the actor): only the identity checks", () => {
     const exclusions = pickExclusions(page(), registry, false, NOW, { checksOnly: true });
     expect(exclusions.excludeClasses).toEqual(["requests"]);
     expect(exclusions.excludeResources).not.toContain("account.verify");
     expect(exclusions.excludeResources).not.toContain("account.identity");
     expect(exclusions.excludeResources).toContain("dm-messages.catchup");
-    const takeover = { stored: "a".repeat(64), verified: null };
-    expect(credentialsVerifiedSince(takeover, null)).toBe(false);
-    expect(credentialsVerifiedSince(takeover, "a".repeat(64))).toBe(true);
-    // The refused digest failed its verify; the owner's checked credentials were trusted.
-    expect(credentialsVerifiedSince(takeover, "c".repeat(64))).toBe(true);
-    const changed = { stored: "a".repeat(64), verified: "b".repeat(64) };
-    expect(credentialsVerifiedSince(changed, "b".repeat(64))).toBe(false);
-    expect(credentialsVerifiedSince(changed, "c".repeat(64))).toBe(true);
   });
 });
 

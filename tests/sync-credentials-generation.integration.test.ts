@@ -15,7 +15,7 @@ import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   checkFanslyIdentityThroughEngine,
   runFanslyIdentityCheck,
-  trustStoredFanslyCredentials,
+  saveVerifiedFanslyCredentials,
 } from "../apps/runtime/src/services/sync-engine-account.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -39,13 +39,14 @@ import {
 import { switchRegistry } from "./helpers/sync-switch.ts";
 
 // The engine's credentials generation on a live page (design step 3 §3.5
-// item 3, G1/G2/G14/G18, E16): an applied `account.verify` records the digest
-// of the stored session and proxy it proved; until then the live transport
-// sends nothing but the identity checks. An auth hold names the digest that
-// failed: a candidate identity check still runs under it (another session),
-// and storing a matching candidate lifts it; a change of the stored
-// credentials made out of band lifts it for one verify, never a spin; a new
-// proxy is followed by the next request.
+// item 3, G1/G2/G18, E16; step 3b ruling 5, A3): an applied `account.verify`
+// records the digest of the stored session and proxy it proved; until then
+// the live transport sends nothing but the identity checks. An auth hold names
+// the latest refusal: a candidate identity check still runs under it (another
+// session), storing a matching candidate is a CAS on the pair it proved, and
+// the verify of stored credentials other than the refused ones — stored by
+// the owner's renewal or out of band — runs under the hold once, its proof
+// lifting it; never a spin; a new proxy is followed by the next request.
 
 const S = 300;
 
@@ -171,7 +172,7 @@ describe("the credentials generation of a live page", () => {
     expect(journaled.rows[0]!.generation).toBe(await storedGeneration(r.page));
   }, 60_000);
 
-  it("under an auth hold, a credentials change runs its identity check, stores the candidate and lifts the hold; nothing else goes out under it", async (context) => {
+  it("under an auth hold, a credentials change runs its identity check, stores the candidate, and the verify of the stored pair lifts the hold; nothing else goes out under it", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const failed = await storedGeneration(r.page);
@@ -198,8 +199,12 @@ describe("the credentials generation of a live page", () => {
     );
     expect(decryptJsonWithKeyVersion<{ session: { authorization: string } }>(stored.rows[0]!.encrypted_session, new Map([[1, HARNESS_ENCRYPTION_KEY]])).session.authorization)
       .toBe("fresh-token");
-    // The hold no longer applies: the queued read goes out, with the new session.
+    // The verify of the stored new pair runs under the hold (A3) and its
+    // proof lifts it: the queued read goes out, with the new session.
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the read after the hold");
+    expect(r.identityTokens).toEqual(["fresh-token", "fresh-token"]);
+    expect(await verifyAttempts(r.page.pageId)).toBe(1);
+    expect((await getSyncPage(db(), r.page.pageId))!.holdKind).toBeNull();
     const identity = await testDb.pool.query<{ state: string; close_reason: string; secret_params: string | null }>(
       "select state, close_reason, secret_params from sync_work where page_id = $1 and resource = 'account.identity'", [r.page.pageId],
     );
@@ -256,7 +261,7 @@ describe("the credentials generation of a live page", () => {
     expect(await storedGeneration(r.page)).toBe(before);
   }, 60_000);
 
-  it("an out-of-band change of the stored credentials under an auth hold lifts it for one account.verify, without a spin", async (context) => {
+  it("an out-of-band change of the stored credentials under an auth hold runs one account.verify under it, whose proof lifts it, without a spin", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const failed = await storedGeneration(r.page);
@@ -315,14 +320,15 @@ describe("the credentials generation of a live page", () => {
     expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
     expect((await getSyncPage(db(), r.page.pageId))!.holdKind).toBe("auth");
 
-    // The renewal (stored and trusted, as the credentials route does) lifts it.
-    await db().transaction(async (raw) => {
-      const tx = raw as unknown as Database;
+    // The renewal (stored and trusted as the credentials route does, a CAS on
+    // the pair the check proved): the verify of it lifts the hold.
+    const done = await checked;
+    await saveVerifiedFanslyCredentials(appContext(), page, { accountId: done.accountId!, username: done.username, proof: done.proof! }, async (tx) => {
       await storeFanslySession(tx, r.page.pageId, JSON.stringify(encryptJson(fresh, HARNESS_ENCRYPTION_KEY, 1)), 1);
-      await trustStoredFanslyCredentials(tx, page);
     });
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the read after the renewal");
     expect(r.identityTokens.at(-1)).toBe("fresh-token");
+    expect(await verifyAttempts(r.page.pageId)).toBe(1);
   }, 60_000);
 
   it("a proxy change: the identity check rides the candidate proxy, and the next request leaves through the new one", async (context) => {
@@ -336,13 +342,12 @@ describe("the credentials generation of a live page", () => {
 
     const app = appContext();
     const page = { id: r.page.pageId, label: r.page.pageLabel };
-    await checkFanslyIdentityThroughEngine(app, page, { proxy: { url: next.url } });
+    const verified = await checkFanslyIdentityThroughEngine(app, page, { proxy: { url: next.url } });
+    // The candidate proxy came from the egress resolver (one tunnel through it).
     expect(next.tunnels).toBe(1);
     // Stored and trusted as `setPageProxy` does on a live page.
-    await db().transaction(async (raw) => {
-      const tx = raw as unknown as Database;
+    await saveVerifiedFanslyCredentials(app, page, verified, async (tx) => {
       await saveProxy({ config: app.config, db: tx }, page.id, { url: next.url });
-      await trustStoredFanslyCredentials(tx, page);
     });
     const firstTunnels = r.proxy.tunnels;
     const polls = r.server.arrivalsAt("/api/v1/polls").length;

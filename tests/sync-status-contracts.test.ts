@@ -25,9 +25,9 @@ import {
   SYNC_WORK_KINDS,
   SYNC_WORK_STATES,
 } from "@agency_hub_core/db";
+import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
 import { agentSyncWhyCapabilities } from "../apps/runtime/src/modules/agent-read/index.ts";
-import { INDEFINITE_UNTIL } from "../apps/runtime/src/sync/engine/errors.ts";
 import { buildPageStatus, type StatusPage } from "../apps/runtime/src/sync/engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import type { WorkWhy } from "../apps/runtime/src/sync/inspect.ts";
@@ -120,8 +120,8 @@ function statusPage(overrides: Partial<StatusPage> = {}): StatusPage {
     pausedResources: [],
     holdKind: null,
     holdUntil: null,
+    holdSince: null,
     holdDetail: {},
-    credentialsGeneration: "gen-1",
     resourceHolds: {},
     owner: {
       generation: 3n,

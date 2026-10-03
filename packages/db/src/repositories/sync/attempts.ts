@@ -993,6 +993,43 @@ export async function countSendsSince(
   return counts;
 }
 
+/** What one class of a page sent on one wire operation within a window. */
+export interface SyncRouteUse {
+  class: SyncEngineWorkClass;
+  /** A wire id (`sync_attempts.operation`). */
+  operation: string;
+  sends: number;
+}
+
+/**
+ * The page's sends of the last `withinMs` by class and operation (step 3b
+ * ruling 11: the history ETA's measure of what the other classes take of
+ * the page's slots and budgets). Counted as the route clocks count them
+ * (`readRouteJournal`): an attempt that may have gone out without a recorded
+ * send (`admitted`, `sent`, `unknown`, a recovered `shadow`) counts at its
+ * admission; a refusal before sending does not. A short range scan of
+ * `sync_attempts_page_admitted`.
+ */
+export async function readRouteUse(
+  db: Database,
+  input: { pageId: number; shadow: boolean; withinMs: number },
+): Promise<SyncRouteUse[]> {
+  const withinMs = Math.max(0, input.withinMs);
+  const result = await db.execute<{ class: SyncEngineWorkClass; operation: string; sends: number }>(sql`
+    select a.class, a.operation, count(*)::int as sends
+      from sync_attempts a
+     where a.page_id = ${input.pageId}
+       and a.shadow = ${input.shadow}::boolean
+       and a.admitted_at > statement_timestamp()
+         - ${withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS}::double precision * interval '1 millisecond'
+       and coalesce(a.sent_at, a.admitted_at)
+         > statement_timestamp() - ${withinMs}::double precision * interval '1 millisecond'
+       and (a.sent_at is not null or a.outcome in ('admitted', 'sent', 'unknown', 'shadow'))
+     group by a.class, a.operation
+  `);
+  return result.rows.map((row) => ({ class: row.class, operation: row.operation, sends: Number(row.sends) }));
+}
+
 /** One attempt by id (status, the apply path). */
 export async function getSyncAttempt(db: Database, attemptId: number): Promise<SyncAttemptRow | null> {
   const result = await db.execute<AttemptSqlRow>(sql`

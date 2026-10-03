@@ -8,8 +8,8 @@ import {
   type SyncPageRow,
   type SyncSwitchCapability,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
-import { activePageHold } from "../engine/errors.ts";
 import { activeRouteHolds } from "../engine/route-holds.ts";
 import { parseRouteState } from "../engine/route-policy.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
@@ -47,7 +47,8 @@ import { SWITCH_EXIT, SwitchRefusedError, wholeSeconds, type SwitchContext } fro
 //     before the actor stopped is waited out (nothing is sent in `handover`;
 //     past `routeHoldWaitMs` exit 6, the page stays in handover). Then
 //     `last_completed_at` moved past the engine's last send and the end of a
-//     real page hold (an imported 429 hold, a network hold) — never a route
+//     real page hold (an imported 429 hold, a network hold; the page holds
+//     judged by the shared page-hold core under the row locks) — never a route
 //     hold's, which would stop every endpoint (A4) — `next_u = 0.2` (J2, G20).
 //     After the hand-back the legacy engine runs its own semantics (S, its
 //     page hold on a 429, owner decision №15): the engine's durable route
@@ -89,11 +90,10 @@ export function engineOwnerStopped(page: Pick<SyncPageRow, "owner">): boolean {
   return owner.stopConfirmedAt !== null && owner.acquiredAt !== null && owner.stopConfirmedAt.getTime() > owner.acquiredAt.getTime();
 }
 
-/** The engine's auth/identity hold in force on the page (its own rule: one
- *  of credentials older than the verified ones is lifted), or null. */
+/** The engine's credentials hold in force on the page — by the page-hold
+ *  core, the rule the actor admits by and the hand-back refuses by — or null. */
 function authHoldInForce(page: SyncPageRow): string | null {
-  const hold = activePageHold(page, page.dbNow);
-  return hold !== null && (hold.kind === "auth" || hold.kind === "identity_mismatch") ? hold.kind : null;
+  return activeFanslyPageHold(page, page.dbNow)?.credentials?.kind ?? null;
 }
 
 type RouteHoldWait =
@@ -132,8 +132,9 @@ function routeHoldsLine(holds: ReadonlyArray<{ route: string; until: Date }>): s
   return holds.map((hold) => `${hold.route} until ${hold.until.toISOString()}`).join(", ");
 }
 
-const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update, or `page verify`: the identity "
-  + "check runs under the hold), then run this command again; or rerun with --with-auth-hold on the owner's word";
+const RENEW_HINT = "renew the credentials through the engine (a credentials or proxy update: its identity check, then the "
+  + "verify of the stored credentials, run under the hold and the verify lifts it), then run this command again; or "
+  + "rerun with --with-auth-hold on the owner's word";
 
 export async function runSyncRollback(ctx: SwitchContext, input: SyncRollbackInput): Promise<SyncRollbackOutcome> {
   const { db } = ctx;

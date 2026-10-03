@@ -14,6 +14,7 @@ export * from "./dm-text.ts";
 export * from "./error-sanitizer.ts";
 export * from "./fans.ts";
 export * from "./fansly-notification-types.ts";
+export * from "./fansly-page-holds.ts";
 export * from "./fansly-pause.ts";
 export * from "./fansly-revenue-types.ts";
 export * from "./fansly-stat-types.ts";

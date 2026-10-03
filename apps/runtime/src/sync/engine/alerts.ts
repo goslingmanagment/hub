@@ -15,6 +15,7 @@ import {
   type SyncLivePathFacts,
   type SyncPageRow,
 } from "@agency_hub_core/db";
+import { activeFanslyPageHold } from "@agency_hub_core/shared";
 
 import {
   notifySyncEngineIncident,
@@ -29,7 +30,7 @@ import {
 import { FANSLY_ROUTES, routeBudget, routeOfWireId, type FanslyRoute } from "../fansly/routes.ts";
 import { moneyFramesMissing, readMoneyFrames } from "../fansly/ws/money-frames.ts";
 import type { SyncLogger } from "./commit.ts";
-import { carriedTimedHold, NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
+import { NETWORK_ALERT_AFTER_MS, resourceFileOf } from "./errors.ts";
 import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "./ports.ts";
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
@@ -180,28 +181,21 @@ export function evaluatePageAlerts(facts: PageAlertFacts, registry: Pick<EngineR
   const shadow = page.mode === "shadow" || page.mode === "off";
   const conditions: Array<SyncAlertCondition | null> = [];
 
-  // 1. The page stopped.
+  // 1. The page stopped: the page holds in force by the shared page-hold
+  // core (the rule the actor admits by) — a credentials hold, and a 429 or
+  // network hold, the page's own or one a credentials hold carries.
   const stopped: SyncAlertCondition["reasons"] = [];
-  const holdInForce = inForce(page.holdUntil, now);
-  if (holdInForce && page.holdKind === "identity_mismatch") stopped.push({ detail: "identity_mismatch", since: page.holdSince });
-  if (holdInForce && page.holdKind === "auth") stopped.push({ detail: "auth", since: page.holdSince });
-  if (holdInForce && page.holdKind === "rate_limit") stopped.push({ detail: "rate_limit", since: page.holdSince });
-  // A 429/network hold an auth/identity hold carries beside itself stops the
-  // page too (`combinePageHold`).
-  const carried = carriedTimedHold(page);
-  const carriedInForce = carried !== null && carried.until.getTime() > now.getTime() ? carried : null;
-  if (carriedInForce?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: dateOf(carriedInForce.detail.lastRateLimitAt) });
+  const held = activeFanslyPageHold(page, now);
+  const holdInForce = held !== null;
+  if (held?.credentials) stopped.push({ detail: held.credentials.kind, since: held.credentials.since });
+  if (held?.timed?.kind === "rate_limit") stopped.push({ detail: "rate_limit", since: held.timed.since });
   // A route state this build cannot read keeps the page's admission closed
   // (`engine/route-policy.ts`).
   const routeState = parseRouteState(page.routeState);
   if (!routeState.ok) stopped.push({ detail: "route_state_unreadable", since: null, context: { diagnostic: routeState.diagnostic } });
   const routes = routeState.ok ? routeState.state : null;
-  if (holdInForce && page.holdKind === "network") {
-    const networkSince = dateOf(page.holdDetail.networkSince) ?? page.holdSince;
-    if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
-  }
-  if (carriedInForce?.kind === "network") {
-    const networkSince = dateOf(carriedInForce.detail.networkSince);
+  if (held?.timed?.kind === "network") {
+    const networkSince = dateOf(held.timed.detail.networkSince) ?? held.timed.since;
     if (msSince(networkSince, now) > NETWORK_ALERT_AFTER_MS) stopped.push({ detail: "network", since: networkSince });
   }
   if (page.mode === "handover") {

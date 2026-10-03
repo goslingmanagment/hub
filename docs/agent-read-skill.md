@@ -325,6 +325,18 @@ Reading progress (`hub history-status`):
   `lowerBoundSeconds` ("not less than") and `estimateSeconds`, labelled
   `basis: "estimate"`. Fansly does not say how long a chat is, so there is no
   upper bound: never quote the estimate as a promise.
+- The time is the reads at `eta.ratePerHour`, the rate the page's budgets leave
+  this request (about 800 reads an hour on a busy page, shared round robin with
+  the page's other open requests). `eta.limitedBy` names the budget that sets it:
+  `family` (the chat list, a chat's detail and `/message` share 15 a minute —
+  the usual one), `route` (`/message` itself, when it runs slower) or `page`
+  (the page's pause, when the page is busy with other work). `eta.slowdown`
+  (non-null) says `/message` runs below its budget on that page since Fansly
+  answered 429; it is already in the rate and does not lift by itself.
+- `eta.hold` (non-null) is a stop in force: nothing is read until `until` —
+  the page's hold, or the `/message` route's own after a 429 (`scope`). It is
+  NOT in the seconds above: the reads start when it ends. `until: null` means no
+  known instant ends it (the page needs new credentials or the operator).
 - `waitingReason` / `waitingUntil` say why the request, or one fan, waits right
   now (`pacer`, `class_share`, `paused`, `page_hold`, `ownership_unconfirmed`,
   ...). They are body fields, never blockers.
