@@ -626,7 +626,7 @@ describe("CLI parsing", () => {
     expect(removeProxyCommand?.helpInformation()).toContain("--page <label>");
   });
 
-  it("queues an initial full sync after adding a Fansly page", async () => {
+  it("adds a Fansly page live on the sync engine and queues no legacy sync", async () => {
     const tempFile = await createTempJsonFile("fansly-session.json", {
       authorization: "token",
     });
@@ -666,19 +666,14 @@ describe("CLI parsing", () => {
         username: null,
         password: null,
       },
+      by: "cli",
     });
 
-    const boss = cliMocks.bossInstances[0];
-    expect(boss).toBeDefined();
-    expect(boss.start).toHaveBeenCalledTimes(1);
-    expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), boss, {
-      pageLabel: "lora-main",
-      scope: "all",
-      reason: "onboarding",
-    });
-    expect(boss.stop).toHaveBeenCalledTimes(1);
+    // Step 4 S4-05: the page is born live; the legacy queue is never opened.
+    expect(cliMocks.bossInstances).toHaveLength(0);
+    expect(cliMocks.requestPageSync).not.toHaveBeenCalled();
     expect(logSpy).toHaveBeenCalledWith("Created Fansly page lora-main (101)");
-    expect(logSpy).toHaveBeenCalledWith("Queued initial full sync for lora-main");
+    expect(logSpy).toHaveBeenCalledWith("lora-main is live on the Fansly Sync Engine: the sync host adopts it within seconds");
   });
 
   it("refuses Fansly CLI onboarding without a proxy before opening the app", async () => {
@@ -758,11 +753,7 @@ describe("CLI parsing", () => {
   });
 
   it("surfaces enqueue failures after the page has been created", async () => {
-    const tempFile = await createTempJsonFile("fansly-session.json", {
-      authorization: "token",
-    });
-    cleanupDirectories.add(tempFile.directory);
-    cliMocks.onboardFanslyPage.mockResolvedValue({
+    cliMocks.onboardOnlyFansPage.mockResolvedValue({
       page: {
         id: 303,
         label: "failed-page",
@@ -775,15 +766,13 @@ describe("CLI parsing", () => {
     await expect(program.parseAsync([
       "page",
       "add",
-      "fansly",
+      "onlyfans",
       "--model",
       "lora",
       "--label",
       "failed-page",
-      "--session-file",
-      tempFile.filePath,
-      "--proxy-url",
-      "socks5://proxy.example:1080",
+      "--username",
+      "lora_onlyfans",
     ], { from: "user" })).rejects.toThrow(
       'Page "failed-page" was created, but the automatic sync could not be queued: queue down',
     );

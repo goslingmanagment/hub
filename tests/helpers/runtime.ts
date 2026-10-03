@@ -12,6 +12,8 @@ export function createTestAppContext(
     encryptionKey?: Buffer;
     encryptionKeyVersion?: number;
     encryptionKeysByVersion?: ReadonlyMap<number, Buffer>;
+    /** The Fansly origin (a test's fake one); default an unroutable host. */
+    fanslyBaseUrl?: string;
     fanslyDefaultDelayMs?: number;
     /** S for the context's Fansly send guards. 0 by default: a test that is
      *  not about pacing does not wait between its requests. */
@@ -109,7 +111,7 @@ export function createTestAppContext(
       isProduction: false,
       trustProxy: overrides?.trustProxy ?? false,
       sessionTtlDays: overrides?.sessionTtlDays ?? 30,
-      fanslyBaseUrl: "https://example.invalid",
+      fanslyBaseUrl: overrides?.fanslyBaseUrl ?? "https://example.invalid",
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       fanslyDmConversationsDelayMs: overrides?.fanslyDmConversationsDelayMs ?? 5000,

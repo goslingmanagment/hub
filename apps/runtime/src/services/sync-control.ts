@@ -12,11 +12,12 @@ import {
   type SyncRequestSource,
   type SyncStream,
 } from "@agency_hub_core/db";
+import type { Platform } from "@agency_hub_core/shared";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveStoredProxyEgressKey } from "./page-context.ts";
-import { appPlatformRegistry } from "../platforms/registry.ts";
+import { appPlatformRegistry, isLegacyExecutorPlatform } from "../platforms/registry.ts";
 import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
@@ -32,7 +33,7 @@ import {
   ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
   pauseDisabledOnlyFansDmPollingForPage,
 } from "./sync/onlyfans-dm-polling.ts";
-import { BadRequestError } from "./errors.ts";
+import { AppError, BadRequestError } from "./errors.ts";
 import {
   getOnlyFansPostsCaptureIneligibility,
   pauseIneligibleOnlyFansPostsForPage,
@@ -45,6 +46,37 @@ export interface RequestedSyncRequest {
 }
 
 export const filterStreamsForSyncConfig = filterOnlyFansDmPollingStreams;
+
+export const LEGACY_SYNC_RETIRED_CODE = "legacy_sync_retired";
+
+/** A legacy sync lever (request, trigger, pause, resume, reset) asked for a
+ *  page whose platform the legacy page-sync executor no longer serves: since
+ *  step 4 (S4-10) every Fansly page is read by the Fansly Sync Engine, and the
+ *  levers of a page the engine owns act on the engine (`sync-engine-levers.ts`).
+ *  409 `legacy_sync_retired`; nothing is written or queued. */
+export class LegacySyncRetiredError extends AppError {
+  readonly pageLabel: string;
+  readonly platform: Platform;
+
+  constructor(input: { pageLabel: string; platform: Platform }) {
+    super(
+      `Page ${input.pageLabel}: the legacy sync executor serves no ${input.platform} page since step 4; `
+        + `the Fansly Sync Engine reads it (see \`pnpm cli sync page status --page ${input.pageLabel}\`)`,
+      409,
+      LEGACY_SYNC_RETIRED_CODE,
+    );
+    this.name = "LegacySyncRetiredError";
+    this.pageLabel = input.pageLabel;
+    this.platform = input.platform;
+  }
+}
+
+/** Refuse a page the legacy executor does not serve (`LegacySyncRetiredError`). */
+export function assertLegacyExecutorServes(page: { label: string; platform: Platform }): void {
+  if (!isLegacyExecutorPlatform(page.platform)) {
+    throw new LegacySyncRetiredError({ pageLabel: page.label, platform: page.platform });
+  }
+}
 
 export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
@@ -73,6 +105,7 @@ export async function requestPageSync(
   if (!storedPage) {
     throw new Error(`Page not found for label "${input.pageLabel}"`);
   }
+  assertLegacyExecutorServes(storedPage.page);
 
   if (input.scope === "posts") {
     if (input.reason !== "manual") {
@@ -181,15 +214,15 @@ export async function requestPageSync(
   };
 }
 
+/** Every page of the platforms the legacy executor serves (OnlyFans since
+ *  step 4 S4-10); the Fansly Sync Engine refreshes its own pages
+ *  (`triggerEngineScope`). */
 export async function requestAllPagesSync(
   app: AppContext,
   boss: Pick<PgBoss, "send">,
   input: {
     scope: SyncTriggerScope;
     reason: SyncRequestSource;
-    /** Pages another engine serves (the Fansly Sync Engine's, step 3): their
-     *  legacy streams are fenced, so nothing is requested for them here. */
-    excludePageIds?: ReadonlySet<number>;
   },
 ) {
   if (input.scope === "posts") {
@@ -202,7 +235,7 @@ export async function requestAllPagesSync(
   }>;
 
   for (const page of pages) {
-    if (input.excludePageIds?.has(page.id) === true) continue;
+    if (!isLegacyExecutorPlatform(page.platform)) continue;
     const request = await requestPageSync(app, boss, {
       pageLabel: page.label,
       scope: input.scope,

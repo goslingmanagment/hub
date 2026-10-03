@@ -7,10 +7,12 @@ import {
   requestAllPagesSync,
   resolveStreamsForScope,
 } from "../apps/runtime/src/services/sync-control.ts";
+import { FANSLY_ENGINE_SCOPE_STREAMS } from "../apps/runtime/src/services/sync-engine-levers.ts";
 
 describe("resolveStreamsForScope", () => {
   it("exposes posts as an explicit one-stream scope on both platforms", () => {
-    expect(resolveStreamsForScope("fansly", "posts")).toEqual(["posts"]);
+    // A Fansly page's scopes are the engine levers' since step 4 (S4-10).
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.posts).toEqual(["posts"]);
     expect(resolveStreamsForScope("onlyfans", "posts")).toEqual(["posts"]);
     expect(syncTriggerBodySchema.parse({ pageLabel: "creator-1", scope: "posts" }))
       .toEqual({ pageLabel: "creator-1", scope: "posts" });
@@ -23,8 +25,14 @@ describe("resolveStreamsForScope", () => {
     })).rejects.toThrow("posts sync scope is per-page only");
   });
 
+  it("resolves no Fansly scope: the legacy executor serves no Fansly page (step 4 S4-10)", () => {
+    for (const scope of ["light", "followers", "all", "data", "messages", "posts"] as const) {
+      expect(() => resolveStreamsForScope("fansly", scope)).toThrow(`${scope} sync is not supported for fansly pages`);
+    }
+  });
+
   it("treats follower reconcile as part of Fansly data sync", () => {
-    expect(resolveStreamsForScope("fansly", "data")).toEqual([
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).toEqual([
       "light",
       "transactions",
       "top_spenders",
@@ -35,7 +43,7 @@ describe("resolveStreamsForScope", () => {
   });
 
   it("keeps Fansly history while permanently excluding legacy OnlyFans history", () => {
-    expect(resolveStreamsForScope("fansly", "messages")).toEqual([
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).toEqual([
       "dm_conversations",
       "dm_messages",
     ]);
@@ -76,14 +84,6 @@ describe("resolveStreamsForScope", () => {
       }),
     ).toEqual([
       "dm_conversations",
-    ]);
-    expect(
-      filterStreamsForSyncConfig("fansly", resolveStreamsForScope("fansly", "messages"), {
-        onlyFansDmPollingEnabled: false,
-      }),
-    ).toEqual([
-      "dm_conversations",
-      "dm_messages",
     ]);
   });
 });

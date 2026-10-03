@@ -134,11 +134,6 @@ export function fanslyPageSendGuard(app: GuardHost, pageId: number, source: Fans
   return getFanslySendGuards(app).forPage(pageId, source);
 }
 
-/** The guard of a check of an unknown session: journaled, unpaced. */
-export function fanslyUnpacedSendGuard(app: GuardHost, source: FanslySendSource): FanslySendGuard {
-  return getFanslySendGuards(app).withoutPage(source);
-}
-
 export const FANSLY_SEND_GUARD_SWEEP_INTERVAL_MS = 10_000;
 /** stop() waits at most this long for a pass in flight: inside the api's and
  *  the worker's stop grace, beside the other bounded stops. A pass cut off by

@@ -386,10 +386,6 @@ export async function getPageTransactionsWriterInfo(db: Database, platformAccoun
   return page ?? null;
 }
 
-export async function listFanslyPages(db: Database) {
-  return listPagesByPlatform(db, "fansly");
-}
-
 // Stage 13: operational listings/lookups see ACTIVE pages only — a tombstoned
 // page stops syncing, mapping, and appearing in admin/dashboard lists. Fact
 // readers (rollup rebuilds, fact-presence, model page counts) intentionally

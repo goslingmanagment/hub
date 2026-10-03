@@ -7,11 +7,14 @@ import { sortDemandSignals } from "@agency_hub_core/db";
 
 // Fansly Sync Engine core repositories (design §2.10): the structural pins.
 //
-// I17 — nothing but the step-3 switch can make a page `handover`/`live`.
-// `setSyncPageMode` moves a page there only with a switch capability, and the
-// capability is issued by `issueSyncSwitchCapability` alone. Its one sanctioned
-// production caller is the switch/rollback CLI (S3-05, `sync/cli/switch.ts`);
-// otherwise only tests issue one.
+// I17 — nothing but the step-3 switch can make an existing page
+// `handover`/`live`. `setSyncPageMode` moves a page there only with a switch
+// capability, and the capability is issued by `issueSyncSwitchCapability`
+// alone. Its one sanctioned production caller is the switch/rollback CLI
+// (S3-05, `sync/cli/switch.ts`); otherwise only tests issue one. The one other
+// way to `live` is a page's birth: Fansly onboarding creates the page's row
+// live in the transaction that creates the page (`createLiveSyncPage`, step 4
+// S4-05), and nothing else calls it.
 
 const root = join(__dirname, "..");
 
@@ -38,6 +41,17 @@ describe("Fansly Sync Engine repository boundaries", () => {
   it("issues the switch capability nowhere outside its own module (I17)", () => {
     expect(filesMatching("issueSyncSwitchCapability", SOURCES)).toEqual([
       "apps/runtime/src/sync/cli/switch.ts",
+      "packages/db/src/repositories/sync/pages.ts",
+    ]);
+  });
+
+  it("creates a page live only at its onboarding (I17, step 4 S4-05)", () => {
+    expect(filesMatching("createLiveSyncPage\\(", SOURCES)).toEqual([
+      "apps/runtime/src/services/page-onboarding.ts",
+      "packages/db/src/repositories/sync/pages.ts",
+    ]);
+    // The only insert of a row that is born live.
+    expect(filesMatching("'live', clock_timestamp\\(\\)", SOURCES)).toEqual([
       "packages/db/src/repositories/sync/pages.ts",
     ]);
   });

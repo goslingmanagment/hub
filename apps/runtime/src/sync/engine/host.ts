@@ -72,11 +72,14 @@ import { noStallTracker, type StallTracker, type StallTracking } from "./watchdo
 //   1. `LIVE_LOOP_ENABLED` below (true since the switch PR, S3-05: the build
 //      can run a live loop at all);
 //   2. a page reaches `live` only through the switch CLI's capability
-//      (`setSyncPageMode`; `sync page mode` moves only off ↔ shadow);
+//      (`setSyncPageMode`; `sync page mode` moves only off ↔ shadow) — or is
+//      born live by onboarding (`createLiveSyncPage`, step 4 S4-05: a new
+//      page with nothing of the legacy engine);
 //   3. every live admission needs the step-1 guard row handed to the engine
 //      (`owner_engine = 'fansly_sync_engine'`, checked in `lockOwnedPage`);
 //   4. a live loop starts only after the switch imported the legacy state
-//      (`sync_pages.legacy_imported_at`, J3): a `live` page without it waits
+//      (`sync_pages.legacy_imported_at`, J3; a page born live has none and is
+//      stamped at birth): a `live` page without it waits
 //      (`legacy_not_imported`, alert after 2 min) and nothing is sent.
 // The live transport (`fansly/transport.ts`) is built in one place only: the
 // live branch below. A live page also gets its WebSocket source

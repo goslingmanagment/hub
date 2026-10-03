@@ -1632,11 +1632,12 @@ export function buildProgram() {
           label: options.label,
           session,
           proxy,
+          by: "cli",
         });
-        await queueInitialFullSyncAfterPageCreate(app.config.databaseUrl, app, created.label);
 
+        // Step 4 S4-05: born live; no legacy sync is queued for it.
         console.log(`Created Fansly page ${created.label} (${created.id})`);
-        console.log(`Queued initial full sync for ${created.label}`);
+        console.log(`${created.label} is live on the Fansly Sync Engine: the sync host adopts it within seconds`);
       } finally {
         await app.close();
       }

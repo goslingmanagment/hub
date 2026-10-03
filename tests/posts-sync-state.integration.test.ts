@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  createFanslyPage,
   createModel,
   createOnlyFansPage,
   ensurePageSyncStates,
@@ -13,8 +12,19 @@ import {
 
 import { requestPageSync } from "../apps/runtime/src/services/sync-control.ts";
 import { pauseIneligibleOnlyFansPostsForPage } from "../apps/runtime/src/services/sync/posts.ts";
-import { startIntegrationTestDatabase } from "./helpers/db.ts";
+import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+/** An OnlyFans page the posts lane may open (mapped; background capture on).
+ *  Since step 4 (S4-10) the legacy executor serves OnlyFans pages only. */
+async function eligibleOnlyFansPage(testDb: StartedTestDatabase, slug: string, label: string) {
+  const model = await createModel(testDb.db, { slug, name: slug });
+  if (!model) throw new Error("Expected model seed");
+  const page = await createOnlyFansPage(testDb.db, { modelId: model.id, label });
+  if (!page) throw new Error("Expected page seed");
+  await setPageOfapiAccountId(testDb.db, { pageId: page.id, ofapiAccountId: `ofapi-${label}` });
+  return { page, app: createTestAppContext(testDb, { ofapiMirrorBackgroundCaptureEnabled: true }) };
+}
 
 describe("posts sync rollout state", () => {
   it("seeds inert without a blocker and opens through the ordinary resume FSM", async () => {
@@ -22,13 +32,7 @@ describe("posts sync rollout state", () => {
     if (!testDb) return;
 
     try {
-      const model = await createModel(testDb.db, { slug: "posts-state", name: "Posts State" });
-      if (!model) throw new Error("Expected model seed");
-      const page = await createFanslyPage(testDb.db, {
-        modelId: model.id,
-        label: "posts-state-page",
-      });
-      if (!page) throw new Error("Expected page seed");
+      const { page, app } = await eligibleOnlyFansPage(testDb, "posts-state", "posts-state-page");
 
       await ensurePageSyncStates(testDb.db, { pageId: page.id });
       let [posts] = await listPageSyncStates(testDb.db, { pageId: page.id, streams: ["posts"] });
@@ -51,7 +55,7 @@ describe("posts sync rollout state", () => {
         streams: ["posts"],
       });
       const boss = { send: vi.fn(async () => "posts-wakeup") };
-      const result = await requestPageSync(createTestAppContext(testDb), boss as never, {
+      const result = await requestPageSync(app, boss as never, {
         pageLabel: page.label,
         scope: "posts",
         reason: "manual",
@@ -70,13 +74,7 @@ describe("posts sync rollout state", () => {
     if (!testDb) return;
 
     try {
-      const model = await createModel(testDb.db, { slug: "posts-unblock", name: "Posts Unblock" });
-      if (!model) throw new Error("Expected model seed");
-      const page = await createFanslyPage(testDb.db, {
-        modelId: model.id,
-        label: "posts-unblock-page",
-      });
-      if (!page) throw new Error("Expected page seed");
+      const { page, app } = await eligibleOnlyFansPage(testDb, "posts-unblock", "posts-unblock-page");
       await ensurePageSyncStates(testDb.db, { pageId: page.id });
       await resumePageSync(testDb.db, { pageId: page.id, streams: ["posts"] });
 
@@ -92,7 +90,7 @@ describe("posts sync rollout state", () => {
       await park("manual_action_required", "ofapi_capture_job_job_cap");
       const boss = { send: vi.fn(async () => "posts-wakeup") };
 
-      await requestPageSync(createTestAppContext(testDb), boss as never, {
+      await requestPageSync(app, boss as never, {
         pageLabel: page.label,
         scope: "posts",
         reason: "manual",
@@ -111,7 +109,7 @@ describe("posts sync rollout state", () => {
       // A provider_bad_data block is not the operator's to wave away: the
       // request is recorded, the block stays.
       await park("provider_bad_data", "provider_bad_data");
-      await requestPageSync(createTestAppContext(testDb), boss as never, {
+      await requestPageSync(app, boss as never, {
         pageLabel: page.label,
         scope: "posts",
         reason: "manual",

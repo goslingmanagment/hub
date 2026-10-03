@@ -14,6 +14,7 @@ import {
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
 } from "../page-context.ts";
+import { assertAllowedProxyTarget } from "../proxy-validation.ts";
 import { createEgressPacer } from "./pacer.ts";
 import {
   buildServiceEgressContext,
@@ -31,6 +32,13 @@ import {
 //   ruling 5): checked before it is stored, so it cannot ride the page scope.
 //   Only a page of a platform with page-scoped egress, only with a proxy, and
 //   never as a fallback after the page proxy failed.
+// - fansly_candidate — one identity check of a Fansly session that belongs to
+//   no page yet (onboarding, the create-page credentials check; step 4
+//   S4-05) through the proxy the page will be given: the `page_candidate`
+//   rule without the page lookup. Fansly only, a proxy required (never
+//   direct), its target checked here (`assertAllowedProxyTarget`: nothing
+//   else vouches for a proxy no page holds), and unpaced (owner decision №4:
+//   a session whose account is not known yet is paced against no page).
 // - page scope       — the page's assigned proxy is the address identity
 //   (Fansly direct-to-platform MUST ride it). The legacy OnlyFans page-scope
 //   branch below has no runtime callers: OFAPI callers must use vendor scope,
@@ -94,6 +102,20 @@ export async function resolveEgress(
       dispatcher: null,
       pace: (priorityClass) => pacer.pace(priorityClass),
       close: async () => {},
+    };
+  }
+
+  if (scope.kind === "fansly_candidate") {
+    const candidate = normalizeProxyConfig(scope.proxy);
+    await assertAllowedProxyTarget(candidate);
+    const dispatcher = createProxyRequestDispatcher(candidate);
+    return {
+      egressKey: buildProxyEgressKey(candidate),
+      dispatcher,
+      pace: async () => 0,
+      close: async () => {
+        await dispatcher.close();
+      },
     };
   }
 

@@ -13,10 +13,8 @@ import {
 import { PLATFORM_STREAMS } from "@agency_hub_core/platform-core";
 import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
 
-import {
-  fanslyPlatformAdapter,
-  onlyfansPlatformAdapter,
-} from "../apps/runtime/src/platforms/registry.ts";
+import { onlyfansPlatformAdapter } from "../apps/runtime/src/platforms/registry.ts";
+import { FANSLY_ENGINE_SCOPE_STREAMS } from "../apps/runtime/src/services/sync-engine-levers.ts";
 import { MONITORED_SYNC_STREAMS } from "../apps/runtime/src/services/sync-monitor.ts";
 import {
   BULK_ENRICHMENT_SYNC_STREAMS,
@@ -39,9 +37,7 @@ describe("stats_snapshot stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("stats_snapshot");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("stats_snapshot");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("stats_snapshot");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("stats_snapshot");
-    expect(fanslyPlatformAdapter.pull.stats_snapshot).toBeTypeOf("function");
   });
 
   it("carries a maintenance policy that never runs ahead of transactions or DMs", () => {
@@ -67,9 +63,9 @@ describe("stats_snapshot stream wiring", () => {
   it("is excluded from the manual `all` and `data` scopes", () => {
     // `fan_earnings` is the deliberate precedent for a stream with no scope at
     // all: a manual "sync everything" must not spend a bulk lane's daily budget.
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("stats_snapshot");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("stats_snapshot");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("stats_snapshot");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("stats_snapshot");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("stats_snapshot");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("stats_snapshot");
   });
 
   it("seeds PAUSED, through the generalized branch rather than a name check", () => {
@@ -171,11 +167,9 @@ describe("notifications stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("notifications");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("notifications");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("notifications");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("notifications");
     // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
     // stream" on every dispatch, FLEET-WIDE.
-    expect(fanslyPlatformAdapter.pull.notifications).toBeTypeOf("function");
   });
 
   it("is LIVE class at the 1 800 s cadence, and still yields to money and DMs", () => {
@@ -198,9 +192,9 @@ describe("notifications stream wiring", () => {
   });
 
   it("is excluded from the manual `all` and `data` scopes", () => {
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("notifications");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("notifications");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("notifications");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("notifications");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("notifications");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("notifications");
   });
 
   it("seeds PAUSED and is reachable by the gate reconciler", () => {
@@ -248,11 +242,9 @@ describe("catalog stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("catalog");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("catalog");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("catalog");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("catalog");
     // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
     // stream" on every dispatch, FLEET-WIDE.
-    expect(fanslyPlatformAdapter.pull.catalog).toBeTypeOf("function");
   });
 
   it("is a MAINTENANCE lane on a daily cadence that yields to money and DMs", () => {
@@ -281,9 +273,9 @@ describe("catalog stream wiring", () => {
   });
 
   it("is excluded from the manual `all` and `data` scopes", () => {
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("catalog");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("catalog");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("catalog");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("catalog");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("catalog");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("catalog");
   });
 
   it("seeds PAUSED and is reachable by the gate reconciler", () => {
@@ -331,11 +323,9 @@ describe("post_replies stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("post_replies");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("post_replies");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("post_replies");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("post_replies");
     // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
     // stream" on every dispatch, FLEET-WIDE.
-    expect(fanslyPlatformAdapter.pull.post_replies).toBeTypeOf("function");
   });
 
   it("is a maintenance lane on the history cadence that yields to money and DMs", () => {
@@ -367,9 +357,9 @@ describe("post_replies stream wiring", () => {
   });
 
   it("is excluded from the manual `all` and `data` scopes", () => {
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("post_replies");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("post_replies");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("post_replies");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("post_replies");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("post_replies");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("post_replies");
   });
 
   it("seeds PAUSED and is reachable by the gate reconciler", () => {
@@ -434,11 +424,9 @@ describe("payouts stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("payouts");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("payouts");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("payouts");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("payouts");
     // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
     // stream" on every dispatch, FLEET-WIDE.
-    expect(fanslyPlatformAdapter.pull.payouts).toBeTypeOf("function");
   });
 
   it("is a maintenance lane on the daily cadence that yields to money-in and DMs", () => {
@@ -472,9 +460,9 @@ describe("payouts stream wiring", () => {
   });
 
   it("is excluded from the manual `all` and `data` scopes", () => {
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("payouts");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("payouts");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("payouts");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("payouts");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("payouts");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("payouts");
   });
 
   it("seeds PAUSED and is reachable by the gate reconciler", () => {
@@ -534,12 +522,10 @@ describe("media_stats stream wiring", () => {
     expect([...PLATFORM_STREAMS]).toEqual([...SYNC_STREAMS]);
     expect(getSyncStreamsForPlatform("fansly")).toContain("media_stats");
     expect(getSyncStreamsForPlatform("onlyfans")).not.toContain("media_stats");
-    expect(fanslyPlatformAdapter.capabilities.streams).toContain("media_stats");
     expect(onlyfansPlatformAdapter.capabilities.streams).not.toContain("media_stats");
     // A stream in SYNC_STREAMS with no handler throws "Unsupported executor
     // stream" on every dispatch, FLEET-WIDE — and this is the lane declared for
     // every Fansly page the moment it enters SYNC_STREAMS.
-    expect(fanslyPlatformAdapter.pull.media_stats).toBeTypeOf("function");
   });
 
   it("is the LOWEST-priority lane in the tree, on the six-hourly cadence", () => {
@@ -572,9 +558,9 @@ describe("media_stats stream wiring", () => {
   });
 
   it("is excluded from the manual `all` and `data` scopes", () => {
-    expect(fanslyPlatformAdapter.syncScopes.all).not.toContain("media_stats");
-    expect(fanslyPlatformAdapter.syncScopes.data).not.toContain("media_stats");
-    expect(fanslyPlatformAdapter.syncScopes.messages).not.toContain("media_stats");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.all).not.toContain("media_stats");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.data).not.toContain("media_stats");
+    expect(FANSLY_ENGINE_SCOPE_STREAMS.messages).not.toContain("media_stats");
   });
 
   it("seeds PAUSED and is reachable by the gate reconciler", () => {

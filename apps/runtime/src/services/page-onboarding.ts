@@ -4,35 +4,31 @@ import {
   PlatformAccountIdentityConflictError,
   PlatformAccountIdentityImmutableError,
   createFanslyPage,
+  createLiveSyncPage,
   createOnlyFansPage,
   findModelBySlug,
   setPageOfapiAccountId,
   storePlatformCredentials,
   updateOnlyFansPageIdentityFromOfapi,
-  updatePageMetadata,
 } from "@agency_hub_core/db";
 import {
-  buildProxyEgressKey,
   encryptJson,
   normalizeProxyConfig,
   redactSensitiveText,
-  millsFromInteger,
   type FanslySessionBundle,
   type ProxyConfig,
   type StoredPlatformCredentialBundle,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { applyAccountMeToPage } from "../sync/fansly/resources/account.ts";
+import { checkFanslyIdentityWithoutPage } from "../sync/fansly/identity-without-page.ts";
+import { readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
-import { buildFanslyMetadata } from "./fansly.ts";
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
 import { saveProxy } from "./page-context.ts";
-import { assertAllowedProxyTarget } from "./proxy-validation.ts";
-import { fanslyUnpacedSendGuard } from "./fansly-send-guard/index.ts";
 
-type FanslyOnboardingContext = Pick<AppContext, "db" | "config" | "logger" | "fanslySendGuards"> & {
-  adapter: Pick<AppContext["adapter"], "verifySession">;
-};
+type FanslyOnboardingContext = Pick<AppContext, "db" | "config" | "logger" | "fanslySendGuards">;
 
 type OnlyFansOnboardingContext = Pick<AppContext, "db" | "config" | "ofapi">;
 
@@ -72,6 +68,15 @@ function normalizeProxyInput(proxy: ProxyConfig) {
   }
 }
 
+/**
+ * A new Fansly page (step 4 S4-05): its session is checked through the proxy
+ * it will get — one journaled `/account/me` that belongs to no page yet
+ * (owner decision №4) — and only then are the page, its credentials, its
+ * proxy, the account the check proved and its engine row created, in ONE
+ * transaction. The page is born `live` on the Fansly Sync Engine
+ * (`createLiveSyncPage`): the sync host adopts it on its next pass, its first
+ * request ≥ 1.2 × S after that; the legacy engine never runs it.
+ */
 export async function onboardFanslyPage(
   app: FanslyOnboardingContext,
   input: {
@@ -79,6 +84,8 @@ export async function onboardFanslyPage(
     label: string;
     session: FanslySessionBundle;
     proxy: ProxyConfig;
+    /** Who onboards the page (the engine row's `mode_changed_by`). */
+    by: string;
   },
 ) {
   // Keep the service boundary fail-closed even when a non-contract caller
@@ -94,16 +101,11 @@ export async function onboardFanslyPage(
   }
 
   const proxy = normalizeProxyInput(input.proxy);
-  await assertAllowedProxyTarget(proxy);
-  const egressKey = buildProxyEgressKey(proxy);
-  const verification = await app.adapter.verifySession({
+  const identity = await checkFanslyIdentityWithoutPage(app, {
     session: input.session,
     proxy,
-    egressKey,
-    // No page exists yet: journaled, paced against no page (owner decision №4).
-    sendGuard: fanslyUnpacedSendGuard(app, "onboarding"),
+    source: "onboarding",
   });
-  const verified = verification.parsed;
 
   let page;
   try {
@@ -113,6 +115,7 @@ export async function onboardFanslyPage(
         modelId: model.id,
         label: input.label,
       });
+      if (!created) throw new Error(`Page "${input.label}" was not created`);
 
       await storePlatformCredentials(dbTx, {
         platformAccountId: created.id,
@@ -125,15 +128,18 @@ export async function onboardFanslyPage(
 
       await saveProxy({ ...app, db: dbTx }, created.id, proxy);
 
-      await updatePageMetadata(dbTx, created.id, {
-        platformAccountIdValue: verified.account.id,
-        username: verified.account.username,
-        displayName: verified.account.displayName,
-        followerCount: verified.account.followCount,
-        subscriberCount: verified.account.subscriberCount,
-        earningsBalanceMills: millsFromInteger(verified.account.earningsWallet?.balance ?? 0),
-        metadata: buildFanslyMetadata(verified.account),
-        syncType: "light",
+      // The engine's own write of an applied `/account/me` (identity,
+      // counters, balance, metadata, `last_verified_at`).
+      await applyAccountMeToPage(dbTx, { pageId: created.id, account: identity.account, syncType: "light" });
+
+      await createLiveSyncPage(dbTx, {
+        pageId: created.id,
+        by: `onboarding:${input.by}`,
+        identityAccountId: identity.account.id,
+        identityCheckedAt: identity.sentAt,
+        // The digest of exactly the session and proxy the check proved,
+        // as stored: the engine trusts them without a verify of its own.
+        credentialsGeneration: await readFanslyPageGeneration(dbTx, created.label),
       });
 
       return created;
@@ -142,7 +148,7 @@ export async function onboardFanslyPage(
     rethrowPageIdentityConflict(error);
   }
 
-  return { page, verified };
+  return { page, account: identity.account };
 }
 
 export async function onboardOnlyFansPage(

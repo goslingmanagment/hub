@@ -125,10 +125,11 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
   node apps/runtime/dist/cli.js page add fansly \
   --model lora \
   --label lora-main \
-  --session-file /run/secrets/lora-main.session.json
+  --session-file /run/secrets/lora-main.session.json \
+  --proxy-url http://proxy.example:8080
 ```
 
-The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler.
+The session file must already exist inside the container if you use the CLI this way. For most first-time production setups, the dashboard onboarding flow is simpler. The session is checked through the page's proxy before anything is stored, and the page is created live on the Fansly Sync Engine: the `sync` service adopts it within seconds (no legacy sync is queued).
 
 OnlyFans via OFAPI:
 
@@ -147,9 +148,11 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js sync \
-  --page lora-main \
+  --page lora-of \
   --scope all
 ```
+
+This runs the legacy page-sync executor, which serves OnlyFans pages only. A Fansly page is read by the Fansly Sync Engine (the `sync` service): the command refuses it (`legacy_sync_retired`); use the dashboard's sync buttons, which act on the engine, and `sync page status --page <label>` (or `sync why --page <label> --resource <key>`) to see what the engine does.
 
 ### Inspect sync state from the CLI
 
