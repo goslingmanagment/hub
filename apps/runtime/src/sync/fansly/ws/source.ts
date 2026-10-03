@@ -14,6 +14,7 @@ import {
 import {
   composeFanslySendCheck,
   createOneShotSendCheck,
+  safeFanslyAnswerHeaders,
   type FanslySendCompletionOutcome,
   type FanslySendLease,
   type FanslySendRefusalReason,
@@ -179,6 +180,9 @@ export type WsSourceState = "idle" | "owning" | "connecting" | "open" | "down" |
 export interface UpgradeSettlement {
   outcome: FanslySendCompletionOutcome;
   httpStatus: number | null;
+  /** The answer's safe headers (`safeFanslyAnswerHeaders`): what the
+   *  classifier reads of a refused Upgrade — a 429's or a 5xx's `Retry-After`. */
+  headers: Readonly<Record<string, string>>;
 }
 
 /** A `FanslySendLease` whose send check is the admission's (the pacer's,
@@ -212,16 +216,20 @@ export function createEngineUpgradeLease(hooks: SendHooks, input: { pageId: numb
       return gate.refusal?.reason ?? null;
     },
     bind: (dispatcher) => composeFanslySendCheck(dispatcher, gate.check),
-    async complete({ outcome, httpStatus }) {
+    async complete({ outcome, httpStatus, headers }) {
       if (completed) return;
       completed = true;
-      settle({ outcome, httpStatus: httpStatus ?? null });
+      // Only the safe headers settle the Upgrade, whoever completes the lease.
+      settle({ outcome, httpStatus: httpStatus ?? null, headers: safeFanslyAnswerHeaders(headers) });
     },
     settled,
   };
 }
 
-/** The transport outcome of a settled Upgrade (design §3.3 item 1). */
+/** The transport outcome of a settled Upgrade (design §3.3 item 1): an answer
+ *  carries its status and safe headers, so the classifier reads a refused
+ *  Upgrade as it reads a REST answer — a 429's `Retry-After` is the hold, a
+ *  5xx naming its `Retry-After` is the provider's pause. */
 export function upgradeOutcome(lease: Pick<EngineUpgradeLease, "sent" | "refusal">, settled: UpgradeSettlement): TransportOutcome {
   if (!lease.sent && lease.refusal !== null) return { kind: "aborted_before_send", refusal: lease.refusal };
   switch (settled.outcome) {
@@ -229,7 +237,7 @@ export function upgradeOutcome(lease: Pick<EngineUpgradeLease, "sent" | "refusal
       return {
         kind: "response",
         status: settled.httpStatus ?? 0,
-        headers: {},
+        headers: { ...settled.headers },
         bodyText: "",
         bodyBytes: 0,
         sendMark: lease.sent ? "request_start" : "completion_fallback",

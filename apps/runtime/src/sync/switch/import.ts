@@ -1,8 +1,9 @@
 import {
   getSyncPage,
-  importClosedWorkBreaker,
+  importWorkBreaker,
   importWorkCursor,
   listUnconfirmedOverlayChats,
+  lockBreakerImportFence,
   markPageThreadsUnverified,
   markSyncPageLegacyImported,
   readActiveLegacyProviderHold,
@@ -33,7 +34,10 @@ export interface LegacyImportReport {
   supersededShadowWork: number;
   /** Per module: the keys it seeded and where their values came from. */
   modules: Array<{ resources: string[]; notes: Readonly<Record<string, unknown>> }>;
+  /** Keys whose subject breaker the import raised. */
   breakers: number;
+  /** Of `breakers`, those merged into work the key already had open. */
+  breakersOnOpenWork: number;
   demands: number;
   /** I.3b: chats with an unconfirmed overlay row from before the switch. */
   unconfirmedOverlayChats: number;
@@ -110,6 +114,7 @@ export async function importLegacyState(
     supersededShadowWork: 0,
     modules: [],
     breakers: 0,
+    breakersOnOpenWork: 0,
     demands: 0,
     unconfirmedOverlayChats: 0,
     holds: { rateLimitUntil: null, auth: false },
@@ -125,6 +130,11 @@ export async function importLegacyState(
   for (const module of await importingModules(input.registry)) {
     await inTx(db, async (tx) => {
       const imported = await module.importLegacy!(tx, { pageId: page.pageId, switchStartedAt });
+      // A breaker merges into the key's open work, else its carrier (step 3b
+      // ruling 8), fenced before this transaction writes any work against a
+      // WS receipt opening work of the key meanwhile.
+      const breakers = imported.breakers ?? [];
+      if (breakers.length > 0) await lockBreakerImportFence(tx, { pageId: page.pageId, side: "import" });
       const resources: string[] = [];
       for (const cursor of imported.cursors) {
         const spec = input.registry.spec(cursor.resource);
@@ -140,12 +150,13 @@ export async function importLegacyState(
         });
         resources.push(cursor.resource);
       }
-      for (const breaker of imported.breakers ?? []) {
+      for (const breaker of breakers) {
         const spec = input.registry.spec(breaker.resource);
         if (spec === null) continue;
-        if (await importClosedWorkBreaker(tx, { pageId: page.pageId, ...breaker, kind: spec.kind, class: spec.class })) {
-          report.breakers += 1;
-        }
+        const merged = await importWorkBreaker(tx, { pageId: page.pageId, ...breaker, kind: spec.kind, class: spec.class });
+        if (!merged.raised) continue;
+        report.breakers += 1;
+        if (merged.target === "open_work") report.breakersOnOpenWork += 1;
       }
       const demands = upsertsOf(input.registry, page, imported.demands ?? [], now);
       if (demands.length > 0) await upsertDemands(tx, demands);

@@ -1147,56 +1147,131 @@ export async function importWorkCursor(
   return { id: Number(row.id), created: row.created === true };
 }
 
+/** Transaction advisory lock namespace of the switch's breaker import fence:
+ *  (58216, pageId). */
+export const SYNC_BREAKER_IMPORT_LOCK_NAMESPACE = 58_216;
+
+/**
+ * The fence between the switch's breaker import and the live demand a WS
+ * receipt raises on a `handover` page (the post-ack hook): the import holds it
+ * exclusively, the hook shares it, both until their transaction ends. A
+ * receipt's upsert therefore runs wholly before the import's merge (which then
+ * finds its open row) or wholly after the import's commit (and inherits the
+ * imported carrier): an imported breaker never misses work a concurrent
+ * receipt opened. Lock order: right before the holder's first `sync_work`
+ * write.
+ */
+export async function lockBreakerImportFence(
+  db: Database,
+  input: { pageId: number; side: "import" | "demand" },
+): Promise<void> {
+  await db.execute(input.side === "import"
+    ? sql`select pg_advisory_xact_lock(${SYNC_BREAKER_IMPORT_LOCK_NAMESPACE}, ${input.pageId}::integer)`
+    : sql`select pg_advisory_xact_lock_shared(${SYNC_BREAKER_IMPORT_LOCK_NAMESPACE}, ${input.pageId}::integer)`);
+}
+
+export interface ImportWorkBreakerInput {
+  pageId: number;
+  resource: string;
+  subject: string;
+  kind: SyncWorkKind;
+  class: SyncEngineWorkClass;
+  failureCount: number;
+  breakerUntil: Date | null;
+  lastErrorClass: string | null;
+}
+
+export interface ImportWorkBreakerResult {
+  /** Where the key's breaker lives: its open (running, quarantined) live
+   *  work, or — the key has none — the closed carrier its next work inherits. */
+  target: "open_work" | "carrier";
+  /** The import raised the key's breaker. False: the key already held one at
+   *  least as strict (a resumed import, a stricter engine breaker). */
+  raised: boolean;
+}
+
 /**
  * A subject breaker the legacy engine had armed, carried by the switch's
- * import (design step 3 §3.5 item 7, I.3): a CLOSED live row of the key
- * (`cancelled`, `legacy_import`) holding the failures and `breaker_until`,
- * which the key's next demand inherits (`upsertDemand`: the newest closed row
- * of the key). Idempotent within a switch: when the key's newest closed row
- * is already this very import (same failures, same `breaker_until`) nothing
- * is written. Any other newest row — the engine's own rows of an earlier live
- * period, the work a rollback closed, an older import — means a later legacy
- * breaker: a switch after a rollback imports it (never skipped because an
- * earlier switch imported one for the key).
+ * import (design step 3 §3.5 item 7, I.3; step 3b ruling 8). The breaker is
+ * the key's (page, resource, subject), not a row's, and the import merges it
+ * monotonically: `failure_count` and `breaker_until` become the greater of
+ * the key's and the imported values, `blocked_by_vendor_at` is kept,
+ * `last_error_class` names the import when it raised anything.
+ *
+ * - The key has open live work (a WS receipt in `handover`, a history work a
+ *   rollback kept open, an earlier step of the import): the breaker merges
+ *   into that row. Its state (quarantine included), demand, revision, cursor,
+ *   goal and due time stay as they are; a pick passes it over until
+ *   `breaker_until`.
+ * - Otherwise a CLOSED live row of the key (`cancelled`, `legacy_import`)
+ *   carries the merge of the key's newest closed row and the import, and the
+ *   key's next demand inherits it (`upsertDemand`).
+ *
+ * Idempotent in both orders of a receipt and the import: nothing is written
+ * when the key already holds a breaker at least as strict, so a resumed import
+ * changes nothing, while a stricter legacy breaker after a rollback is always
+ * imported. The caller holds the import fence (`lockBreakerImportFence`).
  */
-export async function importClosedWorkBreaker(
-  db: Database,
-  input: {
-    pageId: number;
-    resource: string;
-    subject: string;
-    kind: SyncWorkKind;
-    class: SyncEngineWorkClass;
-    failureCount: number;
-    breakerUntil: Date | null;
-    lastErrorClass: string | null;
-  },
-): Promise<boolean> {
+export async function importWorkBreaker(db: Database, input: ImportWorkBreakerInput): Promise<ImportWorkBreakerResult> {
   assertResourceKey(input.resource);
   assertSubject(input.subject);
-  const result = await db.execute(sql`
-    insert into sync_work (
-      page_id, shadow, resource, subject, kind, class, state, due_at, closed_at, close_reason,
-      failure_count, breaker_until, last_error_class
+  const failureCount = Math.max(0, Math.trunc(input.failureCount));
+  const key = sql`w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
+    and w.subject = ${input.subject}`;
+  // The import raises a breaker `held` (failure_count, breaker_until) when
+  // either value is greater; a null breaker_until is the least.
+  const raises = (held: SQL) => sql`(${failureCount}::int > coalesce(${held}.failure_count, 0)
+    or ${timestampParam(input.breakerUntil)} > coalesce(${held}.breaker_until, '-infinity'::timestamptz))`;
+  const result = await db.execute<{ openWork: boolean; raised: boolean }>(sql`
+    with open_work as (
+      select w.id, w.failure_count, w.breaker_until
+        from sync_work w
+       where ${key}
+         and w.state in ('open', 'running', 'quarantined')
+         for update of w
+    ),
+    merged as (
+      update sync_work w
+         set failure_count = greatest(w.failure_count, ${failureCount}::int),
+             breaker_until = greatest(w.breaker_until, ${timestampParam(input.breakerUntil)}),
+             last_error_class = ${input.lastErrorClass}::text,
+             updated_at = clock_timestamp()
+        from open_work o
+       where w.id = o.id
+         and ${raises(sql`o`)}
+      returning w.id
+    ),
+    newest_closed as (
+      select w.failure_count, w.breaker_until, w.blocked_by_vendor_at
+        from sync_work w
+       where ${key}
+         and w.closed_at is not null
+       order by w.id desc
+       limit 1
+    ),
+    carrier as (
+      insert into sync_work (
+        page_id, shadow, resource, subject, kind, class, state, due_at, closed_at, close_reason,
+        failure_count, breaker_until, blocked_by_vendor_at, last_error_class
+      )
+      select ${input.pageId}::bigint, false, ${input.resource}::text, ${input.subject}::text, ${input.kind}::text,
+             ${input.class}::text, 'cancelled', clock_timestamp(), clock_timestamp(), 'legacy_import',
+             greatest(coalesce(n.failure_count, 0), ${failureCount}::int),
+             greatest(n.breaker_until, ${timestampParam(input.breakerUntil)}),
+             n.blocked_by_vendor_at,
+             ${input.lastErrorClass}::text
+        from (select 1) as one
+        left join newest_closed n on true
+       where not exists (select 1 from open_work)
+         and ${raises(sql`n`)}
+      returning id
     )
-    select ${input.pageId}::bigint, false, ${input.resource}::text, ${input.subject}::text, ${input.kind}::text,
-           ${input.class}::text, 'cancelled', clock_timestamp(), clock_timestamp(), 'legacy_import',
-           ${Math.max(0, Math.trunc(input.failureCount))}::int, ${timestampParam(input.breakerUntil)},
-           ${input.lastErrorClass}::text
-     where not exists (
-       select 1
-         from (select w.close_reason, w.failure_count, w.breaker_until
-                 from sync_work w
-                where w.page_id = ${input.pageId} and not w.shadow and w.resource = ${input.resource}
-                  and w.subject = ${input.subject} and w.closed_at is not null
-                order by w.id desc
-                limit 1) newest
-        where newest.close_reason = 'legacy_import'
-          and newest.failure_count = ${Math.max(0, Math.trunc(input.failureCount))}::int
-          and newest.breaker_until is not distinct from ${timestampParam(input.breakerUntil)}
-     )
+    select exists (select 1 from open_work) as "openWork",
+           (exists (select 1 from merged) or exists (select 1 from carrier)) as raised
   `);
-  return (result.rowCount ?? 0) > 0;
+  const row = result.rows[0];
+  if (!row) throw new Error(`sync_work breaker import of ${input.resource} returned no row`);
+  return { target: row.openWork === true ? "open_work" : "carrier", raised: row.raised === true };
 }
 
 /** What a rollback (or a switch reverted at B) closes: every live work of the
