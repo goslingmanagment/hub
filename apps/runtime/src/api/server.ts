@@ -62,6 +62,7 @@ import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
 import { registerCatalogRoutes } from "../modules/catalog/index.ts";
+import { registerClientRoutes } from "../modules/client/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerEventsRoutes } from "../modules/events/index.ts";
@@ -625,6 +626,9 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Fansly Sync Engine owner routes (history requests) --- (module: apps/runtime/src/modules/sync-engine)
   registerSyncEngineRoutes(server, moduleContext);
+
+  // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
+  registerClientRoutes(server, moduleContext);
 
   // --- Events (stream + snapshot) --- (module: apps/runtime/src/modules/events)
   registerEventsRoutes(server, moduleContext);
