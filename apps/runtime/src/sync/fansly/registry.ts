@@ -222,10 +222,14 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: dmConversationsModule("full"),
   },
   {
+    // Planned before the HTTP gate too (ruling 9): what its plan settles
+    // without a request (a wait for the page's identity; a closure, once a
+    // list read answered the find) commits there with no slot; its reads
+    // wait for theirs.
     key: "dm-conversations.find", file: "dm-conversations", subject: "thread", kind: "trigger", class: "urgent",
     triggers: ["ws:group_created", "ws:message_unknown_chat", "dependency"],
     coalesce: { quietMs: 0, maxMs: 0, extendOnSignal: false }, slo: { resultMs: 12 * SECOND },
-    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "dm_archive",
+    proof: "snapshot", walk: "single", http: true, planBeforeGate: true, evidence: false, fence: "dm_archive",
     operations: ["messaging.groups", "group.detail"], replayKinds: ["group_detail"],
     legacy: [stream("dm_conversations"), sender("ws_hint")],
     module: dmConversationsModule("find"),

@@ -32,7 +32,7 @@ import type { AppConfig } from "@agency_hub_core/shared";
 import { loadEffectiveConfig } from "../services/effective-config.ts";
 import { SYNC_DECODE_DEBT_WINDOW_MS } from "./engine/alerts.ts";
 import { demandToUpsert, registryOverrideProblem, type EngineRegistry } from "./engine/resource.ts";
-import { FANSLY_RESOURCE_SPECS, type ResourceSpec } from "./fansly/registry.ts";
+import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec, type ResourceSpec } from "./fansly/registry.ts";
 import { probeRequestOf, type ProbeParams } from "./fansly/resources/probe.ts";
 import { pageRequestProgress } from "./requests/history.ts";
 import {
@@ -104,6 +104,7 @@ function statusWork(work: SyncWorkRow): StatusWork {
     blockedByVendorAt: work.blockedByVendorAt,
     waitingReason: work.waitingReason,
     waitingUntil: work.waitingUntil,
+    http: fanslyResourceSpec(work.resource)?.http !== false,
   };
 }
 

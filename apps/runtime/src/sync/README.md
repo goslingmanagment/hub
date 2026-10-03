@@ -24,7 +24,7 @@ sync/
     resource.ts              the resource contract (plan / apply / shadow) and the rules every entry shares
     host.ts                  pages ↔ actors, ownership, LISTEN, mode changes, SIGTERM; LIVE_LOOP_ENABLED
     host-ports.ts            the lock session (advisory locks 58215) and the LISTEN wake
-    actor.ts                 one page: recover → loop (plan → admit → send → capture → apply)
+    actor.ts                 one page: recover → loop (steps without a request; plan → admit → send → capture → apply)
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
@@ -81,6 +81,15 @@ One step of a page is four short transactions: **admit** (the attempt is journal
 it) → **apply** (erasure fence, parse through the wire contract, domain writes, events, cursor and proof, `applied`).
 A crash between capture and apply re-applies from the journal without a request; a crash before capture leaves the
 attempt `unknown` and the read is repeated as a new, counted attempt.
+
+Steps that need no request do not wait for the HTTP gate (step 3b, ruling 9; `stepBeforeGate` in `engine/actor.ts`).
+On every lap, after the due applies and before the page hold and the pacer, the actor plans the due work of the keys
+without HTTP (`dm-live.deletions`) and of the keys that plan before the gate by choice (`planBeforeGate`:
+`dm-conversations.find`, which a list read may already have answered) — at most 10 rows a lap, the keys without HTTP
+first, under the same fences: the owner generation and mode, the erasure fence the entry takes; the owner's pause of
+the page and of a key still stops them. A `local` plan, a closure, a wait or a quarantine commits there; a plan that
+asks for a request is left for its slot. Nothing is admitted or paced and the cycle does not move; "why waiting"
+never shows a key without HTTP as held by the page or the pacer.
 
 ## History requests
 
@@ -178,11 +187,11 @@ decoder plus new chats, money, subscriptions and payouts) and one routing table 
 Own mass broadcasts make no work (decision №9): they are `message.type = 2` with one shared correlation id (measured
 on the production journal), and as a fallback more than 20 own messages in distinct chats within 60 s are a
 broadcast. A deletion becomes `dm-live.deletions` (no request): in shadow it closes at once; on a live page it is a
-`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, picked at a
-slot like any work but admitting nothing): the page's hot rows of the message are marked (sticky), one deliverable
-`message.deleted` is appended and the archive tombstoned from it (tombstone-first, sticky against a later REST copy),
-and the stored window of every touched thread is recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays
-the conversation list's, the chain is untouched.
+`local` step (a write without a request, in one generation-fenced transaction under the erasure fence, taken before
+the HTTP gate on the actor's next lap — no page hold or pacer slot delays it — and admitting nothing): the page's hot
+rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
+from it (tombstone-first, sticky against a later REST copy), and the stored window of every touched thread is
+recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
 page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own

@@ -70,8 +70,14 @@ export interface EngineResourceSpec {
   period?: PeriodSpec;
   coalesce?: CoalesceSpec;
   slo?: SloSpec;
-  /** False only for entries applied from the socket (no request). */
+  /** False only for entries applied from the socket (no request). Such an
+   *  entry's every step runs before the HTTP gate (`beforeGateKeys`). */
   http: boolean;
+  /** Its plan may settle a step without a request — a closure, a wait — and
+   *  decides so read-only and cheaply: the actor plans its due work before
+   *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
+   *  step there; a plan that asks for a request is left for its slot. */
+  planBeforeGate?: true;
   /** Never runs in shadow (socket connect, media download, repair). */
   liveOnly?: boolean;
   /** `sync_attempts.evidence`: the request parameters are coverage evidence
@@ -621,6 +627,29 @@ export function effectivePeriodMs(spec: EngineResourceSpec, page: Pick<SyncPageR
 /** Whether an entry runs on a page in this mode. */
 export function runsIn(spec: EngineResourceSpec, shadow: boolean): boolean {
   return !(shadow && spec.liveOnly === true);
+}
+
+/** Whether the actor plans an entry's due work before the HTTP gate (ruling
+ *  9): an entry without HTTP always, any other only when it says so. */
+export function plansBeforeGate(spec: EngineResourceSpec): boolean {
+  return !spec.http || spec.planBeforeGate === true;
+}
+
+/**
+ * The keys whose due work the actor plans before the page's HTTP gate, in
+ * the order it plans them: the entries without HTTP first (every step of
+ * theirs is one the gate never needed to stop), then those that plan before
+ * the gate by choice. Keys that do not run in this mode, that the owner
+ * switched off for the page or paused are left out, as a pick leaves them out.
+ */
+export function beforeGateKeys(
+  registry: EngineRegistry,
+  page: Pick<SyncPageRow, "pausedResources" | "registryOverrides">,
+  shadow: boolean,
+): string[] {
+  const specs = registry.specs.filter((spec) =>
+    plansBeforeGate(spec) && runsIn(spec, shadow) && !resourceDisabled(page, spec.key) && !page.pausedResources.includes(spec.key));
+  return [...specs.filter((spec) => !spec.http), ...specs.filter((spec) => spec.http)].map((spec) => spec.key);
 }
 
 /** One standing row of a page: a poll, or a standing walk (`kind: 'goal'`). */
