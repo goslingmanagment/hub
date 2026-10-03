@@ -720,7 +720,15 @@ describe("compose config", () => {
     expect(gate).toContain('for drop in "${DROP_CLIENT_SDKS[@]}"; do');
     expect(text).toContain("DROP_CLIENT_SDKS=()");
     expect(text).toContain("    --drop-client-sdk)\n");
+    // Every repetition is kept (behavior: deploy-client-sdk-gate.test.ts).
+    expect(text).toContain('      DROP_CLIENT_SDKS+=("$2")\n');
     expect(text).toContain("  --drop-client-sdk <sha256>\n");
+    // The release kit synced to the host, and archived for rollback, carries
+    // the verifier its deploy-production.sh calls.
+    const releaseFilesStart = text.indexOf("REMOTE_RELEASE_FILES=()");
+    const releaseFiles = text.slice(releaseFilesStart, text.indexOf("\ndo\n", releaseFilesStart) + 1);
+    expect(releaseFilesStart).toBeGreaterThan(-1);
+    expect(releaseFiles).toContain("  scripts/verify-client-sdk-retention.mjs\n");
     // A drop is the owner's per-run decision: no environment equivalent.
     expect(text).not.toMatch(/DEPLOY_DROP_CLIENT_SDK/);
     // Called once, inside candidate verification: after the build and the
