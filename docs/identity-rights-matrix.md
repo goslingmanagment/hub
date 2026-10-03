@@ -53,9 +53,13 @@ pages that account is granted; the owner is granted every page implicitly.
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
-the owner switches it on. A live agent key is refused with 403 even on a page
-it is granted. Its row is held by `client-bootstrap.integration`: every cell
-of it, plus the agent key, in both auth-policy modes.
+the owner switches it on (the audited `chatExtension*` settings). Its
+`bindingsByHost` keeps an owner host binding only when it points at one of
+those pages, so a binding never reveals a page the caller is not granted. A
+live agent key is refused with 403 even on a page it is granted. Its row is
+held by `client-bootstrap.integration`: every cell of it, plus the agent key,
+in both auth-policy modes; the switches and bindings by
+`client-owner-switches.integration`.
 
 Three consequences worth stating out loud, because each has already surprised
 someone:
