@@ -1,5 +1,6 @@
 import { readOfapiStoredSnapshots, type Database } from "@agency_hub_core/db";
-import { millsFromDollars, normalizeDmMessageText } from "@agency_hub_core/shared";
+import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { ofapiDollarValueToMillsString } from "./ofapi-message-material.ts";
 
 /**
  * The page's automatic welcome template, as the `account_settings` collection
@@ -24,19 +25,26 @@ export interface OfapiWelcomeTemplateSnapshot extends OfapiWelcomeTemplateFacts 
   observedAt: string;
 }
 
-const MAX_TEMPLATE_PRICE_DOLLARS = 1_000_000;
+/** $1,000,000: far above any real template price and a safe integer in mills. */
+const MAX_TEMPLATE_PRICE_MILLS = 1_000_000_000n;
 
 /**
  * OnlyFans prices the template in US DOLLARS (`price: 0`, or 3–200 on write —
  * the same unit `welcome_message_update` sends), never cents or mills. The
  * conversion to mills is explicit here so no reader handles a dollar number.
+ * It is the shared OFAPI dollar parser, so the template price follows the same
+ * rule as every other OFAPI money field; one cap then applies to a number and
+ * a decimal string alike.
  */
 export function ofapiWelcomeTemplatePriceMills(value: unknown): number | null {
-  const dollars = typeof value === "number"
-    ? Number.isFinite(value) && value >= 0 && value <= MAX_TEMPLATE_PRICE_DOLLARS ? value : null
-    : typeof value === "string" && /^(0|[1-9]\d{0,6})(\.\d{1,3})?$/.test(value) ? value : null;
-  if (dollars === null) return null;
-  return Number(millsFromDollars(dollars));
+  let mills: string | null;
+  try {
+    mills = ofapiDollarValueToMillsString(value);
+  } catch {
+    // Past the BIGINT range or an exponent form (1e21): not a usable price.
+    return null;
+  }
+  return mills !== null && BigInt(mills) <= MAX_TEMPLATE_PRICE_MILLS ? Number(mills) : null;
 }
 
 export function ofapiWelcomeTemplateFacts(row: Record<string, unknown>): OfapiWelcomeTemplateFacts {

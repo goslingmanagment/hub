@@ -53,6 +53,7 @@ describe("account_settings: the welcome-template collection category", () => {
       label: "Account settings: welcome message",
       modes: ["off", "on_demand", "scheduled"],
       baseline: false,
+      consumers: ["dashboard"],
       supportsOneOff: true,
       priceUnit: "physical_calls",
       legacyOperations: [],
@@ -110,7 +111,12 @@ describe("account_settings: the welcome-template collection category", () => {
     });
     expect(ofapiReadCoverage(welcome, body, "/acct_test/settings/welcome-message", {}))
       .toMatchObject({ state: "complete", reason: null, nextQuery: null });
+    // No template object (null, a list) is a contract rejection: the scheduled
+    // run parks as paused with the raw response retained (runbook, "Welcome
+    // template snapshot"), as the desktop's gateway read of this path refuses it.
     expect(() => normalizeOfapiRead(welcome, { data: [] })).toThrow("contract rejected");
+    expect(() => normalizeOfapiRead(welcome, { data: null })).toThrow("contract rejected");
+    expect(validateOfapiInteractiveResponseShape("ofapi_gateway_welcome_message", { data: null })).toBe(false);
   });
 
   it("converts the provider's dollar price to mills explicitly", () => {
@@ -120,8 +126,14 @@ describe("account_settings: the welcome-template collection category", () => {
     expect(ofapiWelcomeTemplatePriceMills(4.99)).toBe(4990);
     expect(ofapiWelcomeTemplatePriceMills("12.5")).toBe(12_500);
     expect(ofapiWelcomeTemplatePriceMills(0)).toBe(0);
-    for (const invalid of [undefined, null, -1, Number.NaN, Number.POSITIVE_INFINITY, "free", "-3", "1e3", true, 1e21])
+    for (const invalid of [undefined, null, -1, Number.NaN, Number.POSITIVE_INFINITY, "free", "-3", "1e3", " 5", true, 1e21,
+      "99999999999999999999"])
       expect(ofapiWelcomeTemplatePriceMills(invalid), String(invalid)).toBeNull();
+    // One cap ($1,000,000) for a number and a decimal string alike.
+    expect(ofapiWelcomeTemplatePriceMills(1_000_000)).toBe(1_000_000_000);
+    expect(ofapiWelcomeTemplatePriceMills("1000000")).toBe(1_000_000_000);
+    expect(ofapiWelcomeTemplatePriceMills(5_000_000)).toBeNull();
+    expect(ofapiWelcomeTemplatePriceMills("5000000")).toBeNull();
     const [paid] = normalizeOfapiRead(welcome, { data: { ...documented, price: 7 } });
     expect(paid).toMatchObject({ welcomeTemplate: { priceMills: 7000 } });
   });

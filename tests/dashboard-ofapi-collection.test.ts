@@ -130,7 +130,7 @@ function catalog(): OfapiCollectionCatalogEntry[] {
     modes: id === "vault_files" ? ["off"] : id === "media_previews" ? ["off", "on_demand"] : ["off", "on_demand", "scheduled"],
     baseline: ["core_messages", "core_payments", "core_audience"].includes(id),
     consumers: id === "core_messages" ? ["chatters", "Agent Read"] : id === "media_previews" ? ["chatters"]
-      : id === "account_settings" ? ["chatters", "dashboard"] : ["dashboard", "Agent Read"],
+      : id === "account_settings" ? ["dashboard"] : ["dashboard", "Agent Read"],
     supportsOneOff: !["core_messages", "core_payments", "core_audience", "media_previews"].includes(id),
     priceUnit: id === "vault_files" || id === "media_previews" ? "calls_and_bytes" : "physical_calls",
     prerequisites: id === "vault_files" ? ["owned source and explicit upload approval"] : ["active OFAPI page binding"],
