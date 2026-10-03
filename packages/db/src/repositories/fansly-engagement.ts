@@ -1881,18 +1881,21 @@ export interface MediaStatsRefreshProgress {
  * query does — not read from `refresh_class`, which is only ever the tier of the
  * LAST visit and is `dirty` for anything WP-F2 marked. `dueNow` applies the
  * chunk query's failure backoff too: an item the lane will not touch today is
- * not due today.
+ * not due today. `tiers` is the chunk query's input of the same name: absent
+ * (the legacy lane), the legacy code tiers at `longTailCycleDays`; the Fansly
+ * Sync Engine passes the page's own (owner decision №6), so its census is the
+ * queue its walk reads.
  */
 export async function countMediaStatsRefreshProgress(
   db: Database,
-  input: { pageId: number; now: Date; longTailCycleDays: number },
+  input: { pageId: number; now: Date; longTailCycleDays: number; tiers?: MediaStatsTiers },
 ): Promise<MediaStatsRefreshProgress> {
-  const longTailDays = Math.max(1, input.longTailCycleDays);
-  const freshFrom = new Date(input.now.getTime() - MEDIA_STATS_FRESH_DAYS * DAY_MS);
-  const midFrom = new Date(input.now.getTime() - MEDIA_STATS_MID_DAYS * DAY_MS);
-  const freshDue = new Date(input.now.getTime() - MEDIA_STATS_FRESH_INTERVAL_DAYS * DAY_MS);
-  const midDue = new Date(input.now.getTime() - MEDIA_STATS_MID_INTERVAL_DAYS * DAY_MS);
-  const longDue = new Date(input.now.getTime() - longTailDays * DAY_MS);
+  const tiers = input.tiers ?? legacyMediaStatsTiers(input.longTailCycleDays);
+  const freshFrom = new Date(input.now.getTime() - tiers.freshDays * DAY_MS);
+  const midFrom = new Date(input.now.getTime() - tiers.midDays * DAY_MS);
+  const freshDue = new Date(input.now.getTime() - tiers.freshEveryMs);
+  const midDue = new Date(input.now.getTime() - tiers.midEveryMs);
+  const longDue = new Date(input.now.getTime() - tiers.oldEveryMs);
   const publicationAt = sql`coalesce(m.created_at_platform, m.first_observed_at)`;
   const tier = sql`
     case

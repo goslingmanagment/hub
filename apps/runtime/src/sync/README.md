@@ -39,7 +39,8 @@ sync/
                              page's socket (`source.ts`)
     lib/                     chain rules, walk helpers
   requests/                  history requests, ETA, enqueue-and-wait, the legacy hydration wrapper's mapping
-  report/                    `sync shadow report`: part A (the live window), part B (the past journal)
+  report/                    `sync shadow report`: part A (the live window, the route checks), part B (the past
+                             journal), the fingerprint the switch checks
   switch/                    step 3: `sync switch` (preconditions, legacy stop, import, phases A–H), `sync rollback`,
                              `sync switch check` (the acceptance checks); `cli/switch.ts` issues the switch capability
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
@@ -317,7 +318,8 @@ restores the legacy engine with no other action.
 
 ## Switch and rollback (step 3)
 
-`pnpm cli sync switch --page P --shadow-report <path> [--dry-run]` moves one page to the live engine; it is resumable
+`pnpm cli sync switch --page P --shadow-report <path> [--dry-run]` moves one page to the live engine (the report: an
+accepted shadow hour of the build `sync` runs and of its route policy, by the report's fingerprint); it is resumable
 (where it stands is read from the mode, the guard owner, `legacy_imported_at`, `requests_enabled_at` and the page's
 newest `admin.sync_switch` / `admin.sync_rollback` audit row) and refuses a page a rollback left half done (J4).
 Phases: **A** mode `handover` (the legacy engine is fenced, the shadow actor releases, the host keeps the page's
@@ -509,8 +511,19 @@ live demand, the transactions apply's new sales, names no target in shadow), the
 row on the socket → the shadow admission vs the legacy arrival; an offline replay of the previous day's routing when
 the hour is too quiet), the pacer's self-check; part B over the past journal — every resource's replay of its legacy
 observations (≥ 99.9 %, every mismatch listed), the chain rebuild and end-of-history check since 05.07 (the 16.09
-counterexamples listed, no empty-page soundness hit) and the ETA backtest. `--out <path>` keeps the report for the
-step-3 switch. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
+counterexamples listed, no empty-page soundness hit) and the ETA backtest. Besides the frozen A1–A4 rules part A runs
+two SQL checks over the shadow journal (step 3b ruling 12, `report/shadow-routes.ts`): the **route budgets** — every
+route and family of `fansly/routes.ts` at most ⌈W / T⌉ + 1 sends in every 60 s and 300 s span (T: its `current`
+interval; a send this build places on no route fails) — and the **walks per route** — no run of a non-poll key asks
+a route the same request twice. It prints the **media model** the shadow walk ran per page (the owner's tiers, the
+long-tail window mode: an unproven route is modelled as live meets it, the refused 90-day window then the 31-day
+split) with the queue under those tiers, and the **fingerprint** (`report/shadow-fingerprint.ts`): the `sync` build
+of the whole window, proven from the database — one fresh `sync` heartbeat build started before the window, every
+shadow page's owner taken since then and before the window, no shadow attempt of another owner generation in it (so
+run the report right after its hour: a deploy or restart since leaves the build unproven and the report not
+accepted) —, `ROUTE_POLICY_HASH`, the registry's hash, each page's overrides and media model, and S (now and as the
+window's admissions recorded it). `--out <path>` keeps the report for the step-3 switch, which accepts it only of the
+build `sync` runs and of this build's route policy. Where the design's wording needed a rule to be measurable (`SHADOW_WINDOW_RULES` in
 `report/shadow-window.ts`: A1.rate, A1.rate-assumed, A1.ceiling, A1.ceiling-demand, A1.floor, A1.floor-scheduled,
 A1.floor-queue, A1.floor-idle, A1.poll-schedule, A2.rate, A2.legacy-regime, A2.live-only, A2.demand-replaced), every
 report prints the rule it applied.

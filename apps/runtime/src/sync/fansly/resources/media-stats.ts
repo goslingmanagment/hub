@@ -671,6 +671,9 @@ interface ShadowVisit {
   /** Windows the visit is estimated to take. */
   steps: number;
   done: number;
+  /** The long-tail window mode the visit was estimated under
+   *  (`shadowLongTailMode`); absent on a visit an older build began. */
+  mode?: LongTailWindowMode;
 }
 
 export interface MediaStatsWalkCursor extends MediaStatsPageState {
@@ -703,7 +706,8 @@ function parseShadowVisit(value: unknown): ShadowVisit | null {
   const done = int(record.done);
   if (subjectRef === null || keyset === null || steps === null || done === null) return null;
   const tier = record.tier === "mid" || record.tier === "long_tail" ? record.tier : "fresh";
-  return { subjectRef, keyset, tier, steps, done };
+  const mode = record.mode === undefined ? undefined : parseLongTailMode(record.mode);
+  return { subjectRef, keyset, tier, steps, done, ...(mode === undefined ? {} : { mode }) };
 }
 
 export function parseMediaStatsWalkCursor(value: unknown): MediaStatsWalkCursor {
@@ -797,10 +801,24 @@ export function estimateVisitWindows(candidate: MediaStatsRefreshCandidate, mode
   return refresh + Math.min(BACKFILL_WINDOWS_PER_VISIT, toFloor);
 }
 
+/**
+ * The windows a visit takes as a live page asks them (shadow, step 3b ruling
+ * 12: the shadow models media as live). On a page whose route has not shown
+ * its answer to the 90-day window (`unproven`), live's first long-tail visit
+ * asks that window and — Fansly refusing it on every page that asked
+ * (production: `split_31` on the five legacy pages and on lilly-1 live) —
+ * falls back to the three 31-day windows (`runMediaVisit`): both are counted.
+ */
+export function shadowVisitWindows(candidate: MediaStatsRefreshCandidate, mode: LongTailWindowMode, now: Date): number {
+  if (mode === "unproven" && candidate.tier === "long_tail") return 1 + estimateVisitWindows(candidate, "split_31", now);
+  return estimateVisitWindows(candidate, mode, now);
+}
+
 /** The page's coverage row (one per page, never one per item): an aggregate
- *  over the queue, the per-look evidence being the journal. */
-async function writeQueueCoverage(tx: Database, input: { pageId: number; now: Date; mode: LongTailWindowMode }) {
-  const progress = await countMediaStatsRefreshProgress(tx, { pageId: input.pageId, now: input.now, longTailCycleDays: 30 });
+ *  over the queue under the page's tiers, the per-look evidence being the
+ *  journal. */
+async function writeQueueCoverage(tx: Database, input: { pageId: number; now: Date; mode: LongTailWindowMode; tiers: MediaStatsTiers }) {
+  const progress = await countMediaStatsRefreshProgress(tx, { pageId: input.pageId, now: input.now, longTailCycleDays: 30, tiers: input.tiers });
   const everyItemVisited = progress.queueSize > 0 && progress.neverVisited === 0 && progress.backfillComplete >= progress.queueSize;
   const status: CaptureCoverageStatus = progress.queueSize === 0
     ? "not_started"
@@ -834,6 +852,22 @@ async function legacyMediaStatsCursor(db: Database, pageId: number) {
   return parseFanslyMediaStatsCursorState(result.rows[0]?.state ?? null);
 }
 
+/**
+ * The long-tail window mode the shadow models on a page: shadow never learns
+ * the route from an answer, so its own mode is set only once a long-tail visit
+ * modelled the refused 90-day window (`shadowVisitWindows`); until then the
+ * legacy lane's discovery stands in — the mode the switch imports
+ * (`importLegacy`), so the shadow asks what live would ask after the switch.
+ * The shadow report prints it per page (its fingerprint).
+ */
+export async function shadowLongTailMode(
+  db: Database,
+  input: { pageId: number; cursor: Pick<MediaStatsPageState, "longTailWindowMode"> },
+): Promise<LongTailWindowMode> {
+  if (input.cursor.longTailWindowMode !== "unproven") return input.cursor.longTailWindowMode;
+  return (await legacyMediaStatsCursor(db, input.pageId))?.longTailWindowMode ?? "unproven";
+}
+
 // ── the module ───────────────────────────────────────────────────────────────
 
 async function planShadow(
@@ -842,7 +876,7 @@ async function planShadow(
 ): Promise<StepPlan> {
   const visit = cursor.shadowVisit;
   if (visit !== null && visit.done < visit.steps) {
-    const [window] = steadyWindows(visit.tier, ctx.now, cursor.longTailWindowMode);
+    const [window] = steadyWindows(visit.tier, ctx.now, visit.mode ?? cursor.longTailWindowMode);
     return { kind: "request", request: windowRequest(visit.subjectRef, window!, { shadowVisit: visit }) };
   }
   const pass = currentShadowPass(cursor.shadow, ctx.now, MEDIA_STATS_RECHECK_MS);
@@ -850,16 +884,14 @@ async function planShadow(
   if (candidate === undefined) {
     return { kind: "wait", reason: "not_due", until: shadowPassWaitUntil(pass, ctx.now, MEDIA_STATS_RECHECK_MS) };
   }
-  // Shadow never learns the route: the legacy lane's discovery stands in.
-  const mode = cursor.longTailWindowMode !== "unproven"
-    ? cursor.longTailWindowMode
-    : (await legacyMediaStatsCursor(ctx.db, ctx.pageId))?.longTailWindowMode ?? "unproven";
+  const mode = await shadowLongTailMode(ctx.db, { pageId: ctx.pageId, cursor });
   const shadowVisit: ShadowVisit = {
     subjectRef: candidate.subjectRef,
     keyset: candidate.keyset,
     tier: candidate.tier,
-    steps: Math.max(1, estimateVisitWindows(candidate, mode, ctx.now)),
+    steps: Math.max(1, shadowVisitWindows(candidate, mode, ctx.now)),
     done: 0,
+    mode,
   };
   const [window] = steadyWindows(candidate.tier, ctx.now, mode);
   return { kind: "request", request: windowRequest(candidate.subjectRef, window!, { shadowVisit }) };
@@ -1064,7 +1096,7 @@ export const mediaStatsWalkModule: ResourceModule = {
     next = { ...next, last: receipt };
     const coverageDue = cursor.coverageWrittenAt === null || now.getTime() - Date.parse(cursor.coverageWrittenAt) >= COVERAGE_EVERY_MS;
     if (coverageDue) {
-      await writeQueueCoverage(tx, { pageId: input.pageId, now, mode: next.longTailWindowMode });
+      await writeQueueCoverage(tx, { pageId: input.pageId, now, mode: next.longTailWindowMode, tiers: mediaStatsOwnerTiers(input.page) });
       next = { ...next, coverageWrittenAt: now.toISOString() };
     }
     // The walk row stays: the next plan takes the next due item, or rests.
@@ -1121,6 +1153,12 @@ export const mediaStatsWalkModule: ResourceModule = {
       limit: 1,
     });
     counters.media_visits_estimated = 1;
+    if (visit.mode === "unproven" && visit.tier === "long_tail") {
+      // Live's first long-tail visit has learned the route's answer by now
+      // (`shadowVisitWindows`): every later visit asks the 31-day windows.
+      next = { ...next, longTailWindowMode: "split_31", longTailWindowAnnounced: true };
+      counters.long_tail_window_split_estimated = 1;
+    }
     return {
       work: { satisfiesRevision: true, nextDueAt: advanced.nextDueAt, cursor: { ...next, shadow: advanced.pass, shadowVisit: null } },
       followups: [],

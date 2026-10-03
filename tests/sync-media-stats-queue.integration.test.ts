@@ -2,11 +2,13 @@ import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  countMediaStatsRefreshProgress,
   legacyMediaStatsTiers,
   listMediaStatsRefreshChunk,
   upsertCheckpointProgress,
   type Database,
   type MediaStatsRefreshCandidate,
+  type MediaStatsTiers,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -233,6 +235,26 @@ describe("the legacy call of the media-stats chunk is unchanged", () => {
     // 60 days: mid under both, due weekly.
     expect([legacy.get(ref(6)), owner.get(ref(6))]).toEqual(["mid", "mid"]);
     expect(owner.get(ref(9))).toBe("long_tail");
+  });
+
+  it("the queue's census counts under the tiers its walk reads: the legacy code's by default, the owner's when given (step 3b ruling 12)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage();
+    await seedQueueFixture(pageId);
+    const owner = mediaStatsOwnerTiers({ registryOverrides: {} });
+    const legacy = await countMediaStatsRefreshProgress(db(), { pageId, now: NOW, longTailCycleDays: 30 });
+    expect(await countMediaStatsRefreshProgress(db(), { pageId, now: NOW, longTailCycleDays: 30, tiers: legacyMediaStatsTiers(30) })).toEqual(legacy);
+    const census = await countMediaStatsRefreshProgress(db(), { pageId, now: NOW, longTailCycleDays: 30, tiers: owner });
+    // What is due is what the walk's chunk admits under the same tiers.
+    const due = async (tiers?: MediaStatsTiers) =>
+      (await listMediaStatsRefreshChunk(db(), { pageId, limit: 100, now: NOW, longTailCycleDays: 30, ...(tiers === undefined ? {} : { tiers }) })).length;
+    expect(legacy.dueNow).toBe(await due());
+    expect(census.dueNow).toBe(await due(owner));
+    // The 100- and 150-day items are mid by the code, the long tail by the
+    // owner's tiers; the 100-day one is due weekly, not monthly.
+    expect(census.longTail - legacy.longTail).toBe(2);
+    expect(legacy.mid - census.mid).toBe(2);
+    expect(legacy.dueNow - census.dueNow).toBe(1);
   });
 });
 

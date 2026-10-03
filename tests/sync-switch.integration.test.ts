@@ -44,6 +44,7 @@ import {
   legacyRoute,
   LegacySender,
   seedSwitchPage,
+  SWITCH_TEST_BUILD,
   switchContext,
   switchRegistry,
   testCapability,
@@ -506,9 +507,22 @@ describe("sync switch", () => {
     // No shadow owner beats yet (no host): `page_shadow` fails.
     expect(dry.exitCode).toBe(1);
     expect(r.lines.filter((line) => line.startsWith("FAIL")).map((line) => line.split(":")[0])).toEqual(["FAIL page_shadow"]);
+    // An accepted, fresh report of the hour another build ran proves nothing
+    // about this one (step 3b ruling 12: its fingerprint).
+    const otherBuild = await checkSwitchPreconditions(ctx({ ...r, report: acceptedShadowReport([page.pageLabel], new Date(), "fedcba9876543210") }), {
+      page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json",
+    });
+    expect(otherBuild.checks.find((check) => check.name === "shadow_report")).toEqual({
+      name: "shadow_report", ok: false,
+      detail: `the shadow window ran build fedcba9876543210, sync runs ${SWITCH_TEST_BUILD}: a fresh shadow hour on this build`,
+    });
     await beatSync(testDb.pool, null);
     const unknown = await checkSwitchPreconditions(ctx(r), { page: (await getSyncPage(db(), page.pageId))!, shadowReportPath: "/tmp/r.json" });
     expect(unknown.checks.find((check) => check.name === "build_identity")).toMatchObject({ ok: false });
+    // Nor does any report while the build sync runs is unknown.
+    expect(unknown.checks.find((check) => check.name === "shadow_report")).toMatchObject({
+      ok: false, detail: expect.stringContaining("sync runs an unknown build"),
+    });
     expect((await getSyncPage(db(), page.pageId))!.mode).toBe("shadow");
 
     await testDb.pool.query("update sync_pages set mode = 'handover' where page_id = $1", [page.pageId]);

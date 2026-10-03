@@ -1,12 +1,19 @@
 import { sql } from "drizzle-orm";
 
-import type { Database, FanslyWsLivePayloadResolver, SyncPageRow } from "@agency_hub_core/db";
+import {
+  countMediaStatsRefreshProgress,
+  type Database,
+  type FanslyWsLivePayloadResolver,
+  type MediaStatsRefreshProgress,
+  type SyncPageRow,
+} from "@agency_hub_core/db";
 
 import type { SyncContext } from "../context.ts";
 import type { SettingsSource } from "../engine/ports.ts";
 import type { EngineRegistry } from "../engine/resource.ts";
 import { ScanGovernor, type ScanPacing } from "../fansly/lib/chain-rebuild.ts";
 import { purchaseAnnouncementSummary } from "./purchase-announcements.ts";
+import { readShadowFingerprint, type ShadowFingerprintPage, type ShadowReportFingerprint } from "./shadow-fingerprint.ts";
 import {
   backtestEta,
   checkChains,
@@ -23,6 +30,7 @@ import {
   type PageDemand,
   type ShadowWindowReport,
 } from "./shadow-window.ts";
+import { readShadowRouteChecks, routeCheckLines, type ShadowRouteChecks } from "./shadow-routes.ts";
 import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 
 // `pnpm cli sync shadow report` (design §3.12): the shadow acceptance's
@@ -33,11 +41,14 @@ import type { EtaBacktestPageReport } from "../requests/eta-backtest.ts";
 // backtest are the dry-run scans of `sync chain …` and `sync history
 // eta-backtest`). Acceptance = every page in shadow, settled, through the
 // window (a window that starts before the deploy or a page's switch to shadow
-// is no acceptance window), A1–A4 hold, B5 ≥ 99.9 % per resource
-// (matched over every observation but legacy's own refusals; a kind with
-// observations and nothing judged fails) with every mismatch listed for
-// explanation, B6 lists the 16.09 counterexamples and no empty-page soundness
-// hit, B7 printed.
+// is no acceptance window), A1–A4 hold, the route budgets held in shadow and
+// no walk went round in circles (step 3b ruling 12, `shadow-routes.ts`), the
+// fingerprint proves the window's sync build (`shadow-fingerprint.ts`: the
+// switch accepts the report only of its own build and route policy), B5 ≥
+// 99.9 % per resource (matched over every observation but legacy's own
+// refusals; a kind with observations and nothing judged fails) with every
+// mismatch listed for explanation, B6 lists the 16.09 counterexamples and no
+// empty-page soundness hit, B7 printed.
 
 export interface ShadowReportInput {
   pages: readonly SyncPageRow[];
@@ -62,6 +73,8 @@ export interface ShadowReportInput {
    *  plan's own pick, and the replies' re-walk cycle is live config (rule
    *  A1.floor-idle; the registry's 14 d is not prod's 30 d). */
   settings: SettingsSource;
+  /** The build of the process writing the report (its fingerprint). */
+  reportBuild: string | null;
 }
 
 export interface ShadowReportVerdict {
@@ -71,6 +84,12 @@ export interface ShadowReportVerdict {
   a2: boolean | null;
   a3: boolean | null;
   a4: boolean | null;
+  /** Every route and family kept its budget in shadow (ruling 12). */
+  budgets: boolean | null;
+  /** No walk asked a route the same request twice (ruling 12). */
+  walks: boolean | null;
+  /** The fingerprint proves the one sync build of the window. */
+  build: boolean;
   b5: boolean | null;
   b6: boolean | null;
   b7: boolean | null;
@@ -78,10 +97,21 @@ export interface ShadowReportVerdict {
   accepted: boolean;
 }
 
+/** The media-stats walk as the shadow models it on a page (ruling 12), with
+ *  its queue under those tiers at the window end. */
+export interface ShadowMediaModelRow extends Pick<ShadowFingerprintPage, "page" | "media"> {
+  queue: MediaStatsRefreshProgress;
+}
+
 export interface ShadowReport {
   generatedAt: Date;
   pages: Array<{ page: string; mode: SyncPageRow["mode"] }>;
+  /** What the hour ran on (build, route policy, registry and tiers, S). */
+  fingerprint: ShadowReportFingerprint;
   window: ShadowWindowReport | null;
+  /** Part A's two SQL checks over the shadow journal. */
+  routes: ShadowRouteChecks | null;
+  media: ShadowMediaModelRow[] | null;
   journal: {
     replay: ReplayKindReport[];
     chains: ChainCheckReport[];
@@ -93,16 +123,24 @@ export interface ShadowReport {
   summary: string[];
 }
 
-/** Part A inside one read-only, repeatable-read transaction. */
+interface WindowPart {
+  window: ShadowWindowReport;
+  routes: ShadowRouteChecks;
+  media: ShadowMediaModelRow[];
+  fingerprint: ShadowReportFingerprint;
+}
+
+/** Part A — and the fingerprint of its window — inside one read-only,
+ *  repeatable-read transaction. */
 async function windowPart(
   ctx: Pick<SyncContext, "db" | "logger">,
   input: ShadowReportInput,
   window: { start: Date; end: Date },
-): Promise<ShadowWindowReport> {
+): Promise<WindowPart> {
   return ctx.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await tx.execute(sql`set transaction isolation level repeatable read, read only`);
-    return reportShadowWindow(tx, {
+    const report = await reportShadowWindow(tx, {
       window,
       pages: input.pages,
       maxListed: input.maxListed,
@@ -111,6 +149,20 @@ async function windowPart(
       ...(input.resolvePayload === undefined ? {} : { resolvePayload: input.resolvePayload }),
       settings: input.settings,
     });
+    const routes = await readShadowRouteChecks(tx, { pages: input.pages, window, maxListed: input.maxListed });
+    const fingerprint = await readShadowFingerprint(tx, { pages: input.pages, window, settings: input.settings, reportBuild: input.reportBuild });
+    // The fingerprint's media model per page (in `input.pages` order), with
+    // its queue under the same tiers.
+    const media: ShadowMediaModelRow[] = [];
+    for (const [index, page] of input.pages.entries()) {
+      const model = fingerprint.pages[index]!;
+      media.push({
+        page: model.page,
+        media: model.media,
+        queue: await countMediaStatsRefreshProgress(tx, { pageId: page.pageId, now: window.end, longTailCycleDays: 30, tiers: model.media.tiers }),
+      });
+    }
+    return { window: report, routes, media, fingerprint };
   });
 }
 
@@ -127,7 +179,10 @@ function mark(value: boolean | null): string {
 }
 
 export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">, input: ShadowReportInput): Promise<ShadowReport> {
-  const window = input.window === null ? null : await windowPart(ctx, input, input.window);
+  const part = input.window === null ? null : await windowPart(ctx, input, input.window);
+  const window = part?.window ?? null;
+  const fingerprint = part?.fingerprint
+    ?? await readShadowFingerprint(ctx.db, { pages: input.pages, window: null, settings: input.settings, reportBuild: input.reportBuild });
 
   let journal: ShadowReport["journal"] = null;
   if (input.journal !== null) {
@@ -155,18 +210,28 @@ export async function buildShadowReport(ctx: Pick<SyncContext, "db" | "logger">,
     };
   }
 
-  const verdict = verdictOf(window, journal, input.pages.length);
+  const routes = part?.routes ?? null;
+  const media = part?.media ?? null;
+  const verdict = verdictOf({ window, routes, fingerprint }, journal, input.pages.length);
   return {
     generatedAt: new Date(),
     pages: input.pages.map((page) => ({ page: page.pageLabel ?? String(page.pageId), mode: page.mode })),
+    fingerprint,
     window,
+    routes,
+    media,
     journal,
     verdict,
-    summary: summaryOf(window, journal, verdict),
+    summary: summaryOf({ window, routes, media, fingerprint }, journal, verdict),
   };
 }
 
-function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journal"], pages: number): ShadowReportVerdict {
+function verdictOf(
+  partA: Pick<ShadowReport, "window" | "routes" | "fingerprint">,
+  journal: ShadowReport["journal"],
+  pages: number,
+): ShadowReportVerdict {
+  const { window, routes, fingerprint } = partA;
   // A kind passes only on its own ratio; null is a kind without a single
   // legacy observation (listed as not replayable, design §3.12).
   const b5 = journal === null
@@ -187,6 +252,9 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
     a2: window?.verdict.a2 ?? null,
     a3: window?.verdict.a3 ?? null,
     a4: window?.verdict.a4 ?? null,
+    budgets: routes === null ? null : routes.budgets.violations === 0,
+    walks: routes === null ? null : routes.walks.repeats === 0,
+    build: fingerprint.build.sync !== null,
     b5,
     b6,
     b7,
@@ -196,6 +264,7 @@ function verdictOf(window: ShadowReport["window"], journal: ShadowReport["journa
   const accepted = window !== null && journal !== null
     && verdict.covered === true
     && verdict.a1 === true && verdict.a2 === true && verdict.a3 !== false && verdict.a4 === true
+    && verdict.budgets === true && verdict.walks === true && verdict.build
     && b5 === true && b6 === true && b7 === true;
   return { ...verdict, accepted };
 }
@@ -247,8 +316,27 @@ function demandLine(page: PageDemand): string {
   return `A1 ${page.page}: ${parts.join("; ")} — ${page.passes ? "ok" : "FAIL"}`;
 }
 
-function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journal"], verdict: ShadowReportVerdict): string[] {
-  const lines: string[] = [];
+function tiersText(tiers: ShadowFingerprintPage["media"]["tiers"]): string {
+  const days = (ms: number) => `${Math.round((ms / 86_400_000) * 10) / 10} d`;
+  return `≤ ${tiers.freshDays} d every ${days(tiers.freshEveryMs)}, ≤ ${tiers.midDays} d every ${days(tiers.midEveryMs)}, `
+    + `older every ${days(tiers.oldEveryMs)}`;
+}
+
+function fingerprintLine(fingerprint: ShadowReportFingerprint): string {
+  const { build, setting } = fingerprint;
+  return `Fingerprint: sync build ${build.sync ?? `UNPROVEN (${build.unproven})`}`
+    + `${build.report !== null && build.report !== build.sync ? ` (report written by ${build.report})` : ""}; `
+    + `route policy ${fingerprint.policyHash.slice(0, 12)}, registry ${fingerprint.registryHash.slice(0, 12)}; `
+    + `S ${setting.effectiveMs ?? "unreadable"} ms now${setting.windowMs.length === 0 ? "" : `, ${setting.windowMs.join(" / ")} ms in the window`}`;
+}
+
+function summaryOf(
+  partA: Pick<ShadowReport, "window" | "routes" | "media" | "fingerprint">,
+  journal: ShadowReport["journal"],
+  verdict: ShadowReportVerdict,
+): string[] {
+  const { window, routes, media, fingerprint } = partA;
+  const lines: string[] = [fingerprintLine(fingerprint)];
   if (window !== null) {
     lines.push(`Window ${window.window.start.toISOString()} … ${window.window.end.toISOString()}`);
     const uncovered = window.coverage.filter((page) => !page.covered);
@@ -283,6 +371,12 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     }
     lines.push(`A4 pacer: ${window.pacer.violations} shadow pairs closer than the setting`);
   }
+  if (routes !== null) lines.push(...routeCheckLines(routes));
+  for (const row of media ?? []) {
+    lines.push(`Media model ${row.page}: tiers ${tiersText(row.media.tiers)}; long-tail windows ${row.media.longTailWindowMode}; `
+      + `queue ${row.queue.queueSize} (never visited ${row.queue.neverVisited}, due ${row.queue.dueNow}, `
+      + `backfill done ${row.queue.backfillComplete})`);
+  }
   if (journal !== null) {
     const below = journal.replay.filter((row) => row.meetsTarget === false).map((row) => `${row.kind} `
       + (row.ratio !== null ? percent(row.ratio) : row.notReplayableReasons.no_replay === undefined ? "nothing judged" : "no replay"));
@@ -312,6 +406,7 @@ function summaryOf(window: ShadowReport["window"], journal: ShadowReport["journa
     if (journal.stoppedBy !== null) lines.push(`Part B stopped early: ${journal.stoppedBy}`);
   }
   lines.push(`Verdict: coverage ${mark(verdict.covered)}, A1 ${mark(verdict.a1)}, A2 ${mark(verdict.a2)}, A3 ${mark(verdict.a3)}, A4 ${mark(verdict.a4)}, `
+    + `route budgets ${mark(verdict.budgets)}, walks ${mark(verdict.walks)}, build ${mark(verdict.build)}, `
     + `B5 ${mark(verdict.b5)}, B6 ${mark(verdict.b6)}, B7 ${mark(verdict.b7)} — ${verdict.accepted ? "ACCEPTED" : "not accepted"}`);
   return lines;
 }

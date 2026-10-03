@@ -12,6 +12,7 @@ import {
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { emptyAlbumWalk } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
 import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
@@ -521,6 +522,8 @@ describe("catalog.hydrate", () => {
 const ITEM_FRESH = "777000000000000010";
 const ITEM_MID = "777000000000000020";
 const ITEM_GONE = "777000000000000030";
+const ITEM_LONG = "777000000000000040";
+const ITEM_LONG_OLDER = "777000000000000050";
 const BACKFILL_DONE = {
   version: 1, nextBeforeMs: 0, emptyStreak: 2, done: true, floorAt: null, stopReason: "created_at_floor", floorBasis: "created_at",
   guard: { spanDays: 31, narrowed: false, lastAfterMs: null, lastBeforeMs: null, lastObservationId: null },
@@ -868,6 +871,46 @@ describe("media-stats.walk", () => {
     expect(changedTables(before, await tableCounts(testDb.pool))).toEqual(["sync_attempts"]);
     const walk = (await workRow(pageId, "media-stats.walk", true))!;
     expect(walk.due_at.getTime() - Date.now()).toBeGreaterThan(5 * HOUR_MS);
+  });
+
+  it("shadow models the long tail as live (step 3b ruling 12): on an unproven route the first visit asks the 90-day window and the split, every later one the split", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("shadow");
+    // Two long-tail items, both refreshed within their month; the one read
+    // longer ago goes first. Neither the shadow walk nor the legacy lane has
+    // learned the page's 90-day window.
+    await seedQueueItem(pageId, ITEM_LONG_OLDER, { ageDays: 500, lastVisitedDaysAgo: 40, backfillCursor: BACKFILL_DONE });
+    await seedQueueItem(pageId, ITEM_LONG, { ageDays: 400, lastVisitedDaysAgo: 35, backfillCursor: BACKFILL_DONE });
+    const registry = await quietRegistry(pageId, true);
+    await makeDue(pageId, true, "media-stats.walk");
+    await drive(pageId, "shadow", registry, null, async () => (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
+    const rows = await testDb.pool.query<{ subject: string; n: number }>(
+      `select request -> 'params' ->> 'mediaOfferId' as subject, count(*)::int as n from sync_attempts
+        where page_id = $1 and shadow and resource = 'media-stats.walk' and outcome = 'shadow' group by 1 order by min(id)`,
+      [pageId],
+    );
+    // Live's first long-tail visit: the refused 90-day window, then three
+    // 31-day windows; the route's answer known, the next asks the three.
+    expect(rows.rows).toEqual([{ subject: ITEM_LONG_OLDER, n: 1 + 3 }, { subject: ITEM_LONG, n: 3 }]);
+    const walk = (await workRow(pageId, "media-stats.walk", true))!;
+    expect(walk.cursor).toMatchObject({ longTailWindowMode: "split_31", longTailWindowAnnounced: true, shadowVisit: null });
+  });
+
+  it("shadow asks what the legacy lane learned of the 90-day window: the switch imports it (step 3b ruling 12)", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedPage("shadow");
+    await seedQueueItem(pageId, ITEM_LONG, { ageDays: 400, lastVisitedDaysAgo: 35, backfillCursor: BACKFILL_DONE });
+    await testDb.pool.query(
+      `insert into page_sync_cursors (page_id, stream, state) values ($1, 'media_stats', $2::jsonb)`,
+      [pageId, JSON.stringify({ ...emptyFanslyMediaStatsCursorState(new Date()), longTailWindowMode: "split_31", longTailWindowAnnounced: true })],
+    );
+    const registry = await quietRegistry(pageId, true);
+    await makeDue(pageId, true, "media-stats.walk");
+    await drive(pageId, "shadow", registry, null, async () => (await workRow(pageId, "media-stats.walk", true))?.waiting_reason === "not_due");
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and shadow and resource = 'media-stats.walk'", [pageId]))
+      .toBe(3);
+    // The shadow's own mode stays unlearned: the legacy lane's stands in.
+    expect((await workRow(pageId, "media-stats.walk", true))!.cursor).toMatchObject({ longTailWindowMode: "unproven" });
   });
 });
 
