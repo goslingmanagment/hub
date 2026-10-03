@@ -228,6 +228,8 @@ the HTTP gate on the actor's next lap — no page hold or pacer slot delays it �
 rows of the message are marked (sticky), one deliverable `message.deleted` is appended and the archive tombstoned
 from it (tombstone-first, sticky against a later REST copy), and the stored window of every touched thread is
 recomputed by `syncLegacyThreadSummaryAfterDeletion` — the head stays the conversation list's, the chain is untouched.
+Since step 4 S4-11 this is the only path from a socket deletion to the stores: the legacy receipt reconcile is gone, and
+the receipts it applied stay as records that the archive shadow rebuild re-applies.
 
 **A live page's socket** lives in the `sync` process (`fansly/ws/source.ts`, one per live slot of the host; a shadow
 page has none — the legacy receiver owns it). The source holds the page's socket lock `(58213, page)` on its own
@@ -376,13 +378,12 @@ While the engine owns a page (`handover` or `live`) no legacy component even tri
 §3.1); the step-1 guard row (`owner_engine`, 0229) stays the catch-all at the wire. One predicate,
 `legacyOwnsFanslyPageSql` (`repositories/sync/pages.ts`), gates the legacy planner and leases
 (`listRunnablePageSync`, `markPageSyncEnqueued`, `acquirePageSyncLease`, `acquireTargetedPageSyncLease`), the
-`sync_silent` deadman, the AI fast lane (`page_held`), hydration dispatch and auto-approval, and the deletion
-reconcile's window drift pass. The legacy processes ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS
-supervisor drops the page within one poll (graceful `disabled`, lock 58213 released), the ws-hints projector files
-its receipts under no policy (hints `disabled`, no `fansly_ws_dm` write, no DM stream wake; a deletion keeps its
-`mutation_debt` receipt whatever the frame's receive time, so a frame captured before the switch is still marked, and so
-is one whose `dm-live.deletions` work a phase-B revert or a rollback cancelled before the engine applied it), the AI
-describer downloads nothing itself (a `live` page's CDN hops are its actor's `media-download.fetch`) and wakes no DM stream, and the deletion reconcile writes the marks but no thread window. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
+`sync_silent` deadman, the AI fast lane (`page_held`), and hydration dispatch and auto-approval. The legacy processes
+ask `isFanslyPageEngineOwned` / `listEngineOwnedFanslyPages`: the WS supervisor drops the page within one poll (graceful
+`disabled`, lock 58213 released), and the AI describer downloads nothing itself (a `live` page's CDN hops are its
+actor's `media-download.fetch`) and wakes no DM stream. The ws-hints projector and its minutely deletion reconcile are
+gone since step 4 S4-11 (after the A5 drain check over the captured frames): a socket deletion reaches the stores only
+through `dm-live.deletions`, and the receipts the projector filed stay as records. The owner's `/account/me` routes and CLIs, the probes, the alias backfill and the
 `scripts/fansly-ws` probes answer 409 `fansly_page_on_sync_engine` (`services/sync-engine-guard.ts`) with the engine
 command to use instead — except the `/account/me` levers (page verify, credentials, proxy, `fansly:ws-policy`), which
 on a `live` page go through the engine (`services/sync-engine-account.ts`: `account.verify` / `account.identity`,

@@ -1,11 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, nextFanslyWsHintBudgetAt, routeFanslyWsHintEvent,
-  saveFanslyWsHintWalk, isFanslyWsHintClaimEnabled, type Database, type FanslyWsHintEvent,
+  advanceFanslyWsHint, admitFanslyWsHintAttempt, claimFanslyWsHint, nextFanslyWsHintBudgetAt,
+  saveFanslyWsHintWalk, isFanslyWsHintClaimEnabled, type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWsHintPolicy } from "@agency_hub_core/shared";
 import { startTestDatabase, resetIntegrationDatabase, seedFanslyPage, type StartedTestDatabase } from "./helpers/db.ts";
+import { fileFanslyWsHintReceipt, type FanslyWsHintReceiptFixture } from "./helpers/fansly-ws-hint-receipts.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+
+// The legacy B1 claim protocol over the receipts and dirty subjects the
+// retired ws-hints projector left (step 4, S4-11; seeded by
+// helpers/fansly-ws-hint-receipts.ts). The claims go with the legacy DM
+// handler (S4-14).
 
 let db: StartedTestDatabase;
 beforeAll(async () => { db = await startTestDatabase(); }, 120_000);
@@ -24,37 +30,25 @@ async function fixture() {
   const seeded = await seedFanslyPage(app.db, app.config.encryptionKey);
   if (!seeded.page) throw new Error("page missing");
   const pageId = seeded.page.id;
-  const event = (id = 1, groupRef = "100"): FanslyWsHintEvent => ({
+  const event = (id = 1, groupRef = "100"): FanslyWsHintReceiptFixture => ({
     id, pageId, observationId: id, receivedAt: now, generation: policy.generation,
     node: { path: [], outcome: "hint", hint: { type: "message_created", groupRef, messageRef: String(id + 1000) } },
   });
   const tx = <T>(run: (database: Database) => Promise<T>) => db.db.transaction(t => run(t as unknown as Database));
-  const route = (e = event(), p: FanslyWsHintPolicy | null = policy) => tx(database => routeFanslyWsHintEvent(database, e, p));
+  const route = (e = event(), p: FanslyWsHintPolicy | null = policy) => fileFanslyWsHintReceipt(db.pool, e, p);
   const claim = (at = now, p = policy) => tx(database => claimFanslyWsHint(database, pageId, p, at));
   const rows = async () => (await db.pool.query("select * from subject_refresh_state where page_id=$1 order by subject_ref", [pageId])).rows;
   return { app, pageId, event, tx, route, claim, rows };
 }
 
-// Nothing in routing or claiming depends on the burst size (claim is `limit 1`),
-// so a small burst proves the same coalescing and durability as a large one.
+// Nothing in claiming depends on the burst size (claim is `limit 1`), so a
+// small burst proves the same durability as a large one.
 const BURST = 20;
 
-describe("B1 durable coalescing and claim settlement", () => {
-  it(`coalesces ${BURST} signals to one subject and replay does not increment revisions`, async () => {
-    const f = await fixture();
-    await f.tx(async database => {
-      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
-      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id), policy);
-    });
-    expect(await f.rows()).toMatchObject([{ requested_revision: BigInt(BURST), applied_revision: 0n, next_due_at: now }]);
-    expect((await f.rows()).length).toBe(1);
-    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts")).rows[0].n).toBe(BURST);
-  });
+describe("B1 claim settlement", () => {
   it(`keeps ${BURST} distinct groups durable while claiming only one at a time`, async () => {
     const f = await fixture();
-    await f.tx(async database => {
-      for (let id = 1; id <= BURST; id++) await routeFanslyWsHintEvent(database, f.event(id, String(id)), policy);
-    });
+    for (let id = 1; id <= BURST; id++) await f.route(f.event(id, String(id)));
     expect(await f.rows()).toHaveLength(BURST);
     const first = await f.claim();
     const second = await f.claim();
@@ -82,30 +76,6 @@ describe("B1 durable coalescing and claim settlement", () => {
     expect(replacement.revision).toBe(1);
     expect(replacement.walk).toMatchObject({ before: "500", boundaryMessageRef: "200", revision: 1 });
     await expect(f.tx(database => advanceFanslyWsHint(database, first, { walk: first.walk, complete: true, outcome: "old", now: later(3) }))).rejects.toThrow("claim_fenced");
-  });
-  it("rolls back the receipt and mark together on routing failure", async () => {
-    const f = await fixture();
-    await expect(f.tx(async database => { await routeFanslyWsHintEvent(database, f.event(), policy); throw new Error("crash"); })).rejects.toThrow("crash");
-    expect(await f.rows()).toEqual([]);
-    expect((await db.pool.query("select count(*)::int n from fansly_ws_hint_receipts")).rows[0].n).toBe(0);
-    expect(await f.route()).toBe(true);
-  });
-  it("retains delete as debt without a head-read target", async () => {
-    const f = await fixture();
-    await f.route({ ...f.event(), node: { path: [], outcome: "mutation_debt", mutation: {
-      groupRef: "100", messageRef: "99", correlationRef: "55", bulk: true,
-    } } });
-    expect(await f.rows()).toEqual([]);
-    expect((await db.pool.query("select outcome,message_ref from fansly_ws_hint_receipts")).rows).toEqual([{ outcome: "mutation_debt", message_ref: "99" }]);
-  });
-  it("does not route disabled, unbound or pre-activation observations", async () => {
-    const f = await fixture();
-    await f.route(f.event(1), null);
-    await f.route({ ...f.event(2), generation: null });
-    await f.route({ ...f.event(3), receivedAt: new Date("2026-09-14T23:00:00Z") });
-    expect(await f.rows()).toEqual([]);
-    expect((await db.pool.query("select outcome from fansly_ws_hint_receipts order by event_id")).rows.map(r => r.outcome))
-      .toEqual(["disabled", "generation_unknown", "before_activation"]);
   });
   it("changing the type allowlist or activation boundary revokes old queued work", async () => {
     const f = await fixture(); await f.route();
