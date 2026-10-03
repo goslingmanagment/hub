@@ -9,7 +9,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { createCapturePayloadRowResolver, isCapturePayloadUnavailable } from "../../services/payload-reader.ts";
-import { fanslyPurchaseHistoryOrderRows } from "../../services/sync/fansly-purchase-history.ts";
+import { fanslyPurchaseHistoryOrderRows } from "../fansly/lib/purchase-history.ts";
 import { normalizeFanslyTimestamp } from "../fansly/lib/timestamp.ts";
 import { readOrderFrames } from "../fansly/ws/money-frames.ts";
 

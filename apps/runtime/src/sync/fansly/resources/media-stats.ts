@@ -20,7 +20,7 @@ import {
 } from "@agency_hub_core/db";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
-import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   answeredFloor,
   BACKFILL_EMPTY_STREAK_LIMIT,

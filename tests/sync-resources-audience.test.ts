@@ -8,7 +8,7 @@ import {
   findUnmappedFollowerIds,
   isStatedEmptyActiveSnapshot,
   uniqueFollowerIds,
-} from "../apps/runtime/src/services/sync/audience-rules.ts";
+} from "../apps/runtime/src/sync/fansly/lib/audience-rules.ts";
 import { prepareJournalBody, fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { captureFanslyFollowerPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 import { demandToUpsert, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";

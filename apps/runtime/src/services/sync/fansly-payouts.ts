@@ -114,10 +114,12 @@ import type { ExecutorRequestContext, StreamChunkResult } from "./executor-handl
 import {
   advanceOffsetPage,
   classifyFanslyResponse,
+  fanslyUtcDayKey,
+} from "../../sync/fansly/lib/lane.ts";
+import {
   createFanslyLaneCoverageWriter,
   createFanslyLaneJournal,
   createFanslyLaneRuntime,
-  fanslyUtcDayKey,
   FanslyLaneInvalidResponseError,
   isRepeatedRequest,
   nextFanslyUtcDayStart,

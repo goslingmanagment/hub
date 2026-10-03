@@ -34,10 +34,10 @@ import {
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { buildFanslyMetadata } from "../apps/runtime/src/services/fansly.ts";
-import { upsertHydratedFansForPageDetailed } from "../apps/runtime/src/services/sync/fan-hydration.ts";
 import { createFanslyLaneJournal } from "../apps/runtime/src/services/sync/fansly-lane.ts";
 import { fetchAndJournalFanslyDmMessagePage } from "../apps/runtime/src/services/sync/fansly-dm-messages.ts";
 import { retentionDate } from "../apps/runtime/src/services/sync/shared.ts";
+import { upsertHydratedFansForPageDetailed } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

@@ -15,7 +15,7 @@ import {
   FANSLY_NOTIFICATION_TYPE_GROUPS,
 } from "@agency_hub_core/shared";
 
-import { writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   classifyNotificationResponse,
   compareNotificationRefs,

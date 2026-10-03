@@ -33,7 +33,7 @@ import {
   getFanslyDmMessageSyncExcludedReason,
 } from "@agency_hub_core/shared";
 
-import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../../../services/sync/fan-hydration.ts";
+import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPage } from "../lib/fan-hydration.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

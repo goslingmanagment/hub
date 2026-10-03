@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FanEarningsReceipt, FanEarningsRefreshWindow } from "@agency_hub_core/db";
-import { parseFanslyEarningsObservation } from "../canonicalize/fansly-earnings.ts";
+import { parseFanslyEarningsObservation } from "../../../services/canonicalize/fansly-earnings.ts";
 
 /** Reuse the monetary parser against the exact captured payload. A response
  * for a different fan or an empty result cannot certify this requested fan. */

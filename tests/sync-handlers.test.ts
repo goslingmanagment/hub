@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
 import type * as FanHydrationModule from "../apps/runtime/src/services/sync/fan-hydration.ts";
+import type * as FanHydrationWritersModule from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import { PAGE_DM_MESSAGE_HISTORY_LIMIT, PageSyncLeaseLostError } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 import {
@@ -122,6 +123,14 @@ vi.mock("../apps/runtime/src/services/sync/fan-hydration.ts", async () => {
     ...actual,
     hydrateFans: fanHydrationMocks.hydrateFans,
     lookupHydratedFans: fanHydrationMocks.lookupHydratedFans,
+  };
+});
+vi.mock("../apps/runtime/src/sync/fansly/lib/fan-hydration.ts", async () => {
+  const actual = await vi.importActual<typeof FanHydrationWritersModule>(
+    "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts",
+  );
+  return {
+    ...actual,
     upsertHydratedFansForPage: fanHydrationMocks.upsertHydratedFansForPage,
   };
 });
