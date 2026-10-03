@@ -13,7 +13,7 @@ state; `sync page mode` moves pages only `off ↔ shadow` (I17).
 
 ```
 sync/
-  main.ts, context.ts        the `sync` runtime role: context, heartbeat, host, signals
+  main.ts, context.ts        the `sync` runtime role: context (pool timeouts), watchdog, heartbeat, host, signals
   cli.ts, inspect.ts         the owner's CLI (`pnpm cli sync page …`, `sync why`, `sync work …`, `sync ownership …`) and its reads
   engine/
     ports.ts                 Clock, Rng, PauseSource, Wake, OwnershipSession, AlertSink, Metrics, Transport
@@ -29,6 +29,7 @@ sync/
     commit.ts                the four transactions of a step, the no-HTTP outcomes and the local writes
     shadow.ts                the shadow transport (no socket, no credentials)
     alerts.ts                alerts 1–4: the incident sink, the 30 s evaluator, the pace backstop, the owner's ack
+    watchdog.ts              the stall watchdog: a step, pass or beat stuck for 120 s ends the process (exit 70)
     metrics.ts               the golden signals (per page; the ops sampler's compact set every 5 min)
   fansly/
     registry.ts              ALL Fansly resources: trigger, period, class, coalescing, SLO, proof
@@ -330,6 +331,31 @@ credentials hold is never replaced or lifted by it. Nothing goes out, not even a
 hold ends; the proof lifts only the credentials hold. The egress follows the digest (a changed proxy is resolved
 again before the next request).
 
+## The process: pool timeouts, stall watchdog, shutdown (step 4, 4-3)
+
+The `sync` process's pool runs with `SYNC_POOL_TIMEOUTS` (`context.ts`): a checkout waits at most 30 s, a statement
+runs at most 60 s, a lock wait 30 s, an idle transaction 60 s; the boot log line `Sync pool timeouts in force` shows
+what Postgres reports. A hung database call is therefore an error the engine handles: a lap that failed before an
+admission backs off 1 s; a commit after a send is retried 3 times, then the actor fails and the host restarts it 5 s
+later. The CLI's contexts run without them; the lock session and the LISTEN client keep their own 5 s bounds.
+
+What is left is a promise that never settles. The stall watchdog (`engine/watchdog.ts`, a look every 5 s) watches
+every actor (each phase of a lap, its recovery, its commit retries, its exit), the host's start and every pass of its
+mode loop, every heartbeat beat and every alert pass. One that has not moved for 120 s — the longest legitimate phase
+is ≈ 72 s: a slot wait of 1.2 × S at the largest S, a 20 s request, a 60 s statement — ends the process: one JSON
+line on stderr (`component`, `pageId`, `generation`, `phase`, `ageMs`), a best-effort `process` incident (`stalled`,
+alert 5's latch) through a client of its own within 2 s, then `process.exit(70)`. Never a SIGKILL to itself (node is
+PID 1 in its container, where that is a no-op) and never a graceful stop. A beat or a pass that fails (the database
+down) is not a stall. Docker restarts the container (`restart: unless-stopped`, no `init:`), and nothing changes in
+ownership: the locks go with the process and no safe release is written; the restarted container takes its pages
+back by `pid_namespace_replaced`, its first send waits ≥ 1.2 × S after every send the database knows (I5), the
+attempt left in flight is closed `unknown`, and the socket's repair reads from 60 s before its gap. A block of the
+event loop itself is not covered.
+
+The watchdog stops when `runtime.stop()` begins. SIGTERM ends the process 40 s after the signal at the latest
+(`SYNC_SHUTDOWN_CAP_MS`, inside the 45 s stop grace); a page whose release did not finish by then waits for the OS
+proof of the next start.
+
 ## Legacy fences (step 3)
 
 While the engine owns a page (`handover` or `live`) no legacy component even tries to send for it (step-3 design
@@ -560,7 +586,8 @@ soon as progress resumes), so a condition that comes and goes keeps one standing
 latch that only the owner closes (`pnpm cli sync alerts ack --page <label>`); the evaluator also re-reads the
 journal's new live sends, so a violation the capture path could not report still opens it. Only `handover`/`live` pages page the owner: a `shadow` page's conditions are counted (`sync_shadow_alerts`),
 never paged (D14). Alert 5 — a page is in the engine and no `sync` process beats — is the api watchdog's, since a
-process cannot report its own death. `pnpm cli sync alerts status` shows what holds per page.
+process cannot report its own death; a stalled process opens it itself (`stalled`) right before it exits for a
+restart. `pnpm cli sync alerts status` shows what holds per page.
 
 The golden signals (`engine/metrics.ts`) come from the database: `computeSyncMetrics` per page (smallest send gap
 vs the setting, violations, sends by class and resource, holds, breakers, quarantine) and the global families

@@ -80,29 +80,13 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 
+// The capture trims, their capture-shape versions and the DM normalization
+// are pure helpers (apps/runtime/src/sync/fansly/lib/) and run for real.
 const sharedMocks = vi.hoisted(() => ({
-  // WP-F0(a): the per-endpoint capture-shape versions the three journaling call
-  // sites now pass. Real VALUES, not vi.fn(): a handler reads them as constants,
-  // and the assertions below pin the exact string that reaches the journal —
-  // which is the point of having them (replay tooling must be able to tell a
-  // pre-[A20] 4-field capture from a widened 18-field one).
-  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION: "fansly-phase1-v5+followers-capture-v2",
-  FANSLY_GROUPS_CAPTURE_MAPPER_VERSION: "fansly-phase1-v5+groups-capture-v2",
   dmRetentionDate: vi.fn(() => new Date("2026-09-17T00:00:00.000Z")),
-  normalizeDmTipAmountCents: vi.fn((platform: "fansly" | "onlyfans", totalTipAmount: number | null | undefined) => (
-    typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0
-      ? 0
-      : platform === "fansly"
-      ? Math.round(totalTipAmount / 10)
-      : Math.round(totalTipAmount)
-  )),
-  normalizeFanslyTimestamp: vi.fn((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000)),
   persistRawPayload: vi.fn(),
   refreshPageMetadata: vi.fn(),
   retentionDate: vi.fn(() => new Date("2026-09-10T00:00:00.000Z")),
-  captureFanslyFollowerPayload: vi.fn((value: unknown) => value),
-  captureFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
-  trimFanslyMessagingGroupsPayload: vi.fn((value: unknown) => value),
 }));
 
 const tipContextMocks = vi.hoisted(() => ({
@@ -342,18 +326,6 @@ describe("sync executor handlers", () => {
     dbMocks.refreshFanPageSubscriberState.mockResolvedValue(undefined);
     sharedMocks.dmRetentionDate.mockReset();
     sharedMocks.dmRetentionDate.mockReturnValue(new Date("2026-09-17T00:00:00.000Z"));
-    sharedMocks.normalizeDmTipAmountCents.mockReset();
-    sharedMocks.normalizeDmTipAmountCents.mockImplementation(
-      (platform: "fansly" | "onlyfans", totalTipAmount: number | null | undefined) => (
-        typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0
-          ? 0
-          : platform === "fansly"
-          ? Math.round(totalTipAmount / 10)
-          : Math.round(totalTipAmount)
-      ),
-    );
-    sharedMocks.normalizeFanslyTimestamp.mockReset();
-    sharedMocks.normalizeFanslyTimestamp.mockImplementation((value: number) => new Date(value >= 1_000_000_000_000 ? value : value * 1000));
     sharedMocks.persistRawPayload.mockResolvedValue({
       id: 444,
       capturedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -369,10 +341,6 @@ describe("sync executor handlers", () => {
       conversationConflicts: 0,
       failed: false,
     });
-    sharedMocks.trimFanslyMessagingGroupsPayload.mockReset();
-    sharedMocks.trimFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
-    sharedMocks.captureFanslyMessagingGroupsPayload.mockReset();
-    sharedMocks.captureFanslyMessagingGroupsPayload.mockImplementation((value: unknown) => value);
     fanHydrationMocks.hydrateFans.mockResolvedValue(new Map());
     fanHydrationMocks.lookupHydratedFans.mockImplementation(async (
       app: { adapter?: { getAccountsByIdsPage?: ((requestContext: unknown, ids: string[]) => Promise<{ parsed: Array<{ id: string; username: string | null; displayName: string | null; createdAt?: number | null }> }>) | undefined } },

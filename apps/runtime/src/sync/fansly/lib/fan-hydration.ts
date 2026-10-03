@@ -47,7 +47,7 @@ function normalizeFanslyNote(served: FanslyAccountNote) {
   // The note is served text (a creator's free-form note, a custom username)
   // and `raw` is jsonb, which refuses an unpaired UTF-16 surrogate: one broken
   // emoji would fail the page transaction on every retry
-  // (sanitizeLoneSurrogatesDeep). Every field comes from ONE copy so the
+  // (./journal-lone-surrogates.ts). Every field comes from ONE copy so the
   // alias compared and deduplicated here is the text the columns store.
   const note = sanitizeLoneSurrogatesDeep(served);
   return {

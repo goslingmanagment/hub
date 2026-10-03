@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { advanceDmShadow, type DmShadowConversation } from "../../apps/runtime/src/services/sync/dm-shadow.ts";
 import { createDmShadowState, type DmShadowPolicy, type DmShadowState } from "../../apps/runtime/src/services/sync/dm-shadow-state.ts";
-import type { ConversationHeadDiffReason } from "../../apps/runtime/src/services/sync/fansly-dm-head-diff.ts";
+import type { ConversationHeadDiffReason } from "../../apps/runtime/src/sync/fansly/lib/dm-head-diff.ts";
 
 const headSchema = z.object({
   groupId: z.string().min(1),

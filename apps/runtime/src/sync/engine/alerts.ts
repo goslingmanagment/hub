@@ -35,10 +35,12 @@ import { noopMetrics, type AlertSink, type Metrics, type SyncAlertInput } from "
 import { effectivePeriodMs, resourceDisabled, runsIn, type EngineRegistry } from "./resource.ts";
 import { routeHoldUntil } from "./route-holds.ts";
 import { effectiveRatePerMin, parseRouteState, type RouteState } from "./route-policy.ts";
+import { noStallTracker, type StallTracker, type StallTracking } from "./watchdog.ts";
 
 // The Fansly Sync Engine's alerts 1–4 (plan §10, design §9.6). Alert 5 (the
 // `sync` process is silent) is the api watchdog's: a process cannot report
-// its own death.
+// its own death. It can report its own stall, and does, on the same latch,
+// right before it exits for a restart (`engine/watchdog.ts`, `main.ts`).
 //
 // One incident kind, `fansly_sync_engine` (0233), one latch per page and
 // alert. Two paths open a latch: the actor's capture transaction opens alert 1
@@ -467,6 +469,8 @@ export interface SyncAlertEvaluatorOptions {
   registry: Pick<EngineRegistry, "spec">;
   resolvePayload?: FanslyWsLivePayloadResolver;
   intervalMs?: number;
+  /** The process's stall watchdog: every pass is watched, page by page. */
+  watchdog?: StallTracking;
 }
 
 /**
@@ -506,18 +510,22 @@ export class SyncAlertEvaluator {
 
   /** One pass; a pass already running is joined (never two at once). */
   runOnce(): Promise<SyncAlertPassResult | null> {
-    this.#pass ??= this.#evaluate()
-      .catch((error: unknown) => {
-        this.#o.logger.warn({ err: error instanceof Error ? error.name : "unknown" }, "Fansly sync alerts: evaluation pass failed");
-        return null;
-      })
-      .finally(() => {
-        this.#pass = null;
-      });
+    if (this.#pass === null) {
+      const pass = this.#o.watchdog?.track({ component: "alerts" }, "pages") ?? noStallTracker;
+      this.#pass = this.#evaluate(pass)
+        .catch((error: unknown) => {
+          this.#o.logger.warn({ err: error instanceof Error ? error.name : "unknown" }, "Fansly sync alerts: evaluation pass failed");
+          return null;
+        })
+        .finally(() => {
+          pass.done();
+          this.#pass = null;
+        });
+    }
     return this.#pass;
   }
 
-  async #evaluate(): Promise<SyncAlertPassResult> {
+  async #evaluate(pass: StallTracker): Promise<SyncAlertPassResult> {
     const { db } = this.#o;
     const pages = await listSyncPages(db);
     const result: SyncAlertPassResult = { pages: pages.length, opened: [], resolved: [], paceViolations: 0 };
@@ -527,12 +535,14 @@ export class SyncAlertEvaluator {
       .map((incident) => [incident.incidentKey, incident.lastSeenAt] as const));
     const owned = pages.filter(pagesOwnerAlerts);
     const now = pages[0]?.dbNow ?? new Date();
+    pass.progress("money_frames");
     const money = await readMissingMoneyFrames(db, {
       pageIds: owned.map((page) => page.pageId),
       now,
       ...(this.#o.resolvePayload === undefined ? {} : { resolvePayload: this.#o.resolvePayload }),
     });
     for (const page of pages) {
+      pass.progress("page");
       const conditions = pagesOwnerAlerts(page)
         ? await collectPageAlerts(db, { page, registry: this.#o.registry, money })
         : [];

@@ -9,8 +9,8 @@ import {
   isStatedEmptyActiveSnapshot,
   uniqueFollowerIds,
 } from "../apps/runtime/src/sync/fansly/lib/audience-rules.ts";
-import { captureFanslyFollowerPayload } from "../apps/runtime/src/services/sync/shared.ts";
 import { prepareJournalBody, fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
+import { captureFanslyFollowerPayload } from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 import { demandToUpsert, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { accountModule } from "../apps/runtime/src/sync/fansly/resources/account.ts";

@@ -8,7 +8,6 @@ import {
   type FanslyWireId,
 } from "@agency_hub_core/fansly";
 
-import { normalizeFanslyTimestamp } from "../../../services/sync/shared.ts";
 import type { OutcomeDecision } from "../../engine/errors.ts";
 import type {
   ApplyInput,
@@ -19,6 +18,7 @@ import type {
   ShadowResult,
   StepPlan,
 } from "../../engine/resource.ts";
+import { normalizeFanslyTimestamp } from "../lib/timestamp.ts";
 
 // `probe.manual` (design §5.22): the owner's one-off read of any wire route,
 // `pnpm cli sync probe --page <label> --operation <wire id> --params '<json>'`.

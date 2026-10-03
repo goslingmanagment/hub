@@ -19,7 +19,7 @@ import {
   captureFanslyMessagingGroupsPayload,
   trimFanslyFollowerPayload,
   trimFanslyMessagingGroupsPayload,
-} from "../apps/runtime/src/services/sync/shared.ts";
+} from "../apps/runtime/src/sync/fansly/lib/capture-trims.ts";
 
 const OBSERVED_AT = new Date("2026-03-15T08:00:00Z");
 const RECEIVED_AT = new Date("2026-03-15T08:00:05Z");
