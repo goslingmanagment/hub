@@ -1033,14 +1033,22 @@ export async function requeueQuarantinedWork(
 
 /**
  * Close a quarantined row by an owner's decision (the followers blast-radius
- * override applied its deactivation; an owner reset of the walk): `done` or
- * `cancelled` with the reason, the cursor/proof the decision leaves (the next
- * row of the key reads the newest closed one's), `result.quarantine` dropped.
- * The caller holds the row (`lockWorkRows`). False: not quarantined any more.
+ * override applied its deactivation; an owner reset of the walk) — `done` or
+ * `cancelled` — or as `superseded` when what it was for is gone (the verify
+ * of credentials no longer stored): with the reason, the cursor/proof the
+ * decision leaves (the next row of the key reads the newest closed one's),
+ * `result.quarantine` dropped. The caller holds the row (`lockWorkRows`).
+ * False: not quarantined any more.
  */
 export async function closeQuarantinedWork(
   db: Database,
-  input: { workId: number; to: "done" | "cancelled"; closeReason: string; cursor?: unknown; proof?: unknown },
+  input: {
+    workId: number;
+    to: "done" | "cancelled" | "superseded";
+    closeReason: string;
+    cursor?: unknown;
+    proof?: unknown;
+  },
 ): Promise<boolean> {
   const done = input.to === "done";
   const result = await db.execute(sql`

@@ -232,12 +232,13 @@ export class SyncActor {
     const underCredentials = gate.checks !== null && held !== null && held.credentials !== null && held.timed === null;
     // G2 from the database, never from memory: while the stored credentials
     // are not the ones the engine trusts, only the identity checks go out.
-    const checksOnly = !underCredentials && !shadow && await this.#checksOnly(page);
+    const unverified = underCredentials || shadow ? null : await this.#unverifiedStoredDigest(page);
+    const checksOnly = unverified !== null;
     const exclusions = pickExclusions(page, d.registry, shadow, now, { checksOnly });
     const picked = underCredentials
       ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
       : await this.#pick(page, now, exclusions);
-    if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed")) return null;
+    if (picked === null && checksOnly && await ensureCredentialsVerify(d, "credentials_changed", unverified)) return null;
     if (picked === null) {
       // Idle until the next work this pick could take: a paused, switched-off
       // or held row is never "due" here, or the actor would lap without
@@ -463,9 +464,10 @@ export class SyncActor {
       // A3 — the verify of stored credentials whose digest is not the latest
       // refusal's, raised here from the database (one per digest: its own
       // refusal makes the digest the latest).
-      const verify = verifyAdmittedUnderCredentialsHold(hold.credentials, await this.#storedDigest());
+      const stored = await this.#storedDigest();
+      const verify = verifyAdmittedUnderCredentialsHold(hold.credentials, stored);
       if ((await pickCredentialsCheck(d.db, { pageId: d.pageId, verify })) !== null) return { open: true, page, checks: { verify } };
-      if (verify && await ensureCredentialsVerify(d, "credentials_changed")) return { open: false, waitMs: 0 };
+      if (verify && await ensureCredentialsVerify(d, "credentials_changed", stored)) return { open: false, waitMs: 0 };
     }
     return { open: false, waitMs: hold.until.getTime() - now.getTime() };
   }
@@ -477,13 +479,14 @@ export class SyncActor {
     return transport.storedCredentialsGeneration === undefined ? null : transport.storedCredentialsGeneration();
   }
 
-  /** G2: the page's stored credentials are not the ones the engine trusts
-   *  (`sync_pages.credentials_generation`) — read from the database at every
-   *  pick, so a restart, a failed write or a verify closed meanwhile can
-   *  never leave the actor in, or out of, checks-only by mistake. */
-  async #checksOnly(page: SyncPageRow): Promise<boolean> {
+  /** G2: the digest of the page's stored credentials when they are not the
+   *  ones the engine trusts (`sync_pages.credentials_generation`), else null
+   *  — read from the database at every pick, so a restart, a failed write or
+   *  a verify closed meanwhile can never leave the actor in, or out of,
+   *  checks-only by mistake. */
+  async #unverifiedStoredDigest(page: SyncPageRow): Promise<string | null> {
     const stored = await this.#storedDigest();
-    return stored !== null && stored !== page.credentialsGeneration;
+    return stored !== null && stored !== page.credentialsGeneration ? stored : null;
   }
 
   /** The transport refused a request because the stored credentials are not
@@ -493,7 +496,7 @@ export class SyncActor {
   async #credentialsUnverified(error: CredentialsGenerationChangedError, stop: AbortSignal): Promise<void> {
     const d = this.#d;
     d.metrics.increment("sync_credentials_unverified", { pageId: d.pageId });
-    if (await ensureCredentialsVerify(d, "credentials_changed")) {
+    if (await ensureCredentialsVerify(d, "credentials_changed", error.storedGeneration)) {
       d.logger.info({ pageId: d.pageId, verified: error.verifiedGeneration !== null },
         "Fansly sync actor: the stored credentials are not verified; only the identity checks go out until the verify passes");
       return;

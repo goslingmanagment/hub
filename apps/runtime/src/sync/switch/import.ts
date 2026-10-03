@@ -51,14 +51,19 @@ async function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promis
   return db.transaction(async (raw) => body(raw as unknown as Database));
 }
 
-/** One imported page hold, combined with the hold the row holds now (read in
- *  the same transaction, by the database clock; the shared page-hold core's
- *  `combineFanslyPageHold`): a hold in force is never overwritten by another
- *  kind (I.4). The 429 ladder step stays the row's. */
-async function writeImportedHold(tx: Database, pageId: number, hold: FanslyPageHoldWrite): Promise<void> {
+/** One imported page hold — `hold` builds it at the import's instant, read in
+ *  the same transaction by the database clock — combined with the hold the
+ *  row holds now (the shared page-hold core's `combineFanslyPageHold`): a hold
+ *  in force is never overwritten by another kind (I.4). The 429 ladder step
+ *  stays the row's. */
+async function writeImportedHold(
+  tx: Database,
+  pageId: number,
+  hold: (importedAt: Date) => FanslyPageHoldWrite,
+): Promise<void> {
   const current = await getSyncPage(tx, pageId);
   if (current === null) throw new Error(`page ${pageId} has no sync_pages row`);
-  const combined = combineFanslyPageHold(current, hold, current.dbNow);
+  const combined = combineFanslyPageHold(current, hold(current.dbNow), current.dbNow);
   await setPageHold(tx, { pageId, kind: combined.kind, until: combined.until, step: current.holdStep, detail: combined.detail });
 }
 
@@ -185,26 +190,28 @@ export async function importLegacyState(
   await inTx(db, async (tx) => {
     const providerHold = await readActiveLegacyProviderHold(tx, page.pageId);
     if (providerHold !== null) {
-      await writeImportedHold(tx, page.pageId, {
+      await writeImportedHold(tx, page.pageId, () => ({
         kind: "rate_limit",
         until: providerHold.holdUntil,
         detail: { importedFrom: "page_sync_provider_holds", reason: providerHold.reason, stream: providerHold.stream },
-      });
+      }));
       report.holds.rateLimitUntil = providerHold.holdUntil.toISOString();
     }
     const authBlocker = await readLegacyAuthBlocker(tx, page.pageId);
     if (authBlocker !== null && page.pageLabel !== null) {
       const failed = await readFanslyPageGeneration(tx, page.pageLabel).catch(() => null);
-      // No attempt of the engine refused them: only a proof sent after the
-      // import clears it (`hold_since`, ruling 5).
-      await writeImportedHold(tx, page.pageId, {
+      // No attempt of the engine refused them: the refusal is the import's,
+      // at its instant, so only a proof sent after the import clears it
+      // (ruling 5) — also when an engine credentials hold in force keeps an
+      // earlier episode start (`hold_since`).
+      await writeImportedHold(tx, page.pageId, (importedAt) => ({
         kind: "auth",
         until: "infinity",
         detail: credentialsFailureDetail(
-          { attemptId: null, at: null, digest: failed },
+          { attemptId: null, at: importedAt, digest: failed },
           { importedFrom: "page_sync_states.blocker_kind", streams: authBlocker.streams },
         ),
-      });
+      }));
       report.holds.auth = true;
     }
   });

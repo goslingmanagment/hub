@@ -6,7 +6,10 @@ import {
   capturePayloadRefFromColumns,
   captureAttempt,
   clearPageHold,
+  closeQuarantinedWork,
   countRecentFailedSubjects,
+  getOpenWorkForKey,
+  getSyncAttempt,
   getSyncPage,
   getSyncWork,
   insertAdmission,
@@ -16,6 +19,7 @@ import {
   listUnfinishedAttempts,
   lockAttemptForApply,
   lockOwnedPage,
+  lockWorkRows,
   markApplied,
   markAttemptQuarantined,
   markHistoryTurnServed,
@@ -847,26 +851,87 @@ async function recordLocalError(d: CommitDeps, work: SyncWorkRow, error: unknown
 
 // ── credentials (step-3 §3.5 item 3, G1/G2; step 3b ruling 5, A3) ───────────
 
+/** The durable record of a quarantined verify closed because the credentials
+ *  it verified are no longer stored (`ensureCredentialsVerify`). */
+export const SYNC_CREDENTIALS_VERIFY_SUPERSEDED_AUDIT_EVENT = "sync.credentials_verify_superseded";
+
+/** A quarantined verify `ensureCredentialsVerify` closed as superseded. */
+interface SupersededVerify {
+  workId: number;
+  attemptId: number | null;
+  /** The digest its last attempt carried (null: none journaled). */
+  credentialsGeneration: string | null;
+}
+
 /**
  * The verify of the page's stored credentials, raised by the actor from what
- * the database says (never from memory): the stored digest is not the one
- * the engine trusts (checks-only), or a credentials hold admits the verify of
- * changed credentials (A3). Created only when the page has no open, running
- * or quarantined verify — a merge would bump a waiting one on every lap. True:
- * a new verify was raised.
+ * the database says (never from memory): the stored digest (`storedDigest`,
+ * read by the caller) is not the one the engine trusts (checks-only), or a
+ * credentials hold admits the verify of changed credentials (A3). Created
+ * only when the page has no open, running or quarantined verify of them — a
+ * merge would bump a waiting one on every lap. One verify per digest: a
+ * quarantined verify of OTHER credentials (its last attempt carried another
+ * digest, or none) answers for nothing stored any more — it is closed as
+ * superseded, with its audit row, in the same fenced transaction, and the
+ * verify of the stored credentials is created. Kept, it would block every
+ * later verify of the page (one row per key), and a credentials hold only
+ * such a verify's proof clears would never end. A quarantined verify of the
+ * stored digest stays (its answer is the owner's to re-apply). True: a new
+ * verify was raised.
  */
-export async function ensureCredentialsVerify(d: CommitDeps, reason: string): Promise<boolean> {
+export async function ensureCredentialsVerify(d: CommitDeps, reason: string, storedDigest: string | null): Promise<boolean> {
   const now = d.clock.wallNow();
-  const created = await inTx(d.db, async (tx) => {
+  const raised = await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
     const page = await getSyncPage(tx, d.pageId);
     const upserts = upsertsOf(d, [{ resource: VERIFY_KEY, demand: { reason } }], page, now)
       .map((upsert) => ({ ...upsert, createOnly: true }));
-    if (upserts.length === 0) return false;
-    return (await upsertDemands(tx, upserts)).some((result) => result.created);
+    if (upserts.length === 0) return { created: false, superseded: null };
+    const superseded = storedDigest === null
+      ? null
+      : await supersedeQuarantinedVerify(tx, d, { shadow: upserts[0]!.shadow, storedDigest });
+    const created = (await upsertDemands(tx, upserts)).some((result) => result.created);
+    return { created, superseded };
   });
-  if (created) d.metrics.increment("sync_credentials_verify_raised", { pageId: d.pageId, reason });
-  return created;
+  if (raised.superseded !== null) {
+    d.metrics.increment("sync_credentials_verify_superseded", { pageId: d.pageId });
+    d.logger.info({ pageId: d.pageId, ...raised.superseded },
+      "Fansly sync: a quarantined verify of credentials no longer stored was superseded");
+  }
+  if (raised.created) d.metrics.increment("sync_credentials_verify_raised", { pageId: d.pageId, reason });
+  return raised.created;
+}
+
+/** The page's quarantined verify, closed as superseded when its last attempt
+ *  carried another digest than the stored one (`ensureCredentialsVerify`),
+ *  with its audit row. Null: none, or one of the stored digest. */
+async function supersedeQuarantinedVerify(
+  tx: Database,
+  d: CommitDeps,
+  input: { shadow: boolean; storedDigest: string },
+): Promise<SupersededVerify | null> {
+  const current = await getOpenWorkForKey(tx, { pageId: d.pageId, shadow: input.shadow, resource: VERIFY_KEY, subject: "" });
+  if (current === null || current.state !== "quarantined") return null;
+  const [work] = await lockWorkRows(tx, [current.id]);
+  if (work === undefined || work.state !== "quarantined") return null;
+  const attempt = work.lastAttemptId === null ? null : await getSyncAttempt(tx, work.lastAttemptId);
+  const credentialsGeneration = attempt === null ? null : credentialsGenerationOfAttempt(attempt);
+  if (credentialsGeneration === input.storedDigest) return null;
+  const closed = await closeQuarantinedWork(tx, { workId: work.id, to: "superseded", closeReason: "credentials_changed" });
+  if (!closed) return null;
+  await insertAuditEvent(tx, {
+    platformAccountId: d.pageId,
+    source: "sync",
+    eventType: SYNC_CREDENTIALS_VERIFY_SUPERSEDED_AUDIT_EVENT,
+    metadata: {
+      workId: work.id,
+      attemptId: attempt?.id ?? null,
+      quarantine: work.lastErrorClass,
+      credentialsGeneration,
+      storedCredentialsGeneration: input.storedDigest,
+    },
+  });
+  return { workId: work.id, attemptId: attempt?.id ?? null, credentialsGeneration };
 }
 
 /** A plan threw: the work waits a minute (an unexpected error of a module

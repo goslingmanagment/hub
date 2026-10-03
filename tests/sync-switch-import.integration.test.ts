@@ -13,7 +13,7 @@ import {
   type Database,
   type ImportWorkBreakerInput,
 } from "@agency_hub_core/db";
-import { activeFanslyPageHold, INDEFINITE_UNTIL } from "@agency_hub_core/shared";
+import { activeFanslyPageHold, INDEFINITE_UNTIL, proofClearsCredentialsHold, readFanslyPageHolds } from "@agency_hub_core/shared";
 
 import { routeFanslyWsReceiptDemand } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
 import { SYNC_SWITCH_AUDIT_EVENT } from "../apps/runtime/src/sync/switch/audit.ts";
@@ -141,10 +141,10 @@ describe("the switch's legacy import: holds (I.4)", () => {
     expect(row.holdDetail).toMatchObject({
       importedFrom: "page_sync_states.blocker_kind",
       streams: ["light"],
-      // No engine attempt was refused: only a proof sent after the import
-      // (hold_since) clears it.
+      // No engine attempt was refused: the refusal is the import's, at its
+      // instant — only a proof sent after the import clears it.
       failedAttemptId: null,
-      failedAt: null,
+      failedAt: expect.any(String),
       timedHold: { kind: "rate_limit", until: legacyUntil.toISOString(), detail: { importedFrom: "page_sync_provider_holds" } },
     });
     // Both in force: nothing goes out before the 429 ends (not even a
@@ -162,6 +162,35 @@ describe("the switch's legacy import: holds (I.4)", () => {
     const again = (await getSyncPage(db(), page.pageId))!;
     expect(again.holdKind).toBe("auth");
     expect(again.holdDetail.timedHold).toEqual(row.holdDetail.timedHold);
+  }, 60_000);
+
+  it("a legacy auth block imported over an engine credentials hold of an earlier episode: a proof sent before the import never clears it", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await handoverPage("import-auth-over-engine");
+    // What a rollback --with-auth-hold left: the engine's auth hold, its
+    // episode and latest refusal 10 minutes old.
+    await testDb.pool.query(
+      `update sync_pages set hold_kind = 'auth', hold_until = 'infinity', hold_since = clock_timestamp() - interval '10 minutes',
+              hold_detail = jsonb_build_object('status', 401, 'credentialsGeneration', 'x', 'failedAttemptId', 7,
+                                               'failedAt', clock_timestamp() - interval '10 minutes')
+        where page_id = $1`,
+      [page.pageId],
+    );
+    await legacyAuthBlock(page.pageId);
+    const before = (await testDb.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
+
+    await importOnce(page);
+    const row = (await getSyncPage(db(), page.pageId))!;
+    const held = readFanslyPageHolds(row).credentials!;
+    // One episode: its start stays; the latest refusal is the import's.
+    expect(held.since!.getTime()).toBeLessThan(before.getTime());
+    expect(held.failure.attemptId).toBeNull();
+    expect(held.failure.at!.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(held.failure.digest).toEqual(expect.any(String));
+    // A proof of the episode sent before the import does not clear it; one
+    // sent after the import does.
+    expect(proofClearsCredentialsHold(held, { attemptId: 1_000, sentAt: new Date(before.getTime() - 60_000) })).toBe(false);
+    expect(proofClearsCredentialsHold(held, { attemptId: 1_000, sentAt: new Date(held.failure.at!.getTime() + 1) })).toBe(true);
   }, 60_000);
 
   it("an engine 429/network hold left on the row ending later than the legacy one stays the carried end", async (context) => {

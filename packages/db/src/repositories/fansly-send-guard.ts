@@ -532,8 +532,8 @@ export async function confirmFanslySendGuardTerminated(
 //     the latest instant the engine could have sent — or later, to the end of
 //     an engine 429/network/list hold in force (G20) — and `next_u = 0.2`, so
 //     the first legacy capture waits ≥ 1.2 × S after it (and never inside the
-//     hold). An auth/identity hold in force (by the engine's rule: one of
-//     credentials older than the verified ones is lifted) is not carried: the
+//     hold). An auth/identity hold in force (the page-hold core's rule: until
+//     an identity proof sent after its latest refusal) is not carried: the
 //     flip refuses unless the owner allows it.
 
 /** The guard row's owner on the engine's side (0229). */

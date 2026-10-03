@@ -287,9 +287,12 @@ change, sealed in the work's secret, over the stored base its caller read) and â
 `account.verify` of stored credentials other than the refused ones pass: a candidate that matches is stored and
 trusted in one transaction that is a CAS on the exact pair it proved (`saveVerifiedFanslyCredentials`; a changed base
 stores nothing, 409), and the verify of what is stored then lifts the hold; a refusal of that verify makes its digest
-the latest and closes the exception. A candidate proxy comes from the egress resolver (`page_candidate` scope). The
-socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens only with the digest its
-admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
+the latest and closes the exception. One verify per digest, under a hold or in checks-only: a verify quarantined for
+credentials no longer stored (its `identity_mismatch`, a contract violation) is closed as `superseded` in the
+transaction that raises the verify of the stored ones (audit `sync.credentials_verify_superseded`); one quarantined
+for the stored digest stays, for the owner's requeue. A candidate proxy comes from the egress resolver
+(`page_candidate` scope). The socket's Upgrade (`ws.connect`) is checked like an API request, and the socket opens
+only with the digest its admission checked. A credentials hold and a 429/network hold can both be in force (`hold_detail.timedHold`, the
 core's `combineFanslyPageHold`): a credentials hold taken over a 429 hold carries it (the switch's import of a legacy
 429 and a legacy auth block), and a candidate check's 429 or network failure under it is carried beside it â€” the
 credentials hold is never replaced or lifted by it. Nothing goes out, not even a candidate check, before the carried

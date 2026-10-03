@@ -57,8 +57,10 @@ import { switchRegistry } from "./helpers/sync-switch.ts";
 // the page row FOR NO KEY UPDATE from its start (no deadlock with a waiting
 // heartbeat). A crash between capture and apply, or a failed proof write,
 // applies the stored answer again without a request. Checks-only is read
-// from the database; a candidate save is a CAS on the pair its check proved;
-// a hold written after the gate looked refuses at the admission.
+// from the database; a quarantined verify of credentials no longer stored is
+// superseded by the verify of the stored ones (one verify per digest); a
+// candidate save is a CAS on the pair its check proved; a hold written after
+// the gate looked refuses at the admission.
 
 const S = 300;
 
@@ -109,6 +111,16 @@ function refusing(refused: ReadonlySet<string>): FakeRoute {
     ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false }) }
     : null);
 }
+
+/** `/account/me` answers `account` for every session whose token is in `tokens`. */
+function answering(tokens: ReadonlySet<string>, account: Record<string, unknown>): FakeRoute {
+  return (request) => (request.url.pathname === "/api/v1/account/me" && tokens.has(String(request.headers.authorization ?? ""))
+    ? { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response: { account } }) }
+    : null);
+}
+
+/** Another account's session: its `/account/me` is someone else (identity_mismatch). */
+const ANOTHER_ACCOUNT = { id: "399999999999999999", username: "someone-else", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 };
 
 async function rig(label: string, first: readonly FakeRoute[] = []): Promise<Rig> {
   server = await FakeFanslyServer.start();
@@ -190,6 +202,18 @@ async function verifyAttempts(pageId: number): Promise<VerifyAttempt[]> {
        from sync_attempts where page_id = $1 and resource = 'account.verify' order by id`,
     [pageId],
   )).rows;
+}
+
+async function verifyWork(pageId: number): Promise<Array<{ id: number; state: string; close_reason: string | null }>> {
+  return (await testDb!.pool.query<{ id: number; state: string; close_reason: string | null }>(
+    "select id::int, state, close_reason from sync_work where page_id = $1 and resource = 'account.verify' order by id", [pageId],
+  )).rows;
+}
+
+async function auditMetadata(pageId: number, eventType: string): Promise<Array<Record<string, unknown>>> {
+  return (await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
+    "select metadata from audit_events where platform_account_id = $1 and event_type = $2 order by id", [pageId, eventType],
+  )).rows.map((row) => row.metadata);
 }
 
 async function pageRow(pageId: number) {
@@ -402,6 +426,99 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     expect(works.rows.map((row) => row.state)).toEqual(["done", "done"]);
     expect(works.rows[1]!.demand.reasons).toContain("credentials_changed");
     expect((await getSyncPage(db(), r.page.pageId))!.credentialsGeneration).toBe(await storedGeneration(r.page));
+  }, 90_000);
+
+  for (const renewal of ["through the engine", "stored out of band"] as const) {
+    it(`B is another account's (identity_mismatch, the verify quarantined); C ${renewal} supersedes that verify, C's verify runs under the hold and its proof clears it`, async (context) => {
+      if (!testDb) return context.skip();
+      const r = await rig(`creds-mismatch-${renewal === "stored out of band" ? "oob" : "engine"}`, [
+        answering(new Set(["token-b"]), ANOTHER_ACCOUNT),
+      ]);
+      const digestB = await storeSession(r.page, "token-b");
+      await urgent(r.page.pageId, "u1");
+      await startHost(r, 48);
+
+      await until(async () => (await pageRow(r.page.pageId)).hold_kind === "identity_mismatch", 15_000, "B's identity_mismatch");
+      const [mismatch] = await verifyAttempts(r.page.pageId);
+      expect((await pageRow(r.page.pageId)).hold_detail).toMatchObject({ credentialsGeneration: digestB, failedAttemptId: Number(mismatch!.id) });
+      const [quarantined] = await verifyWork(r.page.pageId);
+      expect(quarantined).toMatchObject({ state: "quarantined" });
+      // B stays stored: its verify is neither superseded nor sent again.
+      await new Promise((resolve) => setTimeout(resolve, 6 * S + 1_000));
+      expect(r.identityTokens).toEqual(["token-b"]);
+      expect(await verifyWork(r.page.pageId)).toEqual([quarantined]);
+
+      let digestC: string;
+      if (renewal === "through the engine") {
+        // The owner's renewal: a candidate check under the hold, then the CAS
+        // save stores C and trusts it — the hold stays until C's own verify.
+        const app = appContext();
+        const page = { id: r.page.pageId, label: r.page.pageLabel };
+        const verified = await checkFanslyIdentityThroughEngine(app, page, { session: session("token-c") });
+        digestC = await saveVerifiedFanslyCredentials(app, page, verified, async (tx) => {
+          await storeFanslySession(tx, page.id, JSON.stringify(encryptJson(session("token-c"), HARNESS_ENCRYPTION_KEY, 1)), 1);
+        });
+      } else {
+        digestC = await storeSession(r.page, "token-c");
+      }
+
+      await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the read after C's proof");
+      expect(r.identityTokens).toEqual(renewal === "through the engine" ? ["token-b", "token-c", "token-c"] : ["token-b", "token-c"]);
+      const attempts = await verifyAttempts(r.page.pageId);
+      expect(attempts.map((attempt) => [attempt.apply_state, attempt.generation])).toEqual([["quarantined", digestB], ["applied", digestC]]);
+      expect(await verifyWork(r.page.pageId)).toEqual([
+        { id: quarantined!.id, state: "superseded", close_reason: "credentials_changed" },
+        { id: expect.any(Number), state: "done", close_reason: "verified" },
+      ]);
+      expect(await pageRow(r.page.pageId)).toMatchObject({ hold_kind: null, credentials_generation: digestC });
+      expect(await auditMetadata(r.page.pageId, "sync.credentials_verify_superseded")).toEqual([{
+        workId: quarantined!.id,
+        attemptId: Number(mismatch!.id),
+        quarantine: "identity_mismatch",
+        credentialsGeneration: digestB,
+        storedCredentialsGeneration: digestC,
+      }]);
+      expect(await auditMetadata(r.page.pageId, "sync.credentials_hold_cleared")).toEqual([expect.objectContaining({
+        attemptId: Number(attempts[1]!.id),
+        credentialsGeneration: digestC,
+        cleared: expect.objectContaining({ kind: "identity_mismatch", failedAttemptId: Number(mismatch!.id), credentialsGeneration: digestB }),
+      })]);
+    }, 90_000);
+  }
+
+  it("checks-only: a verify quarantined for B stays while B is stored; C stored since supersedes it and C's verify runs", async (context) => {
+    if (!testDb) return context.skip();
+    // B's answer breaks the contract: its verify is quarantined, no hold.
+    const r = await rig("creds-checks-only-quarantined", [answering(new Set(["token-b"]), { username: "no-id" })]);
+    const digestB = await storeSession(r.page, "token-b");
+    await urgent(r.page.pageId, "u1");
+    await startHost(r, 49);
+
+    await until(async () => (await verifyWork(r.page.pageId))[0]?.state === "quarantined", 15_000, "B's quarantined verify");
+    const [quarantined] = await verifyWork(r.page.pageId);
+    const [refused] = await verifyAttempts(r.page.pageId);
+    expect((await pageRow(r.page.pageId)).hold_kind).toBeNull();
+    // One verify per digest: B's is not raised again, nothing else goes out.
+    await new Promise((resolve) => setTimeout(resolve, 6 * S + 1_000));
+    expect(r.identityTokens).toEqual(["token-b"]);
+    expect(await verifyWork(r.page.pageId)).toEqual([quarantined]);
+    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
+
+    const digestC = await storeSession(r.page, "token-c");
+    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 20_000, "the read after C's verify");
+    expect(r.identityTokens).toEqual(["token-b", "token-c"]);
+    expect(await verifyWork(r.page.pageId)).toEqual([
+      { id: quarantined!.id, state: "superseded", close_reason: "credentials_changed" },
+      { id: expect.any(Number), state: "done", close_reason: "verified" },
+    ]);
+    expect((await pageRow(r.page.pageId)).credentials_generation).toBe(digestC);
+    expect(await auditMetadata(r.page.pageId, "sync.credentials_verify_superseded")).toEqual([{
+      workId: quarantined!.id,
+      attemptId: Number(refused!.id),
+      quarantine: "contract",
+      credentialsGeneration: digestB,
+      storedCredentialsGeneration: digestC,
+    }]);
   }, 90_000);
 });
 
