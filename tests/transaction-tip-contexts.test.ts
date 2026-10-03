@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  materializeFanslyDmTipContextsBestEffort,
-  parseFanslyDmTipSidecar,
-} from
+import { materializeFanslyDmTipContextsBestEffort } from
   "../apps/runtime/src/services/sync/fansly-tip-contexts.ts";
+import { parseFanslyDmTipSidecar } from
+  "../apps/runtime/src/sync/fansly/lib/tip-contexts.ts";
 import { runBackfillMaterializationSafely } from
   "../apps/runtime/src/services/transaction-tip-contexts-backfill.ts";
 
