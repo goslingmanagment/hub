@@ -1,5 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
-import pg, { Pool, type PoolClient } from "pg";
+import pg, { Pool, type Client, type PoolClient } from "pg";
 
 import * as schema from "./schema.ts";
 
@@ -28,6 +28,23 @@ export type PoolBackgroundErrorEvent = {
 
 export type PoolBackgroundErrorHandler = (event: PoolBackgroundErrorEvent) => void;
 
+/**
+ * Bounds that turn a hung database call into an error the caller already
+ * handles. Without them (the default) node-postgres waits for a connection,
+ * and Postgres runs a statement, waits for a lock and keeps an idle
+ * transaction open, for ever.
+ */
+export type PoolTimeouts = {
+  /** A checkout (a free connection, or a new dial) that takes longer fails. */
+  connectionTimeoutMillis: number;
+  /** Server side, per session: `statement_timeout`. */
+  statementTimeoutMs: number;
+  /** Server side, per session: `lock_timeout`. */
+  lockTimeoutMs: number;
+  /** Server side, per session: `idle_in_transaction_session_timeout`. */
+  idleInTransactionSessionTimeoutMs: number;
+};
+
 export type CreatePoolOptions = {
   /**
    * Called for every absorbed background error. Defaults to a console.warn so
@@ -35,7 +52,28 @@ export type CreatePoolOptions = {
    * without changing any existing call.
    */
   onBackgroundError?: PoolBackgroundErrorHandler;
+  /** Every connection of the pool starts its session with these. */
+  timeouts?: PoolTimeouts;
 };
+
+/** The server-side timeouts a pooled session runs with, as Postgres reports
+ *  them (`current_setting`: `1min`, `30s`, `0` for none). */
+export type PoolSessionTimeouts = {
+  statementTimeout: string;
+  lockTimeout: string;
+  idleInTransactionSessionTimeout: string;
+};
+
+export async function readPoolSessionTimeouts(pool: Pool): Promise<PoolSessionTimeouts> {
+  const result = await pool.query<PoolSessionTimeouts>(`
+    select current_setting('statement_timeout') as "statementTimeout",
+           current_setting('lock_timeout') as "lockTimeout",
+           current_setting('idle_in_transaction_session_timeout') as "idleInTransactionSessionTimeout"
+  `);
+  const row = result.rows[0];
+  if (row === undefined) throw new Error("current_setting returned no row");
+  return row;
+}
 
 function readErrorCode(error: unknown) {
   const code = (error as { code?: unknown } | null | undefined)?.code;
@@ -70,7 +108,16 @@ function warnBackgroundError(event: PoolBackgroundErrorEvent) {
  * event is swallowed.
  */
 export function createPool(connectionString: string, options: CreatePoolOptions = {}) {
-  const pool = new Pool({ connectionString });
+  const timeouts = options.timeouts;
+  const pool = new Pool(timeouts === undefined
+    ? { connectionString }
+    : {
+      connectionString,
+      connectionTimeoutMillis: timeouts.connectionTimeoutMillis,
+      statement_timeout: timeouts.statementTimeoutMs,
+      lock_timeout: timeouts.lockTimeoutMs,
+      idle_in_transaction_session_timeout: timeouts.idleInTransactionSessionTimeoutMs,
+    });
   const report = options.onBackgroundError ?? warnBackgroundError;
   // pg re-emits an idle client's error on the Pool, so the same Error object can
   // reach both listeners below: report it once.
@@ -117,8 +164,10 @@ export function createPool(connectionString: string, options: CreatePoolOptions 
   return pool;
 }
 
-export function createDb(pool: Pool) {
-  return drizzle(pool, { schema });
+/** A database over the pool, or over one dedicated client (a session of its
+ *  own that no pool checkout can block). */
+export function createDb(client: Pool | Client) {
+  return drizzle(client, { schema });
 }
 
 export type Database = Omit<ReturnType<typeof createDb>, "$client">;
