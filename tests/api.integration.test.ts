@@ -9331,9 +9331,16 @@ describe("api integration", () => {
     }));
     await server.ready();
 
+    // Since step 4 (S4-10) the legacy executor serves OnlyFans pages only: a
+    // Fansly page off the engine is refused (the engine's levers:
+    // tests/sync-engine-levers.integration.test.ts).
+    const onlyFansPage = await createOnlyFansPage(activeTestDb.db, {
+      modelId: fixture.lanaModel.id,
+      label: "lana-of-blocks",
+    });
     const now = new Date("2026-03-24T12:00:00.000Z");
     await ensurePageSyncStates(activeTestDb.db, {
-      pageId: fixture.lanaPage.id,
+      pageId: onlyFansPage.id,
       now,
     });
 
@@ -9344,12 +9351,21 @@ describe("api integration", () => {
     });
     const ownerCookie = sessionCookieFrom(ownerLogin);
 
+    const fansly = await server.inject({
+      method: "POST",
+      url: "/api/v1/admin/sync/blocks/trigger",
+      headers: { cookie: ownerCookie },
+      payload: { pageLabel: "lana", block: "financials" },
+    });
+    expect(fansly.statusCode).toBe(409);
+    expect(fansly.json()).toMatchObject({ error: "legacy_sync_retired" });
+
     const trigger = await server.inject({
       method: "POST",
       url: "/api/v1/admin/sync/blocks/trigger",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "financials",
       },
     });
@@ -9357,7 +9373,7 @@ describe("api integration", () => {
     expect(trigger.json()).toMatchObject({
       accepted: true,
       action: "trigger",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "financials",
     });
 
@@ -9366,7 +9382,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/pause",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9382,7 +9398,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/resume",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9401,7 +9417,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "messages_history",
       },
     });
@@ -9414,7 +9430,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "audience",
       },
     });
@@ -9422,7 +9438,7 @@ describe("api integration", () => {
     expect(audienceReset.json()).toMatchObject({
       accepted: true,
       action: "reset",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "audience",
     });
 
@@ -9431,7 +9447,7 @@ describe("api integration", () => {
       url: "/api/v1/admin/sync/blocks/reset",
       headers: { cookie: ownerCookie },
       payload: {
-        pageLabel: "lana",
+        pageLabel: "lana-of-blocks",
         block: "financials",
       },
     });
@@ -9439,7 +9455,7 @@ describe("api integration", () => {
     expect(financialsReset.json()).toMatchObject({
       accepted: true,
       action: "reset",
-      pageLabel: "lana",
+      pageLabel: "lana-of-blocks",
       block: "financials",
     });
   }, 15_000);

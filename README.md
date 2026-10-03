@@ -148,9 +148,11 @@ docker compose --env-file .env.production -f docker-compose.production.yml exec 
 ```bash
 docker compose --env-file .env.production -f docker-compose.production.yml exec api \
   node apps/runtime/dist/cli.js sync \
-  --page lora-main \
+  --page lora-of \
   --scope all
 ```
+
+This runs the legacy page-sync executor, which serves OnlyFans pages only. A Fansly page is read by the Fansly Sync Engine (the `sync` service): the command refuses it (`legacy_sync_retired`); use the dashboard's sync buttons, which act on the engine, and `sync page status --page <label>` (or `sync why --page <label> --resource <key>`) to see what the engine does.
 
 ### Inspect sync state from the CLI
 

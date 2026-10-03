@@ -3,11 +3,9 @@ import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark,
   hasRecentAiGenerationInConversation,
-  isFanslyPageEngineOwned,
   listEventAccounts,
   listEventsSince,
   requestAiMediaAcceleratorRead,
-  requestPageSync,
   setProjectionWatermark,
   upsertAiMediaDescriptionCandidate,
 } from "@agency_hub_core/db";
@@ -200,7 +198,6 @@ export async function runAiMediaCandidatesProjection(
     }
     const liveChatOnly = effective.aiMediaDescribeLiveChatOnly !== false;
     const accelerator = effective.aiMediaDescribeFanslyAcceleratorEnabled === true;
-    let wakeDm = false;
     for (;;) {
       const events = await listEventsSince(app.db, { accountId, afterSeq: watermark, limit: EVENT_PAGE_SIZE });
       if (events.length === 0) break;
@@ -224,7 +221,6 @@ export async function runAiMediaCandidatesProjection(
           }
           if (await requestAiMediaAcceleratorRead(app.db, { pageId: accountId, groupRef, messageRef, now: new Date() })) {
             totals.accelerations += 1;
-            wakeDm = true;
           }
           continue;
         }
@@ -252,13 +248,6 @@ export async function runAiMediaCandidatesProjection(
       watermark = events[events.length - 1]!.accountSeq;
       await setProjectionWatermark(app.db, AI_MEDIA_CANDIDATES_PROJECTION, accountId, watermark);
       if (events.length < EVENT_PAGE_SIZE) break;
-    }
-    // Wakes an idle DM stream for the addressed read only; busy streams run
-    // the accelerator step inside their ordinary chunk. Never on a page the
-    // Fansly Sync Engine owns: its legacy DM stream is fenced, and the head
-    // read there is the WS confirmation's (step-3 design §3.1 item 7).
-    if (wakeDm && !(await isFanslyPageEngineOwned(app.db, accountId)).owned) {
-      await requestPageSync(app.db, { pageId: accountId, streams: ["dm_messages"], source: "event" });
     }
   }
   return totals;
