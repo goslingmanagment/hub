@@ -18,7 +18,7 @@ import {
   LEGACY_UNCHANGED_PAGE_REASONS,
   type ConversationHeadDiffReason,
   type ConversationHeadSnapshot,
-} from "../apps/runtime/src/services/sync/fansly-dm-head-diff.ts";
+} from "../apps/runtime/src/sync/fansly/lib/dm-head-diff.ts";
 
 const HEAD_AT = new Date("2026-03-10T12:00:00.000Z");
 

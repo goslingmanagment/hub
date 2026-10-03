@@ -9,8 +9,8 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { createCapturePayloadRowResolver, isCapturePayloadUnavailable } from "../../services/payload-reader.ts";
-import { fanslyPurchaseHistoryOrderRows } from "../../services/sync/fansly-purchase-history.ts";
-import { normalizeFanslyTimestamp } from "../../services/sync/shared.ts";
+import { fanslyPurchaseHistoryOrderRows } from "../fansly/lib/purchase-history.ts";
+import { normalizeFanslyTimestamp } from "../fansly/lib/timestamp.ts";
 import { readOrderFrames } from "../fansly/ws/money-frames.ts";
 
 // Rule A2.demand-replaced (design §3.12 A2, §5.9): legacy reads the order

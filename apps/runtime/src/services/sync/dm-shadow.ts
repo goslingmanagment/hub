@@ -1,6 +1,6 @@
 import type { FanslyDmReaderHeadReceipt } from "@agency_hub_core/db";
 
-import type { ConversationHeadDiffReason } from "./fansly-dm-head-diff.ts";
+import type { ConversationHeadDiffReason } from "../../sync/fansly/lib/dm-head-diff.ts";
 import type { DmShadowState } from "./dm-shadow-state.ts";
 import { DM_SHADOW_WITNESS_LIMIT, type DmShadowWitnessPointer } from "./dm-shadow-witness.ts";
 

@@ -16,7 +16,7 @@ import {
 } from "@agency_hub_core/fansly";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP } from "@agency_hub_core/shared";
 
-import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPageDetailed } from "../../../services/sync/fan-hydration.ts";
+import { FANSLY_ACCOUNT_LOOKUP_REUSE_MS, upsertHydratedFansForPageDetailed } from "../lib/fan-hydration.ts";
 import type {
   ApplyInput,
   ApplyResult,

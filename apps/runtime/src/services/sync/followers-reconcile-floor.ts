@@ -1,11 +1,7 @@
 import type { PageSyncStatus, SyncRequestSource, SyncStream } from "@agency_hub_core/db";
 
+import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "../../sync/fansly/lib/audience-rules.ts";
 import { asNumber, asRecord } from "./cursor-state.ts";
-
-/** Owner policy: a full followers walk starts at most once a day on every
- *  page. The walk's two-walk grace is unchanged, so an unfollow shows 24-48 h
- *  after it happens instead of within a few hours. */
-export const FOLLOWERS_RECONCILE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /** StreamChunkResult.deferral of a chunk the floor held, and the status reason
  *  code the readers report for the held request. */

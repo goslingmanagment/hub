@@ -13,10 +13,8 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { millsFromInteger } from "@agency_hub_core/shared";
 
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import {
-  fanslyPostRepliesChunk,
-  parseFanslyPostRepliesCursorState,
-} from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
+import { fanslyPostRepliesChunk } from "../apps/runtime/src/services/sync/fansly-post-replies.ts";
+import { parseFanslyPostRepliesCursorState } from "../apps/runtime/src/sync/fansly/lib/post-replies-rules.ts";
 import { REPLIES_FULL_PAGE_THRESHOLD } from "../apps/runtime/src/services/canonicalize/fansly-comments.ts";
 import {
   resetIntegrationDatabase,

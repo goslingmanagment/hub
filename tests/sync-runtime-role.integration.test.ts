@@ -193,6 +193,15 @@ describe("the sync runtime role", () => {
       await waitFor(() => (existsSync(healthFile) ? true : null), 10_000, "the sync health file");
       // The engine host starts after the first beat (it owns no page here).
       await waitFor(() => (stdout.includes("Sync runtime started") ? true : null), 10_000, "the started line");
+      // Step 4, 4-3 layer 0: the boot log shows the pool's timeouts, as
+      // Postgres reports them for a pooled session.
+      const timeouts = stdout.split("\n").find((line) => line.includes("Sync pool timeouts in force"));
+      expect(JSON.parse(timeouts ?? "null"), stdout).toMatchObject({
+        connectionTimeoutMillis: 30_000,
+        statementTimeout: "1min",
+        lockTimeout: "30s",
+        idleInTransactionSessionTimeout: "1min",
+      });
 
       await sleep(IDLE_EXIT_WINDOW_MS);
       alive();

@@ -5,7 +5,7 @@ import { PAYOUT_REQUESTS_PAGE_SIZE } from "@agency_hub_core/fansly";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { isMappedPayoutStatus } from "../../../services/canonicalize/fansly-payouts.ts";
-import { advanceOffsetPage, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { advanceOffsetPage, writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   catchUpReached,
   classifyPayoutResponse,
@@ -24,7 +24,7 @@ import {
   settleWalkStop,
   type FanslyPayoutsCatchUp,
   type FanslyPayoutsWalkStop,
-} from "../../../services/sync/fansly-payouts.ts";
+} from "../lib/payouts-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type {
   ApplyInput,

@@ -4,11 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  nextVaultCursor,
-  vaultMediaRows,
-  walkContinuationAt,
-} from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { walkContinuationAt } from "../apps/runtime/src/services/sync/fansly-catalog.ts";
+import { nextVaultCursor, vaultMediaRows } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
 
 describe("WP-F3 catalog lane helpers", () => {
   it("reads albumMedia rows and nothing from the raw media sidecar", () => {

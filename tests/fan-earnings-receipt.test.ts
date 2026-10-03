@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFanEarningsReceipt } from "../apps/runtime/src/services/sync/fan-earnings-receipt.ts";
+import { buildFanEarningsReceipt } from "../apps/runtime/src/sync/fansly/lib/fan-earnings-receipt.ts";
 
 const row = { correlationAccountId: "fan-a", type: 2110, totalGross: 100, totalNet: 80 };
 function receipt(payload: unknown, window: "lifetime" | "monthly" = "lifetime") {

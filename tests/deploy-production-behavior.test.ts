@@ -574,6 +574,141 @@ describe("production deploy behavior without production access", () => {
     expect(result.stderr).toContain(`Sync container last observed status: ${status}`);
   });
 
+  // 2026-10-03: a rollback force-recreated the whole stack, PostgreSQL
+  // included, and never confirmed the replaced sync container's page owners:
+  // the live page had no sender until an operator ran confirm-stopped by hand.
+  // An app-scope rollback now recreates only the runtime's services, then runs
+  // the forward path's sync owner and send-guard confirmations, and still
+  // returns to fail() whatever happens.
+  describe("rollback of the remote stack", () => {
+    const syncConfirmation = "docker compose --current exec -T api node apps/runtime/dist/cli.js sync ownership confirm-stopped "
+      + '--running-hosts "$sync_hosts" --acquired-before "$listed_at"';
+    const sendGuardConfirmation = "docker compose --current exec -T api node apps/runtime/dist/cli.js fansly-send-guard confirm-terminated "
+      + '--running-hosts "$running_hosts" --include-unexpired --captured-before "$listed_at"';
+    const rollbackUp = "set -euo pipefail; cd /opt/agency-hub; docker tag example/hub:production-rollback-fixture example/hub:production; "
+      + "docker compose --current up -d --remove-orphans --force-recreate --no-build";
+
+    function rollback(overrides: NodeJS.ProcessEnv = {}) {
+      writeFileSync(path.join(fixtureRoot, "schema-before"), "0001_init\n");
+      return runFunctions([
+        "rollback_remote_stack", "remote_release_defines_sync", "wait_for_sync_container_health",
+        "confirm_sync_owner_handover", "confirm_remote_fansly_send_guard_terminations",
+      ], String.raw`
+        sleep() { :; }
+        run_remote() {
+          printf '%s\n' "$1" >> "$TEST_COMMAND_LOG"
+          if [[ -n "$TEST_REMOTE_FAILURE_PATTERN" && "$1" == *"$TEST_REMOTE_FAILURE_PATTERN"* ]]; then return 23; fi
+          case "$1" in
+            *"confirm-stopped"*) printf 'page\tgeneration\towner_host\tconfirmed\nlilly-1\t3\told-sync\ttrue\n' ;;
+            *"confirm-terminated"*) printf 'page\tholder_host\treleased\nlilly-1\told-api\ttrue\n' ;;
+            *"config --services"*) printf '%s\n' $TEST_RELEASE_SERVICES ;;
+            *"ps -q sync"*) next_sync_status ;;
+            *"docker tag "*) return 0 ;;
+            *) printf 'Unexpected remote command\n' >&2; return 97 ;;
+          esac
+        }
+        capture_remote_schema_migrations() { cp "$SCHEMA_BEFORE_FILE" "$1"; }
+        verify_remote_legacy_onlyfans_dm_messages_retired() { return 0; }
+        wait_for_api_health() { printf 'api health\n' >> "$TEST_COMMAND_LOG"; return "$TEST_API_HEALTH_STATUS"; }
+        ROLLBACK_IMAGE_AVAILABLE=1 SCHEMA_BASELINE_CAPTURED=1 ROLLBACK_RELEASE_FILES_RESTORED=1
+        SCHEMA_BEFORE_FILE="$ROOT_DIR/schema-before" SCHEMA_AFTER_FILE="$ROOT_DIR/schema-after" HEALTH_FILE="$ROOT_DIR/health"
+        IMAGE_TAG=example/hub:production ROLLBACK_IMAGE_TAG=example/hub:production-rollback-fixture
+        rollback_remote_stack
+        log "rollback returned"
+      `, {
+        RECREATE_SERVICES: "api worker scheduler", TEST_RELEASE_SERVICES: "postgres api scheduler worker sync",
+        TEST_API_HEALTH_STATUS: "0", TEST_SYNC_STATUSES: "starting healthy", ...overrides,
+      });
+    }
+
+    function lineOf(calls: string[], text: string) {
+      return calls.findIndex((call) => call.includes(text));
+    }
+
+    it("recreates only the runtime's services after an app-scope deploy, so PostgreSQL keeps running", () => {
+      const result = rollback();
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands()).toContain(`${rollbackUp} api worker scheduler sync`);
+      expect(commands().filter((call) => call.includes(" up -d"))).toHaveLength(1);
+      expect(commands().join("\n")).not.toContain("postgres");
+    });
+
+    it("recreates the whole stack after a stack-scope deploy, which recreated PostgreSQL itself", () => {
+      const result = rollback({ RECREATE_SCOPE: "stack", RECREATE_SERVICES: "" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands()).toContain(rollbackUp);
+      expect(commands().at(-1)).toBe(sendGuardConfirmation);
+    });
+
+    it.each([
+      ["passed", "0", "Rollback health check passed"],
+      ["timed out from the deploy host", "1", "Rollback health check did not reach 200"],
+    ])("confirms the replaced containers' sync owners, then send-guard holders, once sync is healthy (API check %s)", (_label, apiHealth, apiLog) => {
+      const result = rollback({ TEST_API_HEALTH_STATUS: apiHealth });
+      expect(result.status, result.stderr).toBe(0);
+      const calls = commands();
+      const recreate = lineOf(calls, " up -d --remove-orphans --force-recreate --no-build");
+      const api = calls.indexOf("api health");
+      const probes = calls.flatMap((call, index) => (call.includes(".State.Health.Status") ? [index] : []));
+      const owners = calls.indexOf(syncConfirmation);
+      const holders = calls.indexOf(sendGuardConfirmation);
+      expect(recreate).toBeGreaterThan(-1);
+      expect(api).toBeGreaterThan(recreate);
+      expect(probes).toHaveLength(2);
+      expect(probes[0]).toBeGreaterThan(api);
+      expect(owners).toBeGreaterThan(Math.max(...probes));
+      expect(holders).toBe(calls.length - 1);
+      expect(holders).toBeGreaterThan(owners);
+      expect(result.stderr).toContain(apiLog);
+      expect(result.stderr).toContain("Sync engine: confirmed the page owners of stopped sync containers");
+      expect(result.stderr).toContain("lilly-1\t3\told-sync\ttrue");
+      expect(result.stderr).toContain("Fansly send guard: confirmed the holders of stopped containers terminated");
+      expect(result.stderr).toContain("lilly-1\told-api\ttrue");
+      expect(result.stderr).toMatch(/rollback returned\n$/);
+    });
+
+    it("confirms no sync owner while the rolled-back sync never turns healthy, but still frees cut-off send-guard holders", () => {
+      const result = rollback({ TEST_SYNC_STATUSES: "unhealthy" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands().join("\n")).not.toContain("confirm-stopped");
+      expect(commands().at(-1)).toBe(sendGuardConfirmation);
+      expect(result.stderr).toContain("WARNING: the rolled-back sync container never reached a healthy state");
+      expect(result.stderr).toMatch(/rollback returned\n$/);
+    });
+
+    it.each([
+      ["sync owner", "confirm-stopped", "WARNING: the sync engine owner confirmation failed after the rollback"],
+      ["send-guard", "confirm-terminated", "WARNING: the Fansly send guard confirmation failed after the rollback"],
+    ])("only logs a failed %s confirmation after the rollback", (_label, pattern, warning) => {
+      const result = rollback({ TEST_REMOTE_FAILURE_PATTERN: pattern });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands().at(-1)).toBe(sendGuardConfirmation);
+      expect(result.stderr).toContain(warning);
+      expect(result.stderr).toMatch(/rollback returned\n$/);
+    });
+
+    it("leaves sync out when the restored release predates it: --remove-orphans removes it and nothing waits for it", () => {
+      const result = rollback({ TEST_RELEASE_SERVICES: "postgres api scheduler worker" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands()).toContain(`${rollbackUp} api worker scheduler`);
+      expect(commands().join("\n")).not.toContain("ps -q sync");
+      expect(commands().at(-1)).toBe(sendGuardConfirmation);
+    });
+
+    it("lists sync when the restored release's services cannot be read, as every current release defines it", () => {
+      const result = rollback({ TEST_REMOTE_FAILURE_PATTERN: "config --services" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(commands()).toContain(`${rollbackUp} api worker scheduler sync`);
+    });
+
+    it("neither waits for sync nor confirms anything when the rollback recreate itself fails", () => {
+      const result = rollback({ TEST_REMOTE_FAILURE_PATTERN: "docker tag " });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("Rollback command failed");
+      expect(commands().join("\n")).not.toMatch(/ps -q sync|confirm-stopped|confirm-terminated/);
+    });
+  });
+
   // fail() dumps diagnostics after the rollback restored the previous release
   // files, which may predate the sync service. Compose refuses a whole `logs`
   // call naming a service its files lack, so the dump's remote command runs

@@ -20,7 +20,7 @@ import {
 } from "@agency_hub_core/db";
 import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
-import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../../../services/sync/fansly-lane.ts";
+import { fanslyUtcDayKey, writeFanslyLaneCoverage } from "../lib/lane.ts";
 import {
   answeredFloor,
   BACKFILL_EMPTY_STREAK_LIMIT,
@@ -49,8 +49,8 @@ import {
   type LongTailWindowMode,
   type MediaBackfillCursor,
   type WindowFailure,
-} from "../../../services/sync/fansly-media-stats.ts";
-import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../../../services/sync/fansly-stats.ts";
+} from "../lib/media-stats-rules.ts";
+import { classifyStatsWindow, narrowedSpanDays, servedWindow, windowWasHonoured } from "../lib/stats-rules.ts";
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import {
   effectiveTiers,

@@ -5,15 +5,17 @@ import { FanslyApiError } from "@agency_hub_core/fansly";
 import { FanslyPurchaseHistoryContractError } from "../apps/runtime/src/services/sync/errors.ts";
 import {
   assertFanslyPurchaseHistoryTargetKindsConsistent,
-  classifyFanslyPurchaseHistoryCapture,
   classifyFanslyPurchaseHistoryCaptures,
   classifyFanslyPurchaseHistoryProbe,
   deriveFanslyPurchaseHistoryRejectionStreaks,
   extractFanslyPurchaseHistoryTargetsFromTransactions,
   fanslyPurchaseHistoryTargetRejection,
-  parseFanslyPurchaseHistoryCursorState,
   rejectedFanslyPurchaseHistoryPayload,
 } from "../apps/runtime/src/services/sync/fansly-purchase-history.ts";
+import {
+  classifyFanslyPurchaseHistoryCapture,
+  parseFanslyPurchaseHistoryCursorState,
+} from "../apps/runtime/src/sync/fansly/lib/purchase-history.ts";
 
 describe("Fansly purchase-history transaction discovery", () => {
   it("maps current and legacy media transaction types to the correct target kind", () => {

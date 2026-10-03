@@ -22,7 +22,7 @@ import { createEffectiveConfigSettingsSource, type SettingsSource } from "../app
 import { runsIn, type EngineRegistry, type ReplayContext, type ReplayObservation, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { fanEarningsRosterNextDueAt } from "../apps/runtime/src/sync/fansly/resources/fan-earnings.ts";
-import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/services/sync/fansly-media-stats.ts";
+import { emptyFanslyMediaStatsCursorState } from "../apps/runtime/src/sync/fansly/lib/media-stats-rules.ts";
 import { mediaStatsOwnerTiers } from "../apps/runtime/src/sync/fansly/resources/media-stats.ts";
 import { ROUTE_POLICY_HASH } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { FANSLY_REGISTRY_HASH, SHADOW_FINGERPRINT_VERSION } from "../apps/runtime/src/sync/report/shadow-fingerprint.ts";

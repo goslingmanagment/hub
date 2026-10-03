@@ -277,4 +277,49 @@ describe("startRuntimeHeartbeat", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Step 4, 4-3: the `sync` role's stall watchdog watches each beat from its
+  // start until it settles. A beat that never settles is a stall (the process
+  // exits 70 for a restart); one that fails — the database down — is not.
+  describe("watched by the sync role's stall watchdog", () => {
+    async function watchedHeartbeat() {
+      const { SyncStallWatchdog } = await import("../apps/runtime/src/sync/engine/watchdog.ts");
+      const clock = { now: 0, monoNow() { return this.now; } };
+      const exits: number[] = [];
+      const watchdog = new SyncStallWatchdog({ clock, exit: (code) => exits.push(code), writeStderr: () => undefined });
+      const { startRuntimeHeartbeat } = await import("../apps/runtime/src/services/runtime-heartbeat.ts");
+      const app = ({ db: {}, config: {}, bootSkipped: [], logger: { warn: vi.fn() } }) as never;
+      const hb = startRuntimeHeartbeat(app, "sync", {
+        intervalMs: 30_000,
+        stopTimeoutMs: 1,
+        watchBeat: () => watchdog.track({ component: "heartbeat" }, "beat"),
+      });
+      return { clock, exits, watchdog, hb };
+    }
+
+    it("a beat that never settles is a stall", async () => {
+      h.loadEffectiveConfig.mockImplementationOnce(() => new Promise<never>(() => undefined));
+      const { clock, exits, watchdog, hb } = await watchedHeartbeat();
+      await vi.waitFor(() => expect(h.loadEffectiveConfig).toHaveBeenCalledTimes(1));
+      expect(watchdog.tracked).toBe(1);
+      clock.now = 120_000;
+      expect(watchdog.check()).toMatchObject({ component: "heartbeat", phase: "beat", ageMs: 120_000 });
+      await watchdog.exiting;
+      expect(exits).toEqual([70]);
+      await hb.stop();
+    });
+
+    it("a beat that fails is no stall: it settled", async () => {
+      h.upsertInstanceHeartbeat.mockImplementationOnce(async () => {
+        throw new Error("db unreachable");
+      });
+      const { clock, exits, watchdog, hb } = await watchedHeartbeat();
+      await vi.waitFor(() => expect(h.upsertInstanceHeartbeat).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(watchdog.tracked).toBe(0));
+      clock.now = 10 * 120_000;
+      expect(watchdog.check()).toBeNull();
+      expect(exits).toEqual([]);
+      await hb.stop();
+    });
+  });
 });

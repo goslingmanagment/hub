@@ -166,7 +166,7 @@ export function deriveObservationQueryableFields(input: {
  * payload back whole; storing a copy of it would duplicate a body to preserve a
  * value the only consumer cannot use — a non-record response and SQL NULL are
  * both `envelopeStatus: "invalid"` to the sidecar parser
- * (services/sync/fansly-tip-contexts.ts). The fallback keeps historical rows on
+ * (apps/runtime/src/sync/fansly/lib/tip-contexts.ts). The fallback keeps historical rows on
  * the old path either way.
  */
 export function deriveRawPayloadTipsSlice(input: {
