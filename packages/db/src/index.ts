@@ -96,6 +96,7 @@ export * from "./repositories/agent-hydration.ts";
 export * from "./repositories/agent-read.ts";
 export * from "./repositories/agent-transcript.ts";
 export * from "./repositories/ai-transcript-union.ts";
+export * from "./repositories/conversation-feed.ts";
 export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";
 export * from "./repositories/config-settings.ts";
