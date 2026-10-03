@@ -953,8 +953,10 @@ export const mediaStatsWalkModule: ResourceModule = {
     if (ctx.shadow) return planShadow(cursor, { db: ctx.db, pageId: ctx.pageId, now: ctx.now, tiers });
     // The free signal (zero calls): today's top-50 jump the queue once a UTC
     // day, marked before the pick as legacy marks them — also on a day the
-    // queue holds nothing else due, when no apply would run. Never between a
-    // visit's steps or after a failed step (their plan comes first).
+    // queue holds nothing else due. This is the walk's only mark. Never
+    // between a visit's steps or after a failed step (their plan comes
+    // first): a visit in flight at midnight ends first, and after a failure
+    // the mark waits for the first plan after an applied step.
     if (cursor.topMarkedDay !== fanslyUtcDayKey(ctx.now) && cursor.visit === null && work.lastErrorClass === null) {
       return { kind: "local", reason: "top_media_mark" };
     }
@@ -1043,13 +1045,6 @@ export const mediaStatsWalkModule: ResourceModule = {
       run = runMediaVisit(visit);
       for (const [name, by] of Object.entries(run.counters)) counters[name] = (counters[name] ?? 0) + by;
       next = { ...next, ...run.page };
-    }
-    // Today's top-50 not marked yet (a visit ran across midnight, or a step
-    // failed before the plan's mark): marked with this apply.
-    const today = fanslyUtcDayKey(now);
-    if (cursor.topMarkedDay !== today) {
-      counters.top_media_marked = await markTopMedia(tx, input.pageId, now);
-      next = { ...next, topMarkedDay: today };
     }
 
     if (run !== null && run.kind === "need") {
