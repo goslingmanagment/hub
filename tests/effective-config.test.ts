@@ -245,6 +245,11 @@ describe("LIVE_CONFIG_KEYS", () => {
     // Step 4 S4-16 retired ten keys with the legacy Fansly money lanes.
     // Step 4 S4-17 retired two keys with the legacy followers reconcile's settlement reuse.
     // Step 4 S4-18 retired 24 keys with the legacy Fansly content lanes.
-    expect(LIVE_CONFIG_KEYS.size).toBe(48);
+    // The legacy ramp gate of fan_earnings and purchase_history went with its
+    // last callers (S4-16 and S4-18 together), and its two live keys with it.
+    for (const key of ["fanslyFanEarningsSyncEnabled", "fanslyNewStreamPageAllowlist"]) {
+      expect(LIVE_CONFIG_KEYS.has(key), key).toBe(false);
+    }
+    expect(LIVE_CONFIG_KEYS.size).toBe(46);
   });
 });

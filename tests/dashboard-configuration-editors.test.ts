@@ -32,12 +32,12 @@ import { KernelApiError } from "../apps/dashboard/src/api/sdk.ts";
 
 function item(overrides: Partial<ConfigItem> = {}): ConfigItem {
   return {
-    key: "fanslyNewStreamPageAllowlist",
-    envName: "FANSLY_NEW_STREAM_PAGE_ALLOWLIST",
-    configField: "fanslyNewStreamPageAllowlist",
+    key: "fanslyLiveOverlayReadPages",
+    envName: "FANSLY_LIVE_OVERLAY_READ_PAGES",
+    configField: "fanslyLiveOverlayReadPages",
     kind: "string",
     subsystem: "Fansly",
-    label: "Fansly new-stream page allowlist",
+    label: "Fansly live overlay readers",
     default: "",
     editability: "editable",
     runtimeApply: "live",

@@ -5,9 +5,7 @@
 // value. They are declared here so a handler module can be a leaf.
 //
 // executor-handlers.ts re-exports both, so the modules that already import them
-// from there (fansly-stats, fansly-catalog, fansly-media-stats,
-// fansly-notifications, fansly-payouts, fansly-post-replies, posts, and the
-// platform registry) keep working unchanged.
+// from there (posts and the platform registry) keep working unchanged.
 
 import type { SyncRequestSource } from "@agency_hub_core/db";
 
