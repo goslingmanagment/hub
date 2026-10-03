@@ -2,13 +2,13 @@
 export const OFAPI_COLLECTION_CATEGORIES = [
   "core_messages", "core_payments", "core_audience", "posts_comments", "visitors",
   "tracking_links", "smart_links", "vault_catalog", "vault_files", "balances",
-  "profile_notifications", "content_history", "media_previews",
+  "profile_notifications", "content_history", "media_previews", "account_settings",
 ] as const;
 export type OfapiCollectionCategory = typeof OFAPI_COLLECTION_CATEGORIES[number];
 /** Closed periodic GET executors; uploads, exports and baseline sync use other lifecycles. */
 export const OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES: readonly OfapiCollectionCategory[] = [
   "posts_comments", "visitors", "tracking_links", "smart_links", "vault_catalog",
-  "balances", "profile_notifications", "content_history",
+  "balances", "profile_notifications", "content_history", "account_settings",
 ];
 export type OfapiCollectionMode = "off" | "on_demand" | "scheduled";
 export type OfapiCollectionPurpose = "background" | "interactive" | "one_off";
@@ -68,12 +68,16 @@ export const OFAPI_COLLECTION_REGISTRY = OFAPI_COLLECTION_CATEGORIES.map(id => (
     smart_links: "Smart links", vault_catalog: "Vault catalog", vault_files: "Owned media uploads",
     balances: "Balances and payouts", profile_notifications: "Profile and notifications",
     content_history: "Stories, highlights and queue history",
-    media_previews: "Desktop media previews" })[id],
+    media_previews: "Desktop media previews",
+    account_settings: "Account settings: welcome message" })[id],
   // media_previews has no background executor: on_demand admits only explicit
   // interactive desktop resolves (docs/runbooks/ofapi-media.md).
   modes: id === "vault_files" ? ["off"] as const : id === "media_previews" ? ["off", "on_demand"] as const : ["off", "on_demand", "scheduled"] as const,
   baseline: ["core_messages", "core_payments", "core_audience"].includes(id),
-  consumers: id === "core_messages" ? ["chatters", "Agent Read"] : id === "media_previews" ? ["chatters"] : ["dashboard", "Agent Read"],
+  // account_settings: the welcome-template snapshot feeds the chat
+  // extension's "New" panel and the owner's stored-read report.
+  consumers: id === "core_messages" ? ["chatters", "Agent Read"] : id === "media_previews" ? ["chatters"]
+    : id === "account_settings" ? ["chatters", "dashboard"] : ["dashboard", "Agent Read"],
   supportsOneOff: !["core_messages", "core_payments", "core_audience", "media_previews"].includes(id),
   priceUnit: id === "vault_files" || id === "media_previews" ? "calls_and_bytes" as const : "physical_calls" as const,
   prerequisites: id === "vault_files" ? ["owned source and explicit upload approval"] : ["active OFAPI page binding"],
@@ -89,6 +93,10 @@ export function classifyOfapiCollectionOperation(operation: string): OfapiCollec
   // Desktop media previews: the free redirect probe and the paid download.
   if (["ofapi_media_probe", "ofapi_media_download"].includes(operation)) return "media_previews";
   if (/^ofapi_command_/.test(operation)) return "command";
+  // The catalog's welcome-template read, not a chat message: named before the
+  // `message` pattern below claims it for core_messages. The desktop's gateway
+  // read of the same path (`ofapi_gateway_welcome_message`) keeps its class.
+  if (operation === "ofapi_read_welcome_message") return "account_settings";
   if (["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_admin_accounts", "ofapi_webhook_crud", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog",
     "ofapi_stored_tracking_links", "ofapi_stored_trial_links"].includes(operation)) return "diagnostic";
   if (/chat|message/.test(operation) && !/export/.test(operation)) return "core_messages";

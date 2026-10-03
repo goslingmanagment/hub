@@ -18,6 +18,7 @@ The closed catalog supports the selected GET operations from the 294-operation a
 | content_history | `["stories"]`; optional explicit story/highlight IDs or engagement ranges | active stories, archive, highlights, mass queue |
 | balances | `["payout_balances"]`, then separate `["statistics_overview"]` and `["subscriber_statistics"]` with paired dates | payout balance snapshot, the newest page of payout requests (limit 50), one general overview and subscriber statistics; needs `maxCallsPerRun` ≥ 4 |
 | visitors | selection `["total"]` with UTC-midnight from/to and sufficient explicit calls | previous UTC day via the S8 visitor handler; users/guests are separate optional types |
+| account_settings | `["welcome_message"]`, one call | the welcome template snapshot (one call, 1 credit) |
 
 Selections name a catalog `id`, with `:numeric-id` only for a detail operation; user-list details also allow documented named IDs such as `friends`, `tagged` and `rebill_off`. Searching requires the catalog's query term. An explicit selector may include an allowlisted query, for example `giphy_search?q=hello`. No selector becomes an arbitrary path. Empty selection picks only the listed defaults. Detail fanout never occurs implicitly. For a continuation approval, create a new bounded job using the captured next-query evidence, for example `["following_expired?offset=50&limit=50"]`. The new selector is validated against the same strict query catalog; it never rewrites the previous job's caps or cursor.
 
@@ -26,6 +27,32 @@ Selections name a catalog `id`, with `:numeric-id` only for a detail operation; 
 The scheduled `balances` run reads the newest page of `payouts/payout-requests` (offset 0, limit 50). OnlyFans keeps the whole history and documents only limit/offset; the response `marker` is never used as a request cursor, so a scheduled run makes exactly one call for it. Older requests are a bounded one-off `balances` job with explicit selectors, for example `payout_requests?offset=50`, then `?offset=100`. A policy created before this change with `maxCallsPerRun: 3` ends every run at `scheduled_run_exhausted:job_limit` before its fourth step (subscriber statistics): raise it to 4 in Settings → Сбор for each OnlyFans page.
 
 Agents read the result as the OnlyFans-only dataset `ofapi_payout_requests` (`read:datasets` + `read:money`, claim field `ofapiPayoutRequest`): one row per invoice (`payoutRef`), the latest observation wins, with `amountMills`, `currency`, `state`, `rejectReason`, `requestedAt`, `lastObservedAt` and `observationRef`. The window and the capture floor run on `requestedAt`, so the floor is the oldest request Hub holds. `amount` is taken as US dollars like the balance snapshot (`payoutAvailable` 247.46 → 247460 mills); confirm it against the OnlyFans payout page on the first real capture.
+
+## Welcome template snapshot (`account_settings`)
+
+The chat extension's "New" panel shows whether the page's automatic welcome
+message is on, has text or media, and its price. Hub reads it as the
+`account_settings` category: one `GET settings/welcome-message` per run (1
+credit), stored like any other read snapshot. The category is off until the
+owner applies it per OnlyFans page in Settings → Сбор: mode **Scheduled**,
+interval **1440** minutes, daily credit limit **1**, calls per run **1**.
+Nothing is applied by deployment.
+
+- The read is collection-only. The desktop's read of the same path through the
+  read gateway keeps its own capture-first operation
+  (`ofapi_gateway_welcome_message`) and admission; turning this category on or
+  off does not change it.
+- It is not the owner action `welcome_message_read`. That action holds the
+  cluster-wide owner-action lock, so a background read there would turn the
+  owner's own actions into 409s.
+- The canonical snapshot item carries `welcomeTemplate`
+  (`enabled`, `hasText`, `hasMedia`, `priceMills`). OnlyFans prices the
+  template in US dollars (0, or 3–200 on write); the price becomes mills at
+  canonicalization (`$5` → `5000`). `enabled` is the provider's `isActive`, or
+  null when absent.
+- `readLatestOfapiWelcomeTemplate(db, pageId)`
+  (`apps/runtime/src/services/ofapi-welcome-template.ts`) returns the newest
+  stored template, or null when none was collected. It reads local rows only.
 
 ## Data and recovery
 
@@ -100,7 +127,7 @@ The SDK operation is `ofapiCollectionJobFinishIncomplete`, or
 `POST /api/v1/admin/ofapi/collection/jobs/{id}/finish-incomplete`, with the current
 `expectedRevision`, `expectedState:"paused"`, matching `pageId` and an owner
 `reason`. A stale revision/state returns `409`; reload before another action.
-Only paused background runs in the eight closed GET categories are eligible,
+Only paused background runs in the nine closed GET categories are eligible,
 with no active worker lease or reserved/dispatching capture attempt. One-offs,
 baseline sync, exports and uploads retain their own recovery paths. Global pause
 and category-off settings continue to prevent the next scheduled dispatch.
@@ -154,6 +181,7 @@ Query names, limits, response families and category/detail flags live in `packag
 | payout_earnings | GET /api/{account}/payouts/earning-statistics | balances |
 | statistics_overview | GET /api/{account}/statistics/overview | balances |
 | subscriber_statistics | GET /api/{account}/subscribers/statistics | balances |
+| welcome_message | GET /api/{account}/settings/welcome-message | account_settings |
 
 ## Composer reference lookup and runtime composition
 

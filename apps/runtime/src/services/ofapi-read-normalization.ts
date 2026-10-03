@@ -8,6 +8,7 @@ import {
   type OfapiReadDefinition,
 } from "@agency_hub_core/shared";
 import { ofapiDollarValueToMillsString } from "./ofapi-message-material.ts";
+import { ofapiWelcomeTemplateFacts } from "./ofapi-welcome-template.ts";
 
 export function ofapiReadRecord(
   value: unknown,
@@ -392,6 +393,9 @@ export function normalizeOfapiRead(
                 })
               : [],
           }
+        : {}),
+      ...(def.id === "welcome_message"
+        ? { welcomeTemplate: ofapiWelcomeTemplateFacts(row) }
         : {}),
       fanId: profile
         ? id(user.id)
