@@ -378,6 +378,9 @@ export const healthResponseSchema = z.object({
   timestamp: isoTimestamp,
   contractHash: z.string().regex(/^[a-f0-9]{64}$/),
   capabilities: z.array(z.literal("desktop-lifecycle-v2")),
+  /** Client SDK contract hashes this hub serves: its own first, then every frozen SDK
+   *  in its registry, no repeats. A client release gate checks its vendored hash here. */
+  compatibleClientSdks: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(64).optional(),
   checks: z.object({
     api: z.object({
       status: z.literal("ok"),
