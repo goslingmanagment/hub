@@ -161,23 +161,11 @@ describe("LIVE_CONFIG_KEYS", () => {
     // process by the heartbeat, which reads the live overlay anyway);
     // G5 slice 2 added the payload read mode, published the same way;
     // G5 slice 3c-1 added the pointer-only bound, published on the same beat;
-    // WP-F1 added the six `stats_snapshot` keys — the ramp flag, its FAIL-CLOSED
-    // page allowlist, the per-lane daily call budget (read per chunk, so a
-    // budget flip must not need a deploy), the hourly-bucket switch, the hourly
-    // backfill bound and the backfill continuation delay;
-    // WP-F2 added the three `notifications` keys — the ramp flag, its
-    // FAIL-CLOSED page allowlist and the per-lane daily call budget, all read
-    // per chunk so a ramp on the lossy lane never waits for a deploy;
-    // WP-F3 added the three `catalog` keys on the same template;
-    // WP-F5 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
-    // per-lane daily call budget and the re-walk cycle, which is live because
-    // it re-aims a running first pass without a deploy;
-    // WP-F7 added the three `payouts` keys on the WP-F3 template;
-    // WP-F4 added FOUR — the ramp flag, its FAIL-CLOSED page allowlist, the
-    // per-lane daily call budget (the ONE number a cap-raise step moves, and
-    // the whole request-count enforcement on the highest-volume lane in the
-    // system) and the long-tail cycle, live because it re-aims a running
-    // round-robin without a deploy.
+    // WP-F5 added the replies re-walk cycle, live because it re-aims a running
+    // first pass without a deploy (the engine's post-replies walk reads it);
+    // step 4 (S4-18) retired the legacy content lanes' 24 flags, allowlists,
+    // daily call budgets, hourly switches, continuation delay and long-tail
+    // cycle: nothing reads them, so none is live any more.
     expect(LIVE_CONFIG_KEYS.has("fanslyDmHeadCatchupPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyDmShadowPageAllowlist")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyFanEarningsShadowPageAllowlist")).toBe(true);
@@ -227,6 +215,6 @@ describe("LIVE_CONFIG_KEYS", () => {
     }
     expect(LIVE_CONFIG_KEYS.has("fanslyDefaultDelayMs")).toBe(true);
     expect(LIVE_CONFIG_KEYS.has("fanslyLiveOverlayReadPages")).toBe(true);
-    expect(LIVE_CONFIG_KEYS.size).toBe(97);
+    expect(LIVE_CONFIG_KEYS.size).toBe(73);
   });
 });
