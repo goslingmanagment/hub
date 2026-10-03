@@ -155,6 +155,10 @@ export function startRuntimeHeartbeat(
     stopTimeoutMs?: number | undefined;
     healthFilePath?: string | null | undefined;
     intervalMs?: number | undefined;
+    /** Called as each beat starts; what it returns is called once that beat
+     *  has settled, upserted or failed (the `sync` role's stall watchdog:
+     *  a beat that never settles is a stall, a failed one is not). */
+    watchBeat?: (() => { done(): void }) | undefined;
   } = {},
 ): RuntimeHeartbeat {
   const instanceId = randomUUID();
@@ -211,7 +215,9 @@ export function startRuntimeHeartbeat(
   // Never start a beat while one is in flight (no overlap) or after stop().
   const runBeat = () => {
     if (stopped || inFlight) return;
+    const watched = options.watchBeat?.();
     inFlight = beat().finally(() => {
+      watched?.done();
       inFlight = null;
     });
   };
