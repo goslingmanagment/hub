@@ -82,7 +82,7 @@ export type SyncRequestSource =
   | "reset";
 export type SyncWorkClass = "live" | "history" | "maintenance";
 
-/** The Fansly streams behind a rollout gate (`services/sync/fansly-stream-gate.ts`).
+/** The Fansly streams the legacy executor once held behind a rollout gate.
  *  Since step 4 (S4-10) the legacy executor runs no Fansly stream, so nothing
  *  pauses or resumes them by their gate any more. */
 export const FANSLY_BULK_SYNC_STREAMS = [

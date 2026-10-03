@@ -20,30 +20,20 @@ import {
   type PageSyncLease,
   type SyncStream,
 } from "@agency_hub_core/db";
-import {
-  FANSLY_MAPPER_VERSION,
-} from "@agency_hub_core/fansly";
-import {
-} from "@agency_hub_core/shared";
 
 import type { CanonicalStream } from "@agency_hub_core/platform-core";
 
 import { appPlatformRegistry } from "../../platforms/registry.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import { isPageAllowlisted } from "./fansly-stream-gate.ts";
-import { loadEffectiveConfig } from "../effective-config.ts";
 import {
   resolvePageContextById,
   type ResolvedPageContext,
 } from "../page-context.ts";
-import { resolveFanslyPlatformAccountId } from "../fansly.ts";
 import {
   summarizeCheckpoint,
   type SyncRunTelemetry,
 } from "./observability.ts";
-import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
-import {
-} from "./cursor-state.ts";
+import type { SyncChunkBudget } from "./chunk-budget.ts";
 import {
   isOnlyFansDmPollingEnabled,
   isOnlyFansDmPollingStream,
@@ -62,17 +52,11 @@ import {
   syncOfapiFanIdentities,
 } from "./ofapi-fan-identities.ts";
 import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
-import {
-  persistRawPayload,
-  refreshPageMetadata,
-  retentionDate,
-} from "./shared.ts";
 
 // Kept exported from here for the modules and the platform registry that
 // already import them from this file; both now live in executor-types.ts so a
 // handler module can be a leaf.
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
-import { fanslyPageSendGuard } from "../fansly-send-guard/index.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
 

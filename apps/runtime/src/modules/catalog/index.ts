@@ -107,7 +107,7 @@ function serializeAssignedPage(page: {
 }
 
 // The voice-notes page allowlist FAILS CLOSED: empty (or unset) = NO pages.
-// Mirrors isPageAllowlisted in services/sync/fansly-stream-gate.ts (its
+// Mirrors isPageAllowlisted in @agency_hub_core/shared (its
 // canonical home) — kept a local copy so the two never drift on the
 // empty-means-none rule.
 function parseVoiceAllowlist(csv: string | undefined): Set<string> {

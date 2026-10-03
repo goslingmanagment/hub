@@ -64,18 +64,6 @@ function createTelemetry() {
   };
 }
 
-async function recordStartedRequest(requestObserver: { onRequestEvent(event: unknown): Promise<void> } | null | undefined, operation: string) {
-  await requestObserver?.onRequestEvent({
-    requestId: `${operation}-request`,
-    operation,
-    endpointTemplate: `/${operation}`,
-    method: "GET",
-    attemptNumber: 1,
-    timestamp: new Date("2026-03-10T00:00:00.000Z"),
-    state: "started",
-  });
-}
-
 describe("sync executor handlers", () => {
   beforeEach(() => {
     for (const mock of Object.values(dbMocks)) {

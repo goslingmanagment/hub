@@ -80,69 +80,69 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "purchase_history_contract_probe", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
   { kind: "purchase_history_contract_storm", source: "pull", writer: "none since step 4 S4-16 (the legacy purchase-history lane)" },
   { kind: "subscribers", source: "pull", writer: "sync/fansly/capture.ts" },
-  // ── WP-F1: the `stats_snapshot` lane (services/sync/fansly-stats.ts) ──────
+  // ── WP-F1: the `stats_snapshot` lane (sync/fansly/resources/stats.ts) ──────
   // Every one is claimed by the `fansly-stats` family. `media_offer_stats` was
   // registered here by F1 with the PARSER but no writer, so the kind would be
   // claimed the day a capture could write it rather than accruing parse debt
   // nothing reports (the BL-C3 shape); WP-F4 is that writer, and it stays in
   // the SAME family — one family, one sweep, one health-floor gauge.
-  { kind: "account_stats", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "media_offer_stats", source: "pull", writer: "services/sync/fansly-media-stats.ts" },
-  { kind: "earnings_stats_snapshot", source: "pull", writer: "services/sync/fansly-stats.ts" },
+  { kind: "account_stats", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "media_offer_stats", source: "pull", writer: "sync/fansly/resources/media-stats.ts" },
+  { kind: "earnings_stats_snapshot", source: "pull", writer: "sync/fansly/resources/stats.ts" },
   {
     kind: "earnings_monthlystats_snapshot",
     source: "pull",
-    writer: "services/sync/fansly-stats.ts",
+    writer: "sync/fansly/resources/stats.ts",
   },
-  { kind: "tracking_links", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "discovery_feed", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "broadcast_stats", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "broadcast_stats_deleted", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "broadcast_scheduled", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "polls", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  { kind: "recapstats", source: "pull", writer: "services/sync/fansly-stats.ts" },
-  // ── WP-F2: the `notifications` lane (services/sync/fansly-notifications.ts) ──
+  { kind: "tracking_links", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "discovery_feed", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "broadcast_stats", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "broadcast_stats_deleted", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "broadcast_scheduled", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "polls", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  { kind: "recapstats", source: "pull", writer: "sync/fansly/resources/stats.ts" },
+  // ── WP-F2: the `notifications` lane (sync/fansly/resources/notifications.ts) ──
   // ONE kind for the whole lane: the head poll, the deep backfill and the
   // type-filter probe all journal the same envelope shape, and the request
   // params say which walk produced it. A kind per phase would split one fact
   // across three parse paths for nothing.
-  { kind: "notifications", source: "pull", writer: "services/sync/fansly-notifications.ts" },
-  // ── WP-F3: the `catalog` lane (services/sync/fansly-catalog.ts) ────────────
+  { kind: "notifications", source: "pull", writer: "sync/fansly/resources/notifications.ts" },
+  // ── WP-F3: the `catalog` lane (sync/fansly/resources/catalog.ts) ────────────
   // ONE kind PER ROUTE here, and the contrast with WP-F2 above is deliberate:
   // the notification lane journals one envelope shape from three walks, while
   // these nine routes serve nine different shapes. A shared kind would force
   // one parser to sniff which route produced a body it can no longer identify.
-  { kind: "vault_albums", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "uservault_albums", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "subscription_tiers", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "gift_codes", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "automated_messages", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "account_walls", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "vault_media", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "vault_album_walk_completed", source: "pull", writer: "services/sync/fansly-catalog.ts" },
-  { kind: "account_media_batch", source: "pull", writer: "services/sync/fansly-catalog.ts" },
+  { kind: "vault_albums", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "uservault_albums", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "subscription_tiers", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "gift_codes", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "automated_messages", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "account_walls", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "vault_media", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "vault_album_walk_completed", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
+  { kind: "account_media_batch", source: "pull", writer: "sync/fansly/resources/catalog.ts" },
   {
     kind: "account_media_bundle_batch",
     source: "pull",
-    writer: "services/sync/fansly-catalog.ts",
+    writer: "sync/fansly/resources/catalog.ts",
   },
-  // ── WP-F5: the `post_replies` lane (services/sync/fansly-post-replies.ts) ──
+  // ── WP-F5: the `post_replies` lane (sync/fansly/resources/post-replies.ts) ──
   // ONE kind for one route. Its observation payload is an ENVELOPE
   // (`{walk, response}`) because the post id lives in the request PATH: an
   // empty reply page is a body with no way to say which post it is about, and
   // that is precisely the body `missing_since` is computed from. The response,
   // [A20]-trimmed (only `accounts[]` allowlisted), lands in
   // `sync_raw_payloads.response_payload` without the envelope.
-  { kind: "post_replies", source: "pull", writer: "services/sync/fansly-post-replies.ts" },
-  // ── WP-F7: the `payouts` lane (services/sync/fansly-payouts.ts) ───────────
+  { kind: "post_replies", source: "pull", writer: "sync/fansly/resources/post-replies.ts" },
+  // ── WP-F7: the `payouts` lane (sync/fansly/resources/payouts.ts) ───────────
   // ONE kind per route, two routes. Both are RESTRICTED-CLASS bodies:
   // `payout_methods` carries the creator's payout credentials (provider 2
   // returns a plaintext email) and `payout_requests` carries the money-out
   // history. Neither is on `AGENT_OBSERVATION_PAYLOAD_ALLOWLIST` — which is an
   // ALLOWLIST and fails closed, so absence is the enforcement — and
   // `tests/fansly-payouts-restricted.test.ts` pins that they stay off it.
-  { kind: "payout_methods", source: "pull", writer: "services/sync/fansly-payouts.ts" },
-  { kind: "payout_requests", source: "pull", writer: "services/sync/fansly-payouts.ts" },
+  { kind: "payout_methods", source: "pull", writer: "sync/fansly/resources/payouts.ts" },
+  { kind: "payout_requests", source: "pull", writer: "sync/fansly/resources/payouts.ts" },
   // BL-C3 itself. Both halves of the pair, so the incident's own kinds are the
   // first thing this registry pins.
   { kind: "link_stats_tracking", source: "pull", writer: "services/ofapi-link-stats-sync.ts" },

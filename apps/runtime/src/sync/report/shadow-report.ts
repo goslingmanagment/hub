@@ -237,7 +237,7 @@ async function windowPart(
       media.push({
         page: model.page,
         media: model.media,
-        queue: await countMediaStatsRefreshProgress(tx, { pageId: page.pageId, now: window.end, longTailCycleDays: 30, tiers: model.media.tiers }),
+        queue: await countMediaStatsRefreshProgress(tx, { pageId: page.pageId, now: window.end, tiers: model.media.tiers }),
       });
     }
     return { window: report, routes, media, fingerprint };
