@@ -11,6 +11,8 @@ const repoMocks = vi.hoisted(() => ({
   // Step-3 legacy fences (S3-01): no page is the Fansly Sync Engine's here.
   findPageByLabel: vi.fn(async () => null),
   listEngineOwnedFanslyPages: vi.fn(async () => []),
+  // Step 4 (S4-08): the store a page's DM readers read.
+  readDmReaderStore: vi.fn(async () => "page_dm_messages"),
   millsToNumber: (value: bigint) => Number(value),
 }));
 
@@ -175,6 +177,7 @@ describe("runtime page services", () => {
         platformConversationId: "conversation-001",
         limit: 10,
         liveOverlay: false,
+        store: "page_dm_messages",
       }),
     );
     expect(result.messageSyncUx.state).toBe("healthy");
@@ -193,6 +196,8 @@ describe("runtime page services", () => {
   it("asks the repository for the live union and serializes each row's provenance on a listed page", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
     liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(true);
+    // A page the Fansly Sync Engine runs live reads the archive (S4-08).
+    repoMocks.readDmReaderStore.mockResolvedValueOnce("message_archive");
     const page = {
       id: 7, label: "ari-1", platform: "fansly", username: null, displayName: null, followerCount: null,
       subscriberCount: null, lastLightSyncAt: null, lastFollowerSyncAt: null, modelSlug: "ari", modelName: "Ari",
@@ -223,9 +228,10 @@ describe("runtime page services", () => {
     );
 
     expect(liveOverlayMocks.pageReadsLiveOverlay).toHaveBeenCalledWith({ db: {} }, page);
+    expect(repoMocks.readDmReaderStore).toHaveBeenCalledWith({}, 7);
     expect(repoMocks.getPageConversationMessages).toHaveBeenCalledWith(
       {},
-      { platformAccountId: 7, platformConversationId: "800", limit: 25, liveOverlay: true },
+      { platformAccountId: 7, platformConversationId: "800", limit: 25, liveOverlay: true, store: "message_archive" },
     );
     expect(result.messages).toEqual([
       { messageId: "2", senderRole: "fan", content: "live", createdAt: "2026-10-01T12:00:01.000Z",

@@ -12,6 +12,7 @@ import {
   getPageConversationMessages,
   getPageConversationPreview,
   getPageDmSyncCoverage,
+  readDmReaderStore,
   type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
@@ -124,12 +125,16 @@ export async function getPageConversationPreviewReport(
   requireDashboardUser(principal);
   const page = await resolveAccessiblePage(app, principal, params.pageLabel);
   const liveOverlay = await pageReadsLiveOverlay(app, page);
+  // The store the page's readers read (step 4, S4-08): message_archive on a
+  // page the Fansly Sync Engine runs live, page_dm_messages elsewhere.
+  const store = await readDmReaderStore(app.db, page.id);
   const [preview, freshness] = await Promise.all([
     getPageConversationPreview(app.db, {
       platformAccountId: page.id,
       platformConversationId: params.platformConversationId,
       limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
       liveOverlay,
+      store,
     }),
     getPageDmSyncCoverage(app.db, page.id),
   ]);
@@ -189,6 +194,7 @@ export async function getPageConversationMessagesReport(
     platformConversationId: params.conversationId,
     limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
     liveOverlay: await pageReadsLiveOverlay(app, page),
+    store: await readDmReaderStore(app.db, page.id),
   });
 
   if (!conversation) {
