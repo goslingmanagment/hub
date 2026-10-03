@@ -15,6 +15,7 @@ import {
 } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { routeHoldAfter } from "../apps/runtime/src/sync/engine/route-holds.ts";
 import { RouteClocks, routeExclusions, ROUTE_STATE_VERSION } from "../apps/runtime/src/sync/engine/route-policy.ts";
+import { DM_LIST_READ_KEYS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { isQueueWalk, QUEUE_WALK_DRIVERS, ratePeriodMs, runGroupingOf } from "../apps/runtime/src/sync/report/shadow-window.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
@@ -122,8 +123,12 @@ describe("the Fansly registry table", () => {
 
   it("the conversation list's follow-ups are triggers of the entries they create (design §5.3)", () => {
     // A list read asks for a chat's messages (urgent from find and ws-down,
-    // planned from head, full and detail), a group detail, a probe.
-    expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining(["apply:dm-conversations.find", "apply:dm-conversations.ws-down"]));
+    // planned from head, full and detail — urgent from them too for a chat a
+    // `.find` is open for, step 3b), a group detail, a probe.
+    expect(byKey("dm-messages.head").triggers).toEqual(expect.arrayContaining([
+      "apply:dm-conversations.find", "apply:dm-conversations.ws-down",
+      "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
+    ]));
     expect(byKey("dm-messages.catchup").triggers).toEqual(expect.arrayContaining([
       "apply:dm-conversations.head", "apply:dm-conversations.full", "apply:dm-conversations.detail",
     ]));
@@ -132,6 +137,15 @@ describe("the Fansly registry table", () => {
     for (const key of ["dm-conversations.head", "dm-conversations.full"]) expect(byKey(key).kind, key).toBe("poll");
     expect(byKey("dm-conversations.full").period?.everyMs).toBe(86_400_000);
     expect(byKey("dm-conversations.head").period?.everyMs).toBe(30 * 60_000);
+  });
+
+  it("a `.find`'s shared list-head read may be any key of the list route, and its closure is a local step (step 3b, plan PR 1-3)", async () => {
+    // Every key that reads the list writes each page through the list's
+    // writer: an applied read of the head by any of them answers a find.
+    const listReaders = FANSLY_RESOURCE_SPECS.filter((spec) => spec.operations.includes("messaging.groups")).map((spec) => spec.key);
+    expect([...DM_LIST_READ_KEYS].sort()).toEqual(listReaders.sort());
+    expect(plansBeforeGate(byKey("dm-conversations.find"))).toBe(true);
+    expect(typeof (await createFanslyRegistry().module("dm-conversations.find")).applyLocal).toBe("function");
   });
 
   it("a route's 429 leaves out exactly the keys all of whose routes it holds (owner decisions №14, №20 → №22)", () => {

@@ -5,6 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   ensurePollRows,
   getSyncPage,
+  listSharedReadAdmissions,
+  readDmFindSharedRead,
+  setPageHold,
   upsertDemand,
   upsertFans,
   type Database,
@@ -19,8 +22,11 @@ import {
   createEngineRegistry,
   pollsFor,
   type EngineRegistry,
+  type ResourceModule,
 } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS, fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
+import { DM_LIST_READ_KEYS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
+import { FAMILY_BUDGETS, intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -33,10 +39,12 @@ import {
   okResponse,
   RecordingAlerts,
   RecordingMetrics,
+  routeTestScale,
   ScriptedLiveTransport,
   seedSyncPage,
   statusResponse,
   tableCounts,
+  testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
@@ -47,8 +55,10 @@ import {
 // stored window, the coverage verdict or the chain, never an unbinding), a
 // head walk stops at the first page it already knows, a full walk stamps its
 // generation and hides nothing, a list head newer than the message reads asks
-// for exactly one read, an unknown chat is found through its detail, and a
-// shadow step writes only sync_work and sync_attempts.
+// for exactly one read, an unknown chat is found through its detail, a burst
+// of unknown chats shares one read of the list head (live and shadow, inside
+// the 12 s at the production ratios), and a shadow step writes only
+// sync_work and sync_attempts.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -622,6 +632,418 @@ describe("dm-conversations.find and .detail", () => {
     expect(page.rows[0]).toEqual({ hold_kind: null, resource_holds: {} });
     expect(await thread(pageId, 5)).toMatchObject({ partner: null, metadata: { unresolvedIdentity: true } });
   });
+});
+
+const FIND = "dm-conversations.find";
+
+async function findRows(pageId: number, shadow = false) {
+  const result = await testDb!.pool.query<{
+    subject: string; state: string; close_reason: string | null; result: Record<string, unknown> | null;
+    first_demand_at: Date; closed_at: Date | null;
+  }>(
+    `select subject, state, close_reason, result, first_demand_at, closed_at from sync_work
+      where page_id = $1 and resource = $2 and shadow = $3 order by subject`,
+    [pageId, FIND, shadow],
+  );
+  return result.rows;
+}
+
+async function attemptsOf(pageId: number, shadow = false) {
+  const result = await testDb!.pool.query<{ id: number; resource: string; subject: string; operation: string; admitted_at: Date; sent_at: Date | null }>(
+    `select id::int as id, resource, subject, operation, admitted_at, sent_at from sync_attempts
+      where page_id = $1 and shadow = $2 order by id`,
+    [pageId, shadow],
+  );
+  return result.rows;
+}
+
+async function openFinds(pageId: number, shadow = false): Promise<number> {
+  return countRows(testDb!.pool,
+    "select count(*)::int as n from sync_work where page_id = $1 and resource = $2 and shadow = $3 and state in ('open', 'running')",
+    [pageId, FIND, shadow]);
+}
+
+describe("the shared list-head read of .find (step 3b, plan PR 1-3)", () => {
+  /** A journaled list read of the page (no request: the row only). */
+  async function journalListRead(pageId: number, input: {
+    resource: string; offset: number; shadow?: boolean; applyState?: string; outcome?: string; workId?: number;
+  }): Promise<number> {
+    const result = await testDb!.pool.query<{ id: string }>(
+      `insert into sync_attempts (page_id, shadow, work_id, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
+                                  sent_at, send_mark, operation, request, outcome, apply_state)
+       values ($1, $2, $3, $4, '', 'planned', 1, 2000, 0, 2000, clock_timestamp(), $5, 'messaging.groups',
+               jsonb_build_object('spec', 'messaging.groups', 'params', jsonb_build_object('offset', $6::int)), $7, $8)
+       returning id`,
+      [pageId, input.shadow ?? false, input.workId ?? null, input.resource, input.shadow === true ? "shadow" : "request_start",
+        input.offset, input.outcome ?? (input.shadow === true ? "shadow" : "response"), input.applyState ?? (input.shadow === true ? "skipped" : "applied")],
+    );
+    return Number(result.rows[0]!.id);
+  }
+
+  async function findWorkId(pageId: number, n: number, shadow = false): Promise<number> {
+    const result = await testDb!.pool.query<{ id: string }>(
+      "select id from sync_work where page_id = $1 and resource = $2 and subject = $3 and shadow = $4 and state = 'open'",
+      [pageId, FIND, groupOf(n), shadow],
+    );
+    return Number(result.rows[0]!.id);
+  }
+
+  async function sharedRead(pageId: number, n: number, shadow = false) {
+    return readDmFindSharedRead(db(), {
+      workId: await findWorkId(pageId, n, shadow),
+      pageId,
+      shadow,
+      platformConversationId: groupOf(n),
+      listOperation: "messaging.groups",
+      listKeys: DM_LIST_READ_KEYS,
+    });
+  }
+
+  it("counts only an applied read of the list head by a list key admitted since the find's first demand; a chat a write since served is found", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const at = NOW_MS - HOUR;
+    // Admitted before the demand: it may have been served before the chat existed.
+    await journalListRead(pageId, { resource: "dm-conversations.head", offset: 0 });
+    // Chat 2's thread was listed before the demand too.
+    await seedThreads(pageId, [{ n: 2, headId: messageOf(2), headAtMs: at }]);
+    await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() - interval '1 minute' where platform_account_id = $1", [pageId]);
+    await makeDue(pageId, false, FIND, groupOf(1));
+    await makeDue(pageId, false, FIND, groupOf(2));
+    expect(await sharedRead(pageId, 1)).toEqual({ found: false, headRead: null });
+    expect(await sharedRead(pageId, 2)).toEqual({ found: false, headRead: null });
+
+    // Since the demand, none of these answers it: an answer not applied, a
+    // page past the head, a read no list key made (an owner probe).
+    await journalListRead(pageId, { resource: "dm-conversations.ws-down", offset: 0, applyState: "captured" });
+    await journalListRead(pageId, { resource: "dm-conversations.full", offset: 100 });
+    await journalListRead(pageId, { resource: "probe.manual", offset: 0 });
+    await journalListRead(pageId, { resource: "dm-conversations.head", offset: 0, outcome: "unknown", applyState: "none" });
+    expect(await sharedRead(pageId, 1)).toEqual({ found: false, headRead: null });
+
+    // An applied head read of any list key (here the socket repair's) does;
+    // the first one counts.
+    const repair = await journalListRead(pageId, { resource: "repair.ws-gap", offset: 0 });
+    await journalListRead(pageId, { resource: FIND, offset: 0 });
+    expect(await sharedRead(pageId, 1)).toEqual({
+      found: false,
+      headRead: { attemptId: repair, resource: "repair.ws-gap", subject: "", admittedAt: expect.any(Date) },
+    });
+    // A write of the chat's thread since the demand (the list's writer) finds it.
+    await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() where platform_account_id = $1", [pageId]);
+    expect(await sharedRead(pageId, 2)).toMatchObject({ found: true });
+  });
+
+  it("on a shadow page, counts its own settled estimates of the list head, and finds nothing by a thread", async (context) => {
+    if (!testDb) return context.skip();
+    const shadowPageId = await seedPage("shadow");
+    const at = NOW_MS - HOUR;
+    await seedThreads(shadowPageId, [{ n: 3, headId: messageOf(3), headAtMs: at }]);
+    await makeDue(shadowPageId, true, FIND, groupOf(3));
+    await journalListRead(shadowPageId, { resource: FIND, offset: 0, shadow: true, outcome: "admitted", applyState: "none" });
+    expect(await sharedRead(shadowPageId, 3, true)).toEqual({ found: false, headRead: null });
+    const settled = await journalListRead(shadowPageId, { resource: "dm-conversations.head", offset: 0, shadow: true });
+    await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() where platform_account_id = $1", [shadowPageId]);
+    expect(await sharedRead(shadowPageId, 3, true)).toEqual({
+      found: false,
+      headRead: { attemptId: settled, resource: "dm-conversations.head", subject: "", admittedAt: expect.any(Date) },
+    });
+  });
+
+  it("a burst: one list head read answers every find — the chats it shows close with no request before the HTTP gate, the one it does not show reads its detail, every found chat is read urgently", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const old = NOW_MS - 2 * HOUR;
+    const recent = NOW_MS - 30_000;
+    await seedThreads(pageId, [{ n: 1, headId: messageOf(1), headAtMs: old, newestStored: messageOf(1) }]);
+    const listed = [2, 3, 4, 5, 6];
+    const hidden = 7;
+    for (const n of [...listed, hidden]) await makeDue(pageId, false, FIND, groupOf(n));
+    const metrics = new RecordingMetrics();
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "messaging.groups") {
+        return okResponse(listPage([...listed.map((n) => ({ n, headId: messageOf(n, 7), headAtMs: recent })), { n: 1, headId: messageOf(1), headAtMs: old }]));
+      }
+      if (req.spec === "group.detail") return okResponse(groupDetail(hidden, [fanOf(hidden)], { id: messageOf(hidden, 7), atMs: recent, senderId: fanOf(hidden) }));
+      return okResponse({ messages: [] });
+    }, async () => (await openFinds(pageId)) === 0, { metrics });
+
+    // One list read for the burst, one detail for the chat it did not show.
+    expect(hits.filter((spec) => spec !== "messages.page")).toEqual(["messaging.groups", "group.detail"]);
+    const attempts = await attemptsOf(pageId);
+    const listRead = attempts.find((attempt) => attempt.operation === "messaging.groups")!;
+    expect(listRead).toMatchObject({ resource: FIND, subject: groupOf(2) });
+    const finds = new Map((await findRows(pageId)).map((row) => [row.subject, row]));
+    expect(finds.get(groupOf(2))).toMatchObject({ state: "done", close_reason: "found_in_list" });
+    for (const n of [3, 4, 5, 6]) {
+      expect(finds.get(groupOf(n)), `find ${n}`).toMatchObject({
+        state: "done",
+        close_reason: "found_by_shared_read",
+        result: { groupId: groupOf(n), sharedRead: { attemptId: listRead.id, resource: FIND, subject: groupOf(2) } },
+      });
+    }
+    expect(finds.get(groupOf(hidden))).toMatchObject({ state: "done", close_reason: "found_by_detail" });
+    expect(attempts.filter((attempt) => attempt.resource === FIND).map((attempt) => [attempt.operation, attempt.subject]))
+      .toEqual([["messaging.groups", groupOf(2)], ["group.detail", groupOf(hidden)]]);
+    // Closed before the gate, with no slot.
+    expect(metrics.get("sync_steps_before_gate")).toBeGreaterThanOrEqual(4);
+    // Every found chat's message is read urgently, never a planned catch-up.
+    for (const n of [...listed, hidden]) {
+      expect(await workRow(pageId, "dm-messages.head", { subject: groupOf(n) }), `head ${n}`).toMatchObject({
+        class: "urgent",
+        demand: expect.objectContaining({ messageIds: [messageOf(n, 7)] }),
+      });
+    }
+    expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
+    expect(await thread(pageId, hidden)).toMatchObject({ partner: fanOf(hidden) });
+  });
+
+  it("a list head read before the find's demand answers nothing: the find reads the list itself, not the detail", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const recent = NOW_MS - 30_000;
+    // The planned head poll reads the list before the chat's first message.
+    await makeDue(pageId, false, "dm-conversations.head");
+    await runLive(pageId, () => okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: recent }])),
+      async () => (await workRow(pageId, "dm-conversations.head"))?.cursor.last != null);
+    await makeDue(pageId, false, FIND, groupOf(8));
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "messaging.groups") {
+        return okResponse(listPage([{ n: 8, headId: messageOf(8), headAtMs: recent }, { n: 1, headId: messageOf(1), headAtMs: recent }]));
+      }
+      return okResponse({ messages: [] });
+    }, async () => (await openFinds(pageId)) === 0);
+    expect(hits.filter((spec) => spec !== "messages.page")).toEqual(["messaging.groups"]);
+    expect((await findRows(pageId))[0]).toMatchObject({ close_reason: "found_in_list" });
+  });
+
+  it("while a 429 holds the list route (the page's route state), a find reads its detail alone", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    await testDb.pool.query(
+      `update sync_pages set resource_holds = jsonb_set(resource_holds, '{route:state}', $2::jsonb) where page_id = $1`,
+      [pageId, JSON.stringify({
+        version: 1,
+        routes: {
+          "messaging.groups": {
+            holdUntil: new Date(Date.now() + 5 * 60_000).toISOString(), ladderStep: 1, effectivePerMin: 6,
+            policyVersion: null, last429AttemptId: null, last429At: null, revision: 1,
+          },
+        },
+      })],
+    );
+    await makeDue(pageId, false, FIND, groupOf(8));
+    const { hits } = await runLive(pageId, (req) => {
+      if (req.spec === "group.detail") return okResponse(groupDetail(8, [fanOf(8)], { id: messageOf(8), atMs: NOW_MS - 10_000, senderId: fanOf(8) }));
+      return okResponse({ messages: [] });
+    }, async () => (await openFinds(pageId)) === 0);
+    expect(hits.filter((spec) => spec !== "messages.page")).toEqual(["group.detail"]);
+    expect((await findRows(pageId))[0]).toMatchObject({ close_reason: "found_by_detail" });
+  });
+
+  it("under a page hold, a find a list read answered still closes before the gate, asking its chat's urgent read unless one is open; one it did not answer waits for its detail's slot", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const at = NOW_MS - HOUR;
+    for (const n of [1, 2, 3, 4]) await makeDue(pageId, false, FIND, groupOf(n));
+    // The socket repair's head read since the demands served chats 1, 3 and
+    // 4 (its apply wrote the threads) but did not see their finds — their
+    // demands committed while it applied, so it asked no urgent read; chat 3
+    // has one open anyway (a socket frame of it since), chat 4's head was
+    // confirmed since. Chat 2 was not on it.
+    await journalListRead(pageId, { resource: "repair.ws-gap", offset: 0 });
+    await seedThreads(pageId, [
+      { n: 1, headId: messageOf(1), headAtMs: at },
+      { n: 3, headId: messageOf(3), headAtMs: at },
+      { n: 4, headId: messageOf(4), headAtMs: at },
+    ]);
+    await testDb.pool.query("update page_dm_threads set last_seen_at = clock_timestamp() where platform_account_id = $1", [pageId]);
+    await testDb.pool.query("update page_dm_threads set head_confirmed_id = last_message_id where platform_account_id = $1 and platform_conversation_id = $2", [pageId, groupOf(4)]);
+    await upsertDemand(db(), {
+      pageId, shadow: false, resource: "dm-messages.head", subject: groupOf(3), kind: "trigger", class: "urgent",
+      demand: { messageIds: [messageOf(3)], reasons: ["ws:message_created"] },
+    });
+    await setPageHold(db(), { pageId, kind: "network", until: new Date(Date.now() + 5 * 60_000), step: 1 });
+    const metrics = new RecordingMetrics();
+    const { hits } = await runLive(pageId, () => {
+      throw new Error("nothing is sent under the hold");
+    }, async () => (await findRows(pageId)).filter((row) => row.state === "done").length === 3, { metrics });
+    expect(hits).toEqual([]);
+    const finds = await findRows(pageId);
+    expect(finds.map((row) => [row.subject, row.state, row.close_reason])).toEqual([
+      [groupOf(1), "done", "found_by_shared_read"],
+      [groupOf(2), "open", null],
+      [groupOf(3), "done", "found_by_shared_read"],
+      [groupOf(4), "done", "found_by_shared_read"],
+    ]);
+    expect(finds[0]!.result).toMatchObject({ groupId: groupOf(1), sharedRead: { resource: "repair.ws-gap", subject: "" } });
+    expect(metrics.get("sync_steps_before_gate")).toBe(3);
+    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and resource = $2", [pageId, FIND])).toBe(0);
+    // Chat 1's urgent read is the closure's; chat 3's open one is untouched;
+    // chat 4 needs none.
+    expect(await subjectsOf(pageId, "dm-messages.head")).toEqual([groupOf(1), groupOf(3)]);
+    expect(await workRow(pageId, "dm-messages.head", { subject: groupOf(1) })).toMatchObject({
+      class: "urgent",
+      demand: expect.objectContaining({ messageIds: [messageOf(1)] }),
+    });
+    const three = await testDb.pool.query<{ demand_revision: number }>(
+      "select demand_revision from sync_work where page_id = $1 and resource = 'dm-messages.head' and subject = $2",
+      [pageId, groupOf(3)],
+    );
+    expect(three.rows.map((row) => Number(row.demand_revision))).toEqual([1]);
+    expect(await subjectsOf(pageId, "dm-messages.catchup")).toEqual([]);
+  });
+
+  it("in shadow, as live: one list read for the burst, every other find closed on it naming that read (the report counts its chat read with it), the urgent reads of the chats the database knows", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("shadow");
+    const old = NOW_MS - 3 * HOUR;
+    const recent = NOW_MS - 30_000;
+    // Legacy listed chats 2 and 3 already (heads newer than what was read);
+    // 4 and 5 it has not.
+    await seedThreads(pageId, [
+      { n: 2, headId: messageOf(2, 1), headAtMs: recent, newestStored: messageOf(2) },
+      { n: 3, headId: messageOf(3, 1), headAtMs: recent, newestStored: messageOf(3) },
+      { n: 9, headId: messageOf(9), headAtMs: old, newestStored: messageOf(9) },
+    ]);
+    const registry = await quietRegistry(pageId, true);
+    for (const n of [2, 3, 4, 5]) await makeDue(pageId, true, FIND, groupOf(n));
+    const from = new Date(Date.now() - 1_000);
+    await drive(pageId, "shadow", registry, null, async () => (await openFinds(pageId, true)) === 0);
+
+    const attempts = (await attemptsOf(pageId, true)).filter((attempt) => attempt.resource === FIND);
+    expect(attempts.map((attempt) => [attempt.operation, attempt.subject])).toEqual([["messaging.groups", groupOf(2)]]);
+    const reader = attempts[0]!;
+    const finds = await findRows(pageId, true);
+    expect(finds.map((row) => [row.subject, row.close_reason])).toEqual([
+      [groupOf(2), "shadow"],
+      [groupOf(3), "shared_head_read"],
+      [groupOf(4), "shared_head_read"],
+      [groupOf(5), "shared_head_read"],
+    ]);
+    for (const row of finds.slice(1)) {
+      expect(row.result).toMatchObject({ sharedRead: { attemptId: reader.id, resource: FIND, subject: groupOf(2) } });
+    }
+    // The read's estimate asked the urgent read of each known chat a find was
+    // open for — the reader's and the one it answered.
+    expect(await subjectsOf(pageId, "dm-messages.head", true)).toEqual([groupOf(2), groupOf(3)]);
+    expect((await workRow(pageId, "dm-messages.head", { shadow: true, subject: groupOf(3) }))!.class).toBe("urgent");
+    // The shadow report's live path counts every chat read at the shared read.
+    const admissions = await listSharedReadAdmissions(db(), {
+      pageIds: [pageId], shadow: true, resources: [FIND], from, to: new Date(Date.now() + 60_000),
+    });
+    expect(admissions.map((row) => [row.subject, row.admittedAt.getTime()])).toEqual(
+      [3, 4, 5].map((n) => [groupOf(n), reader.admitted_at.getTime()]),
+    );
+  });
+});
+
+describe("a burst of .find under saturated history at the production ratios (A1: ≤ 12 s)", () => {
+  // The route budgets scaled with the pause (`routeTestScale`): S = 250 ms
+  // stands for 2.5 s, so the 12 s target is 1.2 s here. The messaging family
+  // (4 s → 400 ms) is kept busy by an endless history read in the requests
+  // class, the media statistics by an endless planned walk.
+  const SETTING_MS = 250;
+  const SCALE = routeTestScale(SETTING_MS);
+
+  function busy(spec: "messages.page" | "media.offer_stats"): ResourceModule {
+    const request = spec === "messages.page"
+      ? { spec, params: { groupId: groupOf(999), before: null, after: null } }
+      : { spec, params: { mediaOfferId: "777", beforeMs: 2_000_000_000_000, afterMs: 1_990_000_000_000, periodMs: 86_400_000 } };
+    return {
+      async plan() {
+        return { kind: "request", request: request as never };
+      },
+      async apply(_tx, input) {
+        return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
+      },
+      async shadow(_work, _request, ctx) {
+        return { work: { satisfiesRevision: false, nextDueAt: ctx.now }, followups: [] };
+      },
+    };
+  }
+
+  it("every find of the burst a head read shows closes within 12 s (scaled), one list read; the chat it does not show reads its detail", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("live");
+    const registry = createEngineRegistry([
+      ...FANSLY_RESOURCE_SPECS,
+      testSpec("history.busy", busy("messages.page"), { kind: "goal", class: "requests", operations: ["messages.page"] }),
+      testSpec("media.busy", busy("media.offer_stats"), { kind: "goal", class: "planned", operations: ["media.offer_stats"] }),
+    ]);
+    const page = await getSyncPage(db(), pageId);
+    await ensurePollRows(db(), { pageId, shadow: false, polls: pollsFor(registry, page!, false).map((poll) => ({ ...poll, phase: 0.999 })) });
+    // The history request whose endless read keeps the requests class busy.
+    for (const key of ["history.busy", "media.busy"]) {
+      await upsertDemand(db(), { pageId, shadow: false, resource: key, kind: "goal", class: key === "history.busy" ? "requests" : "planned", demand: { reasons: ["test"] } });
+    }
+    const request = await testDb.pool.query<{ id: string }>(
+      `insert into history_requests (request_ref, page_id, requester_kind, idempotency_key, request_fingerprint, depth_kind,
+                                     reason_sha256, reason_length, items_total, estimate_at_submit)
+       values (gen_random_uuid(), $1, 'owner_cli', gen_random_uuid(), repeat('a', 64), 'all', repeat('b', 64), 4, 1, '{}'::jsonb) returning id`,
+      [pageId],
+    );
+    await testDb.pool.query(
+      `insert into history_request_items (request_id, page_id, ordinal, input_kind, input_ref, state, work_id)
+       select $1, $2, 1, 'conversation_ref', 'busy', 'queued', w.id from sync_work w
+        where w.page_id = $2 and w.resource = 'history.busy' and w.state = 'open'`,
+      [Number(request.rows[0]!.id), pageId],
+    );
+
+    const recent = NOW_MS - 30_000;
+    const listed = [2, 3, 4, 5, 6];
+    const hidden = 7;
+    const transport = new ScriptedLiveTransport();
+    transport.respond = (req) => {
+      if (req.spec === "messaging.groups") return okResponse(listPage(listed.map((n) => ({ n, headId: messageOf(n, 7), headAtMs: recent }))));
+      if (req.spec === "group.detail") return okResponse(groupDetail(hidden, [fanOf(hidden)], { id: messageOf(hidden, 7), atMs: recent, senderId: fanOf(hidden) }));
+      if (req.spec === "messages.page") return okResponse({ messages: [] });
+      return okResponse();
+    };
+    const { actor, stop, abort } = await makeTestActor({
+      db: db(), pageId, mode: "live", registry, transport, settingMs: SETTING_MS, routeTimeScale: SCALE, ownRef: OWN_ID,
+    });
+    const run = actor.run({ stop: stop.signal, abort: abort.signal });
+    try {
+      // History saturates the family first; then the burst arrives.
+      await waitFor(async () => (transport.hits.filter((hit) => hit.spec === "messages.page").length >= 8 ? true : null), 30_000, "history");
+      for (const n of [...listed, hidden]) await makeDue(pageId, false, FIND, groupOf(n));
+      await waitFor(async () => ((await openFinds(pageId)) === 0 ? true : null), 30_000, "the burst's finds");
+      // History goes on beside it.
+      const before = transport.hits.length;
+      await waitFor(async () => (transport.hits.length >= before + 4 ? true : null), 30_000, "more reads");
+    } finally {
+      stop.abort();
+      await run;
+    }
+
+    const finds = await findRows(pageId);
+    const slo = fanslyResourceSpec(FIND)!.slo!.resultMs! * SCALE;
+    for (const row of finds.filter((candidate) => candidate.subject !== groupOf(hidden))) {
+      expect(row.state, row.subject).toBe("done");
+      expect(row.closed_at!.getTime() - row.first_demand_at.getTime(), row.subject).toBeLessThanOrEqual(slo);
+    }
+    const hiddenFind = finds.find((row) => row.subject === groupOf(hidden))!;
+    expect(hiddenFind).toMatchObject({ state: "done", close_reason: "found_by_detail" });
+    expect(hiddenFind.closed_at!.getTime() - hiddenFind.first_demand_at.getTime()).toBeLessThanOrEqual(25_000 * SCALE);
+    const attempts = await attemptsOf(pageId);
+    const sent = attempts.filter((attempt) => attempt.sent_at !== null);
+    expect(sent.filter((attempt) => attempt.resource === FIND).map((attempt) => attempt.operation)).toEqual(["messaging.groups", "group.detail"]);
+    // History was not starved by the burst: it kept its turns from the
+    // burst's first demand on.
+    const burstFrom = Math.min(...finds.map((row) => row.first_demand_at.getTime()));
+    expect(sent.filter((attempt) => attempt.resource === "history.busy" && attempt.sent_at!.getTime() >= burstFrom).length).toBeGreaterThanOrEqual(2);
+    // The route and family budgets held throughout (scaled).
+    const gaps = (operations: readonly string[]) => {
+      const times = sent.filter((attempt) => operations.includes(attempt.operation)).map((attempt) => attempt.sent_at!.getTime());
+      return times.slice(1).map((time, index) => time - times[index]!);
+    };
+    const family = Math.ceil(intervalMsOf(FAMILY_BUDGETS.messaging.currentPerMin) * SCALE);
+    for (const gap of gaps(["messages.page", "messaging.groups", "group.detail"])) expect(gap).toBeGreaterThanOrEqual(family);
+    const media = Math.ceil(intervalMsOf(routeBudget("media.offer_stats").currentPerMin) * SCALE);
+    for (const gap of gaps(["media.offer_stats"])) expect(gap).toBeGreaterThanOrEqual(media);
+    for (const gap of gaps(sent.map((attempt) => attempt.operation))) expect(gap).toBeGreaterThanOrEqual(SETTING_MS);
+  }, 90_000);
 });
 
 describe("a 429 on the conversation list (owner decisions №14, №22)", () => {

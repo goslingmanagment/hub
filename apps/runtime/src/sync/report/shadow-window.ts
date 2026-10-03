@@ -1,6 +1,7 @@
 import {
   countLegacyFanslyAttempts,
   countSyncAttemptsByKey,
+  listSharedReadAdmissions,
   listSyncAdmissions,
   listSyncRunAttempts,
   listSyncWorkOpenAt,
@@ -227,6 +228,17 @@ export const SHADOW_WINDOW_RULES: readonly AcceptanceRule[] = [
       + "fans' messages of a busy hour read at their frames' expectation are that demand, not the engine over-reading "
       + "(deviation from the design wording, 2026-10-02: ari-1 16:25–17:25 UTC read dm-messages.head 104 times on "
       + "104 socket reads).",
+  },
+  {
+    id: "A1.shared-read",
+    text: "A row another key's read served — a dm-conversations.find whose chat the first read of the conversation "
+      + "list's head admitted since its demand answered (step 3b, plan PR 1-3: one read serves a burst of new chats; "
+      + "the row closes naming that read in result.sharedRead) — counts beside its key's attempts when its row is "
+      + "judged against the reads its socket frames imply (0.5–2×), when the read was admitted in the window; A3 counts "
+      + "its chat read at that read's admission. It sent nothing: the steady state, the ceiling and the socket demand "
+      + "count attempts only, the shared read once under the key that sent it. Why: the frames of N new chats imply N "
+      + "finds after coalescing, and one list read answers them all; judged by attempts alone the row would read 1/N "
+      + "of its expectation.",
   },
   {
     id: "A1.floor",
@@ -1747,6 +1759,9 @@ export function demandOfPage(
   input: {
     window: { startMs: number; endMs: number };
     observed: ReadonlyMap<string, { class: string; attempts: number }>;
+    /** Per key, its rows another key's read served in the window (rule
+     *  A1.shared-read); absent: none. */
+    served?: ReadonlyMap<string, number>;
     reads: ReadonlyMap<string, SimulatedReads> | undefined;
     facts: PageRunFacts;
     counterparts: CounterpartCheck;
@@ -1857,7 +1872,7 @@ export function demandOfPage(
       if (fault !== null) scheduleFaults.push(`${key}: ${fault}`);
       rows.push(row);
     } else {
-      rows.push(demandRow(spec, key, workClass, observed, input.reads?.get(key)));
+      rows.push(demandRow(spec, key, workClass, observed, input.reads?.get(key), input.served?.get(key) ?? 0));
     }
   }
   const band = { min: STEADY_STATE_BAND_PER_HOUR.min * hours, max: STEADY_STATE_BAND_PER_HOUR.max * hours };
@@ -1988,13 +2003,15 @@ function demandJudgement(observed: number, expected: number): { ratio: number | 
   return { ratio, inside: ratio !== null && ratio >= EXPECTATION_RATIO_BAND.min && ratio <= EXPECTATION_RATIO_BAND.max };
 }
 
-/** A key that is not a poll: its attempts against the reads its socket frames imply. */
+/** A key that is not a poll: its attempts — and its rows another key's read
+ *  served (rule A1.shared-read) — against the reads its socket frames imply. */
 function demandRow(
   spec: ResourceSpec | undefined,
   key: string,
   workClass: string,
   observed: number,
   reads: SimulatedReads | undefined,
+  served: number,
 ): DemandRow {
   const kind = spec?.kind ?? "unknown";
   const socket = reads?.reads ?? null;
@@ -2008,8 +2025,9 @@ function demandRow(
           : "demand not modelled by the report";
     return { ...base, expected: null, ratio: null, verdict: "not_modelled", reason };
   }
-  const demand = demandJudgement(observed, socket);
-  const basis = `socket reads ${socket}`;
+  const demand = demandJudgement(observed + served, socket);
+  const servedText = served === 0 ? "" : `; ${served} served by another key's read (rule A1.shared-read)`;
+  const basis = `socket reads ${socket}${servedText}`;
   if (demand.inside && demand.ratio === null) {
     return { ...base, expected: socket, ratio: null, verdict: "ok", reason: `at most one read expected (${basis})` };
   }
@@ -2341,15 +2359,20 @@ async function liveDecision(
     kind: "messages" | "transactions";
   },
 ): Promise<LiveDecision> {
-  const admissions = await listSyncAdmissions(db, {
+  const range = {
     pageIds: input.pageIds,
     shadow: true,
     resources: [...new Set(input.frames.flatMap((frame) => frame.resources))],
     from: input.window.start,
     to: new Date(input.window.end.getTime() + ADMISSION_SEARCH_MS),
-  });
+  };
+  // A row another key's read served (rule A1.shared-read: a `.find` the
+  // shared list-head read answered) is read with that read: its admission is
+  // the row's.
+  const admissions = [...await listSyncAdmissions(db, range), ...await listSharedReadAdmissions(db, range)]
+    .sort((a, b) => a.admittedAt.getTime() - b.admittedAt.getTime());
   const keyOf = (pageId: number, resource: string, subject: string) => `${pageId}\u0000${resource}\u0000${subject}`;
-  // Admission times per key, ascending (the read orders by admission).
+  // Admission times per key, ascending.
   const byKey = new Map<string, number[]>();
   for (const admission of admissions) {
     const key = keyOf(admission.pageId, admission.resource, admission.subject);
@@ -2456,6 +2479,15 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
     page.set(row.resource, { class: row.class, attempts: (current?.attempts ?? 0) + row.attempts });
     observed.set(row.pageId, page);
   }
+  // Rule A1.shared-read: the rows another key's read served in the window.
+  const served = new Map<number, Map<string, number>>();
+  for (const row of await listSharedReadAdmissions(db, {
+    pageIds, shadow: true, resources: FANSLY_RESOURCE_SPECS.map((spec) => spec.key), from: start, to: end,
+  })) {
+    const page = served.get(row.pageId) ?? new Map<string, number>();
+    page.set(row.resource, (page.get(row.resource) ?? 0) + 1);
+    served.set(row.pageId, page);
+  }
   const frames = await readWindowFrames(db, { from: start, to: end, pageIds, ...resolve });
   const implied = await impliedReads(db, frames.byPage);
 
@@ -2478,6 +2510,7 @@ export async function reportShadowWindow(db: Database, input: ShadowWindowInput)
   const demand = input.pages.map((page) => demandOfPage(page, {
     window: { startMs: start.getTime(), endMs: end.getTime() },
     observed: observed.get(page.pageId) ?? new Map(),
+    served: served.get(page.pageId) ?? new Map(),
     reads: implied.byPage.get(page.pageId),
     facts: runFacts.get(page.pageId) ?? NO_RUN_FACTS,
     counterparts: legacyCounterparts({
