@@ -53,9 +53,21 @@ export function isHarvestClientVersion(clientVersion: string) {
   return clientVersion.startsWith(HARVEST_VERSION_PREFIX);
 }
 
+// The OnlyMonster chat-extension sends x-client-version 'chat-extension/<v>'
+// and journals as its own producer 'chat-extension@<v>', so its facts are
+// attributable apart from the desktop's. Only the producer differs: its kinds
+// stay in the desktop.<kind> namespace the canonicalizers and the acceptance
+// projection key on. Every other header keeps the desktop@ stamp, including
+// the Fansly extension's 'chatgoose-extension/<v>'.
+const CHAT_EXTENSION_CLIENT_VERSION = /^chat-extension\/(.+)$/;
+
 export function ingestProducerForClientVersion(clientVersion: string) {
-  return isHarvestClientVersion(clientVersion)
-    ? `${HARVEST_PRODUCER_PREFIX}${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`
+  if (isHarvestClientVersion(clientVersion)) {
+    return `${HARVEST_PRODUCER_PREFIX}${clientVersion.slice(HARVEST_VERSION_PREFIX.length)}`;
+  }
+  const chatExtension = CHAT_EXTENSION_CLIENT_VERSION.exec(clientVersion);
+  return chatExtension
+    ? `chat-extension@${chatExtension[1]}`
     : `desktop@${clientVersion}`;
 }
 
