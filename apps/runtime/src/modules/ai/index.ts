@@ -32,6 +32,7 @@ import {
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { hasDebugInputCapability } from "./prompt-debug-echo.ts";
@@ -324,6 +325,11 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     requireApiKeyUser(principal);
+    // chat-extension H-3: the owner's switches decide a narrow token's AI.
+    await requireClientTokenAiFeature(appContext, request, principal, {
+      feature: request.params.feature,
+      pageLabel: request.body.pageLabel,
+    });
     const stream = await prepareAiFeatureStream(
       appContext,
       principal,

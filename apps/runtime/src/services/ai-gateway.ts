@@ -550,6 +550,10 @@ export async function prepareAiGatewayStream(
           // Feature-derived provenance spreads FIRST so the canonical
           // gateway keys below always win on any collision.
           ...(input.featureParams ?? {}),
+          // chat-extension H-3: a narrow token's generation is labelled with
+          // its client profile (the desktop-retirement metric); a full
+          // token's params are unchanged.
+          ...(principal.clientProfile !== undefined ? { clientProfile: principal.clientProfile } : {}),
           maxTokens: input.maxTokens ?? null,
           temperature: input.temperature ?? null,
           reasoningEffort: input.reasoningEffort,

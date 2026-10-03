@@ -1,3 +1,4 @@
+import { CLIENT_TOKEN_PROFILES, clientTokenProfileAllows } from "./client-token-scopes.ts";
 import type { RouteAuthPolicy } from "./routes.ts";
 
 // Kernel Stage 19: the generated authorization-policy document. Rendered by
@@ -26,6 +27,18 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "any": "any authenticated principal except an agent key",
 };
 
+/** Kinds that take no principal: a narrow token's allowlist does not apply to them. */
+const NO_PRINCIPAL_KINDS: ReadonlySet<RouteAuthPolicy["kind"]> = new Set(["public", "hmac", "pending-device-token"]);
+
+/** The narrow-token column: "yes" on the profile's list, "no" (403) off it,
+ *  "—" where the route takes no principal at all. */
+function clientTokenCell(row: AuthorizationPolicyRow): string {
+  if (!row.auth || NO_PRINCIPAL_KINDS.has(row.auth.kind)) {
+    return "—";
+  }
+  return clientTokenProfileAllows("chat-extension", row.routeKey) ? "yes" : "no";
+}
+
 export function renderAuthorizationPolicyMarkdown(rows: readonly AuthorizationPolicyRow[]): string {
   const sorted = [...rows].sort((left, right) =>
     left.url === right.url ? left.method.localeCompare(right.method) : left.url.localeCompare(right.url),
@@ -46,10 +59,15 @@ export function renderAuthorizationPolicyMarkdown(rows: readonly AuthorizationPo
     "| --- | --- |",
     ...Object.entries(KIND_DESCRIPTIONS).map(([kind, meaning]) => `| \`${kind}\` | ${meaning} |`),
     "",
+    "The `chat-extension token` column is the narrow device token a client asks",
+    "for at password sign-in (`client: \"chat-extension\"`): it reaches only the",
+    `${CLIENT_TOKEN_PROFILES["chat-extension"].operations.length} routes marked "yes", and every route marked "no" refuses it with 403 in`,
+    "both enforcement modes. A full device token is not affected.",
+    "",
     `## Routes (${sorted.length})`,
     "",
-    "| Method | Path | Route key | Kind | Roles | Page scope |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   ];
 
   for (const row of sorted) {
@@ -62,6 +80,7 @@ export function renderAuthorizationPolicyMarkdown(rows: readonly AuthorizationPo
       auth ? `\`${auth.kind}\`` : "**UNDECLARED**",
       auth?.roles?.length ? auth.roles.join(", ") : "—",
       auth?.scope === "page" ? "page" : "—",
+      clientTokenCell(row),
       "",
     ].join(" | ").trim());
   }

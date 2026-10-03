@@ -2620,6 +2620,10 @@ export const deviceTokens = pgTable(
     // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
     // never authority (#145).
     lastClientVersion: text("last_client_version"),
+    // chat-extension H-3 (migration 0236): the narrow token's client profile
+    // (CLIENT_TOKEN_PROFILES), set once at issuance and immutable (trigger).
+    // NULL = a full token. Authority, unlike last_client_version.
+    clientProfile: text("client_profile"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     revokedReason: text("revoked_reason"),
